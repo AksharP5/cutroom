@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
+import { z } from "zod";
 import {
   ArrowCounterClockwise,
   ArrowClockwise,
@@ -7,7 +9,13 @@ import {
   FolderOpen,
   SlidersHorizontal,
 } from "@phosphor-icons/react";
-import { useDockLayoutStore } from "@hyperframes/studio";
+import { useDockLayoutStore, usePreviewIframeStore } from "@hyperframes/studio";
+import { seekEditor } from "./CutroomEditor";
+
+const reviewSeekSchema = z.object({
+  time: z.number().finite().nonnegative(),
+  compositionPath: z.string().min(1),
+});
 
 interface EditorHeaderProps {
   captureFrameHref: string;
@@ -26,9 +34,50 @@ interface EditorHeaderProps {
   redoLabel?: string;
   isRendering: boolean;
   ffmpegMissing: boolean;
+  onSelectComposition: (path: string) => void;
+  activeCompPath: string | null;
+  compositionLoading: boolean;
 }
 
 export function EditorHeader(props: EditorHeaderProps) {
+  const [reviewSeek, setReviewSeek] = useState<z.infer<
+    typeof reviewSeekSchema
+  > | null>(null);
+  const iframe = usePreviewIframeStore((state) => state.iframe);
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const parsed = reviewSeekSchema.safeParse(event.detail);
+      if (!parsed.success) return;
+      setReviewSeek(parsed.data);
+      if (
+        parsed.data.compositionPath !== (props.activeCompPath ?? "index.html")
+      )
+        props.onSelectComposition(parsed.data.compositionPath);
+    };
+    window.addEventListener("cutroom:seek-review", navigate);
+    return () => window.removeEventListener("cutroom:seek-review", navigate);
+  }, [props.activeCompPath, props.onSelectComposition]);
+  useEffect(() => {
+    if (
+      !reviewSeek ||
+      !iframe ||
+      props.compositionLoading ||
+      (props.activeCompPath ?? "index.html") !== reviewSeek.compositionPath
+    )
+      return;
+    const path = decodeURIComponent(new URL(iframe.src).pathname);
+    if (
+      !path.endsWith(`/preview/comp/${reviewSeek.compositionPath}`) &&
+      !(
+        reviewSeek.compositionPath === "index.html" && path.endsWith("/preview")
+      )
+    )
+      return;
+    if (iframe.contentDocument?.readyState !== "complete") return;
+    seekEditor(reviewSeek.time);
+    setReviewSeek(null);
+  }, [iframe, props.activeCompPath, props.compositionLoading, reviewSeek]);
   const filesVisible = useDockLayoutStore(
     (state) =>
       state.visiblePanels.has("compositions") ||

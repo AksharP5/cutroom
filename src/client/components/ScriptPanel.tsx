@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   FileArrowUp,
@@ -15,64 +15,163 @@ import {
   TranscriptViewSchema,
   WordSchema,
   type MediaClip,
-  type Transcript,
   type TranscriptJob,
   type TranscriptView,
 } from "../../shared/project";
-import { api, json, timecode } from "../api";
+import { ApiError, api, json, timecode } from "../api";
 
 const viewsSchema = z.object({ transcripts: z.array(TranscriptViewSchema) });
+function readJob(projectId: string) {
+  try {
+    const value: unknown = JSON.parse(
+      sessionStorage.getItem(`cutroom:transcription:${projectId}`) ?? "null",
+    );
+    const parsed = TranscriptJobSchema.safeParse(value);
+    return parsed.success &&
+      parsed.data.projectId === projectId &&
+      parsed.data.status === "running"
+      ? parsed.data
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 const clipKey = (clip: Pick<MediaClip, "sourceFile" | "elementId">) =>
   `${clip.sourceFile}:${clip.elementId}`;
 
-export function ScriptPanel({
+type TranscriptWord = TranscriptView["words"][number];
+
+const TranscriptChunk = memo(
+  function TranscriptChunk({
+    words,
+    selectedIds,
+    onWordClick,
+  }: {
+    words: TranscriptWord[];
+    selectedIds: ReadonlySet<string>;
+    onWordClick: (word: TranscriptWord, extend: boolean) => void;
+  }) {
+    return (
+      <div className="transcript-chunk">
+        {words.map((word) => (
+          <button
+            key={word.id}
+            className={`${selectedIds.has(word.id) ? "word-selected" : ""} ${word.cut ? "word-cut" : ""}`}
+            title={
+              word.timelineStart === null
+                ? "Cut from the timeline"
+                : timecode(word.timelineStart)
+            }
+            aria-pressed={selectedIds.has(word.id)}
+            onClick={(event) => onWordClick(word, event.shiftKey)}
+          >
+            {word.text}{" "}
+          </button>
+        ))}
+      </div>
+    );
+  },
+  (before, after) =>
+    before.words === after.words &&
+    before.onWordClick === after.onWordClick &&
+    before.words.every(
+      (word) =>
+        before.selectedIds.has(word.id) === after.selectedIds.has(word.id),
+    ),
+);
+
+export const ScriptPanel = memo(function ScriptPanel({
   projectId,
-  transcripts,
+  revision,
+  visible,
   onChange,
   onSeek,
   onAsk,
 }: {
   projectId: string;
-  transcripts: Transcript[];
+  revision: string;
+  visible: boolean;
   onChange: () => Promise<void>;
-  onSeek: (time: number) => void;
+  onSeek: (time: number, compositionPath?: string) => void;
   onAsk: (prompt: string) => void;
 }) {
   const [media, setMedia] = useState<MediaClip[]>([]);
   const [views, setViews] = useState<TranscriptView[]>([]);
   const [selectedClipKey, setSelectedClipKey] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  const [job, setJob] = useState<TranscriptJob | null>(null);
+  const [job, setJob] = useState<TranscriptJob | null>(() =>
+    readJob(projectId),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [pollError, setPollError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const anchor = useRef<string | null>(null);
+  const pendingTranscript = useRef<string | null>(null);
+
+  const refreshRequest = useRef<AbortController | null>(null);
+  const recordJob = useCallback(
+    (value: TranscriptJob | null) => {
+      if (value?.status === "running") pendingTranscript.current = null;
+      if (value?.status === "complete" && value.transcriptId)
+        pendingTranscript.current = value.transcriptId;
+      try {
+        const key = `cutroom:transcription:${projectId}`;
+        if (value?.status === "running")
+          sessionStorage.setItem(key, JSON.stringify(value));
+        else sessionStorage.removeItem(key);
+      } catch {
+        /* The current job still works when browser storage is disabled. */
+      }
+      setJob(value);
+    },
+    [projectId],
+  );
 
   const refresh = useCallback(async () => {
-    const [clips, scripts] = await Promise.all([
-      api(`/projects/${projectId}/media`, MediaListSchema),
-      api(`/projects/${projectId}/transcripts`, viewsSchema),
-    ]);
-    setMedia(clips.media);
-    setViews(scripts.transcripts);
+    refreshRequest.current?.abort();
+    const request = new AbortController();
+    refreshRequest.current = request;
+    try {
+      const [clips, scripts] = await Promise.all([
+        api(`/projects/${projectId}/media`, MediaListSchema, {
+          signal: request.signal,
+        }),
+        api(`/projects/${projectId}/transcripts`, viewsSchema, {
+          signal: request.signal,
+        }),
+      ]);
+      if (request.signal.aborted) return;
+      setMedia(clips.media);
+      setViews(scripts.transcripts);
+      const completed = scripts.transcripts.find(
+        (transcript) => transcript.id === pendingTranscript.current,
+      );
+      if (completed) {
+        setSelectedClipKey(clipKey(completed));
+        pendingTranscript.current = null;
+      }
+    } catch (error) {
+      if (!request.signal.aborted) throw error;
+    }
   }, [projectId]);
 
   useEffect(() => {
-    let active = true;
-    void refresh().catch((error: unknown) => {
-      if (active)
-        setError(error instanceof Error ? error.message : String(error));
-    });
-    return () => {
-      active = false;
-    };
-  }, [refresh, transcripts]);
+    if (!visible) return;
+    void refresh().catch((error: unknown) =>
+      setError(error instanceof Error ? error.message : String(error)),
+    );
+    return () => refreshRequest.current?.abort();
+  }, [visible, refresh, revision]);
+  useEffect(() => () => refreshRequest.current?.abort(), []);
 
   const clips = useMemo(() => {
-    const all = [...media];
+    const all = new Map(media.map((clip) => [clipKey(clip), clip]));
     for (const transcript of views) {
-      if (!all.some((clip) => clipKey(clip) === clipKey(transcript)))
-        all.push({
+      const key = clipKey(transcript);
+      if (!all.has(key))
+        all.set(key, {
           elementId: transcript.elementId,
           sourceFile: transcript.sourceFile,
           mediaPath: transcript.mediaPath,
@@ -82,16 +181,48 @@ export function ScriptPanel({
           duration: transcript.duration,
         });
     }
-    return all;
+    return [...all.values()];
   }, [media, views]);
+  const selectedIds = useMemo(() => new Set(selected), [selected]);
   const selectedClip =
     clips.find((clip) => clipKey(clip) === selectedClipKey) ?? clips[0];
   const active = views.find(
     (transcript) =>
       selectedClip && clipKey(transcript) === clipKey(selectedClip),
   );
-  const selectedWords =
-    active?.words.filter((word) => selected.includes(word.id)) ?? [];
+  const selectedWords = useMemo(
+    () => active?.words.filter((word) => selectedIds.has(word.id)) ?? [],
+    [active, selectedIds],
+  );
+  const chunks = useMemo(() => {
+    const all: TranscriptWord[][] = [];
+    if (active)
+      for (let index = 0; index < active.words.length; index += 80)
+        all.push(active.words.slice(index, index + 80));
+    return all;
+  }, [active?.words]);
+  const onWordClick = useCallback(
+    (word: TranscriptWord, extend: boolean) => {
+      if (!active) return;
+      if (word.timelineStart !== null)
+        onSeek(word.timelineStart, active.sourceFile);
+      if (extend && anchor.current) {
+        const from = active.words.findIndex(
+          (item) => item.id === anchor.current,
+        );
+        const to = active.words.findIndex((item) => item.id === word.id);
+        setSelected(
+          active.words
+            .slice(Math.min(from, to), Math.max(from, to) + 1)
+            .map((item) => item.id),
+        );
+        return;
+      }
+      anchor.current = word.id;
+      setSelected([word.id]);
+    },
+    [active, onSeek],
+  );
 
   useEffect(() => {
     setSelected([]);
@@ -100,45 +231,50 @@ export function ScriptPanel({
   useEffect(() => {
     if (!job || job.status !== "running") return;
     const id = job.id;
-    let cancelled = false;
+    const request = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
+      let delay = 750;
+      let again = true;
       try {
         const result = await api(
           `/transcription-jobs/${id}`,
           TranscriptJobSchema,
+          { signal: request.signal },
         );
-        if (cancelled) return;
-        setJob(result);
-        if (result.status === "complete") {
-          await onChange();
-          await refresh();
-          return;
-        }
-        if (result.status === "failed") {
+        if (request.signal.aborted) return;
+        recordJob(result);
+        setPollError("");
+        again = result.status === "running";
+        if (result.status === "complete") await onChange();
+        if (result.status === "failed")
           setError(result.error ?? result.message);
-          return;
-        }
-        if (result.status === "running")
-          timer = setTimeout(() => void poll(), 750);
       } catch (error) {
-        if (!cancelled)
-          setError(error instanceof Error ? error.message : String(error));
+        if (request.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 404) {
+          recordJob(null);
+          again = false;
+        }
+        setPollError(error instanceof Error ? error.message : String(error));
+        delay = 2000;
       }
+      if (again && !request.signal.aborted)
+        timer = setTimeout(() => void poll(), delay);
     }
     timer = setTimeout(() => void poll(), 500);
     return () => {
-      cancelled = true;
+      request.abort();
       clearTimeout(timer);
     };
-  }, [job?.id, job?.status, onChange, refresh]);
+  }, [job?.id, job?.status, onChange, recordJob]);
 
   async function transcribe() {
-    if (!selectedClip) return;
+    if (!selectedClip || busy || job?.status === "running") return;
     setBusy(true);
     setError("");
+    setPollError("");
     try {
-      setJob(
+      recordJob(
         await api(
           `/projects/${projectId}/transcribe`,
           TranscriptJobSchema,
@@ -153,7 +289,7 @@ export function ScriptPanel({
   }
 
   async function cut(action: "cut" | "restore") {
-    if (!active || !selected.length) return;
+    if (!active || !selected.length || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -171,7 +307,6 @@ export function ScriptPanel({
         }),
       );
       await onChange();
-      await refresh();
       setSelected([]);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
@@ -214,6 +349,7 @@ export function ScriptPanel({
         <select
           id="script-media"
           value={selectedClip ? clipKey(selectedClip) : ""}
+          disabled={busy}
           onChange={(event) => {
             setSelectedClipKey(event.target.value);
             setSelected([]);
@@ -242,7 +378,7 @@ export function ScriptPanel({
         <div className="script-file-actions">
           <button
             className="text-button"
-            disabled={!selectedClip}
+            disabled={!selectedClip || busy}
             onClick={() => fileInput.current?.click()}
           >
             <FileArrowUp size={14} />
@@ -251,6 +387,7 @@ export function ScriptPanel({
           <button
             className="icon-button"
             aria-label="Refresh media clips"
+            disabled={busy}
             onClick={() =>
               void refresh().catch((error: unknown) =>
                 setError(
@@ -269,7 +406,9 @@ export function ScriptPanel({
           hidden
           onChange={(event) => {
             const file = event.target.files?.[0];
-            if (!file || !selectedClip) return;
+            if (!file || !selectedClip || busy) return;
+            setBusy(true);
+            setError("");
             void file
               .text()
               .then(async (text) => {
@@ -280,7 +419,7 @@ export function ScriptPanel({
                     z.object({ words: z.array(WordSchema) }),
                   ])
                   .parse(value);
-                await api(
+                const imported = await api(
                   `/projects/${projectId}/transcripts/import`,
                   TranscriptViewSchema,
                   json("POST", {
@@ -288,14 +427,15 @@ export function ScriptPanel({
                     words: Array.isArray(parsed) ? parsed : parsed.words,
                   }),
                 );
+                setSelectedClipKey(clipKey(imported));
                 await onChange();
-                await refresh();
               })
               .catch((error: unknown) =>
                 setError(
                   error instanceof Error ? error.message : String(error),
                 ),
-              );
+              )
+              .finally(() => setBusy(false));
             event.target.value = "";
           }}
         />
@@ -306,13 +446,14 @@ export function ScriptPanel({
           <progress max={1} value={job.progress} />
           <button
             className="text-button"
+            disabled={busy}
             onClick={() =>
               void api(
                 `/transcription-jobs/${job.id}`,
                 TranscriptJobSchema,
                 json("DELETE"),
               )
-                .then(setJob)
+                .then(recordJob)
                 .catch((error: unknown) =>
                   setError(
                     error instanceof Error ? error.message : String(error),
@@ -325,9 +466,9 @@ export function ScriptPanel({
           </button>
         </div>
       )}
-      {error && (
+      {(error || pollError) && (
         <div className="inline-error" role="alert">
-          <p>{error}</p>
+          <p>{error || pollError}</p>
           {selectedWords.length > 0 && (
             <button className="text-button" onClick={askAboutSelection}>
               Ask agent about this edit
@@ -353,38 +494,13 @@ export function ScriptPanel({
             <span>{active.words.length} words</span>
           </div>
           <div className="transcript-words" aria-label="Transcript words">
-            {active.words.map((word) => (
-              <button
-                key={word.id}
-                className={`${selected.includes(word.id) ? "word-selected" : ""} ${word.cut ? "word-cut" : ""}`}
-                title={
-                  word.timelineStart === null
-                    ? "Cut from the timeline"
-                    : timecode(word.timelineStart)
-                }
-                aria-pressed={selected.includes(word.id)}
-                onClick={(event) => {
-                  if (word.timelineStart !== null) onSeek(word.timelineStart);
-                  if (event.shiftKey && anchor.current) {
-                    const from = active.words.findIndex(
-                      (item) => item.id === anchor.current,
-                    );
-                    const to = active.words.findIndex(
-                      (item) => item.id === word.id,
-                    );
-                    setSelected(
-                      active.words
-                        .slice(Math.min(from, to), Math.max(from, to) + 1)
-                        .map((item) => item.id),
-                    );
-                  } else {
-                    anchor.current = word.id;
-                    setSelected([word.id]);
-                  }
-                }}
-              >
-                {word.text}{" "}
-              </button>
+            {chunks.map((words) => (
+              <TranscriptChunk
+                key={words[0]?.id}
+                words={words}
+                selectedIds={selectedIds}
+                onWordClick={onWordClick}
+              />
             ))}
           </div>
           <p className="script-hint">
@@ -423,4 +539,4 @@ export function ScriptPanel({
       )}
     </section>
   );
-}
+});

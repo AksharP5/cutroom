@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import {
   ArrowClockwise,
   ArrowUp,
@@ -18,6 +19,7 @@ import {
   agentEventEnvelopeSchema,
   agentSessionSchema,
   type AgentCapabilities,
+  type AgentEvent,
   type AgentMessage,
   type AgentProvider,
   type AgentRequest,
@@ -47,6 +49,53 @@ function readDraft(projectId: string) {
   } catch {
     return undefined;
   }
+}
+
+type ConversationState =
+  | { phase: "restoring" }
+  | { phase: "new" }
+  | { phase: "loading"; id: string }
+  | { phase: "ready"; session: AgentSession };
+type TurnSubmission = { kind: "turn"; stopped: boolean; sessionId?: string };
+type ChatOperation = TurnSubmission | { kind: "model" } | { kind: "stop" };
+
+function applyConversationEvents(
+  state: ConversationState,
+  id: string,
+  events: AgentEvent[],
+): ConversationState {
+  if (state.phase === "new" || state.phase === "restoring") return state;
+  if ((state.phase === "ready" ? state.session.id : state.id) !== id)
+    return state;
+  let session = state.phase === "ready" ? state.session : null;
+  for (const event of events) {
+    if (event.type === "snapshot") {
+      if (event.session.id === id) session = event.session;
+      continue;
+    }
+    if (!session) continue;
+    if (event.type === "message" || event.type === "delta") {
+      const messageId =
+        event.type === "message" ? event.message.id : event.messageId;
+      const index = session.messages.findIndex((item) => item.id === messageId);
+      const items = [...session.messages];
+      if (event.type === "message") {
+        if (index < 0) items.push(event.message);
+        else items[index] = event.message;
+      } else {
+        const message = items[index];
+        if (!message) continue;
+        items[index] = { ...message, text: message.text + event.text };
+      }
+      session = { ...session, messages: items };
+    }
+    if (event.type === "status") session = { ...session, status: event.status };
+    if (event.type === "request")
+      session = { ...session, pendingRequest: event.request };
+    if (event.type === "request-resolved")
+      session = { ...session, pendingRequest: undefined };
+  }
+  return session ? { phase: "ready", session } : state;
 }
 
 const Message = memo(function Message({
@@ -194,6 +243,73 @@ function RequestCard({
   );
 }
 
+const ConversationMessages = memo(function ConversationMessages({
+  session,
+  capabilities,
+  discovering,
+  messagesRef,
+  followRef,
+  onRespond,
+}: {
+  session: AgentSession | null;
+  capabilities: AgentCapabilities | null;
+  discovering: boolean;
+  messagesRef: RefObject<HTMLDivElement | null>;
+  followRef: RefObject<boolean>;
+  onRespond: (
+    decision: "allow" | "deny",
+    answers?: Record<string, string | string[]>,
+  ) => Promise<void>;
+}) {
+  return (
+    <div
+      className="chat-messages"
+      ref={messagesRef}
+      onScroll={() => {
+        const element = messagesRef.current;
+        if (element)
+          followRef.current =
+            element.scrollHeight - element.scrollTop - element.clientHeight <
+            72;
+      }}
+    >
+      {!session?.messages.length && (
+        <div className="chat-empty">
+          <div className="empty-agent-mark">
+            <TerminalWindow size={26} weight="light" />
+          </div>
+          <h2>Keep the work in view.</h2>
+          <p>
+            Ask your agent to edit, or draw a change directly on the picture.
+          </p>
+          <p className="native-note">
+            {discovering
+              ? "Reading your agent configuration…"
+              : capabilities?.available
+                ? `${capabilities.skills.filter((skill) => skill.enabled).length} native skills available. Type $ to choose one.`
+                : (capabilities?.error ??
+                  "Choose an installed agent to begin.")}
+          </p>
+        </div>
+      )}
+      {session?.messages.map((message) => (
+        <Message
+          key={message.id}
+          message={message}
+          provider={session.provider}
+        />
+      ))}
+      {session?.pendingRequest && (
+        <RequestCard
+          key={session.pendingRequest.id}
+          request={session.pendingRequest}
+          onRespond={onRespond}
+        />
+      )}
+    </div>
+  );
+});
+
 export function ChatPanel({
   projectId,
   visible,
@@ -223,14 +339,25 @@ export function ChatPanel({
   const [sessions, setSessions] = useState<
     z.infer<typeof sessionListSchema>["sessions"]
   >([]);
-  const [session, setSession] = useState<AgentSession | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<ConversationState>({
+    phase: "restoring",
+  });
+  const session = conversation.phase === "ready" ? conversation.session : null;
+  const sessionId =
+    conversation.phase === "ready"
+      ? conversation.session.id
+      : conversation.phase === "loading"
+        ? conversation.id
+        : null;
+  const opening =
+    conversation.phase === "restoring" || conversation.phase === "loading";
   const [draft, setDraft] = useState(() => readDraft(projectId)?.text ?? "");
   const [attachments, setAttachments] = useState<string[]>(
     () => readDraft(projectId)?.attachments ?? [],
   );
   const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [operation, setOperation] = useState<ChatOperation | null>(null);
+  const submitting = operation !== null;
   const [skillIndex, setSkillIndex] = useState(0);
   const [skillDismissed, setSkillDismissed] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -279,8 +406,7 @@ export function ChatPanel({
 
   useEffect(() => {
     let cancelled = false;
-    setSession(null);
-    setSessionId(null);
+    setConversation({ phase: "restoring" });
     setError("");
     void loadSessions()
       .then((items) => {
@@ -289,12 +415,14 @@ export function ChatPanel({
         if (recent) {
           setProvider(recent.provider);
           setModel(recent.model ?? "");
-          setSessionId(recent.id);
-        }
+          setConversation({ phase: "loading", id: recent.id });
+        } else setConversation({ phase: "new" });
       })
       .catch((error: unknown) => {
-        if (!cancelled)
+        if (!cancelled) {
+          setConversation({ phase: "new" });
           setError(error instanceof Error ? error.message : String(error));
+        }
       });
     return () => {
       cancelled = true;
@@ -329,7 +457,34 @@ export function ChatPanel({
     const source = new EventSource(
       `/api/cutroom/agents/sessions/${encodeURIComponent(sessionId)}/events`,
     );
+    let pending: AgentEvent[] = [];
+    let frame: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const flush = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      frame = undefined;
+      timer = undefined;
+      if (closed || !pending.length) return;
+      const events = pending;
+      pending = [];
+      setConversation((current) =>
+        applyConversationEvents(current, sessionId, events),
+      );
+      for (const event of events)
+        if (event.type === "error") setError(event.message);
+      if (
+        events.some(
+          (event) =>
+            event.type === "status" &&
+            (event.status === "idle" || event.status === "error"),
+        )
+      )
+        void loadSessions().catch(() => {});
+    };
     source.onmessage = (message) => {
+      if (closed) return;
       let value: unknown;
       try {
         value = JSON.parse(message.data);
@@ -339,49 +494,29 @@ export function ChatPanel({
       const parsed = agentEventEnvelopeSchema.safeParse(value);
       if (!parsed.success) return;
       const event = parsed.data.event;
-      if (event.type === "snapshot") setSession(event.session);
-      if (event.type === "message")
-        setSession((current) => {
-          if (!current) return current;
-          const index = current.messages.findIndex(
-            (item) => item.id === event.message.id,
-          );
-          const items = [...current.messages];
-          if (index < 0) items.push(event.message);
-          else items[index] = event.message;
-          return { ...current, messages: items };
-        });
-      if (event.type === "delta")
-        setSession((current) =>
-          current
-            ? {
-                ...current,
-                messages: current.messages.map((item) =>
-                  item.id === event.messageId
-                    ? { ...item, text: item.text + event.text }
-                    : item,
-                ),
-              }
-            : current,
-        );
-      if (event.type === "status") {
-        setSession((current) =>
-          current ? { ...current, status: event.status } : current,
-        );
-        if (event.status === "idle" || event.status === "error")
-          void loadSessions().catch(() => {});
-      }
-      if (event.type === "request")
-        setSession((current) =>
-          current ? { ...current, pendingRequest: event.request } : current,
-        );
-      if (event.type === "request-resolved")
-        setSession((current) =>
-          current ? { ...current, pendingRequest: undefined } : current,
-        );
-      if (event.type === "error") setError(event.message);
+      const previous = pending.at(-1);
+      if (
+        event.type === "delta" &&
+        previous?.type === "delta" &&
+        previous.messageId === event.messageId
+      )
+        pending[pending.length - 1] = {
+          ...previous,
+          text: previous.text + event.text,
+        };
+      else pending.push(event);
+      if (frame !== undefined) return;
+      frame = requestAnimationFrame(flush);
+      // Background windows can suspend animation frames; still consume native output.
+      timer = setTimeout(flush, 50);
     };
-    return () => source.close();
+    return () => {
+      closed = true;
+      source.close();
+      pending = [];
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
   }, [sessionId, loadSessions]);
 
   useEffect(() => {
@@ -412,7 +547,47 @@ export function ChatPanel({
       )
       .slice(0, 12);
   }, [capabilities, skillQuery?.[1], Boolean(skillQuery)]);
+  const requestId = session?.pendingRequest?.id;
+  const respondToRequest = useCallback(
+    async (
+      decision: "allow" | "deny",
+      answers?: Record<string, string | string[]>,
+    ) => {
+      if (!sessionId || !requestId)
+        throw new Error("This request is no longer active.");
+      await api(
+        `/agents/sessions/${sessionId}/responses`,
+        acceptedSchema,
+        json("POST", { requestId, decision, answers }),
+      );
+    },
+    [sessionId, requestId],
+  );
   const busy = session?.status === "running" || session?.status === "waiting";
+  const controlsLocked = busy || submitting || opening;
+
+  async function stop() {
+    const pending = operation?.kind === "turn" ? operation : null;
+    if (pending) pending.stopped = true;
+    const id = pending?.sessionId ?? sessionId;
+    if (!id) {
+      setOperation((current) => (current === pending ? null : current));
+      return;
+    }
+    const stopping: ChatOperation = { kind: "stop" };
+    setOperation(stopping);
+    try {
+      await api(
+        `/agents/sessions/${id}/interrupt`,
+        acceptedSchema,
+        json("POST"),
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOperation((current) => (current === stopping ? null : current));
+    }
+  }
 
   function insertSkill(skill: AgentSkill) {
     const input = textarea.current;
@@ -429,8 +604,19 @@ export function ChatPanel({
   }
 
   async function send() {
-    if ((!draft.trim() && !attachments.length) || busy || submitting) return;
-    setSubmitting(true);
+    if ((!draft.trim() && !attachments.length) || controlsLocked) return;
+    const text = draft;
+    const submittedAttachments = attachments;
+    const files = [
+      ...new Set([...submittedAttachments, ...getReviewAttachments()]),
+    ].slice(0, 30);
+    const context = getContext();
+    const submission: TurnSubmission = {
+      kind: "turn",
+      stopped: false,
+      sessionId: session?.id,
+    };
+    setOperation(submission);
     setError("");
     try {
       let active = session;
@@ -440,8 +626,9 @@ export function ChatPanel({
           agentSessionSchema,
           json("POST", { projectId, provider, ...(model ? { model } : {}) }),
         );
-        setSession(active);
-        setSessionId(active.id);
+        if (submission.stopped) return;
+        submission.sessionId = active.id;
+        setConversation({ phase: "ready", session: active });
       }
       if (active.model !== (model || undefined)) {
         active = await api(
@@ -449,38 +636,40 @@ export function ChatPanel({
           agentSessionSchema,
           json("PATCH", { model: model || null }),
         );
-        setSession(active);
+        if (submission.stopped) return;
+        setConversation({ phase: "ready", session: active });
         setModel(active.model ?? "");
       }
       const mentioned = new Set(
-        [...draft.matchAll(/\$([\w:/.-]+)/g)].map((match) => match[1]),
+        [...text.matchAll(/\$([\w:/.-]+)/g)].map((match) => match[1]),
       );
       const skills =
         capabilities?.skills
           .filter((skill) => skill.enabled && mentioned.has(skill.name))
           .map(({ name, path }) => ({ name, path })) ?? [];
-      const files = [
-        ...new Set([...attachments, ...getReviewAttachments()]),
-      ].slice(0, 30);
       await api(
         `/agents/sessions/${active.id}/turns`,
         acceptedSchema,
         json("POST", {
-          text: draft,
+          text,
           skills,
           attachments: files.map((path) => ({ path })),
-          context: getContext(),
+          context,
         }),
       );
-      setDraft("");
-      setAttachments([]);
+      if (submission.stopped) return;
+      setDraft((current) => (current === text ? "" : current));
+      setAttachments((current) =>
+        current.filter((path) => !submittedAttachments.includes(path)),
+      );
       follow.current = true;
       onSent();
       void loadSessions().catch(() => {});
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      if (!submission.stopped)
+        setError(error instanceof Error ? error.message : String(error));
     } finally {
-      setSubmitting(false);
+      setOperation((current) => (current === submission ? null : current));
     }
   }
 
@@ -493,16 +682,24 @@ export function ChatPanel({
         </span>
         <div className="heading-actions">
           <span className="quiet-label">
-            {busy
-              ? session?.status === "waiting"
-                ? "Needs you"
-                : "Working"
-              : "Ready"}
+            {operation?.kind === "stop"
+              ? "Stopping"
+              : busy
+                ? session?.status === "waiting"
+                  ? "Needs you"
+                  : "Working"
+                : opening
+                  ? "Opening"
+                  : operation?.kind === "model"
+                    ? "Saving model"
+                    : submitting
+                      ? "Sending"
+                      : "Ready"}
           </span>
           <button
             className="icon-button"
             aria-label="Refresh agent configuration"
-            disabled={busy || discovering}
+            disabled={controlsLocked || discovering}
             onClick={() => {
               setError("");
               setConfigurationRevision((value) => value + 1);
@@ -513,10 +710,9 @@ export function ChatPanel({
           <button
             className="icon-button"
             aria-label="New conversation"
-            disabled={busy}
+            disabled={controlsLocked}
             onClick={() => {
-              setSession(null);
-              setSessionId(null);
+              setConversation({ phase: "new" });
               setError("");
               textarea.current?.focus();
             }}
@@ -531,12 +727,11 @@ export function ChatPanel({
           <select
             aria-label="Agent provider"
             value={provider}
-            disabled={busy}
+            disabled={controlsLocked}
             onChange={(event) => {
               setProvider(event.target.value === "claude" ? "claude" : "codex");
               setModel("");
-              setSession(null);
-              setSessionId(null);
+              setConversation({ phase: "new" });
               setError("");
             }}
           >
@@ -550,21 +745,27 @@ export function ChatPanel({
           <select
             aria-label="Model"
             value={model}
-            disabled={busy || discovering || submitting}
+            disabled={controlsLocked || discovering}
             onChange={(event) => {
               const selected = event.target.value;
               if (!session) {
                 setModel(selected);
                 return;
               }
-              setSubmitting(true);
+              const changing: ChatOperation = { kind: "model" };
+              setOperation(changing);
               void api(
                 `/agents/sessions/${session.id}`,
                 agentSessionSchema,
                 json("PATCH", { model: selected || null }),
               )
                 .then((result) => {
-                  setSession(result);
+                  setConversation((current) =>
+                    current.phase === "ready" &&
+                    current.session.id === result.id
+                      ? { phase: "ready", session: result }
+                      : current,
+                  );
                   setModel(result.model ?? "");
                 })
                 .catch((error: unknown) =>
@@ -572,7 +773,11 @@ export function ChatPanel({
                     error instanceof Error ? error.message : String(error),
                   ),
                 )
-                .finally(() => setSubmitting(false));
+                .finally(() =>
+                  setOperation((current) =>
+                    current === changing ? null : current,
+                  ),
+                );
             }}
           >
             <option value="">Configured default</option>
@@ -590,10 +795,13 @@ export function ChatPanel({
           className="conversation-picker"
           aria-label="Conversation"
           value={sessionId ?? ""}
-          disabled={busy}
+          disabled={controlsLocked}
           onChange={(event) => {
-            setSession(null);
-            setSessionId(event.target.value || null);
+            setConversation(
+              event.target.value
+                ? { phase: "loading", id: event.target.value }
+                : { phase: "new" },
+            );
             const next = sessions.find(
               (item) => item.id === event.target.value,
             );
@@ -611,61 +819,14 @@ export function ChatPanel({
           ))}
         </select>
       )}
-      <div
-        className="chat-messages"
-        ref={messages}
-        onScroll={() => {
-          const element = messages.current;
-          if (element)
-            follow.current =
-              element.scrollHeight - element.scrollTop - element.clientHeight <
-              72;
-        }}
-      >
-        {!session?.messages.length && (
-          <div className="chat-empty">
-            <div className="empty-agent-mark">
-              <TerminalWindow size={26} weight="light" />
-            </div>
-            <h2>Keep the work in view.</h2>
-            <p>
-              Ask your agent to edit, or draw a change directly on the picture.
-            </p>
-            <p className="native-note">
-              {discovering
-                ? "Reading your agent configuration…"
-                : capabilities?.available
-                  ? `${capabilities.skills.filter((skill) => skill.enabled).length} native skills available. Type $ to choose one.`
-                  : (capabilities?.error ??
-                    "Choose an installed agent to begin.")}
-            </p>
-          </div>
-        )}
-        {session?.messages.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            provider={session.provider}
-          />
-        ))}
-        {session?.pendingRequest && (
-          <RequestCard
-            key={session.pendingRequest.id}
-            request={session.pendingRequest}
-            onRespond={async (decision, answers) => {
-              await api(
-                `/agents/sessions/${session.id}/responses`,
-                acceptedSchema,
-                json("POST", {
-                  requestId: session.pendingRequest?.id,
-                  decision,
-                  answers,
-                }),
-              );
-            }}
-          />
-        )}
-      </div>
+      <ConversationMessages
+        session={session}
+        capabilities={capabilities}
+        discovering={discovering}
+        messagesRef={messages}
+        followRef={follow}
+        onRespond={respondToRequest}
+      />
       {error && (
         <div className="chat-error" role="alert">
           <span>{error}</span>
@@ -791,21 +952,14 @@ export function ChatPanel({
                 <kbd>$</kbd> skills
               </span>
             </div>
-            {busy ? (
+            {busy ||
+            operation?.kind === "turn" ||
+            operation?.kind === "stop" ? (
               <button
                 className="send-button stop-button"
                 aria-label="Stop agent"
-                onClick={() =>
-                  void api(
-                    `/agents/sessions/${sessionId}/interrupt`,
-                    acceptedSchema,
-                    json("POST"),
-                  ).catch((error: unknown) =>
-                    setError(
-                      error instanceof Error ? error.message : String(error),
-                    ),
-                  )
-                }
+                disabled={operation?.kind === "stop"}
+                onClick={() => void stop()}
               >
                 <Square size={14} weight="fill" />
               </button>
@@ -814,7 +968,7 @@ export function ChatPanel({
                 className="send-button"
                 aria-label="Send message"
                 disabled={
-                  submitting ||
+                  controlsLocked ||
                   discovering ||
                   !capabilities?.available ||
                   (!draft.trim() && !attachments.length)

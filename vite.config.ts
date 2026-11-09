@@ -17,7 +17,14 @@ export default defineConfig({
         replacement: resolve("node_modules/@hyperframes/studio/src"),
       },
     ],
-    dedupe: ["react", "react-dom", "zustand"],
+    // Extensions must share Studio's pinned CodeMirror view and facet identities.
+    dedupe: [
+      "react",
+      "react-dom",
+      "zustand",
+      "@codemirror/view",
+      "@codemirror/state",
+    ],
   },
   define: {
     "import.meta.env.VITE_HYPERFRAMES_NO_TELEMETRY": JSON.stringify("1"),

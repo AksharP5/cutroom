@@ -16,8 +16,17 @@ export function Modal({
   const titleId = useId();
   useEffect(() => {
     const dialog = ref.current;
+    const opener = document.activeElement;
     dialog?.showModal();
-    return () => dialog?.close();
+    return () => {
+      dialog?.close();
+      if (
+        opener instanceof HTMLElement &&
+        opener.isConnected &&
+        !document.querySelector("dialog[open]")
+      )
+        opener.focus({ preventScroll: true });
+    };
   }, []);
   return (
     <dialog

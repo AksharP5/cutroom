@@ -59,6 +59,148 @@ export function studioPlugin(): Plugin {
           map: null,
         };
       }
+      if (id.endsWith("/hooks/useFileManager.ts")) {
+        let code = replaceOnce(
+          source,
+          "  const editingPathRef = useRef(editingFile?.path);",
+          "  const editingFileRef = useRef(editingFile);\n  editingFileRef.current = editingFile;\n  const editingPathRef = useRef(editingFile?.path);",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "  const editorSave = useEditorSave({\n",
+          "  const editorSave = useEditorSave({\n    editingFileRef,\n",
+          id,
+        );
+        return { code, map: null };
+      }
+      if (id.endsWith("/hooks/useStudioUrlState.ts")) {
+        const code = replaceOnce(
+          source,
+          '  if (typeof window === "undefined") return;\n  if (window.location.hash === nextHash) return;',
+          `  if (typeof window === "undefined") return;
+  // A pending editor update must not undo navigation to another project.
+  if (parseProjectIdFromHash(window.location.hash) !== parseProjectIdFromHash(nextHash)) return;
+  if (window.location.hash === nextHash) return;`,
+          id,
+        );
+        return { code, map: null };
+      }
+      if (id.endsWith("/hooks/useEditorSave.ts")) {
+        let code = replaceOnce(
+          source,
+          'import { useCallback, useRef } from "react";',
+          'import { useCallback, useRef } from "react";\nimport type { EditingFile } from "../utils/studioHelpers";\nimport { studioFileContentVersion } from "../utils/studioFileVersion";',
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "interface UseEditorSaveOptions {\n",
+          "interface UseEditorSaveOptions {\n  editingFileRef: React.RefObject<EditingFile | null>;\n",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "  content: string;\n}",
+          "  content: string;\n  baseContent: string;\n}",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "export function useEditorSave({\n",
+          "export function useEditorSave({\n  editingFileRef,\n",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "  const pendingCandidateRef = useRef<EditorSaveCandidate | null>(null);",
+          `  const pendingCandidateRef = useRef<EditorSaveCandidate | null>(null);
+  // Only successful source saves may advance the baseline of a queued draft.
+  const savedSourcesRef = useRef(new Map<string, { bases: Set<string>; content: string }>());`,
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "        readFile: readProjectFile,",
+          `        readFile: async (path) => {
+          const current = await readProjectFile(path);
+          const saved = savedSourcesRef.current.get(path);
+          if (current !== candidate.baseContent && current !== candidate.content &&
+              !(saved?.content === current && saved.bases.has(candidate.baseContent))) {
+            throw new StudioFileConflictError({
+              filePath: path,
+              currentVersion: await studioFileContentVersion(current),
+              currentContent: current,
+              attemptedContent: candidate.content,
+            });
+          }
+          return current;
+        },`,
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "          if (pendingCandidateRef.current === candidate) pendingCandidateRef.current = null;",
+          `          let saved = savedSourcesRef.current.get(candidate.path);
+          if (!saved?.bases.has(candidate.baseContent)) {
+            saved = { bases: new Set([candidate.baseContent]), content: candidate.content };
+            savedSourcesRef.current.set(candidate.path, saved);
+          }
+          saved.content = candidate.content;
+          saved.bases.add(candidate.content);
+          if (pendingCandidateRef.current === candidate) {
+            pendingCandidateRef.current = null;
+            saved.bases.clear();
+            saved.bases.add(candidate.content);
+          }`,
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "      const candidate = { projectId: pid, path, content };",
+          `      const base = editingFileRef.current;
+      if (base?.path !== path || base.content === null) {
+        reportFailure(path, new Error("The source must finish loading before saving."));
+        return;
+      }
+      const candidate = { projectId: pid, path, content, baseContent: base.content };`,
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "    [editingPathRef, projectIdRef, persistCandidate],",
+          "    [editingFileRef, editingPathRef, projectIdRef, persistCandidate, reportFailure],",
+          id,
+        );
+        return { code, map: null };
+      }
+      if (id.endsWith("/components/editor/SourceEditor.tsx")) {
+        let code = replaceOnce(
+          source,
+          "  const contentRef = useRef(content);",
+          "  const previousContentRef = useRef(content);\n  const contentRef = useRef(content);",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "    const current = view.state.doc.toString();\n    if (current === content) return;",
+          "    const previous = previousContentRef.current;\n    previousContentRef.current = content;\n    const current = view.state.doc.toString();\n    if (current === content) return;",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          `    // If the user is actively typing (editor focused), a programmatic replace
+    // would clobber their in-flight keystrokes — the ExternalSync annotation
+    // suppresses onChange, so those edits would be silently lost. Skip the
+    // external sync while focused; it re-runs on the next \x60content\x60 change after
+    // they blur (or when a later commit lands with the editor unfocused).
+    if (view.hasFocus) return;`,
+          `    // A clean focused buffer can accept outside changes. Keep unsaved keystrokes.
+    if (view.hasFocus && current !== previous) return;`,
+          id,
+        );
+        return { code, map: null };
+      }
       if (id.endsWith("/components/ui/HyperframesLoader.tsx")) {
         if (!source.includes("export function HyperframesLoader"))
           throw new Error("Upstream composition loader changed.");
@@ -158,6 +300,9 @@ export function studioPlugin(): Plugin {
           source,
           "                <StudioHeader\n",
           `                <StudioHeader
+                  onSelectComposition={handleSelectComposition}
+                  activeCompPath={activeCompPath}
+                  compositionLoading={compositionLoading}
                   onUndo={appHotkeys.handleUndo}
                   onRedo={appHotkeys.handleRedo}
                   canUndo={historyFlags.canUndo}
@@ -190,6 +335,22 @@ export function studioPlugin(): Plugin {
           source,
           "    if (import.meta.hot) {",
           "    if (false && import.meta.hot) {",
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "      if (accept) onAcceptedPersistedFileChange(path, readFileChangeAffectedCompositions(owed));",
+          `      if (accept) {
+        const content = readFileChangeContent(owed);
+        if (content != null) onUseExternalFile?.(path, content);
+        onAcceptedPersistedFileChange(path, readFileChangeAffectedCompositions(owed));
+      }`,
+          id,
+        );
+        code = replaceOnce(
+          code,
+          "    [onAcceptedPersistedFileChange, reloadPreview, reloadSdkSession, refreshFileTree],",
+          "    [onAcceptedPersistedFileChange, onUseExternalFile, reloadPreview, reloadSdkSession, refreshFileTree],",
           id,
         );
         code = replaceOnce(

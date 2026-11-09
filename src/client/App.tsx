@@ -27,11 +27,10 @@ import {
 import { z } from "zod";
 import {
   AnnotationSchema,
-  ProjectDocumentSchema,
+  ProjectNotebookSchema,
   ProjectSchema,
   type Annotation,
   type Project,
-  type ProjectDocument,
 } from "../shared/project";
 import type {
   EditorContext,
@@ -39,6 +38,7 @@ import type {
   EditorReviewDraft,
 } from "../shared/editor";
 import { api, json, timecode } from "./api";
+import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
 import { FileDialog } from "./components/FileDialog";
@@ -59,10 +59,9 @@ const statusSchema = z.object({
   dataDir: z.string(),
   mcpCommand: z.string(),
 });
-const emptyDocument: ProjectDocument = {
-  schemaVersion: 1,
+const emptyDocument: z.infer<typeof ProjectNotebookSchema> = {
   annotations: [],
-  transcripts: [],
+  transcriptVersion: "",
 };
 
 class EditorBoundary extends Component<
@@ -99,17 +98,31 @@ function projectFromHash() {
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string | null>(projectFromHash);
-  const [projectDocument, setProjectDocument] =
-    useState<ProjectDocument>(emptyDocument);
+  const [documentState, setDocumentState] = useState<{
+    projectId: string;
+    document: z.infer<typeof ProjectNotebookSchema>;
+  } | null>(null);
+  const projectDocument =
+    documentState?.projectId === projectId
+      ? documentState.document
+      : emptyDocument;
   const [status, setStatus] = useState<z.infer<typeof statusSchema> | null>(
     null,
   );
   const [mode, setMode] = useState<EditorMode>("select");
+  const [sourceRevision, setSourceRevision] = useState(0);
   const [panel, setPanel] = useState<"review" | "script">("review");
-  const [reviewDraft, setReviewDraft] = useState<EditorReviewDraft | null>(
-    null,
-  );
-  const [prompt, setPrompt] = useState<string | null>(null);
+  const [reviewState, setReviewState] = useState<{
+    projectId: string;
+    draft: EditorReviewDraft;
+  } | null>(null);
+  const reviewDraft =
+    reviewState?.projectId === projectId ? reviewState.draft : null;
+  const [promptState, setPromptState] = useState<{
+    projectId: string;
+    text: string;
+  } | null>(null);
+  const prompt = promptState?.projectId === projectId ? promptState.text : null;
   const [chatVisible, setChatVisible] = useState(true);
   const [notebookVisible, setNotebookVisible] = useState(true);
   const [dialog, setDialog] = useState<
@@ -119,32 +132,36 @@ export function App() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const attachmentResolve = useRef<((path: string | null) => void) | null>(
-    null,
-  );
+  const attachmentResolve = useRef<{
+    projectId: string;
+    resolve: (path: string | null) => void;
+  } | null>(null);
   const context = useRef<EditorContext | null>(null);
   const documentRequest = useRef(0);
+  const projectListRequest = useRef(0);
+  const projectOpening = useRef<object | null>(null);
   const activeProjectId = useRef(projectId);
   activeProjectId.current = projectId;
   const project = projects.find((item) => item.id === projectId);
 
   const loadProjects = useCallback(async () => {
+    const request = ++projectListRequest.current;
     const result = await api("/projects", projectsSchema);
-    setProjects(result.projects);
+    if (request === projectListRequest.current) setProjects(result.projects);
     return result.projects;
   }, []);
   const refreshDocument = useCallback(async () => {
     if (!projectId) return;
     const request = ++documentRequest.current;
     const result = await api(
-      `/projects/${projectId}/document`,
-      ProjectDocumentSchema,
+      `/projects/${projectId}/notebook`,
+      ProjectNotebookSchema,
     );
     if (
       activeProjectId.current === projectId &&
       request === documentRequest.current
     )
-      setProjectDocument(result);
+      setDocumentState({ projectId, document: result });
   }, [projectId]);
 
   useEffect(() => {
@@ -162,15 +179,28 @@ export function App() {
   }, [loadProjects]);
 
   useEffect(() => {
-    setProjectDocument(emptyDocument);
-    setReviewDraft(null);
+    projectOpening.current = null;
+    setCreating(false);
+    setReviewState(null);
+    attachmentResolve.current?.resolve(null);
+    attachmentResolve.current = null;
+    setPicker((current) => (current === "file" ? null : current));
     context.current = null;
     void refreshDocument().catch((error: unknown) =>
       setError(error instanceof Error ? error.message : String(error)),
     );
     if (!projectId) return;
     const events = new EventSource(`/api/cutroom/projects/${projectId}/events`);
-    events.onmessage = () => {
+    events.onmessage = (event) => {
+      try {
+        const payload = z
+          .object({ changed: z.string() })
+          .parse(JSON.parse(event.data));
+        if (/\.html?$/i.test(payload.changed))
+          setSourceRevision((value) => value + 1);
+      } catch {
+        return;
+      }
       void refreshDocument().catch(() => {});
     };
     return () => events.close();
@@ -195,14 +225,21 @@ export function App() {
       }
       if (event.key === "Escape") {
         setMode("select");
-        setReviewDraft(null);
+        setReviewState(null);
       }
     }
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, []);
 
+  function closeCreateDialog() {
+    projectOpening.current = null;
+    setCreating(false);
+    setDialog(null);
+  }
   function openProject(next: Project) {
+    projectOpening.current = null;
+    setCreating(false);
     window.location.hash = `project/${encodeURIComponent(next.id)}?v=1&rc=1&tv=1`;
     setProjectId(next.id);
     setDialog(null);
@@ -212,26 +249,37 @@ export function App() {
   const onContext = useCallback((value: EditorContext) => {
     context.current = value;
   }, []);
-  const onReview = useCallback((value: EditorReviewDraft) => {
-    setReviewDraft(value);
-    setPanel("review");
-    setNotebookVisible(true);
-    setMode("select");
-  }, []);
-  const consumePrompt = useCallback(() => setPrompt(null), []);
-  const ask = useCallback((value: string) => {
-    setPrompt(value);
-    setChatVisible(true);
-  }, []);
-  async function seek(time: number) {
+  const onReview = useCallback(
+    (value: EditorReviewDraft) => {
+      if (!projectId || activeProjectId.current !== projectId) return;
+      setReviewState({ projectId, draft: value });
+      setPanel("review");
+      setNotebookVisible(true);
+      setMode("select");
+    },
+    [projectId],
+  );
+  const consumePrompt = useCallback(() => setPromptState(null), []);
+  const ask = useCallback(
+    (value: string) => {
+      if (!projectId || activeProjectId.current !== projectId) return;
+      setPromptState({ projectId, text: value });
+      setChatVisible(true);
+    },
+    [projectId],
+  );
+  const seek = useCallback(async (time: number, compositionPath?: string) => {
+    const expectedProject = activeProjectId.current;
     const { seekEditor } = await import("./editor/CutroomEditor");
-    seekEditor(time);
-  }
+    if (activeProjectId.current === expectedProject)
+      seekEditor(time, compositionPath);
+  }, []);
   const changed = useCallback(async () => {
     await refreshDocument();
+    if (activeProjectId.current !== projectId) return;
     const { refreshEditor } = await import("./editor/CutroomEditor");
     refreshEditor();
-  }, [refreshDocument]);
+  }, [projectId, refreshDocument]);
   function getContext() {
     const notes = projectDocument.annotations.filter(
       (item) => item.status === "open",
@@ -329,7 +377,11 @@ export function App() {
         <main
           className={`workspace ${notebookVisible ? "with-notebook" : ""} ${chatVisible ? "with-chat" : ""}`}
         >
-          <aside className="notebook" hidden={!notebookVisible}>
+          <aside
+            key={`notebook:${project.id}`}
+            className="notebook"
+            hidden={!notebookVisible}
+          >
             <header className="panel-heading">
               <span className="panel-title">Notebook</span>
               <span className="quiet-label">
@@ -360,7 +412,7 @@ export function App() {
                   projectId={project.id}
                   annotations={projectDocument.annotations}
                   draft={reviewDraft}
-                  onCancel={() => setReviewDraft(null)}
+                  onCancel={() => setReviewState(null)}
                   onSave={async (body) => {
                     if (!reviewDraft) return;
                     const captureError = await saveReviewNote(
@@ -368,14 +420,18 @@ export function App() {
                       reviewDraft,
                       body,
                     );
-                    setReviewDraft(null);
+                    setReviewState((current) =>
+                      current?.draft === reviewDraft ? null : current,
+                    );
                     await refreshDocument();
-                    if (captureError)
+                    if (captureError && activeProjectId.current === project.id)
                       setError(
                         `Note saved without a frame image. ${captureError}`,
                       );
                   }}
-                  onSeek={(time) => void seek(time)}
+                  onSeek={(annotation) =>
+                    void seek(annotation.time, annotation.compositionPath)
+                  }
                   onResolve={async (annotation) => {
                     await api(
                       `/projects/${projectId}/annotations/${annotation.id}`,
@@ -402,9 +458,10 @@ export function App() {
               <div hidden={panel !== "script"}>
                 <ScriptPanel
                   projectId={project.id}
-                  transcripts={projectDocument.transcripts}
+                  revision={`${projectDocument.transcriptVersion}:${sourceRevision}`}
+                  visible={panel === "script" && notebookVisible}
                   onChange={changed}
-                  onSeek={(time) => void seek(time)}
+                  onSeek={seek}
                   onAsk={ask}
                 />
               </div>
@@ -508,7 +565,7 @@ export function App() {
             onPromptConsumed={consumePrompt}
             pickAttachment={() =>
               new Promise((resolve) => {
-                attachmentResolve.current = resolve;
+                attachmentResolve.current = { projectId: project.id, resolve };
                 setPicker("file");
               })
             }
@@ -558,26 +615,35 @@ export function App() {
         </Modal>
       )}
       {dialog === "create" && (
-        <Modal title="New project" onClose={() => setDialog(null)}>
+        <Modal title="New project" onClose={closeCreateDialog}>
           <form
             className="project-form"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!name.trim() || creating) return;
+              if (!name.trim() || projectOpening.current) return;
+              const operation = {};
+              projectOpening.current = operation;
               setCreating(true);
               setError("");
               void api("/projects", ProjectSchema, json("POST", { name }))
                 .then(async (created) => {
                   await loadProjects();
+                  if (projectOpening.current !== operation) return;
                   openProject(created);
                   setName("");
                 })
-                .catch((error: unknown) =>
-                  setError(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                )
-                .finally(() => setCreating(false));
+                .catch((error: unknown) => {
+                  if (projectOpening.current === operation)
+                    setError(
+                      error instanceof Error ? error.message : String(error),
+                    );
+                })
+                .finally(() => {
+                  if (projectOpening.current === operation) {
+                    projectOpening.current = null;
+                    setCreating(false);
+                  }
+                });
             }}
           >
             <label htmlFor="project-name">Project name</label>
@@ -599,7 +665,7 @@ export function App() {
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => setDialog(null)}
+                onClick={closeCreateDialog}
               >
                 Cancel
               </button>
@@ -644,7 +710,7 @@ export function App() {
                 chat panel.
               </p>
             </section>
-            <footer>Cutroom {status?.version ?? "0.1.0"}</footer>
+            <footer>Cutroom {status?.version ?? version}</footer>
           </div>
         </Modal>
       )}
@@ -654,39 +720,48 @@ export function App() {
           initialPath={project?.path ?? status?.projectsDir ?? "/home"}
           onClose={() => {
             setPicker(null);
-            attachmentResolve.current?.(null);
+            attachmentResolve.current?.resolve(null);
             attachmentResolve.current = null;
           }}
           onSelect={(path) => {
             const kind = picker;
             setPicker(null);
             if (kind === "file") {
-              const resolve = attachmentResolve.current;
+              const pending = attachmentResolve.current;
               attachmentResolve.current = null;
+              if (!pending) return;
               void api(
-                `/projects/${projectId}/attachments/import`,
+                `/projects/${pending.projectId}/attachments/import`,
                 z.object({ path: z.string() }),
                 json("POST", { path }),
               )
-                .then((attachment) => resolve?.(attachment.path))
+                .then((attachment) => pending.resolve(attachment.path))
                 .catch((error: unknown) => {
-                  resolve?.(null);
-                  setError(
-                    error instanceof Error ? error.message : String(error),
-                  );
+                  pending.resolve(null);
+                  if (activeProjectId.current === pending.projectId)
+                    setError(
+                      error instanceof Error ? error.message : String(error),
+                    );
                 });
               return;
             }
+            const operation = {};
+            projectOpening.current = operation;
             void api("/projects/import", ProjectSchema, json("POST", { path }))
               .then(async (imported) => {
                 await loadProjects();
-                openProject(imported);
+                if (projectOpening.current === operation) openProject(imported);
               })
-              .catch((error: unknown) =>
-                setError(
-                  error instanceof Error ? error.message : String(error),
-                ),
-              );
+              .catch((error: unknown) => {
+                if (projectOpening.current === operation)
+                  setError(
+                    error instanceof Error ? error.message : String(error),
+                  );
+              })
+              .finally(() => {
+                if (projectOpening.current === operation)
+                  projectOpening.current = null;
+              });
           }}
         />
       )}

@@ -15,6 +15,15 @@ test("visual review, native skill selection, and script edits survive real works
   request,
 }) => {
   const errors: string[] = [];
+  const scriptRequests: string[] = [];
+  page.on("request", (request) => {
+    if (
+      /\/api\/cutroom\/projects\/[^/]+\/(media|transcripts)$/.test(
+        new URL(request.url()).pathname,
+      )
+    )
+      scriptRequests.push(request.url());
+  });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
     route.fulfill({
@@ -51,6 +60,7 @@ test("visual review, native skill selection, and script edits survive real works
   );
   const frame = page.frameLocator("hyperframes-player iframe").last();
   await expect(frame.locator("#headline")).toHaveText("A new perspective");
+  expect(scriptRequests).toHaveLength(0);
 
   await page
     .getByRole("button", { name: "Toggle project files", exact: true })

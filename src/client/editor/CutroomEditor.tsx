@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -21,6 +22,8 @@ import type {
   EditorReviewDraft,
 } from "../../shared/editor";
 
+const NativeStudio = memo(StudioApp);
+
 export interface CutroomEditorProps {
   projectId: string;
   mode?: EditorMode;
@@ -29,10 +32,18 @@ export interface CutroomEditorProps {
   onAskAgent?: (prompt: string) => void;
 }
 
-export function seekEditor(time: number) {
+export function seekEditor(time: number, targetComposition?: string) {
+  if (targetComposition) {
+    window.dispatchEvent(
+      new CustomEvent("cutroom:seek-review", {
+        detail: { time, compositionPath: targetComposition },
+      }),
+    );
+    return;
+  }
   const state = usePlayerStore.getState();
   state.requestPlayback(false);
-  state.requestSeek(Math.max(0, Math.min(time, state.duration || time)));
+  state.requestSeek(Math.max(0, time));
 }
 
 export function refreshEditor() {
@@ -63,6 +74,8 @@ function ReviewOverlay({
   const host = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const points = useRef<EditorPoint[]>([]);
+  const drawnPoints = useRef(0);
+  const paintFrame = useRef<number | null>(null);
   const pointer = useRef<number | null>(null);
   const reviewTime = useRef(0);
   const iframe = usePreviewIframeStore((state) => state.iframe);
@@ -72,8 +85,8 @@ function ReviewOverlay({
   useEffect(() => {
     const doc = iframe?.contentDocument;
     if (!doc) return;
-    doc.querySelectorAll("audio,video").forEach((element) => {
-      if (element instanceof HTMLMediaElement) element.muted = true;
+    doc.querySelectorAll<HTMLMediaElement>("audio,video").forEach((element) => {
+      element.muted = true;
     });
   }, [iframe]);
 
@@ -84,22 +97,62 @@ function ReviewOverlay({
     if (!ctx) return;
     const width = element.clientWidth;
     const height = element.clientHeight;
-    element.width = Math.round(width * devicePixelRatio);
-    element.height = Math.round(height * devicePixelRatio);
-    ctx.scale(devicePixelRatio, devicePixelRatio);
+    const pixelWidth = Math.round(width * devicePixelRatio);
+    const pixelHeight = Math.round(height * devicePixelRatio);
+    if (element.width !== pixelWidth || element.height !== pixelHeight) {
+      element.width = pixelWidth;
+      element.height = pixelHeight;
+      drawnPoints.current = 0;
+    }
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    if (!points.current.length) {
+      ctx.clearRect(0, 0, width, height);
+      drawnPoints.current = 0;
+      return;
+    }
+    if (drawnPoints.current === points.current.length) return;
+    if (!drawnPoints.current) ctx.clearRect(0, 0, width, height);
     ctx.lineWidth = 3;
     ctx.strokeStyle = "#fa9a87";
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
-    points.current.forEach((point, index) => {
+    for (
+      let index = Math.max(0, drawnPoints.current - 1);
+      index < points.current.length;
+      index++
+    ) {
+      const point = points.current[index];
+      if (!point) continue;
       const x = point.x * width;
       const y = point.y * height;
-      if (index === 0) ctx.moveTo(x, y);
+      if (index === Math.max(0, drawnPoints.current - 1)) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
-    });
+    }
     ctx.stroke();
+    drawnPoints.current = points.current.length;
   }, []);
+  const scheduleDraw = useCallback(() => {
+    if (paintFrame.current !== null) return;
+    paintFrame.current = requestAnimationFrame(() => {
+      paintFrame.current = null;
+      draw();
+    });
+  }, [draw]);
+  const clearDrawing = useCallback(() => {
+    if (paintFrame.current !== null) cancelAnimationFrame(paintFrame.current);
+    paintFrame.current = null;
+    pointer.current = null;
+    points.current = [];
+    drawnPoints.current = 0;
+    draw();
+  }, [draw]);
+  useEffect(
+    () => () => {
+      if (paintFrame.current !== null) cancelAnimationFrame(paintFrame.current);
+    },
+    [],
+  );
 
   const pointFor = (event: PointerEvent<HTMLCanvasElement>): EditorPoint => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -130,8 +183,7 @@ function ReviewOverlay({
         frameUrl: `/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(current.compositionPath)}?${params}`,
       });
     }
-    points.current = [];
-    draw();
+    clearDrawing();
   };
 
   return (
@@ -169,20 +221,17 @@ function ReviewOverlay({
             usePlayerStore.getState().requestPlayback(false);
             pointer.current = event.pointerId;
             points.current = [pointFor(event)];
+            drawnPoints.current = 0;
             event.currentTarget.setPointerCapture(event.pointerId);
-            draw();
+            scheduleDraw();
           }}
           onPointerMove={(event) => {
             if (pointer.current !== event.pointerId || mode !== "draw") return;
             points.current.push(pointFor(event));
-            draw();
+            scheduleDraw();
           }}
           onPointerUp={finish}
-          onPointerCancel={() => {
-            pointer.current = null;
-            points.current = [];
-            draw();
-          }}
+          onPointerCancel={clearDrawing}
         />
       )}
     </div>
@@ -209,15 +258,16 @@ export function CutroomEditor({
   }, [controller, projectId]);
 
   useLayoutEffect(() => {
-    const sameProject = window.location.hash.startsWith(
-      `#project/${encodeURIComponent(projectId)}?`,
-    );
-    const previous = new URLSearchParams(
-      sameProject ? window.location.hash.split("?")[1] : undefined,
-    );
+    const projectHash = `#project/${encodeURIComponent(projectId)}`;
+    if (
+      window.location.hash !== projectHash &&
+      !window.location.hash.startsWith(`${projectHash}?`)
+    )
+      return;
+    const previous = new URLSearchParams(window.location.hash.split("?")[1]);
     previous.set("rc", "1");
     previous.set("tv", "1");
-    window.location.hash = `project/${encodeURIComponent(projectId)}?${previous}`;
+    window.history.replaceState(null, "", `${projectHash}?${previous}`);
     usePlayerStore.getState().setAudioMuted(true);
     setMountedProjectId(projectId);
   }, [projectId]);
@@ -261,7 +311,7 @@ export function CutroomEditor({
     >
       {mountedProjectId === projectId && (
         <>
-          <StudioApp key={projectId} />
+          <NativeStudio key={projectId} />
           <ReviewOverlay
             projectId={projectId}
             mode={mode}

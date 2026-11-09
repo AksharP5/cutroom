@@ -6,7 +6,7 @@ Cutroom's original code is MIT-licensed. Dependencies retain their own licenses;
 
 The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version 0.9.26 from [heygen-com/hyperframes](https://github.com/heygen-com/hyperframes). The public framework is Apache-2.0 licensed; its license is preserved in [licenses/HYPERFRAMES.txt](licenses/HYPERFRAMES.txt).
 
-`build/studioPlugin.ts` adapts the published editor source at build time. The adaptations replace the header, splash, transport icons, and agent handoff; remove hosted catalog and feedback UI; disable telemetry; and connect external file changes to Cutroom. Every transform checks its source match and package version. Capture and rendering adapters build on the public Studio server and CLI implementations.
+`build/studioPlugin.ts` adapts the published editor source at build time. The adaptations replace the header, splash, transport icons, and agent handoff; remove hosted catalog and feedback UI; disable telemetry; connect external file changes to Cutroom; and preserve source synchronization, save conflicts, and project navigation. Every transform checks its source match and package version. Capture and rendering adapters build on the public Studio server and CLI implementations.
 
 Cutroom does not include code or assets extracted from the proprietary HyperFrames desktop application. HyperFrames and HeyGen names describe dependency provenance, not affiliation or endorsement.
 

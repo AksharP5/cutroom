@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Check,
@@ -28,13 +28,18 @@ export function ReviewPanel({
   draft: EditorReviewDraft | null;
   onSave: (body: string) => Promise<void>;
   onCancel: () => void;
-  onSeek: (time: number) => void;
+  onSeek: (annotation: Annotation) => void;
   onResolve: (annotation: Annotation) => Promise<void>;
   onDelete: (annotation: Annotation) => Promise<void>;
   onSend: () => void;
 }) {
   const [body, setBody] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [savingDraft, setSavingDraft] = useState<EditorReviewDraft | null>(
+    null,
+  );
+  const saving = draft !== null && savingDraft === draft;
+  const activeDraft = useRef(draft);
+  activeDraft.current = draft;
   const [error, setError] = useState("");
   const [frame, setFrame] = useState<Annotation | null>(null);
   useEffect(() => setBody(""), [draft]);
@@ -59,12 +64,17 @@ export function ReviewPanel({
           className="review-draft"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!body.trim() || saving) return;
-            setSaving(true);
+            if (!draft || !body.trim() || saving) return;
+            const submittedDraft = draft;
+            setSavingDraft(submittedDraft);
             void run(async () => {
               await onSave(body);
-              setBody("");
-            }).finally(() => setSaving(false));
+              if (activeDraft.current === submittedDraft) setBody("");
+            }).finally(() =>
+              setSavingDraft((current) =>
+                current === submittedDraft ? null : current,
+              ),
+            );
           }}
         >
           <div className="review-draft-heading">
@@ -106,6 +116,7 @@ export function ReviewPanel({
           <textarea
             id="review-body"
             autoFocus
+            disabled={saving}
             value={body}
             onChange={(event) => setBody(event.target.value)}
             placeholder="What should change here?"
@@ -134,10 +145,7 @@ export function ReviewPanel({
       {open.map((annotation, index) => (
         <article className="review-note" key={annotation.id}>
           <div className="review-note-top">
-            <button
-              className="note-seek"
-              onClick={() => onSeek(annotation.time)}
-            >
+            <button className="note-seek" onClick={() => onSeek(annotation)}>
               <span className="note-number">{index + 1}</span>
               <time>{timecode(annotation.time)}</time>
             </button>
@@ -209,7 +217,7 @@ export function ReviewPanel({
             .filter((annotation) => annotation.status === "resolved")
             .map((annotation) => (
               <div key={annotation.id}>
-                <button onClick={() => onSeek(annotation.time)}>
+                <button onClick={() => onSeek(annotation)}>
                   {timecode(annotation.time)}
                 </button>
                 <span>{annotation.body}</span>

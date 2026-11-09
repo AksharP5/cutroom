@@ -811,6 +811,10 @@ select {
   font-size: 13px;
   color: #d6e0e5;
 }
+.transcript-chunk {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
 .transcript-words button {
   background: transparent;
   color: inherit;

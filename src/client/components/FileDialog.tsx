@@ -16,6 +16,14 @@ const directorySchema = z.object({
     }),
   ),
 });
+type DirectoryState =
+  | { status: "loading"; path: string }
+  | {
+      status: "ready";
+      path: string;
+      directory: z.infer<typeof directorySchema>;
+    }
+  | { status: "failed"; path: string; message: string };
 
 export function FileDialog({
   initialPath,
@@ -30,30 +38,33 @@ export function FileDialog({
 }) {
   const [path, setPath] = useState(initialPath);
   const [input, setInput] = useState(initialPath);
-  const [directory, setDirectory] = useState<z.infer<
-    typeof directorySchema
-  > | null>(null);
+  const [directoryState, setDirectoryState] = useState<DirectoryState>({
+    status: "loading",
+    path: initialPath,
+  });
+  const current = directoryState.path === path ? directoryState : null;
+  const directory = current?.status === "ready" ? current.directory : null;
+  const loading = current === null || current.status === "loading";
+  const error = current?.status === "failed" ? current.message : "";
   const [selected, setSelected] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError("");
+    setDirectoryState({ status: "loading", path });
     setSelected(null);
     void api(`/browse?path=${encodeURIComponent(path)}`, directorySchema)
       .then((result) => {
         if (!cancelled) {
-          setDirectory(result);
+          setDirectoryState({ status: "ready", path, directory: result });
           setInput(result.path);
         }
       })
       .catch((error: unknown) => {
         if (!cancelled)
-          setError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+          setDirectoryState({
+            status: "failed",
+            path,
+            message: error instanceof Error ? error.message : String(error),
+          });
       });
     return () => {
       cancelled = true;
@@ -109,6 +120,7 @@ export function FileDialog({
           .map((entry) => (
             <button
               key={entry.path}
+              disabled={loading}
               className={`file-row ${selected === entry.path ? "selected" : ""}`}
               onClick={() =>
                 entry.directory ? setPath(entry.path) : setSelected(entry.path)
@@ -136,7 +148,7 @@ export function FileDialog({
         </button>
         <button
           className="primary-button"
-          disabled={loading || (kind === "file" ? !selected : !directory)}
+          disabled={loading || !directory || (kind === "file" && !selected)}
           onClick={() => {
             const value = kind === "file" ? selected : directory?.path;
             if (value) onSelect(value);
