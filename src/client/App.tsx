@@ -9,20 +9,19 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ArrowsOutSimple,
   CaretDown,
   ChatTeardropText,
   Check,
-  Cursor,
   FilmSlate,
   FolderOpen,
   Folders,
   GearSix,
-  PencilSimple,
   Plus,
   SidebarSimple,
   TerminalWindow,
   TextAlignLeft,
+  Moon,
+  Sun,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
@@ -45,6 +44,7 @@ import { FileDialog } from "./components/FileDialog";
 import { Modal } from "./components/Modal";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
+import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 
 const Editor = lazy(() =>
@@ -123,8 +123,22 @@ export function App() {
     text: string;
   } | null>(null);
   const prompt = promptState?.projectId === projectId ? promptState.text : null;
-  const [chatVisible, setChatVisible] = useState(true);
-  const [notebookVisible, setNotebookVisible] = useState(true);
+  const [workPanel, setWorkPanel] = useState<"agent" | "notebook" | null>(
+    "agent",
+  );
+  const chatVisible = workPanel === "agent";
+  const notebookVisible = workPanel === "notebook";
+  const [theme, setTheme] = useState(() =>
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+  );
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("cutroom:theme", theme);
+    } catch {
+      // Theme changes still work when browser storage is unavailable.
+    }
+  }, [theme]);
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | null
   >(null);
@@ -254,7 +268,7 @@ export function App() {
       if (!projectId || activeProjectId.current !== projectId) return;
       setReviewState({ projectId, draft: value });
       setPanel("review");
-      setNotebookVisible(true);
+      setWorkPanel("notebook");
       setMode("select");
     },
     [projectId],
@@ -264,7 +278,7 @@ export function App() {
     (value: string) => {
       if (!projectId || activeProjectId.current !== projectId) return;
       setPromptState({ projectId, text: value });
-      setChatVisible(true);
+      setWorkPanel("agent");
     },
     [projectId],
   );
@@ -340,7 +354,11 @@ export function App() {
               className={`icon-button ${notebookVisible ? "active" : ""}`}
               aria-label="Toggle notebook"
               aria-pressed={notebookVisible}
-              onClick={() => setNotebookVisible((value) => !value)}
+              onClick={() =>
+                setWorkPanel((value) =>
+                  value === "notebook" ? null : "notebook",
+                )
+              }
             >
               <SidebarSimple />
             </button>
@@ -348,12 +366,23 @@ export function App() {
               className={`icon-button ${chatVisible ? "active" : ""}`}
               aria-label="Toggle agent chat"
               aria-pressed={chatVisible}
-              onClick={() => setChatVisible((value) => !value)}
+              onClick={() =>
+                setWorkPanel((value) => (value === "agent" ? null : "agent"))
+              }
             >
               <TerminalWindow />
             </button>
           </>
         )}
+        <button
+          className="icon-button theme-toggle"
+          aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
+          onClick={() =>
+            setTheme((value) => (value === "light" ? "dark" : "light"))
+          }
+        >
+          {theme === "light" ? <Moon /> : <Sun />}
+        </button>
         <button
           className="icon-button"
           aria-label="Settings"
@@ -374,202 +403,191 @@ export function App() {
           onImport={() => setPicker("directory")}
         />
       ) : (
-        <main
-          className={`workspace ${notebookVisible ? "with-notebook" : ""} ${chatVisible ? "with-chat" : ""}`}
-        >
-          <aside
-            key={`notebook:${project.id}`}
-            className="notebook"
-            hidden={!notebookVisible}
+        <main className={`workspace ${workPanel ? "with-work-panel" : ""}`}>
+          <section
+            className="work-panel"
+            aria-label="Project workspace"
+            hidden={!workPanel}
           >
-            <header className="panel-heading">
-              <span className="panel-title">Notebook</span>
-              <span className="quiet-label">
-                {projectDocument.annotations.filter(
-                  (item) => item.status === "open",
-                ).length || ""}
-              </span>
-            </header>
-            <nav className="notebook-tabs" aria-label="Notebook">
+            <nav className="workspace-tabs" aria-label="Workspace panels">
               <button
-                className={panel === "review" ? "active" : ""}
-                onClick={() => setPanel("review")}
+                className={chatVisible ? "active" : ""}
+                aria-pressed={chatVisible}
+                onClick={() => setWorkPanel("agent")}
               >
-                <ChatTeardropText size={15} />
-                Review
+                <TerminalWindow size={16} />
+                Agent
               </button>
               <button
-                className={panel === "script" ? "active" : ""}
-                onClick={() => setPanel("script")}
+                aria-label="Review"
+                className={
+                  notebookVisible && panel === "review" ? "active" : ""
+                }
+                aria-pressed={notebookVisible && panel === "review"}
+                onClick={() => {
+                  setPanel("review");
+                  setWorkPanel("notebook");
+                }}
               >
-                <TextAlignLeft size={15} />
+                <ChatTeardropText size={16} />
+                Review
+                {projectDocument.annotations.some(
+                  (item) => item.status === "open",
+                ) && (
+                  <span className="note-count">
+                    {
+                      projectDocument.annotations.filter(
+                        (item) => item.status === "open",
+                      ).length
+                    }
+                  </span>
+                )}
+              </button>
+              <button
+                className={
+                  notebookVisible && panel === "script" ? "active" : ""
+                }
+                aria-pressed={notebookVisible && panel === "script"}
+                onClick={() => {
+                  setPanel("script");
+                  setWorkPanel("notebook");
+                }}
+              >
+                <TextAlignLeft size={16} />
                 Script
               </button>
             </nav>
-            <div className="notebook-content">
-              <div hidden={panel !== "review"}>
-                <ReviewPanel
-                  projectId={project.id}
-                  annotations={projectDocument.annotations}
-                  draft={reviewDraft}
-                  onCancel={() => setReviewState(null)}
-                  onSave={async (body) => {
-                    if (!reviewDraft) return;
-                    const captureError = await saveReviewNote(
-                      project.id,
-                      reviewDraft,
-                      body,
-                    );
-                    setReviewState((current) =>
-                      current?.draft === reviewDraft ? null : current,
-                    );
-                    await refreshDocument();
-                    if (captureError && activeProjectId.current === project.id)
-                      setError(
-                        `Note saved without a frame image. ${captureError}`,
-                      );
-                  }}
-                  onSeek={(annotation) =>
-                    void seek(annotation.time, annotation.compositionPath)
-                  }
-                  onResolve={async (annotation) => {
-                    await api(
-                      `/projects/${projectId}/annotations/${annotation.id}`,
-                      AnnotationSchema,
-                      json("PATCH", { status: "resolved" }),
-                    );
-                    await refreshDocument();
-                  }}
-                  onDelete={async (annotation) => {
-                    await api(
-                      `/projects/${projectId}/annotations/${annotation.id}`,
-                      z.unknown(),
-                      json("DELETE"),
-                    );
-                    await refreshDocument();
-                  }}
-                  onSend={() =>
-                    ask(
-                      `Apply my ${projectDocument.annotations.filter((item) => item.status === "open").length} pending review notes. They are included with this message's project context.`,
-                    )
-                  }
-                />
-              </div>
-              <div hidden={panel !== "script"}>
-                <ScriptPanel
-                  projectId={project.id}
-                  revision={`${projectDocument.transcriptVersion}:${sourceRevision}`}
-                  visible={panel === "script" && notebookVisible}
-                  onChange={changed}
-                  onSeek={seek}
-                  onAsk={ask}
-                />
-              </div>
-            </div>
-            <button
-              className="project-location"
-              title={project.path}
-              onClick={() => void navigator.clipboard.writeText(project.path)}
+            <aside
+              key={`notebook:${project.id}`}
+              className="notebook"
+              hidden={!notebookVisible}
             >
-              <FolderOpen size={14} />
-              <span>{project.path.replace(/^\/home\/[^/]+/, "~")}</span>
-            </button>
-          </aside>
-          <section className="editor-workspace" aria-label="Video editor">
-            <div className="editor-topbar">
-              <div
-                className="mode-switch"
-                role="toolbar"
-                aria-label="Preview tools"
-              >
-                {(
-                  [
-                    { id: "select", label: "Select", key: "V", icon: Cursor },
-                    { id: "draw", label: "Draw", key: "D", icon: PencilSimple },
-                    {
-                      id: "comment",
-                      label: "Comment",
-                      key: "C",
-                      icon: ChatTeardropText,
-                    },
-                  ] as const
-                ).map((item) => (
-                  <button
-                    key={item.id}
-                    className={mode === item.id ? "active" : ""}
-                    aria-label={`${item.label} (${item.key})`}
-                    aria-pressed={mode === item.id}
-                    onClick={() => setMode(item.id)}
-                  >
-                    <item.icon size={16} />
-                    <span>{item.label}</span>
-                    <kbd>{item.key}</kbd>
-                  </button>
-                ))}
+              <div className="notebook-content">
+                <div hidden={panel !== "review"}>
+                  <ReviewPanel
+                    projectId={project.id}
+                    annotations={projectDocument.annotations}
+                    draft={reviewDraft}
+                    onCancel={() => setReviewState(null)}
+                    onSave={async (body) => {
+                      if (!reviewDraft) return;
+                      const captureError = await saveReviewNote(
+                        project.id,
+                        reviewDraft,
+                        body,
+                      );
+                      setReviewState((current) =>
+                        current?.draft === reviewDraft ? null : current,
+                      );
+                      await refreshDocument();
+                      if (
+                        captureError &&
+                        activeProjectId.current === project.id
+                      )
+                        setError(
+                          `Note saved without a frame image. ${captureError}`,
+                        );
+                    }}
+                    onSeek={(annotation) =>
+                      void seek(annotation.time, annotation.compositionPath)
+                    }
+                    onResolve={async (annotation) => {
+                      await api(
+                        `/projects/${projectId}/annotations/${annotation.id}`,
+                        AnnotationSchema,
+                        json("PATCH", { status: "resolved" }),
+                      );
+                      await refreshDocument();
+                    }}
+                    onDelete={async (annotation) => {
+                      await api(
+                        `/projects/${projectId}/annotations/${annotation.id}`,
+                        z.unknown(),
+                        json("DELETE"),
+                      );
+                      await refreshDocument();
+                    }}
+                    onSend={() =>
+                      ask(
+                        `Apply my ${projectDocument.annotations.filter((item) => item.status === "open").length} pending review notes. They are included with this message's project context.`,
+                      )
+                    }
+                  />
+                </div>
+                <div hidden={panel !== "script"}>
+                  <ScriptPanel
+                    projectId={project.id}
+                    revision={`${projectDocument.transcriptVersion}:${sourceRevision}`}
+                    visible={panel === "script" && notebookVisible}
+                    onChange={changed}
+                    onSeek={seek}
+                    onAsk={ask}
+                  />
+                </div>
               </div>
-              <span className="editor-mode-hint">
-                {mode === "draw"
-                  ? "Draw over the picture"
-                  : mode === "comment"
-                    ? "Click the picture to leave a note"
-                    : "Select an element to edit"}
-              </span>
               <button
-                className="icon-button"
-                aria-label="Focus editor"
-                onClick={() => {
-                  setNotebookVisible(false);
-                  setChatVisible(false);
-                }}
+                className="project-location"
+                title={project.path}
+                onClick={() => void navigator.clipboard.writeText(project.path)}
               >
-                <ArrowsOutSimple />
+                <FolderOpen size={14} />
+                <span>{project.path.replace(/^\/home\/[^/]+/, "~")}</span>
               </button>
-            </div>
-            <EditorBoundary key={project.id}>
-              <Suspense
-                fallback={
-                  <div className="editor-loading">
-                    <span>Opening editor</span>
-                    <div className="loading-line" />
-                  </div>
-                }
-              >
-                <Editor
-                  projectId={project.id}
-                  mode={mode}
-                  onContext={onContext}
-                  onReview={onReview}
-                  onAskAgent={ask}
-                />
-              </Suspense>
-            </EditorBoundary>
+            </aside>
+            <ChatPanel
+              key={project.id}
+              projectId={project.id}
+              visible={chatVisible}
+              getContext={getContext}
+              getReviewAttachments={() =>
+                projectDocument.annotations
+                  .filter((note) => note.status === "open" && note.framePath)
+                  .flatMap((note) => (note.framePath ? [note.framePath] : []))
+              }
+              onSent={() =>
+                void markSent().catch((error: unknown) =>
+                  setError(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                )
+              }
+              prompt={prompt}
+              onPromptConsumed={consumePrompt}
+              pickAttachment={() =>
+                new Promise((resolve) => {
+                  attachmentResolve.current = {
+                    projectId: project.id,
+                    resolve,
+                  };
+                  setPicker("file");
+                })
+              }
+            />
           </section>
-          <ChatPanel
-            key={project.id}
-            projectId={project.id}
-            visible={chatVisible}
-            getContext={getContext}
-            getReviewAttachments={() =>
-              projectDocument.annotations
-                .filter((note) => note.status === "open" && note.framePath)
-                .flatMap((note) => (note.framePath ? [note.framePath] : []))
-            }
-            onSent={() =>
-              void markSent().catch((error: unknown) =>
-                setError(
-                  error instanceof Error ? error.message : String(error),
-                ),
-              )
-            }
-            prompt={prompt}
-            onPromptConsumed={consumePrompt}
-            pickAttachment={() =>
-              new Promise((resolve) => {
-                attachmentResolve.current = { projectId: project.id, resolve };
-                setPicker("file");
-              })
-            }
-          />
+          <section className="editor-workspace" aria-label="Video editor">
+            <EditorToolsContext.Provider
+              value={{ mode, setMode, focusEditor: () => setWorkPanel(null) }}
+            >
+              <EditorBoundary key={project.id}>
+                <Suspense
+                  fallback={
+                    <div className="editor-loading">
+                      <span>Opening editor</span>
+                      <div className="loading-line" />
+                    </div>
+                  }
+                >
+                  <Editor
+                    projectId={project.id}
+                    mode={mode}
+                    onContext={onContext}
+                    onReview={onReview}
+                    onAskAgent={ask}
+                  />
+                </Suspense>
+              </EditorBoundary>
+            </EditorToolsContext.Provider>
+          </section>
         </main>
       )}
       {dialog === "projects" && (

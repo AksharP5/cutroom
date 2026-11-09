@@ -268,7 +268,12 @@ try {
     await page
       .getByRole("button", { name: "Cancel note", exact: true })
       .click();
-    await page.getByLabel("Message your agent").fill("A short draft");
+    const composer = page.getByLabel("Message your agent");
+    if (!(await composer.isVisible()))
+      await page.getByRole("button", { name: "Agent", exact: true }).click();
+    await composer.fill("A short draft");
+    const review = page.getByRole("button", { name: "Review", exact: true });
+    if (await review.count()) await review.click();
     phase = "note-update";
     const updated = page.waitForResponse((response) =>
       /\/projects\/[^/]+\/(document|notebook)$/.test(
@@ -300,7 +305,8 @@ try {
     await expect(page.locator(".word-selected")).toHaveCount(10_000);
     const selectAllMs = performance.now() - selectStart;
     phase = "typing";
-    const composer = page.getByLabel("Message your agent");
+    if (!(await composer.isVisible()))
+      await page.getByRole("button", { name: "Agent", exact: true }).click();
     await composer.fill("");
     const typingStart = performance.now();
     const text =
@@ -333,10 +339,10 @@ try {
       text.length,
     );
     await composer.pressSequentially(text);
-    await expect(composer).toHaveValue(text);
     const typingMs = performance.now() - typingStart;
     const typingFrameMs = await inputFrames;
     expect(typingFrameMs).toHaveLength(text.length);
+    await expect(composer).toHaveValue(text);
     await Promise.all(reads);
     results.push({
       readyMs,

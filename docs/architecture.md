@@ -14,6 +14,8 @@ External changes are watched and sent to the editor through server-sent events. 
 
 The public `@hyperframes/studio` application supplies the timeline, canvas editing, preview, inspector, and source editor. Cutroom supplies the surrounding workspace, review tools, agent panel, and original visual theme.
 
+Agent, Review, and Script share one work panel beside the editor. Their components stay mounted while switching tabs so drafts and native sessions survive navigation. Transcript reads run only while Script is visible. The document applies the saved theme before React starts to avoid a theme flash.
+
 `build/studioPlugin.ts` applies explicit, version-checked changes to the published source. It replaces branded chrome, removes hosted catalog and feedback, disables telemetry, and connects agent handoffs. The source package remains an upstream dependency rather than a copied editor fork.
 
 Keep the HyperFrames packages on the same version. An upgrade must review each source transform, run the editing and preview/export tests, and inspect the workspace in a real browser. A successful build alone is insufficient.

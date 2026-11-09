@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,6 +7,10 @@
     <meta name="description" content="Cutroom local video studio" />
     <title>Cutroom</title>
     <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("cutroom:theme") === "dark" ? "dark" : "light";
+      } catch {}
       window.__HF_CLI_TELEMETRY_DISABLED = true;
       window.__HF_STUDIO_ENV__ = { VITE_HYPERFRAMES_NO_TELEMETRY: "1" };
     </script>

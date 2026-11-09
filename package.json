@@ -1,6 +1,6 @@
 {
   "name": "cutroom",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "A local video studio with native agents, visual review, and script editing.",
   "type": "module",
@@ -28,6 +28,7 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.321",
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource/inter": "5.3.0",
     "@hyperframes/core": "0.9.26",
     "@hyperframes/parsers": "0.9.26",
     "@hyperframes/producer": "0.9.26",

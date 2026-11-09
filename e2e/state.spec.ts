@@ -59,6 +59,7 @@ test("changing projects closes a saved review frame and clears project-local rev
     ).ok(),
   ).toBeTruthy();
   await page.goto(`/#project/${first.id}`);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: "View annotated frame" }).click();
   await expect(
     page.getByRole("dialog", { name: "Review at 00:00.00" }),

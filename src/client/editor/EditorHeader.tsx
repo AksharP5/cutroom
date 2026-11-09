@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useDockLayoutStore, usePreviewIframeStore } from "@hyperframes/studio";
 import { seekEditor } from "./CutroomEditor";
+import { EditorTools } from "./EditorTools";
 
 const reviewSeekSchema = z.object({
   time: z.number().finite().nonnegative(),
@@ -97,7 +98,7 @@ export function EditorHeader(props: EditorHeaderProps) {
   };
   return (
     <div className="editor-header" aria-label="Composition controls">
-      <span className="editor-header-label">Canvas & timeline</span>
+      <EditorTools />
       <div className="editor-header-actions">
         <button
           type="button"

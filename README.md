@@ -41,6 +41,8 @@ Choose Codex or Claude Code in the agent panel. Type `$` to select one of that p
 
 If your agent is signed out, authenticate through its own CLI with `codex login` or `claude auth login`, then refresh the agent configuration in Cutroom.
 
+Switch between **Agent**, **Review**, and **Script** in the left panel. Drafts stay in place when you change tabs. The theme button switches between light and dark and remembers your choice.
+
 Use **D** to draw, **C** to comment, and **V** to select. In Script, select a word and Shift-click another to select a passage. Cuts ripple the selected media lane; other tracks keep their authored timing. Complex scripted or linked edits can be handed to the agent.
 
 See [local transcription](docs/transcription.md) and [editing behavior](docs/editing.md) for supported inputs and undo details.

@@ -278,10 +278,8 @@ const ConversationMessages = memo(function ConversationMessages({
           <div className="empty-agent-mark">
             <TerminalWindow size={26} weight="light" />
           </div>
-          <h2>Keep the work in view.</h2>
-          <p>
-            Ask your agent to edit, or draw a change directly on the picture.
-          </p>
+          <h2>What should we change?</h2>
+          <p>Describe an edit, or draw on the preview to show your agent.</p>
           <p className="native-note">
             {discovering
               ? "Reading your agent configuration…"
@@ -780,7 +778,7 @@ export function ChatPanel({
                 );
             }}
           >
-            <option value="">Configured default</option>
+            <option value="">Default model</option>
             {capabilities?.models.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}

@@ -62,6 +62,7 @@ test("a saved review note opens its own composition and frame", async ({
   await page.goto(`/#project/${project.id}`);
   const frame = page.frameLocator("hyperframes-player iframe").last();
   await expect(frame.locator("#headline")).toHaveText("Review navigation");
+  await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.locator(".review-note .note-seek").click();
   await expect(frame.locator("#headline")).toHaveText("Second composition");
   await expect(
