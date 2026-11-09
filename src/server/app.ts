@@ -76,7 +76,9 @@ export async function createApp(
     return c.json({ error: error.message }, 500);
   });
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const mcpCommand = `bun ${join(root, "src/server/mcp/stdio.ts")}`;
+  const mcpCommand = [process.execPath, join(root, "src/server/mcp/stdio.ts")]
+    .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
+    .join(" ");
   app.route(
     "/api/cutroom",
     createWorkspaceRoutes({ projects, dataDir, projectsDir, mcpCommand }),
