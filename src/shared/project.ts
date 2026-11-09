@@ -77,6 +77,10 @@ export const ProjectDocumentSchema = z.object({
   annotations: z.array(AnnotationSchema),
   transcripts: z.array(TranscriptSchema),
 });
+export const ProjectNotebookSchema = z.object({
+  annotations: z.array(AnnotationSchema),
+  transcriptVersion: z.string(),
+});
 export const ProjectSchema = z.object({
   id: z.string(),
   name: z.string(),

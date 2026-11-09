@@ -24,6 +24,7 @@ interface PreviewWindow extends Window {
 /** One browser is reused; individual captures own isolated, cancellable pages. */
 export function createThumbnailRenderer() {
   let browser: Promise<Browser> | undefined;
+  let closing: Promise<void> | undefined;
   const getBrowser = () =>
     (browser ??= (async () => {
       const executablePath = browserExecutable();
@@ -56,7 +57,7 @@ export function createThumbnailRenderer() {
 
   return {
     async capture(options: ThumbnailOptions): Promise<Buffer | null> {
-      if (options.signal.aborted) return null;
+      if (closing || options.signal.aborted) return null;
       let page: Page | undefined;
       const abort = () => {
         void page?.close().catch(() => {});
@@ -64,7 +65,7 @@ export function createThumbnailRenderer() {
       options.signal.addEventListener("abort", abort, { once: true });
       try {
         const instance = await getBrowser();
-        if (options.signal.aborted) return null;
+        if (closing || options.signal.aborted) return null;
         page = await instance.newPage();
         await page.setViewport({
           width: options.width,
@@ -111,7 +112,7 @@ export function createThumbnailRenderer() {
               options.selectorIndex,
             )
           : undefined;
-        if (options.signal.aborted) return null;
+        if (closing || options.signal.aborted) return null;
         const image = await page.screenshot(
           options.format === "png"
             ? { type: "png", ...(clip ? { clip } : {}) }
@@ -119,17 +120,19 @@ export function createThumbnailRenderer() {
         );
         return Buffer.from(image);
       } catch (error) {
-        if (options.signal.aborted) return null;
+        if (closing || options.signal.aborted) return null;
         throw error;
       } finally {
         options.signal.removeEventListener("abort", abort);
         await page?.close().catch(() => {});
       }
     },
-    async close() {
-      const current = browser;
-      browser = undefined;
-      if (current) await (await current).close();
+    close() {
+      closing ??= (async () => {
+        const current = browser;
+        if (current) await (await current).close();
+      })();
+      return closing;
     },
   };
 }

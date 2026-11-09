@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+import { version } from "../../shared/version";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
@@ -44,7 +45,7 @@ export function createMcpServer(options: McpOptions = {}) {
   const baseUrl = localApiBase(options.baseUrl);
   const fetchLocal = options.fetch ?? fetch;
   const server = new McpServer(
-    { name: "cutroom", version: "0.1.0" },
+    { name: "cutroom", version },
     {
       instructions:
         "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Never modify source media to cut the timeline.",

@@ -1,8 +1,28 @@
-import { readdir } from "node:fs/promises";
-import { basename, dirname, extname, join, relative } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import {
+  basename,
+  dirname,
+  extname,
+  join,
+  normalize,
+  relative,
+} from "node:path";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import type { MediaClip, Project } from "../../shared/project";
+import { ProjectDocumentSchema } from "../../shared/project";
 import { projectPath, readSource } from "./store";
+
+export function localMediaPath(sourceFile: string, src: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) return null;
+  try {
+    return join(
+      dirname(sourceFile),
+      decodeURIComponent(src.split(/[?#]/, 1)[0]!),
+    );
+  } catch {
+    return null;
+  }
+}
 
 export async function listMedia(project: Project): Promise<MediaClip[]> {
   const sources: string[] = [];
@@ -19,10 +39,70 @@ export async function listMedia(project: Project): Promise<MediaClip[]> {
   };
   await walk(project.path);
   const media: MediaClip[] = [];
+  let metadata: ReturnType<typeof ProjectDocumentSchema.parse> | undefined;
   for (const sourceFile of sources) {
     const source = await readSource(project, sourceFile);
     const { document } = parseSourceDocument(source.content);
     const elements = [...document.querySelectorAll("video, audio")];
+    const groups = new Map<string, Element[]>();
+    for (const element of elements) {
+      const id = element.getAttribute("data-cutroom-transcript");
+      if (!id) continue;
+      const group = groups.get(id) ?? [];
+      group.push(element);
+      groups.set(id, group);
+    }
+    const displayedTranscripts = new Set(
+      elements
+        .filter((element) => !element.id.includes("-cut-"))
+        .map((element) => element.getAttribute("data-cutroom-transcript")),
+    );
+    const missing = [
+      ...document.querySelectorAll("template[data-cutroom-anchor]"),
+    ].filter(
+      (anchor) =>
+        !displayedTranscripts.has(anchor.getAttribute("data-cutroom-anchor")),
+    );
+    if (missing.length) {
+      metadata ??= ProjectDocumentSchema.parse(
+        JSON.parse(
+          await readFile(await projectPath(project, "cutroom.json"), "utf8"),
+        ),
+      );
+      for (const anchor of missing) {
+        const transcript = metadata.transcripts.find(
+          (item) =>
+            item.id === anchor.getAttribute("data-cutroom-anchor") &&
+            normalize(item.sourceFile) === normalize(sourceFile),
+        );
+        if (!transcript) continue;
+        const original = parseSourceDocument(
+          transcript.original.html,
+        ).document.querySelector("video, audio");
+        if (!original) continue;
+        const pieces = groups.get(transcript.id) ?? [];
+        const start = pieces.length
+          ? Math.min(
+              ...pieces.map((element) =>
+                Number(element.getAttribute("data-start") ?? 0),
+              ),
+            )
+          : Number(
+              anchor.getAttribute("data-cutroom-start") ??
+                transcript.original.start,
+            );
+        const duration = pieces.reduce(
+          (sum, element) =>
+            sum + Number(element.getAttribute("data-duration") ?? 0),
+          0,
+        );
+        original.setAttribute("id", transcript.elementId);
+        original.setAttribute("data-start", String(start));
+        original.setAttribute("data-duration", String(duration));
+        original.removeAttribute("data-cutroom-transcript");
+        elements.push(original);
+      }
+    }
     for (let index = 0; index < elements.length; index++) {
       const element = elements[index]!;
       if (
@@ -33,19 +113,30 @@ export async function listMedia(project: Project): Promise<MediaClip[]> {
       const src =
         element.getAttribute("src") ??
         element.querySelector("source")?.getAttribute("src");
-      if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//"))
-        continue;
-      const mediaPath = join(
-        dirname(sourceFile),
-        decodeURIComponent(src.split(/[?#]/, 1)[0]!),
-      );
+      const mediaPath = src && localMediaPath(sourceFile, src);
+      if (!mediaPath) continue;
       const exists = await projectPath(project, mediaPath).then(
         () => true,
         () => false,
       );
       if (!exists) continue;
-      const start = Number(element.getAttribute("data-start") ?? "0");
-      const duration = Number(element.getAttribute("data-duration") ?? "0");
+      const group = groups.get(
+        element.getAttribute("data-cutroom-transcript") ?? "",
+      );
+      const start = group
+        ? Math.min(
+            ...group.map((piece) =>
+              Number(piece.getAttribute("data-start") ?? 0),
+            ),
+          )
+        : Number(element.getAttribute("data-start") ?? "0");
+      const duration = group
+        ? group.reduce(
+            (sum, piece) =>
+              sum + Number(piece.getAttribute("data-duration") ?? 0),
+            0,
+          )
+        : Number(element.getAttribute("data-duration") ?? "0");
       media.push({
         elementId: element.id || `media:${index}`,
         mediaPath,

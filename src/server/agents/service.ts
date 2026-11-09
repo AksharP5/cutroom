@@ -31,6 +31,12 @@ type PendingRequest = {
   resolve: (response: AgentResponse) => void;
   removeAbortListener: () => void;
 };
+type TurnOperation = {
+  kind: "turn";
+  phase: "preparing" | "running";
+  controller: AbortController;
+};
+type SessionOperation = TurnOperation | { kind: "configure" };
 export type AgentServiceOptions = {
   projects: ProjectStore;
   dataDir: string;
@@ -40,7 +46,7 @@ export type AgentServiceOptions = {
 
 export class AgentService {
   private readonly sessions = new Map<string, AgentSession>();
-  private readonly admissions = new Set<string>();
+  private readonly operations = new Map<string, SessionOperation>();
   private readonly runtimes = new Map<string, AgentRuntime>();
   private readonly listeners = new Map<
     string,
@@ -57,6 +63,7 @@ export class AgentService {
   private writeChain = Promise.resolve();
   private saveTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
+  private closing?: Promise<void>;
 
   constructor(private readonly options: AgentServiceOptions) {
     this.path = join(options.dataDir, "agents.json");
@@ -97,12 +104,19 @@ export class AgentService {
     return session;
   }
 
+  private requireOpen() {
+    if (this.disposed)
+      throw new HttpError(503, "Cutroom's agent service is closed.");
+  }
+
   async capabilities(
     provider: AgentProvider,
     projectId: string,
     refresh = false,
   ) {
+    this.requireOpen();
     const project = await this.options.projects.get(projectId);
+    this.requireOpen();
     const key = `${provider}:${project.path}`;
     const cached = this.capabilitiesCache.get(key);
     if (!refresh && cached && cached.expiresAt > Date.now())
@@ -133,7 +147,9 @@ export class AgentService {
   }
 
   async create(input: CreateAgentSession) {
+    this.requireOpen();
     await this.options.projects.get(input.projectId);
+    this.requireOpen();
     const now = new Date().toISOString();
     const session: AgentSession = {
       id: crypto.randomUUID(),
@@ -152,14 +168,12 @@ export class AgentService {
   }
 
   async configure(id: string, input: ConfigureAgentSession) {
+    this.requireOpen();
     const session = this.requireSession(id);
-    if (
-      this.admissions.has(id) ||
-      session.status === "running" ||
-      session.status === "waiting"
-    )
+    if (this.operations.has(id))
       throw new HttpError(409, "Stop the current run before changing models.");
-    this.admissions.add(id);
+    const operation: SessionOperation = { kind: "configure" };
+    this.operations.set(id, operation);
     try {
       if (input.model === undefined || input.model === session.model)
         return this.get(id);
@@ -170,6 +184,7 @@ export class AgentService {
           session.projectId,
           true,
         );
+        this.requireOpen();
         const configured = capabilities.models.find(
           (candidate) => candidate.isDefault,
         );
@@ -180,50 +195,101 @@ export class AgentService {
           );
         model = configured.id;
       }
-      this.runtimes.get(id)?.dispose();
+      const previous = this.runtimes.get(id);
       this.runtimes.delete(id);
+      previous?.dispose();
       session.model = model;
       session.updatedAt = new Date().toISOString();
       await this.persist();
       this.emit(id, { type: "snapshot", session: structuredClone(session) });
       return this.get(id);
     } finally {
-      this.admissions.delete(id);
+      if (this.operations.get(id) === operation) this.operations.delete(id);
     }
   }
 
   async send(id: string, turn: AgentTurn) {
+    this.requireOpen();
     const session = this.requireSession(id);
-    if (
-      this.admissions.has(id) ||
-      session.status === "running" ||
-      session.status === "waiting"
-    )
+    if (this.operations.has(id))
       throw new HttpError(
         409,
         "This agent is working. Stop it before sending another request.",
       );
-    this.admissions.add(id);
+    const operation: TurnOperation = {
+      kind: "turn",
+      phase: "preparing",
+      controller: new AbortController(),
+    };
+    this.operations.set(id, operation);
     try {
-      return await this.startTurn(session, turn);
+      return await this.startTurn(session, turn, operation);
     } catch (error) {
-      if (this.requireSession(id).status === "running")
+      if (this.admissionCancelled(id, operation)) return this.get(id);
+      if (this.operations.get(id) === operation) this.operations.delete(id);
+      if (!this.disposed && this.requireSession(id).status === "running")
         this.apply(id, {
           type: "error",
           message: error instanceof Error ? error.message : String(error),
         });
       throw error;
-    } finally {
-      this.admissions.delete(id);
     }
   }
 
-  private async startTurn(session: AgentSession, turn: AgentTurn) {
+  private admissionCancelled(id: string, operation: TurnOperation) {
+    if (
+      !operation.controller.signal.aborted &&
+      !this.disposed &&
+      this.operations.get(id) === operation
+    )
+      return false;
+    if (this.operations.get(id) !== operation) return true;
+    this.operations.delete(id);
+    if (!this.disposed && this.requireSession(id).status === "running")
+      this.apply(id, { type: "status", status: "idle" });
+    return true;
+  }
+
+  private prepare<T>(operation: TurnOperation, work: Promise<T>): Promise<T> {
+    const signal = operation.controller.signal;
+    return new Promise((resolve, reject) => {
+      const cancel = () => {
+        signal.removeEventListener("abort", cancel);
+        reject(signal.reason);
+      };
+      if (signal.aborted) cancel();
+      else signal.addEventListener("abort", cancel, { once: true });
+      work.then(
+        (value) => {
+          signal.removeEventListener("abort", cancel);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", cancel);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  private async startTurn(
+    session: AgentSession,
+    turn: AgentTurn,
+    operation: TurnOperation,
+  ) {
     const id = session.id;
-    const project = await this.options.projects.get(session.projectId);
+    const project = await this.prepare(
+      operation,
+      this.options.projects.get(session.projectId),
+    );
+    if (this.admissionCancelled(id, operation)) return this.get(id);
     const capabilities = turn.skills.length
-      ? await this.capabilities(session.provider, session.projectId)
+      ? await this.prepare(
+          operation,
+          this.capabilities(session.provider, session.projectId),
+        )
       : undefined;
+    if (this.admissionCancelled(id, operation)) return this.get(id);
     if (capabilities && !capabilities.available)
       throw new HttpError(
         503,
@@ -243,22 +309,26 @@ export class AgentService {
         );
       return { name: skill.name, ...(skill.path ? { path: skill.path } : {}) };
     });
-    const attachments = await Promise.all(
-      turn.attachments.map(async (attachment) => {
-        if (!isAbsolute(attachment.path))
-          throw new HttpError(
-            400,
-            "Attachments must use an absolute project file path.",
-          );
-        return {
-          ...attachment,
-          path: await projectPath(
-            project,
-            relative(project.path, attachment.path),
-          ),
-        };
-      }),
+    const attachments = await this.prepare(
+      operation,
+      Promise.all(
+        turn.attachments.map(async (attachment) => {
+          if (!isAbsolute(attachment.path))
+            throw new HttpError(
+              400,
+              "Attachments must use an absolute project file path.",
+            );
+          return {
+            ...attachment,
+            path: await projectPath(
+              project,
+              relative(project.path, attachment.path),
+            ),
+          };
+        }),
+      ),
     );
+    if (this.admissionCancelled(id, operation)) return this.get(id);
     const nativeTurn = { ...turn, skills, attachments };
     if (!session.messages.some((message) => message.role === "user"))
       session.title = turn.text.trim().slice(0, 90) || "Attached media";
@@ -268,6 +338,11 @@ export class AgentService {
     });
     this.apply(id, { type: "status", status: "running" });
     await this.persist();
+    if (this.admissionCancelled(id, operation)) {
+      if (!this.disposed) await this.persist();
+      return this.get(id);
+    }
+    operation.phase = "running";
     let runtime = this.runtimes.get(id);
     if (!runtime) {
       runtime = this.factory.create(session.provider, {
@@ -275,46 +350,64 @@ export class AgentService {
         model: session.model,
         nativeSessionId: session.nativeSessionId,
         emit: (event) => {
-          this.apply(id, event);
+          if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
+            return;
           if (event.type === "error") {
-            this.runtimes.get(id)?.dispose();
+            this.finishStreaming(id, "failed");
+            this.rejectRequests(id);
             this.runtimes.delete(id);
+            runtime.dispose();
           }
+          this.apply(id, event);
         },
-        request: (request, signal) => this.request(id, request, signal),
+        request: (request, signal) =>
+          runtime && this.runtimes.get(id) === runtime
+            ? this.request(id, request, signal)
+            : Promise.resolve({ requestId: request.id, decision: "deny" }),
       });
       this.runtimes.set(id, runtime);
     }
     const native = runtime;
     void native
       .send(nativeTurn)
-      .then(async () => {
-        if (this.disposed) return;
+      .then(() => {
+        if (this.disposed || this.operations.get(id) !== operation) return;
         this.finishStreaming(id, "complete");
+        this.rejectRequests(id);
+        this.operations.delete(id);
         this.apply(id, { type: "status", status: "idle" });
-        await this.persist();
+        void this.persist().catch((error) => this.storageFailed(error));
       })
-      .catch(async (error) => {
-        if (this.disposed) return;
+      .catch((error) => {
+        if (this.disposed || this.operations.get(id) !== operation) return;
         this.finishStreaming(id, "failed");
         this.rejectRequests(id);
-        native.dispose();
-        this.runtimes.delete(id);
-        this.apply(id, {
-          type: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-        try {
-          await this.persist();
-        } catch (failure) {
-          this.storageFailed(failure);
+        if (this.runtimes.get(id) === native) {
+          this.runtimes.delete(id);
+          native.dispose();
         }
+        this.operations.delete(id);
+        if (session.status !== "error")
+          this.apply(id, {
+            type: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        void this.persist().catch((failure) => this.storageFailed(failure));
       });
     return this.get(id);
   }
 
   async interrupt(id: string) {
+    this.requireOpen();
     const session = this.requireSession(id);
+    const operation = this.operations.get(id);
+    if (operation?.kind === "turn") {
+      operation.controller.abort();
+      if (operation.phase === "preparing") {
+        this.admissionCancelled(id, operation);
+        return this.get(id);
+      }
+    }
     this.rejectRequests(id);
     const runtime = this.runtimes.get(id);
     if (
@@ -326,7 +419,9 @@ export class AgentService {
   }
 
   async respond(id: string, response: AgentResponse) {
+    this.requireOpen();
     const session = this.requireSession(id);
+    const operation = this.operations.get(id);
     const queue = this.pendingRequests.get(id) ?? [];
     const current = queue[0];
     if (!current || current.request.id !== response.requestId)
@@ -341,14 +436,30 @@ export class AgentService {
     const next = queue[0];
     if (next) this.apply(id, { type: "request", request: next.request });
     else this.apply(id, { type: "status", status: "running" });
-    await this.persist();
-    current.resolve(response);
+    try {
+      await this.persist();
+      current.resolve(
+        operation?.kind === "turn" && operation.controller.signal.aborted
+          ? { requestId: response.requestId, decision: "deny" }
+          : response,
+      );
+    } catch (error) {
+      current.resolve({ requestId: response.requestId, decision: "deny" });
+      throw error;
+    }
     return this.get(id);
   }
 
   private request(id: string, request: AgentRequest, signal?: AbortSignal) {
     return new Promise<AgentResponse>((resolve) => {
-      if (signal?.aborted || this.disposed) {
+      const operation = this.operations.get(id);
+      if (
+        signal?.aborted ||
+        this.disposed ||
+        operation?.kind !== "turn" ||
+        operation.phase !== "running" ||
+        operation.controller.signal.aborted
+      ) {
         resolve({ requestId: request.id, decision: "deny" });
         return;
       }
@@ -396,6 +507,8 @@ export class AgentService {
       });
     }
     this.requireSession(id).pendingRequest = undefined;
+    if (!this.disposed && this.requireSession(id).status === "waiting")
+      this.apply(id, { type: "status", status: "running" });
   }
 
   subscribe(id: string, listener: (event: AgentEventEnvelope) => void) {
@@ -483,9 +596,11 @@ export class AgentService {
   private storageFailed(error: unknown) {
     const message = `Conversation history could not be saved: ${error instanceof Error ? error.message : String(error)}`;
     for (const session of this.sessions.values()) {
-      session.status = "error";
       this.emit(session.id, { type: "error", message });
-      this.emit(session.id, { type: "status", status: "error" });
+      if (!this.operations.has(session.id)) {
+        session.status = "error";
+        this.emit(session.id, { type: "status", status: "error" });
+      }
     }
   }
 
@@ -504,9 +619,16 @@ export class AgentService {
     return this.writeChain;
   }
 
-  async dispose() {
+  dispose() {
+    this.closing ??= this.close();
+    return this.closing;
+  }
+
+  private async close() {
     this.disposed = true;
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    for (const operation of this.operations.values())
+      if (operation.kind === "turn") operation.controller.abort();
     for (const id of this.pendingRequests.keys()) this.rejectRequests(id);
     for (const runtime of this.runtimes.values()) runtime.dispose();
     this.runtimes.clear();

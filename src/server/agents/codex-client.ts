@@ -1,3 +1,4 @@
+import { version } from "../../shared/version";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { z } from "zod";
@@ -84,7 +85,7 @@ export class CodexClient {
       );
     });
     this.ready = this.request("initialize", {
-      clientInfo: { name: "cutroom", title: "Cutroom", version: "0.1.0" },
+      clientInfo: { name: "cutroom", title: "Cutroom", version },
     })
       .then((value) => {
         const metadata = z

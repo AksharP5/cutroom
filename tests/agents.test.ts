@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -256,6 +256,237 @@ describe("agent conversations", () => {
         .get(session.id)
         .messages.filter((message) => message.role === "user"),
     ).toHaveLength(1);
+  });
+
+  test("stopping a turn during skill discovery prevents it from starting", async () => {
+    let release: (() => void) | undefined;
+    let discovered: (() => void) | undefined;
+    const discovery = new Promise<void>((resolve) => {
+      discovered = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finish: (() => void) | undefined;
+    const replacement = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let starts = 0;
+    const native = factory(async () => {
+      starts++;
+      await replacement;
+    });
+    native.capabilities = async (provider) => {
+      discovered?.();
+      await waiting;
+      return {
+        provider,
+        available: true,
+        skills: [
+          {
+            name: "editing",
+            path: "/native/editing/SKILL.md",
+            description: "Editing",
+            enabled: true,
+          },
+        ],
+        models: [],
+        mcpServers: [],
+      };
+    };
+    const { service, project } = await setup(native);
+    const session = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const pending = service.send(session.id, {
+      text: "Use editing",
+      skills: [{ name: "editing" }],
+      attachments: [],
+    });
+    await discovery;
+    try {
+      await service.interrupt(session.id);
+      expect(
+        await Promise.race([
+          pending.then(() => true),
+          Bun.sleep(200).then(() => false),
+        ]),
+      ).toBe(true);
+      expect(starts).toBe(0);
+      expect(service.get(session.id).messages).toHaveLength(0);
+      await service.send(session.id, {
+        text: "A replacement request",
+        skills: [],
+        attachments: [],
+      });
+      expect(service.get(session.id).status).toBe("running");
+      release?.();
+      await waiting;
+      expect(service.get(session.id).status).toBe("running");
+      expect(starts).toBe(1);
+      finish?.();
+      await idle(service, session.id);
+    } finally {
+      release?.();
+      finish?.();
+      await pending;
+    }
+  });
+
+  test("shutdown cancels admission instead of starting a native process afterward", async () => {
+    let release: (() => void) | undefined;
+    let discovered: (() => void) | undefined;
+    const discovery = new Promise<void>((resolve) => {
+      discovered = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let starts = 0;
+    const native = factory(async () => {
+      starts++;
+    });
+    native.capabilities = async (provider) => {
+      discovered?.();
+      await waiting;
+      return {
+        provider,
+        available: true,
+        skills: [
+          {
+            name: "editing",
+            path: "/native/editing/SKILL.md",
+            description: "Editing",
+            enabled: true,
+          },
+        ],
+        models: [],
+        mcpServers: [],
+      };
+    };
+    const { service, project } = await setup(native);
+    const session = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const pending = service.send(session.id, {
+      text: "Use editing",
+      skills: [{ name: "editing" }],
+      attachments: [],
+    });
+    await discovery;
+    await service.dispose();
+    release?.();
+    await pending;
+    expect(starts).toBe(0);
+    await expect(
+      service.send(session.id, {
+        text: "After shutdown",
+        skills: [],
+        attachments: [],
+      }),
+    ).rejects.toThrow("closed");
+  });
+
+  test("disposed native runtimes cannot change or interrupt the next conversation turn", async () => {
+    const connections: RuntimeOptions[] = [];
+    let complete: (() => void) | undefined;
+    let stops = 0;
+    const native = factory(async () => {});
+    native.create = (_provider, options) => {
+      connections.push(options);
+      return {
+        send: () =>
+          connections.length === 1
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                complete = resolve;
+              }),
+        interrupt: async () => {},
+        dispose: () => {
+          stops++;
+          options.emit({ type: "error", message: "Old connection closed" });
+        },
+      };
+    };
+    const { service, project } = await setup(native);
+    const session = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    await service.send(session.id, {
+      text: "First turn",
+      skills: [],
+      attachments: [],
+    });
+    await idle(service, session.id);
+    await service.configure(session.id, { model: "another-model" });
+    await service.send(session.id, {
+      text: "Second turn",
+      skills: [],
+      attachments: [],
+    });
+    connections[0]?.emit({ type: "error", message: "Late old error" });
+    const oldQuestion = connections[0]?.request({
+      id: "old-request",
+      kind: "approval",
+      title: "Old permission",
+      tool: "Write",
+      input: {},
+    });
+    expect(service.get(session.id).status).toBe("running");
+    expect(service.get(session.id).pendingRequest).toBeUndefined();
+    expect((await oldQuestion)?.decision).toBe("deny");
+    expect(
+      service.get(session.id).messages.map((message) => message.text),
+    ).toEqual(["First turn", "Second turn"]);
+    expect(stops).toBe(1);
+    complete?.();
+    await idle(service, session.id);
+  });
+
+  test("an approval save failure denies the native request instead of stranding it", async () => {
+    let decision: string | undefined;
+    const { service, project, dataDir } = await setup(
+      factory(async (options) => {
+        const answer = await options.request({
+          id: "permission",
+          kind: "approval",
+          title: "Write source?",
+          tool: "Write",
+          input: {},
+        });
+        decision = answer.decision;
+      }),
+    );
+    const session = await service.create({
+      projectId: project.id,
+      provider: "claude",
+    });
+    await service.send(session.id, {
+      text: "Edit the source",
+      skills: [],
+      attachments: [],
+    });
+    await idle(service, session.id, "waiting");
+    const backup = `${dataDir}.saved`;
+    await rename(dataDir, backup);
+    await writeFile(dataDir, "Blocks the history directory");
+    try {
+      await expect(
+        service.respond(session.id, {
+          requestId: "permission",
+          decision: "allow",
+        }),
+      ).rejects.toThrow();
+      await idle(service, session.id);
+      expect(decision).toBe("deny");
+      expect(service.get(session.id).pendingRequest).toBeUndefined();
+    } finally {
+      await rm(dataDir);
+      await rename(backup, dataDir);
+    }
   });
 
   test("validates routes and project attachment boundaries", async () => {

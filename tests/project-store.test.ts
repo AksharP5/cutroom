@@ -178,3 +178,48 @@ test("project APIs reject traversal and symlinks outside the registered folder",
     await fixture.close();
   }
 });
+
+test("project shutdown drains admitted edits and refuses new mutations", async () => {
+  const fixture = await projectFixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  try {
+    const project = await fixture.store.create({ name: "Shutdown ordering" });
+    const saving = fixture.store.mutate(project, "Finish note", async () => {
+      entered();
+      await gate;
+      const document = await fixture.store.document(project);
+      document.annotations.push(
+        AnnotationSchema.parse({
+          id: "saved",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          kind: "comment",
+          body: "Persist before shutdown",
+          time: 0,
+        }),
+      );
+      await fixture.store.writeDocument(project, document);
+    });
+    await started;
+    const closing = fixture.store.close();
+    await expect(
+      fixture.store.mutate(project, "Too late", async () => {}),
+    ).rejects.toThrow("shutting down");
+    release();
+    await saving;
+    await closing;
+    expect((await fixture.store.document(project)).annotations[0]?.body).toBe(
+      "Persist before shutdown",
+    );
+  } finally {
+    release();
+    await fixture.close();
+  }
+});

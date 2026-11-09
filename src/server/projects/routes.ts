@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
-import { applyFileMutations } from "@hyperframes/studio-server";
+import {
+  applyFileMutations,
+  fileContentVersion,
+} from "@hyperframes/studio-server";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
@@ -59,6 +62,15 @@ export function createProjectRoutes(
   api.get("/projects/:id/document", async (c) =>
     c.json(await store.document(await store.get(c.req.param("id")))),
   );
+  api.get("/projects/:id/notebook", async (c) => {
+    const document = await store.document(await store.get(c.req.param("id")));
+    return c.json({
+      annotations: document.annotations,
+      transcriptVersion: fileContentVersion(
+        JSON.stringify(document.transcripts),
+      ),
+    });
+  });
   api.get("/projects/:id/media", async (c) =>
     c.json({ media: await listMedia(await store.get(c.req.param("id"))) }),
   );

@@ -272,6 +272,9 @@ export class ClaudeRuntime implements AgentRuntime {
       await completed;
     } finally {
       this.active = undefined;
+      this.currentMessageId = undefined;
+      this.text.clear();
+      this.toolNames.clear();
     }
   }
 
@@ -335,6 +338,7 @@ export class ClaudeRuntime implements AgentRuntime {
         .map((block) => block.text)
         .join("\n");
       const accumulated = this.text.get(message.message.id);
+      this.text.delete(message.message.id);
       if (text || accumulated) {
         this.hasAssistantText = true;
         this.options.emit({
@@ -374,6 +378,8 @@ export class ClaudeRuntime implements AgentRuntime {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content ?? "", null, 2);
+        const tool = this.toolNames.get(block.tool_use_id) ?? "Tool";
+        this.toolNames.delete(block.tool_use_id);
         this.options.emit({
           type: "message",
           message: {
@@ -381,7 +387,7 @@ export class ClaudeRuntime implements AgentRuntime {
               text.slice(-32_000),
               "tool",
               block.tool_use_id,
-              this.toolNames.get(block.tool_use_id) ?? "Tool",
+              tool,
             ),
             status: block.is_error ? "failed" : "complete",
           },

@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { z } from "zod";
 import { HttpError } from "../shared/errors";
+import { version } from "../shared/version";
 import { createAgentRoutes, createAgentService } from "./agents";
 import { createHyperframesApi } from "./hyperframes/api";
 import { createMcpHttpHandler } from "./mcp/server";
@@ -45,7 +46,14 @@ export async function createApp(
   const editor = createHyperframesApi(projects);
   const transcripts = createTranscriptService(projects);
   const app = new Hono();
+  let closing = false;
+  let shutdown: Promise<void> | undefined;
   app.use("*", async (c, next) => {
+    if (closing)
+      return c.json(
+        { error: "Cutroom is closing. Reopen the app to continue." },
+        503,
+      );
     const url = new URL(c.req.url);
     if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))
       return c.json({ error: "Cutroom accepts local connections only." }, 403);
@@ -76,7 +84,11 @@ export async function createApp(
     return c.json({ error: error.message }, 500);
   });
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const mcpCommand = [process.execPath, join(root, "src/server/mcp/stdio.ts")]
+  const mcpCommand = [
+    ...(port === 4317 ? [] : ["env", `CUTROOM_URL=${baseUrl}`]),
+    process.execPath,
+    join(root, "src/server/mcp/stdio.ts"),
+  ]
     .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
     .join(" ");
   app.route(
@@ -88,9 +100,7 @@ export async function createApp(
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });
   app.all("/mcp", (c) => mcp(c.req.raw));
-  app.get("/health", (c) =>
-    c.json({ ok: true, app: "cutroom", version: "0.1.0" }),
-  );
+  app.get("/health", (c) => c.json({ ok: true, app: "cutroom", version }));
   app.all("/api/*", (c) =>
     c.json({ error: "This API route does not exist." }, 404),
   );
@@ -102,11 +112,28 @@ export async function createApp(
     projects,
     agents,
     editor,
-    async dispose() {
-      await agents.dispose();
-      await transcripts.dispose();
-      await editor.dispose();
-      await projects.close();
+    dispose() {
+      closing = true;
+      return (shutdown ??= (async () => {
+        const failures: unknown[] = [];
+        for (const cleanup of [
+          () => agents.dispose(),
+          () => transcripts.dispose(),
+          () => editor.dispose(),
+          () => projects.close(),
+        ]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length)
+          throw new AggregateError(
+            failures,
+            "Cutroom could not finish closing every service.",
+          );
+      })());
     },
   };
 }

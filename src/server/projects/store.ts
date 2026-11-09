@@ -139,6 +139,21 @@ export async function createProjectStore(options: {
   );
   const documentReads = new WeakMap<ProjectDocument, string | null>();
   const queues = new Map<string, Promise<unknown>>();
+  const operations = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  const track = <T>(change: () => Promise<T>): Promise<T> => {
+    if (closing)
+      return Promise.reject(
+        new HttpError(503, "The project store is shutting down."),
+      );
+    const pending = change();
+    operations.add(pending);
+    void pending.then(
+      () => operations.delete(pending),
+      () => operations.delete(pending),
+    );
+    return pending;
+  };
   let registryQueue: Promise<unknown> = Promise.resolve();
   const saveRegistry = () => {
     const pending = registryQueue.then(() =>
@@ -160,34 +175,35 @@ export async function createProjectStore(options: {
     if (!opened) throw new HttpError(503, "Project history is unavailable.");
     return opened;
   };
-  const mutate = async <T>(
+  const mutate = <T>(
     project: Project,
     label: string,
     change: () => Promise<T>,
     who: HistoryWho = PERSON,
-  ): Promise<T> => {
-    const previous = queues.get(project.id) ?? Promise.resolve();
-    const pending = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const ledger = await history(project);
-        const window = await ledger.beginWindow(who, label);
-        try {
-          const result = await change();
-          project.updatedAt = new Date().toISOString();
-          await saveRegistry();
-          return result;
-        } finally {
-          await window.close();
-        }
-      });
-    queues.set(project.id, pending);
-    try {
-      return await pending;
-    } finally {
-      if (queues.get(project.id) === pending) queues.delete(project.id);
-    }
-  };
+  ): Promise<T> =>
+    track(async () => {
+      const previous = queues.get(project.id) ?? Promise.resolve();
+      const pending = previous
+        .catch(() => undefined)
+        .then(async () => {
+          const ledger = await history(project);
+          const window = await ledger.beginWindow(who, label);
+          try {
+            const result = await change();
+            project.updatedAt = new Date().toISOString();
+            await saveRegistry();
+            return result;
+          } finally {
+            await window.close();
+          }
+        });
+      queues.set(project.id, pending);
+      try {
+        return await pending;
+      } finally {
+        if (queues.get(project.id) === pending) queues.delete(project.id);
+      }
+    });
   const document = async (project: Project): Promise<ProjectDocument> => {
     const raw = await readFile(
       await projectPath(project, DOCUMENT_PATH, true),
@@ -286,86 +302,97 @@ export async function createProjectStore(options: {
     document,
     writeDocument,
     async create(raw: CreateProjectInput) {
-      const input = CreateProjectSchema.parse(raw);
-      const id = randomUUID();
-      const slug =
-        input.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "") || "project";
-      const path = join(projectsDir, `${slug}-${id.slice(0, 8)}`);
-      await mkdir(path);
-      const fonts = join(path, "assets", "fonts");
-      await mkdir(fonts, { recursive: true });
-      await Promise.all([
-        copyFile(
-          new URL(
-            import.meta
-              .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2"),
-          ),
-          join(fonts, "regular.woff2"),
-        ),
-        copyFile(
-          new URL(
-            import.meta
-              .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2"),
-          ),
-          join(fonts, "semibold.woff2"),
-        ),
-        copyFile(
-          new URL(
-            "LICENSE",
+      return track(async () => {
+        const input = CreateProjectSchema.parse(raw);
+        const id = randomUUID();
+        const slug =
+          input.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "") || "project";
+        const path = join(projectsDir, `${slug}-${id.slice(0, 8)}`);
+        await mkdir(path);
+        const fonts = join(path, "assets", "fonts");
+        await mkdir(fonts, { recursive: true });
+        await Promise.all([
+          copyFile(
             new URL(
-              import.meta.resolve("@fontsource/ibm-plex-sans/package.json"),
+              import.meta
+                .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2"),
             ),
+            join(fonts, "regular.woff2"),
           ),
-          join(fonts, "LICENSE.txt"),
-        ),
-      ]);
-      await writeFile(join(path, "index.html"), starter(input));
-      await writeFile(
-        join(path, DOCUMENT_PATH),
-        `${JSON.stringify(emptyProjectDocument(), null, 2)}\n`,
-      );
-      const now = new Date().toISOString();
-      const project: Project = {
-        id,
-        name: input.name,
-        path,
-        createdAt: now,
-        updatedAt: now,
-      };
-      projects.push(project);
-      await saveRegistry();
-      return project;
+          copyFile(
+            new URL(
+              import.meta
+                .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2"),
+            ),
+            join(fonts, "semibold.woff2"),
+          ),
+          copyFile(
+            new URL(
+              "LICENSE",
+              new URL(
+                import.meta.resolve("@fontsource/ibm-plex-sans/package.json"),
+              ),
+            ),
+            join(fonts, "LICENSE.txt"),
+          ),
+        ]);
+        await writeFile(join(path, "index.html"), starter(input));
+        await writeFile(
+          join(path, DOCUMENT_PATH),
+          `${JSON.stringify(emptyProjectDocument(), null, 2)}\n`,
+        );
+        const now = new Date().toISOString();
+        const project: Project = {
+          id,
+          name: input.name,
+          path,
+          createdAt: now,
+          updatedAt: now,
+        };
+        projects.push(project);
+        await saveRegistry();
+        return project;
+      });
     },
     async importProject(input: { path: string; name?: string }) {
-      if (!isAbsolute(input.path))
-        throw new HttpError(400, "Choose an absolute project folder path.");
-      const path = await realpath(input.path).catch(() => {
-        throw new HttpError(404, "The project folder does not exist.");
+      return track(async () => {
+        if (!isAbsolute(input.path))
+          throw new HttpError(400, "Choose an absolute project folder path.");
+        const path = await realpath(input.path).catch(() => {
+          throw new HttpError(404, "The project folder does not exist.");
+        });
+        const info = await stat(join(path, "index.html")).catch(() => null);
+        if (!info?.isFile())
+          throw new HttpError(
+            422,
+            "This folder needs an index.html HyperFrames composition.",
+          );
+        const existing = projects.find((project) => project.path === path);
+        if (existing) return existing;
+        const now = new Date().toISOString();
+        const project: Project = {
+          id: randomUUID(),
+          name: input.name ?? basename(path),
+          path,
+          createdAt: now,
+          updatedAt: now,
+        };
+        projects.push(project);
+        await saveRegistry();
+        return project;
       });
-      const info = await stat(join(path, "index.html")).catch(() => null);
-      if (!info?.isFile())
-        throw new HttpError(
-          422,
-          "This folder needs an index.html HyperFrames composition.",
-        );
-      const existing = projects.find((project) => project.path === path);
-      if (existing) return existing;
-      const now = new Date().toISOString();
-      const project: Project = {
-        id: randomUUID(),
-        name: input.name ?? basename(path),
-        path,
-        createdAt: now,
-        updatedAt: now,
-      };
-      projects.push(project);
-      await saveRegistry();
-      return project;
     },
-    close: () => histories.closeAll(),
+    close() {
+      closing ??= (async () => {
+        await Promise.allSettled([...operations]);
+        await registryQueue;
+        await histories.closeAll();
+      })();
+      return closing;
+    },
   };
 }
 

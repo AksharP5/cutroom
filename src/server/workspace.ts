@@ -20,6 +20,7 @@ import {
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { projectPath } from "./projects/store";
@@ -33,7 +34,7 @@ export function createWorkspaceRoutes(options: {
   const app = new Hono();
   app.get("/status", (c) =>
     c.json({
-      version: "0.1.0",
+      version,
       dataDir: options.dataDir,
       projectsDir: options.projectsDir,
       mcpCommand: options.mcpCommand,

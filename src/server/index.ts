@@ -18,8 +18,16 @@ let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
-  await runtime.dispose();
-  await server.stop(true);
+  try {
+    await runtime.dispose();
+  } finally {
+    await server.stop(true);
+  }
 }
-process.on("SIGINT", () => void stop());
-process.on("SIGTERM", () => void stop());
+for (const signal of ["SIGINT", "SIGTERM"] as const)
+  process.on(signal, () => {
+    void stop().catch((error: unknown) => {
+      console.error("Cutroom could not close cleanly:", error);
+      process.exitCode = 1;
+    });
+  });

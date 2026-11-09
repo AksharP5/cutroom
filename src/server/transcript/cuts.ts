@@ -12,7 +12,10 @@ interface Range {
 }
 const round = (number: number) => Math.round(number * 1_000_000) / 1_000_000;
 
-function mediaElement(document: Document, elementId: string): Element | null {
+export function mediaElement(
+  document: Document,
+  elementId: string,
+): Element | null {
   const selected = findTargetElement(document, { id: elementId });
   if (selected) return selected;
   const index = /^media:(\d+)$/.exec(elementId)?.[1];
@@ -21,37 +24,94 @@ function mediaElement(document: Document, elementId: string): Element | null {
     : (document.querySelectorAll("video, audio").item(Number(index)) ?? null);
 }
 
+function requireEditableMedia(
+  document: Document,
+  elements: Element[],
+  elementIds: string[],
+) {
+  if (elements.some(nestedTiming))
+    throw new HttpError(
+      422,
+      "This media belongs to a nested timed scene. Ask the agent to edit its script with the surrounding scene.",
+    );
+  const linked = [...document.querySelectorAll("[data-link]")];
+  if (
+    elements.some((media) => {
+      const link = media.getAttribute("data-link");
+      return (
+        link &&
+        linked.some(
+          (element) =>
+            !elements.includes(element) &&
+            element.getAttribute("data-link") === link,
+        )
+      );
+    })
+  )
+    throw new HttpError(
+      422,
+      "This clip has linked media. Ask the agent to cut the linked clips together.",
+    );
+  if (
+    [...document.querySelectorAll("script")].some((script) =>
+      elementIds.some((id) => id && script.textContent?.includes(`#${id}`)),
+    )
+  )
+    throw new HttpError(
+      422,
+      "This media has scripted animation. Ask the agent to preserve its animation while cutting.",
+    );
+}
+
+function nestedTiming(element: Element): boolean {
+  const root = element.ownerDocument.querySelector("[data-composition-id]");
+  let ancestor = element.parentElement;
+  while (ancestor && ancestor !== element.ownerDocument.body) {
+    if (ancestor !== root && ancestor.hasAttribute("data-start")) return true;
+    ancestor = ancestor.parentElement;
+  }
+  return false;
+}
+
 export function transcriptStart(
-  source: string,
+  document: Document,
   transcript: Transcript,
 ): number {
-  const { document } = parseSourceDocument(source);
   const group = [
     ...document.querySelectorAll("[data-cutroom-transcript]"),
   ].filter(
     (element) =>
       element.getAttribute("data-cutroom-transcript") === transcript.id,
   );
-  if (group.length)
-    return Math.min(
-      ...group.map((element) => Number(element.getAttribute("data-start"))),
-    );
+  let start: number;
   const anchor = [
     ...document.querySelectorAll("template[data-cutroom-anchor]"),
   ].find(
     (element) => element.getAttribute("data-cutroom-anchor") === transcript.id,
   );
-  if (anchor)
-    return Number(
+  if (group.length)
+    start = Math.min(
+      ...group.map((element) => Number(element.getAttribute("data-start"))),
+    );
+  else if (anchor)
+    start = Number(
       anchor.getAttribute("data-cutroom-start") ?? transcript.original.start,
     );
-  const media = mediaElement(document, transcript.elementId);
-  if (!media)
+  else {
+    const media = mediaElement(document, transcript.elementId);
+    if (!media)
+      throw new HttpError(
+        409,
+        "The transcript's media clip is no longer in this composition.",
+      );
+    start = Number(media.getAttribute("data-start") ?? 0);
+  }
+  if (!Number.isFinite(start) || start < 0)
     throw new HttpError(
       409,
-      "The transcript's media clip is no longer in this composition.",
+      "The transcript's clip has invalid timeline timing. Correct it before editing the script.",
     );
-  return Number(media.getAttribute("data-start") ?? 0);
+  return start;
 }
 
 export function cutRanges(
@@ -101,30 +161,94 @@ export function keptRanges(
   return kept;
 }
 
-export function transcriptView(transcript: Transcript) {
-  const kept = keptRanges(transcript);
+export function transcriptView(transcript: Transcript, document?: Document) {
+  const start = document
+    ? transcriptStart(document, transcript)
+    : transcript.original.start;
+  const elements = document
+    ? [...document.querySelectorAll("[data-cutroom-transcript]")].filter(
+        (element) =>
+          element.getAttribute("data-cutroom-transcript") === transcript.id,
+      )
+    : [];
+  const anchor =
+    document &&
+    [...document.querySelectorAll("template[data-cutroom-anchor]")].some(
+      (element) =>
+        element.getAttribute("data-cutroom-anchor") === transcript.id,
+    );
+  if (document && !elements.length && !anchor) {
+    const media = mediaElement(document, transcript.elementId);
+    if (media) elements.push(media);
+  }
+  let cursor = transcript.original.start;
+  const ranges = document
+    ? elements
+        .map((element) => {
+          const timelineStart = Number(
+            element.getAttribute("data-start") ?? "0",
+          );
+          const duration = Number(element.getAttribute("data-duration"));
+          const mediaStart = Number(
+            element.getAttribute("data-media-start") ??
+              element.getAttribute("data-playback-start") ??
+              "0",
+          );
+          const rate = Number(
+            element.getAttribute("data-playback-rate") ?? "1",
+          );
+          if (
+            ![timelineStart, duration, mediaStart, rate].every(
+              Number.isFinite,
+            ) ||
+            timelineStart < 0 ||
+            duration <= 0 ||
+            mediaStart < 0 ||
+            rate <= 0
+          )
+            throw new HttpError(
+              409,
+              "The transcript's clip has invalid media timing. Correct it before seeking its words.",
+            );
+          return {
+            start: mediaStart,
+            end: mediaStart + duration * rate,
+            timelineStart,
+            rate,
+          };
+        })
+        .sort((a, b) => a.start - b.start)
+    : keptRanges(transcript).map((range) => {
+        const timelineStart = cursor;
+        cursor += (range.end - range.start) / transcript.original.playbackRate;
+        return {
+          ...range,
+          timelineStart,
+          rate: transcript.original.playbackRate,
+        };
+      });
   const cutIds = new Set(transcript.cutWordIds);
-  const rate = transcript.original.playbackRate;
   let rangeIndex = 0;
-  let before = 0;
   const words = transcript.words.map((word) => {
-    while (rangeIndex < kept.length && word.start >= kept[rangeIndex]!.end) {
-      const range = kept[rangeIndex++]!;
-      before += range.end - range.start;
-    }
+    while (rangeIndex < ranges.length && word.start >= ranges[rangeIndex]!.end)
+      rangeIndex++;
     let timelineStart: number | null = null;
-    const range = kept[rangeIndex];
+    const range = ranges[rangeIndex];
     if (range && word.start >= range.start - 0.001 && word.start < range.end)
       timelineStart = round(
-        transcript.original.start + (before + word.start - range.start) / rate,
+        range.timelineStart + (word.start - range.start) / range.rate,
       );
     return { ...word, cut: cutIds.has(word.id), timelineStart };
   });
   return {
     ...transcript,
+    original: { ...transcript.original, start },
     words,
     duration: round(
-      kept.reduce((sum, range) => sum + range.end - range.start, 0) / rate,
+      ranges.reduce(
+        (sum, range) => sum + (range.end - range.start) / range.rate,
+        0,
+      ),
     ),
   };
 }
@@ -137,19 +261,7 @@ export function originalClip(source: string, elementId: string) {
       422,
       "Choose the video or audio element to edit its script.",
     );
-  let ancestor = media.parentElement;
-  while (ancestor && ancestor !== document.body) {
-    if (
-      ancestor.hasAttribute("data-start") &&
-      !ancestor.hasAttribute("data-composition-id")
-    ) {
-      throw new HttpError(
-        422,
-        "This media belongs to a nested timed scene. Ask the agent to edit its script with the surrounding scene.",
-      );
-    }
-    ancestor = ancestor.parentElement;
-  }
+  requireEditableMedia(document, [media], [elementId, media.id]);
   const start = Number(media.getAttribute("data-start") ?? "0");
   const duration = Number(media.getAttribute("data-duration"));
   const mediaStart = Number(
@@ -168,29 +280,6 @@ export function originalClip(source: string, elementId: string) {
     throw new HttpError(
       422,
       "Script editing needs a media clip with numeric start, duration, and playback rate.",
-    );
-  }
-  const link = media.getAttribute("data-link");
-  if (
-    link &&
-    [...document.querySelectorAll("[data-link]")].some(
-      (element) =>
-        element !== media && element.getAttribute("data-link") === link,
-    )
-  ) {
-    throw new HttpError(
-      422,
-      "This clip has linked media. Ask the agent to cut the linked clips together.",
-    );
-  }
-  if (
-    [...document.querySelectorAll("script")].some((script) =>
-      script.textContent?.includes(`#${elementId}`),
-    )
-  ) {
-    throw new HttpError(
-      422,
-      "This media has scripted animation. Ask the agent to preserve its animation while cutting.",
     );
   }
   return { html: media.outerHTML, start, duration, mediaStart, playbackRate };
@@ -219,6 +308,11 @@ export function applyTranscriptCuts(
     : mediaElement(document, transcript.elementId);
   if (group.length === 0 && !anchor && originalElement)
     group.push(originalElement);
+  requireEditableMedia(
+    document,
+    group.length ? group : anchor ? [anchor] : [],
+    [transcript.elementId, ...group.map((element) => element.id)],
+  );
   const fingerprint = (element: Element) => {
     const clone = element.cloneNode(true);
     if (clone.nodeType !== 1) return "";
@@ -261,8 +355,11 @@ export function applyTranscriptCuts(
   const originalMedia = parseSourceDocument(
     transcript.original.html,
   ).document.querySelector("video, audio");
+  const mediaSource = (element: Element | null) =>
+    element?.getAttribute("src") ??
+    element?.querySelector("source")?.getAttribute("src");
   if (
-    templateMedia?.getAttribute("src") !== originalMedia?.getAttribute("src") ||
+    mediaSource(templateMedia) !== mediaSource(originalMedia) ||
     Number(templateMedia?.getAttribute("data-playback-rate") ?? "1") !==
       transcript.original.playbackRate
   ) {
@@ -286,12 +383,42 @@ export function applyTranscriptCuts(
     (sum, element) => sum + Number(element.getAttribute("data-duration") ?? 0),
     0,
   );
-  const expectedDuration = keptRanges(transcript).reduce(
-    (sum, range) =>
-      sum + (range.end - range.start) / transcript.original.playbackRate,
-    0,
+  const priorRanges = keptRanges(transcript);
+  let expectedStart = currentStart;
+  const ordered = [...group].sort(
+    (a, b) =>
+      Number(
+        a.getAttribute("data-media-start") ??
+          a.getAttribute("data-playback-start") ??
+          "0",
+      ) -
+      Number(
+        b.getAttribute("data-media-start") ??
+          b.getAttribute("data-playback-start") ??
+          "0",
+      ),
   );
-  if (Math.abs(oldDuration - expectedDuration) > 0.001)
+  const timingMatches = ordered.every((element, index) => {
+    const range = priorRanges[index];
+    if (!range) return false;
+    const start = Number(element.getAttribute("data-start") ?? "0");
+    const duration = Number(element.getAttribute("data-duration"));
+    const mediaStart = Number(
+      element.getAttribute("data-media-start") ??
+        element.getAttribute("data-playback-start") ??
+        "0",
+    );
+    const expectedDuration =
+      (range.end - range.start) / transcript.original.playbackRate;
+    const matches =
+      [start, duration, mediaStart].every(Number.isFinite) &&
+      Math.abs(start - expectedStart) <= 0.001 &&
+      Math.abs(duration - expectedDuration) <= 0.001 &&
+      Math.abs(mediaStart - range.start) <= 0.001;
+    expectedStart += expectedDuration;
+    return matches;
+  });
+  if (!timingMatches || ordered.length !== priorRanges.length)
     throw new HttpError(
       409,
       "This clip's timing changed outside Script. Undo that timing edit before changing its script cuts.",
@@ -316,6 +443,7 @@ export function applyTranscriptCuts(
       0,
       ...[...doc.querySelectorAll("[data-start][data-duration]")]
         .filter((element) => !element.hasAttribute("data-composition-id"))
+        .filter((element) => !nestedTiming(element))
         .map(
           (element) =>
             Number(element.getAttribute("data-start")) +
@@ -338,7 +466,8 @@ export function applyTranscriptCuts(
   )) {
     if (
       group.includes(element) ||
-      element.getAttribute("data-track-index") !== track ||
+      (element.getAttribute("data-track-index") ?? "0") !== track ||
+      nestedTiming(element) ||
       element.hasAttribute("data-composition-id")
     )
       continue;

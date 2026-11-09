@@ -251,7 +251,7 @@ export function createHyperframesApi(store: ProjectStore) {
       for (const timer of timers.values()) clearTimeout(timer);
       watchers.clear();
       timers.clear();
-      renders.cancelAll();
+      await renders.cancelAll();
       await thumbnails.close();
     },
   });

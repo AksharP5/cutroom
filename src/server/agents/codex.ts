@@ -219,6 +219,7 @@ export class CodexRuntime implements AgentRuntime {
       this.active = undefined;
       this.turnId = undefined;
       this.commands.clear();
+      this.seen.clear();
     }
   }
 

@@ -6,6 +6,7 @@ import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
+import { HttpError } from "../../shared/errors";
 
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
 type RenderState = ReturnType<StudioApiAdapter["startRender"]>;
@@ -35,16 +36,44 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 }
 
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
-export function createRenderWorkers() {
-  const running = new Set<() => void>();
+export function createRenderWorkers(
+  configuration: { workerPath?: string; stopTimeoutMs?: number } = {},
+) {
+  const running = new Map<() => void, Promise<void>>();
+  let closing = false;
   return {
     start(options: RenderOptions): RenderState {
+      if (closing) throw new HttpError(503, "The renderer is shutting down.");
       let worker: ReturnType<typeof Bun.spawn> | undefined;
+      let errors: Promise<string> | undefined;
+      let stopTimeout: ReturnType<typeof setTimeout> | undefined;
       let cancelled = false;
+      const signalWorker = (signal: NodeJS.Signals) => {
+        if (!worker) return;
+        try {
+          if (process.platform === "win32") worker.kill(signal);
+          else process.kill(-worker.pid, signal);
+        } catch (error) {
+          if (!(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ESRCH"
+          ))
+            throw error;
+        }
+      };
+      const stopWorker = () => {
+        if (!worker || worker.exitCode !== null) return;
+        signalWorker("SIGTERM");
+        stopTimeout ??= setTimeout(() => {
+          signalWorker("SIGKILL");
+        }, configuration.stopTimeoutMs ?? 6000);
+      };
       const cancel = () => {
+        if (state.status !== "rendering") return;
         cancelled = true;
         state.status = "cancelled";
-        worker?.kill("SIGTERM");
+        stopWorker();
       };
       const state: RenderState = {
         id: options.jobId,
@@ -53,9 +82,8 @@ export function createRenderWorkers() {
         outputPath: options.outputPath,
         cancel,
       };
-      running.add(cancel);
       const started = performance.now();
-      void (async () => {
+      const task = (async () => {
         const node = Bun.which("node");
         if (!node)
           throw new Error(
@@ -82,12 +110,14 @@ export function createRenderWorkers() {
           [
             node,
             "--experimental-strip-types",
-            fileURLToPath(new URL("./renderWorker.ts", import.meta.url)),
+            configuration.workerPath ??
+              fileURLToPath(new URL("./renderWorker.ts", import.meta.url)),
           ],
           {
             stdin: "pipe",
             stdout: "pipe",
             stderr: "pipe",
+            detached: process.platform !== "win32",
             env: {
               ...process.env,
               HYPERFRAMES_NO_TELEMETRY: "1",
@@ -107,7 +137,7 @@ export function createRenderWorkers() {
           }),
         );
         child.stdin.end();
-        const errors = diagnostics(child.stderr);
+        errors = diagnostics(child.stderr);
         const reader = child.stdout.getReader();
         const decoder = new TextDecoder();
         let remaining = "";
@@ -130,7 +160,7 @@ export function createRenderWorkers() {
             }
             if (event.type === "error") {
               failure = event.message;
-              cancelled ||= event.cancelled;
+              if (event.cancelled) cancel();
             }
             if (event.type === "complete") {
               completed = true;
@@ -154,6 +184,7 @@ export function createRenderWorkers() {
             durationMs: Math.round(performance.now() - started),
           }),
         );
+        if (cancelled) return;
         state.status = "complete";
         state.progress = 100;
       })()
@@ -162,21 +193,39 @@ export function createRenderWorkers() {
           if (!cancelled)
             state.error =
               error instanceof Error ? error.message : String(error);
+          stopWorker();
         })
         .finally(async () => {
-          running.delete(cancel);
-          if (cancelled) {
-            await rm(options.outputPath, { force: true });
-            await rm(
-              options.outputPath.replace(/\.(mp4|webm|mov|gif)$/, ".meta.json"),
-              { force: true },
-            );
+          try {
+            await worker?.exited;
+            signalWorker("SIGKILL");
+            await errors;
+            if (cancelled || state.status === "failed") {
+              await rm(options.outputPath, { force: true });
+              await rm(
+                options.outputPath.replace(
+                  /\.(mp4|webm|mov|gif)$/,
+                  ".meta.json",
+                ),
+                { force: true },
+              );
+            }
+          } finally {
+            clearTimeout(stopTimeout);
+            running.delete(cancel);
           }
+        })
+        .catch((error: unknown) => {
+          state.status = "failed";
+          state.error = `Render cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
         });
+      running.set(cancel, task);
       return state;
     },
-    cancelAll() {
-      for (const cancel of running) cancel();
+    async cancelAll() {
+      closing = true;
+      for (const cancel of running.keys()) cancel();
+      await Promise.all([...running.values()]);
     },
   };
 }
