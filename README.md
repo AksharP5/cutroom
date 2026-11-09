@@ -13,6 +13,10 @@ A local video studio with native coding agents, visual review, and script editin
 
 ## Run
 
+The [Linux release](https://github.com/AksharP5/cutroom/releases) includes Bun and Node.js. Extract it and run `./install.sh` to add Cutroom to your application launcher. Run `./cutroom` directly to use the portable folder.
+
+### From source
+
 Requires Bun 1.4.4 or newer, Node.js 22.18 or newer, FFmpeg, and a Chromium-compatible browser. Agent chat additionally requires an installed and authenticated Codex or Claude Code. Whisper transcription is optional.
 
 ```sh
@@ -59,6 +63,13 @@ bun run check
 bun test
 bun run test:e2e
 bun run format:check
+```
+
+To build and install the Linux desktop app from source:
+
+```sh
+bun run package
+bun run install:desktop
 ```
 
 Browser tests need Chromium or a Playwright browser installation. `CUTROOM_BROWSER_PATH` selects an executable. `bun run package` builds the portable Linux distribution.

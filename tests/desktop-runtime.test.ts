@@ -83,6 +83,7 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
     );
     Object.assign(launchEnv, {
       ELECTRON_RUN_AS_NODE: "",
+      CUTROOM_MUTE_AUDIO: "1",
       CUTROOM_PORT: String(port),
       CUTROOM_DATA_DIR: join(data, "data"),
       CUTROOM_PROJECTS_DIR: join(data, "projects"),

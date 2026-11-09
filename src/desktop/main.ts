@@ -9,6 +9,8 @@ import {
 } from "./runtime";
 
 app.setName("Cutroom");
+if (process.platform === "linux")
+  app.setDesktopName("io.github.AksharP5.Cutroom.desktop");
 const dataDir = resolve(
   process.env.CUTROOM_DATA_DIR || join(homedir(), ".local", "share", "cutroom"),
 );
@@ -21,6 +23,8 @@ if (process.env.CUTROOM_NO_SANDBOX === "1")
 let window: BrowserWindow | undefined;
 let server: Awaited<ReturnType<typeof connectLocalServer>> | undefined;
 let quitting = false;
+const lifetime = new AbortController();
+let startup: Promise<void> | undefined;
 
 function openExternal(url: string) {
   try {
@@ -43,7 +47,13 @@ async function start() {
   const runtimeBin = app.isPackaged
     ? join(process.resourcesPath, "runtime", "bin")
     : undefined;
-  server = await connectLocalServer({ root, baseUrl, runtimeBin });
+  server = await connectLocalServer({
+    root,
+    baseUrl,
+    runtimeBin,
+    signal: lifetime.signal,
+  });
+  if (quitting) return;
   window = new BrowserWindow({
     title: "Cutroom",
     width: 1640,
@@ -62,7 +72,7 @@ async function start() {
       autoplayPolicy: "user-gesture-required",
     },
   });
-  window.webContents.setAudioMuted(true);
+  window.webContents.setAudioMuted(process.env.CUTROOM_MUTE_AUDIO === "1");
   const permissionAllowed = (
     permission: string,
     url: string,
@@ -115,17 +125,24 @@ else {
   });
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", (event) => {
-    if (quitting || !server?.owned) return;
+    if (quitting) return;
     event.preventDefault();
     quitting = true;
-    void server.stop().finally(() => app.quit());
+    lifetime.abort();
+    void (async () => {
+      await startup;
+      await server?.stop();
+    })()
+      .catch((error: unknown) =>
+        console.error("Cutroom could not close cleanly:", error),
+      )
+      .finally(() => app.quit());
   });
-  void start().catch((error: unknown) => {
+  startup = start().catch((error: unknown) => {
+    if (quitting) return;
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
     dialog.showErrorBox("Cutroom could not open", message);
-    quitting = true;
-    void server?.stop().finally(() => app.quit());
-    if (!server) app.quit();
+    app.quit();
   });
 }

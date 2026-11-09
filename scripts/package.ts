@@ -61,6 +61,8 @@ try {
   await cp(join(root, "src", "shared"), join(app, "src", "shared"), {
     recursive: true,
   });
+  await mkdir(join(app, "scripts"));
+  await cp(join(root, "scripts/install.ts"), join(app, "scripts/install.ts"));
   await mkdir(join(app, "src", "desktop"), { recursive: true });
   await cp(
     join(root, "src", "desktop", "icon.png"),
@@ -131,8 +133,13 @@ try {
     await cp(nodeLicense, join(runtime, "NODE-LICENSE.txt"));
   await rename(join(stage, "electron"), join(stage, "cutroom"));
   await writeFile(
+    join(stage, "install.sh"),
+    '#!/bin/sh\nset -eu\ncutroom_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$cutroom_dir/resources/runtime/bin/bun" "$cutroom_dir/resources/app/scripts/install.ts" --from "$cutroom_dir"\n',
+    { mode: 0o755 },
+  );
+  await writeFile(
     join(stage, "START.txt"),
-    "Open ./cutroom to start the studio. Bun and Node are included. FFmpeg and Chromium must be installed for local video exports. Codex and Claude Code use your own installed runtimes and sign-in. Projects and credentials are not included in this package.\n",
+    "Run ./install.sh to add Cutroom to your application launcher, or open ./cutroom to run it directly. Bun and Node are included. FFmpeg and Chromium must be installed for local video exports. Codex and Claude Code use your own installed runtimes and sign-in. Projects and credentials are not included in this package.\n",
   );
   const output = join(release, name);
   await rm(output, { recursive: true, force: true });

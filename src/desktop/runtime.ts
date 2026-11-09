@@ -17,11 +17,13 @@ export function isApplicationUrl(value: string, baseUrl: string) {
   }
 }
 
-async function health(baseUrl: string) {
+async function health(baseUrl: string, signal?: AbortSignal) {
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/health`, {
-      signal: AbortSignal.timeout(700),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(700)])
+        : AbortSignal.timeout(700),
     });
   } catch {
     return false;
@@ -56,9 +58,12 @@ export async function connectLocalServer(options: {
   runtimeBin?: string;
   baseUrl: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }) {
-  if (await health(options.baseUrl))
+  options.signal?.throwIfAborted();
+  if (await health(options.baseUrl, options.signal))
     return { owned: false, stop: async () => {} };
+  options.signal?.throwIfAborted();
   const env = options.env ?? process.env;
   const bundledBun =
     options.runtimeBin &&
@@ -102,20 +107,24 @@ export async function connectLocalServer(options: {
       return;
     stopped = true;
     child.kill("SIGTERM");
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 6000);
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
     await exited;
     clearTimeout(timeout);
   };
   try {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
+      options.signal?.throwIfAborted();
       if (startupError)
         throw new Error(`Cutroom could not start Bun: ${startupError.message}`);
       if (child.exitCode !== null || child.signalCode !== null)
         throw new Error(
           diagnostics.trim() || "The local editor stopped before it was ready.",
         );
-      if (await health(options.baseUrl)) return { owned: true, stop };
+      if (await health(options.baseUrl, options.signal)) {
+        options.signal?.throwIfAborted();
+        return { owned: true, stop };
+      }
       await new Promise((done) => setTimeout(done, 80));
     }
     throw new Error(
