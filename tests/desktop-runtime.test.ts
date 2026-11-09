@@ -1,0 +1,239 @@
+import { afterEach, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { z } from "zod";
+import {
+  connectLocalServer,
+  isApplicationUrl,
+  localServerUrl,
+} from "../src/desktop/runtime";
+
+const servers: Array<ReturnType<typeof Bun.serve>> = [];
+afterEach(async () => {
+  for (const server of servers.splice(0)) await server.stop(true);
+});
+
+test("desktop reuses only a Cutroom server and leaves its lifetime with its owner", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => Response.json({ app: "cutroom", ok: true }),
+  });
+  servers.push(server);
+  const baseUrl = server.url.origin;
+  const connection = await connectLocalServer({ root: "/unused", baseUrl });
+  expect(connection.owned).toBe(false);
+  await connection.stop();
+  expect((await fetch(`${baseUrl}/health`)).ok).toBe(true);
+
+  const unrelated = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => Response.json({ app: "another-app", ok: true }),
+  });
+  servers.push(unrelated);
+  await expect(
+    connectLocalServer({ root: "/unused", baseUrl: unrelated.url.origin }),
+  ).rejects.toThrow("Another application");
+});
+
+test("desktop validates the local origin and reports a missing Bun runtime without hanging", async () => {
+  expect(localServerUrl("4317")).toBe("http://127.0.0.1:4317");
+  expect(() => localServerUrl("4317/path")).toThrow("valid TCP port");
+  expect(
+    isApplicationUrl("http://127.0.0.1:4317/#project/test", localServerUrl()),
+  ).toBe(true);
+  expect(isApplicationUrl("https://example.com", localServerUrl())).toBe(false);
+  expect(isApplicationUrl("file:///etc/passwd", localServerUrl())).toBe(false);
+  const probe = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const baseUrl = probe.url.origin;
+  await probe.stop(true);
+  await expect(
+    connectLocalServer({
+      root: process.cwd(),
+      baseUrl,
+      env: { ...process.env, CUTROOM_BUN_PATH: "/cutroom-test-no-such-bun" },
+    }),
+  ).rejects.toThrow("could not start Bun");
+});
+
+test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
+  "native Electron window opens the real workspace with renderer isolation, muted media, and owned-server cleanup",
+  async () => {
+    const root = resolve(import.meta.dir, "..");
+    const data = await mkdtemp(join(tmpdir(), "cutroom-desktop-"));
+    const probe = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(),
+    });
+    const port = probe.port;
+    await probe.stop(true);
+    const { _electron } = await import("@playwright/test");
+    const packaged = process.env.CUTROOM_TEST_PACKAGE;
+    const launchEnv = Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+    Object.assign(launchEnv, {
+      ELECTRON_RUN_AS_NODE: "",
+      CUTROOM_PORT: String(port),
+      CUTROOM_DATA_DIR: join(data, "data"),
+      CUTROOM_PROJECTS_DIR: join(data, "projects"),
+    });
+    delete launchEnv.CUTROOM_ROOT;
+    delete launchEnv.CUTROOM_BUN_PATH;
+    if (!packaged) {
+      launchEnv.CUTROOM_ROOT = root;
+      launchEnv.CUTROOM_BUN_PATH = process.execPath;
+    }
+    const application = await _electron.launch({
+      executablePath: packaged
+        ? join(packaged, "cutroom")
+        : join(root, "node_modules/electron/dist/electron"),
+      args: [
+        "--ozone-platform=headless",
+        ...(process.env.CUTROOM_TEST_NO_SANDBOX === "1"
+          ? ["--no-sandbox"]
+          : []),
+        ...(packaged ? [] : [join(root, "dist-desktop/main.cjs")]),
+      ],
+      env: launchEnv,
+      timeout: 30_000,
+    });
+    try {
+      const page = await application.firstWindow();
+      await page
+        .getByRole("button", { name: "New project", exact: true })
+        .waitFor();
+      expect(await page.title()).toBe("Cutroom");
+      expect(
+        await application.evaluate(
+          ({ Menu }) => Menu.getApplicationMenu() === null,
+        ),
+      ).toBe(true);
+      expect(
+        await page.getByRole("heading", { name: "Make the next cut." }).count(),
+      ).toBe(1);
+      const state = z
+        .object({
+          preferences: z.object({
+            nodeIntegration: z.boolean(),
+            contextIsolation: z.boolean(),
+            sandbox: z.boolean(),
+          }),
+          muted: z.boolean(),
+        })
+        .parse(
+          await application.evaluate(({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            if (!window) throw new Error("The desktop window is missing.");
+            const readPreferences: unknown = Reflect.get(
+              window.webContents,
+              "getLastWebPreferences",
+            );
+            if (typeof readPreferences !== "function")
+              throw new Error(
+                "Electron's preferences inspector is unavailable.",
+              );
+            const preferences: unknown = readPreferences.call(
+              window.webContents,
+            );
+            return { preferences, muted: window.webContents.isAudioMuted() };
+          }),
+        );
+      expect(state).toEqual({
+        preferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+        muted: true,
+      });
+      expect(
+        await page.evaluate(() => typeof Reflect.get(globalThis, "require")),
+      ).toBe("undefined");
+      expect(
+        await page.evaluate(
+          'navigator.permissions.query({name:"clipboard-write"}).then(permission => permission.state)',
+        ),
+      ).toBe("granted");
+      expect(
+        await page.evaluate(
+          'navigator.permissions.query({name:"camera"}).then(permission => permission.state)',
+        ),
+      ).toBe("denied");
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).ok).toBe(true);
+      if (packaged) {
+        const status = z
+          .object({ mcpCommand: z.string() })
+          .parse(
+            await (
+              await fetch(`http://127.0.0.1:${port}/api/cutroom/status`)
+            ).json(),
+          );
+        expect(status.mcpCommand).toContain(
+          join(packaged, "resources/app/src/server/mcp/stdio.ts"),
+        );
+        const project = z.object({ id: z.string() }).parse(
+          await (
+            await fetch(`http://127.0.0.1:${port}/api/cutroom/projects`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                name: "Portable render",
+                width: 320,
+                height: 240,
+                duration: 1,
+              }),
+            })
+          ).json(),
+        );
+        const rendered = await fetch(
+          `http://127.0.0.1:${port}/api/projects/${project.id}/render`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              fps: 2,
+              quality: "draft",
+              format: "mp4",
+              telemetryOptOut: true,
+            }),
+          },
+        );
+        expect(rendered.status).toBe(200);
+        const job = z
+          .object({ jobId: z.string() })
+          .parse(await rendered.json());
+        const progress = await (
+          await fetch(
+            `http://127.0.0.1:${port}/api/render/${job.jobId}/progress`,
+          )
+        ).text();
+        expect(progress).toContain('"status":"complete"');
+        const video = await fetch(
+          `http://127.0.0.1:${port}/api/render/${job.jobId}/download`,
+        );
+        expect(video.status).toBe(200);
+        expect((await video.arrayBuffer()).byteLength).toBeGreaterThan(1000);
+      }
+    } finally {
+      await application.close();
+      await rm(data, { recursive: true, force: true });
+    }
+    expect(
+      await fetch(`http://127.0.0.1:${port}/health`).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  },
+  90_000,
+);

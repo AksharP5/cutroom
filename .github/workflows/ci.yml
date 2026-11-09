@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: bunx playwright install --with-deps chromium
+      - name: Set browser paths
+        run: |
+          browser=$(bun -e 'import { chromium } from "@playwright/test"; process.stdout.write(chromium.executablePath())')
+          echo "CUTROOM_BROWSER_PATH=$browser" >> "$GITHUB_ENV"
+          echo "HYPERFRAMES_BROWSER_PATH=$browser" >> "$GITHUB_ENV"
+      - run: bun run format:check
+      - run: bun run check
+      - run: bun test
+      - run: bun run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-failure
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

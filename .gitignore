@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-desktop/
+release/
+.env
+.env.*
+!.env.example
+*.log
+test-results/
+playwright-report/
+coverage/
+.cutroom-dev/
+artifacts/
+.DS_Store
