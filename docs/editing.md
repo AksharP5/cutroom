@@ -28,6 +28,8 @@ Zoom runs from the whole timeline to 32px per frame. The slider in the ruler's c
 
 Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the note content remains in `cutroom.json` so undo restores it. Captured frames can be reopened from the notebook and are attached when new notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.
 
+A stroke or a comment click opens the note and puts the cursor in its text, so typing never reaches the editor's shortcuts. Marking again before saving replaces the mark and keeps the words already typed; only closing the note clears them.
+
 Each note stays in the queue until an explicit step finishes it:
 
 | Status            | Meaning                               | Next                                                          |

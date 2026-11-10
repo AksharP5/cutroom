@@ -139,8 +139,7 @@ export function ReviewPanel({
     null,
   );
   const saving = draft !== null && savingDraft === draft;
-  const activeDraft = useRef(draft);
-  activeDraft.current = draft;
+  const bodyField = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState("");
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const details = items.find((item) => item.id === detailsId);
@@ -150,7 +149,12 @@ export function ReviewPanel({
     note: string;
   } | null>(null);
   const answerOpener = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => setBody(""), [draft]);
+  // Each new mark takes the typing, so note keys never reach the editor's shortcuts.
+  // A replaced mark keeps the words typed so far; only closing the note clears them.
+  useEffect(() => {
+    if (draft) bodyField.current?.focus();
+    else setBody("");
+  }, [draft]);
   const fresh = items.filter((item) => item.review.status === "open");
   const current = items.filter((item) => item.review.status !== "withdrawn");
   const accepted = items.filter((item) => item.review.status === "accepted");
@@ -392,7 +396,7 @@ export function ReviewPanel({
             setSavingDraft(submittedDraft);
             void run(async () => {
               await onSave(body);
-              if (activeDraft.current === submittedDraft) setBody("");
+              setBody((current) => (current === body ? "" : current));
             }).finally(() =>
               setSavingDraft((current) =>
                 current === submittedDraft ? null : current,
@@ -438,7 +442,7 @@ export function ReviewPanel({
           </label>
           <textarea
             id="review-body"
-            autoFocus
+            ref={bodyField}
             disabled={saving}
             value={body}
             onChange={(event) => setBody(event.target.value)}

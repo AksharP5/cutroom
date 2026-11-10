@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
 test("review notes stay grouped by state until the owner accepts, answers, or restores them", async ({
   page,
@@ -151,4 +152,64 @@ test("the owner can return a stuck claim to the queue", async ({
   await expect(
     page.getByRole("region", { name: "Queued notes", exact: true }),
   ).toContainText("Trim the last second");
+});
+
+test("typing a note after a stroke never drives the editor, and another note keeps the typed words", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Note focus" },
+      })
+    ).json(),
+  );
+  const range = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline.range;
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.newEditor", "true"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const preview = page.frameLocator("iframe[title='Composition preview']");
+  await expect(preview.locator("#headline")).toHaveText("Note focus");
+  const now = page.getByRole("button", { name: /^Current time/ });
+  const stop = page.getByRole("button", { name: "Stop" });
+  const note = page.getByLabel("What should change?");
+
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("i");
+  await expect.poll(range).toEqual({ in: 30, out: null });
+
+  await page.keyboard.press("Shift+n");
+  const canvas = page.getByLabel("Draw on the composition");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("The drawing canvas has no box.");
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5, {
+    steps: 5,
+  });
+  await page.mouse.up();
+  const untouched = async (text: string) => {
+    await expect(note).toHaveValue(text);
+    await expect(note).toBeFocused();
+    await expect(stop).toHaveAttribute("aria-pressed", "true");
+    await expect(now).toHaveText("00:00:01:00");
+    expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+    expect(await range()).toEqual({ in: 30, out: null });
+  };
+  await page.keyboard.type("look in");
+  await untouched("look in");
+
+  // Pinning a comment while a note is half written keeps the words and the typing.
+  await page.getByRole("button", { name: /^Comment/ }).click();
+  await page.getByLabel("Pin a comment on the composition").click();
+  await page.keyboard.type(" to play");
+  await untouched("look in to play");
 });
