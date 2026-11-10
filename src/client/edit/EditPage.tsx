@@ -91,10 +91,15 @@ export function EditPage({
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
     });
-    void loadTimeline(projectId).catch(report);
+    let open = true;
+    // A read that fails after the user switched projects must not report on the next one.
+    const fail = (error: unknown) => {
+      if (open) report(error);
+    };
+    void loadTimeline(projectId).catch(fail);
     // Any project change can move the timeline or the undo history.
     const projectEvents = new EventSource(`/api/cutroom${base}/events`);
-    projectEvents.onmessage = () => void loadTimeline(projectId).catch(report);
+    projectEvents.onmessage = () => void loadTimeline(projectId).catch(fail);
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const previewEvents = new EventSource("/api/events");
     previewEvents.addEventListener("file-change", (event) => {
@@ -110,6 +115,7 @@ export function EditPage({
         setRevision((value) => value + 1);
     });
     return () => {
+      open = false;
       reportEditorError("timeline", null);
       projectEvents.close();
       previewEvents.close();
