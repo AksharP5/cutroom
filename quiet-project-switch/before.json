@@ -1,0 +1,11 @@
+{
+  "reports": [
+    {
+      "text": "The preview was closed.",
+      "kind": "status",
+      "project": "#project/4c3bb967-5765-446a-91a9-d03b42869ec1"
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": []
+}
