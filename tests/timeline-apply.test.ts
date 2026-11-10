@@ -570,6 +570,92 @@ test("separate ripple deletions preserve the unselected interval between them", 
   ]);
 });
 
+test("range trims unlink survivors when their only overlap was removed", () => {
+  const state = timeline([
+    clip("v", 0, 0, 40, { link: "av" }),
+    clip("a", 1, 30, 40, { kind: "audio", link: "av", mediaStart: 1 }),
+    clip("edit", 2, 30, 30),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["edit"],
+    ripple: true,
+  });
+  expect(
+    result.clips.map((item) => [
+      item.id,
+      item.start,
+      item.duration,
+      item.link,
+      item.mediaStart,
+    ]),
+  ).toEqual([
+    ["v", 0, 30, null, 0],
+    ["a", 30, 10, null, 2],
+  ]);
+  expect(positions(run(result, { type: "remove", clipIds: ["v"] }))).toEqual({
+    a: [1, 30, 10],
+  });
+});
+
+test("linked interval sweep lifts only surviving overlapping partners after Q, W, and delete", () => {
+  const intervals: [number, number][] = [];
+  for (let start = 0; start < 100; start += 10)
+    for (let end = start + 10; end <= 100; end += 10)
+      intervals.push([start, end]);
+  const edits: [Clip, CommandInput][] = [
+    [
+      clip("edit", 2, 30, 60),
+      { type: "trim", clipId: "edit", edge: "start", to: 60, ripple: true },
+    ],
+    [
+      clip("edit", 2, 0, 60),
+      { type: "trim", clipId: "edit", edge: "end", to: 30, ripple: true },
+    ],
+    [
+      clip("edit", 2, 30, 30),
+      { type: "remove", clipIds: ["edit"], ripple: true },
+    ],
+  ];
+  let cases = 0;
+  for (const [vStart, vEnd] of intervals)
+    for (const [aStart, aEnd] of intervals) {
+      if (Math.max(vStart, aStart) >= Math.min(vEnd, aEnd)) continue;
+      for (const [target, command] of edits) {
+        const result = run(
+          timeline([
+            clip("v", 0, vStart, vEnd - vStart, { link: "av" }),
+            clip("a", 1, aStart, aEnd - aStart, { kind: "audio", link: "av" }),
+            target,
+          ]),
+          command,
+        );
+        const survivors = result.clips.filter((item) => item.track !== 2);
+        for (const item of survivors) {
+          const partners = survivors.filter(
+            (other) =>
+              other !== item &&
+              Math.max(item.start, other.start) <
+                Math.min(
+                  item.start + item.duration,
+                  other.start + other.duration,
+                ),
+          );
+          expect(item.link === null).toBe(partners.length === 0);
+          const lifted = run(result, { type: "remove", clipIds: [item.id] });
+          expect(lifted.clips.map((other) => other.id).toSorted()).toEqual(
+            result.clips
+              .filter((other) => other !== item && !partners.includes(other))
+              .map((other) => other.id)
+              .toSorted(),
+          );
+        }
+        cases++;
+      }
+    }
+  expect(cases).toBe(6_105);
+});
+
 test("cuts keep a piece linked while it still overlaps its partner", () => {
   const lead = timeline([
     clip("s2", 0, 100, 100, { link: "l2" }),

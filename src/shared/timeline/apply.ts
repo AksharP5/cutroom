@@ -834,9 +834,23 @@ function splitClips(
     ),
     ...rights,
   ];
+  return regroupLinks(
+    cut,
+    new Set(targets.flatMap((clip) => clip.link ?? [])),
+    taken,
+  );
+}
+
+/** Keep affected pieces linked only within their surviving overlap groups. */
+function regroupLinks(
+  clips: Clip[],
+  links: ReadonlySet<string>,
+  taken: Set<string>,
+): Clip[] {
+  if (!links.size) return clips;
   const relinked = new Map<string, string | null>();
-  for (const link of new Set(targets.flatMap((clip) => clip.link ?? []))) {
-    const components = overlapping(cut.filter((clip) => clip.link === link));
+  for (const link of links) {
+    const components = overlapping(clips.filter((clip) => clip.link === link));
     let kept = false;
     for (const component of components) {
       const next =
@@ -845,7 +859,7 @@ function splitClips(
       for (const clip of component) relinked.set(clip.id, next);
     }
   }
-  return cut.map((clip) =>
+  return clips.map((clip) =>
     relinked.has(clip.id) && relinked.get(clip.id) !== clip.link
       ? { ...clip, link: relinked.get(clip.id)! }
       : clip,
@@ -877,16 +891,17 @@ function clearRange(
   const overlaps = (clip: Clip) => clip.start < to && clipEnd(clip) > from;
   const hits = (list: Clip[]) =>
     list.filter((clip) => clip.track === track && overlaps(clip));
+  const targets = hits(clips);
   // Only a clip with surviving material on both sides needs a copy.
   const next = splitClips(
     clips,
-    hits(clips).filter((clip) => clip.start < from && clipEnd(clip) > to),
+    targets.filter((clip) => clip.start < from && clipEnd(clip) > to),
     to,
     fps,
     taken,
     onCreate,
   );
-  return next.flatMap((clip) => {
+  const cut = next.flatMap((clip) => {
     if (clip.track !== track || !overlaps(clip)) return [clip];
     if (clip.start < from) return [{ ...clip, duration: from - clip.start }];
     if (clipEnd(clip) <= to) return [];
@@ -899,6 +914,11 @@ function clearRange(
       },
     ];
   });
+  return regroupLinks(
+    cut,
+    new Set(targets.flatMap((clip) => clip.link ?? [])),
+    taken,
+  );
 }
 
 function mergeRanges(

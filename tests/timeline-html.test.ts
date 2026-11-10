@@ -673,6 +673,23 @@ ${script}`);
   expect(output).not.toContain("bed-2");
 });
 
+test("a range cut removes stale links in HTML so lifting the picture keeps the surviving audio", () => {
+  const html =
+    composition(`<video id="v" src="v.mp4" data-start="0" data-duration="1.333333" data-link="av" data-track-index="0"></video>
+<audio id="a" src="a.wav" data-start="1" data-duration="1.333333" data-media-start="1" data-link="av" data-track-index="1"></audio>
+<video id="edit" src="edit.mp4" data-start="1" data-duration="1" data-track-index="2"></video>`);
+  expect(
+    edit(html, [
+      { type: "remove", clipIds: ["edit"], ripple: true },
+      { type: "remove", clipIds: ["v"] },
+    ]),
+  ).toBe(
+    composition(
+      `<audio id="a" src="a.wav" data-start="1" data-duration="0.333333" data-media-start="2" data-track-index="1"></audio>`,
+    ).replace(`data-duration="10"`, `data-duration="9"`),
+  );
+});
+
 test("removing an anonymous clip writes ids on the clips it would renumber", () => {
   const clips = ["A", "B", "C"].map(
     (text, index) =>
