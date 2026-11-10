@@ -5,6 +5,7 @@ import {
   MAX_PPF,
   clipsByTrack,
   clipsInRange,
+  cssMilliseconds,
   fitPpf,
   frameAt,
   majorTicks,
@@ -392,4 +393,11 @@ test("a selection drops clips that were removed or whose track was locked", () =
     "v2",
   ]);
   expect(pruneSelection(locked, { ...picked, anchor: "t1" }).anchor).toBeNull();
+});
+
+test("motion durations read the same from dev and minified CSS", () => {
+  expect(cssMilliseconds("220ms")).toBe(220);
+  expect(cssMilliseconds(" .22s")).toBe(220);
+  // Reduced motion collapses movement to zero, which the timeline takes as no animation.
+  expect(cssMilliseconds("0s")).toBe(0);
 });
