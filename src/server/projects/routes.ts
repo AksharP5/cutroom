@@ -1,3 +1,4 @@
+import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -54,6 +55,8 @@ export function createProjectRoutes(
   transcripts: TranscriptService = createTranscriptService(store),
 ) {
   const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
+  api.use("/projects", projectMutationGuard(reviews));
   api.get("/projects", async (c) => c.json({ projects: await store.list() }));
   api.post("/projects", async (c) =>
     c.json(
@@ -142,6 +145,7 @@ export function createProjectRoutes(
           },
           token ? { kind: "agent", name: "Agent" } : undefined,
         ),
+      body.noteId,
     );
     return c.json(result);
   });
@@ -205,6 +209,8 @@ export function createProjectRoutes(
     });
   });
   api.post("/projects/:id/review/:itemId/human", async (c) => {
+    if (c.req.header(AGENT_HEADER) !== undefined)
+      throw new HttpError(409, "Agents must use the agent review route.");
     const project = await store.get(c.req.param("id"));
     const action = parseInput(HumanReviewActionSchema, await c.req.json());
     return c.json(
@@ -250,9 +256,11 @@ export function createProjectRoutes(
   api.get("/transcription-jobs/:jobId", (c) =>
     c.json(transcripts.getJob(c.req.param("jobId"))),
   );
-  api.delete("/transcription-jobs/:jobId", (c) =>
-    c.json(transcripts.cancel(c.req.param("jobId"))),
-  );
+  api.delete("/transcription-jobs/:jobId", (c) => {
+    const job = transcripts.getJob(c.req.param("jobId"));
+    reviews.authorize(c.req.header(AGENT_HEADER), job.projectId);
+    return c.json(transcripts.cancel(job.id));
+  });
   api.post("/projects/:id/transcripts/:transcriptId/cuts", async (c) => {
     const project = await store.get(c.req.param("id"));
     const transcriptId = c.req.param("transcriptId");
@@ -267,6 +275,7 @@ export function createProjectRoutes(
         transcript.sourceFile,
         c.req.header(AGENT_HEADER),
         () => transcripts.cutWords(project, transcriptId, input),
+        input.noteId,
       ),
     );
   });

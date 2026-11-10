@@ -22,7 +22,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
 | `timeline_view`                                            | Render one timeline frame as an image.                             |
 
-Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected.
+Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
 ## Timeline
 
@@ -53,3 +53,5 @@ Claim a note before working on it, then complete it with a short note or block i
 MCP mutations use the same server commands as the interface. Edits to project files and note content appear in its undo history; review status lives outside it. File watchers update the visible preview and the Review panel.
 
 `review_reorder` takes `noteId` and `beforeId`. Set `beforeId` to another unfinished note or `null` for the end. This changes the saved owner order used by Review, note numbers, and the next agent digest. Cutroom's own agent cannot reorder; outside clients may act for the owner.
+
+Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the run has several claimed notes. It must name a note claimed by that run. With one claimed note it is automatic; ambiguous edits are refused before writing, so accepting one note never accepts another note's clips.

@@ -107,18 +107,27 @@ test("an approval shows the full target and scoped Always allow in a short windo
       })
     ).json(),
   );
+  const target = "compositions/an-unusually-long-composition-name.html";
   await openWaiting(page, project.id, {
     id: "approval-1",
     canAllowCutroomEdits: true,
     kind: "approval",
-    title: "Write compositions/an-unusually-long-composition-name.html?",
+    title: `Write ${target}?`,
+    target,
+    input: { projectId: project.id, path: target },
     tool: "mcp__cutroom_studio__source_write",
-    input: { path: "compositions/an-unusually-long-composition-name.html" },
-    target: "compositions/an-unusually-long-composition-name.html",
   });
   const approval = page.getByRole("region", { name: "Permission request" });
   const allow = approval.getByRole("button", { name: "Allow once" });
   await expectInWindow(allow, page);
+  await expect(approval.locator(".agent-request-tool")).toHaveText(
+    "mcp__cutroom_studio__source_write",
+  );
+  expect(
+    await approval
+      .locator(".agent-request-tool")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
   const title = approval.getByRole("button", { name: /^Write / });
   const [titleBox, allowBox] = [
     await title.boundingBox(),
@@ -138,4 +147,10 @@ test("an approval shows the full target and scoped Always allow in a short windo
     page,
   );
   await expectInWindow(page.getByLabel("Message your agent"), page);
+  await page.setViewportSize({ width: 1720, height: 1050 });
+  await page.frameLocator("iframe[data-live]").locator("#headline").waitFor();
+  if (process.env.CUTROOM_E2E_DIR)
+    await page.screenshot({
+      path: `${process.env.CUTROOM_E2E_DIR}/approval-identity.png`,
+    });
 });

@@ -1,3 +1,4 @@
+import { projectMutationGuard } from "../projects/authorization";
 import { AGENT_HEADER } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
 import { posix } from "node:path";
@@ -186,6 +187,7 @@ export function createTimelineRoutes(
   };
 
   const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.get("/projects/:id/timeline", async (c) => {
     const project = await store.get(c.req.param("id"));
     const composition = canonical(c.req.query("composition") ?? "index.html");
@@ -220,6 +222,7 @@ export function createTimelineRoutes(
                 ? { kind: "agent", name: "Agent" }
                 : undefined,
             ),
+          batch.noteId,
         )),
         agentChanges: await reviews.changedClips(project, batch.composition),
       });

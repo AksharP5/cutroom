@@ -851,8 +851,10 @@ test("Codex uses privileged MCP approval metadata, honors explicit prompt rules,
 import {createInterface} from 'node:readline';
 const reply = value => process.stdout.write(JSON.stringify(value)+'\n');
 const requests = [
- ['cutroom_studio','timeline_edit',{commands:[{}, {}, {}]}],
- ['cutroom_studio','source_write',{path:'index.html'}],
+ ['cutroom_studio','timeline_edit',{projectId:'project',expectedRevision:'revision',commands:[{type:'setClip',clipId:'a',label:'A'},{type:'setClip',clipId:'b',label:'B'},{type:'setClip',clipId:'c',label:'C'}]}],
+ ['cutroom_studio','source_write',{projectId:'project',path:'index.html',file_path:'harmless.txt',content:'changed',expectedVersion:'revision'}],
+ ['cutroom_studio','project_create',{name:'New project'}],
+ ['cutroom_studio','project_import',{path:'/tmp/project'}],
  ['other','timeline_edit',{}],
  ['cutroom_studio',null,{}],
  ['cutroom_studio','unknown',{}],
@@ -899,8 +901,23 @@ for await(const line of createInterface({input:process.stdin})) {
     });
     try {
       await runtime.send({ text: "Edit", skills: [], attachments: [] });
-      expect(requests[0]?.title).toBe("Edit the timeline (3 changes)?");
+      expect(requests[0]?.title).toBe(
+        "Edit the timeline (index.html) (3 changes)?",
+      );
       expect(requests[0]?.canAllowCutroomEdits).toBe(true);
+      if (prompt) {
+        const source = requests.find(
+          (request) => request.tool === "mcp__cutroom_studio__source_write",
+        );
+        expect(source?.title).toBe("Write index.html?");
+        expect(source?.input).not.toHaveProperty("file_path");
+      }
+      for (const name of ["project_create", "project_import"])
+        expect(
+          requests.find(
+            (request) => request.tool === `mcp__cutroom_studio__${name}`,
+          )?.canAllowCutroomEdits,
+        ).toBe(false);
       expect(
         requests.some(
           (request) => request.tool === "mcp__cutroom_studio__source_write",

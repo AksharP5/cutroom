@@ -228,6 +228,7 @@ function RequestCard({
             >
               {request.title}
             </button>
+            <code className="agent-request-tool">{request.tool}</code>
             {actions}
           </div>
           {showInput && <pre>{JSON.stringify(request.input, null, 2)}</pre>}

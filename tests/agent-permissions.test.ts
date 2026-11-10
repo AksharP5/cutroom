@@ -12,6 +12,7 @@ import {
   claudeEditPermission,
 } from "../src/server/agents/tool-permissions";
 
+const unscoped = ["project_create", "project_import"];
 const reads = [
   "projects_list",
   "project_read",
@@ -43,12 +44,16 @@ test("native permission rules match every tool advertised over MCP", async () =>
       const codex = codexToolPermissions(always);
       for (const tool of tools) {
         const name = `mcp__cutroom_studio__${tool.name}`;
-        const allowed = reads.includes(tool.name) || always;
+        const allowed =
+          reads.includes(tool.name) ||
+          (always && !unscoped.includes(tool.name));
         expect(claude.allowedTools.includes(name)).toBe(allowed);
         expect(
           codex[`mcp_servers.cutroom_studio.tools.${tool.name}.approval_mode`],
         ).toBe(allowed ? "approve" : "prompt");
-        expect(isCutroomEdit(name)).toBe(!reads.includes(tool.name));
+        expect(isCutroomEdit(name)).toBe(
+          !reads.includes(tool.name) && !unscoped.includes(tool.name),
+        );
       }
       expect(
         claude.allowedTools.every((name) =>
@@ -68,6 +73,16 @@ test("native permission rules match every tool advertised over MCP", async () =>
     ])
       expect(isCutroomEdit(tool)).toBe(false);
     expect(claudeEditPermission.destination).toBe("session");
+    expect(claudeToolPermissions(true).settings.permissions.ask).toEqual([
+      "mcp__cutroom_studio__project_create",
+      "mcp__cutroom_studio__project_import",
+    ]);
+    if ("rules" in claudeEditPermission)
+      expect(
+        claudeEditPermission.rules.every((rule) =>
+          isCutroomEdit(rule.toolName),
+        ),
+      ).toBe(true);
     const configured = codexToolPermissions(true, [
       {
         tools: {
@@ -199,7 +214,9 @@ try {
                 ?.slice("--allowedTools=".length)
                 .split(","),
             ).toEqual(claudeToolPermissions(always).allowedTools);
-            expect(args).not.toContain("--settings");
+            expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual(
+              claudeToolPermissions(always).settings,
+            );
           } else {
             const thread = JSON.parse(
               await readFile(`${recording}.thread`, "utf8"),

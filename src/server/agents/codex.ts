@@ -6,7 +6,7 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
-import { approvalTitle } from "../../shared/toolRow";
+import { toolApproval } from "./tool-approval";
 import {
   codexAsks,
   codexPermissionConfigSchema,
@@ -484,6 +484,7 @@ export class CodexRuntime implements AgentRuntime {
           ? "Files"
           : method;
     const input = approval?._meta.tool_params ?? params;
+    const details = toolApproval(tool, input, this.options.cwd);
     const canAllowCutroomEdits =
       isCutroomEdit(tool) &&
       !codexAsks(this.permissionConfigs, approval?._meta.tool_name ?? "");
@@ -491,23 +492,24 @@ export class CodexRuntime implements AgentRuntime {
       this.client.respond(id, { action: "accept", content: null });
       return;
     }
-    const target = toolTarget(input, this.options.cwd);
+    const target = details.target;
     const request: AgentRequest = {
       id: String(id),
       kind: questions ? "question" : "approval",
       tool,
       canAllowCutroomEdits,
       ...(target && { target }),
-      title: approval
-        ? approvalTitle(tool, input, this.options.cwd)
-        : typeof params.reason === "string"
-          ? params.reason
-          : typeof params.command === "string"
-            ? params.command
-            : typeof params.message === "string"
-              ? params.message
-              : "Codex needs your permission",
-      input,
+      title:
+        approval || details.target
+          ? details.title
+          : typeof params.reason === "string"
+            ? params.reason
+            : typeof params.command === "string"
+              ? params.command
+              : typeof params.message === "string"
+                ? params.message
+                : "Codex needs your permission",
+      input: details.input,
       ...(questions ? { questions } : {}),
     };
     const response = await this.options.request(request);

@@ -11,8 +11,7 @@ import type {
   AgentRequest,
   AgentTurn,
 } from "../../shared/agent";
-import { toolTarget } from "../../shared/agent";
-import { approvalTitle } from "../../shared/toolRow";
+import { toolApproval } from "./tool-approval";
 import {
   claudeToolPermissions,
   claudeEditPermission,
@@ -197,7 +196,8 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
     // "Write index.html?" rather than the tool's internal name.
-    const target = toolTarget(input, this.options.cwd);
+    const approval = toolApproval(tool, input, this.options.cwd);
+    const target = approval.target;
     const questions =
       tool === "AskUserQuestion"
         ? questionInputSchema.safeParse(input)
@@ -209,10 +209,8 @@ export class ClaudeRuntime implements AgentRuntime {
       canAllowCutroomEdits:
         isCutroomEdit(tool) && !this.options.allowCutroomEdits?.(),
       title:
-        tool === "AskUserQuestion"
-          ? "Claude has a question"
-          : approvalTitle(tool, input, this.options.cwd),
-      input,
+        tool === "AskUserQuestion" ? "Claude has a question" : approval.title,
+      input: approval.input,
       ...(target ? { target } : {}),
       ...(questions?.success
         ? {
@@ -236,7 +234,7 @@ export class ClaudeRuntime implements AgentRuntime {
     );
     return {
       behavior: "allow",
-      updatedInput: questions?.success ? { ...input, answers } : input,
+      updatedInput: questions?.success ? { ...input, answers } : approval.input,
       ...(response.alwaysAllowCutroomEdits &&
         isCutroomEdit(tool) && { updatedPermissions: [claudeEditPermission] }),
     };

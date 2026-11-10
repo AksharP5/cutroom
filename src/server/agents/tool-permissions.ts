@@ -1,3 +1,7 @@
+import {
+  getObjectShape,
+  isSchemaOptional,
+} from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type {
   Options,
   PermissionUpdate,
@@ -6,12 +10,19 @@ import { z } from "zod";
 import { createMcpServer } from "../mcp/server";
 
 // The registry is the permission boundary. Unknown tools always ask.
-const tools = Array.from(createMcpServer().toolRegistry, ([name, tool]) => ({
-  name,
-  readOnly: tool.annotations?.readOnlyHint === true,
-}));
+export const cutroomToolRegistry = createMcpServer().toolRegistry;
+const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
+  const projectId = getObjectShape(tool.inputSchema)?.projectId;
+  return {
+    name,
+    readOnly: tool.annotations?.readOnlyHint === true,
+    projectScoped: projectId !== undefined && !isSchemaOptional(projectId),
+  };
+});
 const editTools = new Set(
-  tools.filter((tool) => !tool.readOnly).map((tool) => tool.name),
+  tools
+    .filter((tool) => !tool.readOnly && tool.projectScoped)
+    .map((tool) => tool.name),
 );
 
 export function isCutroomEdit(tool: string) {
@@ -21,12 +32,20 @@ export function isCutroomEdit(tool: string) {
 
 export function claudeToolPermissions(always = false) {
   // Native ask/deny rules take precedence over these allow entries. Do not add our own
-  // ask rules: they would also override an owner choosing Always allow during a turn.
+  // ask rules for project edits: they would override an owner choosing Always allow.
+  // Creation/import have no existing project and always require approval.
   return {
     allowedTools: tools
-      .filter((tool) => tool.readOnly || always)
+      .filter((tool) => tool.readOnly || (always && tool.projectScoped))
       .map(({ name }) => `mcp__cutroom_studio__${name}`),
-  } satisfies Pick<Options, "allowedTools">;
+    settings: {
+      permissions: {
+        ask: tools
+          .filter((tool) => !tool.readOnly && !tool.projectScoped)
+          .map(({ name }) => `mcp__cutroom_studio__${name}`),
+      },
+    },
+  } satisfies Pick<Options, "allowedTools" | "settings">;
 }
 
 export const claudeEditPermission: PermissionUpdate = {
@@ -81,11 +100,11 @@ export function codexToolPermissions(
   return {
     "mcp_servers.cutroom_studio.default_tools_approval_mode": "prompt",
     ...Object.fromEntries(
-      tools.map(({ name, readOnly }) => [
+      tools.map(({ name, readOnly, projectScoped }) => [
         `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
         codexAsks(configs, name)
           ? "prompt"
-          : readOnly || always
+          : readOnly || (always && projectScoped)
             ? "approve"
             : "prompt",
       ]),

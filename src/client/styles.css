@@ -1041,6 +1041,15 @@ option {
   overflow-wrap: anywhere;
   white-space: normal;
 }
+.agent-request-tool {
+  flex: 1 0 100%;
+  min-width: 0;
+  margin-bottom: var(--space-1);
+  color: var(--text-secondary);
+  font: var(--type-micro) / var(--leading-body) var(--font-mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .agent-request-title:hover {
   color: var(--text-primary);
 }

@@ -314,28 +314,39 @@ export function createReviewService(store: ProjectStore) {
    * The agent behind a request. A conversation's token only acts on the project whose run it
    * belongs to, while that run is active; anything else is refused rather than guessed.
    */
+  const authorize = (token: string | undefined, projectId?: string) => {
+    if (token === undefined || token === "external") return;
+    const turn =
+      projectId === undefined
+        ? [...turns.values()].find(
+            (turn) => turn.kind === "message" && turn.token === token,
+          )
+        : turns.get(projectId);
+    if (turn?.kind !== "message" || turn.token !== token)
+      throw new HttpError(409, "No Cutroom run is active for this project.");
+    return turn;
+  };
   const agent = (
     project: Project,
     token: string | undefined,
-  ): Extract<ReviewActor, { kind: "agent" }> => {
-    if (token === undefined || token === "external")
-      return { kind: "agent", turn: external };
-    const turn = turns.get(project.id);
-    if (turn?.kind !== "message" || turn.token !== token)
-      throw new HttpError(409, "No Cutroom run is active for this project.");
-    return { kind: "agent", turn };
-  };
+  ): Extract<ReviewActor, { kind: "agent" }> => ({
+    kind: "agent",
+    turn: authorize(token, project.id) ?? external,
+  });
 
   return {
     agent,
+    authorize,
     /** Source and timeline edits share the review queue, so accepting cannot race attribution. */
     editComposition: <T>(
       project: Project,
       composition: string,
       token: string | undefined,
       work: () => Promise<T>,
+      noteId?: string,
     ) =>
       serialize(project, async () => {
+        authorize(token, project.id);
         if (!composition.endsWith(".html")) return work();
         let items: ReviewItem[];
         let before: Map<string, string>;
@@ -352,6 +363,25 @@ export function createReviewService(store: ProjectStore) {
           throw error;
         }
         const actor = token === undefined ? undefined : agent(project, token);
+        const claimed = actor
+          ? items.filter(
+              (item) =>
+                item.review.status === "working" &&
+                item.review.turnId === actor.turn.id,
+            )
+          : [];
+        if (noteId !== undefined && !claimed.some((item) => item.id === noteId))
+          throw new HttpError(
+            409,
+            "The edit's note must be claimed by this run.",
+          );
+        if (claimed.length > 1 && noteId === undefined)
+          throw new HttpError(
+            409,
+            "Pass noteId to identify which claimed note this edit addresses.",
+          );
+        const noteIds =
+          noteId === undefined ? claimed.map((item) => item.id) : [noteId];
         const result = await work();
         const after = await clipVersions(store, project, composition);
         const changed = new Set(
@@ -366,13 +396,6 @@ export function createReviewService(store: ProjectStore) {
             change.composition !== composition || !changed.has(change.clipId),
         );
         if (actor) {
-          const noteIds = items
-            .filter(
-              (item) =>
-                item.review.status === "working" &&
-                item.review.turnId === actor.turn.id,
-            )
-            .map((item) => item.id);
           for (const id of changed) {
             const signature = after.get(id);
             if (signature)

@@ -115,6 +115,13 @@ export const TranscriptImportSchema = z.object({
   words: z.array(WordSchema).min(1).max(200_000),
 });
 export const CutWordsSchema = z.object({
+  noteId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The claimed review note this edit addresses; required when several notes are claimed",
+    ),
   wordIds: z.array(z.string()).min(1).max(200_000),
   action: z.enum(["cut", "restore"]),
   expectedVersion: z.string().optional(),
@@ -128,6 +135,13 @@ export const SourceSchema = z.object({
   version: z.string(),
 });
 export const SourceWriteSchema = z.object({
+  noteId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The claimed review note this edit addresses; required when several notes are claimed",
+    ),
   path: z.string().default("index.html"),
   content: z.string().max(10 * 1024 * 1024),
   expectedVersion: z.string().min(1),

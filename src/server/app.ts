@@ -104,6 +104,7 @@ export async function createApp(
     "/api/cutroom",
     createWorkspaceRoutes({
       projects,
+      review,
       dataDir,
       projectsDir,
       mcpCommand,

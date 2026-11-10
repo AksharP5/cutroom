@@ -1,3 +1,4 @@
+import { AGENT_HEADER } from "../../shared/review";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -14,6 +15,17 @@ import type { AgentService } from "./service";
 
 export function createAgentRoutes(service: AgentService) {
   const app = new Hono();
+  app.use("*", async (c, next) => {
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
+      c.req.header(AGENT_HEADER) !== undefined
+    )
+      throw new HttpError(
+        409,
+        "Only the owner can control agents and their permissions.",
+      );
+    await next();
+  });
   app.onError((error, c) => {
     if (error instanceof HttpError)
       return c.json({ error: error.message }, error.status);

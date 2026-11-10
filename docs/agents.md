@@ -27,9 +27,9 @@ If a native run needs approval or an answer, the chat shows that request. Stoppi
 
 ## Approvals and changed clips
 
-`timeline_view` and other Cutroom reads run without approval unless your native settings ask. On an edit approval, choose **Always allow Cutroom edits** to allow Cutroom's own edit tools for this project. Shell commands and other MCP servers keep their own permissions. Your native ask rules still apply. The Agent panel shows the saved choice and **Revoke**; revoking stops any active run too.
+`timeline_view` and other Cutroom reads run without approval unless your native settings ask. On an edit approval, choose **Always allow Cutroom edits** to allow Cutroom's own edit tools for this project. Shell commands and other MCP servers keep their own permissions. Project creation and import always prompt separately. Your native ask rules still apply. The Agent panel shows the saved choice and **Revoke**; revoking stops any active run too.
 
-Clips changed through Cutroom's timeline, script, or HTML source tools have a blue underline. Accept their completed review note to clear it, or use **Accept agent changes** in Review for edits made directly from chat. Editing a clip yourself also clears its underline.
+Clips changed through Cutroom's timeline, script, or HTML source tools have a blue underline. Accept their completed review note to clear it, or use **Accept agent changes** in Review for edits made directly from chat. Editing a clip yourself also clears its underline. When several notes are claimed, the agent passes `noteId` on each edit so accepting a note clears only its own clips.
 
 ## Review queue
 

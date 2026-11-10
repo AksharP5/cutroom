@@ -271,6 +271,13 @@ export const CommandSchema = z.discriminatedUnion("type", [
 ]);
 
 export const CommandBatchSchema = z.object({
+  noteId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The claimed review note this edit addresses; required when several notes are claimed",
+    ),
   composition: z.string().min(1).default("index.html"),
   commands: z.array(CommandSchema).min(1).max(1_000),
   expectedRevision: z

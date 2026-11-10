@@ -109,3 +109,97 @@ test("unreadable review metadata does not block timeline reads or source repairs
     await fixture.close();
   }
 });
+
+test("two claimed notes own their individual edits, and accepting either clears only its clips", async () => {
+  const fixture = await projectFixture();
+  const { store, review, app, request } = fixture;
+  app.route("/api/cutroom", createTimelineRoutes(store, review));
+  const project = await store.create({ name: "Two claimed notes" });
+  const actor = review.agent(project, undefined);
+  const base = `/projects/${project.id}`;
+  const notes = await Promise.all(
+    ["Headline", "Caption"].map((body) =>
+      review.add(
+        project,
+        { body, time: 0, compositionPath: "index.html" },
+        undefined,
+      ),
+    ),
+  );
+  for (const note of notes)
+    await review.act(project, note.id, { type: "claim" }, actor);
+  const edit = async (clipId: string, noteId?: string) => {
+    const { revision } = TimelineViewSchema.parse(
+      await (await request(`${base}/timeline`)).json(),
+    );
+    return app.request(`/api/cutroom${base}/commands`, {
+      method: "POST",
+      headers: {
+        [AGENT_HEADER]: "external",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        expectedRevision: revision,
+        noteId,
+        commands: [{ type: "setClip", clipId, label: `Edited ${clipId}` }],
+      }),
+    });
+  };
+  try {
+    expect((await edit("headline")).status).toBe(409);
+    expect((await edit("headline", "not-claimed")).status).toBe(409);
+    expect(await review.changedClips(project, "index.html")).toEqual([]);
+    expect((await edit("headline", notes[0]!.id)).status).toBe(200);
+    // Source edits use the same note attribution as timeline commands.
+    const source = await (await request(`${base}/source`)).json();
+    const saved = await app.request(`/api/cutroom${base}/source`, {
+      method: "PUT",
+      headers: {
+        [AGENT_HEADER]: "external",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        path: "index.html",
+        noteId: notes[1]!.id,
+        expectedVersion: source.version,
+        content: source.content.replace(
+          'class="clip caption"',
+          'class="clip caption" style="opacity:.8"',
+        ),
+      }),
+    });
+    expect(saved.status).toBe(200);
+    expect((await review.changedClips(project, "index.html")).sort()).toEqual([
+      "caption",
+      "headline",
+    ]);
+    for (const note of notes)
+      await review.act(
+        project,
+        note.id,
+        { type: "complete", note: "Changed its clip" },
+        actor,
+      );
+    await review.act(
+      project,
+      notes[0]!.id,
+      { type: "accept" },
+      { kind: "human" },
+    );
+    expect(await review.changedClips(project, "index.html")).toEqual([
+      "caption",
+    ]);
+    expect(
+      await createReviewService(store).changedClips(project, "index.html"),
+    ).toEqual(["caption"]);
+    await review.act(
+      project,
+      notes[1]!.id,
+      { type: "accept" },
+      { kind: "human" },
+    );
+    expect(await review.changedClips(project, "index.html")).toEqual([]);
+  } finally {
+    await fixture.close();
+  }
+});
