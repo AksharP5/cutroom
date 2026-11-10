@@ -142,11 +142,9 @@ test("Export in the tool row renders the composition and downloads a playable MP
   expect(renders).toBe(0);
   release();
 
-  await expectPlayable(
-    await pendingDownload,
-    testInfo.outputPath("export.mp4"),
-    1.5,
-  );
+  const download = await pendingDownload;
+  expect(download.suggestedFilename()).toBe(`${project.name}.mp4`);
+  await expectPlayable(download, testInfo.outputPath("export.mp4"), 1.5);
   await expect(
     page.getByRole("button", { name: "Export", exact: true }),
   ).toBeEnabled();

@@ -765,6 +765,14 @@ function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
     ["id", clip.id],
     ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
     ["src", input.src],
+    ...(clip.kind === "video" || clip.kind === "image"
+      ? [
+          [
+            "style",
+            "position:absolute;inset:0;width:100%;height:100%;object-fit:contain",
+          ] as const,
+        ]
+      : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],

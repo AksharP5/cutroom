@@ -17,10 +17,6 @@ async function openProject(
       await request.post("/api/cutroom/projects", { data: { name } })
     ).json(),
   );
-  await page.addInitScript(() => {
-    if (window === window.top)
-      localStorage.setItem("cutroom.newEditor", "true");
-  });
   await page.goto(`/#project/${project.id}`);
   await expect(
     page
@@ -63,6 +59,77 @@ async function pinPoint(page: Page, name: string) {
     y: (pin.y + pin.height - picture.y) / picture.height,
   };
 }
+
+test("a five-note pass keeps its pins and strokes when the same tool row edits the timeline", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = await openProject(page, request, "Notes and drag edits");
+  const bodies = [
+    "Lift this title",
+    "Keep the first mark",
+    "Hold this beat",
+    "Keep both strokes",
+    "End on this frame",
+  ];
+  for (const [index, body] of bodies.entries()) {
+    const draw = index === 1 || index === 3;
+    await page
+      .getByRole("button", { name: draw ? /^Draw/ : /^Comment/ })
+      .click();
+    const x = 0.15 + (index % 3) * 0.25;
+    const y = index < 3 ? 0.3 : 0.7;
+    const start = await project.at(x, y);
+    if (draw) {
+      for (const offset of [0, 0.05]) {
+        const from = await project.at(x, y + offset);
+        const to = await project.at(x + 0.08, y + offset);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        await page.mouse.up();
+      }
+    } else await page.mouse.click(start.x, start.y);
+    const field = page.getByLabel("What should change?");
+    await field.fill(body);
+    await field.press("Enter");
+  }
+  await expect
+    .poll(async () => (await project.notes()).map((note) => note.body))
+    .toEqual(bodies);
+  const saved = await project.notes();
+  expect(saved.map((note) => note.strokes.length)).toEqual([0, 2, 0, 2, 0]);
+  expect(saved.every((note) => note.framePath)).toBe(true);
+  await expect(page.locator(".edit-note-pin")).toHaveCount(5);
+  await page.screenshot({ path: testInfo.outputPath("five-note-pass.png") });
+
+  await page.getByRole("button", { name: /^Select/ }).click();
+  const rule = page.locator('[data-clip="rule"]');
+  const box = await rule.boundingBox();
+  if (!box) throw new Error("The rule has no timeline box.");
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((grid) => Number(grid.style.getPropertyValue("--ppf")));
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    box.x + box.width / 2 + 30 * ppf,
+    box.y + box.height / 2,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(() => rule.evaluate((clip) => clip.style.getPropertyValue("--s")))
+    .toBe("30");
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(() => rule.evaluate((clip) => clip.style.getPropertyValue("--s")))
+    .toBe("0");
+  expect(await project.notes()).toEqual(saved);
+  await expect(page.locator(".edit-note-pin")).toHaveCount(5);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.locator(".review-row")).toHaveCount(5);
+});
 
 test("a comment pins where you click, takes every key while you type, and stays put through a resize", async ({
   page,

@@ -626,6 +626,7 @@ export function App() {
                   {newEditor ? (
                     <EditPage
                       projectId={project.id}
+                      projectName={project.name}
                       notes={projectDocument.items}
                       onContext={onContext}
                       onSaveNote={saveNote}

@@ -43,7 +43,7 @@ function finished(jobId: string) {
  * Renders the project's root composition to MP4 with the same render job the embedded editor
  * starts, then hands the file to the browser as a download. Failures show in the header.
  */
-export async function exportProject(projectId: string, fps: Fps) {
+export async function exportProject(projectId: string, name: string, fps: Fps) {
   if (useExport.getState().progress !== null) return;
   useExport.setState({ progress: 0 });
   useWorkspace.setState({ exporting: true });
@@ -77,8 +77,9 @@ export async function exportProject(projectId: string, fps: Fps) {
     if (end.status !== "complete")
       throw new Error(end.error || `The export ${end.status}.`);
     const link = document.createElement("a");
-    link.href = `/api/render/${encodeURIComponent(jobId)}/download`;
-    link.download = "";
+    const filename = `${name}.mp4`;
+    link.href = `/api/render/${encodeURIComponent(jobId)}/download?${new URLSearchParams({ filename })}`;
+    link.download = filename;
     link.click();
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error));

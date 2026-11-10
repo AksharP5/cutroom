@@ -88,7 +88,7 @@ At 32 px per frame every filmstrip tile is its own frame from the server. Frames
 
 ### Dragging
 
-500 clips referencing a generated 15-second 320x180 H.264/AAC file, reused across the linked picture and sound pieces, fit view at 0.06776 px/frame, 415 clips following a ripple trim, Chromium 1720x1050. Hardware renderer verified as ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2. Each run sent native pointer moves from an independent 60 Hz source for ten seconds, with the CPU profiler running. Callback gaps use `performance.now()` at actual callback entry, not RAF's supplied timestamp. The final build includes the preview-isolation rebase onto `3287a9d`.
+500 clips referencing a generated 15-second 320x180 H.264/AAC file, reused across the linked picture and sound pieces, fit view at 0.06776 px/frame, 415 clips following a ripple trim, Chromium 1720x1050. Hardware renderer verified as ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2. Each run sent native pointer moves from an independent 60 Hz source for ten seconds, with the CPU profiler running. Callback gaps use `performance.now()` at actual callback entry, not RAF's supplied timestamp. These measurements were taken on the fix based on `3287a9d`, before the notes integration.
 
 | Measurement                        |   00d1c00 | Rebased fix |
 | ---------------------------------- | --------: | ----------: |

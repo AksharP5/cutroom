@@ -379,6 +379,17 @@ export function createHyperframesApi(
       ),
     });
   });
+  api.get("/render/:jobId/download", async (c, next) => {
+    await next();
+    const filename = c.req.query("filename");
+    if (!c.res.ok || !filename) return;
+    // A response filename takes precedence over the link's download attribute.
+    const encoded = encodeURIComponent(filename).replace(
+      /['()*]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+    c.header("Content-Disposition", `attachment; filename*=UTF-8''${encoded}`);
+  });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
     subscribe(projectId: string, listener: (change: FileChange) => void) {

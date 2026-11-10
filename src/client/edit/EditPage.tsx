@@ -74,6 +74,7 @@ const tools = [
 /** Cutroom's own editor: tool row, viewer, transport, and the timeline below a split. */
 export function EditPage({
   projectId,
+  projectName,
   notes,
   onContext,
   onSaveNote,
@@ -81,6 +82,7 @@ export function EditPage({
   onFiles,
 }: {
   projectId: string;
+  projectName: string;
   /** Review notes, shown as pins on the picture and the timeline ruler. */
   notes: readonly ReviewItem[];
   onContext?: (context: EditorContext) => void;
@@ -379,7 +381,11 @@ export function EditPage({
           className="edit-export"
           disabled={exporting !== null}
           onClick={() =>
-            void exportProject(projectId, useTransport.getState().fps)
+            void exportProject(
+              projectId,
+              projectName,
+              useTransport.getState().fps,
+            )
           }
         >
           {exporting === null
