@@ -23,6 +23,7 @@ import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "./timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
+import { editLabel } from "./labels";
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 
@@ -345,7 +346,7 @@ export async function editTimeline(
         : applyAll(view.timeline, commands);
     edit = {
       projectId,
-      label,
+      label: editLabel(commands, from, label),
       commands,
       uses: new Set(
         commands.flatMap((command) =>

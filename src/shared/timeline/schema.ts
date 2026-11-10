@@ -344,6 +344,8 @@ export const ClipEditSchema = z.object({
   by: z.enum(["human", "agent"]),
   at: z.string(),
   accepted: z.boolean(),
+  historyId: z.string().optional(),
+  resolution: z.enum(["owner", "source"]).optional(),
 });
 
 export const TimelineViewSchema = z.object({

@@ -1161,7 +1161,8 @@ test("an agent's script cut marks the changed pieces and ripple followers, keepi
       },
     );
     expect(response.status).toBe(200);
-    const changes = await fixture.review.changedClips(project, "index.html");
+    const changes = (await fixture.review.clipChanges(project, "index.html"))
+      .agentChanges;
     expect(changes).toHaveLength(3);
     expect(changes).toContain("following");
     expect(changes).not.toContain("other-track");

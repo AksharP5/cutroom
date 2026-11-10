@@ -109,35 +109,75 @@ export function ValueField({
       >
         {label}
       </label>
-      <input
-        ref={input}
-        id={id}
-        title={
-          allowAuto
-            ? "Auto uses source styles. Type a percentage to set static inline opacity."
-            : undefined
-        }
-        type="text"
-        spellCheck={false}
-        disabled={disabled}
-        value={draft ?? formatField(value, unit, fps)}
-        onFocus={(event) => event.currentTarget.select()}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          if (cancelled.current) setDraft(null);
-          else commit();
-          cancelled.current = false;
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          // Leaving the field returns Space, undo and the other shortcuts to the editor.
-          if (event.key === "Enter" || event.key === "Escape") {
-            event.preventDefault();
-            cancelled.current = event.key === "Escape";
-            event.currentTarget.blur();
+      <div className="inspector-value">
+        <input
+          ref={input}
+          id={id}
+          title={
+            allowAuto
+              ? "Auto uses source styles. Type a percentage to set static inline opacity."
+              : undefined
           }
-        }}
-      />
+          type="text"
+          spellCheck={false}
+          disabled={disabled}
+          value={draft ?? formatField(value, unit, fps)}
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (cancelled.current) setDraft(null);
+            else commit();
+            cancelled.current = false;
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") event.stopPropagation();
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              event.preventDefault();
+              try {
+                const current =
+                  draft === null || draft.trim().toLowerCase() === "auto"
+                    ? (value ?? 1)
+                    : parseField(draft, unit, fps);
+                const step =
+                  (unit === "timecode" ? 1 : 0.01) *
+                  (event.shiftKey ? 10 : 1) *
+                  (event.key === "ArrowUp" ? 1 : -1);
+                setDraft(
+                  formatField(
+                    Math.min(max, Math.max(min, current + step)),
+                    unit,
+                    fps,
+                  ),
+                );
+              } catch (error) {
+                showToast(
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
+            }
+            // Leaving the field returns Space, undo and the other shortcuts to the editor.
+            if (event.key === "Enter" || event.key === "Escape") {
+              event.preventDefault();
+              cancelled.current = event.key === "Escape";
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        {allowAuto && (
+          <button
+            type="button"
+            aria-label="Use automatic opacity"
+            aria-pressed={value === null}
+            title="Use source styles"
+            onClick={() => {
+              setDraft(null);
+              if (value !== null) onCommit(null);
+            }}
+          >
+            Auto
+          </button>
+        )}
+      </div>
     </div>
   );
 }
