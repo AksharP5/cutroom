@@ -2,14 +2,15 @@ import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
 const frames = z.number().int().positive();
 const clipId = z.string().min(1).max(200);
 const label = z.string().max(500);
-/** Static gain as written to `data-volume`: 0 is silence, 3.98 is +12 dB. */
-const volume = z.number().min(0).max(3.98);
+/** Static gain as written to `data-volume`: 0 is silence, MAX_AUDIO_GAIN is +12 dB. */
+const volume = z.number().min(0).max(MAX_AUDIO_GAIN);
 /** Static CSS values are canonical to six decimals, beyond CSS parser float precision. */
 const opacity = z
   .number()
@@ -49,6 +50,9 @@ export const ClipSchema = z.object({
   volume: z.number().nonnegative().nullable(),
   /** Static inline opacity; null leaves the authored stylesheet in control. */
   opacity: opacity.nullable(),
+  /** Clip-edge fades, in timeline frames. */
+  fadeIn: frame.default(0),
+  fadeOut: frame.default(0),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -234,7 +238,16 @@ export const CommandSchema = z.discriminatedUnion("type", [
       type: z.literal("setClip"),
       clipId,
       label: label.nullable().optional(),
-      volume: volume.nullable().optional(),
+      volume: volume
+        .nullable()
+        .optional()
+        .describe("Linear clip gain, 0 for silence, 1 for unity, up to +12 dB"),
+      fadeIn: frame
+        .optional()
+        .describe("Fade-in length in timeline frames; 0 clears it"),
+      fadeOut: frame
+        .optional()
+        .describe("Fade-out length in timeline frames; 0 clears it"),
       opacity: opacity.nullable().optional(),
       enabled: z
         .boolean()

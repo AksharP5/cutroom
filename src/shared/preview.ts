@@ -25,3 +25,10 @@ export const RuntimeStateSchema = z.object({
   currentTime: z.number().nonnegative().finite(),
   isPlaying: z.boolean(),
 });
+
+export const PreviewLevelsSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("levels"),
+  l: z.number().nonnegative().finite(),
+  r: z.number().nonnegative().finite(),
+});

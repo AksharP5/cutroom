@@ -478,6 +478,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         label: input.label ?? null,
         volume: input.volume ?? null,
         opacity: null,
+        fadeIn: 0,
+        fadeOut: 0,
         enabled: true,
         startRef: null,
       };
@@ -567,12 +569,24 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "setClip": {
       const target = find(command.clipId);
+      const fadeIn = command.fadeIn ?? target.fadeIn;
+      const fadeOut = command.fadeOut ?? target.fadeOut;
+      if (
+        (command.fadeIn !== undefined || command.fadeOut !== undefined) &&
+        fadeIn + fadeOut > target.duration
+      )
+        throw new TimelineError(
+          "out_of_bounds",
+          "Fades must fit inside the clip.",
+        );
       return {
         ...timeline,
         clips: clips.map((clip) =>
           clip === target
             ? {
                 ...clip,
+                fadeIn,
+                fadeOut,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
                 ...(command.opacity !== undefined && {

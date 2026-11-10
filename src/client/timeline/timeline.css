@@ -822,3 +822,149 @@
 .tl-agent-change.on-audio {
   margin-top: calc(var(--size-track-audio) - var(--stroke-rail));
 }
+
+/* Clip gain and edge fades sit above the shared media canvas. */
+.tl {
+  display: flex;
+}
+.tl-scroll {
+  flex: 1;
+  min-width: 0;
+}
+.tl-mix {
+  position: absolute;
+  z-index: calc(var(--z-clip-selected) + 1);
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100% - 1px);
+  height: calc(var(--size-track-audio) - 2px);
+  margin-top: 1px;
+  pointer-events: none;
+}
+.tl-mix.on-video {
+  height: calc(var(--size-track-video) - 2px);
+}
+.tl-mix.locked {
+  opacity: var(--track-locked-opacity);
+}
+.tl-gain-area,
+.tl-fade-curve {
+  position: absolute;
+  top: var(--size-clip-name);
+  bottom: 3px;
+  width: 100%;
+}
+.tl-fade-curve {
+  height: calc(100% - var(--size-clip-name) - 3px);
+  overflow: visible;
+}
+.tl-fade-curve path {
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.tl-gain {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 7px;
+  transform: translateY(-50%);
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+.tl-gain::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--text-primary);
+}
+.tl-fade-handle {
+  position: absolute;
+  top: 1px;
+  width: 8px;
+  height: 9px;
+  background: var(--text-secondary);
+  border: 1px solid var(--surface-panel);
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+.tl-fade-handle[data-mix="fadeIn"] {
+  transform: translateX(-0%);
+}
+.tl-fade-handle[data-mix="fadeOut"] {
+  transform: translateX(0%);
+}
+.tl-lanes[data-cursor="gain"] {
+  cursor: ns-resize;
+}
+.tl-lanes[data-cursor="fade"] {
+  cursor: ew-resize;
+}
+
+.tl-meters {
+  position: relative;
+  flex: 0 0 var(--size-meter);
+  border-left: var(--stroke-hair) solid var(--line-subtle);
+}
+.tl-meter-channel {
+  position: absolute;
+  top: 34px;
+  bottom: 12px;
+  width: 5px;
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-off) 0 2px,
+    transparent 2px 3px
+  );
+}
+.tl-meter-channel:nth-child(2) {
+  right: 11px;
+}
+.tl-meter-channel:nth-child(3) {
+  right: 3px;
+}
+.tl-meter-channel > span {
+  position: absolute;
+  top: -16px;
+  width: 5px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font: var(--type-micro) / 1 var(--font-mono);
+}
+.tl-meter-level {
+  position: absolute;
+  inset: 0;
+  transform: scaleY(0);
+  transform-origin: bottom;
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-on) 0 2px,
+    transparent 2px 3px
+  );
+}
+.tl-meter-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  bottom: 0;
+  background: var(--meter-peak);
+}
+.tl-meter-channel[data-clipping="true"] .tl-meter-peak {
+  background: var(--meter-clip);
+}
+.tl-meter-scale {
+  position: absolute;
+  top: 34px;
+  bottom: 12px;
+  left: 4px;
+  font: var(--type-micro) / 1 var(--font-mono);
+  color: var(--text-tertiary);
+}
+.tl-meter-scale span {
+  position: absolute;
+  transform: translateY(-50%);
+}

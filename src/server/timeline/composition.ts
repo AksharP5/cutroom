@@ -1,3 +1,4 @@
+import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
 import { posix } from "node:path";
@@ -435,6 +436,8 @@ export function parseComposition(
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
+      fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
+      fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
@@ -706,6 +709,15 @@ function clipChanges(
       "data-volume",
       after.volume === null ? null : String(after.volume),
     ]);
+  for (const [field, attribute] of [
+    ["fadeIn", "data-fade-in"],
+    ["fadeOut", "data-fade-out"],
+  ] as const)
+    if (before[field] !== after[field])
+      changes.push([
+        attribute,
+        after[field] ? String(toSeconds(after[field], fps)) : null,
+      ]);
   if (before.label !== after.label) {
     if (after.label === null)
       changes.push(["data-timeline-label", null], ["data-label", null]);
@@ -899,6 +911,16 @@ function insertMarkup(
     ...(clip.volume !== null
       ? [["data-volume", String(clip.volume)] as const]
       : []),
+    ...(
+      [
+        ["fadeIn", "data-fade-in"],
+        ["fadeOut", "data-fade-out"],
+      ] as const
+    ).flatMap(([field, attribute]) =>
+      clip[field]
+        ? [[attribute, String(toSeconds(clip[field], fps))] as const]
+        : [],
+    ),
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]
       : []),

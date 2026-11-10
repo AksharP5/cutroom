@@ -1,3 +1,5 @@
+import { audioGainToText } from "@hyperframes/core/audio-gain";
+import { fadePath, gainHeight } from "./mix";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
@@ -60,6 +62,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
   latest.current = options;
   const gesture = useRef<Gesture>(idle);
   const drag = useRef<Drag | null>(null);
+  const originY = useRef(0);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
   const pointer = useRef({ x: 0, y: 0, bypass: false });
@@ -153,10 +156,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     if (shown !== base || next.size || placed.current.size || preview.current)
       for (const element of root.querySelectorAll<HTMLElement>(
-        "[data-clip], [data-clip-label], [data-clip-outline], [data-agent-change]",
+        "[data-clip], [data-clip-label], [data-clip-outline], [data-agent-change], [data-clip-mix]",
       )) {
-        const { clip, clipLabel, clipOutline, agentChange } = element.dataset;
-        const id = clip ?? clipLabel ?? clipOutline ?? agentChange ?? "";
+        const { clip, clipLabel, clipOutline, agentChange, clipMix } =
+          element.dataset;
+        const id =
+          clip ?? clipLabel ?? clipOutline ?? agentChange ?? clipMix ?? "";
         element.hidden = !surviving.has(id);
         const at = next.get(id);
         const move = at ? `translate(${at.x}px, ${at.y}px)` : "";
@@ -173,6 +178,30 @@ export function useLaneGestures(options: LaneGestureOptions) {
           element.style.clipPath =
             at && at.scale < 1 ? `inset(0 ${(1 - at.scale) * 100}% 0 0)` : "";
       }
+    for (const clip of shown.clips) {
+      const old = before.get(clip.id);
+      if (
+        old?.volume === clip.volume &&
+        old.fadeIn === clip.fadeIn &&
+        old.fadeOut === clip.fadeOut &&
+        !preview.current?.commands.some(
+          (command) => command.type === "setClip" && command.clipId === clip.id,
+        )
+      )
+        continue;
+      const mix = root.querySelector<HTMLElement>(
+        `[data-clip-mix="${CSS.escape(clip.id)}"]`,
+      );
+      const gain = mix?.querySelector<HTMLElement>('[data-mix="gain"]');
+      if (gain) gain.style.top = `${gainHeight(clip.volume)}%`;
+      mix?.querySelector("path")?.setAttribute("d", fadePath(clip));
+      for (const edge of ["fadeIn", "fadeOut"] as const) {
+        const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
+        if (handle)
+          handle.style[edge === "fadeIn" ? "left" : "right"] =
+            `${(clip[edge] / clip.duration) * 100}%`;
+      }
+    }
     placed.current = next;
 
     // Pieces the edit cuts off have no element yet: each gets a box of its clip's kind.
@@ -257,13 +286,23 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   function hitAt(event: PointerEvent): Hit | null {
     if (!(event.target instanceof Element)) return null;
-    const element = event.target.closest<HTMLElement>("[data-clip]");
+    const element = event.target.closest<HTMLElement>(
+      "[data-clip], [data-clip-mix]",
+    );
     const clip = latest.current.timeline.clips.find(
-      (item) => item.id === element?.dataset.clip,
+      (item) => item.id === (element?.dataset.clip ?? element?.dataset.clipMix),
     );
     if (!element || !clip) return null;
     const box = element.getBoundingClientRect();
-    return { clip, x: event.clientX - box.left, width: box.width };
+    const mix = event.target.closest<HTMLElement>("[data-mix]")?.dataset.mix;
+    return {
+      clip,
+      x: event.clientX - box.left,
+      width: box.width,
+      ...(mix === "gain" || mix === "fadeIn" || mix === "fadeOut"
+        ? { mix }
+        : {}),
+    };
   }
 
   function drawMarquee() {
@@ -310,8 +349,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frame: frameAt(x),
       track: rowAt(y)?.track.index ?? null,
       reach: reach(bypass),
+      dy: active.intent.kind === "gain" ? at.y - current.origin.y : 0,
     };
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.dy}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
@@ -328,7 +368,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
           rowOf(clip?.track),
         );
       } else if (readout.current) {
-        readout.current.textContent = `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
+        readout.current.textContent =
+          intent.kind === "gain"
+            ? audioGainToText(
+                next.shown.clips.find((clip) => clip.id === intent.clipId)
+                  ?.volume ?? 1,
+              )
+            : `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
         readout.current.hidden = false;
       }
     }
@@ -383,6 +429,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
             frame: frameAt(pointer.current.x),
             track: rowAt(pointer.current.y)?.track.index ?? null,
             reach: reach(pointer.current.bypass),
+            dy: local(pointer.current.x, pointer.current.y).y - originY.current,
           });
     settle(result, active.timeline);
   }
@@ -494,6 +541,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       intent,
       point: local(event.clientX, event.clientY),
     }).gesture;
+    originY.current = local(event.clientX, event.clientY).y;
     onGesture(true);
     if (intent.kind === "marquee") {
       marqueeBase.current =
