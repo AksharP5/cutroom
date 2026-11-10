@@ -5,6 +5,7 @@ import {
   MAX_PPF,
   clipsByTrack,
   clipsInRange,
+  cssEasing,
   cssMilliseconds,
   filmTiles,
   fitPpf,
@@ -55,6 +56,7 @@ const clip = (
   link: null,
   label: null,
   volume: null,
+  enabled: true,
   startRef: null,
   ...extra,
 });
@@ -406,6 +408,18 @@ test("motion durations read the same from dev and minified CSS", () => {
   expect(cssMilliseconds(" .22s")).toBe(220);
   // Reduced motion collapses movement to zero, which the timeline takes as no animation.
   expect(cssMilliseconds("0s")).toBe(0);
+});
+
+test("the canvas eases a sliding clip on the same curve the browser eases its box", () => {
+  // A symmetric curve is half the way at half the time.
+  expect(cssEasing("cubic-bezier(0.42, 0, 0.58, 1)")(0.5)).toBeCloseTo(0.5, 4);
+  // The edit slide's curve as minified CSS writes it: slow to start, and always moving forward.
+  const ease = cssEasing("cubic-bezier(.77, 0, .175, 1)");
+  expect([ease(0), ease(1)]).toEqual([0, 1]);
+  expect(ease(0.25)).toBeLessThan(0.1);
+  const samples = Array.from({ length: 11 }, (_, step) => ease(step / 10));
+  expect(samples).toEqual(samples.toSorted((a, b) => a - b));
+  expect(cssEasing("ease")(0.3)).toBe(0.3);
 });
 
 test("a waveform is drawn from the coarsest level that still gives every pixel its own bucket", () => {

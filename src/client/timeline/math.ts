@@ -7,6 +7,39 @@ import { nominal } from "../edit/timecode";
 export const cssMilliseconds = (time: string) =>
   parseFloat(time) * (time.trim().endsWith("ms") ? 1 : 1000);
 
+/**
+ * A CSS `cubic-bezier()` as a function from time to progress, both 0 to 1, so the canvas can move
+ * what it draws in step with an element animated by the same easing. Anything else is linear.
+ */
+export function cssEasing(easing: string): (time: number) => number {
+  const points = /^cubic-bezier\(([^)]*)\)$/
+    .exec(easing.trim())?.[1]
+    ?.split(",")
+    .map(Number);
+  if (points?.length !== 4 || points.some((value) => !Number.isFinite(value)))
+    return (time) => time;
+  const [x1, y1, x2, y2] = points as [number, number, number, number];
+  const curve = (a: number, b: number, t: number) =>
+    3 * a * t * (1 - t) ** 2 + 3 * b * t ** 2 * (1 - t) + t ** 3;
+  return (time) => {
+    if (time <= 0) return 0;
+    if (time >= 1) return 1;
+    // x rises with t on any CSS curve, so halving finds the t at this time.
+    let low = 0;
+    let high = 1;
+    for (let step = 0; step < 24; step++) {
+      const mid = (low + high) / 2;
+      if (curve(x1, x2, mid) < time) low = mid;
+      else high = mid;
+    }
+    return curve(y1, y2, (low + high) / 2);
+  };
+}
+
+/** A clip's name as the timeline shows it. */
+export const clipName = (clip: Clip) =>
+  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+
 /** The closest zoom: one frame is this many pixels wide. */
 export const MAX_PPF = 32;
 /** Ruler labels never sit closer than this many pixels. */

@@ -37,6 +37,8 @@ export const ClipSchema = z.object({
   link: z.string().nullable(),
   label: z.string().nullable(),
   volume: z.number().nonnegative().nullable(),
+  /** False while `data-hidden` keeps the clip out of preview and render. */
+  enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
   startRef: z.object({ clipId, offset: z.number().int() }).nullable(),
 });
@@ -194,6 +196,10 @@ export const CommandSchema = z.discriminatedUnion("type", [
       clipId,
       label: label.nullable().optional(),
       volume: volume.nullable().optional(),
+      enabled: z
+        .boolean()
+        .optional()
+        .describe("False hides the clip from preview and render"),
     })
     .describe("Change clip properties. Null clears a property."),
   z

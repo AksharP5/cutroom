@@ -24,6 +24,7 @@ import type {
 } from "../../shared/timeline/schema";
 import {
   MAX_PPF,
+  clipName,
   clipsByTrack,
   clipsInRange,
   majorTicks,
@@ -40,6 +41,7 @@ import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import { clickSelection, emptySelection, marqueeSelection } from "./selection";
 import type { Selection } from "./selection";
+import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
 import type { TimelineViewport } from "./view";
 import { formatTimecode } from "../edit/timecode";
@@ -131,9 +133,6 @@ function readSizes(): { rows: RowSizes; head: number } {
   };
 }
 
-const clipName = (clip: Clip) =>
-  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
-
 const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
   a.size === b.size && [...a].every((id) => b.has(id));
 
@@ -148,7 +147,7 @@ const ClipBody = memo(function ClipBody({
 }) {
   return (
     <div
-      className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${selected ? " selected" : ""}`}
+      className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
     />
@@ -166,6 +165,7 @@ const ClipOutline = memo(function ClipOutline({
   return (
     <i
       className={`tl-selected on-${row.track.kind}`}
+      data-clip-outline={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
     />
   );
@@ -186,7 +186,8 @@ const ClipLabel = memo(function ClipLabel({
   const end = clip.start + clip.duration;
   return (
     <div
-      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}`}
+      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}`}
+      data-clip-label={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
     >
       <span
@@ -401,6 +402,7 @@ export function Timeline({
   const canvas = useRef<HTMLCanvasElement>(null);
   const tickLabels = useRef<HTMLDivElement>(null);
   const bodies = useRef<Bodies | null>(null);
+  const lanes = useRef<HTMLDivElement>(null);
   const viewport = useRef<TimelineViewport | null>(null);
   const scrubbing = useRef(false);
   const drag = useRef<{
@@ -481,6 +483,13 @@ export function Timeline({
     return () => created.destroy();
   }, [sizes]);
 
+  useClipMotion(
+    lanes,
+    timeline.clips,
+    layout.rows,
+    () => viewport.current?.state().ppf ?? 0,
+    (slides) => bodies.current?.slide(slides),
+  );
   useLayoutEffect(() => {
     viewport.current?.measure({
       frames,
@@ -719,6 +728,7 @@ export function Timeline({
           </div>
           <div
             className="tl-lanes"
+            ref={lanes}
             onPointerDown={pressLanes}
             onPointerMove={dragLanes}
             onPointerUp={releaseLanes}

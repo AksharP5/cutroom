@@ -115,6 +115,23 @@ test("edits change only the attributes they need and keep references", () => {
   );
 });
 
+test("a disabled clip is data-hidden, which HyperFrames leaves out of preview and render", () => {
+  const off = edit(source, [
+    { type: "setClip", clipId: "title", enabled: false },
+  ]);
+  expect(off).toBe(source.replace(`data-hf-id="hf-9"`, `$& data-hidden=""`));
+  // Both halves of a cut stay off, and turning a clip back on removes only the attribute.
+  const cut = edit(off, [{ type: "split", at: 200 }]);
+  expect(
+    parseComposition(cut, emptyTimelineSettings())
+      .timeline.clips.filter((clip) => clip.track === 1 && clip.start < 300)
+      .map((clip) => clip.enabled),
+  ).toEqual([false, false]);
+  expect(edit(off, [{ type: "setClip", clipId: "title", enabled: true }])).toBe(
+    source,
+  );
+});
+
 test("split, ripple delete, and insert round-trip without touching other markup", () => {
   const output = edit(source, [
     { type: "split", at: 60 },

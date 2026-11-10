@@ -495,6 +495,14 @@
 .tl-label.locked {
   opacity: var(--track-locked-opacity);
 }
+/* A clip that is off stays in place, grey and dimmed, name included; bodies.ts does the same. */
+.tl-clip.disabled {
+  filter: var(--clip-disabled-filter);
+}
+.tl-clip.disabled,
+.tl-label.disabled {
+  opacity: var(--clip-disabled-opacity);
+}
 /* One canvas for every clip body in view, placed and sized by bodies.ts. */
 .tl-bodies {
   position: absolute;

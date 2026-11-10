@@ -44,7 +44,7 @@ import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
-import { useWorkspace } from "./workspace";
+import { showToast, useWorkspace } from "./workspace";
 
 const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({
@@ -148,7 +148,7 @@ export function App() {
   const [picker, setPicker] = useState<"file" | "directory" | null>(null);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
+  const error = useWorkspace((state) => state.toast);
   const [toastLeaving, setToastLeaving] = useState(false);
   useEffect(() => setToastLeaving(false), [error]);
   const attachmentResolve = useRef<{
@@ -205,7 +205,7 @@ export function App() {
   useEffect(() => {
     if (known && !browsing) return;
     void loadProjects().catch((error: unknown) =>
-      setError(error instanceof Error ? error.message : String(error)),
+      showToast(error instanceof Error ? error.message : String(error)),
     );
   }, [projectId, known, browsing, loadProjects]);
 
@@ -213,7 +213,7 @@ export function App() {
     void api("/status", statusSchema)
       .then(setStatus)
       .catch((error: unknown) =>
-        setError(error instanceof Error ? error.message : String(error)),
+        showToast(error instanceof Error ? error.message : String(error)),
       );
     const change = () => setProjectId(projectFromHash());
     window.addEventListener("hashchange", change);
@@ -229,7 +229,7 @@ export function App() {
     setPicker((current) => (current === "file" ? null : current));
     context.current = null;
     void refreshDocument().catch((error: unknown) =>
-      setError(error instanceof Error ? error.message : String(error)),
+      showToast(error instanceof Error ? error.message : String(error)),
     );
     if (!projectId) return;
     const events = new EventSource(`/api/cutroom/projects/${projectId}/events`);
@@ -300,7 +300,7 @@ export function App() {
     window.location.hash = `project/${encodeURIComponent(next.id)}?v=1&rc=1&tv=1`;
     setProjectId(next.id);
     setDialog(null);
-    setError("");
+    showToast("");
     document.title = `${next.name} · Cutroom`;
   }
   const onContext = useCallback((value: EditorContext) => {
@@ -400,7 +400,7 @@ export function App() {
               onTransitionEnd={(event) => {
                 if (toastLeaving && event.propertyName === "opacity") {
                   setToastLeaving(false);
-                  setError("");
+                  showToast("");
                 }
               }}
             >
@@ -505,7 +505,7 @@ export function App() {
                         captureError &&
                         activeProjectId.current === project.id
                       )
-                        setError(
+                        showToast(
                           `Note saved without a frame image. ${captureError}`,
                         );
                     }}
@@ -559,7 +559,7 @@ export function App() {
               }
               onSent={() =>
                 void refreshDocument().catch((error: unknown) =>
-                  setError(
+                  showToast(
                     error instanceof Error ? error.message : String(error),
                   ),
                 )
@@ -683,7 +683,7 @@ export function App() {
               const operation = {};
               projectOpening.current = operation;
               setCreating(true);
-              setError("");
+              showToast("");
               void api("/projects", ProjectSchema, json("POST", { name }))
                 .then(async (created) => {
                   await loadProjects();
@@ -693,7 +693,7 @@ export function App() {
                 })
                 .catch((error: unknown) => {
                   if (projectOpening.current === operation)
-                    setError(
+                    showToast(
                       error instanceof Error ? error.message : String(error),
                     );
                 })
@@ -812,7 +812,7 @@ export function App() {
                 .catch((error: unknown) => {
                   pending.resolve(null);
                   if (activeProjectId.current === pending.projectId)
-                    setError(
+                    showToast(
                       error instanceof Error ? error.message : String(error),
                     );
                 });
@@ -827,7 +827,7 @@ export function App() {
               })
               .catch((error: unknown) => {
                 if (projectOpening.current === operation)
-                  setError(
+                  showToast(
                     error instanceof Error ? error.message : String(error),
                   );
               })

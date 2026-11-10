@@ -423,6 +423,7 @@ export function parseComposition(
         element.attrs["data-label"] ??
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
+      enabled: element.attrs["data-hidden"] === undefined,
       startRef:
         referenced && typeof referencedEnd === "number"
           ? {
@@ -698,6 +699,8 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
+  if (before.enabled !== after.enabled)
+    changes.push(["data-hidden", after.enabled ? null : ""]);
   return changes;
 }
 

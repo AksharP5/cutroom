@@ -1,17 +1,28 @@
 import { z } from "zod";
 import { create } from "zustand";
-import { TimelineError, applyAll } from "../../shared/timeline/apply";
+import {
+  TimelineError,
+  apply,
+  applyAll,
+  randomClipId,
+} from "../../shared/timeline/apply";
 import {
   CommandSchema,
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
 import type {
+  Clip,
+  Command,
   CommandInput,
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
-import { api, json } from "../api";
-import { reportEditorError } from "../workspace";
+import { ApiError, api, json } from "../api";
+import { clipName, trackRows } from "../timeline/math";
+import { emptySelection } from "../timeline/selection";
+import type { Selection } from "../timeline/selection";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
+import { formatTimecode } from "./timecode";
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 
@@ -22,10 +33,28 @@ export const useTimeline = create(() => ({
   /** The engine's last answer with the edits it has not answered yet applied on top. */
   view: null as TimelineView | null,
   history: { canUndo: false, canRedo: false },
+  /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
+  selection: emptySelection as Selection,
 }));
 
-/** Builds an edit's commands from the timeline it applies to. */
-type Build = (timeline: Timeline) => CommandInput[];
+/** An edit as the user made it: commands built once, from the view they saw. */
+interface Edit {
+  projectId: string;
+  label: string;
+  /** Sent as they are, with every new piece named, so the server makes exactly what was shown. */
+  commands: Command[];
+  /** Clip ids the commands name. */
+  uses: ReadonlySet<string>;
+  /** Ids of the pieces the commands make. */
+  creates: ReadonlySet<string>;
+  /**
+   * The clips a trim or razor names, as shown. Those commands cut at absolute frames, so they
+   * only mean the same cut while the clips sit where they were.
+   */
+  anchors: Clip[];
+  /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
+  dropped: boolean;
+}
 
 const project = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}`;
@@ -34,13 +63,15 @@ let queue = Promise.resolve();
 /** The engine's last answer, which the shown view starts from. */
 let confirmed: { projectId: string; view: TimelineView } | null = null;
 /** Edits shown already and not yet answered, oldest first. */
-let pending: { projectId: string; build: Build }[] = [];
+let pending: Edit[] = [];
+/** The header toast this queue last showed, cleared by the next edit that lands. */
+let refusal = "";
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
 export function openTimeline(projectId: string) {
   confirmed = null;
   pending = [];
-  useTimeline.setState({ projectId, view: null });
+  useTimeline.setState({ projectId, view: null, selection: emptySelection });
 }
 
 /**
@@ -54,8 +85,41 @@ function enqueue(step: () => Promise<void>) {
   return run;
 }
 
-const commandsFor = (build: Build, timeline: Timeline) =>
-  z.array(CommandSchema).parse(build(timeline));
+/**
+ * Applies commands to the view the user sees, naming every piece they cut with an id no clip has
+ * had, in the commands' own `ids` lists. Commands apply one at a time, so each is named by itself.
+ */
+function name(commands: Command[], timeline: Timeline) {
+  let current = timeline;
+  const creates = new Set<string>();
+  const named = commands.map((command): Command => {
+    // Razors, inserts, and ripple trims and deletes through a spanning clip cut pieces.
+    if (
+      command.type !== "split" &&
+      command.type !== "insert" &&
+      command.type !== "trim" &&
+      command.type !== "remove"
+    ) {
+      current = apply(current, command);
+      return command;
+    }
+    const ids: Record<string, string[]> = { ...command.ids };
+    let clipId = command.type === "insert" ? command.clip.id : undefined;
+    current = apply(current, command, {
+      newId: (base, from, taken) => {
+        const id = randomClipId(base, from, taken);
+        creates.add(id);
+        if (from === null) clipId = id;
+        else ids[from] = [...(ids[from] ?? []), id];
+        return id;
+      },
+    });
+    return command.type === "insert"
+      ? { ...command, ids, clip: { ...command.clip, id: clipId } }
+      : { ...command, ids };
+  });
+  return { commands: named, creates, timeline: current };
+}
 
 /**
  * The engine's last answer with each pending edit applied again on top. An edit that no longer
@@ -68,7 +132,7 @@ function shown(projectId: string): TimelineView | null {
     .filter((edit) => edit.projectId === projectId)
     .reduce((current, edit) => {
       try {
-        return applyAll(current, commandsFor(edit.build, current));
+        return applyAll(current, edit.commands);
       } catch (error) {
         if (error instanceof TimelineError) return current;
         throw error;
@@ -96,55 +160,198 @@ export const loadTimeline = (projectId: string) =>
   });
 
 /**
- * Applies the commands `build` makes from the timeline as one undo step. The shared engine shows
- * the result at once, so whatever reads the timeline next sees it; the server's answer then
- * replaces it, and a refusal takes it back. `build` runs again on the timeline the server holds
- * when the edit's turn comes, so quick presses each build on the last.
+ * Sends an edit's commands as they were made. When someone else edited first the revision is
+ * stale, so the server is read and the same commands are sent again; they still apply when the
+ * other edit left their clips alone, as with a marker after an agent's marker.
+ */
+async function send(edit: Edit) {
+  const changed = new Error(
+    "An agent changed those clips first. Press it again.",
+  );
+  for (const retry of [false, true]) {
+    const base =
+      !retry && confirmed?.projectId === edit.projectId
+        ? confirmed.view
+        : await read(edit.projectId);
+    // A cut at absolute frames only means the same cut while the clips it names are where the
+    // user saw them; an agent may have moved them since, whether or not the revision is stale.
+    if (
+      edit.anchors.some((seen) => {
+        const clip = base.timeline.clips.find((item) => item.id === seen.id);
+        return (
+          !clip ||
+          clip.start !== seen.start ||
+          clip.duration !== seen.duration ||
+          clip.track !== seen.track ||
+          // The server keeps source offsets to the microsecond; a shown piece may not be rounded yet.
+          Math.abs((clip.mediaStart ?? -1) - (seen.mediaStart ?? -1)) > 1e-6
+        );
+      })
+    )
+      throw changed;
+    try {
+      await api(
+        `${project(edit.projectId)}/commands`,
+        TimelineViewSchema,
+        json("POST", {
+          composition: base.composition,
+          expectedRevision: base.revision,
+          label: edit.label,
+          commands: edit.commands,
+        }),
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      if (error.status === 409 && !retry) continue;
+      if (error.status === 409)
+        throw new Error("An agent edited first. Press it again.");
+      // After someone else's edit, the engine refusing commands that applied to the view the
+      // user saw means the clips changed. Checks only the server makes, such as exact readback,
+      // keep their own reason.
+      if (retry && error.status === 422 && error.code !== "unsupported")
+        throw changed;
+      throw error;
+    }
+  }
+}
+
+/**
+ * When an edit is refused, the pieces it would have made never exist. Queued edits that name
+ * them, and edits that name those edits' pieces, are taken back with it, and the pieces leave the
+ * selection. The editor chose those ids, so the set is exact.
+ */
+function dropDependents(refused: Edit) {
+  const gone = new Set(refused.creates);
+  for (const edit of pending) {
+    if (edit === refused || ![...edit.uses].some((id) => gone.has(id)))
+      continue;
+    edit.dropped = true;
+    for (const id of edit.creates) gone.add(id);
+  }
+  pending = pending.filter((edit) => edit !== refused && !edit.dropped);
+  const { selection } = useTimeline.getState();
+  if (![...selection.ids].some((id) => gone.has(id))) return;
+  const ids = new Set([...selection.ids].filter((id) => !gone.has(id)));
+  useTimeline.setState({
+    selection: {
+      ids,
+      anchor:
+        selection.anchor && ids.has(selection.anchor) ? selection.anchor : null,
+    },
+  });
+}
+
+const noSizes = { video: 0, audio: 0, seam: 0, divider: 0 };
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The engine's reason in the editor's terms: tracks as V1 and A1, frames as timecode, and clips by
+ * the names the timeline shows. MCP clients keep the engine's own text.
+ */
+function humanReason(message: string, timeline: Timeline) {
+  const text = message.replace(/^Command \d+ \(\w+\): /, "");
+  const rows = trackRows(timeline.tracks, noSizes).rows;
+  const names = new Map(
+    timeline.clips
+      .filter((clip) => clipName(clip) !== clip.id)
+      .map((clip) => [clip.id, clipName(clip)]),
+  );
+  const ids = [...names.keys()].sort((a, b) => b.length - a.length);
+  const withNames = ids.length
+    ? text.replace(
+        new RegExp(
+          `(?<![\\w.-])(?:${ids.map(escaped).join("|")})(?![\\w-])`,
+          "g",
+        ),
+        (id) => names.get(id) ?? id,
+      )
+    : text;
+  return withNames
+    .replace(
+      /\btrack (\d+)\b/g,
+      (whole, index: string) =>
+        rows.find((row) => row.track.index === Number(index))?.id ?? whole,
+    )
+    .replace(/\bframe (\d+)\b/g, (_, frame: string) =>
+      formatTimecode(Number(frame), timeline.fps),
+    );
+}
+
+/**
+ * Makes one undo step from the commands `build` returns for the timeline the user sees. They are
+ * built once, here: a key acts on what was on screen when it was pressed, never on what a
+ * rebuild against newer server state would pick. The shared engine shows the result at once and
+ * the server's answer then replaces it. A refusal, here or from the server, takes the edit back
+ * and says why in the header.
  */
 export async function editTimeline(
   projectId: string,
   label: string,
-  build: Build,
+  build: (timeline: Timeline) => CommandInput[],
 ) {
-  const edit = { projectId, build };
+  const { view, projectId: open } = useTimeline.getState();
+  if (!view || open !== projectId) return;
+  let edit: Edit | null = null;
   try {
-    const { view, projectId: open } = useTimeline.getState();
-    if (view && open === projectId) {
-      const commands = commandsFor(build, view.timeline);
-      if (!commands.length) return;
-      const timeline = applyAll(view.timeline, commands);
-      pending.push(edit);
-      useTimeline.setState({ view: { ...view, timeline } });
-    } else pending.push(edit);
+    const input = z.array(CommandSchema).parse(build(view.timeline));
+    if (!input.length) return;
+    const { commands, creates, timeline } = name(input, view.timeline);
+    edit = {
+      projectId,
+      label,
+      commands,
+      uses: new Set(
+        commands.flatMap((command) =>
+          "clipIds" in command
+            ? (command.clipIds ?? [])
+            : "clipId" in command
+              ? [command.clipId]
+              : [],
+        ),
+      ),
+      creates,
+      anchors: view.timeline.clips.filter((clip) =>
+        commands.some(
+          (command) =>
+            (command.type === "trim" && command.clipId === clip.id) ||
+            (command.type === "split" && command.clipIds?.includes(clip.id)),
+        ),
+      ),
+      dropped: false,
+    };
+    const made = edit;
+    useTimeline.setState({ view: { ...view, timeline } });
+    pending.push(made);
     await enqueue(async () => {
+      // An edit that made a clip this one names was refused, and both were taken back.
+      if (made.dropped) return;
       try {
-        const base =
-          confirmed?.projectId === projectId
-            ? confirmed.view
-            : await read(projectId);
-        const commands = commandsFor(build, base.timeline);
-        if (commands.length)
-          await api(
-            `${project(projectId)}/commands`,
-            TimelineViewSchema,
-            json("POST", {
-              composition: base.composition,
-              expectedRevision: base.revision,
-              label,
-              commands,
-            }),
-          );
-      } finally {
-        pending = pending.filter((item) => item !== edit);
+        await send(made);
+      } catch (error) {
+        // Before the next edit runs, the queue forgets this one and the edits that named its
+        // pieces, and reads what the server holds.
+        dropDependents(made);
+        await read(projectId).catch((failure: unknown) =>
+          reportEditorError("timeline", failure),
+        );
+        throw error;
       }
+      pending = pending.filter((item) => item !== made);
       await read(projectId);
     });
+    if (!made.dropped && refusal && useWorkspace.getState().toast === refusal)
+      showToast("");
   } catch (error) {
-    pending = pending.filter((item) => item !== edit);
-    const view = shown(projectId);
-    if (view && useTimeline.getState().projectId === projectId)
-      useTimeline.setState({ view });
-    throw error;
+    if (edit) pending = pending.filter((item) => item !== edit);
+    if (useTimeline.getState().projectId !== projectId) return;
+    const shownView = shown(projectId);
+    if (shownView) useTimeline.setState({ view: shownView });
+    refusal = humanReason(
+      error instanceof Error ? error.message : String(error),
+      view.timeline,
+    );
+    showToast(refusal);
   }
 }
 

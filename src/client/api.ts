@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** The error's code when the server sends one, such as a timeline refusal's. */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -24,10 +26,13 @@ export async function api<T>(
   });
   const value: unknown = await response.json();
   if (!response.ok) {
-    const error = z.object({ error: z.string() }).safeParse(value);
+    const error = z
+      .object({ error: z.string(), code: z.string().optional() })
+      .safeParse(value);
     throw new ApiError(
       response.status,
       error.success ? error.data.error : `Request failed (${response.status})`,
+      error.success ? error.data.code : undefined,
     );
   }
   return schema.parse(value);
