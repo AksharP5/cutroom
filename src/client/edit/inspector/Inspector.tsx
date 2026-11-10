@@ -1,5 +1,9 @@
 import { useContext, useEffect, useState } from "react";
 import { SidebarSimple, X } from "@phosphor-icons/react";
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
@@ -170,6 +174,7 @@ export function Inspector({ projectId }: { projectId: string }) {
               <ValueField
                 label="Opacity"
                 allowAuto
+                max={1}
                 value={clip.opacity}
                 unit="percent"
                 fps={timeline.fps}
@@ -207,6 +212,8 @@ export function Inspector({ projectId }: { projectId: string }) {
               label="Speed"
               value={clip.playbackRate}
               unit="percent"
+              min={MIN_PLAYBACK_RATE}
+              max={MAX_PLAYBACK_RATE}
               fps={timeline.fps}
               disabled={clip.mediaStart === null}
               onCommit={(value) => timing("speed", value)}

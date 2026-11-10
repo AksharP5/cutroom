@@ -107,6 +107,27 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   await expect(inspector.locator(".inspector-changes")).toContainText(
     "Set speed to 150%",
   );
+  // Enter hands the keyboard back to the editor.
+  await expect(
+    inspector.getByRole("textbox", { name: "Opacity", exact: true }),
+  ).not.toBeFocused();
+  await set("Opacity", "150%");
+  await expect(page.locator(".toast")).toContainText(
+    "Opacity must be between 0% and 100%.",
+  );
+  const startLabel = inspector.locator("label").filter({ hasText: /^Start$/ });
+  const startBounds = await startLabel.boundingBox();
+  if (!startBounds) throw new Error("Start label has no bounds");
+  const beforeClick = (await read()).revision;
+  await page.mouse.move(startBounds.x + 10, startBounds.y + 5);
+  await page.mouse.down();
+  await page.mouse.move(startBounds.x + 11, startBounds.y + 5);
+  await page.mouse.up();
+  await expect(
+    inspector.getByRole("textbox", { name: "Start", exact: true }),
+  ).toBeFocused();
+  expect((await read()).revision).toBe(beforeClick);
+  await page.keyboard.press("Escape");
   const opacityLabel = inspector
     .locator("label")
     .filter({ hasText: /^Opacity$/ });
@@ -313,4 +334,23 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   expect(stdout[2]).toBeLessThan(170);
   expect(await readFile(file)).not.toHaveLength(0);
   expect(errors).toEqual([]);
+});
+
+test("the inspector starts closed where it would cover the stage", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Drawer default", width: 320, height: 240, duration: 3 },
+      })
+    ).json(),
+  );
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("#clip-inspector")).toHaveAttribute(
+    "data-open",
+    "false",
+  );
 });

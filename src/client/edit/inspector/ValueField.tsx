@@ -12,6 +12,8 @@ export function ValueField({
   fps,
   disabled = false,
   allowAuto = false,
+  min = 0,
+  max = Infinity,
   onCommit,
 }: {
   label: string;
@@ -20,12 +22,20 @@ export function ValueField({
   fps: Fps;
   disabled?: boolean;
   allowAuto?: boolean;
+  min?: number;
+  max?: number;
   onCommit(value: number | null): void;
 }) {
   const id = useId();
   const [draft, setDraft] = useState<string | null>(null);
-  const drag = useRef<{ x: number; value: number; next: number } | null>(null);
+  const drag = useRef<{
+    x: number;
+    value: number;
+    next: number;
+    moved: boolean;
+  } | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const cancelled = useRef(false);
   const commit = () => {
     if (draft === null) return;
     try {
@@ -33,6 +43,10 @@ export function ValueField({
         allowAuto && draft.trim().toLowerCase() === "auto"
           ? null
           : parseField(draft, unit, fps);
+      if (next !== null && (next < min || next > max))
+        throw new Error(
+          `${label} must be between ${formatField(min, unit, fps)} and ${formatField(max, unit, fps)}.`,
+        );
       if (next !== value) onCommit(next);
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error));
@@ -49,18 +63,29 @@ export function ValueField({
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
           const initial = value ?? 1;
-          drag.current = { x: event.clientX, value: initial, next: initial };
+          drag.current = {
+            x: event.clientX,
+            value: initial,
+            next: initial,
+            moved: false,
+          };
         }}
         onPointerMove={(event) => {
           const current = drag.current;
           if (!current) return;
           const delta = Math.round(event.clientX - current.x);
-          current.next = Math.max(
-            0,
-            current.value +
-              delta *
-                (unit === "timecode" ? 1 : 0.01) *
-                (event.shiftKey ? 0.1 : 1),
+          // A click that wobbles a pixel is still a click.
+          if (!current.moved && Math.abs(delta) < 3) return;
+          current.moved = true;
+          current.next = Math.min(
+            max,
+            Math.max(
+              min,
+              current.value +
+                delta *
+                  (unit === "timecode" ? 1 : 0.01) *
+                  (event.shiftKey ? 0.1 : 1),
+            ),
           );
           if (unit === "timecode") current.next = Math.round(current.next);
           setDraft(formatField(current.next, unit, fps));
@@ -70,7 +95,7 @@ export function ValueField({
           drag.current = null;
           if (!current) return;
           setDraft(null);
-          if (event.clientX === current.x) input.current?.focus();
+          if (!current.moved) input.current?.focus();
           else if (current.next !== current.value) onCommit(current.next);
         }}
         onPointerCancel={() => {
@@ -98,16 +123,18 @@ export function ValueField({
         value={draft ?? formatField(value, unit, fps)}
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
+        onBlur={() => {
+          if (cancelled.current) setDraft(null);
+          else commit();
+          cancelled.current = false;
+        }}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (event.key === "Enter") {
+          // Leaving the field returns Space, undo and the other shortcuts to the editor.
+          if (event.key === "Enter" || event.key === "Escape") {
             event.preventDefault();
-            commit();
-          }
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(null);
+            cancelled.current = event.key === "Escape";
+            event.currentTarget.blur();
           }
         }}
       />

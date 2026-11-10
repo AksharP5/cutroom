@@ -1,3 +1,7 @@
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -242,7 +246,12 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("setTiming"),
       clipId,
-      playbackRate: z.number().positive().optional(),
+      playbackRate: z
+        .number()
+        .min(MIN_PLAYBACK_RATE)
+        .max(MAX_PLAYBACK_RATE)
+        .overwrite((value) => Math.round(value * 1e6) / 1e6)
+        .optional(),
       mediaStart: z.number().nonnegative().optional(),
     })
     .describe(
