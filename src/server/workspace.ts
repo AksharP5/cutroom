@@ -166,7 +166,8 @@ export function createWorkspaceRoutes(options: {
   app.get("/projects/:id/events", async (c) => {
     const project = await options.projects.get(c.req.param("id"));
     return streamSSE(c, async (stream) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      // One debounce per path, so a burst touching several files reports each of them.
+      const timers = new Map<string, ReturnType<typeof setTimeout>>();
       const watcher = watch(
         project.path,
         { recursive: true },
@@ -178,14 +179,16 @@ export function createWorkspaceRoutes(options: {
               .some((part) => part.startsWith(".") || part === "node_modules")
           )
             return;
-          if (filename !== "cutroom.json" && !/\.html?$/i.test(filename))
-            return;
-          clearTimeout(timer);
-          timer = setTimeout(() => {
-            void stream
-              .writeSSE({ data: JSON.stringify({ changed: filename }) })
-              .catch(() => {});
-          }, 100);
+          clearTimeout(timers.get(filename));
+          timers.set(
+            filename,
+            setTimeout(() => {
+              timers.delete(filename);
+              void stream
+                .writeSSE({ data: JSON.stringify({ changed: filename }) })
+                .catch(() => {});
+            }, 100),
+          );
         },
       );
       const heartbeat = setInterval(() => {
@@ -197,7 +200,7 @@ export function createWorkspaceRoutes(options: {
           await new Promise<void>((done) => stream.onAbort(done));
       } finally {
         watcher.close();
-        clearTimeout(timer);
+        for (const timer of timers.values()) clearTimeout(timer);
         clearInterval(heartbeat);
       }
     });

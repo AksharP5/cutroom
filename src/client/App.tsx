@@ -109,6 +109,7 @@ export function App() {
   );
   const [mode, setMode] = useState<EditorMode>("select");
   const [sourceRevision, setSourceRevision] = useState(0);
+  const [mediaRevision, setMediaRevision] = useState(0);
   const [panel, setPanel] = useState<"review" | "script">("review");
   const [reviewState, setReviewState] = useState<{
     projectId: string;
@@ -203,6 +204,10 @@ export function App() {
           .parse(JSON.parse(event.data));
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
+        else if (payload.changed !== "cutroom.json") {
+          setMediaRevision((value) => value + 1);
+          return;
+        }
       } catch {
         return;
       }
@@ -385,6 +390,7 @@ export function App() {
           <MediaPanel
             key={project.id}
             projectId={project.id}
+            revision={mediaRevision}
             hidden={!workPanel}
           />
           <section

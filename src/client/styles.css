@@ -639,6 +639,9 @@ option {
 .chat-toolbar .quiet-label {
   margin: 0 6px 0 auto;
 }
+.quiet-label[data-attention] {
+  color: var(--accent);
+}
 .chat-toolbar-title {
   padding: 0 6px;
   color: var(--text-2);

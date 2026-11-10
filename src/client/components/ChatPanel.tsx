@@ -711,7 +711,10 @@ export function ChatPanel({
             <CaretDown size={10} weight="bold" />
           </label>
         )}
-        <span className="quiet-label">
+        <span
+          className="quiet-label"
+          data-attention={(busy && session?.status === "waiting") || undefined}
+        >
           {operation?.kind === "stop"
             ? "Stopping"
             : busy
@@ -812,6 +815,7 @@ export function ChatPanel({
             ref={textarea}
             aria-label="Message your agent"
             placeholder="Describe the next edit"
+            title="Enter to send, Shift+Enter for a new line"
             value={draft}
             rows={3}
             onChange={(event) => {

@@ -3,11 +3,40 @@ import type { DragEvent } from "react";
 import { FilmStrip, Image, Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 
+// Mirrors the formats the upload route validates. `.ts` transport streams are left out so
+// TypeScript files in a project are never listed as video.
 const mediaKinds = [
-  { kind: "video", pattern: /\.(mp4|webm|mov|m4v)$/i, icon: FilmStrip },
-  { kind: "audio", pattern: /\.(mp3|wav|ogg|m4a|aac|flac)$/i, icon: Waveform },
-  { kind: "image", pattern: /\.(jpe?g|png|gif|webp|avif|svg)$/i, icon: Image },
+  {
+    kind: "video",
+    extensions: [
+      "mp4",
+      "webm",
+      "mov",
+      "mkv",
+      "avi",
+      "m4v",
+      "mxf",
+      "mts",
+      "m2ts",
+    ],
+    icon: FilmStrip,
+  },
+  {
+    kind: "audio",
+    extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"],
+    icon: Waveform,
+  },
+  {
+    kind: "image",
+    extensions: ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"],
+    icon: Image,
+  },
 ] as const;
+const acceptedFiles = mediaKinds
+  .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
+  .join(",");
+const UPLOAD_LIMIT =
+  "Imports are limited to 500 MB at a time. Copy larger files into the project folder and they will appear here.";
 
 const projectFilesSchema = z.object({ files: z.array(z.string()) });
 const uploadSchema = z.object({
@@ -17,27 +46,22 @@ const uploadSchema = z.object({
     .array(z.object({ name: z.string(), reason: z.string() }))
     .default([]),
 });
-const fileChangeSchema = z.object({ projectId: z.string(), path: z.string() });
 
-const mediaKind = (path: string) =>
-  mediaKinds.find((item) => item.pattern.test(path));
-
-async function request<T>(
-  url: string,
-  schema: z.ZodType<T>,
-  init?: RequestInit,
-) {
-  const response = await fetch(url, init);
-  if (!response.ok)
-    throw new Error(`The project media could not load (${response.status}).`);
-  return schema.parse(await response.json());
-}
+const mediaKind = (path: string) => {
+  const extension = path.split(".").at(-1)?.toLowerCase();
+  return mediaKinds.find((item) =>
+    item.extensions.some((candidate) => candidate === extension),
+  );
+};
 
 export function MediaPanel({
   projectId,
+  revision,
   hidden,
 }: {
   projectId: string;
+  /** Bumped by the shell whenever a non-source file in the project changes. */
+  revision: number;
   hidden: boolean;
 }) {
   const [media, setMedia] = useState<
@@ -49,8 +73,15 @@ export function MediaPanel({
   const picker = useRef<HTMLInputElement>(null);
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
 
+  const latestLoad = useRef(0);
+
   const load = useCallback(async () => {
-    const { files } = await request(projectUrl, projectFilesSchema);
+    const id = ++latestLoad.current;
+    const response = await fetch(projectUrl);
+    if (!response.ok)
+      throw new Error(`The project media could not load (${response.status}).`);
+    const { files } = projectFilesSchema.parse(await response.json());
+    if (id !== latestLoad.current) return;
     setMedia(
       files
         .flatMap((path) => {
@@ -62,35 +93,36 @@ export function MediaPanel({
   }, [projectUrl]);
 
   useEffect(() => {
-    const report = (error: unknown) =>
-      setMessage(error instanceof Error ? error.message : String(error));
-    void load().catch(report);
-    const events = new EventSource("/api/events");
-    events.addEventListener("file-change", (event) => {
-      if (!(event instanceof MessageEvent)) return;
-      const change = fileChangeSchema.safeParse(JSON.parse(String(event.data)));
-      if (
-        change.success &&
-        change.data.projectId === projectId &&
-        mediaKind(change.data.path)
-      )
-        void load().catch(report);
-    });
-    return () => events.close();
-  }, [load, projectId]);
+    // A bulk copy reports each file; one trailing reload covers the burst.
+    const timer = setTimeout(
+      () =>
+        void load().catch((error: unknown) =>
+          setMessage(error instanceof Error ? error.message : String(error)),
+        ),
+      revision === 0 ? 0 : 150,
+    );
+    return () => clearTimeout(timer);
+  }, [load, revision]);
 
   async function importFiles(files: FileList | null) {
-    if (!files?.length || importing) return;
+    if (!files?.length) return;
+    if (importing) {
+      setMessage("Still importing. Drop the next files when it finishes.");
+      return;
+    }
     const body = new FormData();
     for (const file of files) body.append("file", file);
     setImporting(true);
     setMessage("");
     try {
-      const result = await request(
-        `${projectUrl}/upload?dir=assets`,
-        uploadSchema,
-        { method: "POST", body },
-      );
+      const response = await fetch(`${projectUrl}/upload?dir=assets`, {
+        method: "POST",
+        body,
+      });
+      if (response.status === 413) throw new Error(UPLOAD_LIMIT);
+      if (!response.ok)
+        throw new Error(`The import failed (${response.status}).`);
+      const result = uploadSchema.parse(await response.json());
       const refused = [
         ...result.skipped.map((name) => `${name} is too large`),
         ...result.invalid.map((item) => `${item.name}: ${item.reason}`),
@@ -149,7 +181,7 @@ export function MediaPanel({
           type="file"
           multiple
           hidden
-          accept="video/*,audio/*,image/*"
+          accept={acceptedFiles}
           onChange={(event) => {
             void importFiles(event.target.files);
             event.target.value = "";

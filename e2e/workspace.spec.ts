@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -271,5 +271,13 @@ test("media panel follows project media and imports files into assets", async ({
     media.getByRole("listitem").filter({ hasText: "narration" }),
   ).toBeVisible();
   await stat(join(project.path, "assets", "narration.mp3"));
+
+  // Moving a whole folder out reports only the folder, not the files inside it.
+  const moved = `${project.path}-sound`;
+  await rename(join(project.path, "sound"), moved);
+  await expect(
+    media.getByRole("listitem").filter({ hasText: "room-tone" }),
+  ).toHaveCount(0);
+  await rm(moved, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
 });
