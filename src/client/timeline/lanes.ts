@@ -76,6 +76,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const written = useRef(new WeakMap<Element, string>());
   /** How far each clip is held from its layout. */
   const placed = useRef<ReadonlyMap<string, Offset>>(new Map());
+  /** Clips whose gain line and fades the last preview redrew, so a drag back to its start redraws them too. */
+  const remixed = useRef<ReadonlySet<string>>(new Set());
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   /** Snap targets for the blade's hover, made again when the timeline or playhead changes. */
@@ -179,9 +181,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
           element.style.clipPath =
             at && at.scale < 1 ? `inset(0 ${(1 - at.scale) * 100}% 0 0)` : "";
       }
+    const remixing = new Set<string>();
     for (const clip of shown.clips) {
       const old = before.get(clip.id);
-      if (
+      const unchanged =
         old?.volume === clip.volume &&
         old.fadeIn === clip.fadeIn &&
         old.fadeOut === clip.fadeOut &&
@@ -189,9 +192,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
         old.duration === clip.duration &&
         !preview.current?.commands.some(
           (command) => command.type === "setClip" && command.clipId === clip.id,
-        )
-      )
-        continue;
+        );
+      if (!unchanged) remixing.add(clip.id);
+      else if (!remixed.current.has(clip.id)) continue;
       const mix = root.querySelector<HTMLElement>(
         `[data-clip-mix="${CSS.escape(clip.id)}"]`,
       );
@@ -209,6 +212,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     }
     placed.current = next;
+    remixed.current = remixing;
 
     // Pieces the edit cuts off have no element yet: each gets a box of its clip's kind.
     const boxes = pieces.current;

@@ -503,3 +503,59 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
     JSON.stringify(evidence, null, 2),
   );
 });
+
+test("a fade drag that returns to its start redraws the fade it began with", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fade drag back", duration: 2 },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=2",
+    join(project.path, "tone.wav"),
+  ]);
+  // Authored fades of 2 s and 6 s on a 2 s clip: the runtime scales them to 0.5 s and 1.5 s.
+  const source =
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="2" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="2" data-fade-in="2" data-fade-out="6"></audio></main></body></html>';
+  await writeFile(index, source);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  const mix = page.locator('[data-clip-mix="music"]');
+  const drawing = () =>
+    mix.evaluate((element) => ({
+      curve: element.querySelector("path")?.getAttribute("d"),
+      fadeIn: element
+        .querySelector<HTMLElement>('[data-mix="fadeIn"]')
+        ?.style.getPropertyValue("--fade"),
+      fadeOut: element
+        .querySelector<HTMLElement>('[data-mix="fadeOut"]')
+        ?.style.getPropertyValue("--fade"),
+    }));
+  const before = await drawing();
+  for (const edge of ["fadeIn", "fadeOut"]) {
+    const box = (await mix.locator(`[data-mix="${edge}"]`).boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + (edge === "fadeIn" ? -40 : 40), y, {
+      steps: 8,
+    });
+    await expect.poll(drawing).not.toEqual(before);
+    await page.mouse.move(x, y, { steps: 8 });
+    await page.mouse.up();
+    expect(await drawing()).toEqual(before);
+  }
+  expect(await readFile(index, "utf8")).toBe(source);
+});
