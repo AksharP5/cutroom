@@ -1,0 +1,201 @@
+{
+  "before": [
+    {
+      "fadeIn": 0,
+      "fadeOut": 4,
+      "at": 120,
+      "levels": [
+        {
+          "time": 0.5,
+          "differenceDb": -1.1561535458044885
+        },
+        {
+          "time": 1.5,
+          "differenceDb": -4.0690541497403405
+        },
+        {
+          "time": 2,
+          "differenceDb": -5.981988462427303
+        },
+        {
+          "time": 3.95,
+          "differenceDb": -36.807328254984924
+        },
+        {
+          "time": 4.05,
+          "differenceDb": 0.004075215520855919
+        },
+        {
+          "time": 5,
+          "differenceDb": 0
+        },
+        {
+          "time": 6.5,
+          "differenceDb": 2.9058650160921823e-06
+        },
+        {
+          "time": 7.8,
+          "differenceDb": 0
+        }
+      ]
+    }
+  ],
+  "after": [
+    {
+      "fadeIn": 0,
+      "fadeOut": 4,
+      "at": 120,
+      "levels": [
+        {
+          "time": 0.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 1.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 2,
+          "differenceDb": 0
+        },
+        {
+          "time": 3.95,
+          "differenceDb": 0
+        },
+        {
+          "time": 4.05,
+          "differenceDb": 0
+        },
+        {
+          "time": 5,
+          "differenceDb": 0
+        },
+        {
+          "time": 6.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 7.8,
+          "differenceDb": 0
+        }
+      ]
+    },
+    {
+      "fadeIn": 2,
+      "fadeOut": 6,
+      "at": 30,
+      "levels": [
+        {
+          "time": 0.5,
+          "differenceDb": 0.0022944889498876736
+        },
+        {
+          "time": 1.5,
+          "differenceDb": 0.00044208892264271964
+        },
+        {
+          "time": 2,
+          "differenceDb": 6.739734236235322e-05
+        },
+        {
+          "time": 3.95,
+          "differenceDb": 2.0585748811552793e-05
+        },
+        {
+          "time": 4.05,
+          "differenceDb": -6.110269232116587e-06
+        },
+        {
+          "time": 5,
+          "differenceDb": -9.504967409475655e-06
+        },
+        {
+          "time": 6.5,
+          "differenceDb": 2.1182108202550193e-05
+        },
+        {
+          "time": 7.8,
+          "differenceDb": 0
+        }
+      ]
+    },
+    {
+      "fadeIn": 2,
+      "fadeOut": 6,
+      "at": 120,
+      "levels": [
+        {
+          "time": 0.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 1.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 2,
+          "differenceDb": 0.0008087335948159139
+        },
+        {
+          "time": 3.95,
+          "differenceDb": 0.0012074341905883334
+        },
+        {
+          "time": 4.05,
+          "differenceDb": 0.0002649593585820892
+        },
+        {
+          "time": 5,
+          "differenceDb": -0.0013059337467185039
+        },
+        {
+          "time": 6.5,
+          "differenceDb": -7.523342254579427e-05
+        },
+        {
+          "time": 7.8,
+          "differenceDb": 1.9809402899680052e-05
+        }
+      ]
+    },
+    {
+      "fadeIn": 2,
+      "fadeOut": 6,
+      "at": 180,
+      "levels": [
+        {
+          "time": 0.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 1.5,
+          "differenceDb": 0
+        },
+        {
+          "time": 2,
+          "differenceDb": 0.0008087335948159139
+        },
+        {
+          "time": 3.95,
+          "differenceDb": 0.0012074341905883334
+        },
+        {
+          "time": 4.05,
+          "differenceDb": -6.665771485728052e-05
+        },
+        {
+          "time": 5,
+          "differenceDb": -0.000691696329132214
+        },
+        {
+          "time": 6.5,
+          "differenceDb": 0.000906401958095468
+        },
+        {
+          "time": 7.8,
+          "differenceDb": -0.0005124189205938407
+        }
+      ]
+    }
+  ]
+}
