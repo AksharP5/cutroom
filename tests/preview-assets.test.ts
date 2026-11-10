@@ -176,6 +176,8 @@ test.skipIf(!browserExecutable())(
       await fixture.dispose();
     }
   },
+  // Launching a real browser can outlast Bun's 5 s default on a loaded CI runner.
+  30_000,
 );
 
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
