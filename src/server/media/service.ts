@@ -44,7 +44,7 @@ export function createMediaService(options: { workerUrl?: URL } = {}) {
       const source = await projectPath(project, path);
       const identity = await fingerprint(source);
       const key = createHash("sha256")
-        .update(`media-v1\0${kind}\0${identity}`)
+        .update(`media-v2\0${kind}\0${identity}`)
         .digest("hex");
       await mkdir(await projectPath(project, ".cutroom", true), {
         recursive: true,

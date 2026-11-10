@@ -71,7 +71,7 @@ Peaks decode the first audio stream to mono signed 16-bit PCM at 48 kHz. The bas
 | 8           | uint32 level count, currently 4                                                                      |
 | 12          | uint32 decoded sample rate, currently 48000                                                          |
 | 16          | float64 total decoded sample count                                                                   |
-| 24          | uint32 base bucket sample count, currently 80                                                        |
+| 24          | uint32 base bucket sample count, currently 480                                                       |
 | 28          | uint32 reserved, currently 0                                                                         |
 | 32          | One 16-byte directory entry per level: uint32 samples per pair, pair count, byte offset, byte length |
 | 96          | Level payloads in order, each pair an int16 minimum followed by an int16 maximum                     |
