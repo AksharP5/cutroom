@@ -37,7 +37,7 @@ import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
 import { FileDialog } from "./components/FileDialog";
-import { affectsMediaList, MediaPanel } from "./components/MediaPanel";
+import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
@@ -109,7 +109,6 @@ export function App() {
   );
   const [mode, setMode] = useState<EditorMode>("select");
   const [sourceRevision, setSourceRevision] = useState(0);
-  const [mediaRevision, setMediaRevision] = useState(0);
   const [panel, setPanel] = useState<"review" | "script">("review");
   const [reviewState, setReviewState] = useState<{
     projectId: string;
@@ -205,8 +204,9 @@ export function App() {
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
         else if (payload.changed !== "cutroom.json") {
-          if (affectsMediaList(payload.changed))
-            setMediaRevision((value) => value + 1);
+          useWorkspace.setState((state) => ({
+            mediaRevision: state.mediaRevision + 1,
+          }));
           return;
         }
       } catch {
@@ -391,7 +391,6 @@ export function App() {
           <MediaPanel
             key={project.id}
             projectId={project.id}
-            revision={mediaRevision}
             hidden={!workPanel}
           />
           <section

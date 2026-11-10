@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { FilmStrip, Image, Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
+import { useWorkspace } from "../workspace";
 
 // Mirrors the formats the upload route validates. `.ts` transport streams are left out so
 // TypeScript files in a project are never listed as video.
@@ -56,22 +57,15 @@ const mediaKind = (path: string) => {
   );
 };
 
-/** True for media files and for folders, whose moves report only the folder path. */
-export function affectsMediaList(path: string) {
-  const name = path.split(/[\\/]/).at(-1) ?? path;
-  return !name.includes(".") || mediaKind(name) !== undefined;
-}
-
 export function MediaPanel({
   projectId,
-  revision,
   hidden,
 }: {
   projectId: string;
-  /** Bumped by the shell whenever a non-source file in the project changes. */
-  revision: number;
   hidden: boolean;
 }) {
+  // Read here rather than in the shell, so a burst of file events re-renders only this panel.
+  const revision = useWorkspace((state) => state.mediaRevision);
   const [media, setMedia] = useState<
     { path: string; type: (typeof mediaKinds)[number] }[] | null
   >(null);
@@ -82,6 +76,7 @@ export function MediaPanel({
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
+  const loaded = useRef(false);
 
   const load = useCallback(async () => {
     const id = ++latestLoad.current;
@@ -91,6 +86,7 @@ export function MediaPanel({
       throw new Error(`The project media could not load (${response.status}).`);
     const { files } = projectFilesSchema.parse(await response.json());
     if (id !== latestLoad.current) return;
+    loaded.current = true;
     setMedia(
       files
         .flatMap((path) => {
@@ -108,19 +104,28 @@ export function MediaPanel({
         void load().catch((error: unknown) =>
           setMessage(error instanceof Error ? error.message : String(error)),
         ),
-      revision === 0 ? 0 : 150,
+      loaded.current ? 150 : 0,
     );
     return () => clearTimeout(timer);
   }, [load, revision]);
 
-  async function importFiles(files: FileList | null) {
-    if (!files?.length) return;
+  async function importFiles(list: FileList | null) {
+    const files = [...(list ?? [])];
+    const unsupported = files.filter((file) => !mediaKind(file.name));
+    const media = files.filter((file) => mediaKind(file.name));
+    if (!media.length) {
+      if (unsupported.length)
+        setMessage(
+          `Not imported. ${unsupported.map((file) => file.name).join(", ")} is not a supported video, audio, or image format.`,
+        );
+      return;
+    }
     if (importing) {
       setMessage(STILL_IMPORTING);
       return;
     }
     const body = new FormData();
-    for (const file of files) body.append("file", file);
+    for (const file of media) body.append("file", file);
     setImporting(true);
     setMessage("");
     try {
@@ -133,6 +138,7 @@ export function MediaPanel({
         throw new Error(`The import failed (${response.status}).`);
       const result = uploadSchema.parse(await response.json());
       const refused = [
+        ...unsupported.map((file) => `${file.name} is not a supported format`),
         ...result.skipped.map((name) => `${name} is too large`),
         ...result.invalid.map((item) => `${item.name}: ${item.reason}`),
       ];

@@ -10,4 +10,6 @@ export const useWorkspace = create(() => ({
   /** Export progress and finished renders. */
   exports: false,
   exporting: false,
+  /** Bumped when files other than compositions or `cutroom.json` change on disk. */
+  mediaRevision: 0,
 }));

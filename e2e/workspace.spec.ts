@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -256,8 +264,8 @@ test("media panel follows project media and imports files into assets", async ({
   const media = page.getByRole("region", { name: "Media", exact: true });
   await expect(media.getByText("No media yet")).toBeVisible();
 
-  await mkdir(join(project.path, "sound"), { recursive: true });
-  await tone(join(project.path, "sound", "room-tone.wav"));
+  await mkdir(join(project.path, "sound.v2"), { recursive: true });
+  await tone(join(project.path, "sound.v2", "room-tone.wav"));
   await expect(
     media.getByRole("listitem").filter({ hasText: "room-tone" }),
   ).toHaveAttribute("data-kind", "audio");
@@ -272,9 +280,17 @@ test("media panel follows project media and imports files into assets", async ({
   ).toBeVisible();
   await stat(join(project.path, "assets", "narration.mp3"));
 
-  // Moving a whole folder out reports only the folder, not the files inside it.
+  await writeFile(join(outside, "notes.txt"), "not media");
+  await media
+    .locator('input[type="file"]')
+    .setInputFiles(join(outside, "notes.txt"));
+  await expect(media.getByRole("alert")).toContainText(
+    "notes.txt is not a supported",
+  );
+
+  // Moving a whole folder out reports only the folder, even when its name has a dot.
   const moved = `${project.path}-sound`;
-  await rename(join(project.path, "sound"), moved);
+  await rename(join(project.path, "sound.v2"), moved);
   await expect(
     media.getByRole("listitem").filter({ hasText: "room-tone" }),
   ).toHaveCount(0);
