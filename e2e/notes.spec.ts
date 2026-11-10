@@ -6,6 +6,7 @@ import { z } from "zod";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { NotebookSchema, ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { agentSessionSchema } from "../src/shared/agent";
 
 async function openProject(
   page: Page,
@@ -381,6 +382,201 @@ async function quickCapture(page: Page, projectId: string) {
     });
   });
 }
+
+for (const finishCapture of [true, false]) {
+  test(
+    finishCapture
+      ? "chat includes a note image when sent before its capture finishes"
+      : "chat continues after the capture timeout without an image",
+    async ({ page, request }) => {
+      await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
+        route.fulfill({
+          json: {
+            provider: "codex",
+            available: true,
+            skills: [],
+            models: [],
+            mcpServers: [],
+          },
+        }),
+      );
+      const project = await openProject(page, request, "Capture-window chat");
+      await quickCapture(page, project.id);
+      const session = agentSessionSchema.parse({
+        id: crypto.randomUUID(),
+        projectId: project.id,
+        provider: "codex",
+        title: "Capture-window chat",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: "idle",
+        messages: [],
+      });
+      await page.route("**/api/cutroom/agents/sessions?**", (route) =>
+        route.fulfill({ json: { sessions: [] } }),
+      );
+      await page.route("**/api/cutroom/agents/sessions", (route) =>
+        route.fulfill({ status: 201, json: session }),
+      );
+      await page.route(
+        `**/api/cutroom/agents/sessions/${session.id}/events`,
+        (route) =>
+          route.fulfill({
+            contentType: "text/event-stream",
+            body: `data: ${JSON.stringify({ seq: 0, event: { type: "snapshot", session } })}\n\n`,
+          }),
+      );
+      const submitted = Promise.withResolvers<unknown>();
+      await page.route(
+        `**/api/cutroom/agents/sessions/${session.id}/turns`,
+        async (route) => {
+          submitted.resolve(route.request().postDataJSON());
+          await route.fulfill({ status: 202, json: session });
+        },
+      );
+      const capture = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      await page.route(
+        `**/api/projects/${project.id}/thumbnail/**`,
+        async (route) => {
+          if (route.request().resourceType() !== "fetch")
+            return route.fallback();
+          started.resolve();
+          await capture.promise;
+          await route.fallback();
+        },
+      );
+      try {
+        await page.keyboard.press("n");
+        const spot = await project.at(0.3, 0.4);
+        await page.mouse.click(spot.x, spot.y);
+        await page
+          .getByLabel("What should change?")
+          .fill("Keep this frame with my note");
+        await page.getByLabel("What should change?").press("Enter");
+        await started.promise;
+        await expect.poll(async () => (await project.notes()).length).toBe(1);
+        expect((await project.notes())[0]?.framePath).toBeUndefined();
+        await page.getByLabel("Message your agent").fill("Apply my note");
+        await page
+          .getByRole("button", { name: "Send message", exact: true })
+          .click();
+        if (finishCapture && process.env.CUTROOM_CAPTURE_EVIDENCE)
+          await page.screenshot({
+            path: join(process.env.CUTROOM_CAPTURE_EVIDENCE, "chat-wait.png"),
+          });
+        if (finishCapture) capture.resolve();
+        await expect(page.getByLabel("Message your agent")).toHaveValue("", {
+          timeout: 5_000,
+        });
+        const turn = z
+          .object({ attachments: z.array(z.object({ path: z.string() })) })
+          .parse(await submitted.promise);
+        if (!finishCapture) {
+          expect(turn.attachments).toEqual([]);
+          expect((await project.notes())[0]?.framePath).toBeUndefined();
+          capture.resolve();
+        }
+        await expect
+          .poll(async () => (await project.notes())[0]?.framePath)
+          .toBeTruthy();
+        if (finishCapture)
+          expect(turn.attachments).toEqual([
+            { path: (await project.notes())[0]!.framePath },
+          ]);
+        await expect(page.getByLabel("Message your agent")).toHaveValue("");
+      } finally {
+        capture.resolve();
+      }
+    },
+  );
+}
+
+test("a capture refresh failing after a project switch does not toast in the new project", async ({
+  page,
+  request,
+}) => {
+  const first = await openProject(page, request, "Capture refresh owner");
+  const second = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Other project" },
+      })
+    ).json(),
+  );
+  await quickCapture(page, first.id);
+  const capture = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  await page.route(
+    `**/api/projects/${first.id}/thumbnail/**`,
+    async (route) => {
+      if (route.request().resourceType() !== "fetch") return route.fallback();
+      started.resolve();
+      await capture.promise;
+      await route.fallback();
+    },
+  );
+  const refresh = Promise.withResolvers<void>();
+  const refreshing = Promise.withResolvers<void>();
+  let failRefresh = false;
+  await page.route(`**${first.base}/notebook`, async (route) => {
+    if (!failRefresh) return route.fallback();
+    refreshing.resolve();
+    await refresh.promise;
+    await route.fulfill({
+      status: 503,
+      json: { error: "Old project capture refresh failed" },
+    });
+  });
+  try {
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await page.keyboard.press("n");
+    const spot = await first.at(0.3, 0.4);
+    await page.mouse.click(spot.x, spot.y);
+    await page
+      .getByLabel("What should change?")
+      .fill("Refresh in my own project");
+    await page.getByLabel("What should change?").press("Enter");
+    await started.promise;
+    await expect(page.locator(".review-row")).toContainText(
+      "Refresh in my own project",
+    );
+    failRefresh = true;
+    capture.resolve();
+    await refreshing.promise;
+    await page.evaluate((id) => {
+      location.hash = `project/${id}`;
+    }, second.id);
+    await expect(page.locator(".project-switcher")).toHaveText("Other project");
+    const failed = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`${first.base}/notebook`) &&
+        response.status() === 503,
+    );
+    refresh.resolve();
+    await (await failed).finished();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(
+      page.locator(".status-bar").getByText("30 fps", { exact: true }),
+    ).toBeVisible();
+    if (process.env.CUTROOM_CAPTURE_EVIDENCE) {
+      if (await page.locator(".toast").count())
+        await expect(page.locator(".toast")).toHaveCSS("opacity", "1");
+      await page.screenshot({
+        path: join(process.env.CUTROOM_CAPTURE_EVIDENCE, "project-toast.png"),
+      });
+    }
+    await expect(page.locator(".toast")).toHaveCount(0);
+  } finally {
+    capture.resolve();
+    refresh.resolve();
+  }
+});
 
 test("Review rows appear within one second of Enter while frame captures are held", async ({
   page,
