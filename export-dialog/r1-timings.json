@@ -1,0 +1,22 @@
+[
+  {
+    "name": "before-full",
+    "seconds": 18.484626567,
+    "status": "complete"
+  },
+  {
+    "name": "before-range",
+    "seconds": 18.86139957,
+    "status": "complete"
+  },
+  {
+    "name": "r1-full",
+    "seconds": 18.636453119,
+    "status": "complete"
+  },
+  {
+    "name": "r1-range",
+    "seconds": 8.412608618000002,
+    "status": "complete"
+  }
+]
