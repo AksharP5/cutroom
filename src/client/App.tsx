@@ -191,7 +191,7 @@ export function App() {
     return result.projects;
   }, []);
   const refreshDocument = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || activeProjectId.current !== projectId) return;
     const request = ++documentRequest.current;
     const result = await api(`/projects/${projectId}/notebook`, NotebookSchema);
     if (

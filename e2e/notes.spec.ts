@@ -4,7 +4,7 @@ import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
-import { ReviewItemSchema } from "../src/shared/review";
+import { NotebookSchema, ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
 async function openProject(
@@ -450,6 +450,117 @@ test("Review rows appear within one second of Enter while frame captures are hel
     await expect(page.locator(".toast")).toHaveCount(0);
   } finally {
     release();
+  }
+});
+
+test("an old project's late capture cannot discard the destination project's held notebook", async ({
+  page,
+  request,
+}, testInfo) => {
+  const second = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Notebook project B" },
+      })
+    ).json(),
+  );
+  const secondBase = `/api/cutroom/projects/${second.id}`;
+  const bodies = Array.from(
+    { length: 6 },
+    (_, index) => `Project B note ${index + 1}`,
+  );
+  for (const body of bodies)
+    expect(
+      (
+        await request.post(`${secondBase}/annotations`, {
+          data: { kind: "comment", body, time: 0 },
+        })
+      ).ok(),
+    ).toBe(true);
+  // Reconcile B before opening its event stream, so initial review metadata cannot trigger a later refresh.
+  expect((await request.get(`${secondBase}/notebook`)).ok()).toBe(true);
+  const first = await openProject(page, request, "Capture project A");
+
+  await quickCapture(page, first.id);
+  let releaseCapture = () => {};
+  const captureHeld = new Promise<void>((resolve) => {
+    releaseCapture = resolve;
+  });
+  let captureEntered = () => {};
+  const captureStarted = new Promise<void>((resolve) => {
+    captureEntered = resolve;
+  });
+  await page.route(
+    `**/api/projects/${first.id}/thumbnail/**`,
+    async (route) => {
+      if (route.request().resourceType() !== "fetch") return route.fallback();
+      captureEntered();
+      await captureHeld;
+      await route.fallback();
+    },
+  );
+  let releaseNotebook = () => {};
+  const notebookHeld = new Promise<void>((resolve) => {
+    releaseNotebook = resolve;
+  });
+  let notebookEntered = () => {};
+  const notebookStarted = new Promise<void>((resolve) => {
+    notebookEntered = resolve;
+  });
+  await page.route(`**${secondBase}/notebook`, async (route) => {
+    const response = await route.fetch();
+    expect(
+      NotebookSchema.parse(await response.json()).items.map(
+        (item) => item.body,
+      ),
+    ).toEqual(bodies);
+    notebookEntered();
+    await notebookHeld;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.keyboard.press("n");
+    const spot = await first.at(0.3, 0.4);
+    await page.mouse.click(spot.x, spot.y);
+    const field = page.getByLabel("What should change?");
+    await field.fill("Project A captured later");
+    await field.press("Enter");
+    await captureStarted;
+    await expect.poll(async () => (await first.notes()).length).toBe(1);
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.locator(".review-row")).toHaveCount(1);
+
+    await page.evaluate((id) => {
+      location.hash = `project/${id}`;
+    }, second.id);
+    await notebookStarted;
+    await expect(page.locator(".project-switcher")).toHaveText(
+      "Notebook project B",
+    );
+    const attached = page.waitForResponse(
+      (response) =>
+        response.url().includes(`${first.base}/review/`) &&
+        response.url().endsWith("/frame") &&
+        response.request().method() === "PUT",
+    );
+    releaseCapture();
+    expect((await attached).ok()).toBe(true);
+    await (await attached).finished();
+    // Let A's capture continuation run while B's notebook response is still held.
+    await page.evaluate(
+      () =>
+        new Promise<void>((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => done())),
+        ),
+    );
+    releaseNotebook();
+    await expect(page.locator(".review-row-body")).toHaveText(bodies);
+    await page.screenshot({
+      path: testInfo.outputPath("destination-review-after-late-capture.png"),
+    });
+  } finally {
+    releaseCapture();
+    releaseNotebook();
   }
 });
 
