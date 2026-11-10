@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { AnnotationSchema } from "../shared/project";
 import type { EditorReviewDraft } from "../shared/editor";
-import type { ReviewItem } from "../shared/review";
+import type { ReviewItem, ReviewStatus } from "../shared/review";
 import { api, json } from "./api";
 import { strokePath } from "./edit/notes";
 import { saveNoteInOrder, trackNoteCapture } from "./edit/noteStore";
+
+/** Completed notes and agent questions wait on the owner in Review's To review group. */
+export const toReviewStatuses: readonly ReviewStatus[] = ["blocked", "done"];
 
 /** Notes are numbered in the owner's order, the same in Review, on the ruler, and on the picture. */
 export const noteNumbers = (items: readonly ReviewItem[]) =>

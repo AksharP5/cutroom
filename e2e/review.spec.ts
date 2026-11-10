@@ -60,6 +60,10 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const group = (name: string) =>
     page.getByRole("region", { name: `${name} notes`, exact: true });
+  const waiting = page
+    .locator(".status-bar")
+    .getByRole("button", { name: /^To review \d+$/ });
+  await expect(waiting).toHaveText("To review 1");
   await expect(group("New")).toContainText("Not sent yet");
   await expect(group("Queued")).toContainText("Move the title up");
   await expect(group("Queued")).toContainText("Fade the music out");
@@ -76,6 +80,10 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     note: "Moved the title up 40px.",
   });
   await expect(group("To review")).toContainText("Moved the title up 40px.");
+  await expect(waiting).toHaveText("To review 2");
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await waiting.click();
+  await expect(group("To review")).toBeVisible();
   await page.screenshot({
     path: `${process.env.CUTROOM_E2E_DIR ?? "artifacts"}/review-queue.png`,
   });
@@ -87,12 +95,14 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     .getByRole("button", { name: "Accept", exact: true })
     .click();
   await expect(group("Accepted")).toContainText("Move the title up");
+  await expect(waiting).toHaveText("To review 1");
   await expect(group("To review")).not.toContainText("Move the title up");
 
   await group("To review").getByRole("button", { name: "Answer" }).click();
   await page.getByLabel("Answer the agent").fill("Use the white logo.");
   await page.getByRole("button", { name: "Reply", exact: true }).click();
   await expect(group("Queued")).toContainText("You added: Use the white logo.");
+  await expect(waiting).toHaveCount(0);
 
   await group("Withdrawn")
     .getByRole("button", { name: "Restore to queue" })
