@@ -69,9 +69,11 @@ export function ProjectTimeline({
     useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
   useEffect(() => {
-    void loadTimeline(projectId).catch((error) =>
-      reportEditorError("timeline", error),
-    );
+    const closing = new AbortController();
+    void loadTimeline(projectId, closing.signal).catch((error: unknown) => {
+      if (!closing.signal.aborted) reportEditorError("timeline", error);
+    });
+    return () => closing.abort();
   }, [projectId, notes]);
 
   useEffect(() => {

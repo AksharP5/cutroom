@@ -112,17 +112,16 @@ export function EditPage({
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
     });
-    let open = true;
-    // A read that fails after the user switched projects must not report on the next one.
+    const closing = new AbortController();
     const fail = (error: unknown) => {
-      if (open) report(error);
+      if (!closing.signal.aborted) report(error);
     };
-    void loadTimeline(projectId).catch(fail);
+    void loadTimeline(projectId, closing.signal).catch(fail);
     // Any project change can move the timeline or the undo history.
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void loadTimeline(projectId).catch(fail),
+      () => void loadTimeline(projectId, closing.signal).catch(fail),
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopPreview = subscribeProjectEvents(
@@ -142,7 +141,7 @@ export function EditPage({
       },
     );
     return () => {
-      open = false;
+      closing.abort();
       reportEditorError("timeline", null);
       stopProject();
       stopPreview();

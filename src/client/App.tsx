@@ -166,6 +166,12 @@ export function App() {
   const projectOpening = useRef<object | null>(null);
   const activeProjectId = useRef(projectId);
   activeProjectId.current = projectId;
+  const projectRequests = useRef(new AbortController());
+  useEffect(() => {
+    const closing = new AbortController();
+    projectRequests.current = closing;
+    return () => closing.abort();
+  }, [projectId]);
   const project = projects.find((item) => item.id === projectId);
 
   // The tab indicator moves and resizes with transform only.
@@ -194,12 +200,19 @@ export function App() {
   }, []);
   const refreshDocument = useCallback(async () => {
     if (!projectId || activeProjectId.current !== projectId) return;
+    const { signal } = projectRequests.current;
     const request = ++documentRequest.current;
-    const result = await api(`/projects/${projectId}/notebook`, NotebookSchema);
-    if (
-      activeProjectId.current === projectId &&
-      request === documentRequest.current
-    )
+    const result = await api(
+      `/projects/${projectId}/notebook`,
+      NotebookSchema,
+      {
+        signal,
+      },
+    ).catch((error: unknown) => {
+      if (!signal.aborted) throw error;
+      return null;
+    });
+    if (result && !signal.aborted && request === documentRequest.current)
       setDocumentState({ projectId, document: result });
   }, [projectId]);
 
@@ -342,7 +355,12 @@ export function App() {
   const saveNote = useCallback(
     async (draft: EditorReviewDraft, body: string) => {
       if (!projectId) throw new Error("No project is open.");
-      const { id, capture } = await saveReviewNote(projectId, draft, body);
+      const { id, capture } = await saveReviewNote(
+        projectId,
+        draft,
+        body,
+        projectRequests.current.signal,
+      );
       void capture
         .then((captureError) => {
           if (captureError && activeProjectId.current === projectId)

@@ -14,6 +14,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
     time: 0,
     playing: false,
   };
+  const closing = new AbortController();
   const pending = new Map<
     string,
     { resolve(): void; reject(error: Error): void; timer: number }
@@ -49,6 +50,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
   };
   const request = (action: string) =>
     new Promise<void>((resolve, reject) => {
+      closing.signal.throwIfAborted();
       const id = send(action);
       const timer = window.setTimeout(() => {
         pending.delete(id);
@@ -77,16 +79,18 @@ export function connectPreview(frame: HTMLIFrameElement) {
   };
   return {
     player,
+    signal: closing.signal,
     get state() {
       return state;
     },
     inspect: () => request("inspect"),
     painted: () => request("paint"),
     dispose() {
+      closing.abort();
       window.removeEventListener("message", receive);
       for (const request of pending.values()) {
         clearTimeout(request.timer);
-        request.reject(new Error("The preview was closed."));
+        request.reject(closing.signal.reason);
       }
       pending.clear();
     },
