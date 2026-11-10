@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { SidebarSimple, X } from "@phosphor-icons/react";
 import {
   MAX_PLAYBACK_RATE,
@@ -37,6 +37,13 @@ export function Inspector({ projectId }: { projectId: string }) {
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const [accepting, setAccepting] = useState<string | null>(null);
+  // Closing the project cancels a pending reload, like the timeline's own read.
+  const closing = useRef(new AbortController());
+  useEffect(() => {
+    const controller = new AbortController();
+    closing.current = controller;
+    return () => controller.abort();
+  }, [projectId]);
   const [timingOpen, setTimingOpen] = useState(
     () =>
       window.innerHeight >=
@@ -82,15 +89,17 @@ export function Inspector({ projectId }: { projectId: string }) {
     [];
   const accept = async (editId: string) => {
     setAccepting(editId);
+    const { signal } = closing.current;
     try {
       await api(
         `/projects/${projectId}/review/changes/accept`,
         z.object({ ok: z.boolean() }),
         json("POST", { editId }),
       );
-      await loadTimeline(projectId);
+      await loadTimeline(projectId, signal);
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error));
+      if (!signal.aborted)
+        showToast(error instanceof Error ? error.message : String(error));
     } finally {
       setAccepting(null);
     }
