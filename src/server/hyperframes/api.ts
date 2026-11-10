@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
 import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
@@ -256,6 +257,21 @@ export function createHyperframesApi(
       }
     }),
   );
+  // Studio's listing feeds the Media panel, Assets, and the code tree. Dot folders hold app
+  // state such as Cutroom's review captures, so they are hidden here like everywhere else.
+  api.get("/projects/:id", async (c, next) => {
+    await next();
+    if (!c.res.ok) return;
+    const listing = z
+      .looseObject({ files: z.array(z.string()) })
+      .parse(await c.res.json());
+    c.res = c.json({
+      ...listing,
+      files: listing.files.filter(
+        (file) => !file.split("/").some((part) => part.startsWith(".")),
+      ),
+    });
+  });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
     async dispose() {

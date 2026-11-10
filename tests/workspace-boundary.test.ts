@@ -9,9 +9,11 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { createWorkspaceRoutes } from "../src/server/workspace";
 import { createProjectStore } from "../src/server/projects/store";
+import { ProjectSchema } from "../src/shared/project";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -99,4 +101,36 @@ test("user-selected attachments are copied into the project and project files ar
   const reused = await importFile(attachment.path);
   expect(reused.status).toBe(200);
   expect(await reused.json()).toEqual(attachment);
+});
+
+test("review captures stay out of the project file list", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "cutroom-listing-"));
+  cleanup.push(() => rm(dataDir, { recursive: true, force: true }));
+  const runtime = await createApp({
+    dataDir,
+    projectsDir: join(dataDir, "projects"),
+  });
+  cleanup.push(() => runtime.dispose());
+  const request = (path: string, init?: RequestInit) =>
+    runtime.app.request(`http://127.0.0.1:4317/api${path}`, init);
+  const project = ProjectSchema.parse(
+    await (
+      await request("/cutroom/projects", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Review captures" }),
+      })
+    ).json(),
+  );
+  const capture = await request(`/cutroom/projects/${project.id}/attachments`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ image: "data:image/png;base64,iVBORw0KGgo=" }),
+  });
+  expect(capture.status).toBe(201);
+  const { files } = z
+    .object({ files: z.array(z.string()) })
+    .parse(await (await request(`/projects/${project.id}`)).json());
+  expect(files).toContain("index.html");
+  expect(files.filter((file) => file.startsWith(".cutroom/"))).toEqual([]);
 });
