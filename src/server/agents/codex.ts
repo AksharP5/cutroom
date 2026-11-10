@@ -5,6 +5,7 @@ import type {
   AgentRequest,
   AgentTurn,
 } from "../../shared/agent";
+import { toolTarget } from "../../shared/agent";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
 import { agentPrompt, completeMessage } from "./runtime";
@@ -280,6 +281,7 @@ export class CodexRuntime implements AgentRuntime {
               "tool",
               delta.itemId,
               "Shell",
+              toolTarget({ command: command.command }),
             ),
             status: "streaming",
           },
@@ -323,6 +325,7 @@ export class CodexRuntime implements AgentRuntime {
               "tool",
               item.id,
               "Shell",
+              toolTarget({ command }),
             ),
             status: !completed
               ? "streaming"
@@ -341,6 +344,7 @@ export class CodexRuntime implements AgentRuntime {
             "tool",
             item.id,
             "Files",
+            item.changes?.map((change) => change.path).join(", "),
           ),
         });
       if (item.type === "mcpToolCall")
@@ -358,6 +362,7 @@ export class CodexRuntime implements AgentRuntime {
               "tool",
               item.id,
               `${item.server ?? "MCP"}: ${item.tool ?? "tool"}`,
+              toolTarget(item.arguments),
             ),
             status:
               message.method === "item/completed" ? "complete" : "streaming",

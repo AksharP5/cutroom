@@ -43,6 +43,20 @@ export function json(
   };
 }
 
+/** `HH:MM:SS:FF` at the composition's nominal frame rate. */
+export function frameTimecode(seconds: number, fps: number): string {
+  const rate = Math.round(fps);
+  const frames = Math.floor(Math.max(0, seconds) * fps + 1e-6);
+  return [
+    Math.floor(frames / rate / 3600),
+    Math.floor(frames / rate / 60) % 60,
+    Math.floor(frames / rate) % 60,
+    frames % rate,
+  ]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+}
+
 export function timecode(seconds: number): string {
   const value = Math.max(0, seconds);
   const minutes = Math.floor(value / 60);

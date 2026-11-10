@@ -54,6 +54,7 @@ export function completeMessage(
   role: AgentMessage["role"] = "assistant",
   id: string = crypto.randomUUID(),
   tool?: string,
+  target?: string,
 ) {
   return {
     id,
@@ -62,5 +63,6 @@ export function completeMessage(
     status: "complete" as const,
     createdAt: new Date().toISOString(),
     ...(tool ? { tool } : {}),
+    ...(target ? { target } : {}),
   };
 }

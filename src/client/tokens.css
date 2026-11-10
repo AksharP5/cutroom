@@ -1,0 +1,293 @@
+/*
+  Cutroom design tokens. The only place colors, type, sizes and timings live.
+  Dark only. Components read these names; never hard-code a value elsewhere.
+
+  Fonts to vendor (OFL 1.1, latin subset, one variable woff2 per family):
+    fonts/InstrumentSans-var.woff2  wght 400..700, wdth 75..100  (uses 400, 500, 600, 700)
+    fonts/MartianMono-var.woff2     wght 300..600, wdth 75..112.5 (uses 400, 500 at wdth 87.5)
+  Add both OFL.txt files to THIRD_PARTY_NOTICES.md.
+
+  Contrast is measured (WCAG 2.x), listed beside each text token. "hover" means the
+  7% white overlay composited on the surface.
+
+  Breakpoints are @custom-media (Media Queries 5). Bun's CSS bundler (Lightning CSS)
+  expands them; @media can't read custom properties, so the --breakpoint-* properties
+  mirror them for script (panel resize, drawer logic). Change both together, here only.
+*/
+
+@custom-media --drawer (max-width: 1303px); /* inspector becomes a drawer over the stage */
+@custom-media --rail (max-width: 1023px); /* left column becomes a 44px icon rail */
+@custom-media --short (max-height: 959px); /* 6 media rows, Timing collapsed */
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("./fonts/InstrumentSans-var.woff2") format("woff2");
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-display: block;
+}
+@font-face {
+  font-family: "Martian Mono";
+  src: url("./fonts/MartianMono-var.woff2") format("woff2");
+  font-weight: 300 600;
+  font-stretch: 75% 112.5%;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: zero chroma (R=G=B) so nothing tints the picture. */
+  --surface-ground: #0a0a0a; /* app ground, 1px seams between panels, viewer stage */
+  --surface-panel: #121212; /* panels, header, status bar */
+  --surface-raised: #191919; /* inputs, composer, fields, modal */
+  --surface-float: #1c1c1c; /* toast, popover, menu */
+  --surface-lane: #0f0f0f; /* audio lanes, read-only curve well */
+  --surface-lane-video: #101010; /* video lanes */
+  --surface-active: #2b2b2b; /* armed tool, active segment (static, not animated) */
+  --overlay-hover: rgb(255 255 255 / 0.07); /* drawn on a ::before, faded by opacity */
+  --overlay-press: rgb(255 255 255 / 0.11);
+  --scrim: rgb(0 0 0 / 0.6);
+  --shadow-float: 0 0 0 1px var(--line), 0 8px 24px rgb(0 0 0 / 0.45); /* toast, popover, menu */
+  --shadow-modal: 0 0 0 1px var(--line), 0 24px 64px rgb(0 0 0 / 0.55);
+
+  /* Lines */
+  --line-subtle: #1f1f1f; /* hairlines inside panels */
+  --line: #2e2e2e; /* field borders, separators, track divider, picture outline */
+  --line-strong: #444444; /* ruler major ticks */
+  --line-lane: #181818; /* seam between timeline lanes */
+
+  /* Text. Ratios: panel / raised / float / hover-on-panel / press */
+  --text-primary: #ededed; /* 16.0 / 15.0 / 14.6 / 13.4 / 12.1 */
+  --text-secondary: #a8a8a8; /* 7.9 / 7.4 / 7.2 / 6.6 / 5.9 */
+  --text-tertiary: #929292; /* 6.0 / 5.7 / 5.5 / 5.1 / 4.55 */
+  --glyph-faint: #5c5c5c; /* non-text only: idle keyframe diamonds, empty step boxes, accepted pin ring */
+
+  /* Signals. Yellow is a human mark. Blue is agent work: active OR awaiting review. */
+  --human: #f2c94c; /* 11.8 on panel */
+  --on-human: #141003; /* text on --human, 12.0 */
+  --agent: #8fd0ea; /* 11.0 on panel, 10.1 on float */
+  --on-agent: #071318; /* text on --agent, 11.1 */
+  --agent-hatch: repeating-linear-gradient(
+    135deg,
+    var(--agent) 0 1.5px,
+    transparent 1.5px 4px
+  ); /* working state only, small elements only, never under text, own layer */
+  --accepted: var(--text-tertiary); /* accepted agent work turns neutral */
+  --playhead: #ff4f3a; /* 5.7 on panel; playhead and meter clip only */
+  --danger: #ff7a6b; /* 7.4 on panel; errors */
+  --selection: #ededed; /* paper: selection outline, brackets, in/out */
+  --range-band: rgb(237 237 237 / 0.07); /* in/out band in the ruler */
+  --range-line: rgb(237 237 237 / 0.28); /* 1px in/out lines through tracks */
+
+  /* Focus, text selection, caret, scrollbars */
+  --focus-ring-color: #ededed; /* paper; on every focusable control via :focus-visible */
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --text-selection-bg: rgb(237 237 237 / 0.24); /* text stays --text-primary, 9.6:1 on panel */
+  --caret: var(--human); /* the human's pencil, in every text field */
+  --scrollbar-size: 8px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #636363; /* 3.2:1 on panel */
+  --scrollbar-thumb-hover: #7a7a7a;
+
+  /* Track and clip states (spec section 3) */
+  --track-locked-opacity: 0.6; /* whole lane; inactive content, exempt from text contrast */
+  --clip-disabled-filter: saturate(0); /* static, never animated */
+
+  /* Markers: graphic only (3:1+ on panel). Names use --text-secondary. No yellow, blue or red. */
+  --marker-grey: #a8a8a8; /* default */
+  --marker-green: #84bd86;
+  --marker-violet: #a994dc;
+  --marker-rose: #d68aa2;
+  --marker-sand: #c4a77c;
+
+  /* Pencil marks on the picture. Casing keeps them legible on any footage. */
+  --pencil-casing: rgb(0 0 0 / 0.45);
+
+  /* Clip kinds: rail (2px top edge), head (name strip fill), body (flat fill). */
+  --clip-video: #6884d6;
+  --clip-video-head: #384466;
+  --clip-video-body: #252a3b;
+  --clip-image: #3fae8c;
+  --clip-image-head: #275547;
+  --clip-image-body: #1d332c;
+  --clip-comp: #a07bdb;
+  --clip-comp-head: #4f4068;
+  --clip-comp-body: #30293c;
+  --clip-audio: #6ebb5b;
+  --clip-audio-head: #3a5b32;
+  --clip-audio-body: #263522;
+  --clip-vo: #d2708f;
+  --clip-vo-head: #643b48;
+  --clip-vo-body: #3a262d;
+  --clip-head-text: var(--text-primary); /* 6.6 min (audio head) */
+  --clip-head-meta: #d0d0d0; /* durations on heads, 5.0 min (audio head) */
+  --wave-audio: #77ad69; /* music/effects, 30% less chroma than the rail */
+  --wave-vo: #c97690;
+  --clip-filmstrip-seam: rgb(0 0 0 / 0.55);
+
+  /* Meters: monochrome until clip */
+  --meter-off: #262626;
+  --meter-on: var(--text-secondary);
+  --meter-peak: var(--text-primary);
+  --meter-clip: var(--playhead);
+
+  /* Type */
+  --font-sans: "Instrument Sans", system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, monospace;
+  --stretch-mono: 87.5%; /* every number, always tabular */
+  --stretch-condensed: 87%; /* clip, track and media names */
+  --stretch-display: 75%;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --type-micro: 9px; /* ruler labels, meter scale (mono) */
+  --type-2xs: 10px; /* clip name strip, track ids, small timecode */
+  --type-xs: 11px; /* meta, durations, status bar, transport duration */
+  --type-sm: 12px; /* body, controls, panel titles */
+  --type-md: 13px; /* chat, transport timecode */
+  --leading-tight: 14px;
+  --leading-body: 16px;
+  --leading-chat: 19px;
+
+  /* Space: 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Fixed sizes */
+  --size-header: 40px;
+  --size-icon-button: 26px;
+  --size-tab-row: 36px;
+  --size-field: 22px;
+  --size-section-head: 30px;
+  --size-inspector-label: 70px;
+  --size-track-id: 24px; /* id slot; names and line-2 buttons share this indent */
+  --size-marker-w: 8px;
+  --size-marker-h: 10px;
+  --size-tick-major: 8px;
+  --size-tick-minor: 4px;
+  --icon-xs: 10px; /* chevrons, keyframe diamonds */
+  --icon-sm: 12px; /* inline, stop, zoom */
+  --icon-md: 14px; /* tool row labels, track buttons, composer */
+  --icon-lg: 16px; /* icon buttons, transport */
+  --size-tool-row: 32px;
+  --size-tool-button: 24px;
+  --size-transport: 36px;
+  --size-transport-button: 28px;
+  --size-shuttle-slot: 32px;
+  --size-panel-head: 34px;
+  --size-row: 28px;
+  --size-media-row: 30px;
+  --size-status: 24px;
+  --size-ruler: 28px; /* bands: pins 2-8, labels 10-19, flags and playhead head 19-28 */
+  --ruler-pin-top: 2px;
+  --ruler-label-top: 10px;
+  --ruler-flag-top: 19px;
+  --size-track-head: 132px;
+  --size-track-video: 56px;
+  --size-track-audio: 44px;
+  --size-track-button: 20px;
+  --size-clip-name: 14px;
+  --size-filmstrip: 40px;
+  --size-meter: 36px;
+  --size-queue-row-max: 72px;
+  --size-queue-thumb-w: 48px;
+  --size-queue-thumb-h: 27px;
+  --size-pin-viewer: 16px;
+  --size-pin-ruler: 6px;
+  --size-playhead-head-w: 11px;
+  --size-playhead-head-h: 9px; /* the 19-28 band; the stem starts at its tip */
+  --size-zoom-slider: 72px;
+  --stage-margin: 12px;
+
+  /* Panel widths (integers) and collapse thresholds (see direction.md) */
+  --breakpoint-drawer: 1304px;
+  --breakpoint-rail: 1024px;
+  --breakpoint-short: 960px;
+  --width-left: 320px;
+  --width-left-min: 300px;
+  --width-left-max: 480px;
+  --width-inspector: 300px;
+  --width-inspector-min: 264px;
+  --width-centre-min: 736px;
+  --timeline-height: 337px; /* 29 ruler + 3x57 video + 2 divider + 3x45 audio */
+
+  /* Radii */
+  --radius-clip: 2px;
+  --radius-control: 4px; /* controls, fields, track buttons, curve well, scrollbar thumb */
+  --radius-float: 6px;
+  --radius-modal: 8px;
+
+  /* Line weights */
+  --stroke-hair: 1px;
+  --stroke-selection: 1px; /* inner outline */
+  --stroke-bracket: 2px;
+  --stroke-rail: 2px; /* kind rail, agent underline, tab indicator, user rule */
+  --stroke-pencil: 3px;
+  --stroke-pencil-casing: 5px;
+
+  /* Layers */
+  --z-clip: 1;
+  --z-clip-selected: 2;
+  --z-range-lines: 3;
+  --z-playhead: 4;
+  --z-track-heads: 5;
+  --z-drawer: 10;
+  --z-popover: 20;
+  --z-toast: 30;
+  --z-scrim: 40;
+  --z-modal: 41;
+
+  /* Motion: transform and opacity only. Nothing loops. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1); /* entrances, feedback */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* things already on screen moving */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1); /* exits only, always the shorter duration */
+  --ease-fade: ease; /* opacity-only changes */
+
+  --duration-instant: 0ms; /* selection, tool arming, keyboard actions, shuttle readout */
+  --duration-press: 90ms;
+  --duration-hover: 120ms;
+  --duration-fade: 160ms;
+  --duration-panel-in: 200ms;
+  --duration-panel-out: 120ms;
+  --duration-indicator: 220ms;
+  --duration-edit: 220ms; /* clip moves after a completed edit, ripple close */
+  --duration-zoom: 200ms; /* keys, slider, fit; wheel and pinch are direct */
+  --duration-page: 180ms; /* timeline paging during playback */
+  --duration-strike: 200ms;
+  --duration-toast-in: 220ms;
+  --duration-toast-out: 140ms;
+  --duration-toast-hold: 4000ms;
+  --duration-modal-in: 240ms;
+  --duration-modal-out: 140ms;
+
+  --press-scale: 0.96;
+  --enter-offset: 6px;
+  --toast-offset: -8px; /* toast enters downward from the header */
+  --modal-scale: 0.97;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    /* Movement collapses; opacity stays as a short fade. Components must not translate or scale. */
+    --duration-panel-in: 100ms;
+    --duration-indicator: 0ms;
+    --duration-edit: 0ms;
+    --duration-zoom: 0ms;
+    --duration-page: 0ms;
+    --duration-strike: 0ms;
+    --duration-toast-in: 100ms;
+    --duration-modal-in: 100ms;
+    --press-scale: 1;
+    --enter-offset: 0px;
+    --toast-offset: 0px;
+    --modal-scale: 1;
+  }
+}

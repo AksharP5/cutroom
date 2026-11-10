@@ -5,7 +5,6 @@ import {
   ArrowCounterClockwise,
   ArrowClockwise,
   Camera,
-  Export,
   FolderOpen,
   SlidersHorizontal,
 } from "@phosphor-icons/react";
@@ -91,13 +90,13 @@ export function EditorHeader(props: EditorHeaderProps) {
       <div className="editor-header-actions">
         <button
           type="button"
-          className="editor-files-button"
+          className="tool-button editor-files-button"
           onClick={() => useWorkspace.setState({ files: !filesVisible })}
           aria-pressed={filesVisible}
           aria-label="Toggle project files"
           title="Compositions, assets, and source"
         >
-          <FolderOpen size={16} />
+          <FolderOpen size={15} weight={filesVisible ? "fill" : "regular"} />
           <span>Files</span>
         </button>
         <button
@@ -146,14 +145,13 @@ export function EditorHeader(props: EditorHeaderProps) {
         </button>
         <button
           type="button"
-          className="editor-export-button"
+          className="secondary-button editor-export-button"
           onClick={() => {
             useWorkspace.setState({ exports: true });
             if (!props.ffmpegMissing) props.onExport?.();
           }}
           disabled={props.isRendering}
         >
-          <Export size={15} />
           {props.isRendering ? "Exporting" : "Export"}
         </button>
       </div>

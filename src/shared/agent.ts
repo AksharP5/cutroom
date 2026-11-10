@@ -40,8 +40,32 @@ export const agentMessageSchema = z.object({
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "failed"]).default("complete"),
   tool: z.string().optional(),
+  /** What a tool call acted on, such as a file path or command, kept after its result arrives. */
+  target: z.string().optional(),
 });
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
+
+const targetKeys = [
+  "file_path",
+  "notebook_path",
+  "path",
+  "command",
+  "pattern",
+  "url",
+  "query",
+  "description",
+] as const;
+
+/** The first line of the input field that names what a tool call acts on. */
+export function toolTarget(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  for (const key of targetKeys) {
+    const value: unknown = Reflect.get(input, key);
+    if (typeof value === "string" && value.trim())
+      return value.trim().split("\n", 1)[0]?.slice(0, 240);
+  }
+  return undefined;
+}
 
 export const agentQuestionSchema = z.object({
   id: z.string(),

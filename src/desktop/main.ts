@@ -60,7 +60,7 @@ async function start() {
     height: 1040,
     minWidth: 1000,
     minHeight: 680,
-    backgroundColor: "#0e0e10",
+    backgroundColor: "#0a0a0a",
     autoHideMenuBar: true,
     show: false,
     icon: join(root, "src", "desktop", "icon.png"),

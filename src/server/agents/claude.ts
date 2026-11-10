@@ -11,6 +11,7 @@ import type {
   AgentRequest,
   AgentTurn,
 } from "../../shared/agent";
+import { toolTarget } from "../../shared/agent";
 import { InputQueue } from "./input-queue";
 import { agentPrompt, completeMessage } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
@@ -138,7 +139,10 @@ export class ClaudeRuntime implements AgentRuntime {
   private active?: { resolve: () => void; reject: (error: Error) => void };
   private currentMessageId?: string;
   private readonly text = new Map<string, string>();
-  private readonly toolNames = new Map<string, string>();
+  private readonly tools = new Map<
+    string,
+    { name: string; target: string | undefined }
+  >();
   private nativeSessionId?: string;
   private hasAssistantText = false;
   private disposed = false;
@@ -274,7 +278,7 @@ export class ClaudeRuntime implements AgentRuntime {
       this.active = undefined;
       this.currentMessageId = undefined;
       this.text.clear();
-      this.toolNames.clear();
+      this.tools.clear();
     }
   }
 
@@ -352,7 +356,8 @@ export class ClaudeRuntime implements AgentRuntime {
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
-        this.toolNames.set(block.id, block.name);
+        const target = toolTarget(block.input);
+        this.tools.set(block.id, { name: block.name, target });
         this.options.emit({
           type: "message",
           message: {
@@ -361,6 +366,7 @@ export class ClaudeRuntime implements AgentRuntime {
               "tool",
               block.id,
               block.name,
+              target,
             ),
             status: "streaming",
           },
@@ -378,8 +384,8 @@ export class ClaudeRuntime implements AgentRuntime {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content ?? "", null, 2);
-        const tool = this.toolNames.get(block.tool_use_id) ?? "Tool";
-        this.toolNames.delete(block.tool_use_id);
+        const tool = this.tools.get(block.tool_use_id);
+        this.tools.delete(block.tool_use_id);
         this.options.emit({
           type: "message",
           message: {
@@ -387,7 +393,8 @@ export class ClaudeRuntime implements AgentRuntime {
               text.slice(-32_000),
               "tool",
               block.tool_use_id,
-              tool,
+              tool?.name ?? "Tool",
+              tool?.target,
             ),
             status: block.is_error ? "failed" : "complete",
           },

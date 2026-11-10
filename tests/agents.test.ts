@@ -689,5 +689,6 @@ test("Codex accepts nullable running command output and streams it before comple
     role: "tool",
     text: "printf checked\nfirst second",
     status: "complete",
+    target: "printf checked",
   });
 });

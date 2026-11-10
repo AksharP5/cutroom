@@ -21,7 +21,7 @@ import type {
   EditorPoint,
   EditorReviewDraft,
 } from "../../shared/editor";
-import { useWorkspace } from "../workspace";
+import { compositionFps, useWorkspace } from "../workspace";
 
 const NativeStudio = memo(StudioApp);
 
@@ -113,8 +113,9 @@ function ReviewOverlay({
     }
     if (drawnPoints.current === points.current.length) return;
     if (!drawnPoints.current) ctx.clearRect(0, 0, width, height);
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#fa9a87";
+    const tokens = getComputedStyle(element);
+    ctx.lineWidth = parseFloat(tokens.getPropertyValue("--stroke-pencil"));
+    ctx.strokeStyle = tokens.getPropertyValue("--human");
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -289,6 +290,35 @@ function mirrorWorkspacePanels() {
   };
 }
 
+/** Publishes the open composition's frame rate and size for the status bar and timecode. */
+function useCompositionFacts() {
+  const iframe = usePreviewIframeStore((state) => state.iframe);
+  useEffect(() => {
+    if (!iframe) return;
+    const read = () => {
+      const root = iframe.contentDocument?.querySelector(
+        "[data-composition-id]",
+      );
+      if (!root) return;
+      const size = (name: string) => {
+        const value = Number(root.getAttribute(name));
+        return Number.isFinite(value) && value > 0 ? value : null;
+      };
+      useWorkspace.setState({
+        composition: {
+          fps: compositionFps(root.getAttribute("data-fps")),
+          width: size("data-width"),
+          height: size("data-height"),
+        },
+      });
+    };
+    read();
+    iframe.addEventListener("load", read);
+    return () => iframe.removeEventListener("load", read);
+  }, [iframe]);
+  useEffect(() => () => useWorkspace.setState({ composition: null }), []);
+}
+
 export function CutroomEditor({
   projectId,
   mode = "select",
@@ -300,6 +330,7 @@ export function CutroomEditor({
   callbacks.current = { onContext, onAskAgent };
   const [mountedProjectId, setMountedProjectId] = useState<string | null>(null);
   const controller = useDockLayoutStore((state) => state.controller);
+  useCompositionFacts();
 
   useEffect(() => {
     if (!controller) return;

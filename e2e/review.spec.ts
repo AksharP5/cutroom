@@ -62,7 +62,7 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
   await expect(group("New")).toContainText("Not sent yet");
   await expect(group("Queued")).toContainText("Move the title up");
   await expect(group("Queued")).toContainText("Fade the music out");
-  await expect(group("Needs your answer")).toContainText(
+  await expect(group("To review")).toContainText(
     "Agent asks: Which logo file should I use?",
   );
   await expect(group("Withdrawn")).toContainText(
@@ -74,20 +74,19 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     type: "complete",
     note: "Moved the title up 40px.",
   });
-  await expect(group("Done")).toContainText("Moved the title up 40px.");
+  await expect(group("To review")).toContainText("Moved the title up 40px.");
   await page.screenshot({ path: "artifacts/review-queue.png" });
 
   await expect(
-    group("Done").getByRole("button", { name: "Send back with changes" }),
+    group("To review").getByRole("button", { name: "Reject", exact: true }),
   ).toBeVisible();
-  await group("Done").getByRole("button", { name: "Accept" }).click();
-  await expect(group("Done")).toHaveCount(0);
-  await page.getByText("Accepted notes").click();
-  await expect(page.getByText("Move the title up")).toBeVisible();
-
-  await group("Needs your answer")
-    .getByRole("button", { name: "Answer" })
+  await group("To review")
+    .getByRole("button", { name: "Accept", exact: true })
     .click();
+  await expect(group("Accepted")).toContainText("Move the title up");
+  await expect(group("To review")).not.toContainText("Move the title up");
+
+  await group("To review").getByRole("button", { name: "Answer" }).click();
   await page.getByLabel("Answer the agent").fill("Use the white logo.");
   await page.getByRole("button", { name: "Reply", exact: true }).click();
   await expect(group("Queued")).toContainText("You added: Use the white logo.");
@@ -144,7 +143,7 @@ test("the owner can return a stuck claim to the queue", async ({
   await page.goto(`/#project/${project.id}`);
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const working = page.getByRole("region", {
-    name: "Working notes",
+    name: "In progress notes",
     exact: true,
   });
   await working.getByRole("button", { name: "Return to queue" }).click();

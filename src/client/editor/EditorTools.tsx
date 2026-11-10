@@ -33,14 +33,18 @@ export function EditorTools() {
         ).map((item) => (
           <button
             key={item.id}
-            className={tools.mode === item.id ? "active" : ""}
+            className="tool-button"
             aria-label={`${item.label} (${item.key})`}
             title={`${item.label} (${item.key})`}
             aria-pressed={tools.mode === item.id}
             onClick={() => tools.setMode(item.id)}
           >
-            <item.icon size={17} />
+            <item.icon
+              size={15}
+              weight={tools.mode === item.id ? "fill" : "regular"}
+            />
             <span>{item.label}</span>
+            <kbd aria-hidden="true">{item.key}</kbd>
           </button>
         ))}
       </div>

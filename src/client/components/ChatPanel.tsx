@@ -5,11 +5,9 @@ import {
   ArrowUp,
   CaretDown,
   CaretRight,
-  Check,
   Paperclip,
   Plus,
   Square,
-  Wrench,
   X,
 } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
@@ -28,6 +26,8 @@ import {
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
+import { describeTool } from "../toolRow";
+import { useWorkspace } from "../workspace";
 
 const sessionListSchema = z.object({
   sessions: z.array(
@@ -99,6 +99,27 @@ function applyConversationEvents(
   return session ? { phase: "ready", session } : state;
 }
 
+const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
+  const { verb, object } = describeTool(message);
+  return (
+    <details className="chat-tool" data-status={message.status}>
+      <summary title={message.tool}>
+        {message.status === "streaming" ? (
+          <span className="chat-tool-now" />
+        ) : (
+          <CaretRight className="chat-tool-caret" size={10} weight="bold" />
+        )}
+        <span className="chat-tool-verb">{verb}</span>
+        <span className="chat-tool-target">{object}</span>
+        {message.status === "failed" && (
+          <span className="chat-tool-note">Failed</span>
+        )}
+      </summary>
+      <pre>{message.text}</pre>
+    </details>
+  );
+});
+
 const Message = memo(function Message({
   message,
   provider,
@@ -106,17 +127,6 @@ const Message = memo(function Message({
   message: AgentMessage;
   provider: AgentProvider;
 }) {
-  if (message.role === "tool")
-    return (
-      <details className="chat-tool">
-        <summary>
-          <CaretRight size={10} weight="bold" />
-          <Wrench size={12} />
-          {message.tool ?? "Tool"}
-        </summary>
-        <pre>{message.text}</pre>
-      </details>
-    );
   return (
     <article className={`chat-message message-${message.role}`}>
       <div className="sr-only">
@@ -159,6 +169,24 @@ function RequestCard({
       setSending(false);
     }
   }
+  const actions = (
+    <>
+      <button
+        className="text-button"
+        disabled={sending}
+        onClick={() => void respond("allow")}
+      >
+        {request.kind === "question" ? "Answer" : "Allow once"}
+      </button>
+      <button
+        className="text-button quiet"
+        disabled={sending}
+        onClick={() => void respond("deny")}
+      >
+        {request.kind === "question" ? "Decline" : "Deny"}
+      </button>
+    </>
+  );
   return (
     <section
       className="agent-request"
@@ -166,7 +194,19 @@ function RequestCard({
         request.kind === "question" ? "Agent question" : "Permission request"
       }
     >
-      <strong>{request.title}</strong>
+      <div className="agent-request-line">
+        {request.kind === "approval" ? (
+          <details>
+            <summary className="agent-request-title" title={request.tool}>
+              {request.title}
+            </summary>
+            <pre>{JSON.stringify(request.input, null, 2)}</pre>
+          </details>
+        ) : (
+          <span className="agent-request-title">{request.title}</span>
+        )}
+        {request.kind === "approval" && actions}
+      </div>
       {request.questions?.map((question) => (
         <fieldset key={question.id}>
           <legend>{question.question}</legend>
@@ -216,34 +256,17 @@ function RequestCard({
           />
         </fieldset>
       ))}
-      {request.kind === "approval" && (
-        <details>
-          <summary>{request.tool}</summary>
-          <pre>{JSON.stringify(request.input, null, 2)}</pre>
-        </details>
+      {request.kind === "question" && (
+        <div className="agent-request-line">
+          <span className="chat-toolbar-space" />
+          {actions}
+        </div>
       )}
       {error && (
         <p className="inline-error" role="alert">
           {error}
         </p>
       )}
-      <div className="request-actions">
-        <button
-          className="secondary-button"
-          disabled={sending}
-          onClick={() => void respond("deny")}
-        >
-          Decline
-        </button>
-        <button
-          className="primary-button"
-          disabled={sending}
-          onClick={() => void respond("allow")}
-        >
-          <Check />
-          {request.kind === "question" ? "Answer" : "Allow once"}
-        </button>
-      </div>
     </section>
   );
 }
@@ -254,18 +277,21 @@ const ConversationMessages = memo(function ConversationMessages({
   discovering,
   messagesRef,
   followRef,
-  onRespond,
 }: {
   session: AgentSession | null;
   capabilities: AgentCapabilities | null;
   discovering: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   followRef: RefObject<boolean>;
-  onRespond: (
-    decision: "allow" | "deny",
-    answers?: Record<string, string | string[]>,
-  ) => Promise<void>;
 }) {
+  // Consecutive tool calls read as one block of verb rows.
+  const blocks: AgentMessage[][] = [];
+  for (const message of session?.messages ?? []) {
+    const last = blocks.at(-1);
+    if (message.role === "tool" && last?.[0]?.role === "tool")
+      last.push(message);
+    else blocks.push([message]);
+  }
   return (
     <div
       className="chat-messages"
@@ -292,23 +318,42 @@ const ConversationMessages = memo(function ConversationMessages({
           </p>
         </div>
       )}
-      {session?.messages.map((message) => (
-        <Message
-          key={message.id}
-          message={message}
-          provider={session.provider}
-        />
-      ))}
-      {session?.pendingRequest && (
-        <RequestCard
-          key={session.pendingRequest.id}
-          request={session.pendingRequest}
-          onRespond={onRespond}
-        />
-      )}
+      {session &&
+        blocks.map((block) =>
+          block[0]?.role === "tool" ? (
+            <div className="chat-tools" key={block[0].id}>
+              {block.map((message) => (
+                <ToolRow key={message.id} message={message} />
+              ))}
+            </div>
+          ) : (
+            block.map((message) => (
+              <Message
+                key={message.id}
+                message={message}
+                provider={session.provider}
+              />
+            ))
+          ),
+        )}
     </div>
   );
 });
+
+/** Elapsed agent time as a clock (m:ss), not timecode. Re-renders only itself. */
+function Elapsed({ since }: { since: string }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - Date.parse(since)) / 1000));
+  return (
+    <span className="presence-clock mono">
+      {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+    </span>
+  );
+}
 
 export function ChatPanel({
   projectId,
@@ -319,6 +364,7 @@ export function ChatPanel({
   prompt,
   onPromptConsumed,
   pickAttachment,
+  workingNote,
 }: {
   projectId: string;
   visible: boolean;
@@ -328,6 +374,8 @@ export function ChatPanel({
   prompt: string | null;
   onPromptConsumed: () => void;
   pickAttachment: () => Promise<string | null>;
+  /** The review note the agent has claimed, numbered as in Review. */
+  workingNote: { number: number; total: number } | null;
 }) {
   const [provider, setProvider] = useState<AgentProvider>("codex");
   const [model, setModel] = useState("");
@@ -453,6 +501,16 @@ export function ChatPanel({
   }, [provider, projectId, configurationRevision]);
 
   useEffect(() => {
+    useWorkspace.setState({
+      agent: capabilities && {
+        name: capabilities.provider === "codex" ? "Codex" : "Claude Code",
+        available: capabilities.available,
+      },
+    });
+  }, [capabilities]);
+  useEffect(() => () => useWorkspace.setState({ agent: null }), []);
+
+  useEffect(() => {
     if (!sessionId) return;
     const source = new EventSource(
       `/api/cutroom/agents/sessions/${encodeURIComponent(sessionId)}/events`,
@@ -565,6 +623,12 @@ export function ChatPanel({
   );
   const busy = session?.status === "running" || session?.status === "waiting";
   const controlsLocked = busy || submitting || opening;
+  const active =
+    busy || operation?.kind === "turn" || operation?.kind === "stop";
+  // A turn starts with the owner's latest message.
+  const turnStart = session?.messages.findLast(
+    (message) => message.role === "user",
+  )?.createdAt;
 
   async function stop() {
     const pending = operation?.kind === "turn" ? operation : null;
@@ -675,92 +739,117 @@ export function ChatPanel({
 
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
-      <div className="chat-toolbar">
-        {sessions.length === 0 && (
-          <span className="chat-toolbar-title">New conversation</span>
-        )}
-        {sessions.length > 0 && (
-          <label className="select-label conversation-picker">
-            <select
-              title={sessions.find((item) => item.id === sessionId)?.title}
-              aria-label="Conversation"
-              value={sessionId ?? ""}
-              disabled={controlsLocked}
-              onChange={(event) => {
-                setConversation(
-                  event.target.value
-                    ? { phase: "loading", id: event.target.value }
-                    : { phase: "new" },
-                );
-                const next = sessions.find(
-                  (item) => item.id === event.target.value,
-                );
-                if (next) {
-                  setProvider(next.provider);
-                  setModel(next.model ?? "");
-                }
-              }}
-            >
-              <option value="">New conversation</option>
-              {sessions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.title}
-                </option>
-              ))}
-            </select>
-            <CaretDown size={10} weight="bold" />
-          </label>
-        )}
-        <span
-          className="quiet-label"
-          data-attention={(busy && session?.status === "waiting") || undefined}
-        >
-          {operation?.kind === "stop"
-            ? "Stopping"
-            : busy
-              ? session?.status === "waiting"
-                ? "Needs you"
-                : "Working"
-              : opening
-                ? "Opening"
-                : operation?.kind === "model"
-                  ? "Saving model"
-                  : submitting
-                    ? "Sending"
-                    : "Ready"}
-        </span>
-        <button
-          className="icon-button"
-          aria-label="Refresh agent configuration"
-          disabled={controlsLocked || discovering}
-          onClick={() => {
-            setError("");
-            setConfigurationRevision((value) => value + 1);
-          }}
-        >
-          <ArrowClockwise />
-        </button>
-        <button
-          className="icon-button"
-          aria-label="New conversation"
-          disabled={controlsLocked}
-          onClick={() => {
-            setConversation({ phase: "new" });
-            setError("");
-            textarea.current?.focus();
-          }}
-        >
-          <Plus />
-        </button>
-      </div>
+      {active ? (
+        <div className="chat-toolbar presence" data-state={session?.status}>
+          <span>
+            <strong>
+              {operation?.kind === "stop"
+                ? "Stopping"
+                : session?.status === "waiting"
+                  ? "Needs you"
+                  : busy
+                    ? "Working"
+                    : "Sending"}
+            </strong>
+            {busy &&
+              session?.status === "running" &&
+              workingNote &&
+              ` on note ${workingNote.number} of ${workingNote.total}`}
+          </span>
+          {busy && turnStart && <Elapsed since={turnStart} />}
+          <button
+            className="icon-button"
+            aria-label="Stop agent"
+            title="Stop agent"
+            disabled={operation?.kind === "stop"}
+            onClick={() => void stop()}
+          >
+            <Square weight="fill" />
+          </button>
+        </div>
+      ) : (
+        <div className="chat-toolbar">
+          {sessions.length === 0 && (
+            <span className="chat-toolbar-title">New conversation</span>
+          )}
+          {sessions.length > 0 && (
+            <label className="select-label conversation-picker">
+              <select
+                title={sessions.find((item) => item.id === sessionId)?.title}
+                aria-label="Conversation"
+                value={sessionId ?? ""}
+                disabled={controlsLocked}
+                onChange={(event) => {
+                  setConversation(
+                    event.target.value
+                      ? { phase: "loading", id: event.target.value }
+                      : { phase: "new" },
+                  );
+                  const next = sessions.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  if (next) {
+                    setProvider(next.provider);
+                    setModel(next.model ?? "");
+                  }
+                }}
+              >
+                <option value="">New conversation</option>
+                {sessions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+              <CaretDown size={10} weight="bold" />
+            </label>
+          )}
+          <span className="quiet-label">
+            {opening
+              ? "Opening"
+              : operation?.kind === "model"
+                ? "Saving model"
+                : ""}
+          </span>
+          <button
+            className="icon-button"
+            aria-label="Refresh agent configuration"
+            disabled={controlsLocked || discovering}
+            onClick={() => {
+              setError("");
+              setConfigurationRevision((value) => value + 1);
+            }}
+          >
+            <ArrowClockwise />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="New conversation"
+            disabled={controlsLocked}
+            onClick={() => {
+              setConversation({ phase: "new" });
+              setError("");
+              textarea.current?.focus();
+            }}
+          >
+            <Plus />
+          </button>
+        </div>
+      )}
       <ConversationMessages
         session={session}
         capabilities={capabilities}
         discovering={discovering}
         messagesRef={messages}
         followRef={follow}
-        onRespond={respondToRequest}
       />
+      {session?.pendingRequest && (
+        <RequestCard
+          key={session.pendingRequest.id}
+          request={session.pendingRequest}
+          onRespond={respondToRequest}
+        />
+      )}
       {error && (
         <div className="chat-error" role="alert">
           <span>{error}</span>
@@ -817,7 +906,7 @@ export function ChatPanel({
             placeholder="Describe the next edit"
             title="Enter to send, Shift+Enter for a new line"
             value={draft}
-            rows={3}
+            rows={1}
             onChange={(event) => {
               setDraft(event.target.value);
               setSkillIndex(0);
@@ -957,32 +1046,19 @@ export function ChatPanel({
                 <CaretDown size={10} weight="bold" />
               </label>
             </div>
-            {busy ||
-            operation?.kind === "turn" ||
-            operation?.kind === "stop" ? (
-              <button
-                className="send-button stop-button"
-                aria-label="Stop agent"
-                disabled={operation?.kind === "stop"}
-                onClick={() => void stop()}
-              >
-                <Square size={14} weight="fill" />
-              </button>
-            ) : (
-              <button
-                className="send-button"
-                aria-label="Send message"
-                disabled={
-                  controlsLocked ||
-                  discovering ||
-                  !capabilities?.available ||
-                  (!draft.trim() && !attachments.length)
-                }
-                onClick={() => void send()}
-              >
-                <ArrowUp size={18} weight="bold" />
-              </button>
-            )}
+            <button
+              className="send-button"
+              aria-label="Send message"
+              disabled={
+                controlsLocked ||
+                discovering ||
+                !capabilities?.available ||
+                (!draft.trim() && !attachments.length)
+              }
+              onClick={() => void send()}
+            >
+              <ArrowUp weight="bold" />
+            </button>
           </div>
         </div>
       </div>

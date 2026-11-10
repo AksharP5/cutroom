@@ -4,6 +4,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -11,7 +12,6 @@ import {
 import {
   CaretDown,
   Check,
-  FilmSlate,
   FolderOpen,
   Folders,
   GearSix,
@@ -32,17 +32,19 @@ import type {
   EditorMode,
   EditorReviewDraft,
 } from "../shared/editor";
-import { api, json, timecode } from "./api";
+import { api, json } from "./api";
 import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
 import { FileDialog } from "./components/FileDialog";
+import { Logo } from "./components/Logo";
 import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
+import { StatusBar } from "./components/StatusBar";
 import { useWorkspace } from "./workspace";
 
 const Editor = lazy(() =>
@@ -123,10 +125,15 @@ export function App() {
   );
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
-  const exporting = useWorkspace((state) => state.exporting);
   const newNotes = projectDocument.items.filter(
     (item) => item.review.status === "open",
   );
+  const workingIndex = projectDocument.items.findIndex(
+    (item) => item.review.status === "working",
+  );
+  const tabs = useRef<HTMLElement>(null);
+  const indicator = useRef<HTMLSpanElement>(null);
+  const activeTab = chatVisible ? 0 : panel === "review" ? 1 : 2;
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | null
   >(null);
@@ -145,6 +152,22 @@ export function App() {
   const activeProjectId = useRef(projectId);
   activeProjectId.current = projectId;
   const project = projects.find((item) => item.id === projectId);
+
+  // The tab indicator moves and resizes with transform only.
+  useLayoutEffect(() => {
+    const nav = tabs.current;
+    const bar = indicator.current;
+    if (!nav || !bar || !workPanel) return;
+    const place = () => {
+      const tab = nav.querySelectorAll("button")[activeTab];
+      if (tab)
+        bar.style.transform = `translateX(${tab.offsetLeft}px) scaleX(${tab.offsetWidth / 100})`;
+    };
+    place();
+    const ready = requestAnimationFrame(() => (bar.dataset.ready = ""));
+    void document.fonts.ready.then(place);
+    return () => cancelAnimationFrame(ready);
+  }, [activeTab, workPanel, project?.id, newNotes.length]);
 
   const loadProjects = useCallback(async () => {
     const request = ++projectListRequest.current;
@@ -303,63 +326,67 @@ export function App() {
   return (
     <div className="cutroom-app">
       <header className="app-header">
-        <button
-          className="wordmark"
-          aria-label="Cutroom projects"
-          onClick={() => setDialog("projects")}
-        >
-          <FilmSlate size={16} />
-          <span>cutroom</span>
-        </button>
-        <span className="header-divider" />
-        <button
-          className="project-switcher"
-          onClick={() => setDialog("projects")}
-        >
-          <span>{project?.name ?? "Projects"}</span>
-          <CaretDown size={10} weight="bold" />
-        </button>
-        <div className="header-space" />
-        {project && (
-          <>
-            <button
-              className={`icon-button ${notebookVisible ? "active" : ""}`}
-              aria-label="Toggle notebook"
-              aria-pressed={notebookVisible}
-              onClick={() =>
-                setWorkPanel((value) =>
-                  value === "notebook" ? null : "notebook",
-                )
-              }
-            >
-              <SidebarSimple />
-            </button>
-            <button
-              className={`icon-button ${chatVisible ? "active" : ""}`}
-              aria-label="Toggle agent chat"
-              aria-pressed={chatVisible}
-              onClick={() =>
-                setWorkPanel((value) => (value === "agent" ? null : "agent"))
-              }
-            >
-              <TerminalWindow />
-            </button>
-          </>
-        )}
-        <button
-          className="icon-button"
-          aria-label="Settings"
-          onClick={() => setDialog("settings")}
-        >
-          <GearSix />
-        </button>
-      </header>
-      {error && (
-        <div className="app-error" role="alert">
-          <span>{error}</span>
-          <button onClick={() => setError("")}>Dismiss</button>
+        <div className="header-start">
+          <button
+            className="logo-button"
+            aria-label="Cutroom projects"
+            onClick={() => setDialog("projects")}
+          >
+            <Logo />
+          </button>
+          <span className="header-divider" />
+          <button
+            className="project-switcher"
+            onClick={() => setDialog("projects")}
+          >
+            <span>{project?.name ?? "Projects"}</span>
+            <CaretDown size={10} weight="bold" />
+          </button>
         </div>
-      )}
+        <div className="toast-slot">
+          {error && (
+            <div className="toast" data-tone="error" role="alert">
+              <span title={error}>{error}</span>
+              <button onClick={() => setError("")}>Dismiss</button>
+            </div>
+          )}
+        </div>
+        <div className="header-end">
+          {project && (
+            <>
+              <button
+                className={`icon-button ${notebookVisible ? "active" : ""}`}
+                aria-label="Toggle notebook"
+                aria-pressed={notebookVisible}
+                onClick={() =>
+                  setWorkPanel((value) =>
+                    value === "notebook" ? null : "notebook",
+                  )
+                }
+              >
+                <SidebarSimple />
+              </button>
+              <button
+                className={`icon-button ${chatVisible ? "active" : ""}`}
+                aria-label="Toggle agent chat"
+                aria-pressed={chatVisible}
+                onClick={() =>
+                  setWorkPanel((value) => (value === "agent" ? null : "agent"))
+                }
+              >
+                <TerminalWindow />
+              </button>
+            </>
+          )}
+          <button
+            className="icon-button"
+            aria-label="Settings"
+            onClick={() => setDialog("settings")}
+          >
+            <GearSix />
+          </button>
+        </div>
+      </header>
       {!project ? (
         <EmptyState
           onCreate={() => setDialog("create")}
@@ -377,7 +404,11 @@ export function App() {
             aria-label="Project workspace"
             hidden={!workPanel}
           >
-            <nav className="workspace-tabs" aria-label="Workspace panels">
+            <nav
+              className="workspace-tabs"
+              aria-label="Workspace panels"
+              ref={tabs}
+            >
               <button
                 className={chatVisible ? "active" : ""}
                 aria-pressed={chatVisible}
@@ -413,6 +444,7 @@ export function App() {
               >
                 Script
               </button>
+              <span className="tab-indicator" ref={indicator} />
             </nav>
             <aside
               key={`notebook:${project.id}`}
@@ -503,6 +535,14 @@ export function App() {
               }
               prompt={prompt}
               onPromptConsumed={consumePrompt}
+              workingNote={
+                workingIndex < 0
+                  ? null
+                  : {
+                      number: workingIndex + 1,
+                      total: projectDocument.items.length,
+                    }
+              }
               pickAttachment={() =>
                 new Promise((resolve) => {
                   attachmentResolve.current = {
@@ -538,28 +578,14 @@ export function App() {
               </EditorBoundary>
             </EditorToolsContext.Provider>
           </section>
-          <footer className="status-bar">
-            <button
-              className="status-path"
-              title={`Copy ${project.path}`}
-              onClick={() => void navigator.clipboard.writeText(project.path)}
-            >
-              {project.path.replace(/^\/home\/[^/]+/, "~")}
-            </button>
-            {newNotes.length > 0 && (
-              <button
-                onClick={() => {
-                  setPanel("review");
-                  setWorkPanel("notebook");
-                }}
-              >
-                {newNotes.length} new {newNotes.length === 1 ? "note" : "notes"}
-              </button>
-            )}
-            {exporting && <span className="status-job">Exporting</span>}
-            <span className="status-space" />
-            <span>Cutroom {status?.version ?? version}</span>
-          </footer>
+          <StatusBar
+            project={project}
+            items={projectDocument.items}
+            onReview={() => {
+              setPanel("review");
+              setWorkPanel("notebook");
+            }}
+          />
         </main>
       )}
       {dialog === "projects" && (
