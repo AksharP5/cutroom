@@ -1,5 +1,6 @@
 import { FolderOpen, Plus } from "@phosphor-icons/react";
 import { Logo } from "./Logo";
+import { keymap } from "../keymap";
 
 export function EmptyState({
   onCreate,
@@ -25,11 +26,11 @@ export function EmptyState({
       </div>
       <div className="welcome-instructions">
         <div>
-          <kbd>D</kbd>
+          <kbd>{keymap.cutroomDraw.keys[0]}</kbd>
           <span>Draw a change on the picture</span>
         </div>
         <div>
-          <kbd>C</kbd>
+          <kbd>{keymap.cutroomComment.keys[0]}</kbd>
           <span>Leave a note at any moment</span>
         </div>
         <div>

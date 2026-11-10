@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
@@ -108,9 +109,9 @@ for (const viewport of viewports) {
       page.getByRole("button", { name: "Agent", exact: true }),
       page.getByRole("button", { name: "Review", exact: true }),
       page.getByRole("button", { name: "Script", exact: true }),
-      page.getByRole("button", { name: "Select (V)", exact: true }),
-      page.getByRole("button", { name: "Draw (D)", exact: true }),
-      page.getByRole("button", { name: "Comment (C)", exact: true }),
+      page.getByRole("button", { name: hint("editPointer"), exact: true }),
+      page.getByRole("button", { name: hint("cutroomDraw"), exact: true }),
+      page.getByRole("button", { name: hint("cutroomComment"), exact: true }),
       page.getByRole("button", { name: "Toggle project files", exact: true }),
       page.getByRole("button", { name: "Toggle inspector", exact: true }),
       page.getByRole("button", { name: "Export", exact: true }),
@@ -202,7 +203,9 @@ test("review and agent drafts survive workspace tabs, panels, and resizing", asy
   const reviewDraft = "Keep this review draft while I inspect the workspace.";
   const composer = page.getByLabel("Message your agent", { exact: true });
   await composer.fill(agentDraft);
-  await page.getByRole("button", { name: "Comment (C)", exact: true }).click();
+  await page
+    .getByRole("button", { name: hint("cutroomComment"), exact: true })
+    .click();
   await page
     .getByLabel("Pin a comment on the composition")
     .click({ position: { x: 100, y: 80 } });

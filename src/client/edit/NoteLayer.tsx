@@ -9,7 +9,7 @@ import type {
 import type { ReviewItem } from "../../shared/review";
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
-import { actionFor, comboOf } from "../keymap";
+import { actionFor, comboOf, keymap } from "../keymap";
 import { noteNumbers } from "../review";
 import { formatTimecode } from "./timecode";
 import {
@@ -188,8 +188,13 @@ export function NoteLayer({
       const combo = comboOf(event);
       const inside = event.target === field.current;
       if (combo === "Esc") dispatchNote(projectId, { type: "cancel" });
-      else if (combo === "Ctrl+Z" || combo === "Ctrl+Shift+Z")
-        dispatchNote(projectId, { type: combo === "Ctrl+Z" ? "undo" : "redo" });
+      else if (
+        combo === keymap.editUndo.keys[0] ||
+        combo === keymap.editRedo.keys[0]
+      )
+        dispatchNote(projectId, {
+          type: combo === keymap.editUndo.keys[0] ? "undo" : "redo",
+        });
       else if (inside) return;
       else if (
         event.key.length === 1 &&
@@ -458,7 +463,7 @@ export function NoteLayer({
                   type="button"
                   className="icon-button"
                   aria-label="Remove last stroke"
-                  title="Remove last stroke (Ctrl+Z)"
+                  title={`Remove last stroke (${keymap.editUndo.keys[0]})`}
                   onClick={() => dispatch({ type: "removeStroke" })}
                 >
                   <ArrowCounterClockwise />

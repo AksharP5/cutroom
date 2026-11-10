@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -225,7 +226,9 @@ try {
     await expect(page.locator(".chat-message")).toHaveCount(200);
     const readyMs = performance.now() - started;
     phase = "drawing";
-    await page.getByRole("button", { name: "Draw (D)", exact: true }).click();
+    await page
+      .getByRole("button", { name: hint("cutroomDraw"), exact: true })
+      .click();
     const drawing = page.getByLabel("Draw on the composition");
     const bounds = await drawing.boundingBox();
     if (!bounds) throw new Error("The drawing surface is unavailable.");

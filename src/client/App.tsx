@@ -45,6 +45,8 @@ import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
 import { showToast, useWorkspace } from "./workspace";
+import { actionFor } from "./keymap";
+import type { Action } from "./keymap";
 
 const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({
@@ -282,12 +284,17 @@ export function App() {
       }
       // Cutroom's own editor binds its tools in its keymap.
       if (useWorkspace.getState().newEditor) return;
-      const modes = { v: "select", d: "draw", c: "comment" } as const;
-      const pressed = event.key.toLowerCase();
-      if (pressed === "v" || pressed === "d" || pressed === "c") {
+      const modes: Partial<Record<Action, EditorMode>> = {
+        editPointer: "select",
+        cutroomDraw: "draw",
+        cutroomComment: "comment",
+      };
+      const action = actionFor(event);
+      const mode = action && modes[action];
+      if (mode) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        setMode(modes[pressed]);
+        setMode(mode);
       }
     }
     window.addEventListener("keydown", key, true);
