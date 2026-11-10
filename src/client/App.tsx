@@ -825,9 +825,8 @@ export function App() {
                 New editor
               </label>
               <p>
-                Cutroom's own viewer, transport, and timeline. Turn it off for
-                the embedded editor, which still has the inspector, the source
-                editor, and frame capture.
+                Cutroom's own viewer, timeline, and inspector. Turn it off for
+                the embedded source editor and frame capture.
               </p>
             </section>
             <section>

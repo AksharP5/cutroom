@@ -30,6 +30,8 @@ Start with `projects_list` and retain the returned project ID. Before a source s
 
 Timeline edits use frames at the composition's fps. Pass the `revision` from `timeline_read` to `timeline_edit`; each successful edit returns the next revision. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
 
+`setClip.opacity` sets static inline opacity from 0 to 1, canonical to six decimals; `null` removes the inline override. `setTiming` sets `playbackRate` or `mediaStart` in source seconds while keeping timeline duration and linked source sync. Both use the same commands and undo history as the inspector. Timeline reads also include `clipEdits`, the recent owner/agent ledger, and `agentChanges`, the clips still underlined for review.
+
 For example, this razors every unlocked auto-select track at frame 90 and ripple deletes the first half of a linked clip:
 
 ```json

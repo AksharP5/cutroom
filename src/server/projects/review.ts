@@ -29,6 +29,7 @@ import type {
 import { HttpError } from "../../shared/errors";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
+import { ClipEditSchema } from "../../shared/timeline/schema";
 import { clipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
@@ -36,6 +37,7 @@ import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
+  clipEdits: z.array(ClipEditSchema).default([]),
   changes: z
     .array(
       z.object({
@@ -140,7 +142,8 @@ export function createReviewService(store: ProjectStore) {
         if (isMissing(error)) return null;
         throw error;
       });
-    if (raw === null) return { schemaVersion: 1, items: [], changes: [] };
+    if (raw === null)
+      return { schemaVersion: 1, items: [], changes: [], clipEdits: [] };
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -149,7 +152,27 @@ export function createReviewService(store: ProjectStore) {
     }
     const parsed = ReviewFileSchema.safeParse(json);
     if (!parsed.success) throw new ReviewFileError();
-    return parsed.data;
+    const state = parsed.data;
+    // Existing #30 marks predate the ledger. Keep them reviewable without accepting other clips.
+    for (const change of state.changes)
+      if (
+        !state.clipEdits.some(
+          (edit) =>
+            edit.composition === change.composition &&
+            edit.clipId === change.clipId &&
+            !edit.accepted,
+        )
+      )
+        state.clipEdits.push({
+          id: `legacy:${change.composition}:${change.clipId}:${change.signature}`,
+          clipId: change.clipId,
+          composition: change.composition,
+          label: "Edited source",
+          by: "agent",
+          at: "",
+          accepted: false,
+        });
+    return state;
   };
 
   const writeState = async (project: Project, state: ReviewFile) => {
@@ -253,6 +276,7 @@ export function createReviewService(store: ProjectStore) {
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
+      clipEdits: state.clipEdits,
       changes: state.changes.filter(
         (change) =>
           !change.noteIds.length ||
@@ -400,6 +424,32 @@ export function createReviewService(store: ProjectStore) {
           (change) =>
             change.composition !== composition || !changed.has(change.clipId),
         );
+        // Owner edits resolve the pending work on those clips, as in the timeline underline.
+        if (!actor)
+          state.clipEdits = state.clipEdits.map((edit) =>
+            edit.composition === composition && changed.has(edit.clipId)
+              ? { ...edit, accepted: true }
+              : edit,
+          );
+        const label =
+          (await store.history(project)).list().at(-1)?.label ??
+          "Edited source";
+        const at = new Date().toISOString();
+        state.clipEdits.push(
+          ...[...changed]
+            .filter((id) => after.has(id))
+            .map((clipId) => ({
+              id: randomUUID(),
+              clipId,
+              composition,
+              label,
+              at,
+              by: actor ? ("agent" as const) : ("human" as const),
+              accepted: !actor,
+            })),
+        );
+        // A bounded ledger lives outside undo history, alongside attribution.
+        state.clipEdits = state.clipEdits.slice(-200);
         if (actor) {
           for (const id of changed) {
             const signature = after.get(id);
@@ -425,24 +475,79 @@ export function createReviewService(store: ProjectStore) {
           throw error;
         }
         const state = await readState(project);
-        if (!state.changes.some((change) => change.composition === composition))
-          return [];
-        const versions = await clipVersions(store, project, composition);
+        const versions = state.changes.some(
+          (change) => change.composition === composition,
+        )
+          ? await clipVersions(store, project, composition)
+          : new Map<string, string>();
         const changes = state.changes.filter(
           (change) =>
             change.composition !== composition ||
             versions.get(change.clipId) === change.signature,
         );
-        if (changes.length !== state.changes.length)
-          await writeState(project, { ...state, changes });
+        const clipEdits = state.clipEdits.map((edit) =>
+          edit.composition === composition &&
+          !edit.accepted &&
+          !changes.some(
+            (change) =>
+              change.composition === composition &&
+              change.clipId === edit.clipId,
+          )
+            ? { ...edit, accepted: true }
+            : edit,
+        );
+        if (
+          !sameContent(clipEdits, state.clipEdits) ||
+          changes.length !== state.changes.length
+        )
+          await writeState(project, { ...state, changes, clipEdits });
         return changes
           .filter((change) => change.composition === composition)
           .map((change) => change.clipId);
       }),
-    acceptChanges: (project: Project) =>
+    recentEdits: (project: Project, composition: string) =>
+      serialize(project, async () => {
+        try {
+          return (await readState(project)).clipEdits.filter(
+            (edit) => edit.composition === composition,
+          );
+        } catch (error) {
+          if (error instanceof ReviewFileError) return [];
+          throw error;
+        }
+      }),
+    acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
         const state = await readState(project);
-        await writeState(project, { ...state, changes: [] });
+        const accepted =
+          editId === undefined
+            ? undefined
+            : state.clipEdits.find((edit) => edit.id === editId);
+        if (editId !== undefined && !accepted)
+          throw new HttpError(
+            409,
+            "This change is no longer in the recent edits.",
+          );
+        const clipEdits = state.clipEdits.map((edit) =>
+          editId === undefined || edit.id === editId
+            ? { ...edit, accepted: true }
+            : edit,
+        );
+        const changes =
+          editId === undefined
+            ? []
+            : state.changes.filter(
+                (change) =>
+                  change.composition !== accepted!.composition ||
+                  change.clipId !== accepted!.clipId ||
+                  clipEdits.some(
+                    (edit) =>
+                      edit.composition === change.composition &&
+                      edit.clipId === change.clipId &&
+                      !edit.accepted,
+                  ),
+              );
+        await writeState(project, { ...state, changes, clipEdits });
       }),
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
     list: (project: Project) => serialize(project, () => reconcile(project)),

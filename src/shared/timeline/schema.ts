@@ -1,3 +1,7 @@
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -6,6 +10,12 @@ const clipId = z.string().min(1).max(200);
 const label = z.string().max(500);
 /** Static gain as written to `data-volume`: 0 is silence, 3.98 is +12 dB. */
 const volume = z.number().min(0).max(3.98);
+/** Static CSS values are canonical to six decimals, beyond CSS parser float precision. */
+const opacity = z
+  .number()
+  .min(0)
+  .max(1)
+  .overwrite((value) => Math.round(value * 1e6) / 1e6);
 
 export const FpsSchema = z.object({
   num: z.number().int().positive(),
@@ -37,6 +47,8 @@ export const ClipSchema = z.object({
   link: z.string().nullable(),
   label: z.string().nullable(),
   volume: z.number().nonnegative().nullable(),
+  /** Static inline opacity; null leaves the authored stylesheet in control. */
+  opacity: opacity.nullable(),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -223,12 +235,28 @@ export const CommandSchema = z.discriminatedUnion("type", [
       clipId,
       label: label.nullable().optional(),
       volume: volume.nullable().optional(),
+      opacity: opacity.nullable().optional(),
       enabled: z
         .boolean()
         .optional()
         .describe("False hides the clip from preview and render"),
     })
     .describe("Change clip properties. Null clears a property."),
+  z
+    .object({
+      type: z.literal("setTiming"),
+      clipId,
+      playbackRate: z
+        .number()
+        .min(MIN_PLAYBACK_RATE)
+        .max(MAX_PLAYBACK_RATE)
+        .overwrite((value) => Math.round(value * 1e6) / 1e6)
+        .optional(),
+      mediaStart: z.number().nonnegative().optional(),
+    })
+    .describe(
+      "Set media speed or source in on a clip and its linked partners, keeping timeline duration. Source in is seconds. Refuses non-media clips or insufficient source media.",
+    ),
   z
     .object({
       type: z.literal("setTrack"),
@@ -289,8 +317,19 @@ export const CommandBatchSchema = z.object({
   label: z.string().trim().min(1).max(120).default("Edit timeline"),
 });
 
+export const ClipEditSchema = z.object({
+  id: z.string(),
+  clipId: z.string(),
+  composition: z.string(),
+  label: z.string(),
+  by: z.enum(["human", "agent"]),
+  at: z.string(),
+  accepted: z.boolean(),
+});
+
 export const TimelineViewSchema = z.object({
   agentChanges: z.array(z.string()).optional(),
+  clipEdits: z.array(ClipEditSchema).optional(),
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,

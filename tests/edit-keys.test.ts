@@ -24,6 +24,7 @@ const clip = (
   link: null,
   label: null,
   volume: null,
+  opacity: null,
   enabled: true,
   hasAudio: false,
   startRef: null,

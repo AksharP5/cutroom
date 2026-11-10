@@ -97,12 +97,12 @@
   color: var(--text-tertiary);
 }
 /* A narrow editor drops the key hints, then the names; the names stay for screen readers. */
-@container edit-page (width < 760px) {
+@container edit-tools (width < 760px) {
   .edit-tool kbd {
     display: none;
   }
 }
-@container edit-page (width < 640px) {
+@container edit-tools (width < 640px) {
   .edit-tool span {
     position: absolute;
     width: 1px;

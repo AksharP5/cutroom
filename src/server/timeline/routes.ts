@@ -199,6 +199,7 @@ export function createTimelineRoutes(
         revision,
         timeline: parsed.timeline,
         agentChanges: await reviews.changedClips(project, composition),
+        clipEdits: await reviews.recentEdits(project, composition),
       } satisfies TimelineView);
     } catch (error) {
       return refused(c, error);
@@ -226,6 +227,7 @@ export function createTimelineRoutes(
           batch.noteId,
         )),
         agentChanges: await reviews.changedClips(project, batch.composition),
+        clipEdits: await reviews.recentEdits(project, batch.composition),
       });
     } catch (error) {
       return refused(c, error);

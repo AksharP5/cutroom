@@ -1,5 +1,6 @@
 /* Every value comes from tokens.css. This file only arranges them. */
 @import "./tokens.css";
+@import "./edit/inspector/inspector.css";
 
 /* The embedded editor reads these names. */
 :root {

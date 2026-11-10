@@ -253,7 +253,10 @@ test("Q through a spanning music bed persists exact NTSC HTML and undo restores 
     expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
       source,
     );
-    expect(await read()).toEqual(before);
+    const restored = await read();
+    expect(restored.timeline).toEqual(before.timeline);
+    expect(restored.revision).toBe(before.revision);
+    expect(restored.agentChanges).toEqual(before.agentChanges);
   } finally {
     await fixture.close();
   }
