@@ -56,6 +56,14 @@ export function createMcpServer(options: McpOptions = {}) {
         "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Review notes persist until you complete, block, or withdraw them with the review tools; reconcile each new message with the queue first. Never modify source media to cut the timeline.",
     },
   );
+  const toolRegistry = new Map<string, ReturnType<McpServer["registerTool"]>>();
+  const registry: Pick<McpServer, "registerTool"> = {
+    registerTool: (name, config, callback) => {
+      const tool = server.registerTool(name, config, callback);
+      toolRegistry.set(name, tool);
+      return tool;
+    },
+  };
   const request = async (path: string, method = "GET", body?: unknown) => {
     try {
       const response = await fetchLocal(`${baseUrl}/api/cutroom${path}`, {
@@ -107,7 +115,7 @@ export function createMcpServer(options: McpOptions = {}) {
     destructiveHint: false,
     openWorldHint: false,
   };
-  server.registerTool(
+  registry.registerTool(
     "projects_list",
     {
       description: "List registered local project folders.",
@@ -115,7 +123,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     () => request("/projects"),
   );
-  server.registerTool(
+  registry.registerTool(
     "project_create",
     {
       description: "Create a new local HyperFrames composition.",
@@ -124,7 +132,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request("/projects", "POST", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "project_import",
     {
       description:
@@ -134,7 +142,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request("/projects/import", "POST", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "project_read",
     {
       description: "Read annotations and transcripts for a local project.",
@@ -143,7 +151,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/document`),
   );
-  server.registerTool(
+  registry.registerTool(
     "media_list",
     {
       description:
@@ -153,7 +161,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/media`),
   );
-  server.registerTool(
+  registry.registerTool(
     "source_read",
     {
       description: "Read a project text file and its exact content version.",
@@ -163,7 +171,7 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) =>
       request(`/projects/${id(input.projectId)}/source?path=${id(input.path)}`),
   );
-  server.registerTool(
+  registry.registerTool(
     "source_write",
     {
       description:
@@ -174,7 +182,7 @@ export function createMcpServer(options: McpOptions = {}) {
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/source`, "PUT", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "annotation_add",
     {
       description:
@@ -185,7 +193,7 @@ export function createMcpServer(options: McpOptions = {}) {
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/annotations`, "POST", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "annotation_update",
     {
       description:
@@ -200,7 +208,7 @@ export function createMcpServer(options: McpOptions = {}) {
         input,
       ),
   );
-  server.registerTool(
+  registry.registerTool(
     "annotation_remove",
     {
       description:
@@ -214,7 +222,7 @@ export function createMcpServer(options: McpOptions = {}) {
         "DELETE",
       ),
   );
-  server.registerTool(
+  registry.registerTool(
     "transcripts_list",
     {
       description:
@@ -224,7 +232,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/transcripts`),
   );
-  server.registerTool(
+  registry.registerTool(
     "transcript_import",
     {
       description: "Attach a word-timed transcript to a local media element.",
@@ -234,7 +242,7 @@ export function createMcpServer(options: McpOptions = {}) {
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/transcripts/import`, "POST", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "transcript_edit",
     {
       description:
@@ -249,7 +257,7 @@ export function createMcpServer(options: McpOptions = {}) {
         input,
       ),
   );
-  server.registerTool(
+  registry.registerTool(
     "transcription_start",
     {
       description:
@@ -260,7 +268,7 @@ export function createMcpServer(options: McpOptions = {}) {
     ({ projectId, ...input }) =>
       request(`/projects/${id(projectId)}/transcribe`, "POST", input),
   );
-  server.registerTool(
+  registry.registerTool(
     "transcription_status",
     {
       description: "Read the status of a transcription job.",
@@ -269,7 +277,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/transcription-jobs/${id(input.jobId)}`),
   );
-  server.registerTool(
+  registry.registerTool(
     "history_list",
     {
       description: "Read the project's shared undo history.",
@@ -278,7 +286,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/history`),
   );
-  server.registerTool(
+  registry.registerTool(
     "history_undo",
     {
       description:
@@ -288,7 +296,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/history/undo`, "POST"),
   );
-  server.registerTool(
+  registry.registerTool(
     "history_redo",
     {
       description: "Redo the project's most recently undone edit.",
@@ -297,11 +305,11 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/history/redo`, "POST"),
   );
-  registerReviewTools(server, request);
-  registerTimelineTools(server, request, async (path) =>
+  registerReviewTools(registry, request);
+  registerTimelineTools(registry, request, async (path) =>
     fetchLocal(`${baseUrl}${path}`),
   );
-  return server;
+  return Object.assign(server, { toolRegistry });
 }
 
 export function createMcpHttpHandler(options: McpOptions = {}) {

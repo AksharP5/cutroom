@@ -23,7 +23,10 @@ const annotations = {
  * The review queue over MCP. Any client works the queue. An outside client may also act for
  * the owner (recorded as an outside agent); Cutroom's own agent may not judge its own work.
  */
-export function registerReviewTools(server: McpServer, request: LocalRequest) {
+export function registerReviewTools(
+  server: Pick<McpServer, "registerTool">,
+  request: LocalRequest,
+) {
   const id = encodeURIComponent;
   const act = (projectId: string, noteId: string, action: object) =>
     request(

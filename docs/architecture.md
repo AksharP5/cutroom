@@ -56,6 +56,8 @@ The entry document's managed stylesheet goes first in `<head>`, before authored 
 
 Codex runs through its app-server protocol. Claude Code runs through the Agent SDK with the installed executable and native Claude Code prompt. The adapters preserve the user's home, project directory, configuration, skill discovery, MCP connections, and recorded native session IDs.
 
+Cutroom tools declare `readOnlyHint` at registration. Both native adapters derive their tool permissions from that registry. Read-only tools run without approval; mutating tools ask on every call, including in resumed sessions. Claude uses exact `allowedTools` entries, `permissions.ask` rules, and the same read-only check in `canUseTool`. Codex sets `mcp_servers.cutroom_studio.tools.<tool>.approval_mode` to `approve` for reads and `prompt` for mutations. These rules apply only to Cutroom's `cutroom_studio` server. Other tools retain the runtime's existing permission policy. See the [Claude SDK permission rules](https://code.claude.com/docs/en/agent-sdk/permissions) and [Codex configuration reference](https://developers.openai.com/codex/config-reference).
+
 The application persists conversation presentation separately from the provider's session. Streaming deltas do not rewrite history on every token. Approvals and questions are explicit pending requests; stale answers are refused. Model changes retain the native session and conversation. A single operation owns each pending or running turn and model change. Stop also cancels preparation, and callbacks from replaced runtimes cannot alter a newer run.
 
 ## Rendering and transcription

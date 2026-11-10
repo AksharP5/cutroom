@@ -29,7 +29,7 @@ const readOnly = {
 };
 
 export function registerTimelineTools(
-  server: McpServer,
+  server: Pick<McpServer, "registerTool">,
   request: JsonRequest,
   fetchLocal: LocalFetch,
 ) {
