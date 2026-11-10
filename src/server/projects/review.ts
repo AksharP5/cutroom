@@ -37,6 +37,8 @@ const ReviewFileSchema = z.object({
       id: z.string(),
       // What was submitted, so a request survives its content being undone.
       content: NoteContentSchema.optional(),
+      // Captures arrive after commit and stay outside content history and review transitions.
+      framePath: NoteContentSchema.shape.framePath,
     }),
   ),
 });
@@ -173,6 +175,9 @@ export function createReviewService(store: ProjectStore) {
         { content, status },
       ]),
     );
+    const frames = new Map(
+      state.items.map((item) => [item.id, item.framePath]),
+    );
     const stored = new Set(state.items.map((item) => item.id));
     const entries = [
       ...state.items.flatMap((entry) => {
@@ -239,6 +244,7 @@ export function createReviewService(store: ProjectStore) {
           id: content.id,
           review,
           instructions,
+          ...(frames.get(content.id) && { framePath: frames.get(content.id) }),
           ...(review.status !== "open" && { content }),
         })),
         // Drafts removed by undo keep their entry in case redo brings them back.
@@ -248,7 +254,10 @@ export function createReviewService(store: ProjectStore) {
     // Parsed and built objects order their keys differently; only a real change is written.
     if (!sameContent(written, state)) await writeState(project, written);
     if (refusal) throw refusal.error;
-    return next;
+    return next.map((item) => {
+      const framePath = frames.get(item.id);
+      return framePath ? { ...item, framePath } : item;
+    });
   };
 
   const update = (project: Project, change: Parameters<typeof reconcile>[2]) =>
@@ -299,6 +308,20 @@ export function createReviewService(store: ProjectStore) {
     agent,
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
     list: (project: Project) => serialize(project, () => reconcile(project)),
+    /** An attachment may arrive after the note was sent, accepted, or undone. It changes no request. */
+    attachFrame: (project: Project, id: string, framePath: string) =>
+      serialize(project, async () => {
+        await reconcile(project);
+        const state = await readState(project);
+        if (!state.items.some((item) => item.id === id))
+          throw new HttpError(404, "Review note not found.");
+        await writeState(project, {
+          ...state,
+          items: state.items.map((item) =>
+            item.id === id ? { ...item, framePath } : item,
+          ),
+        });
+      }),
     async act(
       project: Project,
       id: string,

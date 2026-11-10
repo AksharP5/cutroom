@@ -95,7 +95,11 @@ test("a five-note pass keeps its pins and strokes when the same tool row edits t
     await field.press("Enter");
   }
   await expect
-    .poll(async () => (await project.notes()).map((note) => note.body))
+    .poll(async () =>
+      (await project.notes())
+        .filter((note) => note.framePath)
+        .map((note) => note.body),
+    )
     .toEqual(bodies);
   const saved = await project.notes();
   expect(saved.map((note) => note.strokes.length)).toEqual([0, 2, 0, 2, 0]);
@@ -257,7 +261,9 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   const [drawing] = await project.notes();
   expect(drawing).toMatchObject({ kind: "drawing", body: "" });
   expect(drawing?.strokes).toHaveLength(2);
-  expect(drawing?.framePath).toBeTruthy();
+  await expect
+    .poll(async () => (await project.notes())[0]?.framePath)
+    .toBeTruthy();
   await expect(pencil).toHaveCount(2);
 
   // A comment a second later through a third, made while another tool is chosen.
@@ -375,6 +381,77 @@ async function quickCapture(page: Page, projectId: string) {
     });
   });
 }
+
+test("Review rows appear within one second of Enter while frame captures are held", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = await openProject(page, request, "Immediate notes");
+  await quickCapture(page, project.id);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let captures = 0;
+  await page.route(
+    `**/api/projects/${project.id}/thumbnail/**`,
+    async (route) => {
+      if (route.request().resourceType() !== "fetch") return route.fallback();
+      captures++;
+      await held;
+      await route.fallback();
+    },
+  );
+  try {
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await page.keyboard.press("n");
+    for (let index = 0; index < 3; index++) {
+      const spot = await project.at(0.2 + index * 0.2, 0.4);
+      await page.mouse.click(spot.x, spot.y);
+      const field = page.getByLabel("What should change?");
+      await field.fill(`Immediate note ${index + 1}`);
+      const entered = performance.now();
+      await field.press("Enter");
+      await expect(page.locator(".review-row").nth(index)).toContainText(
+        `Immediate note ${index + 1}`,
+        { timeout: Math.max(1, 1000 - (performance.now() - entered)) },
+      );
+      await expect(page.locator(".review-row").nth(index)).toBeVisible({
+        timeout: Math.max(1, 1000 - (performance.now() - entered)),
+      });
+      expect(performance.now() - entered).toBeLessThan(1000);
+      await expect(
+        page.getByRole("button", {
+          name: new RegExp(`^Review note ${index + 1} `),
+        }),
+      ).toBeVisible();
+    }
+    expect(captures).toBe(3);
+    const notes = await project.notes();
+    expect(notes.every((note) => !note.framePath)).toBe(true);
+    // Sending a saved note before its capture finishes must not reject the attachment or withdraw it.
+    expect(
+      (
+        await request.post(`${project.base}/review/${notes[0]!.id}/agent`, {
+          data: { type: "complete", note: "Checked before capture" },
+        })
+      ).ok(),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("notes-before-captures.png"),
+    });
+    release();
+    await expect
+      .poll(async () => (await project.notes()).every((note) => note.framePath))
+      .toBe(true);
+    expect((await project.notes())[0]!.review.status).toBe("done");
+    await expect(page.locator(".review-row img")).toHaveCount(3);
+    await expect(page.getByLabel("What should change?")).toBeHidden();
+    await expect(page.locator(".toast")).toHaveCount(0);
+  } finally {
+    release();
+  }
+});
 
 test("drafts and a two-stroke failed save recover in their project after switching away", async ({
   page,
@@ -816,10 +893,19 @@ test("six alternating notes on one frame keep their drafted numbers when the fir
       await field.fill(note.body);
       await field.press("Enter");
     }
-    // Captures can run together, but their completion order must not choose the note numbers.
+    // All six notes save before the first capture finishes, without changing their numbers.
     await expect.poll(() => captures).toBe(6);
-    release();
     await expect.poll(async () => (await project.notes()).length).toBe(6);
+    expect((await project.notes()).map((note) => note.body)).toEqual(
+      notes.map((note) => note.body),
+    );
+    release();
+    await expect
+      .poll(
+        async () =>
+          (await project.notes()).filter((note) => note.framePath).length,
+      )
+      .toBe(6);
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await expect(page.locator(".review-row")).toHaveCount(6);
     await expect(page.locator(".notebook-content > div:visible")).toHaveCSS(
@@ -933,7 +1019,12 @@ main{position:relative;width:1920px;height:1080px;background:rgb(24,74,120)}
     await field.fill(`Capture ${index + 1}`);
     await field.press("Enter");
   }
-  await expect.poll(async () => (await project.notes()).length).toBe(6);
+  await expect
+    .poll(
+      async () =>
+        (await project.notes()).filter((note) => note.framePath).length,
+    )
+    .toBe(6);
   const saved = await project.notes();
   expect(saved.map((note) => note.body)).toEqual([
     "Capture 1",

@@ -26,16 +26,16 @@ export function frameCaptureUrl(
   return `/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(compositionPath)}?${params}`;
 }
 
-/** Capture immediately; post in commit order so a late frame never changes a note's number. */
-export function saveReviewNote(
+/** Post in commit order; frame rendering must never hold a note or the next save. */
+export async function saveReviewNote(
   projectId: string,
   draft: EditorReviewDraft,
   body: string,
 ) {
-  const capture = captureReviewFrame(projectId, draft);
-  return saveNoteInOrder(projectId, async () => {
-    const { pencil, framePath, captureError } = await capture;
-    const { id } = await api(
+  const tokens = getComputedStyle(document.documentElement);
+  const pencil = tokens.getPropertyValue("--human").trim();
+  const { id } = await saveNoteInOrder(projectId, () =>
+    api(
       `/projects/${projectId}/annotations`,
       AnnotationSchema,
       json("POST", {
@@ -48,11 +48,25 @@ export function saveReviewNote(
         elementId: draft.elementIds[0],
         point: draft.point,
         strokes: draft.strokes.map((points) => ({ points, color: pencil })),
-        framePath,
       }),
-    );
-    return { id, captureError };
-  });
+    ),
+  );
+  const capture = captureReviewFrame(projectId, draft).then(
+    async ({ framePath, captureError }) => {
+      if (!framePath) return captureError;
+      try {
+        await api(
+          `/projects/${projectId}/review/${id}/frame`,
+          z.object({ ok: z.literal(true) }),
+          json("PUT", { framePath }),
+        );
+        return "";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    },
+  );
+  return { id, capture };
 }
 
 async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
@@ -96,5 +110,5 @@ async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
   } finally {
     image?.close();
   }
-  return { pencil, framePath, captureError };
+  return { framePath, captureError };
 }

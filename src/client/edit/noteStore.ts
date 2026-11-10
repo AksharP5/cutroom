@@ -18,7 +18,7 @@ export function dispatchNote(projectId: string, event: NoteEvent) {
 
 const saves = new Map<string, Promise<void>>();
 
-/** Preserve commit order while callers prepare captures in parallel. Failures reach the caller. */
+/** Preserve annotation commit order. Captures stay outside this queue; failures reach the caller. */
 export function saveNoteInOrder<T>(projectId: string, save: () => Promise<T>) {
   const result = (saves.get(projectId) ?? Promise.resolve()).then(save);
   // A refused save must not block the next note in this project.
