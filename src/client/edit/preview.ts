@@ -1,4 +1,9 @@
-import { PreviewReplySchema, RuntimeStateSchema } from "../../shared/preview";
+import { audioLevels } from "./levels";
+import {
+  PreviewLevelsSchema,
+  PreviewReplySchema,
+  RuntimeStateSchema,
+} from "../../shared/preview";
 import type { PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
 
@@ -15,12 +20,20 @@ export function connectPreview(frame: HTMLIFrameElement) {
     playing: false,
   };
   const closing = new AbortController();
+  let active = false;
   const pending = new Map<
     string,
     { resolve(): void; reject(error: Error): void; timer: number }
   >();
   const receive = (event: MessageEvent<unknown>) => {
     if (event.source !== frame.contentWindow) return;
+    if (active) {
+      const levels = PreviewLevelsSchema.safeParse(event.data);
+      if (levels.success) {
+        audioLevels.publish(levels.data);
+        return;
+      }
+    }
     const runtime = RuntimeStateSchema.safeParse(event.data);
     if (runtime.success) {
       state.time = runtime.data.currentTime;
@@ -80,6 +93,10 @@ export function connectPreview(frame: HTMLIFrameElement) {
   return {
     player,
     signal: closing.signal,
+    activate() {
+      active = true;
+      send("meter", { enabled: true });
+    },
     get state() {
       return state;
     },
@@ -87,6 +104,9 @@ export function connectPreview(frame: HTMLIFrameElement) {
     painted: () => request("paint"),
     dispose() {
       closing.abort();
+      send("meter", { enabled: false });
+      if (active) audioLevels.publish({ l: 0, r: 0 });
+      active = false;
       window.removeEventListener("message", receive);
       for (const request of pending.values()) {
         clearTimeout(request.timer);

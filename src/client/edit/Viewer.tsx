@@ -140,6 +140,7 @@ export function Viewer({
           ...size,
         },
       });
+      preview.activate();
       transport.attach(player, shown);
       reportEditorError("viewer", null);
     } catch (error) {
@@ -190,6 +191,7 @@ export function Viewer({
               title="Composition preview"
               tabIndex={-1}
               sandbox="allow-scripts"
+              allow="autoplay"
               src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}`}
               data-live={gen === live?.gen || undefined}
               style={{

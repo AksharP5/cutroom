@@ -822,3 +822,136 @@
 .tl-agent-change.on-audio {
   margin-top: calc(var(--size-track-audio) - var(--stroke-rail));
 }
+
+/* Clip gain and edge fades sit above the shared media canvas. */
+.tl {
+  display: flex;
+}
+.tl-scroll {
+  flex: 1;
+  min-width: 0;
+}
+.tl-mix {
+  position: absolute;
+  z-index: calc(var(--z-clip-selected) + 1);
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100% - 1px);
+  height: calc(var(--size-track-audio) - 2px);
+  margin-top: 1px;
+  pointer-events: none;
+}
+.tl-mix.on-video {
+  height: calc(var(--size-track-video) - 2px);
+}
+.tl-mix.locked {
+  opacity: var(--track-locked-opacity);
+}
+.tl-fade-curve {
+  position: absolute;
+  top: var(--size-clip-name);
+  bottom: 3px;
+  width: 100%;
+}
+.tl-fade-curve {
+  height: calc(100% - var(--size-clip-name) - 3px);
+  overflow: visible;
+}
+.tl-fade-curve path {
+  fill: none;
+  stroke: var(--text-primary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.tl-fade-curve .tl-gain {
+  stroke: transparent;
+  stroke-width: 7;
+  cursor: ns-resize;
+  pointer-events: stroke;
+}
+.tl-fade-handle {
+  --handle-width: 8px;
+  position: absolute;
+  top: 1px;
+  width: min(var(--handle-width), 100%);
+  height: 9px;
+  background: var(--text-secondary);
+  border: 1px solid var(--surface-panel);
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+.tl-fade-handle[data-mix="fadeIn"] {
+  left: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
+}
+.tl-fade-handle[data-mix="fadeOut"] {
+  right: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
+}
+.tl-lanes[data-cursor="gain"] {
+  cursor: ns-resize;
+}
+.tl-lanes[data-cursor="fade"] {
+  cursor: ew-resize;
+}
+
+.tl-meters {
+  position: relative;
+  flex: 0 0 var(--size-meter);
+  border-left: var(--stroke-hair) solid var(--line-subtle);
+}
+.tl-meter-channel {
+  position: absolute;
+  top: 34px;
+  bottom: 12px;
+  width: 5px;
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-off) 0 2px,
+    transparent 2px 3px
+  );
+}
+.tl-meter-channel:nth-child(2) {
+  right: 11px;
+}
+.tl-meter-channel:nth-child(3) {
+  right: 3px;
+}
+.tl-meter-channel > span {
+  position: absolute;
+  top: -16px;
+  width: 5px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font: var(--type-micro) / 1 var(--font-mono);
+}
+.tl-meter-level {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(100% 0 0 0);
+  background: repeating-linear-gradient(
+    to top,
+    var(--meter-on) 0 2px,
+    transparent 2px 3px
+  );
+}
+/* Full height so translateY is a fraction of the meter; the line is its top 2px. */
+.tl-meter-peak {
+  --peak: var(--meter-peak);
+  position: absolute;
+  inset: -2px 0 2px;
+  transform: translateY(100%);
+  background: linear-gradient(var(--peak) 0 2px, transparent 2px);
+}
+.tl-meter-channel[data-clipping="true"] .tl-meter-peak {
+  --peak: var(--meter-clip);
+}
+.tl-meter-scale {
+  position: absolute;
+  top: 34px;
+  bottom: 12px;
+  left: 4px;
+  font: var(--type-micro) / 1 var(--font-mono);
+  color: var(--text-tertiary);
+}
+.tl-meter-scale span {
+  position: absolute;
+  transform: translateY(-50%);
+}

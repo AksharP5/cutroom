@@ -30,11 +30,14 @@ export async function clipVersions(
         .filter((clip) => !parsed.anonymous.has(clip.id))
         .map((clip) => {
           const element = parsed.elements.get(clip.id)!;
-          // Opacity is already in the HTML hash. Keep persisted #30 signatures unchanged.
+          // These properties are already in the HTML hash. Keep persisted #30 signatures unchanged.
           const {
             sourceDuration: _,
             hasAudio: _audio,
             opacity: _opacity,
+            fadeIn: _fadeIn,
+            fadeOut: _fadeOut,
+            automation: _automation,
             ...authored
           } = clip;
           // HyperFrames stamps editor identity onto untouched nodes during script cuts.

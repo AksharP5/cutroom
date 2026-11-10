@@ -1,3 +1,8 @@
+import {
+  audioDbToGain,
+  audioGainToDb,
+  MAX_AUDIO_GAIN_DB,
+} from "@hyperframes/core/audio-gain";
 import { z } from "zod";
 import {
   TimelineError,
@@ -6,6 +11,7 @@ import {
   normalizeTimeline,
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
+import { clipFades } from "../../shared/timeline/mix";
 import type {
   Clip,
   CommandInput,
@@ -33,6 +39,8 @@ export interface Point {
 
 /** What a press on the lanes will do if it becomes a drag, decided at the press. */
 export type Intent =
+  | { kind: "gain"; clipId: string }
+  | { kind: "fade"; clipId: string; edge: "fadeIn" | "fadeOut" }
   | { kind: "move"; clipId: string; alone: boolean }
   | { kind: "trim"; clipId: string; edge: "start" | "end"; ripple: boolean }
   /** `left` ends where `right` starts; the cut between them moves. */
@@ -107,6 +115,7 @@ export interface Hit {
   clip: Clip;
   x: number;
   width: number;
+  mix?: "gain" | "fadeIn" | "fadeOut";
 }
 
 /**
@@ -125,6 +134,10 @@ export function intentAt(
   const { clip, x, width } = hit;
   if (timeline.tracks.find((track) => track.index === clip.track)?.locked)
     return null;
+  if (tool === "pointer" && hit.mix && clip.hasAudio)
+    return hit.mix === "gain"
+      ? { kind: "gain", clipId: clip.id }
+      : { kind: "fade", clipId: clip.id, edge: hit.mix };
   if (tool === "blade") return { kind: "blade", clipId: clip.id };
   const reach = Math.min(EDGE_PX, width / 3);
   const edge = x < reach ? "start" : x >= width - reach ? "end" : null;
@@ -318,6 +331,8 @@ export function beginDrag(
 }
 
 export interface DragInput {
+  /** Vertical pointer travel in pixels, for gain. */
+  dy?: number;
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -363,6 +378,63 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
   };
 
   switch (intent.kind) {
+    case "gain": {
+      if (!input.dy) return still("Clip gain");
+      const clip = find(intent.clipId);
+      const db = Math.max(
+        -60,
+        Math.min(
+          MAX_AUDIO_GAIN_DB,
+          Math.round(
+            ((clip.volume === 0 ? -60 : audioGainToDb(clip.volume ?? 1)) -
+              (input.dy ?? 0) / 2) *
+              10,
+          ) / 10,
+        ),
+      );
+      const volume = db === -60 ? 0 : audioDbToGain(db);
+      return edit(
+        "Clip gain",
+        volume === (clip.volume ?? 1)
+          ? []
+          : [{ type: "setClip", clipId: clip.id, volume }],
+        db,
+        null,
+      );
+    }
+    case "fade": {
+      const clip = find(intent.clipId);
+      const effective = clipFades(clip);
+      const other = intent.edge === "fadeIn" ? "fadeOut" : "fadeIn";
+      const kept = Math.round(effective[other]);
+      const start = Math.round(effective[intent.edge]);
+      // The handles meet but never cross, so the runtime never rescales them mid-drag.
+      const length = Math.max(
+        0,
+        Math.min(
+          clip.duration - kept,
+          start + (intent.edge === "fadeIn" ? travel : -travel),
+        ),
+      );
+      // Fades longer than the clip are scaled by the runtime. Committing the other edge's
+      // drawn length keeps that handle in place; an unchanged handle keeps authored lengths.
+      const overlong = clip.fadeIn + clip.fadeOut > clip.duration;
+      return edit(
+        intent.edge === "fadeIn" ? "Fade in" : "Fade out",
+        length === start
+          ? []
+          : [
+              {
+                type: "setClip",
+                clipId: clip.id,
+                [intent.edge]: length,
+                ...(overlong && { [other]: kept }),
+              },
+            ],
+        length,
+        null,
+      );
+    }
     case "move": {
       const grabbed = find(intent.clipId);
       const { carried, named } = drag;

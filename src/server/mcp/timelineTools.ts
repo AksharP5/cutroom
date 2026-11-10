@@ -40,7 +40,7 @@ export function registerTimelineTools(
     "timeline_read",
     {
       description:
-        "Read the timeline: tracks, clips, markers, and in/out range in integer frames at the composition's fps, plus the revision to pass to timeline_edit.",
+        "Read the timeline: tracks, clips, markers, and in/out range in integer frames at the composition's fps, plus the revision to pass to timeline_edit. Clip fadeIn/fadeOut are authored lengths; playback proportionally scales them to fit the clip.",
       inputSchema: input,
       annotations: readOnly,
     },

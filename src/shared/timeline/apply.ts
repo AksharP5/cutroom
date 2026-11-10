@@ -1,27 +1,10 @@
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
+import { TimelineError } from "./errors";
+import { windowMix } from "./mix";
 import { newTrack, nextTrackIndex } from "./tracks";
 
-export type TimelineErrorCode =
-  | "not_found"
-  | "locked"
-  | "overlap"
-  | "out_of_bounds"
-  | "nothing_to_split"
-  | "duplicate_id"
-  | "track_kind"
-  | "unsupported";
-
-export class TimelineError extends Error {
-  constructor(
-    readonly code: TimelineErrorCode,
-    message: string,
-    /** Index of the failing command within its batch. */
-    readonly command?: number,
-  ) {
-    super(message);
-    this.name = "TimelineError";
-  }
-}
+export { TimelineError } from "./errors";
+export type { TimelineErrorCode } from "./errors";
 
 /**
  * Where a clip created by a batch gets its markup: a copy of a clip from the timeline the batch
@@ -339,12 +322,16 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const trimmed = clips.map((clip) => {
         if (!ids.has(clip.id)) return clip;
         if (command.edge === "end")
-          return { ...clip, duration: clip.duration + delta };
+          return windowClip(
+            clip,
+            clip.start,
+            clipEnd(clip) + delta,
+            fps,
+            "trim",
+          );
         return {
-          ...clip,
+          ...windowClip(clip, clip.start + delta, clipEnd(clip), fps, "trim"),
           start: command.ripple ? clip.start : clip.start + delta,
-          duration: clip.duration - delta,
-          mediaStart: advance(clip, delta, fps),
         };
       });
       if (!command.ripple) return { ...timeline, clips: trimmed };
@@ -478,6 +465,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         label: input.label ?? null,
         volume: input.volume ?? null,
         opacity: null,
+        fadeIn: 0,
+        fadeOut: 0,
+        automation: null,
         enabled: true,
         startRef: null,
       };
@@ -567,12 +557,16 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "setClip": {
       const target = find(command.clipId);
+      const fadeIn = command.fadeIn ?? target.fadeIn;
+      const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
         ...timeline,
         clips: clips.map((clip) =>
           clip === target
             ? {
                 ...clip,
+                fadeIn,
+                fadeOut,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
                 ...(command.opacity !== undefined && {
@@ -978,6 +972,25 @@ function advance(clip: Clip, frames: number, fps: Fps): number | null {
     : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
 }
 
+/** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
+function windowClip(
+  clip: Clip,
+  start: number,
+  end: number,
+  fps: Fps,
+  mode: "trim" | "cut" = "cut",
+): Clip {
+  const duration = end - start;
+  if (duration <= 0) return { ...clip, start, duration };
+  return {
+    ...clip,
+    ...windowMix(clip, start - clip.start, duration, fps, mode),
+    start,
+    duration,
+    mediaStart: advance(clip, start - clip.start, fps),
+  };
+}
+
 /** The timeline as it reads back once written: source offsets at their canonical microsecond. */
 export function canonicalTimeline(timeline: Timeline): Timeline {
   return {
@@ -1007,18 +1020,15 @@ function splitClips(
     const id = name(clip.id, clip.id);
     onCreate(id, { copyOf: clip.id });
     return {
-      ...clip,
+      ...windowClip(clip, at, clipEnd(clip), fps),
       id,
-      start: at,
-      duration: clipEnd(clip) - at,
-      mediaStart: advance(clip, at - clip.start, fps),
       startRef: null,
     };
   });
   const ids = new Set(targets.map((clip) => clip.id));
   const cut = [
     ...clips.map((clip) =>
-      ids.has(clip.id) ? { ...clip, duration: at - clip.start } : clip,
+      ids.has(clip.id) ? windowClip(clip, clip.start, at, fps) : clip,
     ),
     ...rights,
   ];
@@ -1091,16 +1101,9 @@ function clearRange(
   );
   const cut = next.flatMap((clip) => {
     if (clip.track !== track || !overlaps(clip)) return [clip];
-    if (clip.start < from) return [{ ...clip, duration: from - clip.start }];
+    if (clip.start < from) return [windowClip(clip, clip.start, from, fps)];
     if (clipEnd(clip) <= to) return [];
-    return [
-      {
-        ...clip,
-        start: to,
-        duration: clipEnd(clip) - to,
-        mediaStart: advance(clip, to - clip.start, fps),
-      },
-    ];
+    return [windowClip(clip, to, clipEnd(clip), fps)];
   });
   return regroupLinks(
     cut,

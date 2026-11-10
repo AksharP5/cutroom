@@ -964,3 +964,73 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     }
   },
 );
+
+test("MCP clip gain and frame fades read back exactly and each batch undoes in one step", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  await writeFile(
+    join(project.path, "index.html"),
+    '<main data-composition-id="main" data-duration="10" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="10"></audio></main>',
+  );
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "mix-test", version: "1" });
+  const result = z.object({
+    structuredContent: z.object({ result: TimelineViewSchema }),
+  });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const read = async () =>
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: project.id },
+        }),
+      ).structuredContent.result;
+    const initial = await read();
+    const gain = 10 ** (-12 / 20);
+    const changed = result.parse(
+      await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: project.id,
+          expectedRevision: initial.revision,
+          commands: [
+            {
+              type: "setClip",
+              clipId: "music",
+              volume: gain,
+              fadeIn: 1,
+              fadeOut: 120,
+            },
+            { type: "trim", clipId: "music", edge: "end", to: 60 },
+          ],
+        },
+      }),
+    ).structuredContent.result;
+    expect(changed.timeline.clips[0]).toMatchObject({
+      volume: gain,
+      duration: 60,
+      fadeIn: 1,
+      fadeOut: 120,
+    });
+    expect(await read()).toEqual(changed);
+    await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+    expect((await read()).timeline).toEqual(initial.timeline);
+    await fixture.request(`/projects/${project.id}/history/redo`, "POST");
+    expect((await read()).timeline).toEqual(changed.timeline);
+  } finally {
+    await client.close();
+    server.stop(true);
+    await fixture.close();
+  }
+});

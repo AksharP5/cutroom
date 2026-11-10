@@ -41,7 +41,11 @@ export function editAnchors(
   const destinations: { range: Clip; clips: Clip[] }[] = [];
   if (
     !commands.some(
-      ({ type }) => type === "trim" || type === "split" || type === "move",
+      ({ type }) =>
+        type === "trim" ||
+        type === "split" ||
+        type === "move" ||
+        type === "setClip",
     )
   )
     return { clips: [], destinations };

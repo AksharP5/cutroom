@@ -1,3 +1,5 @@
+import { ClipMix } from "./mix";
+import { AudioMeters } from "./meters";
 import {
   memo,
   useEffect,
@@ -869,6 +871,16 @@ export function Timeline({
                       }}
                     />
                   ))}
+                {clips
+                  .filter(({ clip }) => clip.hasAudio)
+                  .map(({ clip, row }) => (
+                    <ClipMix
+                      key={clip.id}
+                      clip={clip}
+                      row={row}
+                      fps={timeline.fps}
+                    />
+                  ))}
                 {clips.map(
                   ({ clip, row }) =>
                     selection.ids.has(clip.id) && (
@@ -920,6 +932,7 @@ export function Timeline({
           </div>
         </div>
       </div>
+      <AudioMeters />
     </div>
   );
 }

@@ -1,6 +1,14 @@
 import { parse } from "parse5";
+import type { DefaultTreeAdapterTypes } from "parse5";
 
 interface PreviewWindow extends Window {
+  __hf?: Window["__hf"] & {
+    audioMeter?: {
+      start(): void;
+      stop(): void;
+      read(): { master: { l: number; r: number } };
+    };
+  };
   __player?: {
     play(): void;
     pause(): void;
@@ -15,6 +23,28 @@ interface PreviewWindow extends Window {
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge() {
   const win = window as PreviewWindow;
+  let metering = false;
+  let animation = 0;
+  const levels = () => {
+    if (!metering) return;
+    const meter = win.__hf?.audioMeter;
+    meter?.start();
+    const level = win.__player?.isPlaying() ? meter?.read().master : null;
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "levels",
+        l: level?.l ?? 0,
+        r: level?.r ?? 0,
+      },
+      "*",
+    );
+    if (win.__player?.isPlaying()) animation = requestAnimationFrame(levels);
+    else {
+      animation = 0;
+      meter?.stop();
+    }
+  };
   const state = () => {
     const root = document.querySelector("[data-composition-id]");
     const size = (name: string, fallback: number) => {
@@ -62,11 +92,23 @@ function installPreviewBridge() {
       switch (data.action) {
         case "inspect":
           break;
+        case "meter":
+          if (!("enabled" in data) || typeof data.enabled !== "boolean") return;
+          metering = data.enabled;
+          cancelAnimationFrame(animation);
+          animation = 0;
+          if (metering) levels();
+          else win.__hf?.audioMeter?.stop();
+          break;
         case "play":
           win.__player?.play();
+          if (metering && !animation) levels();
           break;
         case "pause":
           win.__player?.pause();
+          cancelAnimationFrame(animation);
+          animation = 0;
+          if (metering) levels();
           break;
         case "seek":
           if (
@@ -119,5 +161,33 @@ export function withPreviewBridge(html: string) {
       : undefined;
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
-  return `${html.slice(0, offset)}<script>${previewBridgeScript}</script>${html.slice(offset)}`;
+  const edits = [{ offset, text: `<script>${previewBridgeScript}</script>` }];
+  // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
+  // Only the served preview changes; project source and its producer input stay untouched.
+  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+    for (const node of nodes) {
+      if (!("tagName" in node)) continue;
+      if (
+        (node.tagName === "audio" || node.tagName === "video") &&
+        !node.attrs.some(({ name }) => name === "crossorigin")
+      ) {
+        const start = node.sourceCodeLocation?.startTag?.startOffset;
+        if (start !== undefined)
+          edits.push({
+            offset: start + node.tagName.length + 1,
+            text: ' crossorigin="anonymous"',
+          });
+      }
+      visit(node.childNodes);
+      if ("content" in node) visit(node.content.childNodes);
+    }
+  };
+  visit(document.childNodes);
+  return edits
+    .sort((a, b) => b.offset - a.offset)
+    .reduce(
+      (source, edit) =>
+        source.slice(0, edit.offset) + edit.text + source.slice(edit.offset),
+      html,
+    );
 }
