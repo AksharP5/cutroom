@@ -34,7 +34,8 @@ export type TimelineViewport = ReturnType<typeof createViewport>;
 
 /**
  * Owns zoom and scroll for one timeline. Pixels per frame is the `--ppf` property on `grid`, so
- * a zoom step is one property write plus the scroll offset that holds the anchor still.
+ * a zoom step is one property write plus the scroll offset that holds the anchor still. The
+ * property is not inherited (see timeline.css), so the write restyles a handful of elements.
  *
  * `onChange` runs after every zoom, scroll and resize. With `flush` it must mount what the new
  * view shows before returning, because an animated zoom measures those elements next.

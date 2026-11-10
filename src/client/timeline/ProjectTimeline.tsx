@@ -109,10 +109,11 @@ export function ProjectTimeline({
       },
     ).catch(onError);
 
-  if (!timeline) return null;
+  if (!view) return null;
   return (
     <Timeline
-      timeline={timeline}
+      timeline={view.timeline}
+      source={{ projectId, composition: view.composition }}
       clock={clock}
       pins={pins}
       selection={selection}

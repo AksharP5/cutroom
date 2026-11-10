@@ -6,19 +6,24 @@ import {
   clipsByTrack,
   clipsInRange,
   cssMilliseconds,
+  filmTiles,
   fitPpf,
   frameAt,
+  frameStep,
   majorTicks,
   mountedRange,
   pageTarget,
+  peakLevel,
   rowsBetween,
   scrollForAnchor,
   settledScroll,
   sliderToZoom,
+  sourceSecondsPerPixel,
   tickStep,
   trackRows,
   zoomToSlider,
 } from "../src/client/timeline/math";
+import { localMediaPath } from "../src/shared/media";
 import {
   clickSelection,
   emptySelection,
@@ -46,6 +51,7 @@ const clip = (
   playbackRate: 1,
   src: "talk.mp4",
   sourceDuration: null,
+  hasAudio: false,
   link: null,
   label: null,
   volume: null,
@@ -400,4 +406,99 @@ test("motion durations read the same from dev and minified CSS", () => {
   expect(cssMilliseconds(" .22s")).toBe(220);
   // Reduced motion collapses movement to zero, which the timeline takes as no animation.
   expect(cssMilliseconds("0s")).toBe(0);
+});
+
+test("a waveform is drawn from the coarsest level that still gives every pixel its own bucket", () => {
+  // Buckets are 2 ms at level 0 and four times longer at each level after it.
+  // At the closest zoom a pixel is about a millisecond: nothing is finer than level 0.
+  expect(peakLevel(sourceSecondsPerPixel(32, fps30, 1))).toBe(0);
+  // One frame per pixel is 33 ms a pixel: the 32 ms level, and 128 ms at four times the speed.
+  expect(peakLevel(sourceSecondsPerPixel(1, fps30, 1))).toBe(2);
+  expect(peakLevel(sourceSecondsPerPixel(1, fps30, 4))).toBe(3);
+  // Ten minutes fitted in the lanes is 0.38 s a pixel: 128 ms buckets, three to a pixel.
+  const fit = fitPpf(18_000, 1_620, fps30);
+  expect(peakLevel(sourceSecondsPerPixel(fit, fps30, 1))).toBe(3);
+  // A pixel exactly one bucket long uses that level; a hair shorter drops to the finer one.
+  expect(peakLevel(0.008)).toBe(1);
+  expect(peakLevel(0.007_9)).toBe(0);
+  // A day in view still has a level: the coarsest.
+  expect(peakLevel(100)).toBe(6);
+});
+
+test("filmstrip tiles start on the clip's first frame and show the source from its media start", () => {
+  const cut = { mediaStart: 3, playbackRate: 1 };
+  // At 2 px per frame a 71px tile spans 1.18 s, so the frames shown are a second apart.
+  const perPixel = sourceSecondsPerPixel(2, fps30, 1);
+  const step = frameStep(71 * perPixel);
+  expect(step).toBe(1);
+  expect(filmTiles(cut, 71, perPixel, step, 0, 200)).toEqual([
+    { x: 0, time: 3 },
+    { x: 71, time: 4 },
+    { x: 142, time: 5 },
+  ]);
+  // Scrolled 100px into the clip, the tiles are the same ones in the same places.
+  expect(filmTiles(cut, 71, perPixel, step, 100, 300)).toEqual([
+    { x: 71, time: 4 },
+    { x: 142, time: 5 },
+    { x: 213, time: 6 },
+    { x: 284, time: 7 },
+  ]);
+  // At double speed each tile covers twice the source: frames two seconds apart, from the trim.
+  const fast = { mediaStart: 3, playbackRate: 2 };
+  const fastPixel = sourceSecondsPerPixel(2, fps30, 2);
+  expect(frameStep(71 * fastPixel)).toBe(2);
+  expect(
+    filmTiles(fast, 71, fastPixel, 2, 0, 200).map((tile) => tile.time),
+  ).toEqual([3, 5, 7]);
+});
+
+test("a trimmed clip's first tile is its first frame, never footage from before the trim", () => {
+  // Trimmed to 1.3 s and 3.1 s, off every step. The first tile is the trim point itself and
+  // the rest count whole steps on from it.
+  const perPixel = sourceSecondsPerPixel(32, fps30, 1);
+  const step = frameStep(71 * perPixel);
+  for (const mediaStart of [1.3, 3.1]) {
+    const times = filmTiles(
+      { mediaStart, playbackRate: 1 },
+      71,
+      perPixel,
+      step,
+      0,
+      200,
+    ).map((tile) => tile.time);
+    expect(times[0]).toBe(mediaStart);
+    expect(times[1]).toBeCloseTo(mediaStart + 0.0625, 9);
+    expect(times[2]).toBeCloseTo(mediaStart + 0.125, 9);
+  }
+});
+
+test("filmstrip frames come from the sprite until a tile is shorter than its two seconds", () => {
+  // Fitted, a tile spans far more than two seconds: one sprite frame each.
+  expect(frameStep(71 * sourceSecondsPerPixel(0.09, fps30, 1))).toBe(2);
+  // At the closest zoom a tile is 2.2 frames: frames a sixteenth of a second apart.
+  expect(frameStep(71 * sourceSecondsPerPixel(32, fps30, 1))).toBe(0.0625);
+});
+
+test("a media source resolves to one project file for the server and the timeline", () => {
+  expect(localMediaPath("index.html", "media/a%20b.mp4?v=2")).toBe(
+    "media/a b.mp4",
+  );
+  expect(localMediaPath("index.html", "./footage.mp4#t=1")).toBe("footage.mp4");
+  expect(localMediaPath("compositions/intro.html", "../media/a.mp4")).toBe(
+    "media/a.mp4",
+  );
+  expect(localMediaPath("compositions/intro.html", "bed.wav")).toBe(
+    "compositions/bed.wav",
+  );
+  // A leading slash still means the composition's own folder.
+  expect(localMediaPath("compositions/intro.html", "/assets/a.mp4")).toBe(
+    "compositions/assets/a.mp4",
+  );
+  // A path out of the project keeps its `..`, so the file lookup refuses it.
+  expect(localMediaPath("compositions/intro.html", "../../secret.mp4")).toBe(
+    "../secret.mp4",
+  );
+  expect(localMediaPath("index.html", "https://example.com/a.mp4")).toBeNull();
+  expect(localMediaPath("index.html", "//example.com/a.mp4")).toBeNull();
+  expect(localMediaPath("index.html", "bad%zz.mp4")).toBeNull();
 });

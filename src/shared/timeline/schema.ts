@@ -32,6 +32,8 @@ export const ClipSchema = z.object({
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
   sourceDuration: z.number().positive().nullable(),
+  /** Whether the clip plays sound: audio, and video that is neither muted nor declared silent. */
+  hasAudio: z.boolean(),
   link: z.string().nullable(),
   label: z.string().nullable(),
   volume: z.number().nonnegative().nullable(),

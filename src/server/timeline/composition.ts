@@ -412,6 +412,11 @@ export function parseComposition(
             ? null
             : sourceOf(element),
       sourceDuration: lengthOf(element),
+      hasAudio:
+        kind === "audio" ||
+        (kind === "video" &&
+          element.attrs.muted === undefined &&
+          (element.attrs["data-has-audio"] ?? "true") === "true"),
       link: element.attrs["data-link"] || null,
       label:
         element.attrs["data-timeline-label"] ??
@@ -778,7 +783,7 @@ function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
       ? [
           input.muted
             ? (["muted", null] as const)
-            : (["data-has-audio", "true"] as const),
+            : (["data-has-audio", String(clip.hasAudio)] as const),
         ]
       : []),
   ];

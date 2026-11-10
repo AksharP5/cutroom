@@ -1,3 +1,4 @@
+import { mediaSettings, peakLevels } from "../../shared/media";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
 import { nominal } from "../edit/timecode";
@@ -243,6 +244,71 @@ export function clipsInRange(
   const first = firstIndex(clips.length, (index) => ends[index]! > from);
   const last = firstIndex(clips.length, (index) => clips[index]!.start >= to);
   return clips.slice(first, last).filter((clip) => clipEnd(clip) > from);
+}
+
+/** Seconds of source media under one pixel of a clip. */
+export const sourceSecondsPerPixel = (
+  ppf: number,
+  fps: Fps,
+  playbackRate: number,
+) => (fps.den / fps.num / ppf) * playbackRate;
+
+/**
+ * The waveform level to draw at a zoom: the coarsest whose buckets are no longer than one pixel,
+ * so every pixel column has a minimum and maximum of its own. The finest level when even its
+ * buckets are longer than a pixel.
+ */
+export const peakLevel = (secondsPerPixel: number) =>
+  Math.max(
+    0,
+    peakLevels.findLastIndex(
+      (samples) => samples / mediaSettings.peakSampleRate <= secondsPerPixel,
+    ),
+  );
+
+/**
+ * Seconds between the source frames a filmstrip shows. The sprite holds one frame per
+ * `filmstripInterval`; when a tile covers less than that, the interval halves until neighbouring
+ * tiles get frames of their own. Zooms that share a step share their frames.
+ */
+export function frameStep(tileSeconds: number): number {
+  let step: number = mediaSettings.filmstripInterval;
+  while (step > tileSeconds) step /= 2;
+  return step;
+}
+
+export interface FilmTile {
+  /** Pixels from the clip's left edge to the tile's. */
+  x: number;
+  /** Source seconds of the frame the tile shows. */
+  time: number;
+}
+
+/**
+ * The filmstrip tiles of a clip that touch `[from, to)`, measured in pixels from the clip's left
+ * edge. Tiles are `width` wide and the first starts on the clip's first frame, so no tile moves
+ * when the view scrolls. Each shows the source frame under its left edge, held back to a whole
+ * number of `step`s after the clip's media start: the first tile is exactly the clip's first
+ * frame, and a clip asks for the same frames at every zoom that shares a step.
+ */
+export function filmTiles(
+  clip: Pick<Clip, "mediaStart" | "playbackRate">,
+  width: number,
+  secondsPerPixel: number,
+  step: number,
+  from: number,
+  to: number,
+): FilmTile[] {
+  const first = Math.max(0, Math.floor(from / width));
+  return Array.from(
+    { length: Math.max(0, Math.ceil(to / width) - first) },
+    (_, index) => {
+      const x = (first + index) * width;
+      // An offset a hair under a step, from the division, belongs to that step.
+      const steps = Math.floor((x * secondsPerPixel) / step + 1e-6);
+      return { x, time: (clip.mediaStart ?? 0) + steps * step };
+    },
+  );
 }
 
 /** Frames of the labelled ruler ticks that fall in a range. */

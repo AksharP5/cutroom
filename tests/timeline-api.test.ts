@@ -531,3 +531,48 @@ test("a scene edit declares the entry layer in the same undo step", async () => 
     await fixture.close();
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "an inserted video is marked as having sound only when its file has an audio stream",
+  async () => {
+    const fixture = await timelineFixture();
+    try {
+      const { path, id } = fixture.project;
+      const picture = ["-f", "lavfi", "-i", "color=c=gray:s=64x36:r=10:d=1"];
+      const tone = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"];
+      for (const [name, inputs] of [
+        ["silent.mp4", picture],
+        ["sound.mp4", [...picture, ...tone]],
+      ] as const) {
+        const made = Bun.spawnSync(
+          ["ffmpeg", "-v", "error", ...inputs, "-shortest", join(path, name)],
+          { stderr: "pipe" },
+        );
+        expect(made.stderr.toString()).toBe("");
+      }
+      const { revision } = TimelineViewSchema.parse(
+        await (await fixture.request(`/projects/${id}/timeline`)).json(),
+      );
+      const insert = (src: string, at: number) => ({
+        type: "insert",
+        track: 5,
+        at,
+        clip: { id: src.replace(".mp4", ""), kind: "video", src, duration: 10 },
+      });
+      const edited = await fixture.request(`/projects/${id}/commands`, "POST", {
+        expectedRevision: revision,
+        commands: [insert("silent.mp4", 0), insert("sound.mp4", 10)],
+      });
+      const { timeline } = TimelineViewSchema.parse(await edited.json());
+      const sounding = (clipId: string) =>
+        timeline.clips.find((clip) => clip.id === clipId)?.hasAudio;
+      expect(sounding("silent")).toBe(false);
+      expect(sounding("sound")).toBe(true);
+      const [html] = await fixture.files();
+      expect(html).toMatch(/<video id="silent"[^>]*data-has-audio="false"/);
+      expect(html).toMatch(/<video id="sound"[^>]*data-has-audio="true"/);
+    } finally {
+      await fixture.close();
+    }
+  },
+);

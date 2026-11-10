@@ -34,11 +34,17 @@ interface Batch {
   onCreate: OnCreate;
   /** Measured source lengths in seconds, by `src`, for inserted media. */
   mediaLengths: ReadonlyMap<string, number>;
+  /** Every inserted `src` known to hold no audio stream. */
+  silentMedia: ReadonlySet<string>;
 }
-/** Options for applying commands; `mediaLengths` holds measured source lengths by `src`. */
+/**
+ * Options for applying commands; `mediaLengths` holds measured source lengths by `src`, and
+ * `silentMedia` every `src` known to hold no audio stream.
+ */
 interface ApplyOptions {
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
+  silentMedia?: ReadonlySet<string>;
 }
 
 /**
@@ -115,12 +121,17 @@ function applyIn(timeline: Timeline, command: Command, batch: Batch) {
 export function apply(
   timeline: Timeline,
   command: Command,
-  { onCreate = () => {}, mediaLengths = new Map() }: ApplyOptions = {},
+  {
+    onCreate = () => {},
+    mediaLengths = new Map(),
+    silentMedia = new Set(),
+  }: ApplyOptions = {},
 ): Timeline {
   return applyIn(timeline, command, {
     reserved: usedNames(timeline),
     onCreate,
     mediaLengths,
+    silentMedia,
   });
 }
 
@@ -128,12 +139,17 @@ export function apply(
 export function applyAll(
   timeline: Timeline,
   commands: readonly Command[],
-  { onCreate = () => {}, mediaLengths = new Map() }: ApplyOptions = {},
+  {
+    onCreate = () => {},
+    mediaLengths = new Map(),
+    silentMedia = new Set(),
+  }: ApplyOptions = {},
 ): Timeline {
   const origins = new Map<string, ClipOrigin>();
   const batch: Batch = {
     reserved: usedNames(timeline),
     mediaLengths,
+    silentMedia,
     onCreate: (id, origin) => {
       // A copy of a clip made earlier in the batch copies that clip's own origin.
       const resolved =
@@ -369,6 +385,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               input.kind === "image"
                 ? null
                 : (batch.mediaLengths.get(input.src) ?? null),
+            hasAudio:
+              input.kind === "audio" ||
+              (input.kind === "video" &&
+                !input.muted &&
+                !batch.silentMedia.has(input.src)),
             link: null,
             label: input.label ?? null,
             volume: input.volume ?? null,
