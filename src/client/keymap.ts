@@ -55,6 +55,25 @@ export const keymap = {
     label: "Fullscreen viewer",
     keys: ["P", "Ctrl+F"],
   },
+  viewZoomSubZoomToFit: {
+    label: "Fit the timeline, or return to the last zoom",
+    keys: ["Shift+Z"],
+  },
+  viewZoomSubZoomIn: {
+    label: "Zoom the timeline in",
+    keys: ["Ctrl+=", "Ctrl+Shift+="],
+    repeat: true,
+  },
+  viewZoomSubZoomOut: {
+    label: "Zoom the timeline out",
+    keys: ["Ctrl+-"],
+    repeat: true,
+  },
+  editSelectItemAtPlayhead: {
+    label: "Select clips at the playhead",
+    keys: ["Shift+V"],
+  },
+  editDeselectAll: { label: "Deselect all", keys: ["Shift+A", "Esc"] },
 } satisfies Record<string, Binding>;
 
 export type Action = keyof typeof keymap;
@@ -75,6 +94,9 @@ const named: Record<string, string> = {
   Quote: "'",
   Backquote: "`",
   Slash: "/",
+  Equal: "=",
+  Minus: "-",
+  Escape: "Esc",
 };
 
 /** The combo a key press makes, by key position so Shift never changes the key's name. */
@@ -125,6 +147,8 @@ export function useKeymap(handlers: Partial<Record<Action, () => void>>) {
   latest.current = handlers;
   useEffect(() => {
     const press = (event: KeyboardEvent) => {
+      // A control that handled the key itself, such as the zoom slider, keeps it.
+      if (event.defaultPrevented) return;
       const action = actionFor(event);
       const handler = action && latest.current[action];
       if (!handler) return;

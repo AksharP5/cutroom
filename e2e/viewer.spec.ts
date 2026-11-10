@@ -32,7 +32,9 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
   const play = page.getByRole("button", { name: "Play forward" });
   const stop = page.getByRole("button", { name: "Stop" });
   await expect(now).toHaveText("00:00:00:00");
-  await expect(page.getByText("00:00:12:00")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Viewer" }).getByText("00:00:12:00"),
+  ).toBeVisible();
 
   // Typing never drives the transport.
   const composer = page.getByPlaceholder("Describe the next edit");

@@ -1,0 +1,556 @@
+/*
+  Timeline read view. Every value comes from tokens.css.
+
+  Zoom is one custom property, --ppf (pixels per frame), set on .tl-grid. Clips, labels, ticks
+  and marks place themselves from it with calc(), so a zoom step writes one property.
+*/
+
+.tl {
+  height: 100%;
+  min-width: 0;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font: var(--weight-regular) var(--type-sm) / var(--leading-body)
+    var(--font-sans);
+  user-select: none;
+}
+.tl *,
+.tl *::before,
+.tl *::after {
+  box-sizing: border-box;
+}
+:where(.tl) button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.tl :focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* One scroller for time and tracks; the ruler, track headers and corner stick to its edges. */
+.tl-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+.tl-grid {
+  --ruler-height: calc(var(--size-ruler) + var(--stroke-hair));
+  display: grid;
+  grid-template-columns: var(--size-track-head) minmax(0, 1fr);
+  grid-template-rows: var(--ruler-height) minmax(0, 1fr);
+  /* --view is the visible width of the lanes. Half a view of room follows the last frame, so the end can be brought to the middle. */
+  width: calc(
+    var(--size-track-head) +
+      max(var(--view), var(--frames) * var(--ppf) * 1px + var(--view) / 2)
+  );
+  min-height: 100%;
+}
+
+.tl-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--z-track-heads) + 1);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+.tl-zoom-step {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--size-track-button);
+  height: var(--size-track-button);
+  border-radius: var(--radius-control);
+  color: var(--text-tertiary);
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.tl-zoom-step:active {
+  transform: scale(var(--press-scale));
+}
+.tl-zoom {
+  position: relative;
+  flex: none;
+  width: var(--size-zoom-slider);
+  height: var(--size-track-button);
+  margin: 0 2px;
+  cursor: pointer;
+  touch-action: none;
+}
+.tl-zoom::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - 1px);
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--line-strong);
+}
+.tl-zoom-thumb {
+  position: absolute;
+  top: calc(50% - 6px);
+  left: calc(var(--zoom, 0) * (100% - 4px));
+  width: 4px;
+  height: 12px;
+  background: var(--text-primary);
+}
+
+.tl-ruler {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-playhead);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+  background: var(--surface-panel);
+  cursor: default;
+  touch-action: none;
+}
+/* Layers that stretch during an animated zoom. Text never sits on them. */
+.tl-scaled {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.tl-tick {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--f) * var(--ppf) * 1px);
+  width: calc(var(--step) * var(--ppf) * 1px);
+  height: var(--size-tick-major);
+  border-left: var(--stroke-hair) solid var(--line-strong);
+}
+.tl-tick i {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--n) * 100%);
+  width: var(--stroke-hair);
+  height: var(--size-tick-minor);
+  background: var(--line);
+}
+.tl-tick-label {
+  position: absolute;
+  top: var(--ruler-label-top);
+  left: calc(var(--f) * var(--ppf) * 1px + 4px);
+  color: var(--text-tertiary);
+  font: var(--type-micro) / 9px var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.tl-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--f) * var(--ppf) * 1px);
+  width: calc(var(--d) * var(--ppf) * 1px);
+  background: var(--range-band);
+}
+.tl-bracket {
+  position: absolute;
+  bottom: 0;
+  left: calc(var(--f) * var(--ppf) * 1px);
+  width: 5px;
+  height: calc(var(--size-ruler) - var(--ruler-flag-top));
+  border: var(--stroke-bracket) solid var(--selection);
+  pointer-events: none;
+}
+.tl-bracket.in {
+  border-right: 0;
+}
+.tl-bracket.out {
+  margin-left: -5px;
+  border-left: 0;
+}
+.tl-range-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--f) * var(--ppf) * 1px);
+  z-index: var(--z-range-lines);
+  width: var(--stroke-hair);
+  background: var(--range-line);
+  pointer-events: none;
+}
+.tl-marker {
+  position: absolute;
+  top: var(--ruler-flag-top);
+  left: calc(var(--f) * var(--ppf) * 1px - var(--size-marker-w) / 2);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--size-marker-h);
+  color: var(--text-secondary);
+  font: var(--weight-medium) var(--type-micro) / 9px var(--font-sans);
+  white-space: nowrap;
+}
+.tl-marker::before {
+  content: "";
+  flex: none;
+  width: var(--size-marker-w);
+  height: var(--size-marker-h);
+  background: var(--marker);
+  clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
+}
+.tl-marker.blue,
+.tl-marker.cyan {
+  --marker: var(--marker-grey);
+}
+.tl-marker.green {
+  --marker: var(--marker-green);
+}
+.tl-marker.purple {
+  --marker: var(--marker-violet);
+}
+.tl-marker.pink,
+.tl-marker.red {
+  --marker: var(--marker-rose);
+}
+.tl-marker.yellow {
+  --marker: var(--marker-sand);
+}
+.tl-pin {
+  position: absolute;
+  top: var(--ruler-pin-top);
+  left: calc(var(--f) * var(--ppf) * 1px - var(--size-pin-ruler) / 2);
+  width: var(--size-pin-ruler);
+  height: var(--size-pin-ruler);
+  border-radius: 50%;
+}
+/* A larger target than the 6px dot. */
+.tl-pin::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+.tl-pin.queued {
+  background: var(--human);
+}
+.tl-pin.review {
+  background: var(--agent);
+}
+.tl-pin.accepted {
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--glyph-faint);
+}
+.tl-pin.working {
+  background: var(--agent-hatch);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--agent);
+}
+
+/*
+  The playhead is two 1px lines moved by transform: the head in the ruler and the stem through
+  the lanes. The stem starts at the head's tip, so it never crosses a label or pin.
+*/
+.tl-playhead,
+.tl-playhead-head {
+  position: absolute;
+  left: 0;
+  z-index: var(--z-playhead);
+  width: var(--stroke-hair);
+  background: var(--playhead);
+  transform: translateX(round(var(--f) * var(--ppf) * 1px, 1px));
+  will-change: transform;
+  pointer-events: none;
+}
+.tl-playhead {
+  top: 0;
+  bottom: 0;
+}
+.tl-playhead-head {
+  top: var(--ruler-flag-top);
+  bottom: calc(var(--stroke-hair) * -1);
+}
+.tl-playhead-head::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc((var(--size-playhead-head-w) - var(--stroke-hair)) / -2);
+  width: var(--size-playhead-head-w);
+  height: var(--size-playhead-head-h);
+  background: var(--playhead);
+  clip-path: polygon(0 0, 100% 0, 100% 45%, 50% 100%, 0 45%);
+}
+
+.tl-heads {
+  position: sticky;
+  left: 0;
+  z-index: var(--z-track-heads);
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+.tl-head {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 6px 0 8px;
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.tl-head.video {
+  height: calc(var(--size-track-video) + var(--stroke-hair));
+}
+.tl-head.audio {
+  gap: 2px;
+  height: calc(var(--size-track-audio) + var(--stroke-hair));
+}
+.tl-head-title {
+  display: flex;
+  align-items: center;
+  height: 16px;
+  min-width: 0;
+}
+.tl-head-id {
+  flex: none;
+  width: var(--size-track-id);
+  color: var(--text-secondary);
+  font: var(--weight-medium) var(--type-2xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.tl-head-name {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  font-stretch: var(--stretch-condensed);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tl-head-buttons {
+  display: flex;
+  gap: 2px;
+  padding-left: var(--size-track-id);
+}
+/* Default states stay quiet; only the exceptions (locked, auto-select off) light up. */
+.tl-track-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--size-track-button);
+  height: var(--size-track-button);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line-subtle);
+  color: var(--text-secondary);
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.tl-track-button.exception {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.tl-track-button:active {
+  transform: scale(var(--press-scale));
+}
+/* Hover fades in a 7% white overlay. It exists only while hovered, so idle clips cost nothing. */
+@media (hover: hover) and (pointer: fine) {
+  .tl-track-button:hover::before,
+  .tl-zoom-step:hover::before,
+  .tl-clip:hover::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--overlay-hover);
+    transition: opacity var(--duration-hover) var(--ease-fade);
+    pointer-events: none;
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+}
+.tl-divider {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: var(--stroke-rail);
+  background: var(--line);
+}
+
+.tl-lanes {
+  position: relative;
+  /* Its own stacking context, so the playhead stem passes under the ruler when tracks scroll. */
+  isolation: isolate;
+  background: var(--surface-lane);
+}
+.tl-lane {
+  position: absolute;
+  right: 0;
+  left: 0;
+  border-bottom: var(--stroke-hair) solid var(--line-lane);
+}
+.tl-lane.video {
+  height: calc(var(--size-track-video) + var(--stroke-hair));
+  background: var(--surface-lane-video);
+}
+.tl-lane.audio {
+  height: calc(var(--size-track-audio) + var(--stroke-hair));
+}
+
+/* Clip: a 2px kind rail on a tinted name strip over a flat body. Media bodies (filmstrip, waveform) go inside, under the strip. */
+.tl-clip {
+  position: absolute;
+  left: calc(var(--s) * var(--ppf) * 1px);
+  z-index: var(--z-clip);
+  width: calc(var(--d) * var(--ppf) * 1px - 1px);
+  min-width: 1px;
+  margin-top: 1px;
+  border-radius: var(--radius-clip);
+  background: linear-gradient(
+    var(--head) var(--size-clip-name),
+    var(--body) var(--size-clip-name)
+  );
+  box-shadow: inset 0 var(--stroke-rail) 0 var(--rail);
+  pointer-events: auto;
+}
+.tl-clip.video {
+  --rail: var(--clip-video);
+  --head: var(--clip-video-head);
+  --body: var(--clip-video-body);
+}
+.tl-clip.image {
+  --rail: var(--clip-image);
+  --head: var(--clip-image-head);
+  --body: var(--clip-image-body);
+}
+.tl-clip.composition,
+.tl-clip.element {
+  --rail: var(--clip-comp);
+  --head: var(--clip-comp-head);
+  --body: var(--clip-comp-body);
+}
+.tl-clip.audio {
+  --rail: var(--clip-audio);
+  --head: var(--clip-audio-head);
+  --body: var(--clip-audio-body);
+}
+.tl-clip.on-video {
+  height: calc(var(--size-track-video) - 2px);
+}
+.tl-clip.on-audio {
+  height: calc(var(--size-track-audio) - 2px);
+}
+.tl-clip.locked,
+.tl-label.locked {
+  opacity: var(--track-locked-opacity);
+}
+.tl-clip.selected {
+  z-index: var(--z-clip-selected);
+}
+/* Selection: a 1px paper outline inside the clip, with brackets at its ends. Instant. */
+.tl-selected {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
+  pointer-events: none;
+}
+/* The brackets overhang by 1px above and below so they stay whole on the top track, under the ruler. */
+.tl-selected::before,
+.tl-selected::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 6px;
+  border: var(--stroke-bracket) solid var(--selection);
+}
+.tl-selected::before {
+  left: -3px;
+  border-right: 0;
+}
+.tl-selected::after {
+  right: -3px;
+  border-left: 0;
+}
+
+/* Names sit above the stretching layer, so text keeps its shape during a zoom. */
+.tl-names {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-clip-selected);
+  pointer-events: none;
+}
+.tl-label {
+  position: absolute;
+  left: calc(var(--s) * var(--ppf) * 1px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(var(--d) * var(--ppf) * 1px - 1px);
+  height: var(--size-clip-name);
+  margin-top: 1px;
+  padding: var(--stroke-rail) 5px 0 6px;
+  color: var(--clip-head-text);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-sans);
+  font-stretch: var(--stretch-condensed);
+  white-space: nowrap;
+}
+/* The name follows the visible left edge of its clip. It hides when the clip is under 28px wide. */
+.tl-name {
+  position: sticky;
+  left: calc(var(--size-track-head) + 6px);
+  flex: none;
+  max-width: clamp(0px, (100% - 16px) * 9999, 100%);
+  overflow: hidden;
+  padding: 1px 0;
+  text-overflow: ellipsis;
+}
+/*
+  The duration shows on clips at least 200px wide. As a clip scrolls out on the left its stuck
+  name closes in on the duration, so the duration fades out before they meet: scroll-driven,
+  opacity only, between 190px and 150px of the clip left in view.
+*/
+.tl-label.timed {
+  view-timeline: --tl-clip inline;
+  view-timeline-inset: var(--size-track-head) 0px;
+}
+.tl-length {
+  max-width: max(0px, (100% - 189px) * 9999);
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--clip-head-meta);
+  font: var(--type-micro) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+  animation: tl-length-leave linear both;
+  animation-timeline: --tl-clip;
+  animation-range: exit calc(100% - 190px) exit calc(100% - 150px);
+}
+@keyframes tl-length-leave {
+  to {
+    opacity: 0;
+  }
+}
+
+.tl-empty {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: var(--view);
+  margin: 0;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+.tl-marquee {
+  position: absolute;
+  z-index: var(--z-range-lines);
+  background: var(--range-band);
+  box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
+  pointer-events: none;
+}

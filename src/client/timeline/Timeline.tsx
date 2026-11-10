@@ -1,0 +1,721 @@
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { KeyboardEvent, PointerEvent } from "react";
+import { flushSync } from "react-dom";
+import {
+  CursorClick,
+  LockSimple,
+  LockSimpleOpen,
+  Minus,
+  Plus,
+} from "@phosphor-icons/react";
+import type {
+  Clip,
+  Fps,
+  Marker,
+  Timeline as TimelineData,
+  Track,
+} from "../../shared/timeline/schema";
+import {
+  MAX_PPF,
+  clipsByTrack,
+  clipsInRange,
+  majorTicks,
+  mountedRange,
+  rowsBetween,
+  sliderToZoom,
+  tickStep,
+  timelineFrames,
+  trackRows,
+  zoomToSlider,
+} from "./math";
+import type { FrameRange, Row, RowSizes, TickStep } from "./math";
+import { clickSelection, emptySelection, marqueeSelection } from "./selection";
+import type { Selection } from "./selection";
+import { createViewport } from "./view";
+import type { TimelineViewport } from "./view";
+import { formatTimecode } from "../edit/timecode";
+import { useKeymap } from "../keymap";
+import "./timeline.css";
+
+declare module "react" {
+  interface CSSProperties {
+    [property: `--${string}`]: string | number;
+  }
+}
+
+/** The transport as the timeline needs it. The playhead follows it without rendering React. */
+export interface TimelineClock {
+  frame(): number;
+  /** The way playback runs: 1 forward, -1 in reverse, 0 when stopped or scrubbing. */
+  direction(): 1 | 0 | -1;
+  /** Calls back when the frame changes and at no other time, at most once per displayed frame. */
+  subscribe(listener: () => void): () => void;
+}
+export interface TimelinePin {
+  id: string;
+  frame: number;
+  state: "queued" | "working" | "review" | "accepted";
+}
+export interface TimelineProps {
+  timeline: TimelineData;
+  clock: TimelineClock;
+  /** Review notes shown on the ruler's top edge. */
+  pins: readonly TimelinePin[];
+  selection: Selection;
+  onSelect(selection: Selection): void;
+  /** A click on a marker or pin. */
+  onSeek(frame: number): void;
+  /** The pointer is down on the ruler; called for the press and every move until `onScrubEnd`. */
+  onScrub(frame: number): void;
+  onScrubEnd(): void;
+  /**
+   * A track button was pressed. The track may be an empty one the timeline does not hold yet;
+   * its index and kind are what it is shown as.
+   */
+  onToggleTrack(track: Track, setting: "locked" | "autoSelect"): void;
+  /** A pin was clicked; the playhead has already been sent to its frame. */
+  onOpenPin(id: string): void;
+}
+
+/** One press of a zoom button or arrow key. */
+const ZOOM_STEP = 1.5;
+/** Pixels the pointer travels before a press on empty lanes becomes a marquee. */
+const DRAG_THRESHOLD = 3;
+
+const pinLabels = {
+  queued: "queued",
+  working: "in progress",
+  review: "ready to review",
+  accepted: "accepted",
+} as const satisfies Record<TimelinePin["state"], string>;
+
+/** A clip name shows once its clip is this wide; timeline.css hides it below that. */
+const NAME_MIN_WIDTH = 28;
+/** A clip shows its duration once it is this wide. */
+const LENGTH_MIN_WIDTH = 200;
+
+interface Mounted {
+  frames: FrameRange;
+  rows: FrameRange;
+  step: TickStep;
+  /**
+   * The closest zoom, in pixels per frame, before labels are mounted again: the next quarter
+   * octave. Clips too narrow to show a name anywhere below it get no label, so a zoomed-out
+   * timeline restyles one element per clip, not three.
+   */
+  labelPpf: number;
+}
+
+function readSizes(): { rows: RowSizes; head: number } {
+  const style = getComputedStyle(document.documentElement);
+  const px = (token: string) => parseFloat(style.getPropertyValue(token));
+  return {
+    rows: {
+      video: px("--size-track-video"),
+      audio: px("--size-track-audio"),
+      seam: px("--stroke-hair"),
+      divider: px("--stroke-rail"),
+    },
+    head: px("--size-track-head"),
+  };
+}
+
+const clipName = (clip: Clip) =>
+  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+
+const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
+  a.size === b.size && [...a].every((id) => b.has(id));
+
+const ClipBody = memo(function ClipBody({
+  clip,
+  row,
+  selected,
+}: {
+  clip: Clip;
+  row: Row;
+  selected: boolean;
+}) {
+  return (
+    <div
+      className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${selected ? " selected" : ""}`}
+      data-clip={clip.id}
+      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+    >
+      {selected && <i className="tl-selected" />}
+    </div>
+  );
+});
+
+const ClipLabel = memo(function ClipLabel({
+  clip,
+  row,
+  fps,
+  timed,
+}: {
+  clip: Clip;
+  row: Row;
+  fps: Fps;
+  /** Whether the clip can get wide enough to show its duration before labels are mounted again. */
+  timed: boolean;
+}) {
+  const end = clip.start + clip.duration;
+  return (
+    <div
+      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}`}
+      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+    >
+      <span
+        className="tl-name"
+        data-unscaled
+        style={{ "--f": clip.start, "--e": end }}
+      >
+        {clipName(clip)}
+      </span>
+      {timed && (
+        <span className="tl-length" data-unscaled style={{ "--f": end }}>
+          {formatTimecode(clip.duration, fps)}
+        </span>
+      )}
+    </div>
+  );
+});
+
+const Ruler = memo(function Ruler({
+  frames,
+  step,
+  fps,
+  end,
+  markers,
+  pins,
+  range,
+  onSeek,
+  onOpenPin,
+}: {
+  frames: FrameRange;
+  step: TickStep;
+  fps: Fps;
+  end: number;
+  markers: readonly Marker[];
+  pins: readonly TimelinePin[];
+  range: TimelineData["range"];
+  onSeek(frame: number): void;
+  onOpenPin(id: string): void;
+}) {
+  const ticks = majorTicks(frames, step.major);
+  const minors = step.minor ? step.major / step.minor : 0;
+  const shown = (frame: number) => frame >= frames.from && frame < frames.to;
+  const marked = range.in !== null || range.out !== null;
+  const from = range.in ?? 0;
+  return (
+    <>
+      <div className="tl-scaled">
+        {marked && (
+          <i
+            className="tl-range"
+            style={{ "--f": from, "--d": (range.out ?? end) - from }}
+          />
+        )}
+        {ticks.map((frame) => (
+          <span
+            key={frame}
+            className="tl-tick"
+            style={{ "--f": frame, "--step": step.major }}
+          >
+            {Array.from({ length: Math.max(0, minors - 1) }, (_, index) => (
+              <i key={index} style={{ "--n": (index + 1) / minors }} />
+            ))}
+          </span>
+        ))}
+      </div>
+      {ticks.map((frame) => (
+        <span
+          key={frame}
+          className="tl-tick-label"
+          data-unscaled
+          style={{ "--f": frame }}
+        >
+          {formatTimecode(frame, fps)}
+        </span>
+      ))}
+      {range.in !== null && (
+        <>
+          <i
+            className="tl-bracket in"
+            data-unscaled
+            style={{ "--f": range.in }}
+          />
+        </>
+      )}
+      {range.out !== null && (
+        <>
+          <i
+            className="tl-bracket out"
+            data-unscaled
+            style={{ "--f": range.out }}
+          />
+        </>
+      )}
+      {markers
+        .filter((marker) => shown(marker.frame))
+        .map((marker) => (
+          <button
+            key={marker.id}
+            className={`tl-marker ${marker.color}`}
+            data-unscaled
+            style={{ "--f": marker.frame }}
+            title={marker.note || undefined}
+            aria-label={`Marker ${marker.name || formatTimecode(marker.frame, fps)}`}
+            onClick={() => onSeek(marker.frame)}
+          >
+            {marker.name}
+          </button>
+        ))}
+      {pins
+        .filter((pin) => shown(pin.frame))
+        .map((pin) => (
+          <button
+            key={pin.id}
+            className={`tl-pin ${pin.state}`}
+            data-unscaled
+            style={{ "--f": pin.frame }}
+            aria-label={`Review note at ${formatTimecode(pin.frame, fps)}, ${pinLabels[pin.state]}`}
+            onClick={() => {
+              onSeek(pin.frame);
+              onOpenPin(pin.id);
+            }}
+          />
+        ))}
+    </>
+  );
+});
+
+const TrackHeads = memo(function TrackHeads({
+  rows,
+  onToggleTrack,
+}: {
+  rows: readonly Row[];
+  onToggleTrack: TimelineProps["onToggleTrack"];
+}) {
+  return rows.map(({ track, id, top }) => (
+    <div key={track.index} className={`tl-head ${track.kind}`} style={{ top }}>
+      <div className="tl-head-title">
+        <span className="tl-head-id">{id}</span>
+        <span className="tl-head-name">{track.name}</span>
+      </div>
+      <div className="tl-head-buttons">
+        <button
+          className={`tl-track-button${track.locked ? " exception" : ""}`}
+          aria-label={`Lock ${id}`}
+          aria-pressed={track.locked}
+          title={track.locked ? "Unlock track" : "Lock track"}
+          onClick={() => onToggleTrack(track, "locked")}
+        >
+          {track.locked ? (
+            <LockSimple size={13} weight="fill" />
+          ) : (
+            <LockSimpleOpen size={13} />
+          )}
+        </button>
+        <button
+          className={`tl-track-button${track.autoSelect ? "" : " exception"}`}
+          aria-label={`Auto-select ${id}`}
+          aria-pressed={track.autoSelect}
+          title={
+            track.autoSelect ? "Turn auto-select off" : "Turn auto-select on"
+          }
+          onClick={() => onToggleTrack(track, "autoSelect")}
+        >
+          <CursorClick
+            size={13}
+            weight={track.autoSelect ? "fill" : "regular"}
+          />
+        </button>
+      </div>
+    </div>
+  ));
+});
+
+/**
+ * The timeline read view: ruler, track headers, clips, markers, review pins and the playhead.
+ * Scrolling and zooming write to the DOM directly; React renders only when the view leaves the
+ * range of frames and rows it has mounted.
+ */
+export function Timeline({
+  timeline,
+  clock,
+  pins,
+  selection,
+  onSelect,
+  onSeek,
+  onScrub,
+  onScrubEnd,
+  onToggleTrack,
+  onOpenPin,
+}: TimelineProps) {
+  const [sizes] = useState(readSizes);
+  const [mounted, setMounted] = useState<Mounted | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  const slider = useRef<HTMLDivElement>(null);
+  const playhead = useRef<HTMLElement>(null);
+  const playheadHead = useRef<HTMLElement>(null);
+  const marquee = useRef<HTMLDivElement>(null);
+  const viewport = useRef<TimelineViewport | null>(null);
+  const scrubbing = useRef(false);
+  const drag = useRef<{
+    x: number;
+    y: number;
+    base: Selection;
+    active: boolean;
+  } | null>(null);
+
+  const { fps } = timeline;
+  const frames = timelineFrames(timeline);
+  const layout = useMemo(
+    () => trackRows(timeline.tracks, sizes.rows),
+    [timeline.tracks, sizes],
+  );
+  const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+
+  useLayoutEffect(() => {
+    if (!scroller.current || !grid.current) return;
+    const created = createViewport(
+      scroller.current,
+      grid.current,
+      sizes.head,
+      (flush) => {
+        const state = created.state();
+        const position = zoomToSlider(state.ppf, state.fit);
+        slider.current?.style.setProperty("--zoom", String(position));
+        slider.current?.setAttribute(
+          "aria-valuenow",
+          String(Math.round(position * 100)),
+        );
+        const update = () =>
+          setMounted((current) => {
+            const next = {
+              frames: mountedRange(current?.frames ?? null, state.frames),
+              rows: mountedRange(current?.rows ?? null, state.rows),
+              step: tickStep(state.ppf, state.fps),
+              labelPpf: 2 ** (Math.ceil(Math.log2(state.ppf) * 4) / 4),
+            };
+            return current &&
+              current.frames === next.frames &&
+              current.rows === next.rows &&
+              current.step.major === next.step.major &&
+              current.labelPpf === next.labelPpf
+              ? current
+              : next;
+          });
+        if (flush) flushSync(update);
+        else update();
+      },
+    );
+    viewport.current = created;
+    return () => created.destroy();
+  }, [sizes]);
+
+  useLayoutEffect(() => {
+    viewport.current?.measure({
+      frames,
+      fps: { num: fps.num, den: fps.den },
+    });
+  }, [frames, fps.num, fps.den]);
+
+  useEffect(() => {
+    const write = () => {
+      const frame = clock.frame();
+      playhead.current?.style.setProperty("--f", String(frame));
+      playheadHead.current?.style.setProperty("--f", String(frame));
+      if (!scrubbing.current)
+        viewport.current?.follow(frame, clock.direction());
+    };
+    write();
+    return clock.subscribe(write);
+  }, [clock]);
+
+  function zoomTo(position: number, animate: boolean) {
+    const view = viewport.current;
+    if (!view) return;
+    view.zoomTo(
+      sliderToZoom(position, view.state().fit),
+      clock.frame(),
+      animate,
+    );
+  }
+  function sliderPosition(event: PointerEvent<HTMLDivElement>) {
+    const track = event.currentTarget.getBoundingClientRect();
+    const thumb =
+      event.currentTarget.firstElementChild?.getBoundingClientRect().width ?? 0;
+    return (event.clientX - track.left - thumb / 2) / (track.width - thumb);
+  }
+  function stepZoom(factor: number) {
+    const view = viewport.current;
+    view?.zoomTo(view.state().ppf * factor, clock.frame());
+  }
+  useKeymap({
+    viewZoomSubZoomIn: () => stepZoom(ZOOM_STEP),
+    viewZoomSubZoomOut: () => stepZoom(1 / ZOOM_STEP),
+    viewZoomSubZoomToFit: () => viewport.current?.toggleFit(clock.frame()),
+  });
+  function zoomKey(event: KeyboardEvent) {
+    const view = viewport.current;
+    if (!view) return;
+    const { ppf, fit } = view.state();
+    const targets: Record<string, number> = {
+      ArrowRight: ppf * ZOOM_STEP,
+      ArrowUp: ppf * ZOOM_STEP,
+      ArrowLeft: ppf / ZOOM_STEP,
+      ArrowDown: ppf / ZOOM_STEP,
+      Home: fit,
+      End: MAX_PPF,
+    };
+    const target = targets[event.key];
+    if (target === undefined) return;
+    // The transport binds the same keys; on the slider they zoom and nothing else.
+    event.preventDefault();
+    event.stopPropagation();
+    view.zoomTo(target, clock.frame());
+  }
+
+  function scrub(event: PointerEvent) {
+    const frame = viewport.current?.frameAtClient(event.clientX) ?? 0;
+    onScrub(Math.min(frames, frame));
+  }
+  function endScrub() {
+    if (!scrubbing.current) return;
+    scrubbing.current = false;
+    onScrubEnd();
+  }
+
+  function pressLanes(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+    const id = event.target.closest<HTMLElement>("[data-clip]")?.dataset.clip;
+    const toggle = event.ctrlKey || event.metaKey;
+    if (id) {
+      onSelect(
+        clickSelection(
+          timeline,
+          layout.rows.map((row) => row.track.index),
+          selection,
+          id,
+          { toggle, range: event.shiftKey, alone: event.altKey },
+        ),
+      );
+      return;
+    }
+    const lanes = event.currentTarget.getBoundingClientRect();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = {
+      x: event.clientX - lanes.left,
+      y: event.clientY - lanes.top,
+      base: toggle || event.shiftKey ? selection : emptySelection,
+      active: false,
+    };
+  }
+  function dragLanes(event: PointerEvent<HTMLDivElement>) {
+    const start = drag.current;
+    const view = viewport.current;
+    const box = marquee.current;
+    if (!start || !view || !box) return;
+    const lanes = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - lanes.left;
+    const y = event.clientY - lanes.top;
+    if (!start.active && Math.hypot(x - start.x, y - start.y) < DRAG_THRESHOLD)
+      return;
+    start.active = true;
+    const left = Math.min(x, start.x);
+    const top = Math.min(y, start.y);
+    const right = Math.max(x, start.x);
+    const bottom = Math.max(y, start.y);
+    box.hidden = false;
+    box.style.left = `${left}px`;
+    box.style.top = `${top}px`;
+    box.style.width = `${right - left}px`;
+    box.style.height = `${bottom - top}px`;
+    const { ppf } = view.state();
+    const next = marqueeSelection(
+      timeline,
+      rowsBetween(layout.rows, top, bottom).map((row) => row.track.index),
+      { from: left / ppf, to: right / ppf },
+      start.base,
+    );
+    if (!sameIds(next.ids, selection.ids)) onSelect(next);
+  }
+  function releaseLanes() {
+    const start = drag.current;
+    if (!start) return;
+    drag.current = null;
+    if (marquee.current) marquee.current.hidden = true;
+    if (!start.active && start.base === emptySelection && selection.ids.size)
+      onSelect(emptySelection);
+  }
+
+  const rows = mounted
+    ? rowsBetween(layout.rows, mounted.rows.from, mounted.rows.to)
+    : [];
+  const clips = mounted
+    ? rows.flatMap((row) => {
+        const track = tracks.get(row.track.index);
+        return track
+          ? clipsInRange(track, mounted.frames).map((clip) => ({ clip, row }))
+          : [];
+      })
+    : [];
+
+  return (
+    <div className="tl">
+      <div className="tl-scroll" ref={scroller}>
+        <div className="tl-grid" ref={grid} style={{ "--frames": frames }}>
+          <div className="tl-corner">
+            <button
+              className="tl-zoom-step"
+              aria-label="Zoom out"
+              onClick={() => stepZoom(1 / ZOOM_STEP)}
+            >
+              <Minus size={12} />
+            </button>
+            <div
+              className="tl-zoom"
+              ref={slider}
+              role="slider"
+              tabIndex={0}
+              aria-label="Zoom"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              title="Double-click to fit the timeline"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                // A press beside the thumb travels there; a drag follows the pointer directly.
+                if (event.target === event.currentTarget)
+                  zoomTo(sliderPosition(event), true);
+              }}
+              onPointerMove={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  zoomTo(sliderPosition(event), false);
+              }}
+              onDoubleClick={() => viewport.current?.fit(clock.frame())}
+              onKeyDown={zoomKey}
+            >
+              <i className="tl-zoom-thumb" />
+            </div>
+            <button
+              className="tl-zoom-step"
+              aria-label="Zoom in"
+              onClick={() => stepZoom(ZOOM_STEP)}
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+          <div
+            className="tl-ruler"
+            onPointerDown={(event) => {
+              if (
+                event.button !== 0 ||
+                !(event.target instanceof Element) ||
+                event.target.closest("button")
+              )
+                return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              scrubbing.current = true;
+              scrub(event);
+            }}
+            onPointerMove={(event) => {
+              if (scrubbing.current) scrub(event);
+            }}
+            onPointerUp={endScrub}
+            onPointerCancel={endScrub}
+          >
+            {mounted && (
+              <Ruler
+                frames={mounted.frames}
+                step={mounted.step}
+                fps={fps}
+                end={frames}
+                markers={timeline.markers}
+                pins={pins}
+                range={timeline.range}
+                onSeek={onSeek}
+                onOpenPin={onOpenPin}
+              />
+            )}
+            <i className="tl-playhead-head" ref={playheadHead} data-unscaled />
+          </div>
+          <div className="tl-heads" style={{ height: layout.height }}>
+            <TrackHeads rows={rows} onToggleTrack={onToggleTrack} />
+            <i className="tl-divider" style={{ top: layout.dividerTop }} />
+          </div>
+          <div
+            className="tl-lanes"
+            onPointerDown={pressLanes}
+            onPointerMove={dragLanes}
+            onPointerUp={releaseLanes}
+            onPointerCancel={releaseLanes}
+          >
+            {rows.map((row) => (
+              <i
+                key={row.track.index}
+                className={`tl-lane ${row.track.kind}`}
+                style={{ top: row.top }}
+              />
+            ))}
+            <i className="tl-divider" style={{ top: layout.dividerTop }} />
+            <div className="tl-scaled">
+              {clips.map(({ clip, row }) => (
+                <ClipBody
+                  key={clip.id}
+                  clip={clip}
+                  row={row}
+                  selected={selection.ids.has(clip.id)}
+                />
+              ))}
+            </div>
+            <div className="tl-names">
+              {mounted &&
+                clips
+                  .filter(
+                    ({ clip }) =>
+                      clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                  )
+                  .map(({ clip, row }) => (
+                    <ClipLabel
+                      key={clip.id}
+                      clip={clip}
+                      row={row}
+                      fps={fps}
+                      timed={
+                        clip.duration * mounted.labelPpf >= LENGTH_MIN_WIDTH
+                      }
+                    />
+                  ))}
+            </div>
+            {timeline.clips.length === 0 && (
+              <p className="tl-empty">Drop media here</p>
+            )}
+            {[timeline.range.in, timeline.range.out].map(
+              (frame, index) =>
+                frame !== null && (
+                  <i
+                    key={index}
+                    className="tl-range-line"
+                    data-unscaled
+                    style={{ "--f": frame }}
+                  />
+                ),
+            )}
+            <i className="tl-playhead" ref={playhead} data-unscaled />
+            <div className="tl-marquee" ref={marquee} hidden />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

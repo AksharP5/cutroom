@@ -183,7 +183,12 @@ export function ReviewPanel({
         setAnswer({ id: item.id, type, note: "" });
       };
     return (
-      <article className="review-row" data-status={status} key={item.id}>
+      <article
+        className="review-row"
+        id={`review-note-${item.id}`}
+        data-status={status}
+        key={item.id}
+      >
         <span className="note-pin" data-status={status}>
           {number.get(item.id)}
         </span>

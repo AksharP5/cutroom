@@ -10,11 +10,13 @@ import {
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext, EditorReviewDraft } from "../../shared/editor";
+import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
+import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { reportEditorError } from "../workspace";
 import "./edit.css";
 import {
@@ -60,12 +62,17 @@ const tools = [
 /** Cutroom's own editor: tool row, viewer, transport, and the timeline below a split. */
 export function EditPage({
   projectId,
+  notes,
   onContext,
   onReview,
+  onOpenNote,
 }: {
   projectId: string;
+  /** Review notes, shown as pins on the timeline ruler. */
+  notes: readonly ReviewItem[];
   onContext?: (context: EditorContext) => void;
   onReview?: (draft: EditorReviewDraft) => void;
+  onOpenNote(id: string): void;
 }) {
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
@@ -319,8 +326,14 @@ export function EditPage({
         }
         onPointerMove={resize}
       />
-      {/* The timeline (src/client/timeline/) mounts here. */}
-      <section className="edit-timeline" aria-label="Timeline" />
+      <section className="edit-timeline" aria-label="Timeline">
+        <ProjectTimeline
+          projectId={projectId}
+          notes={notes}
+          onOpenNote={onOpenNote}
+          onError={report}
+        />
+      </section>
     </div>
   );
 }
