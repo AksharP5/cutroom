@@ -1,6 +1,7 @@
 .edit-page {
   position: relative;
-  overflow: hidden;
+  /* An offscreen drawer must not let focus scroll the whole editor. */
+  overflow: clip;
   grid-template-columns: minmax(0, 1fr) var(--width-inspector);
 }
 .edit-page:has(.clip-inspector[data-open="false"]) {
