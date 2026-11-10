@@ -80,11 +80,36 @@ function escapeHtml(value: string): string {
 function starter(input: z.infer<typeof CreateProjectSchema>): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(input.name)}</title>
-<style>@font-face{font-family:"IBM Plex Sans";src:url("assets/fonts/regular.woff2") format("woff2");font-weight:400;font-style:normal}@font-face{font-family:"IBM Plex Sans";src:url("assets/fonts/semibold.woff2") format("woff2");font-weight:600;font-style:normal}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#141b21;color:#f3f0e9;font-family:"IBM Plex Sans",sans-serif}.stage{position:relative;width:${input.width}px;height:${input.height}px;background:#141b21}.title{position:absolute;left:9%;top:37%;font-size:${Math.round(input.width / 18)}px;letter-spacing:-.045em;line-height:1.05;font-weight:600;max-width:80%}.rule{position:absolute;left:9%;top:29%;width:7%;height:5px;background:#df764c}.caption{position:absolute;left:9%;bottom:15%;font-size:${Math.round(input.width / 60)}px;color:#a5afb4}</style></head>
+<style>
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("assets/fonts/InstrumentSans-var.woff2") format("woff2");
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-style: normal;
+  font-display: block;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { color: #ededed; background: #111111; font-family: "Instrument Sans", system-ui, sans-serif; }
+.stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.background { position: absolute; inset: 0; background: #111111; }
+.title {
+  position: absolute; left: 12%; right: 12%; bottom: 44%; margin: 0;
+  font-size: ${Math.round(Math.min(input.width / 20, input.height / 9))}px;
+  font-weight: 500; letter-spacing: -.035em; line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.caption {
+  position: absolute; left: 12%; right: 12%; top: 61%; margin: 0;
+  font-size: ${Math.round(Math.min(input.width, input.height) / 36)}px;
+  font-weight: 400; line-height: 1.5; color: #a8a8a8;
+}
+</style></head>
 <body><main id="main" data-composition-id="main" data-no-timeline data-width="${input.width}" data-height="${input.height}" data-duration="${input.duration}" class="stage">
-<div id="rule" class="clip rule" data-start="0" data-duration="${input.duration}" data-track-index="0"></div>
-<div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1">${escapeHtml(input.name)}</div>
-<div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2">A new composition.</div>
+<div id="rule" class="clip background" data-start="0" data-duration="${input.duration}" data-track-index="0" data-label="Background"></div>
+<div id="headline" class="clip title" data-start="0" data-duration="${input.duration}" data-track-index="1" data-label="Project title">${escapeHtml(input.name)}</div>
+<div id="caption" class="clip caption" data-start="0" data-duration="${input.duration}" data-track-index="2" data-label="Getting started">Drop media in, or ask your agent to start.</div>
 </main></body></html>\n`;
 }
 
@@ -289,25 +314,13 @@ export async function createProjectStore(options: {
         await Promise.all([
           copyFile(
             new URL(
-              import.meta
-                .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2"),
+              "../../client/fonts/InstrumentSans-var.woff2",
+              import.meta.url,
             ),
-            join(fonts, "regular.woff2"),
+            join(fonts, "InstrumentSans-var.woff2"),
           ),
           copyFile(
-            new URL(
-              import.meta
-                .resolve("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2"),
-            ),
-            join(fonts, "semibold.woff2"),
-          ),
-          copyFile(
-            new URL(
-              "LICENSE",
-              new URL(
-                import.meta.resolve("@fontsource/ibm-plex-sans/package.json"),
-              ),
-            ),
+            new URL("../../../licenses/INSTRUMENT-SANS.txt", import.meta.url),
             join(fonts, "LICENSE.txt"),
           ),
         ]);

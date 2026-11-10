@@ -61,6 +61,11 @@ try {
   await cp(join(root, "src", "shared"), join(app, "src", "shared"), {
     recursive: true,
   });
+  await mkdir(join(app, "src", "client", "fonts"), { recursive: true });
+  await cp(
+    join(root, "src", "client", "fonts", "InstrumentSans-var.woff2"),
+    join(app, "src", "client", "fonts", "InstrumentSans-var.woff2"),
+  );
   await mkdir(join(app, "scripts"));
   await cp(join(root, "scripts/install.ts"), join(app, "scripts/install.ts"));
   await mkdir(join(app, "src", "desktop"), { recursive: true });

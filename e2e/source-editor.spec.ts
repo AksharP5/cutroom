@@ -189,7 +189,7 @@ test("autosave preserves an outside edit that lands before its queued file read"
   );
   const local = original.content.replaceAll("Source race", "Local draft");
   const outside = original.content.replace(
-    "A new composition.",
+    "Drop media in, or ask your agent to start.",
     "Outside caption",
   );
   try {
@@ -321,7 +321,10 @@ test("successive local edits remain saveable while an earlier source save is que
     "Queued source",
     "First local edit",
   );
-  const latest = first.replace("A new composition.", "A newer local caption");
+  const latest = first.replace(
+    "Drop media in, or ask your agent to start.",
+    "A newer local caption",
+  );
   try {
     await editor.fill(first);
     await readPaused;

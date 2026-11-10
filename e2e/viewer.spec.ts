@@ -342,7 +342,10 @@ test("a composition that cannot play keeps the last picture and says why", async
   await expect(live.locator("#headline")).toHaveText("Held picture");
 
   // Fixing the file brings the picture back and clears the report.
-  await writeFile(index, good.replace("A new composition.", "Back again."));
+  await writeFile(
+    index,
+    good.replace("Drop media in, or ask your agent to start.", "Back again."),
+  );
   await expect(live.locator("#caption")).toHaveText("Back again.");
   await expect(page.locator(".status-error")).toHaveCount(0);
 });

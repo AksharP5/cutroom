@@ -59,7 +59,10 @@ test("an active conversation cannot write another project's JavaScript or add it
       path: "index.html",
       file_path: "harmless.txt",
       expectedVersion: ownSource.version,
-      content: ownSource.content.replace("A new composition.", "Approved edit"),
+      content: ownSource.content.replace(
+        "Drop media in, or ask your agent to start.",
+        "Approved edit",
+      ),
     };
     expect(
       toolApproval("mcp__cutroom_studio__source_write", args, own.path).title,

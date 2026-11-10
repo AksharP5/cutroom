@@ -24,7 +24,7 @@ Codex and Claude Code are installed and authenticated by the user. Cutroom does 
 
 ## Interface assets
 
-Instrument Sans and Martian Mono are vendored in `src/client/fonts/` as variable WOFF2 files and distributed under the SIL Open Font License 1.1. Their notices are preserved in [licenses/INSTRUMENT-SANS.txt](licenses/INSTRUMENT-SANS.txt) and [licenses/MARTIAN-MONO.txt](licenses/MARTIAN-MONO.txt). IBM Plex Sans is also distributed under the SIL Open Font License 1.1; its notice is preserved in [licenses/IBM-PLEX-SANS.txt](licenses/IBM-PLEX-SANS.txt). New projects receive the IBM Plex Sans font files and their license.
+Instrument Sans and Martian Mono are vendored in `src/client/fonts/` as variable WOFF2 files and distributed under the SIL Open Font License 1.1. Their notices are preserved in [licenses/INSTRUMENT-SANS.txt](licenses/INSTRUMENT-SANS.txt) and [licenses/MARTIAN-MONO.txt](licenses/MARTIAN-MONO.txt). IBM Plex Sans is also distributed under the SIL Open Font License 1.1; its notice is preserved in [licenses/IBM-PLEX-SANS.txt](licenses/IBM-PLEX-SANS.txt). New projects receive the Instrument Sans font file and its license so compositions remain self-contained.
 
 The Cutroom logo, mark, favicons, and application icon are original Cutroom assets.
 
