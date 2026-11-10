@@ -6,7 +6,7 @@ import {
   CaretDown,
   ChatCircle,
   Cursor,
-  FolderOpen,
+  Folder,
   Knife,
   Magnet,
   PencilSimple,
@@ -305,7 +305,7 @@ export function EditPage({
               size={14}
               weight={mode === tool.mode ? "fill" : "regular"}
             />
-            {keymap[tool.action].label}
+            <span>{keymap[tool.action].label}</span>
             <kbd>{keymap[tool.action].keys[0]}</kbd>
           </button>
         ))}
@@ -347,7 +347,7 @@ export function EditPage({
           title="Project files"
           onClick={onFiles}
         >
-          <FolderOpen size={16} />
+          <Folder size={16} />
         </button>
         <span className="edit-separator" />
         <button
@@ -368,6 +368,7 @@ export function EditPage({
         >
           <ArrowClockwise size={16} />
         </button>
+        <span className="edit-separator" />
         <button
           className="edit-export"
           disabled={exporting !== null}

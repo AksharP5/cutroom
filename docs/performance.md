@@ -86,4 +86,19 @@ Before is main without clip bodies. It missed frames while zooming near fit beca
 
 At 32 px per frame every filmstrip tile is its own frame from the server. Frames are asked for only after the view has rested 150 ms, and a move drops every request not yet sent, so scrolling there draws the sprite's frames and costs the same as at any other zoom.
 
+### Dragging
+
+A drag must follow the pointer at the display rate. On November 10, 2026 the same 500-clip composition over real media (a twelve-minute 720p H.264 file with sound) was opened in Chromium 1720x1050, headless with hardware GL, and each gesture was dragged out and back in 300 pointer moves, about one every other animation frame. The table shows the page's animation-frame intervals; a late frame is an interval over 20 ms. Load average was 6 to 9.
+
+| Drag                                                       | Page frames |     p95 | Late frames | Worst frame |
+| ---------------------------------------------------------- | ----------: | ------: | ----------: | ----------: |
+| Fit, move a linked picture and sound pair along its track  |     59.6 /s | 16.7 ms |    3 of 612 |     49.9 ms |
+| Fit, move a title along its track                          |       60 /s | 16.7 ms |    0 of 604 |     16.8 ms |
+| Fit, ripple trim a quarter of the way in: 400 clips follow |     59.7 /s | 16.7 ms |    1 of 604 |     66.7 ms |
+| Fit, roll a cut                                            |       60 /s | 16.7 ms |    0 of 599 |     16.8 ms |
+| 2.6 px per frame, move a pair with filmstrip and waveform  |       60 /s | 16.7 ms |    0 of 600 |     16.8 ms |
+| 2.6 px per frame, ripple trim                              |       60 /s | 16.7 ms |    0 of 599 |     16.8 ms |
+
+While the pointer is down React renders nothing and no request is sent. A pointer move that stays on the same frame and track writes only the readout's transform. One that reaches a new frame runs the shared engine once for a move (to learn whether it would be refused) and up to about ten times for a trim held against its limit, writes a transform to each mounted clip the preview moves, and redraws the canvas from the previewed timeline. At fit one frame is 0.08 px wide, so most pointer moves reach a new frame.
+
 Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.

@@ -2,7 +2,9 @@
 
 .edit-page {
   --edit-timeline-height: var(--timeline-height);
+  container: edit-page / inline-size;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-rows: var(--size-tool-row) minmax(0, 1fr) var(--space-1) var(
@@ -94,6 +96,22 @@
   font-stretch: var(--stretch-mono);
   color: var(--text-tertiary);
 }
+/* A narrow editor drops the key hints, then the names; the names stay for screen readers. */
+@container edit-page (width < 760px) {
+  .edit-tool kbd {
+    display: none;
+  }
+}
+@container edit-page (width < 640px) {
+  .edit-tool span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
 .edit-grow {
   flex: 1;
 }
@@ -109,7 +127,6 @@
 }
 .edit-export {
   height: var(--size-tool-button);
-  margin-left: var(--space-1);
   padding: 0 9px;
   border-radius: var(--radius-control);
   background: var(--surface-raised);
