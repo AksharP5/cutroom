@@ -287,7 +287,9 @@ export interface FilmTile {
 /**
  * The filmstrip tiles of a clip that touch `[from, to)`, measured in pixels from the clip's left
  * edge. Tiles are `width` wide and the first starts on the clip's first frame, so no tile moves
- * when the view scrolls. Each shows the source frame under its left edge, held to `step` seconds.
+ * when the view scrolls. Each shows the source frame under its left edge, held back to a whole
+ * number of `step`s after the clip's media start: the first tile is exactly the clip's first
+ * frame, and a clip asks for the same frames at every zoom that shares a step.
  */
 export function filmTiles(
   clip: Pick<Clip, "mediaStart" | "playbackRate">,
@@ -302,9 +304,9 @@ export function filmTiles(
     { length: Math.max(0, Math.ceil(to / width) - first) },
     (_, index) => {
       const x = (first + index) * width;
-      const time = (clip.mediaStart ?? 0) + x * secondsPerPixel;
-      // A time a hair under a step, from the division, belongs to that step.
-      return { x, time: Math.floor(time / step + 1e-6) * step };
+      // An offset a hair under a step, from the division, belongs to that step.
+      const steps = Math.floor((x * secondsPerPixel) / step + 1e-6);
+      return { x, time: (clip.mediaStart ?? 0) + steps * step };
     },
   );
 }

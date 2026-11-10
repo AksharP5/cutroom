@@ -28,7 +28,7 @@ import {
 } from "@hyperframes/studio-server";
 import { projectPath, readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
-import { localMediaPath } from "../projects/media";
+import { localMediaPath } from "../../shared/media";
 import {
   applyTranscriptCuts,
   originalClip,

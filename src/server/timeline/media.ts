@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import type { Project } from "../../shared/project";
-import { localMediaPath } from "../projects/media";
+import { localMediaPath } from "../../shared/media";
 import { projectPath } from "../projects/store";
 
 const ProbeSchema = z.object({

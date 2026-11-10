@@ -23,7 +23,7 @@ import {
   trackRows,
   zoomToSlider,
 } from "../src/client/timeline/math";
-import { mediaPath } from "../src/client/timeline/media";
+import { localMediaPath } from "../src/shared/media";
 import {
   clickSelection,
   emptySelection,
@@ -443,13 +443,33 @@ test("filmstrip tiles start on the clip's first frame and show the source from i
     { x: 213, time: 6 },
     { x: 284, time: 7 },
   ]);
-  // At double speed each tile covers twice the source: the sprite's own two-second frames.
+  // At double speed each tile covers twice the source: frames two seconds apart, from the trim.
   const fast = { mediaStart: 3, playbackRate: 2 };
   const fastPixel = sourceSecondsPerPixel(2, fps30, 2);
   expect(frameStep(71 * fastPixel)).toBe(2);
   expect(
     filmTiles(fast, 71, fastPixel, 2, 0, 200).map((tile) => tile.time),
-  ).toEqual([2, 4, 6]);
+  ).toEqual([3, 5, 7]);
+});
+
+test("a trimmed clip's first tile is its first frame, never footage from before the trim", () => {
+  // Trimmed to 1.3 s and 3.1 s, off every step. The first tile is the trim point itself and
+  // the rest count whole steps on from it.
+  const perPixel = sourceSecondsPerPixel(32, fps30, 1);
+  const step = frameStep(71 * perPixel);
+  for (const mediaStart of [1.3, 3.1]) {
+    const times = filmTiles(
+      { mediaStart, playbackRate: 1 },
+      71,
+      perPixel,
+      step,
+      0,
+      200,
+    ).map((tile) => tile.time);
+    expect(times[0]).toBe(mediaStart);
+    expect(times[1]).toBeCloseTo(mediaStart + 0.0625, 9);
+    expect(times[2]).toBeCloseTo(mediaStart + 0.125, 9);
+  }
 });
 
 test("filmstrip frames come from the sprite until a tile is shorter than its two seconds", () => {
@@ -459,14 +479,26 @@ test("filmstrip frames come from the sprite until a tile is shorter than its two
   expect(frameStep(71 * sourceSecondsPerPixel(32, fps30, 1))).toBe(0.0625);
 });
 
-test("a clip's source resolves to a project file as the server resolves it", () => {
-  expect(mediaPath("index.html", "media/a%20b.mp4?v=2")).toBe("media/a b.mp4");
-  expect(mediaPath("compositions/intro.html", "../media/a.mp4")).toBe(
+test("a media source resolves to one project file for the server and the timeline", () => {
+  expect(localMediaPath("index.html", "media/a%20b.mp4?v=2")).toBe(
+    "media/a b.mp4",
+  );
+  expect(localMediaPath("index.html", "./footage.mp4#t=1")).toBe("footage.mp4");
+  expect(localMediaPath("compositions/intro.html", "../media/a.mp4")).toBe(
     "media/a.mp4",
   );
-  expect(mediaPath("compositions/intro.html", "bed.wav")).toBe(
+  expect(localMediaPath("compositions/intro.html", "bed.wav")).toBe(
     "compositions/bed.wav",
   );
-  expect(mediaPath("index.html", "https://example.com/a.mp4")).toBeNull();
-  expect(mediaPath("index.html", "//example.com/a.mp4")).toBeNull();
+  // A leading slash still means the composition's own folder.
+  expect(localMediaPath("compositions/intro.html", "/assets/a.mp4")).toBe(
+    "compositions/assets/a.mp4",
+  );
+  // A path out of the project keeps its `..`, so the file lookup refuses it.
+  expect(localMediaPath("compositions/intro.html", "../../secret.mp4")).toBe(
+    "../secret.mp4",
+  );
+  expect(localMediaPath("index.html", "https://example.com/a.mp4")).toBeNull();
+  expect(localMediaPath("index.html", "//example.com/a.mp4")).toBeNull();
+  expect(localMediaPath("index.html", "bad%zz.mp4")).toBeNull();
 });

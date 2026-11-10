@@ -4,7 +4,6 @@ import {
   clipsInRange,
   filmTiles,
   frameStep,
-  mountedRange,
   peakLevel,
   rowsBetween,
   sourceSecondsPerPixel,
@@ -61,41 +60,77 @@ export function createBodies(
   /** Frames the last paint could not show yet, for tiles in view. */
   let wanted: { src: string; time: number }[] = [];
   let queued = 0;
+  /** Set once the view has rested; a zoom or scroll clears it and stops frame requests. */
+  let settled = false;
   let resting: ReturnType<typeof setTimeout> | undefined;
 
+  /** Media arrived: draw it, and ask for the exact frames it makes drawable if the view is at rest. */
   function schedule() {
     queued ||= requestAnimationFrame(() => {
       queued = 0;
       paint();
+      if (settled) media.wantFrames(wanted);
     });
   }
+
+  /**
+   * The canvas a view needs: two views wide and tall, or as tall as the tracks if that is less.
+   * One size at every zoom and scroll offset, because resizing a canvas reallocates it.
+   */
+  function fit({ ppf, frames, rows }: ViewState, tracks: number) {
+    const dpr = devicePixelRatio;
+    const visible = {
+      x: { from: frames.from * ppf, to: frames.to * ppf },
+      y: rows,
+    };
+    // The view is whole pixels; rounding keeps arithmetic noise from changing the size.
+    const wide = Math.round(visible.x.to - visible.x.from);
+    const tall = Math.round(visible.y.to - visible.y.from);
+    return {
+      dpr,
+      visible,
+      width: Math.ceil(wide * 2 * dpr),
+      height: Math.ceil(Math.min(tall * 2, tracks) * dpr),
+    };
+  }
+  /** Whether the canvas as drawn still shows everything in a view. */
+  const covers = (
+    next: ViewState,
+    { visible, width, height }: ReturnType<typeof fit>,
+  ) =>
+    area !== null &&
+    area.ppf === next.ppf &&
+    canvas.width === width &&
+    canvas.height === height &&
+    area.x.from <= visible.x.from &&
+    area.x.to >= visible.x.to &&
+    area.y.from <= visible.y.from &&
+    area.y.to >= visible.y.to;
+  /** Where a canvas `size` long starts so the visible range sits in its middle. */
+  const centred = (visible: FrameRange, size: number, content = Infinity) =>
+    Math.max(
+      0,
+      Math.min(
+        Math.floor(visible.from - (size - (visible.to - visible.from)) / 2),
+        content - size,
+      ),
+    );
 
   function paint() {
     if (!scene || !view || !(view.ppf > 0)) return;
     const { ppf } = view;
     const { fps } = scene;
-    const visible = {
-      x: { from: view.frames.from * ppf, to: view.frames.to * ppf },
-      y: view.rows,
-    };
-    const kept = area?.ppf === ppf ? area : null;
-    area = {
-      x: mountedRange(kept?.x ?? null, visible.x),
-      y: mountedRange(kept?.y ?? null, visible.y),
-      ppf,
-    };
-    const dpr = devicePixelRatio;
-    const left = area.x.from;
-    const top = area.y.from;
     const last = scene.rows.at(-1);
-    // One size at every zoom and scroll offset: resizing a canvas reallocates it.
-    const width = Math.ceil((visible.x.to - visible.x.from) * 2 * dpr);
-    const height = Math.ceil(
-      Math.min(
-        (visible.y.to - visible.y.from) * 2,
-        last ? last.top + last.height : 0,
-      ) * dpr,
-    );
+    const tracks = last ? last.top + last.height : 0;
+    const needed = fit(view, tracks);
+    const { dpr, visible, width, height } = needed;
+    // The canvas stays where it is while it still covers the view.
+    const kept = covers(view, needed) ? area : null;
+    const left = kept?.x.from ?? centred(visible.x, width / dpr);
+    const top = kept?.y.from ?? centred(visible.y, height / dpr, tracks);
+    const right = left + width / dpr;
+    const bottom = top + height / dpr;
+    area = { x: { from: left, to: right }, y: { from: top, to: bottom }, ppf };
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
@@ -105,9 +140,9 @@ export function createBodies(
     canvas.style.transform = `translate(${left}px, ${top}px)`;
     const originX = Math.round(left * dpr);
     const originY = Math.round(top * dpr);
-    const right = left + width / dpr;
-    const bottom = top + height / dpr;
     const hair = Math.max(1, Math.round(dpr));
+    wanted = [];
+    media.beginPaint();
     wanted = [];
     /** A row's waveform columns by colour, filled once per row. */
     let waves = { audio: new Path2D(), video: new Path2D() };
@@ -346,19 +381,24 @@ export function createBodies(
       scene = next;
       paint();
     },
-    /** Follows a zoom, scroll or resize. Cheap while the canvas still covers the view. */
+    /**
+     * Follows a zoom, scroll or resize. Cheap while the canvas still covers the view. Frames
+     * waiting to be asked for are dropped at once and asked for again when the view rests, so
+     * a scroll never works through the queue of a view it has left.
+     */
     view(next: ViewState) {
-      const covered =
-        area &&
-        area.ppf === next.ppf &&
-        area.x.from <= next.frames.from * next.ppf &&
-        area.x.to >= next.frames.to * next.ppf &&
-        area.y.from <= next.rows.from &&
-        area.y.to >= next.rows.to;
+      const last = scene?.rows.at(-1);
+      const covered = covers(
+        next,
+        fit(next, last ? last.top + last.height : 0),
+      );
       view = next;
       if (!covered) paint();
+      settled = false;
+      media.wantFrames([]);
       clearTimeout(resting);
       resting = setTimeout(() => {
+        settled = true;
         paint();
         media.wantFrames(wanted);
       }, SETTLE_MS);

@@ -1,10 +1,15 @@
 import { z } from "zod";
-import { mediaSettings, peakLevels } from "../../shared/media";
+import { localMediaPath, mediaSettings, peakLevels } from "../../shared/media";
 
 /** Waveform buckets fetched per request: 16 seconds at the finest level, 18 hours at the coarsest. */
 export const PEAK_CHUNK = 8192;
-/** Decoded pictures kept: sprite sheets, single frames and stills. */
-const MAX_PICTURES = 512;
+/**
+ * Decoded pixels kept, in bytes. A sprite sheet is up to 5.8 MB, so 192 MB is about 33 sheets,
+ * over an hour of footage in view at once; a single frame is 58 KB, so 32 MB is about 550.
+ */
+const SHEET_BYTES = 192 * 2 ** 20;
+const FRAME_BYTES = 32 * 2 ** 20;
+const STILL_BYTES = 16 * 2 ** 20;
 /** Single frames asked for at once; the rest wait, newest first. */
 const FRAME_REQUESTS = 4;
 /** A frame is one FFmpeg seek, so it is asked for again sooner than the server's one second. */
@@ -27,20 +32,17 @@ const FilmSchema = z.object({
 });
 export type Film = z.infer<typeof FilmSchema>;
 
-/** The project file a clip's `src` names, as the server resolves it; null for remote media. */
-export function mediaPath(composition: string, src: string): string | null {
-  try {
-    const base = new URL(composition, "file:///");
-    const url = new URL(src, base);
-    return url.protocol === "file:" && !url.host
-      ? decodeURIComponent(url.pathname.slice(1))
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export type TimelineMedia = ReturnType<typeof createTimelineMedia>;
+
+interface Cache<T> {
+  start(key: string): Promise<void>;
+  known(key: string): boolean;
+  failed(key: string): boolean;
+  /** The value if it is in memory; never starts a load. */
+  peek(key: string): T | undefined;
+  get(key: string): T | undefined;
+  clear(): void;
+}
 
 /**
  * Filmstrips, frames and waveforms for one composition's clips, from the server's media cache.
@@ -59,7 +61,7 @@ export function createTimelineMedia(
   const pathOf = (src: string) => {
     let path = paths.get(src);
     if (path === undefined) {
-      const resolved = mediaPath(composition, src);
+      const resolved = localMediaPath(composition, src);
       path = resolved === null ? null : encodeURIComponent(resolved);
       paths.set(src, path);
     }
@@ -81,17 +83,32 @@ export function createTimelineMedia(
     }
   }
 
+  /** Keys read since the last paint began, which are never dropped to make room. */
+  const drawn = new Set<string>();
+
   /**
    * One value per key, loaded on first read. A key that failed or has nothing stays null and is
-   * not asked for again. Past `max` values the least recently read is dropped.
+   * not asked for again. With `bytes`, pictures past that many decoded bytes are closed, least
+   * recently drawn first, except those the latest paint drew: a view that needs more than the
+   * limit keeps what it shows.
    */
+  function cache<T>(load: (key: string) => Promise<T | null>): Cache<T>;
+  function cache(
+    load: (key: string) => Promise<ImageBitmap | null>,
+    bytes: number,
+  ): Cache<ImageBitmap>;
   function cache<T>(
     load: (key: string) => Promise<T | null>,
-    max = Infinity,
-    drop: (value: T) => void = () => {},
-  ) {
+    bytes = Infinity,
+  ): Cache<T> {
     const values = new Map<string, T | null>();
     const loading = new Set<string>();
+    const weigh = (value: T | null) =>
+      value instanceof ImageBitmap ? value.width * value.height * 4 : 0;
+    const drop = (value: T | null) => {
+      if (value instanceof ImageBitmap) value.close();
+    };
+    let held = 0;
     const start = (key: string) => {
       loading.add(key);
       return load(key)
@@ -102,15 +119,15 @@ export function createTimelineMedia(
         })
         .then((value) => {
           loading.delete(key);
-          if (closing.signal.aborted) {
-            if (value !== null) drop(value);
-            return;
-          }
+          if (closing.signal.aborted) return drop(value);
           values.set(key, value);
-          if (values.size > max) {
-            const [oldest, dropped] = values.entries().next().value!;
-            values.delete(oldest);
-            if (dropped !== null) drop(dropped);
+          held += weigh(value);
+          for (const [old, picture] of values) {
+            if (held <= bytes) break;
+            if (old === key || drawn.has(old)) continue;
+            values.delete(old);
+            held -= weigh(picture);
+            drop(picture);
           }
           if (value !== null) onLoad();
         });
@@ -119,13 +136,13 @@ export function createTimelineMedia(
       start,
       known: (key: string) => values.has(key) || loading.has(key),
       failed: (key: string) => values.get(key) === null,
-      /** The value if it is in memory; never starts a load. */
       peek(key: string): T | undefined {
         const value = values.get(key);
         if (value === undefined || value === null) return undefined;
-        if (max !== Infinity) {
+        if (bytes !== Infinity) {
           values.delete(key);
           values.set(key, value);
+          drawn.add(key);
         }
         return value;
       },
@@ -134,7 +151,7 @@ export function createTimelineMedia(
         return this.peek(key);
       },
       clear() {
-        for (const value of values.values()) if (value !== null) drop(value);
+        for (const value of values.values()) drop(value);
         values.clear();
       },
     };
@@ -152,26 +169,16 @@ export function createTimelineMedia(
     const response = await fetchReady(url, pollMs);
     return response && createImageBitmap(await response.blob(), options);
   };
-  const close = (picture: ImageBitmap) => picture.close();
-  const pictures = cache(
-    (url) => loadPicture(url, POLL_MS),
-    MAX_PICTURES,
-    close,
-  );
+  const pictures = cache((url) => loadPicture(url, POLL_MS), SHEET_BYTES);
   const stills = cache(
     (url) =>
       loadPicture(url, POLL_MS, {
         resizeHeight: mediaSettings.tileHeight,
         resizeQuality: "high",
       }),
-    MAX_PICTURES,
-    close,
+    STILL_BYTES,
   );
-  const frames = cache(
-    (url) => loadPicture(url, FRAME_POLL_MS),
-    MAX_PICTURES,
-    close,
-  );
+  const frames = cache((url) => loadPicture(url, FRAME_POLL_MS), FRAME_BYTES);
   const peaks = cache(async (url) => {
     const response = await fetchReady(url, POLL_MS);
     if (!response) return null;
@@ -210,6 +217,8 @@ export function createTimelineMedia(
   };
 
   return {
+    /** Call when a paint begins: what it reads from here on is what the view shows. */
+    beginPaint: () => drawn.clear(),
     /** A video's sprite sheets: one tile every `filmstripInterval` seconds. */
     film(src: string) {
       const url = route("filmstrip", src);
@@ -231,7 +240,7 @@ export function createTimelineMedia(
     },
     /**
      * Replaces the frames being waited for with these, most wanted first. Frames no longer in
-     * the list are not started, so a fast scroll does not queue every frame it passed.
+     * the list are not started, so an empty list stops everything not already on its way.
      */
     wantFrames(list: readonly { src: string; time: number }[]) {
       wanted = list.flatMap(({ src, time }) => frameUrl(src, time) ?? []);

@@ -1,28 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  extname,
-  join,
-  normalize,
-  relative,
-} from "node:path";
+import { basename, extname, join, normalize, relative } from "node:path";
 import { parseSourceDocument } from "@hyperframes/studio-server";
+import { localMediaPath } from "../../shared/media";
 import type { MediaClip, Project } from "../../shared/project";
 import { ProjectDocumentSchema } from "../../shared/project";
 import { projectPath, readSource } from "./store";
-
-export function localMediaPath(sourceFile: string, src: string): string | null {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith("//")) return null;
-  try {
-    return join(
-      dirname(sourceFile),
-      decodeURIComponent(src.split(/[?#]/, 1)[0]!),
-    );
-  } catch {
-    return null;
-  }
-}
 
 export async function listMedia(project: Project): Promise<MediaClip[]> {
   const sources: string[] = [];
