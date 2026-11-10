@@ -45,6 +45,74 @@ test("foreign browser origins and rebinding hosts cannot access local projects",
   ).toBe(200);
 });
 
+test("cross-site reads can reach only isolated previews, while trusted parent loads and native clients keep working", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "cutroom-fetch-site-"));
+  cleanup.push(() => rm(dataDir, { recursive: true, force: true }));
+  const runtime = await createApp({
+    dataDir,
+    projectsDir: join(dataDir, "projects"),
+  });
+  cleanup.push(() => runtime.dispose());
+  const project = await runtime.projects.create({
+    name: "Fetch Metadata boundary",
+  });
+  await writeFile(
+    join(project.path, "evil.html"),
+    "<script>window.escaped = true;</script>",
+  );
+  const baseUrl = "http://127.0.0.1:4317";
+  const preview = `/api/projects/${project.id}/preview/evil.html`;
+  for (const path of [
+    preview,
+    "/api/cutroom/projects",
+    "/api/runtime.js",
+    "/health",
+    "/",
+    "/mcp",
+  ]) {
+    for (const method of ["GET", "HEAD"]) {
+      expect(
+        (
+          await runtime.app.request(`${baseUrl}${path}`, {
+            method,
+            headers: { "sec-fetch-site": "cross-site" },
+          })
+        ).status,
+      ).toBe(403);
+    }
+  }
+  for (const headers of [
+    new Headers(),
+    new Headers({ "sec-fetch-site": "same-origin" }),
+  ]) {
+    expect(
+      (await runtime.app.request(`${baseUrl}${preview}`, { headers })).status,
+    ).toBe(200);
+    expect(
+      (
+        await runtime.app.request(`${baseUrl}/api/cutroom/projects`, {
+          headers,
+        })
+      ).status,
+    ).toBe(200);
+  }
+  const redirect = await runtime.app.request(
+    `${baseUrl}/api/projects/${project.id}/isolated-preview`,
+    {
+      headers: { "sec-fetch-site": "same-origin" },
+    },
+  );
+  expect(redirect.status).toBe(302);
+  const location = z.string().parse(redirect.headers.get("location"));
+  const isolated = await runtime.app.request(location, {
+    headers: { origin: "null", "sec-fetch-site": "cross-site" },
+  });
+  expect(isolated.status).toBe(200);
+  expect(isolated.headers.get("content-security-policy")).toContain(
+    "sandbox allow-scripts",
+  );
+});
+
 test("every mutation requires an explicit workspace Origin, including approval, upstream, and MCP routes", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "cutroom-mutation-origin-"));
   cleanup.push(() => rm(dataDir, { recursive: true, force: true }));

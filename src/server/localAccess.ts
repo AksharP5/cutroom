@@ -6,6 +6,12 @@ export function allowsLocalRequest(
 ) {
   const url = new URL(request.url);
   if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return false;
+  // Opaque frames can navigate without Origin and discard their document's CSP.
+  if (
+    request.headers.get("sec-fetch-site") === "cross-site" &&
+    !url.pathname.startsWith("/api/isolated/")
+  )
+    return false;
   const port = new URL(baseUrl).port;
   const allowed = [baseUrl, `http://localhost:${port}`];
   if (allowDevOrigin)
