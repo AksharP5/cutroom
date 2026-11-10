@@ -167,7 +167,7 @@ export function EditPage({
     const { frame } = useTransport.getState();
     void editTimeline(projectId, label, (timeline) => [
       { type: "setRange", ...range(frame, timeline.range) },
-    ]).catch(report);
+    ]);
   };
   const jump = (to: (timeline: Timeline, frame: number) => number | null) => {
     const view = useTimeline.getState().view;
@@ -338,7 +338,6 @@ export function EditPage({
           projectId={projectId}
           notes={notes}
           onOpenNote={onOpenNote}
-          onError={report}
         />
       </section>
     </div>

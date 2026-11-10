@@ -74,6 +74,20 @@ export const keymap = {
     keys: ["Shift+V"],
   },
   editDeselectAll: { label: "Deselect all", keys: ["Shift+A", "Esc"] },
+  trimRippleStartToPlayhead: {
+    label: "Ripple trim the start to the playhead",
+    keys: ["Q"],
+  },
+  trimRippleEndToPlayhead: {
+    label: "Ripple trim the end to the playhead",
+    keys: ["W"],
+  },
+  editBladeRazor: { label: "Razor at the playhead", keys: ["E"] },
+  editM2SplitClip: { label: "Split at the playhead", keys: ["Ctrl+\\"] },
+  editBackspace: { label: "Lift, leaving a gap", keys: ["X", "Backspace"] },
+  editDelete: { label: "Ripple delete", keys: ["Shift+X", "Delete"] },
+  editClipEnabled: { label: "Turn clips on or off", keys: ["D"] },
+  markMarkerAdd: { label: "Add a marker", keys: ["M"] },
 } satisfies Record<string, Binding>;
 
 export type Action = keyof typeof keymap;
@@ -97,6 +111,9 @@ const named: Record<string, string> = {
   Equal: "=",
   Minus: "-",
   Escape: "Esc",
+  Backspace: "Backspace",
+  Delete: "Delete",
+  Backslash: "\\",
 };
 
 /** The combo a key press makes, by key position so Shift never changes the key's name. */

@@ -94,6 +94,7 @@
   /* Track and clip states (spec section 3) */
   --track-locked-opacity: 0.6; /* whole lane; inactive content, exempt from text contrast */
   --clip-disabled-filter: saturate(0); /* static, never animated */
+  --clip-disabled-opacity: 0.4; /* with the filter, a clip that is off reads at a glance */
 
   /* Markers: graphic only (3:1+ on panel). Names use --text-secondary. No yellow, blue or red. */
   --marker-grey: #a8a8a8; /* default */

@@ -450,6 +450,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             link: null,
             label: input.label ?? null,
             volume: input.volume ?? null,
+            enabled: true,
             startRef: null,
           },
         ],
@@ -465,6 +466,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...clip,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
+                ...(command.enabled !== undefined && {
+                  enabled: command.enabled,
+                }),
               }
             : clip,
         ),

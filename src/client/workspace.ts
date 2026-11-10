@@ -44,7 +44,12 @@ export const useWorkspace = create(() => ({
     EditorErrorSide,
     string | null
   >,
+  /** The header toast's message, empty when none shows. */
+  toast: "",
 }));
+
+export const showToast = (message: string) =>
+  useWorkspace.setState({ toast: message });
 
 type EditorErrorSide = "viewer" | "timeline";
 

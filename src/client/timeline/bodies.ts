@@ -18,6 +18,21 @@ export interface BodyScene {
   fps: Fps;
 }
 export type Bodies = ReturnType<typeof createBodies>;
+/** A clip's way from where it was drawn to where it is, as its box takes it. */
+export interface Slide {
+  id: string;
+  x: number;
+  y: number;
+  duration: number;
+  /** Progress at a fraction of the duration, from 0 to 1. */
+  ease(time: number): number;
+}
+
+/** Waveform columns for one row, by whether their clip is on, and by colour. */
+const paths = () => ({
+  on: { audio: new Path2D(), video: new Path2D() },
+  off: { audio: new Path2D(), video: new Path2D() },
+});
 
 /** The view rests this long before single frames are asked for, so a zoom asks once. */
 const SETTLE_MS = 150;
@@ -50,6 +65,10 @@ export function createBodies(
     seam: token("--clip-filmstrip-seam"),
     scrim: token("--clip-video-body"),
     wave: { audio: token("--wave-audio"), video: token("--wave-video") },
+    off: {
+      filter: token("--clip-disabled-filter"),
+      opacity: Number(token("--clip-disabled-opacity")),
+    },
   };
   const media = createTimelineMedia(projectId, composition, schedule);
 
@@ -63,6 +82,29 @@ export function createBodies(
   /** Set once the view has rested; a zoom or scroll clears it and stops frame requests. */
   let settled = false;
   let resting: ReturnType<typeof setTimeout> | undefined;
+  /** Clips an edit moved, drawn from where they were towards where they are, with their boxes. */
+  let slides: (Slide & { at: number })[] = [];
+  let sliding = 0;
+
+  /** How far a clip still is from its place, in CSS pixels, adding up slides still running. */
+  function offset(id: string, now: number) {
+    let x = 0;
+    let y = 0;
+    for (const slide of slides) {
+      if (slide.id !== id) continue;
+      const left =
+        1 - slide.ease(Math.min(1, (now - slide.at) / slide.duration));
+      x += slide.x * left;
+      y += slide.y * left;
+    }
+    return { x, y };
+  }
+  function slideFrame() {
+    const now = performance.now();
+    slides = slides.filter((slide) => now - slide.at < slide.duration);
+    paint();
+    sliding = slides.length ? requestAnimationFrame(slideFrame) : 0;
+  }
 
   /** Media arrived: draw it, and ask for the exact frames it makes drawable if the view is at rest. */
   function schedule() {
@@ -142,9 +184,10 @@ export function createBodies(
     const originY = Math.round(top * dpr);
     const hair = Math.max(1, Math.round(dpr));
     wanted = [];
+    const now = performance.now();
     media.beginPaint();
     /** A row's waveform columns by colour, filled once per row. */
-    let waves = { audio: new Path2D(), video: new Path2D() };
+    let waves = paths();
 
     /** A clip's sound between device pixels `x0` and `x1`: centred, or as a strip rising from `y1`. */
     function wave(
@@ -195,7 +238,10 @@ export function createBodies(
       }
       let held = -1;
       let pairs: Int16Array | undefined;
-      const bars = waves[clip.kind === "audio" ? "audio" : "video"];
+      const bars =
+        waves[clip.enabled ? "on" : "off"][
+          clip.kind === "audio" ? "audio" : "video"
+        ];
       for (let x = xa; x < xb; x++) {
         const from = Math.floor(first + x * perBucket);
         const to = Math.max(from + 1, Math.floor(first + (x + 1) * perBucket));
@@ -336,45 +382,79 @@ export function createBodies(
       const y1 = Math.round((row.top + row.height - 1) * dpr) - originY;
       const inView =
         row.top < visible.y.to && row.top + row.height > visible.y.from;
-      ctx.globalAlpha = row.track.locked ? tokens.locked : 1;
-      waves = { audio: new Path2D(), video: new Path2D() };
-      const corners: number[] = [];
-      for (const clip of clipsInRange(track, frames)) {
-        if (clip.src === null) continue;
+      const alpha = row.track.locked ? tokens.locked : 1;
+      ctx.globalAlpha = alpha;
+      waves = paths();
+      const corners: [number, number][] = [];
+      for (const placed of clipsInRange(track, frames)) {
+        const src = placed.src;
+        if (src === null) continue;
         const pictured =
           row.track.kind === "video" &&
-          (clip.kind === "video" || clip.kind === "image");
-        if (!pictured && !clip.hasAudio) continue;
+          (placed.kind === "video" || placed.kind === "image");
+        if (!pictured && !placed.hasAudio) continue;
+        // A clip an edit moved is drawn where its box is on its way there.
+        const shift = offset(placed.id, now);
+        const clip = shift.x
+          ? { ...placed, start: placed.start + shift.x / ppf }
+          : placed;
+        const down = Math.round(shift.y * dpr);
+        const clipTop = y0 + down;
+        const clipBottom = y1 + down;
         // The clip's box as the browser snaps it: a pixel short of the next clip.
         const x0 = Math.round(clip.start * ppf * dpr) - originX;
         const x1 = Math.max(
           x0 + hair,
           Math.round(((clip.start + clip.duration) * ppf - 1) * dpr) - originX,
         );
-        if (pictured) film(clip, clip.src, x1, y0, y1, inView);
+        if (pictured) {
+          // A clip that is off is grey and dimmed, as its box is.
+          if (!clip.enabled) {
+            ctx.filter = tokens.off.filter;
+            ctx.globalAlpha = alpha * tokens.off.opacity;
+          }
+          film(clip, src, x1, clipTop, clipBottom, inView);
+          ctx.filter = "none";
+          ctx.globalAlpha = alpha;
+        }
         if (clip.hasAudio)
           wave(
             clip,
-            clip.src,
+            src,
             x0,
             x1,
-            pictured ? y1 - Math.round(BAND * dpr) : y0,
-            y1,
+            pictured ? clipBottom - Math.round(BAND * dpr) : clipTop,
+            clipBottom,
             pictured,
           );
         if (!pictured) continue;
-        corners.push(x0, x1 - hair);
+        corners.push([x0, clipBottom], [x1 - hair, clipBottom]);
       }
-      for (const kind of ["audio", "video"] as const) {
-        ctx.fillStyle = tokens.wave[kind];
-        ctx.fill(waves[kind]);
-      }
+      for (const state of ["on", "off"] as const)
+        for (const kind of ["audio", "video"] as const) {
+          ctx.filter = state === "off" ? tokens.off.filter : "none";
+          ctx.globalAlpha = alpha * (state === "off" ? tokens.off.opacity : 1);
+          ctx.fillStyle = tokens.wave[kind];
+          ctx.fill(waves[state][kind]);
+        }
+      ctx.filter = "none";
+      ctx.globalAlpha = alpha;
       // The clips' rounded bottom corners, which square tiles and strips would cover.
-      for (const x of corners) ctx.clearRect(x, y1 - hair, hair, hair);
+      for (const [x, y] of corners) ctx.clearRect(x, y - hair, hair, hair);
     }
   }
 
   return {
+    /**
+     * Clips an edit moved slide from where they were drawn, `x` and `y` CSS pixels away, as their
+     * boxes do. Slides that overlap add up, as the boxes' animations do.
+     */
+    slide(moves: readonly Slide[]) {
+      const at = performance.now();
+      slides.push(...moves.map((move) => ({ ...move, at })));
+      cancelAnimationFrame(sliding);
+      slideFrame();
+    },
     /** The clips to draw. An edit made while the view rests asks for the frames it uncovers. */
     scene(next: BodyScene) {
       scene = next;
@@ -405,6 +485,7 @@ export function createBodies(
     },
     destroy() {
       cancelAnimationFrame(queued);
+      cancelAnimationFrame(sliding);
       clearTimeout(resting);
       media.dispose();
     },

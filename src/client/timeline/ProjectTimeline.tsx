@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
+import { editKeys } from "../edit/keys";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
+import type { Action } from "../keymap";
 import { Timeline } from "./Timeline";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
@@ -11,6 +13,7 @@ import {
   pruneSelection,
   selectionAtPlayhead,
 } from "./selection";
+import type { Selection } from "./selection";
 
 /** Notes the agent still owes work on are the owner's mark; withdrawn notes leave the ruler. */
 const pinStates = {
@@ -42,28 +45,48 @@ const clock: TimelineClock = {
 
 /**
  * The open project's timeline: the engine's projection from the editor's store, the transport's
- * playhead, review notes as ruler pins, and track changes sent back as commands.
+ * playhead, review notes as ruler pins, and track changes and editing keys sent back as commands.
  */
 export function ProjectTimeline({
   projectId,
   notes,
   onOpenNote,
-  onError,
 }: {
   projectId: string;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
-  onError(error: unknown): void;
 }) {
   const view = useTimeline((state) => state.view);
-  const [selection, setSelection] = useState(emptySelection);
+  const selection = useTimeline((state) => state.selection);
+  const setSelection = (next: Selection) =>
+    useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
 
   useEffect(() => {
-    if (timeline) setSelection((current) => pruneSelection(timeline, current));
+    if (timeline)
+      useTimeline.setState(({ selection: current }) => ({
+        selection: pruneSelection(timeline, current),
+      }));
   }, [timeline]);
 
+  // The selection, playhead and timeline are read at the press, and the commands built from them.
+  const edits = Object.entries(editKeys).map(
+    ([action, { label, commands }]) => [
+      action,
+      () => {
+        // The store's selection, not this render's: a click just before the key has not rendered.
+        const target = {
+          selection: useTimeline.getState().selection.ids,
+          frame: clock.frame(),
+        };
+        void editTimeline(projectId, label, (current) =>
+          commands(current, target),
+        );
+      },
+    ],
+  );
   useKeymap({
+    ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
     editSelectItemAtPlayhead: () => {
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));
     },
@@ -89,8 +112,8 @@ export function ProjectTimeline({
     [notes, view],
   );
 
-  // The toggle is worked out when its turn in the edit queue comes, from the timeline the
-  // previous edit left, so two quick clicks flip twice. A track the timeline does not hold yet
+  // The toggle is worked out from the timeline as shown, with earlier edits already on it,
+  // so two quick clicks flip twice. A track the timeline does not hold yet
   // is created as the kind its row shows.
   const toggleTrack: TimelineProps["onToggleTrack"] = (shown, setting) =>
     void editTimeline(
@@ -107,7 +130,7 @@ export function ProjectTimeline({
           },
         ];
       },
-    ).catch(onError);
+    );
 
   if (!view) return null;
   return (
