@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
+import { embeddedEditor } from "./embedded";
 
 const viewports = [
   { width: 956, height: 1050 },
@@ -83,6 +84,8 @@ async function expectReadable(locator: Locator) {
   });
   expect(contrast).toBeGreaterThanOrEqual(4.5);
 }
+
+test.beforeEach(({ page }) => embeddedEditor(page));
 
 for (const viewport of viewports) {
   test(`workspace keeps the preview and controls usable at ${viewport.width}×${viewport.height}`, async ({

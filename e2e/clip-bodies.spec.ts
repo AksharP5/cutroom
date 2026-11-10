@@ -57,9 +57,6 @@ test("clip bodies draw a filmstrip and a waveform, and a silent video shows no s
     },
   );
   expect(inserted.ok()).toBe(true);
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const timeline = page.getByRole("region", { name: "Timeline" });
   await expect(timeline.locator("[data-clip]")).toHaveCount(6);
@@ -168,9 +165,6 @@ test("exact filmstrip frames follow the view: on a cold cache, after a scroll, a
     await new Promise((resolve) => setTimeout(resolve, 300));
     await route.continue().catch(() => {});
   });
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const timeline = page.getByRole("region", { name: "Timeline" });
   await expect(timeline.locator('[data-clip="long"]')).toBeVisible();

@@ -86,4 +86,21 @@ Before is main without clip bodies. It missed frames while zooming near fit beca
 
 At 32 px per frame every filmstrip tile is its own frame from the server. Frames are asked for only after the view has rested 150 ms, and a move drops every request not yet sent, so scrolling there draws the sprite's frames and costs the same as at any other zoom.
 
+### Dragging
+
+500 clips referencing a generated 15-second 320x180 H.264/AAC file, reused across the linked picture and sound pieces, fit view at 0.06776 px/frame, 415 clips following a ripple trim, Chromium 1720x1050. Hardware renderer verified as ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2. Each run sent native pointer moves from an independent 60 Hz source for ten seconds, with the CPU profiler running. Callback gaps use `performance.now()` at actual callback entry, not RAF's supplied timestamp. These measurements were taken on the fix based on `3287a9d`, before the notes integration.
+
+| Measurement                        |   00d1c00 | Rebased fix |
+| ---------------------------------- | --------: | ----------: |
+| Pointer moves handled              | 562 / 600 |   571 / 601 |
+| Pointer updates handled per second |      56.2 |        57.0 |
+| Pointer handler median             |   14.1 ms |      3.7 ms |
+| Pointer handler p95                |   16.1 ms |      4.6 ms |
+| Actual animation callback gap p95  |   30.0 ms |     27.4 ms |
+| Input age at handler entry p95     |   16.8 ms |     17.1 ms |
+
+The profile found a bounds read for the drag readout after hundreds of transform writes. Moving that read before the writes removes forced layout from the pointer handler. Synchronous input work falls, but sustained throughput stays around 56 to 57 updates per second, and animation callback p95 is still 27.4 ms. This does not establish 60 fps. Full-page rendering still needs work.
+
+Pointer movement renders no React components and sends no edit request while the pointer is down. A pointer move that stays on the same frame and track writes only the readout's transform. One that reaches a new frame runs the shared engine for the preview, writes transforms to the mounted clips that move, and redraws the canvas. Bounds for the readout are measured before those writes.
+
 Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.

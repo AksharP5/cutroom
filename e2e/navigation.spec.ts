@@ -9,6 +9,7 @@ import {
   ProjectSchema,
   SourceSchema,
 } from "../src/shared/project";
+import { embeddedEditor } from "./embedded";
 
 async function localAgent(page: Page) {
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
@@ -28,6 +29,7 @@ test("a saved review note opens its own composition and frame", async ({
   page,
   request,
 }) => {
+  await embeddedEditor(page);
   await localAgent(page);
   const project = ProjectSchema.parse(
     await (
@@ -412,6 +414,7 @@ test("saving one review draft cannot clear a newer draft in the same project", a
   page,
   request,
 }) => {
+  await embeddedEditor(page);
   await localAgent(page);
   const project = ProjectSchema.parse(
     await (

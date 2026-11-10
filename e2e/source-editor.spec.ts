@@ -1,5 +1,8 @@
 import { expect, test } from "./fixtures";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
+import { embeddedEditor } from "./embedded";
+
+test.beforeEach(({ page }) => embeddedEditor(page));
 
 test("source editing saves, updates the preview, and supports native editor undo", async ({
   page,

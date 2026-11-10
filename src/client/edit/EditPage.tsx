@@ -6,7 +6,11 @@ import {
   CaretDown,
   ChatCircle,
   Cursor,
+  Folder,
+  Knife,
+  Magnet,
   PencilSimple,
+  SplitHorizontal,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -18,10 +22,11 @@ import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
-import { api } from "../api";
+import { api, subscribeProjectEvents } from "../api";
 import { noteNumbers } from "../review";
 import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
+import { exportProject, useExport } from "./export";
 import {
   editTimeline,
   loadTimeline,
@@ -60,6 +65,8 @@ function edits({ clips, tracks }: Timeline) {
 
 const tools = [
   { mode: "select", action: "editPointer", icon: Cursor },
+  { mode: "trim", action: "editTrim", icon: SplitHorizontal },
+  { mode: "blade", action: "editBlade", icon: Knife },
   { mode: "draw", action: "cutroomDraw", icon: PencilSimple },
   { mode: "comment", action: "cutroomComment", icon: ChatCircle },
 ] as const;
@@ -67,17 +74,22 @@ const tools = [
 /** Cutroom's own editor: tool row, viewer, transport, and the timeline below a split. */
 export function EditPage({
   projectId,
+  projectName,
   notes,
   onContext,
   onSaveNote,
   onOpenNote,
+  onFiles,
 }: {
   projectId: string;
+  projectName: string;
   /** Review notes, shown as pins on the picture and the timeline ruler. */
   notes: readonly ReviewItem[];
   onContext?: (context: EditorContext) => void;
   onSaveNote: SaveNote;
   onOpenNote(id: string): void;
+  /** Opens the project's folder in the file dialog. */
+  onFiles(): void;
 }) {
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
@@ -88,6 +100,8 @@ export function EditPage({
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
+  const snapping = useTimeline((state) => state.snapping);
+  const exporting = useExport((state) => state.progress);
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
@@ -103,30 +117,36 @@ export function EditPage({
     };
     void loadTimeline(projectId).catch(fail);
     // Any project change can move the timeline or the undo history.
-    const projectEvents = new EventSource(`/api/cutroom${base}/events`);
-    projectEvents.onmessage = () => void loadTimeline(projectId).catch(fail);
+    const stopProject = subscribeProjectEvents(
+      projectId,
+      "message",
+      () => void loadTimeline(projectId).catch(fail),
+    );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
-    const previewEvents = new EventSource("/api/events");
-    previewEvents.addEventListener("file-change", (event) => {
-      const change = previewChangeSchema.safeParse(
-        JSON.parse(String(event.data)),
-      );
-      if (
-        change.success &&
-        change.data.projectId === projectId &&
-        change.data.affectsPreview &&
-        (change.data.affectedCompositions?.includes("index.html") ?? true)
-      )
-        setRevision((value) => value + 1);
-    });
+    const stopPreview = subscribeProjectEvents(
+      projectId,
+      "file-change",
+      (event) => {
+        const change = previewChangeSchema.safeParse(
+          JSON.parse(String(event.data)),
+        );
+        if (
+          change.success &&
+          change.data.projectId === projectId &&
+          change.data.affectsPreview &&
+          (change.data.affectedCompositions?.includes("index.html") ?? true)
+        )
+          setRevision((value) => value + 1);
+      },
+    );
     return () => {
       open = false;
       reportEditorError("timeline", null);
-      projectEvents.close();
-      previewEvents.close();
+      stopProject();
+      stopPreview();
       unsubscribe();
     };
-  }, [base, projectId]);
+  }, [projectId]);
 
   const contextReport = useRef(onContext);
   contextReport.current = onContext;
@@ -208,6 +228,8 @@ export function EditPage({
 
   const handlers: Partial<Record<Action, () => void>> = {
     editPointer: () => setMode("select"),
+    editTrim: () => setMode("trim"),
+    editBlade: () => setMode("blade"),
     cutroomDraw: () => setMode("draw"),
     cutroomComment: () => setMode("comment"),
     controlPlayToggle: () => transport.dispatch({ type: "toggle" }),
@@ -291,11 +313,20 @@ export function EditPage({
               size={14}
               weight={mode === tool.mode ? "fill" : "regular"}
             />
-            {keymap[tool.action].label}
+            <span>{keymap[tool.action].label}</span>
             <kbd>{keymap[tool.action].keys[0]}</kbd>
           </button>
         ))}
         <span className="edit-grow" />
+        <button
+          className="edit-icon"
+          aria-label="Snapping"
+          aria-pressed={snapping}
+          title={hint("editSnapping")}
+          onClick={() => useTimeline.setState({ snapping: !snapping })}
+        >
+          <Magnet size={16} weight={snapping ? "fill" : "regular"} />
+        </button>
         <button
           className="edit-zoom"
           popoverTarget="edit-zoom-menu"
@@ -318,6 +349,14 @@ export function EditPage({
             </button>
           ))}
         </div>
+        <button
+          className="edit-icon"
+          aria-label="Project files"
+          title="Project files"
+          onClick={onFiles}
+        >
+          <Folder size={16} />
+        </button>
         <span className="edit-separator" />
         <button
           className="edit-icon"
@@ -336,6 +375,22 @@ export function EditPage({
           onClick={() => step("redo")}
         >
           <ArrowClockwise size={16} />
+        </button>
+        <span className="edit-separator" />
+        <button
+          className="edit-export"
+          disabled={exporting !== null}
+          onClick={() =>
+            void exportProject(
+              projectId,
+              projectName,
+              useTransport.getState().fps,
+            )
+          }
+        >
+          {exporting === null
+            ? "Export"
+            : `Exporting ${Math.round(exporting)}%`}
         </button>
       </div>
       <section ref={viewer} className="edit-viewer" aria-label="Viewer">
@@ -363,6 +418,7 @@ export function EditPage({
       <section className="edit-timeline" aria-label="Timeline">
         <ProjectTimeline
           projectId={projectId}
+          tool={mode === "trim" || mode === "blade" ? mode : "pointer"}
           notes={notes}
           onOpenNote={onOpenNote}
         />

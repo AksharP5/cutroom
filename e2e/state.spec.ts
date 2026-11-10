@@ -2,6 +2,7 @@ import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import type { AgentSession } from "../src/shared/agent";
+import { embeddedEditor } from "./embedded";
 
 async function agentConfiguration(page: Page) {
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
@@ -332,6 +333,7 @@ test("a frame capture finishing in an old project cannot clear a new project's d
   page,
   request,
 }) => {
+  await embeddedEditor(page);
   await agentConfiguration(page);
   const first = ProjectSchema.parse(
     await (

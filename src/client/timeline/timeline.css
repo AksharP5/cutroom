@@ -462,23 +462,28 @@
   box-shadow: inset 0 var(--stroke-rail) 0 var(--rail);
   pointer-events: auto;
 }
-.tl-clip.video {
+.tl-clip.video,
+.tl-label[data-kind="video"] {
   --rail: var(--clip-video);
   --head: var(--clip-video-head);
   --body: var(--clip-video-body);
 }
-.tl-clip.image {
+.tl-clip.image,
+.tl-label[data-kind="image"] {
   --rail: var(--clip-image);
   --head: var(--clip-image-head);
   --body: var(--clip-image-body);
 }
 .tl-clip.composition,
-.tl-clip.element {
+.tl-clip.element,
+.tl-label[data-kind="composition"],
+.tl-label[data-kind="element"] {
   --rail: var(--clip-comp);
   --head: var(--clip-comp-head);
   --body: var(--clip-comp-body);
 }
-.tl-clip.audio {
+.tl-clip.audio,
+.tl-label[data-kind="audio"] {
   --rail: var(--clip-audio);
   --head: var(--clip-audio-head);
   --body: var(--clip-audio-body);
@@ -609,4 +614,162 @@
   background: var(--range-band);
   box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
   pointer-events: none;
+}
+
+/*
+  Drag feedback. lanes.ts holds dragged clips with transforms and moves these marks the same
+  way; nothing here changes layout while the pointer is down.
+*/
+.tl-clip,
+.tl-selected,
+.tl-label {
+  transform-origin: 0 0;
+}
+/* A resized outline is stretched; its brackets are stretched back. */
+.tl-selected::before,
+.tl-selected::after {
+  transform: scaleX(calc(1 / var(--k, 1)));
+}
+.tl-lanes[data-cursor="trim"],
+.tl-lanes[data-cursor="trim"] .tl-clip {
+  cursor: ew-resize;
+}
+.tl-lanes[data-cursor="roll"],
+.tl-lanes[data-cursor="roll"] .tl-clip {
+  cursor: col-resize;
+}
+.tl-lanes[data-cursor="blade"],
+.tl-lanes[data-cursor="blade"] .tl-clip {
+  cursor: crosshair;
+}
+.tl-lanes[data-cursor="move"],
+.tl-lanes[data-cursor="move"] .tl-clip {
+  cursor: grabbing;
+}
+/* A drop the engine would refuse: the held clips' outline and the ghost turn to the error colour. */
+.tl-lanes[data-refused],
+.tl-lanes[data-refused] .tl-clip {
+  cursor: not-allowed;
+}
+.tl-lanes[data-refused] :is(.tl-selected[data-held], .tl-ghost) {
+  --selection: var(--danger);
+}
+/* A held clip passes over the ones it crosses: its name strip covers theirs. */
+.tl-clip[data-held] {
+  z-index: var(--z-clip-selected);
+}
+.tl-label[data-held] {
+  z-index: 1;
+  background: var(--head);
+  box-shadow: inset 0 var(--stroke-rail) 0 var(--rail);
+}
+/*
+  Boxes for the pieces a previewed edit cuts off, as when a ripple passes through a music bed.
+  Each is one pixel wide and stretched to its length, so placing it writes only a transform.
+*/
+.tl-pieces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.tl-clip.tl-piece {
+  top: 0;
+  left: 0;
+  width: 1px;
+  border-radius: 0;
+  pointer-events: none;
+}
+.tl-snap,
+.tl-blade,
+.tl-ghost,
+.tl-readout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+/* Snap line: through every track, with a notch at each end so it is not read as in or out. */
+.tl-snap {
+  bottom: 0;
+  z-index: var(--z-range-lines);
+  width: var(--stroke-hair);
+  background: var(--selection);
+}
+.tl-snap::before,
+.tl-snap::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  width: 7px;
+  height: 4px;
+  background: var(--selection);
+}
+.tl-snap::before {
+  top: 0;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.tl-snap::after {
+  bottom: 0;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+/* Where the blade will cut, on the clip's own track. */
+.tl-blade {
+  z-index: var(--z-range-lines);
+  width: var(--stroke-hair);
+  margin-top: 1px;
+  background: var(--selection);
+}
+.tl-blade[data-track="video"],
+.tl-ghost[data-track="video"] {
+  height: calc(var(--size-track-video) - 2px);
+}
+.tl-blade[data-track="audio"],
+.tl-ghost[data-track="audio"] {
+  height: calc(var(--size-track-audio) - 2px);
+}
+/* Media held over a track: a clip of its kind, outlined like a selection. */
+.tl-ghost {
+  --rail: var(--clip-video);
+  --head: var(--clip-video-head);
+  --body: var(--clip-video-body);
+  z-index: var(--z-clip);
+  overflow: hidden;
+  margin-top: 1px;
+  padding: calc(var(--stroke-rail) + 1px) 6px 0;
+  border-radius: var(--radius-clip);
+  background: linear-gradient(
+    var(--head) var(--size-clip-name),
+    var(--body) var(--size-clip-name)
+  );
+  box-shadow:
+    inset 0 0 0 var(--stroke-selection) var(--selection),
+    inset 0 var(--stroke-rail) 0 var(--rail);
+  color: var(--clip-head-text);
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-sans);
+  font-stretch: var(--stretch-condensed);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tl-ghost.image {
+  --rail: var(--clip-image);
+  --head: var(--clip-image-head);
+  --body: var(--clip-image-body);
+}
+.tl-ghost.audio {
+  --rail: var(--clip-audio);
+  --head: var(--clip-audio-head);
+  --body: var(--clip-audio-body);
+}
+/* How far the drag has gone, beside the pointer. */
+.tl-readout {
+  z-index: var(--z-playhead);
+  padding: 3px 6px;
+  border-radius: var(--radius-control);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font: var(--type-micro) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

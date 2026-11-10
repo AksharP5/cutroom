@@ -42,6 +42,52 @@ async function captureFrame(
   return frame;
 }
 
+async function exportFrame(
+  request: APIRequestContext,
+  projectId: string,
+  name: string,
+  testInfo: TestInfo,
+) {
+  const started = await request.post(`/api/projects/${projectId}/render`, {
+    data: { format: "mp4", quality: "high" },
+  });
+  expect(started.ok()).toBe(true);
+  const { jobId } = z.object({ jobId: z.string() }).parse(await started.json());
+  const progress = await request.get(`/api/render/${jobId}/progress`, {
+    timeout: 45_000,
+  });
+  const events = (await progress.text())
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) =>
+      z
+        .object({ status: z.string(), error: z.string().optional() })
+        .parse(JSON.parse(line.slice(5))),
+    );
+  expect(events.at(-1)?.status, events.at(-1)?.error).toBe("complete");
+  const exported = await request.get(`/api/render/${jobId}/download`);
+  expect(exported.ok()).toBe(true);
+  const mp4 = testInfo.outputPath(`${name}.mp4`);
+  await writeFile(mp4, await exported.body());
+  const exportedFrame = testInfo.outputPath(`${name}.png`);
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-ss",
+    "1",
+    "-i",
+    mp4,
+    "-frames:v",
+    "1",
+    exportedFrame,
+  ]);
+  await testInfo.attach(name, {
+    path: exportedFrame,
+    contentType: "image/png",
+  });
+  return exportedFrame;
+}
+
 test("rendered video tracks stack upward after insert and track moves, while authored z-index wins", async ({
   request,
 }, testInfo) => {
@@ -121,43 +167,12 @@ test("rendered video tracks stack upward after insert and track moves, while aut
   await edit([{ type: "move", clipIds: ["headline"], trackBy: 1 }]);
   expect(await whitePixels("title-on-v3")).toBeGreaterThan(100);
 
-  const started = await request.post(`/api/projects/${project.id}/render`, {
-    data: { format: "mp4", quality: "high" },
-  });
-  expect(started.ok()).toBe(true);
-  const { jobId } = z.object({ jobId: z.string() }).parse(await started.json());
-  const progress = await request.get(`/api/render/${jobId}/progress`, {
-    timeout: 45_000,
-  });
-  const events = (await progress.text())
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) =>
-      z
-        .object({ status: z.string(), error: z.string().optional() })
-        .parse(JSON.parse(line.slice(5))),
-    );
-  expect(events.at(-1)?.status, events.at(-1)?.error).toBe("complete");
-  const exported = await request.get(`/api/render/${jobId}/download`);
-  expect(exported.ok()).toBe(true);
-  const mp4 = testInfo.outputPath("stacking.mp4");
-  await writeFile(mp4, await exported.body());
-  const exportedFrame = testInfo.outputPath("exported-title-on-v3.png");
-  await promisify(execFile)("ffmpeg", [
-    "-v",
-    "error",
-    "-ss",
-    "1",
-    "-i",
-    mp4,
-    "-frames:v",
-    "1",
-    exportedFrame,
-  ]);
-  await testInfo.attach("exported-title-on-v3", {
-    path: exportedFrame,
-    contentType: "image/png",
-  });
+  const exportedFrame = await exportFrame(
+    request,
+    project.id,
+    "exported-title-on-v3",
+    testInfo,
+  );
   const exportedPixels = await framePixels(exportedFrame);
   expect(
     exportedPixels.some(
@@ -238,6 +253,104 @@ async function stackingProject(request: APIRequestContext, content: string) {
     },
   };
 }
+
+test("inserted 4K video and images fill and letterbox above V1 in preview and export", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project, edit } = await stackingProject(
+    request,
+    `<!doctype html><html><head><style>html,body{margin:0;background:black}main{position:relative;width:320px;height:240px}#underlay{position:absolute;inset:0;background:black}</style></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-duration="2" data-fps="30"><div id="underlay" class="clip" data-start="0" data-duration="2" data-track-index="0"></div></main></body></html>`,
+  );
+  const video = join(project.path, "quadrants.mp4");
+  const image = join(project.path, "quadrants.png");
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=red:s=3840x2160:r=2:d=2",
+    "-vf",
+    "drawbox=x=1920:y=0:w=1920:h=1080:color=lime:t=fill,drawbox=x=0:y=1080:w=1920:h=1080:color=blue:t=fill,drawbox=x=1920:y=1080:w=1920:h=1080:color=yellow:t=fill",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-threads",
+    "2",
+    "-pix_fmt",
+    "yuv420p",
+    video,
+  ]);
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-i",
+    video,
+    "-frames:v",
+    "1",
+    image,
+  ]);
+  const fitted = async (frame: string) => {
+    const pixels = await framePixels(frame);
+    expect(pixels.length).toBe(320 * 240 * 3);
+    const pixel = (x: number, y: number) => [
+      ...pixels.subarray((y * 320 + x) * 3, (y * 320 + x) * 3 + 3),
+    ];
+    const isColor = (at: number[], expected: number[]) =>
+      at.every((value, channel) => Math.abs(value - expected[channel]!) < 64);
+    // All four source corners survive, with 30px black bars above and below the 16:9 image.
+    expect(isColor(pixel(20, 45), [255, 0, 0])).toBe(true);
+    expect(isColor(pixel(300, 45), [0, 255, 0])).toBe(true);
+    expect(isColor(pixel(20, 195), [0, 0, 255])).toBe(true);
+    expect(isColor(pixel(300, 195), [255, 255, 0])).toBe(true);
+    expect(isColor(pixel(160, 10), [0, 0, 0])).toBe(true);
+    expect(isColor(pixel(160, 230), [0, 0, 0])).toBe(true);
+  };
+  await edit([
+    {
+      type: "insert",
+      track: 1,
+      at: 0,
+      clip: {
+        id: "picture",
+        kind: "video",
+        src: "quadrants.mp4",
+        duration: 60,
+        muted: true,
+      },
+    },
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  const preview = page.frameLocator("iframe[data-live]").locator("#main");
+  await expect(preview.locator("#picture")).toBeVisible();
+  await fitted(
+    await captureFrame(request, project.id, "4k-video-preview", testInfo),
+  );
+  await fitted(
+    await exportFrame(request, project.id, "4k-video-export", testInfo),
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("fitted-4k-in-default-editor.png"),
+  });
+  await edit([
+    { type: "remove", clipIds: ["picture"] },
+    {
+      type: "insert",
+      track: 1,
+      at: 0,
+      clip: { id: "still", kind: "image", src: "quadrants.png", duration: 60 },
+    },
+  ]);
+  await expect(preview.locator("#still")).toBeVisible();
+  await fitted(
+    await captureFrame(request, project.id, "4k-image-preview", testInfo),
+  );
+  await fitted(
+    await exportFrame(request, project.id, "4k-image-export", testInfo),
+  );
+});
 
 test("authored utility layers and first-child styles survive a duration edit", async ({
   page,

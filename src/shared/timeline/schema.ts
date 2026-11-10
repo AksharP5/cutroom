@@ -131,6 +131,12 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .int()
         .default(0)
         .describe("Tracks to shift the named clips"),
+      linked: z
+        .boolean()
+        .default(true)
+        .describe(
+          "False moves only the named clips and leaves their linked partners where they are",
+        ),
     })
     .describe("Move clips and their linked partners. Overlaps are refused."),
   z

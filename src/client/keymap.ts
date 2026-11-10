@@ -9,6 +9,8 @@ type Binding = { label: string; keys: readonly string[]; repeat?: boolean };
  */
 export const keymap = {
   editPointer: { label: "Select", keys: ["A"] },
+  editTrim: { label: "Trim", keys: ["T"] },
+  editBlade: { label: "Blade", keys: ["B"] },
   cutroomDraw: { label: "Draw", keys: ["Shift+N"] },
   cutroomComment: { label: "Comment", keys: ["N"] },
   controlPlayToggle: { label: "Play or stop", keys: ["Space"] },
@@ -88,6 +90,7 @@ export const keymap = {
   editDelete: { label: "Ripple delete", keys: ["Shift+X", "Delete"] },
   editClipEnabled: { label: "Turn clips on or off", keys: ["D"] },
   markMarkerAdd: { label: "Add a marker", keys: ["M"] },
+  editSnapping: { label: "Snapping", keys: ["C"] },
 } satisfies Record<string, Binding>;
 
 export type Action = keyof typeof keymap;

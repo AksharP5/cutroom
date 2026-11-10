@@ -34,8 +34,10 @@ export const useWorkspace = create(() => ({
   } | null,
   /** The chat panel's selected native agent, once its configuration is read. */
   agent: null as { name: string; available: boolean } | null,
-  /** Cutroom's own editor in place of the embedded one, from Settings. */
-  newEditor: localStorage.getItem(NEW_EDITOR_KEY) === "true",
+  /** Cutroom's own editor, unless Settings switched back to the embedded one. */
+  newEditor: localStorage.getItem(NEW_EDITOR_KEY) !== "false",
+  /** A press is under way in the timeline. Esc cancels it and does nothing else. */
+  gesture: false,
   /**
    * The new editor's failures, shown in the status bar. Each side sets and clears only its own,
    * so a preview that loads fine never hides a timeline the engine refused.

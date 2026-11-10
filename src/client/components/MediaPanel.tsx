@@ -3,6 +3,11 @@ import type { DragEvent } from "react";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 import { frameTimecode } from "../api";
+import {
+  MEDIA_DRAG_TYPE,
+  STILL_SECONDS,
+  setMediaDrag,
+} from "../timeline/mediaDrag";
 import { useFps, useWorkspace } from "../workspace";
 
 // Mirrors the formats the upload route validates. `.ts` transport streams are left out so
@@ -87,7 +92,20 @@ function MediaRow({
     if (Number.isFinite(element.duration)) setDuration(element.duration);
   };
   return (
-    <li className="media-row" title={path} data-kind={kind} ref={row}>
+    <li
+      className="media-row"
+      title={path}
+      data-kind={kind}
+      ref={row}
+      // A row drags onto a timeline track once its length is known.
+      draggable={kind === "image" || duration !== null}
+      onDragStart={(event) => {
+        event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
+        event.dataTransfer.effectAllowed = "copy";
+        setMediaDrag({ kind, path, seconds: duration ?? STILL_SECONDS });
+      }}
+      onDragEnd={() => setMediaDrag(null)}
+    >
       <span className="media-thumb" aria-hidden="true">
         {seen && kind === "video" && (
           <video

@@ -19,9 +19,6 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
         await request.get(`/api/cutroom/projects/${project.id}/timeline`)
       ).json(),
     ).timeline.tracks;
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
 
   const timeline = page.getByRole("region", { name: "Timeline" });

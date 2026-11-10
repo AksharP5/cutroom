@@ -30,7 +30,7 @@ import type {
   EditorMode,
   EditorReviewDraft,
 } from "../shared/editor";
-import { api, json } from "./api";
+import { api, json, subscribeProjectEvents } from "./api";
 import { toFrames } from "../shared/timeline/apply";
 import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
@@ -145,7 +145,9 @@ export function App() {
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | null
   >(null);
-  const [picker, setPicker] = useState<"file" | "directory" | null>(null);
+  const [picker, setPicker] = useState<"file" | "directory" | "project" | null>(
+    null,
+  );
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const error = useWorkspace((state) => state.toast);
@@ -227,14 +229,13 @@ export function App() {
     setReviewState(null);
     attachmentResolve.current?.resolve(null);
     attachmentResolve.current = null;
-    setPicker((current) => (current === "file" ? null : current));
+    setPicker((current) => (current === "directory" ? current : null));
     context.current = null;
     void refreshDocument().catch((error: unknown) =>
       showToast(error instanceof Error ? error.message : String(error)),
     );
     if (!projectId) return;
-    const events = new EventSource(`/api/cutroom/projects/${projectId}/events`);
-    events.onmessage = (event) => {
+    return subscribeProjectEvents(projectId, "message", (event) => {
       try {
         const payload = z
           .object({ changed: z.string() })
@@ -258,8 +259,7 @@ export function App() {
         return;
       }
       void refreshDocument().catch(() => {});
-    };
-    return () => events.close();
+    });
   }, [projectId, refreshDocument]);
 
   useEffect(() => {
@@ -275,6 +275,8 @@ export function App() {
         return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "Escape") {
+        // A drag in the timeline takes Esc for itself.
+        if (useWorkspace.getState().gesture) return;
         setMode("select");
         setReviewState(null);
       }
@@ -624,10 +626,12 @@ export function App() {
                   {newEditor ? (
                     <EditPage
                       projectId={project.id}
+                      projectName={project.name}
                       notes={projectDocument.items}
                       onContext={onContext}
                       onSaveNote={saveNote}
                       onOpenNote={openReview}
+                      onFiles={() => setPicker("project")}
                     />
                   ) : (
                     <Editor
@@ -794,7 +798,11 @@ export function App() {
                 />
                 New editor
               </label>
-              <p>Cutroom's own viewer and transport, in progress.</p>
+              <p>
+                Cutroom's own viewer, transport, and timeline. Turn it off for
+                the embedded editor, which still has the inspector, the source
+                editor, and frame capture.
+              </p>
             </section>
             <section>
               <h3>Your native agents</h3>
@@ -820,6 +828,12 @@ export function App() {
           onSelect={(path) => {
             const kind = picker;
             setPicker(null);
+            if (kind === "project") {
+              void navigator.clipboard
+                .writeText(path)
+                .catch(() => showToast("The path could not be copied."));
+              return;
+            }
             if (kind === "file") {
               const pending = attachmentResolve.current;
               attachmentResolve.current = null;

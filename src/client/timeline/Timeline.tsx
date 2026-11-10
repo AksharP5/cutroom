@@ -39,7 +39,9 @@ import {
 import type { FrameRange, Row, RowSizes, TickStep } from "./math";
 import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
-import { clickSelection, emptySelection, marqueeSelection } from "./selection";
+import type { Tool } from "./gesture";
+import { useLaneGestures } from "./lanes";
+import type { LaneGestureOptions } from "./lanes";
 import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
@@ -78,6 +80,13 @@ export interface TimelineProps {
   pins: readonly TimelinePin[];
   selection: Selection;
   onSelect(selection: Selection): void;
+  /** What a press on a clip does: move and resize, ripple and roll, or razor. */
+  tool: Tool;
+  /** Dragged edges jump to clip edges, the playhead, markers, and in and out. */
+  snapping: boolean;
+  /** A drag or drop ended in an edit: one undo step. */
+  onEdit: LaneGestureOptions["onEdit"];
+  onGesture: LaneGestureOptions["onGesture"];
   /** A click on a marker or pin. */
   onSeek(frame: number): void;
   /** The pointer is down on the ruler; called for the press and every move until `onScrubEnd`. */
@@ -94,8 +103,6 @@ export interface TimelineProps {
 
 /** One press of a zoom button or arrow key. */
 const ZOOM_STEP = 1.5;
-/** Pixels the pointer travels before a press on empty lanes becomes a marquee. */
-const DRAG_THRESHOLD = 3;
 
 const pinLabels = {
   queued: "queued",
@@ -134,9 +141,6 @@ function readSizes(): { rows: RowSizes; head: number } {
     head: px("--size-track-head"),
   };
 }
-
-const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
-  a.size === b.size && [...a].every((id) => b.has(id));
 
 const ClipBody = memo(function ClipBody({
   clip,
@@ -190,6 +194,7 @@ const ClipLabel = memo(function ClipLabel({
     <div
       className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}`}
       data-clip-label={clip.id}
+      data-kind={clip.kind}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
     >
       <span
@@ -388,6 +393,10 @@ export function Timeline({
   pins,
   selection,
   onSelect,
+  tool,
+  snapping,
+  onEdit,
+  onGesture,
   onSeek,
   onScrub,
   onScrubEnd,
@@ -401,19 +410,12 @@ export function Timeline({
   const slider = useRef<HTMLDivElement>(null);
   const playhead = useRef<HTMLElement>(null);
   const playheadHead = useRef<HTMLElement>(null);
-  const marquee = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const tickLabels = useRef<HTMLDivElement>(null);
   const bodies = useRef<Bodies | null>(null);
   const lanes = useRef<HTMLDivElement>(null);
   const viewport = useRef<TimelineViewport | null>(null);
   const scrubbing = useRef(false);
-  const drag = useRef<{
-    x: number;
-    y: number;
-    base: Selection;
-    active: boolean;
-  } | null>(null);
 
   const { fps } = timeline;
   const frames = timelineFrames(timeline);
@@ -422,6 +424,23 @@ export function Timeline({
     [timeline.tracks, sizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+  const gestures = useLaneGestures({
+    timeline,
+    rows: layout.rows,
+    tracks,
+    selection,
+    tool,
+    snapping,
+    lanes,
+    viewport,
+    bodies,
+    playhead: clock.frame,
+    onSelect,
+    onEdit,
+    onGesture,
+  });
+  const refreshDrag = useRef(gestures.refresh);
+  refreshDrag.current = gestures.refresh;
 
   useLayoutEffect(() => {
     if (!canvas.current) return;
@@ -480,6 +499,7 @@ export function Timeline({
           });
         if (flush) flushSync(update);
         else update();
+        refreshDrag.current();
       },
     );
     viewport.current = created;
@@ -492,6 +512,7 @@ export function Timeline({
     layout.rows,
     () => viewport.current?.state().ppf ?? 0,
     (slides) => bodies.current?.slide(slides),
+    gestures.held,
   );
   useLayoutEffect(() => {
     viewport.current?.measure({
@@ -564,69 +585,6 @@ export function Timeline({
     if (!scrubbing.current) return;
     scrubbing.current = false;
     onScrubEnd();
-  }
-
-  function pressLanes(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0 || !(event.target instanceof Element)) return;
-    const id = event.target.closest<HTMLElement>("[data-clip]")?.dataset.clip;
-    const toggle = event.ctrlKey || event.metaKey;
-    if (id) {
-      onSelect(
-        clickSelection(
-          timeline,
-          layout.rows.map((row) => row.track.index),
-          selection,
-          id,
-          { toggle, range: event.shiftKey, alone: event.altKey },
-        ),
-      );
-      return;
-    }
-    const lanes = event.currentTarget.getBoundingClientRect();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drag.current = {
-      x: event.clientX - lanes.left,
-      y: event.clientY - lanes.top,
-      base: toggle || event.shiftKey ? selection : emptySelection,
-      active: false,
-    };
-  }
-  function dragLanes(event: PointerEvent<HTMLDivElement>) {
-    const start = drag.current;
-    const view = viewport.current;
-    const box = marquee.current;
-    if (!start || !view || !box) return;
-    const lanes = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - lanes.left;
-    const y = event.clientY - lanes.top;
-    if (!start.active && Math.hypot(x - start.x, y - start.y) < DRAG_THRESHOLD)
-      return;
-    start.active = true;
-    const left = Math.min(x, start.x);
-    const top = Math.min(y, start.y);
-    const right = Math.max(x, start.x);
-    const bottom = Math.max(y, start.y);
-    box.hidden = false;
-    box.style.left = `${left}px`;
-    box.style.top = `${top}px`;
-    box.style.width = `${right - left}px`;
-    box.style.height = `${bottom - top}px`;
-    const { ppf } = view.state();
-    const next = marqueeSelection(
-      timeline,
-      rowsBetween(layout.rows, top, bottom).map((row) => row.track.index),
-      { from: left / ppf, to: right / ppf },
-      start.base,
-    );
-    if (!sameIds(next.ids, selection.ids)) onSelect(next);
-  }
-  function releaseLanes() {
-    const start = drag.current;
-    if (!start) return;
-    drag.current = null;
-    if (marquee.current) marquee.current.hidden = true;
-    if (!start.active && start.base === emptySelection && selection.ids.size)
-      onSelect(emptySelection);
   }
 
   const rows = mounted
@@ -732,10 +690,8 @@ export function Timeline({
           <div
             className="tl-lanes"
             ref={lanes}
-            onPointerDown={pressLanes}
-            onPointerMove={dragLanes}
-            onPointerUp={releaseLanes}
-            onPointerCancel={releaseLanes}
+            data-tool={tool}
+            {...gestures.handlers}
           >
             {rows.map((row) => (
               <i
@@ -798,7 +754,12 @@ export function Timeline({
                 ),
             )}
             <i className="tl-playhead" ref={playhead} data-unscaled />
-            <div className="tl-marquee" ref={marquee} hidden />
+            <div className="tl-pieces" ref={gestures.marks.pieces} />
+            <div className="tl-ghost" ref={gestures.marks.ghost} hidden />
+            <i className="tl-blade" ref={gestures.marks.bladeLine} hidden />
+            <i className="tl-snap" ref={gestures.marks.snapLine} hidden />
+            <div className="tl-marquee" ref={gestures.marks.marquee} hidden />
+            <div className="tl-readout" ref={gestures.marks.readout} hidden />
           </div>
         </div>
       </div>

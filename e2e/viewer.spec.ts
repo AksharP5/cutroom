@@ -2,8 +2,76 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
+import type { Request } from "@playwright/test";
 import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+test("three editor tabs share project and preview events without exhausting HTTP connections", async ({
+  context,
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Three tabs" },
+      })
+    ).json(),
+  );
+  const tabs = [page, await context.newPage(), await context.newPage()];
+  const streams = tabs.map((tab) => {
+    const active = new Set<Request>();
+    tab.on("request", (request) => {
+      if (request.resourceType() === "eventsource") active.add(request);
+    });
+    tab.on("requestfailed", (request) => active.delete(request));
+    tab.on("requestfinished", (request) => active.delete(request));
+    return active;
+  });
+  try {
+    for (const tab of tabs) {
+      await tab.goto(`/#project/${project.id}`);
+      await expect(
+        tab.frameLocator("iframe[data-live]").locator("#headline"),
+      ).toHaveText("Three tabs");
+    }
+    await expect
+      .poll(() =>
+        streams.map((active) =>
+          [...active].map((request) => new URL(request.url()).pathname),
+        ),
+      )
+      .toEqual(tabs.map(() => [`/api/cutroom/projects/${project.id}/events`]));
+    // These fetches use Chromium's shared HTTP/1.1 pool, unlike APIRequestContext.
+    for (const tab of tabs) {
+      expect(
+        await tab.evaluate(
+          async () => (await fetch("/api/cutroom/status")).status,
+        ),
+      ).toBe(200);
+    }
+    const index = join(project.path, "index.html");
+    await writeFile(
+      index,
+      (await readFile(index, "utf8"))
+        .replaceAll("Three tabs", "All tabs updated")
+        .replace(
+          'id="headline"',
+          'id="headline" data-label="All tabs updated"',
+        ),
+    );
+    for (const tab of tabs) {
+      await expect(
+        tab.frameLocator("iframe[data-live]").locator("#headline"),
+      ).toHaveText("All tabs updated");
+      await expect(tab.locator('[data-clip-label="headline"]')).toContainText(
+        "All tabs updated",
+      );
+    }
+  } finally {
+    for (const tab of tabs.slice(1)) await tab.close();
+  }
+});
 
 test("a sandboxed viewer cannot navigate to an unrestricted preview and send an external request", async ({
   page,
@@ -174,9 +242,6 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
         await request.get(`/api/cutroom/projects/${project.id}/timeline`)
       ).json(),
     ).timeline.range;
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
 
   const preview = page.frameLocator("iframe[title='Composition preview']");
@@ -261,9 +326,6 @@ test("a composition that cannot play keeps the last picture and says why", async
       })
     ).json(),
   );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const live = page.frameLocator("iframe[data-live]");
   await expect(live.locator("#headline")).toHaveText("Held picture");
@@ -295,9 +357,6 @@ test("a timeline the engine refuses stays reported after the picture reloads", a
         data: { name: "Refused timeline" },
       })
     ).json(),
-  );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
   );
   await page.goto(`/#project/${project.id}`);
   const live = page.frameLocator("iframe[data-live]");

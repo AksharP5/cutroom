@@ -18,11 +18,13 @@ import {
   ProjectDocumentSchema,
   SourceSchema,
 } from "../src/shared/project";
+import { embeddedEditor } from "./embedded";
 
 test("visual review, native skill selection, and script edits survive real workspace use", async ({
   page,
   request,
 }) => {
+  await embeddedEditor(page);
   const errors: string[] = [];
   const scriptRequests: string[] = [];
   page.on("request", (request) => {
