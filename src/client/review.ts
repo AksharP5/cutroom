@@ -34,6 +34,7 @@ export async function saveReviewNote(
   projectId: string,
   draft: EditorReviewDraft,
   body: string,
+  signal: AbortSignal,
 ) {
   const tokens = getComputedStyle(document.documentElement);
   const pencil = tokens.getPropertyValue("--human").trim();
@@ -60,16 +61,18 @@ export async function saveReviewNote(
       const { framePath, captureError } = await captureReviewFrame(
         projectId,
         draft,
+        signal,
       );
       if (!framePath) return captureError;
       try {
         await api(
           `/projects/${projectId}/review/${id}/frame`,
           z.object({ ok: z.literal(true) }),
-          json("PUT", { framePath }),
+          { ...json("PUT", { framePath }), signal },
         );
         return "";
       } catch (error) {
+        if (signal.aborted) return "";
         return error instanceof Error ? error.message : String(error);
       }
     }),
@@ -78,7 +81,11 @@ export async function saveReviewNote(
   return { id, capture };
 }
 
-async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
+async function captureReviewFrame(
+  projectId: string,
+  draft: EditorReviewDraft,
+  signal: AbortSignal,
+) {
   // Marks are the human's yellow pencil on a dark casing, read from the tokens.
   const tokens = getComputedStyle(document.documentElement);
   const pencil = tokens.getPropertyValue("--human").trim();
@@ -86,10 +93,19 @@ async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
   let captureError = "";
   let image: ImageBitmap | undefined;
   try {
-    const response = await fetch(frameCaptureUrl(projectId, draft));
-    if (!response.ok)
-      throw new Error(`Frame capture failed (${response.status}).`);
+    const response = await fetch(frameCaptureUrl(projectId, draft), { signal });
+    if (!response.ok) {
+      const failure = z
+        .object({ error: z.string() })
+        .safeParse(await response.json());
+      throw new Error(
+        failure.success
+          ? failure.data.error
+          : `Frame capture failed (${response.status}).`,
+      );
+    }
     image = await createImageBitmap(await response.blob());
+    signal.throwIfAborted();
     const canvas = document.createElement("canvas");
     canvas.width = image.width;
     canvas.height = image.height;
@@ -111,11 +127,12 @@ async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
     const saved = await api(
       `/projects/${projectId}/attachments`,
       z.object({ path: z.string() }),
-      json("POST", { image: canvas.toDataURL("image/png") }),
+      { ...json("POST", { image: canvas.toDataURL("image/png") }), signal },
     );
     framePath = saved.path;
   } catch (error) {
-    captureError = error instanceof Error ? error.message : String(error);
+    if (!signal.aborted)
+      captureError = error instanceof Error ? error.message : String(error);
   } finally {
     image?.close();
   }

@@ -100,42 +100,55 @@ export function Viewer({
   const load = async (gen: number, frame: HTMLIFrameElement) => {
     const started = performance.now();
     const preview = connectPreview(frame);
+    connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
-    await preview.inspect();
-    while (!preview.state.ready) {
-      if (preview.state.error)
-        throw new Error(`The preview failed to start: ${preview.state.error}`);
-      if (performance.now() - started > READY_TIMEOUT)
-        throw new Error("The preview did not finish loading.");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      if (gen !== latest.current) return;
+    try {
       await preview.inspect();
+      while (!preview.state.ready) {
+        if (preview.state.error)
+          throw new Error(
+            `The preview failed to start: ${preview.state.error}`,
+          );
+        if (performance.now() - started > READY_TIMEOUT)
+          throw new Error("The preview did not finish loading.");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        preview.signal.throwIfAborted();
+        if (gen !== latest.current) return;
+        await preview.inspect();
+      }
+      if (!preview.state.root)
+        throw new Error("The preview has no element with data-composition-id.");
+      const { player } = preview;
+      // Seek until the frame on screen is the latest one asked for.
+      let shown = -1;
+      while (shown !== useTransport.getState().frame) {
+        shown = useTransport.getState().frame;
+        player.seek(frameTime(shown, useTransport.getState().fps));
+        await preview.painted();
+        preview.signal.throwIfAborted();
+        if (gen !== latest.current) return;
+        if (useTransport.getState().state.kind !== "stopped") break;
+      }
+      const { width, height, fps } = preview.state;
+      const size = { width, height };
+      setLive({ gen, ...size });
+      setPending(null);
+      // The status bar shows the open composition's rate and size, as with the embedded editor.
+      useWorkspace.setState({
+        composition: {
+          fps: compositionFps(fps),
+          ...size,
+        },
+      });
+      transport.attach(player, shown);
+      reportEditorError("viewer", null);
+    } catch (error) {
+      if (preview.signal.aborted || gen !== latest.current) return;
+      preview.dispose();
+      connections.current.delete(gen);
+      setPending(null);
+      reportEditorError("viewer", error);
     }
-    if (!preview.state.root)
-      throw new Error("The preview has no element with data-composition-id.");
-    const { player } = preview;
-    // Seek until the frame on screen is the latest one asked for.
-    let shown = -1;
-    while (shown !== useTransport.getState().frame) {
-      shown = useTransport.getState().frame;
-      player.seek(frameTime(shown, useTransport.getState().fps));
-      await preview.painted();
-      if (gen !== latest.current) return;
-      if (useTransport.getState().state.kind !== "stopped") break;
-    }
-    const { width, height, fps } = preview.state;
-    const size = { width, height };
-    setLive({ gen, ...size });
-    setPending(null);
-    // The status bar shows the open composition's rate and size, as with the embedded editor.
-    useWorkspace.setState({
-      composition: {
-        fps: compositionFps(fps),
-        ...size,
-      },
-    });
-    transport.attach(player, shown);
-    reportEditorError("viewer", null);
   };
 
   const fit = live ?? { width: 1920, height: 1080 };
@@ -184,15 +197,7 @@ export function Viewer({
                 height: size.height,
                 transform: `scale(${width / size.width}, ${height / size.height})`,
               }}
-              onLoad={(event) =>
-                void load(gen, event.currentTarget).catch((error: unknown) => {
-                  if (gen !== latest.current) return;
-                  connections.current.get(gen)?.dispose();
-                  connections.current.delete(gen);
-                  setPending(null);
-                  reportEditorError("viewer", error);
-                })
-              }
+              onLoad={(event) => void load(gen, event.currentTarget)}
             />
           );
         })}

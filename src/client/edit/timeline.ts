@@ -176,10 +176,10 @@ function shown(projectId: string): TimelineView | null {
   return timeline === view.timeline ? view : { ...view, timeline };
 }
 
-async function read(projectId: string) {
+async function read(projectId: string, signal?: AbortSignal) {
   const [view, history] = await Promise.all([
-    api(`${project(projectId)}/timeline`, TimelineViewSchema),
-    api(`${project(projectId)}/history`, HistorySchema),
+    api(`${project(projectId)}/timeline`, TimelineViewSchema, { signal }),
+    api(`${project(projectId)}/history`, HistorySchema, { signal }),
   ]);
   if (useTimeline.getState().projectId !== projectId) return view;
   confirmed = { projectId, view };
@@ -189,9 +189,10 @@ async function read(projectId: string) {
   return view;
 }
 
-export const loadTimeline = (projectId: string) =>
+export const loadTimeline = (projectId: string, signal: AbortSignal) =>
   enqueue(async () => {
-    await read(projectId);
+    signal.throwIfAborted();
+    await read(projectId, signal);
   });
 
 /**

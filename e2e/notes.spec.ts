@@ -492,7 +492,7 @@ for (const finishCapture of [true, false]) {
   );
 }
 
-test("a capture refresh failing after a project switch does not toast in the new project", async ({
+test("a project switch aborts its pending capture refresh without a toast", async ({
   page,
   request,
 }) => {
@@ -544,17 +544,15 @@ test("a capture refresh failing after a project switch does not toast in the new
     failRefresh = true;
     capture.resolve();
     await refreshing.promise;
+    const cancelled = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.url().endsWith(`${first.base}/notebook`),
+    });
     await page.evaluate((id) => {
       location.hash = `project/${id}`;
     }, second.id);
     await expect(page.locator(".project-switcher")).toHaveText("Other project");
-    const failed = page.waitForResponse(
-      (response) =>
-        response.url().endsWith(`${first.base}/notebook`) &&
-        response.status() === 503,
-    );
     refresh.resolve();
-    await (await failed).finished();
+    expect((await cancelled).failure()?.errorText).toContain("ERR_ABORTED");
     await page.evaluate(
       () =>
         new Promise<void>((resolve) =>
@@ -649,7 +647,7 @@ test("Review rows appear within one second of Enter while frame captures are hel
   }
 });
 
-test("an old project's late capture cannot discard the destination project's held notebook", async ({
+test("switching projects aborts the old capture and preserves the saved note and destination notebook", async ({
   page,
   request,
 }, testInfo) => {
@@ -726,6 +724,11 @@ test("an old project's late capture cannot discard the destination project's hel
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await expect(page.locator(".review-row")).toHaveCount(1);
 
+    const cancelled = page.waitForEvent("requestfailed", {
+      predicate: (request) =>
+        request.url().includes(`/projects/${first.id}/thumbnail/`) &&
+        request.resourceType() === "fetch",
+    });
     await page.evaluate((id) => {
       location.hash = `project/${id}`;
     }, second.id);
@@ -733,22 +736,10 @@ test("an old project's late capture cannot discard the destination project's hel
     await expect(page.locator(".project-switcher")).toHaveText(
       "Notebook project B",
     );
-    const attached = page.waitForResponse(
-      (response) =>
-        response.url().includes(`${first.base}/review/`) &&
-        response.url().endsWith("/frame") &&
-        response.request().method() === "PUT",
-    );
     releaseCapture();
-    expect((await attached).ok()).toBe(true);
-    await (await attached).finished();
-    // Let A's capture continuation run while B's notebook response is still held.
-    await page.evaluate(
-      () =>
-        new Promise<void>((done) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => done())),
-        ),
-    );
+    expect((await cancelled).failure()?.errorText).toContain("ERR_ABORTED");
+    expect((await first.notes())[0]?.body).toBe("Project A captured later");
+    expect((await first.notes())[0]?.framePath).toBeUndefined();
     releaseNotebook();
     await expect(page.locator(".review-row-body")).toHaveText(bodies);
     await page.screenshot({
