@@ -8,7 +8,7 @@ import { clipName, trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../timecode";
-import { timingCommands } from "./fields";
+import { formatField, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 
@@ -101,10 +101,10 @@ export function Inspector({ projectId }: { projectId: string }) {
       divider: 0,
     }).rows.find((row) => row.track.index === clip.track);
   const timing = (field: TimingField, value: number | null) => {
-    if (!clip || value === null) return;
+    if (!clip || !timeline || value === null) return;
     void editTimeline(
       projectId,
-      `Set ${field === "sourceIn" ? "source in" : field}`,
+      `Set ${field === "sourceIn" ? "source in" : field} to ${formatField(value, field === "speed" ? "percent" : "timecode", timeline.fps)}`,
       (current) => timingCommands(current, clip.id, field, value),
     );
   };
@@ -174,9 +174,11 @@ export function Inspector({ projectId }: { projectId: string }) {
                 unit="percent"
                 fps={timeline.fps}
                 onCommit={(opacity) => {
-                  void editTimeline(projectId, "Set opacity", () => [
-                    { type: "setClip", clipId: clip.id, opacity },
-                  ]);
+                  void editTimeline(
+                    projectId,
+                    `Set opacity to ${formatField(opacity, "percent", timeline.fps)}`,
+                    () => [{ type: "setClip", clipId: clip.id, opacity }],
+                  );
                 }}
               />
             </details>

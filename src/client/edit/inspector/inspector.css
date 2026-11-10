@@ -211,4 +211,8 @@
   .clip-inspector[data-open="false"] {
     transform: none;
   }
+  /* Reduced motion caps fades at the shorter panel-in token. */
+  .clip-inspector[data-open="false"] {
+    transition-duration: var(--duration-panel-in);
+  }
 }

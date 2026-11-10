@@ -31,7 +31,7 @@ export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
     ? "Auto"
     : unit === "timecode"
       ? formatTimecode(value, fps)
-      : `${Number((value * 100).toFixed(3))}%`;
+      : `${Number((value * 100).toFixed(4))}%`;
 
 /** Uses the same move and trim commands as the timeline, with source timing shared by linked media. */
 export function timingCommands(

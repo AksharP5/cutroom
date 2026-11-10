@@ -101,6 +101,12 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   await expect
     .poll(async () => (await read()).timeline.clips[0]?.opacity)
     .toBe(0.5);
+  await expect(inspector.locator(".inspector-changes")).toContainText(
+    "Set opacity to 50%",
+  );
+  await expect(inspector.locator(".inspector-changes")).toContainText(
+    "Set speed to 150%",
+  );
   const opacityLabel = inspector
     .locator("label")
     .filter({ hasText: /^Opacity$/ });

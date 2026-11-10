@@ -10,6 +10,7 @@ import {
 import { parseComposition } from "../src/server/timeline/composition";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import {
+  formatField,
   parseField,
   timingCommands,
 } from "../src/client/edit/inspector/fields";
@@ -85,6 +86,11 @@ test("inspector fields parse timecode, frames, seconds and percentages without a
     expect(() => parseField(input, "timecode", fps)).toThrow();
   for (const input of ["Infinity", "5%junk", "-10%"])
     expect(() => parseField(input, "percent", fps)).toThrow();
+});
+
+test("a percentage shows every digit the engine keeps", () => {
+  const opacity = parseField("12.3456%", "percent", fps);
+  expect(formatField(opacity, "percent", fps)).toBe("12.3456%");
 });
 
 test("inspector timing uses normal move and trim, changes linked source timing, and refuses overlaps and exhausted media", () => {
