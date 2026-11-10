@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
@@ -95,4 +97,59 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     .click();
   await expect(group("Withdrawn")).toHaveCount(0);
   await expect(group("Queued")).toContainText("Make the background red");
+});
+
+test("an unreadable review file shows its error without the empty state", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Broken review file" },
+      })
+    ).json(),
+  );
+  await mkdir(join(project.path, ".cutroom"), { recursive: true });
+  await writeFile(join(project.path, ".cutroom", "review.json"), "{oops");
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Review notes" });
+  await expect(panel.getByRole("alert")).toContainText("is unreadable");
+  await expect(panel.getByText("Start with what you see.")).toHaveCount(0);
+});
+
+test("the owner can return a stuck claim to the queue", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Stuck claim" },
+      })
+    ).json(),
+  );
+  const base = `/api/cutroom/projects/${project.id}`;
+  const { id } = ReviewItemSchema.parse(
+    await (
+      await request.post(`${base}/review`, {
+        data: { body: "Trim the last second", time: 4 },
+      })
+    ).json(),
+  );
+  await request.post(`${base}/review/${id}/agent`, {
+    data: { type: "claim" },
+  });
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  const working = page.getByRole("region", {
+    name: "Working notes",
+    exact: true,
+  });
+  await working.getByRole("button", { name: "Return to queue" }).click();
+  await expect(working).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: "Queued notes", exact: true }),
+  ).toContainText("Trim the last second");
 });

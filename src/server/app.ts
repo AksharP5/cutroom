@@ -46,7 +46,7 @@ export async function createApp(
     dataDir,
     studioUrl: baseUrl,
   });
-  const editor = createHyperframesApi(projects);
+  const editor = createHyperframesApi(projects, review);
   const transcripts = createTranscriptService(projects);
   const app = new Hono();
   let closing = false;

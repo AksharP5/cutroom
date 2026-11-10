@@ -19,7 +19,7 @@ const annotations = {
   openWorldHint: false,
 };
 
-/** The agent's side of the review queue. Accept, reject, restore, and reorder stay with the owner. */
+/** The agent's side of the review queue. Accept, send back, restore, and returning a claim stay with the owner. */
 export function registerReviewTools(server: McpServer, request: LocalRequest) {
   const id = encodeURIComponent;
   const act = (projectId: string, noteId: string, action: object) =>
@@ -53,11 +53,12 @@ export function registerReviewTools(server: McpServer, request: LocalRequest) {
     "review_claim",
     {
       description:
-        "Start work on a new or queued note, or on a blocked note the owner's message answered. It returns to the queue if this run ends first.",
-      inputSchema: note,
+        "Start work on a new or queued note. To resume a blocked note the owner's message answered, pass that answer; it is saved with the note. A claim returns to the queue if this run ends first.",
+      inputSchema: reviewActions.claim.omit({ type: true }).extend(note),
       annotations,
     },
-    ({ projectId, noteId }) => act(projectId, noteId, { type: "claim" }),
+    ({ projectId, noteId, ...input }) =>
+      act(projectId, noteId, { type: "claim", ...input }),
   );
   server.registerTool(
     "review_complete",

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { version } from "../../shared/version";
+import { AGENT_HEADER } from "../../shared/review";
 import { registerReviewTools } from "./reviewTools";
 import {
   AnnotationInputSchema,
@@ -21,6 +22,8 @@ type LocalFetch = (
 interface McpOptions {
   baseUrl?: string;
   fetch?: LocalFetch;
+  /** Set only in the bridge Cutroom gives its native agents; other clients act as `external`. */
+  agentToken?: string;
 }
 const project = {
   projectId: z.string().describe("Project ID returned by projects_list"),
@@ -56,10 +59,11 @@ export function createMcpServer(options: McpOptions = {}) {
     try {
       const response = await fetchLocal(`${baseUrl}/api/cutroom${path}`, {
         method,
-        ...(body !== undefined && {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }),
+        headers: {
+          [AGENT_HEADER]: options.agentToken ?? "external",
+          ...(body !== undefined && { "content-type": "application/json" }),
+        },
+        ...(body !== undefined && { body: JSON.stringify(body) }),
       });
       const text = await response.text();
       if (!response.ok)
@@ -184,7 +188,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "annotation_update",
     {
       description:
-        "Update an annotation's note, timing, or geometry. Use the review tools to change its status.",
+        "Update an unsent note's text, timing, or geometry. Sent notes only change through the review tools.",
       inputSchema: AnnotationPatchSchema.extend(annotation),
       annotations: edit,
     },
@@ -199,7 +203,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "annotation_remove",
     {
       description:
-        "Remove a note that has not been sent. Withdraw submitted notes with review_withdraw instead.",
+        "Remove a note that has not been sent. Withdraw sent notes with review_withdraw instead.",
       inputSchema: annotation,
       annotations: edit,
     },

@@ -7,6 +7,16 @@ const text = z.string().trim().min(1).max(4_000);
 const updatedAt = z.string();
 
 /**
+ * Header Cutroom's MCP bridge adds to every request it forwards. A native agent's bridge
+ * sends the server's agent token; any other MCP client sends `external`. Requests from the
+ * Review panel carry no header.
+ */
+export const AGENT_HEADER = "x-cutroom-agent";
+
+/** Outside project history and the preview watcher, so status changes are never undone. */
+export const REVIEW_STATE_PATH = ".cutroom/review.json";
+
+/**
  * One review note's lifecycle. A note stays in the queue until an explicit
  * transition finishes it; nothing moves it implicitly.
  */
@@ -38,28 +48,38 @@ export const ReviewSchema = z.discriminatedUnion("status", [
 export type Review = z.infer<typeof ReviewSchema>;
 export type ReviewStatus = Review["status"];
 
-/** What the owner asked for after the note was written. Kept through every status change. */
-export const InstructionSchema = z.object({ text, at: z.string() });
+/**
+ * What the owner asked for after the note was written: a reply or send-back in Review,
+ * or a chat answer the agent recorded when it resumed a blocked note. Kept through every
+ * status change.
+ */
+export const InstructionSchema = z.object({
+  text,
+  at: z.string(),
+  source: z.enum(["review", "chat"]),
+  messageId: z.string().optional(),
+});
 export const ReviewStateSchema = z.object({
   review: ReviewSchema,
   instructions: z.array(InstructionSchema),
 });
 export type ReviewState = z.infer<typeof ReviewStateSchema>;
 
-/**
- * The run an agent acts in: the owner's message in Cutroom, an automatic follow-up that
- * cannot speak for the owner, or an outside MCP client talking to the owner directly.
- */
-export type ReviewTurn = {
-  id: string;
-  kind: "message" | "continuation" | "external";
-};
+/** The run an agent acts in: the owner's message in Cutroom, or an outside MCP client. */
+export type ReviewTurn = { id: string; kind: "message" | "external" };
 export type ReviewActor =
   { kind: "human" } | { kind: "agent"; turn: ReviewTurn };
 
 export const reviewActions = {
   send: z.object({ type: z.literal("send") }),
-  claim: z.object({ type: z.literal("claim") }),
+  claim: z.object({
+    type: z.literal("claim"),
+    answer: text
+      .optional()
+      .describe(
+        "Required for a blocked note: the owner's answer from their message, as you read it",
+      ),
+  }),
   complete: z.object({
     type: z.literal("complete"),
     note: text.describe("What changed, in one or two sentences"),
@@ -103,6 +123,7 @@ export const HumanReviewActionSchema = z.discriminatedUnion("type", [
   reviewActions.reject,
   reviewActions.reply,
   reviewActions.restore,
+  reviewActions.release,
   reviewActions.withdraw.omit({ replacedBy: true }),
 ]);
 export const AgentReviewActionSchema = z.discriminatedUnion("type", [
@@ -122,23 +143,15 @@ export const unfinishedStatuses = [
   "done",
 ] as const satisfies readonly ReviewStatus[];
 
-type Role = "human" | "agent" | "continuation";
-type Rule = { readonly [R in Role]?: readonly ReviewStatus[] };
+type Rule = { readonly [K in ReviewActor["kind"]]?: readonly ReviewStatus[] };
 
-/**
- * Which states each role may leave through each action. Anything absent is refused.
- * An automatic continuation has not heard from the owner, so it cannot act on their
- * word: it cannot withdraw a request or resume a note blocked on their answer.
- */
+/** Which states each actor may leave through each action. Anything absent is refused. */
 const transitions = {
   send: { human: ["open"] },
-  claim: { agent: ["open", "queued", "blocked"], continuation: ["queued"] },
-  complete: {
-    agent: ["open", "queued", "working", "blocked"],
-    continuation: ["queued", "working"],
-  },
-  block: { agent: ["queued", "working"], continuation: ["queued", "working"] },
-  release: { agent: ["working"], continuation: ["working"] },
+  claim: { agent: ["open", "queued", "blocked"] },
+  complete: { agent: ["open", "queued", "working", "blocked"] },
+  block: { agent: ["queued", "working"] },
+  release: { agent: ["working"], human: ["working"] },
   withdraw: {
     human: unfinishedStatuses,
     agent: ["queued", "working", "blocked", "done"],
@@ -155,20 +168,14 @@ export function transition(
   actor: ReviewActor,
   now = new Date().toISOString(),
 ): ReviewState {
-  const turn = actor.kind === "agent" ? actor.turn : undefined;
-  const role: Role = !turn
-    ? "human"
-    : turn.kind === "continuation"
-      ? "continuation"
-      : "agent";
   const rule: Rule = transitions[next.type];
-  if (!rule[role]?.includes(review.status))
+  if (!rule[actor.kind]?.includes(review.status))
     throw new HttpError(
       409,
-      role === "continuation" && rule.agent?.includes(review.status)
-        ? `Only a message from the owner can let the agent ${next.type} a note that is ${review.status}.`
-        : `The ${actor.kind} cannot ${next.type} a note that is ${review.status}.`,
+      `The ${actor.kind} cannot ${next.type} a note that is ${review.status}.`,
     );
+  const turn = actor.kind === "agent" ? actor.turn : undefined;
+  const messageId = turn?.kind === "message" ? turn.id : undefined;
   const to = (review: Review): ReviewState => ({ review, instructions });
   switch (next.type) {
     case "send":
@@ -179,11 +186,38 @@ export function transition(
     case "reply":
       return {
         review: { status: "queued", updatedAt: now },
-        instructions: [...instructions, { text: next.note, at: now }],
+        instructions: [
+          ...instructions,
+          { text: next.note, at: now, source: "review" },
+        ],
       };
-    case "claim":
+    case "claim": {
       if (!turn) throw new HttpError(409, "Only an agent can claim a note.");
-      return to({ status: "working", updatedAt: now, turnId: turn.id });
+      const working: Review = {
+        status: "working",
+        updatedAt: now,
+        turnId: turn.id,
+      };
+      if (review.status !== "blocked") return to(working);
+      // The owner answered in chat; keep that answer with the note so it is never lost.
+      if (!next.answer)
+        throw new HttpError(
+          409,
+          "Pass the owner's answer to claim a blocked note.",
+        );
+      return {
+        review: working,
+        instructions: [
+          ...instructions,
+          {
+            text: next.answer,
+            at: now,
+            source: "chat",
+            ...(messageId && { messageId }),
+          },
+        ],
+      };
+    }
     case "complete":
       return to({
         status: "done",
@@ -205,7 +239,7 @@ export function transition(
         updatedAt: now,
         reason: next.reason,
         by: turn?.kind === "external" ? "external" : actor.kind,
-        ...(turn?.kind === "message" && { messageId: turn.id }),
+        ...(messageId && { messageId }),
         ...(next.replacedBy && { replacedBy: next.replacedBy }),
       });
   }
@@ -221,9 +255,10 @@ export function migrateLegacyStatus(
   return { status: "open", updatedAt };
 }
 
-export const ReviewItemSchema = AnnotationSchema.omit({
-  status: true,
-}).extend(ReviewStateSchema.shape);
+export const NoteContentSchema = AnnotationSchema.omit({ status: true });
+export const ReviewItemSchema = NoteContentSchema.extend(
+  ReviewStateSchema.shape,
+);
 export type ReviewItem = z.infer<typeof ReviewItemSchema>;
 
 export const ReviewAddSchema = z.object({

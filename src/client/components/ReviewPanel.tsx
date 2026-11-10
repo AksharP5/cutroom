@@ -6,6 +6,7 @@ import {
   ChatTeardropText,
   Check,
   PencilSimple,
+  Queue,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -100,7 +101,10 @@ export function ReviewPanel({
         )}
         {item.instructions.map((instruction) => (
           <p className="review-outcome" key={instruction.at}>
-            You added: {instruction.text}
+            {instruction.source === "chat"
+              ? "You answered in chat: "
+              : "You added: "}
+            {instruction.text}
           </p>
         ))}
         {review.status === "withdrawn" && (
@@ -240,6 +244,16 @@ export function ReviewPanel({
                 <ArrowCounterClockwise size={14} />
               </button>
             )}
+            {review.status === "working" && (
+              <button
+                className="icon-button"
+                aria-label="Return to queue"
+                title="Return to queue"
+                onClick={() => void run(() => onAct(item, { type: "release" }))}
+              >
+                <Queue size={14} />
+              </button>
+            )}
             {review.status !== "open" && review.status !== "withdrawn" && (
               <button
                 className="icon-button"
@@ -348,7 +362,7 @@ export function ReviewPanel({
           {error || reviewError}
         </p>
       )}
-      {items.length === accepted.length && !draft && (
+      {items.length === accepted.length && !draft && !reviewError && (
         <div className="small-empty">
           <ChatTeardropText size={25} weight="light" />
           <h3>Start with what you see.</h3>

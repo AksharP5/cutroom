@@ -23,6 +23,7 @@ import { z } from "zod";
 import { ProjectSchema, type Project } from "../shared/project";
 import {
   NotebookSchema,
+  REVIEW_STATE_PATH,
   ReviewItemSchema,
   type Notebook,
 } from "../shared/review";
@@ -196,7 +197,10 @@ export function App() {
           .parse(JSON.parse(event.data));
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
-        else if (payload.changed !== "cutroom.json") {
+        else if (
+          payload.changed !== "cutroom.json" &&
+          payload.changed !== REVIEW_STATE_PATH
+        ) {
           useWorkspace.setState((state) => ({
             mediaRevision: state.mediaRevision + 1,
           }));
@@ -549,8 +553,7 @@ export function App() {
                   setWorkPanel("notebook");
                 }}
               >
-                {newNotes.length} new{" "}
-                {newNotes.length === 1 ? "note" : "notes"}
+                {newNotes.length} new {newNotes.length === 1 ? "note" : "notes"}
               </button>
             )}
             {exporting && <span className="status-job">Exporting</span>}

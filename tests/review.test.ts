@@ -21,6 +21,7 @@ import type {
 import { createAgentService } from "../src/server/agents/service";
 import type { AgentService } from "../src/server/agents/service";
 import type { RuntimeFactory } from "../src/server/agents/runtime";
+import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectRoutes } from "../src/server/projects/routes";
@@ -35,10 +36,6 @@ const human: ReviewActor = { kind: "human" };
 const agent: ReviewActor = {
   kind: "agent",
   turn: { id: "message-1", kind: "message" },
-};
-const continuing: ReviewActor = {
-  kind: "agent",
-  turn: { id: "message-1", kind: "continuation" },
 };
 const outside: ReviewActor = {
   kind: "agent",
@@ -70,6 +67,7 @@ const state = (status: ReviewStatus): ReviewState => ({
 });
 const withdraw: ReviewAction = { type: "withdraw", reason: "Never mind." };
 const claim: ReviewAction = { type: "claim" };
+const answered: ReviewAction = { type: "claim", answer: "The white one." };
 const complete: ReviewAction = { type: "complete", note: "Done." };
 
 describe("review transitions", () => {
@@ -77,13 +75,13 @@ describe("review transitions", () => {
     ["open", { type: "send" }, human, "queued"],
     ["queued", claim, agent, "working"],
     ["open", claim, outside, "working"],
-    ["blocked", claim, agent, "working"],
-    ["queued", claim, continuing, "working"],
+    ["blocked", answered, agent, "working"],
     ["working", complete, agent, "done"],
     ["open", complete, outside, "done"],
     ["blocked", complete, agent, "done"],
     ["working", { type: "block", question: "Which?" }, agent, "blocked"],
     ["working", { type: "release" }, agent, "queued"],
+    ["working", { type: "release" }, human, "queued"],
     ["blocked", { type: "reply", note: "The blue one." }, human, "queued"],
     ["done", { type: "accept" }, human, "accepted"],
     ["done", { type: "reject", note: "Still too small." }, human, "queued"],
@@ -100,12 +98,14 @@ describe("review transitions", () => {
   test.each<[ReviewStatus, ReviewAction, ReviewActor]>([
     ["open", { type: "send" }, agent],
     ["working", claim, agent],
+    ["blocked", claim, agent],
     ["queued", claim, human],
     ["working", complete, human],
     ["done", { type: "accept" }, agent],
     ["queued", { type: "accept" }, human],
     ["done", { type: "reject", note: "No." }, agent],
     ["queued", { type: "reply", note: "Yes." }, human],
+    ["queued", { type: "release" }, human],
     ["open", withdraw, agent],
     ["accepted", withdraw, human],
     ["withdrawn", { type: "restore" }, agent],
@@ -113,21 +113,6 @@ describe("review transitions", () => {
   ])("refuses %s --%o by %o", (from, action, actor) => {
     expect(() => transition(state(from), action, actor, at)).toThrow(HttpError);
   });
-
-  test.each<[ReviewStatus, ReviewAction]>([
-    ["queued", withdraw],
-    ["done", withdraw],
-    ["blocked", claim],
-    ["blocked", complete],
-    ["open", claim],
-  ])(
-    "an automatic continuation cannot act on the owner's word: %s --%o",
-    (from, action) => {
-      expect(() => transition(state(from), action, continuing, at)).toThrow(
-        "Only a message from the owner",
-      );
-    },
-  );
 
   test("records who withdrew a note, the message that did it, and its replacement", () => {
     expect(
@@ -166,14 +151,8 @@ describe("review transitions", () => {
       agent,
       at,
     );
-    const answered = transition(
-      blocked,
-      { type: "reply", note: "Double it." },
-      human,
-      at,
-    );
     const released = transition(
-      transition(answered, claim, agent, at),
+      transition(blocked, { type: "claim", answer: "Double it." }, agent, at),
       { type: "release" },
       agent,
       at,
@@ -181,8 +160,8 @@ describe("review transitions", () => {
     expect(released).toEqual({
       review: { status: "queued", updatedAt: at },
       instructions: [
-        { text: "Bigger.", at },
-        { text: "Double it.", at },
+        { text: "Bigger.", at, source: "review" },
+        { text: "Double it.", at, source: "chat", messageId: "message-1" },
       ],
     });
   });
@@ -207,21 +186,31 @@ async function setup(
       error instanceof HttpError ? error.status : 500,
     ),
   );
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch: createMcpHttpHandler({
-      fetch: (url, init) => app.request(url, init),
-    }),
-  });
-  cleanup.push(() => server.stop(true));
-  const mcp = new Client({ name: "cutroom-review-test", version: "1.0.0" });
-  await mcp.connect(
-    new StreamableHTTPClientTransport(
-      new URL(`http://127.0.0.1:${server.port}/mcp`),
-    ),
-  );
-  cleanup.push(() => mcp.close());
+  // The native agent's bridge carries the server's agent token; any other client does not.
+  const connect = async (agentToken?: string) => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => app.request(url, init),
+        agentToken,
+      }),
+    });
+    cleanup.push(() => server.stop(true));
+    const client = new Client({
+      name: "cutroom-review-test",
+      version: "1.0.0",
+    });
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    cleanup.push(() => client.close());
+    return client;
+  };
+  const mcp = await connect();
+  const native = await connect(review.agentToken);
   const turns: AgentTurn[] = [];
   const runtimeFactory: RuntimeFactory = {
     capabilities: async (provider) => ({
@@ -236,7 +225,7 @@ async function setup(
       return {
         send: async (turn) => {
           turns.push(turn);
-          await run(turn, mcp);
+          await run(turn, native);
         },
         interrupt: async () => {},
         dispose: () => {},
@@ -482,18 +471,6 @@ test("notes saved before the review queue keep their meaning", async () => {
   });
 });
 
-test("review status stays out of undo while note content stays undoable", async () => {
-  const queue = await setup();
-  const id = await queue.note("Warm up the grade");
-  await send(queue.agents, queue.project, "Go");
-  await queue.request(`/projects/${queue.project.id}/history/undo`, "POST");
-  expect(await queue.items()).toHaveLength(0);
-  await queue.request(`/projects/${queue.project.id}/history/redo`, "POST");
-  expect(
-    (await queue.items()).find((item) => item.id === id)?.review.status,
-  ).toBe("queued");
-});
-
 describe("review queue regressions", () => {
   test("owner instructions survive a claim and an interrupted run", async () => {
     const queue = await setup(async (_turn, mcp) => {
@@ -533,6 +510,7 @@ describe("review queue regressions", () => {
       await call(mcp, "review_claim", {
         projectId: queue.project.id,
         noteId: item!.id,
+        answer: "Use the white one.",
       });
       await call(mcp, "review_complete", {
         projectId: queue.project.id,
@@ -553,7 +531,11 @@ describe("review queue regressions", () => {
     );
     await send(queue.agents, queue.project, "Use the white one");
     expect(answered).toBe(true);
-    expect((await queue.status())["Swap the logo"]).toBe("done");
+    const [item] = await queue.items();
+    expect(item?.review.status).toBe("done");
+    expect(item?.instructions).toEqual([
+      expect.objectContaining({ text: "Use the white one.", source: "chat" }),
+    ]);
   });
 
   test("an outside MCP client can work fresh notes, and its claims recover after a restart", async () => {
@@ -565,10 +547,7 @@ describe("review queue regressions", () => {
     });
     expect((await queue.status())["Tighten the intro"]).toBe("working");
     const restarted = createReviewService(queue.store);
-    const [item] = await restarted.list(
-      queue.project,
-      await queue.store.document(queue.project),
-    );
+    const [item] = await restarted.list(queue.project);
     expect(item?.review.status).toBe("queued");
   });
 
@@ -729,5 +708,200 @@ describe("review queue regressions", () => {
     const session = await send(queue.agents, queue.project, "Hello");
     expect(session.status).toBe("idle");
     expect(queue.turns.at(-1)?.context).toContain("unavailable");
+  });
+});
+
+describe("review round 2 regressions", () => {
+  test("deleting a draft cannot race a message that submits it", async () => {
+    const queue = await setup();
+    const id = await queue.note("Cut the second take");
+    const write = queue.store.writeDocument;
+    let reached = () => {};
+    const atWrite = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    queue.store.writeDocument = async (...args) => {
+      reached();
+      await gate;
+      return write(...args);
+    };
+    const removing = queue.fetchRaw(
+      `/projects/${queue.project.id}/annotations/${id}`,
+      "DELETE",
+    );
+    await atWrite;
+    const sending = send(queue.agents, queue.project, "Go");
+    await Bun.sleep(50);
+    release();
+    await removing;
+    await sending;
+    queue.store.writeDocument = write;
+    const submitted = queue.turns.at(-1)?.context?.includes(id) ?? false;
+    const listed = (await queue.items()).some((item) => item.id === id);
+    expect(submitted && !listed).toBe(false);
+  });
+
+  test("undo of a submitted note withdraws it visibly, and redo keeps it withdrawn", async () => {
+    const queue = await setup();
+    const id = await queue.note("Warm up the grade");
+    await send(queue.agents, queue.project, "Go");
+    const history = `/projects/${queue.project.id}/history`;
+    await queue.request(`${history}/undo`, "POST");
+    const [undone] = await queue.items();
+    expect(undone?.id).toBe(id);
+    expect(undone?.body).toBe("Warm up the grade");
+    expect(undone?.review).toMatchObject({
+      status: "withdrawn",
+      reason: "Removed by undo",
+      by: "human",
+    });
+    await queue.request(`${history}/redo`, "POST");
+    expect((await queue.status())["Warm up the grade"]).toBe("withdrawn");
+  });
+
+  test("legacy status cleanup runs once, so undoing it keeps redo", async () => {
+    const queue = await setup();
+    await writeFile(
+      join(queue.project.path, "cutroom.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        annotations: [
+          {
+            id: "legacy",
+            kind: "comment",
+            compositionPath: "index.html",
+            body: "Sent earlier",
+            time: 0,
+            strokes: [],
+            status: "sent",
+            createdAt: at,
+            updatedAt: at,
+          },
+        ],
+        transcripts: [],
+      }),
+    );
+    await send(queue.agents, queue.project, "Go");
+    const history = `/projects/${queue.project.id}/history`;
+    await queue.request(`${history}/undo`, "POST");
+    await send(queue.agents, queue.project, "Again");
+    const state = z
+      .object({ canRedo: z.boolean() })
+      .parse(await queue.request(history));
+    expect(state.canRedo).toBe(true);
+  });
+
+  test("an outside client acting during a native turn keeps its own identity", async () => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queue = await setup(() => held);
+    const withdrawn = await queue.note("Red background");
+    const claimed = await queue.note("Trim the end");
+    const session = await queue.agents.create({
+      projectId: queue.project.id,
+      provider: "codex",
+    });
+    await queue.agents.send(session.id, {
+      text: "Go",
+      skills: [],
+      attachments: [],
+    });
+    await call(queue.mcp, "review_withdraw", {
+      projectId: queue.project.id,
+      noteId: withdrawn,
+      reason: "Owner said so in the terminal.",
+    });
+    await call(queue.mcp, "review_claim", {
+      projectId: queue.project.id,
+      noteId: claimed,
+    });
+    release();
+    await settle(queue.agents, session.id);
+    const items = await queue.items();
+    const review = items.find((item) => item.id === withdrawn)?.review;
+    expect(review).toMatchObject({ status: "withdrawn", by: "external" });
+    expect(review).not.toHaveProperty("messageId");
+    expect(items.find((item) => item.id === claimed)?.review.status).toBe(
+      "working",
+    );
+  });
+
+  test("claiming a blocked note records the owner's chat answer", async () => {
+    const queue = await setup();
+    const id = await queue.note("Swap the logo");
+    await send(queue.agents, queue.project, "Go");
+    const base = `/projects/${queue.project.id}/review/${id}/agent`;
+    await queue.request(base, "POST", {
+      type: "block",
+      question: "Which logo file?",
+    });
+    const unanswered = await queue.fetchRaw(base, "POST", { type: "claim" });
+    expect(unanswered.status).toBe(409);
+    await queue.request(base, "POST", {
+      type: "claim",
+      answer: "Use white-logo.svg",
+    });
+    const [item] = await queue.items();
+    expect(item?.instructions).toEqual([
+      expect.objectContaining({ text: "Use white-logo.svg", source: "chat" }),
+    ]);
+  });
+
+  test("a submitted note's text cannot be rewritten", async () => {
+    const queue = await setup();
+    const id = await queue.note("Make it warmer");
+    await send(queue.agents, queue.project, "Go");
+    const patched = await queue.fetchRaw(
+      `/projects/${queue.project.id}/annotations/${id}`,
+      "PATCH",
+      { body: "Make it cooler" },
+    );
+    expect(patched.status).toBe(409);
+    expect(Object.keys(await queue.status())).toEqual(["Make it warmer"]);
+  });
+
+  test("the owner can return a stuck claim to the queue", async () => {
+    const queue = await setup();
+    const id = await queue.note("Trim the end");
+    await call(queue.mcp, "review_claim", {
+      projectId: queue.project.id,
+      noteId: id,
+    });
+    await queue.request(
+      `/projects/${queue.project.id}/review/${id}/human`,
+      "POST",
+      { type: "release" },
+    );
+    expect((await queue.status())["Trim the end"]).toBe("queued");
+  });
+});
+
+test("the editor's own undo button withdraws a sent note as the owner", async () => {
+  const queue = await setup();
+  const editor = createHyperframesApi(queue.store, queue.review);
+  cleanup.push(() => editor.dispose());
+  const id = await queue.note("Swap the logo");
+  await send(queue.agents, queue.project, "Go");
+  const undo = await editor.request(
+    `/projects/${queue.project.id}/history/step`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ direction: "back" }),
+    },
+  );
+  expect(undo.status).toBe(200);
+  expect(
+    (await queue.items()).find((item) => item.id === id)?.review,
+  ).toMatchObject({
+    status: "withdrawn",
+    reason: "Removed by undo",
+    by: "human",
   });
 });

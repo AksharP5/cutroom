@@ -25,6 +25,8 @@ import type {
   StudioApiAdapter,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
+import { createReviewService } from "../projects/review";
+import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
 import { createRenderWorkers } from "./jobs";
@@ -47,7 +49,10 @@ const ignored = new Set([
   "renders",
 ]);
 
-export function createHyperframesApi(store: ProjectStore) {
+export function createHyperframesApi(
+  store: ProjectStore,
+  reviews: ReviewService = createReviewService(store),
+) {
   const api = new Hono();
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<string, ReturnType<typeof watch>>();
@@ -157,7 +162,14 @@ export function createHyperframesApi(store: ProjectStore) {
       });
     },
     resolveProject,
-    history: (project) => store.historyForDir(project.dir),
+    // The editor's undo, redo, and restore are the owner's, and can remove sent review notes.
+    history: async (project) => {
+      const history = await store.historyForDir(project.dir);
+      return (
+        history &&
+        reviews.history(await store.get(project.id), history, { kind: "human" })
+      );
+    },
     async bundle(dir, options) {
       return (
         await bundleToSingleHtml(dir, { ...PREVIEW_BUNDLE_OPTIONS, ...options })

@@ -11,7 +11,13 @@ export function createNativeRuntimeFactory(
   studioUrl = process.env.CUTROOM_PORT
     ? `http://127.0.0.1:${process.env.CUTROOM_PORT}`
     : (process.env.CUTROOM_URL ?? "http://127.0.0.1:4317"),
+  agentToken?: string,
 ): RuntimeFactory {
+  // The token lets the server credit review actions to the running turn instead of an outside client.
+  const env = {
+    CUTROOM_URL: studioUrl,
+    ...(agentToken && { CUTROOM_AGENT_TOKEN: agentToken }),
+  };
   let codex: CodexClient | undefined;
   const discoveries = new Set<AbortController>();
   const bridge = resolve(import.meta.dir, "../mcp/stdio.ts");
@@ -22,7 +28,7 @@ export function createNativeRuntimeFactory(
           type: "stdio" as const,
           command,
           args: [bridge],
-          env: { CUTROOM_URL: studioUrl },
+          env,
         },
       }
     : {};
@@ -39,8 +45,10 @@ export function createNativeRuntimeFactory(
                 `mcp_servers.cutroom_studio.command=${JSON.stringify(command)}`,
                 "-c",
                 `mcp_servers.cutroom_studio.args=${JSON.stringify([bridge])}`,
-                "-c",
-                `mcp_servers.cutroom_studio.env.CUTROOM_URL=${JSON.stringify(studioUrl)}`,
+                ...Object.entries(env).flatMap(([key, value]) => [
+                  "-c",
+                  `mcp_servers.cutroom_studio.env.${key}=${JSON.stringify(value)}`,
+                ]),
               ]
             : []),
         ],

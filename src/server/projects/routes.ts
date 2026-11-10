@@ -15,10 +15,12 @@ import {
   TranscriptImportSchema,
 } from "../../shared/project";
 import {
+  AGENT_HEADER,
   AgentReviewActionSchema,
   HumanReviewActionSchema,
   ReviewAddSchema,
 } from "../../shared/review";
+import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
 import { createTranscriptService } from "../transcript/service";
 import type { TranscriptService } from "../transcript/service";
@@ -80,7 +82,7 @@ export function createProjectRoutes(
     const project = await store.get(c.req.param("id"));
     const document = await store.document(project);
     const review = await reviews
-      .list(project, document)
+      .list(project)
       .then((items) => ({ items }))
       .catch((error: unknown) => {
         if (error instanceof ReviewFileError)
@@ -140,52 +142,19 @@ export function createProjectRoutes(
   api.patch("/projects/:id/annotations/:annotationId", async (c) => {
     const project = await store.get(c.req.param("id"));
     const patch = parseInput(AnnotationPatchSchema, await c.req.json());
-    const annotation = await store.mutate(
-      project,
-      "Update comment",
-      async () => {
-        const document = await store.document(project);
-        const index = document.annotations.findIndex(
-          (item) => item.id === c.req.param("annotationId"),
-        );
-        if (index < 0) throw new HttpError(404, "Annotation not found.");
-        const changed = {
-          ...document.annotations[index]!,
-          ...patch,
-          updatedAt: new Date().toISOString(),
-        };
-        document.annotations[index] = changed;
-        await store.writeDocument(project, document);
-        return changed;
-      },
+    return c.json(
+      await reviews.edit(project, c.req.param("annotationId"), patch),
     );
-    return c.json(annotation);
   });
   api.delete("/projects/:id/annotations/:annotationId", async (c) => {
     const project = await store.get(c.req.param("id"));
-    await store.mutate(project, "Remove comment", async () => {
-      const document = await store.document(project);
-      const index = document.annotations.findIndex(
-        (item) => item.id === c.req.param("annotationId"),
-      );
-      if (index < 0) throw new HttpError(404, "Annotation not found.");
-      const item = (await reviews.list(project, document)).find(
-        (candidate) => candidate.id === c.req.param("annotationId"),
-      );
-      if (item && item.review.status !== "open")
-        throw new HttpError(
-          409,
-          "Only unsent notes can be deleted. Withdraw a submitted note so its reason is recorded.",
-        );
-      document.annotations.splice(index, 1);
-      await store.writeDocument(project, document);
-    });
+    await reviews.remove(project, c.req.param("annotationId"));
     return c.json({ ok: true });
   });
   api.get("/projects/:id/review", async (c) => {
     const project = await store.get(c.req.param("id"));
     return c.json({
-      items: await reviews.list(project, await store.document(project)),
+      items: await reviews.list(project),
     });
   });
   api.post("/projects/:id/review", async (c) => {
@@ -193,18 +162,23 @@ export function createProjectRoutes(
     const input = parseInput(ReviewAddSchema, await c.req.json());
     return c.json(await reviews.add(project, input), 201);
   });
-  for (const [actor, schema] of [
-    ["human", HumanReviewActionSchema],
-    ["agent", AgentReviewActionSchema],
-  ] as const) {
-    api.post(`/projects/:id/review/:itemId/${actor}`, async (c) => {
-      const project = await store.get(c.req.param("id"));
-      const action = parseInput(schema, await c.req.json());
-      return c.json(
-        await reviews.act(project, c.req.param("itemId"), action, actor),
-      );
-    });
-  }
+  api.post("/projects/:id/review/:itemId/human", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const action = parseInput(HumanReviewActionSchema, await c.req.json());
+    return c.json(
+      await reviews.act(project, c.req.param("itemId"), action, {
+        kind: "human",
+      }),
+    );
+  });
+  api.post("/projects/:id/review/:itemId/agent", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const action = parseInput(AgentReviewActionSchema, await c.req.json());
+    const actor = reviews.agent(project, c.req.header(AGENT_HEADER));
+    return c.json(
+      await reviews.act(project, c.req.param("itemId"), action, actor),
+    );
+  });
   api.get("/transcription", async (c) =>
     c.json(await transcripts.availability()),
   );
@@ -259,7 +233,15 @@ export function createProjectRoutes(
     ["redo", "forward"],
   ] as const) {
     api.post(`/projects/:id/history/${route}`, async (c) => {
-      const history = await store.history(await store.get(c.req.param("id")));
+      const project = await store.get(c.req.param("id"));
+      const agent = c.req.header(AGENT_HEADER);
+      const actor: ReviewActor =
+        agent === undefined ? { kind: "human" } : reviews.agent(project, agent);
+      const history = reviews.history(
+        project,
+        await store.history(project),
+        actor,
+      );
       const result = await history.step(direction, {
         kind: "person",
         name: "You",

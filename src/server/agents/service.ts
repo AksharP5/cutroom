@@ -72,7 +72,8 @@ export class AgentService {
   constructor(private readonly options: AgentServiceOptions) {
     this.path = join(options.dataDir, "agents.json");
     this.factory =
-      options.runtimeFactory ?? createNativeRuntimeFactory(options.studioUrl);
+      options.runtimeFactory ??
+      createNativeRuntimeFactory(options.studioUrl, options.review.agentToken);
   }
 
   async load() {
