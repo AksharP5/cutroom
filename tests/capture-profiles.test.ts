@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -37,6 +38,27 @@ test("capture startup sweeps only marked directories with a dead owner", async (
     for (const path of [live, unmarked, unrelated, target, linked])
       expect(await readFile(join(path, "keep"), "utf8")).toBe("profile data");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an abandoned profile that cannot be removed does not stop a new capture profile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cap-profiles-"));
+  const owner = Bun.spawn([process.execPath, "-e", "process.exit(0)"], {
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+  await owner.exited;
+  const stuck = join(root, `cutroom-capture-${owner.pid}-abcdef`);
+  try {
+    await mkdir(join(stuck, "Default"), { recursive: true });
+    await writeFile(join(stuck, "Default", "keep"), "profile data");
+    // Unreadable, like a profile left by another user in a shared temp folder.
+    await chmod(stuck, 0o000);
+    const created = await createCaptureProfile(root);
+    expect(created).toStartWith(join(root, `cutroom-capture-${process.pid}-`));
+  } finally {
+    await chmod(stuck, 0o700);
     await rm(root, { recursive: true, force: true });
   }
 });

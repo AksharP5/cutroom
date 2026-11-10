@@ -16,7 +16,16 @@ export async function createCaptureProfile(directory = tmpdir()) {
     } catch (error) {
       if (!(error instanceof Error && "code" in error)) throw error;
       if (error.code === "ESRCH")
-        await rm(join(directory, entry.name), { recursive: true, force: true });
+        // Another user's or an unremovable profile must not stop this capture from starting.
+        await rm(join(directory, entry.name), {
+          recursive: true,
+          force: true,
+        }).catch((failure: unknown) =>
+          console.warn(
+            `Could not remove the abandoned capture profile ${entry.name}:`,
+            failure instanceof Error ? failure.message : failure,
+          ),
+        );
       else if (error.code !== "EPERM") throw error;
     }
   }
