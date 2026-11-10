@@ -26,6 +26,7 @@ import { api, subscribeProjectEvents } from "../api";
 import { noteNumbers } from "../review";
 import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
+import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { exportProject, useExport } from "./export";
 import {
   editTimeline,
@@ -378,6 +379,7 @@ export function EditPage({
           <ArrowClockwise size={16} />
         </button>
         <span className="edit-separator" />
+        <InspectorToggle />
         {exportNotice && (
           <span
             className="edit-export-notice"
@@ -415,6 +417,7 @@ export function EditPage({
         />
         <TransportBar fullscreen={fullscreen} onFullscreen={toggleFullscreen} />
       </section>
+      <Inspector projectId={projectId} />
       <div
         className="edit-split"
         role="separator"

@@ -477,6 +477,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         link: separate ? id : null,
         label: input.label ?? null,
         volume: input.volume ?? null,
+        opacity: null,
         enabled: true,
         startRef: null,
       };
@@ -532,6 +533,38 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         clips: [...next, added, ...audio],
       };
     }
+    case "setTiming": {
+      const target = find(command.clipId);
+      const targets = withPartners(clips, [target]);
+      for (const clip of targets)
+        if (clip.mediaStart === null)
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${clip.id} has no source timing.`,
+          );
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          targets.includes(clip)
+            ? {
+                ...clip,
+                ...(command.playbackRate !== undefined && {
+                  playbackRate: command.playbackRate,
+                }),
+                // Keep each partner's source at the selected clip's start in sync, including L-cuts.
+                mediaStart:
+                  clip.mediaStart! +
+                  (command.mediaStart === undefined
+                    ? 0
+                    : command.mediaStart - target.mediaStart!) +
+                  frameTime(clip.start - target.start, fps) *
+                    ((command.playbackRate ?? clip.playbackRate) -
+                      clip.playbackRate),
+              }
+            : clip,
+        ),
+      };
+    }
     case "setClip": {
       const target = find(command.clipId);
       return {
@@ -542,6 +575,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...clip,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
+                ...(command.opacity !== undefined && {
+                  opacity: command.opacity,
+                }),
                 ...(command.enabled !== undefined && {
                   enabled: command.enabled,
                 }),

@@ -193,7 +193,11 @@ export function createProjectRoutes(
   api.post("/projects/:id/review/changes/accept", async (c) => {
     if (c.req.header(AGENT_HEADER))
       throw new HttpError(409, "Only the owner can accept agent changes.");
-    await reviews.acceptChanges(await store.get(c.req.param("id")));
+    const { editId } = parseInput(
+      z.object({ editId: z.string().optional() }),
+      await c.req.text().then((text) => (text ? JSON.parse(text) : {})),
+    );
+    await reviews.acceptChanges(await store.get(c.req.param("id")), editId);
     return c.json({ ok: true });
   });
   api.patch("/projects/:id/review/order", async (c) => {

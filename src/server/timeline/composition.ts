@@ -1,4 +1,5 @@
 import { parseFpsWithDefault } from "@hyperframes/core";
+import { readOpacity, writeOpacity } from "./opacity";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -433,6 +434,7 @@ export function parseComposition(
         element.attrs["data-label"] ??
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
+      opacity: readOpacity(element.attrs.style),
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
@@ -695,6 +697,10 @@ function clipChanges(
         : "data-media-start",
       String(mediaStart),
     ]);
+  if (before.playbackRate !== after.playbackRate)
+    changes.push(["data-playback-rate", String(after.playbackRate)]);
+  if (before.opacity !== after.opacity)
+    changes.push(["style", writeOpacity(element.attrs.style, after.opacity)]);
   if (before.volume !== after.volume)
     changes.push([
       "data-volume",

@@ -19,6 +19,7 @@ export function compositionFps(value: string | null | undefined) {
 export const useWorkspace = create(() => ({
   /** Compositions, assets, and source files beside the preview. */
   files: false,
+  inspector: localStorage.getItem("cutroom.inspector") !== "false",
   /** Export progress and finished renders. */
   exports: false,
   exporting: false,
@@ -72,7 +73,9 @@ export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
     },
   }));
 
-useWorkspace.subscribe(({ newEditor }, previous) => {
+useWorkspace.subscribe(({ newEditor, inspector }, previous) => {
+  if (inspector !== previous.inspector)
+    localStorage.setItem("cutroom.inspector", String(inspector));
   if (newEditor !== previous.newEditor)
     localStorage.setItem(NEW_EDITOR_KEY, String(newEditor));
 });

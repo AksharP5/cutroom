@@ -47,6 +47,8 @@ Drop media above the top video track or below the last audio track to add a trac
 
 Use **Select**, **Draw**, and **Comment** above the viewer. Their keys are listed in the [keyboard shortcuts](docs/keyboard.md). In Script, select a word and Shift-click another to select a passage. Cuts ripple the selected media lane; other tracks keep their authored timing. Complex scripted or linked edits can be handed to the agent.
 
+Select a clip to inspect its recent changes, timing, and static opacity. Yellow marks are yours; blue marks are agent edits. Accept clears a reviewed edit, and the clip underline clears when its pending edits are accepted. The Inspector button remembers its visibility and opens a drawer on narrower windows. Type timecode, frames such as `45f`, seconds such as `1.5s`, or percentages. Enter commits, Escape reverts, and dragging a field label scrubs its value. Every committed field is one undo step. Speed keeps timeline duration and changes linked media together. Opacity accepts `Auto` to restore source styles. Position, scale, rotation, and keyframe controls are still pending.
+
 See [local transcription](docs/transcription.md) and [editing behavior](docs/editing.md) for supported inputs and undo details.
 
 ## MCP
