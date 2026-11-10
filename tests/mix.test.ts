@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { parseAutomation } from "@hyperframes/core/audio-automation";
 import { audioDbToGain, MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -118,6 +119,37 @@ function edited(source: string, commands: CommandInput[]) {
   return { html, timeline: next };
 }
 
+async function render(root: string, source: string, name: string) {
+  const output = join(root, `${name}.m4a`);
+  const result = await processCompositionAudio(
+    parseAudioElements(source),
+    root,
+    join(root, name),
+    output,
+    8,
+  );
+  expect(result.success, result.error).toBe(true);
+  return ffmpeg([
+    "-i",
+    output,
+    "-ac",
+    "1",
+    "-ar",
+    "48000",
+    "-f",
+    "f32le",
+    "pipe:1",
+  ]);
+}
+function peak(samples: Float32Array, time: number) {
+  return samples
+    .subarray(
+      Math.round((time - 0.01) * 48000),
+      Math.round((time + 0.01) * 48000),
+    )
+    .reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
+}
+
 const faded = (fadeIn: number, fadeOut: number) =>
   `<main data-composition-id="main" data-duration="8" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="8" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"></audio></main>`;
 
@@ -133,35 +165,6 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "sine=frequency=220:duration=8:sample_rate=48000",
         join(root, "tone.wav"),
       ]);
-      const render = async (source: string, name: string) => {
-        const output = join(root, `${name}.m4a`);
-        const result = await processCompositionAudio(
-          parseAudioElements(source),
-          root,
-          join(root, name),
-          output,
-          8,
-        );
-        expect(result.success, result.error).toBe(true);
-        return ffmpeg([
-          "-i",
-          output,
-          "-ac",
-          "1",
-          "-ar",
-          "48000",
-          "-f",
-          "f32le",
-          "pipe:1",
-        ]);
-      };
-      const peak = (samples: Float32Array, time: number) =>
-        samples
-          .subarray(
-            Math.round((time - 0.01) * 48000),
-            Math.round((time + 0.01) * 48000),
-          )
-          .reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
       for (const [fadeIn, fadeOut, at, automated] of [
         [0, 4, 120],
         [2, 6, 30],
@@ -177,6 +180,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
             : "<audio ",
         );
         const reference = await render(
+          root,
           source,
           `whole-${fadeIn}-${fadeOut}-${at}-${automated}`,
         );
@@ -184,6 +188,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
           { type: "split", clipIds: ["music"], at },
         ]);
         const actual = await render(
+          root,
           split.html,
           `split-${fadeIn}-${fadeOut}-${at}-${automated}`,
         );
@@ -236,18 +241,18 @@ test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving pie
     expect(music.length).toBeGreaterThan(0);
     expect(music.map((clip) => [clip.fadeIn, clip.fadeOut])).toEqual(
       [
-        [[60, 0]],
-        [[0, 60]],
-        [[0, 60]],
+        [[15, 45]],
+        [[15, 45]],
+        [[0, 0]],
         [[60, 0]],
         [
           [60, 0],
           [0, 0],
-          [0, 60],
+          [0, 0],
         ],
         [
           [60, 0],
-          [0, 60],
+          [0, 0],
         ],
       ][index],
     );
@@ -263,10 +268,6 @@ test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving pie
         ]),
       ).not.toThrow();
     }
-    if (commands[0]!.type === "trim" && commands[0]!.edge === "start")
-      expect(music[0]!.fadeIn).toBe(0);
-    if (commands[0]!.type === "trim" && commands[0]!.edge === "end")
-      expect(music[0]!.fadeOut).toBe(0);
   }
 });
 
@@ -289,4 +290,124 @@ test("editing overlapping authored fades writes the normalized pair that the tim
     fadeIn: 0.5,
     fadeOut: 1,
   });
+});
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "trim and roll out and back retain native edge fades and their rendered levels",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "cutroom-edge-audio-"));
+    try {
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=220:duration=16:sample_rate=48000",
+        join(root, "tone.wav"),
+      ]);
+      const source = faded(0, 4);
+      for (const roll of [false, true]) {
+        const original = roll
+          ? source.replace(
+              "</main>",
+              '<audio id="next" src="tone.wav" data-start="8" data-duration="4" data-media-start="8" data-track-index="0" data-fade-in="2"></audio></main>',
+            )
+          : source;
+        const shortened = edited(original, [
+          { type: "trim", clipId: "music", edge: "end", to: 180 },
+          ...(roll
+            ? [
+                {
+                  type: "trim",
+                  clipId: "next",
+                  edge: "start",
+                  to: 180,
+                } as const,
+              ]
+            : []),
+        ]);
+        expect(
+          shortened.timeline.clips.find((clip) => clip.id === "music"),
+        ).toMatchObject({ duration: 180, fadeOut: 120, automation: null });
+        const restored = edited(shortened.html, [
+          ...(roll
+            ? [
+                {
+                  type: "trim",
+                  clipId: "next",
+                  edge: "start",
+                  to: 240,
+                } as const,
+              ]
+            : []),
+          { type: "trim", clipId: "music", edge: "end", to: 240 },
+        ]);
+        expect(restored.timeline).toEqual(
+          parseComposition(original, emptyTimelineSettings()).timeline,
+        );
+        const reference = await render(
+          root,
+          original,
+          `edge-reference-${roll}`,
+        );
+        for (const [name, result, times, expected] of [
+          [
+            "short",
+            shortened,
+            [1, 3, 5, 5.8],
+            faded(0, 4).replaceAll('data-duration="8"', 'data-duration="6"'),
+          ],
+          ["back", restored, [1, 3, 5, 6.5, 7.8], original],
+        ] as const) {
+          const actual = await render(
+            root,
+            result.html,
+            `edge-${roll}-${name}`,
+          );
+          const wanted =
+            name === "back"
+              ? reference
+              : await render(root, expected, `edge-short-reference-${roll}`);
+          for (const time of times)
+            expect(
+              Math.abs(
+                20 * Math.log10(peak(actual, time) / peak(wanted, time)),
+              ),
+            ).toBeLessThan(1);
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
+
+test("head trims keep edge fades, and extending a cut ramp reaches its original endpoint", () => {
+  const head = edited(faded(2, 0), [
+    { type: "trim", clipId: "music", edge: "start", to: 30 },
+  ]);
+  expect(head.timeline.clips[0]).toMatchObject({
+    fadeIn: 60,
+    automation: null,
+  });
+  expect(
+    edited(head.html, [{ type: "trim", clipId: "music", edge: "start", to: 0 }])
+      .timeline,
+  ).toEqual(parseComposition(faded(2, 0), emptyTimelineSettings()).timeline);
+  for (const [fadeIn, fadeOut, at] of [
+    [0, 4, 180],
+    [4, 0, 60],
+  ] as const) {
+    const split = edited(faded(fadeIn, fadeOut), [
+      { type: "split", clipIds: ["music"], at },
+    ]);
+    const extended = edited(split.html, [
+      { type: "remove", clipIds: ["music-2"] },
+      { type: "trim", clipId: "music", edge: "end", to: 240 },
+    ]);
+    const automation = parseAutomation(extended.timeline.clips[0]!.automation!);
+    expect(
+      automation.lanes.find((lane) => lane.target === "volume")?.points.at(-1),
+    ).toMatchObject({ t: 8, v: fadeOut ? 0 : 1 });
+  }
 });

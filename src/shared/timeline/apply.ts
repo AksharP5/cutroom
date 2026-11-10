@@ -340,9 +340,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const trimmed = clips.map((clip) => {
         if (!ids.has(clip.id)) return clip;
         if (command.edge === "end")
-          return windowClip(clip, clip.start, clipEnd(clip) + delta, fps);
+          return windowClip(
+            clip,
+            clip.start,
+            clipEnd(clip) + delta,
+            fps,
+            "trim",
+          );
         return {
-          ...windowClip(clip, clip.start + delta, clipEnd(clip), fps),
+          ...windowClip(clip, clip.start + delta, clipEnd(clip), fps, "trim"),
           start: command.ripple ? clip.start : clip.start + delta,
         };
       });
@@ -992,13 +998,19 @@ function advance(clip: Clip, frames: number, fps: Fps): number | null {
     : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
 }
 
-/** Every cut or trim takes one source/audio window before any ripple moves it. */
-function windowClip(clip: Clip, start: number, end: number, fps: Fps): Clip {
+/** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
+function windowClip(
+  clip: Clip,
+  start: number,
+  end: number,
+  fps: Fps,
+  mode: "trim" | "cut" = "cut",
+): Clip {
   const duration = end - start;
   if (duration <= 0) return { ...clip, start, duration };
   return {
     ...clip,
-    ...windowMix(clip, start - clip.start, duration, fps),
+    ...windowMix(clip, start - clip.start, duration, fps, mode),
     start,
     duration,
     mediaStart: advance(clip, start - clip.start, fps),

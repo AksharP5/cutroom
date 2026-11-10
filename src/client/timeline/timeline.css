@@ -846,7 +846,6 @@
 .tl-mix.locked {
   opacity: var(--track-locked-opacity);
 }
-.tl-gain-area,
 .tl-fade-curve {
   position: absolute;
   top: var(--size-clip-name);
@@ -863,14 +862,11 @@
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
-.tl-gain {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  height: 7px;
-  transform: translateY(-50%);
+.tl-fade-curve .tl-gain {
+  stroke: transparent;
+  stroke-width: 7;
   cursor: ns-resize;
-  pointer-events: auto;
+  pointer-events: stroke;
 }
 .tl-fade-handle {
   position: absolute;

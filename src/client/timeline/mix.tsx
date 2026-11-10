@@ -56,6 +56,7 @@ export const ClipMix = memo(function ClipMix({
   row: Row;
   fps: Fps;
 }) {
+  const path = fadePath(clip, fps);
   return (
     <div
       className={`tl-mix on-${row.track.kind}${row.track.locked ? " locked" : ""}`}
@@ -68,16 +69,11 @@ export const ClipMix = memo(function ClipMix({
         preserveAspectRatio="none"
         aria-hidden="true"
       >
-        <path d={fadePath(clip, fps)} />
+        <path d={path} />
+        <path className="tl-gain" data-mix="gain" d={path}>
+          <title>{`Gain ${audioGainToText(clip.volume ?? 1)}`}</title>
+        </path>
       </svg>
-      <div className="tl-gain-area">
-        <i
-          className="tl-gain"
-          data-mix="gain"
-          title={`Gain ${audioGainToText(clip.volume ?? 1)}`}
-          style={{ top: `${gainHeight(clip.volume)}%` }}
-        />
-      </div>
       <i
         className="tl-fade-handle"
         data-mix="fadeIn"

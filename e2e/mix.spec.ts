@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
@@ -267,9 +267,187 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
       duration: (await music()).duration,
       fadeOut: (await music()).fadeOut,
     }))
-    .toEqual({ duration: 60, fadeOut: 0 });
-  await drag(page, '[data-clip-mix="music"] [data-mix="fadeOut"]', -35, 0);
+    .toEqual({ duration: 60, fadeOut: 60 });
+  await drag(page, '[data-clip-mix="music"] [data-mix="fadeOut"]', 35, 0);
   await expect.poll(async () => (await music()).fadeOut).toBeGreaterThan(0);
   expect((await music()).fadeOut).toBeLessThanOrEqual(60);
   await page.screenshot({ path: info.outputPath("trimmed-envelope.png") });
+});
+
+test("pressing the curved envelope changes gain without moving the clip, in one undo step", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Curved envelope drag", duration: 8 },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=8",
+    join(project.path, "tone.wav"),
+  ]);
+  const source =
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="8" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="8" data-fade-out="4"></audio></main></body></html>';
+  await writeFile(index, source);
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    ).timeline;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  const initial = await read();
+  const path = page
+    .locator('[data-clip-mix="music"] .tl-fade-curve path')
+    .first();
+  // Get the rendered line's point at 7.75 seconds, including its real SVG transform.
+  const point = await path.evaluate((element: SVGPathElement) => {
+    const length = element.getTotalLength();
+    let low = 0;
+    let high = length;
+    for (let i = 0; i < 30; i++) {
+      const middle = (low + high) / 2;
+      if (element.getPointAtLength(middle).x < 96.875) low = middle;
+      else high = middle;
+    }
+    const point = element
+      .getPointAtLength((low + high) / 2)
+      .matrixTransform(element.getScreenCTM()!);
+    return { x: point.x, y: point.y };
+  });
+  await page.screenshot({ path: info.outputPath("curve-before.png") });
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 80, point.y - 12, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(read).not.toEqual(initial);
+  const actual = await read();
+  await writeFile(
+    info.outputPath("curve-readback.json"),
+    JSON.stringify(
+      { before: initial.clips[0], after: actual.clips[0] },
+      null,
+      2,
+    ),
+  );
+  await page.screenshot({ path: info.outputPath("curve-after.png") });
+  expect(actual.clips[0]).toEqual({
+    ...initial.clips[0],
+    volume: 10 ** (6 / 20),
+  });
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(initial);
+  expect(await readFile(index, "utf8")).toBe(source);
+  // Split uses the same history path and must restore the exact authored bytes too.
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 40, y: 12 } });
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("600");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("e");
+  await expect.poll(async () => (await read()).clips.length).toBe(2);
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(initial);
+  expect(await readFile(index, "utf8")).toBe(source);
+});
+
+test("trim and roll out and back keep edge fades and each gesture undoes exactly", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Edge fade trims", duration: 12 },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=16",
+    join(project.path, "tone.wav"),
+  ]);
+  const source =
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="12" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="8" data-fade-out="4"></audio><audio id="next" src="tone.wav" data-start="8" data-duration="4" data-media-start="8" data-fade-in="2"></audio></main></body></html>';
+  await writeFile(index, source);
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    ).timeline;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  const initial = await read();
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((grid: HTMLElement) =>
+      Number(grid.style.getPropertyValue("--ppf")),
+    );
+  const edgeDrag = async (
+    clipId: string,
+    dx: number,
+    edge: "start" | "end",
+  ) => {
+    const clip = page.locator(`[data-clip="${clipId}"]`);
+    await expect
+      .poll(() => clip.evaluate((element) => element.getAnimations().length))
+      .toBe(0);
+    const box = (await clip.boundingBox())!;
+    const x = edge === "start" ? box.x + 1 : box.x + box.width - 1;
+    const y = box.y + 12;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y, { steps: 12 });
+    await page.mouse.up();
+  };
+  const evidence = [];
+  for (const roll of [false, true]) {
+    await page.keyboard.press(roll ? "t" : "a");
+    await edgeDrag(roll ? "next" : "music", -60 * ppf, roll ? "start" : "end");
+    await expect
+      .poll(
+        async () =>
+          (await read()).clips.find((clip) => clip.id === "music")?.duration,
+      )
+      .toBe(180);
+    const short = await read();
+    expect(short.clips.find((clip) => clip.id === "music")).toMatchObject({
+      fadeOut: 120,
+      automation: null,
+    });
+    await page.screenshot({
+      path: info.outputPath(`${roll ? "roll" : "trim"}-short.png`),
+    });
+    await edgeDrag(roll ? "next" : "music", 60 * ppf, roll ? "start" : "end");
+    await expect.poll(read).toEqual(initial);
+    evidence.push({
+      gesture: roll ? "roll" : "trim",
+      short: short.clips,
+      restored: (await read()).clips,
+    });
+    await page.keyboard.press("Control+z");
+    await expect.poll(read).toEqual(short);
+    await page.keyboard.press("Control+z");
+    await expect.poll(read).toEqual(initial);
+    expect(await readFile(index, "utf8")).toBe(source);
+  }
+  await writeFile(
+    info.outputPath("edge-readback.json"),
+    JSON.stringify(evidence, null, 2),
+  );
 });

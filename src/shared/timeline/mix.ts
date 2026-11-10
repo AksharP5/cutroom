@@ -22,45 +22,49 @@ export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
   };
 }
 
-/** Preserve the audible window. A fade cut away from its zero edge becomes native volume automation. */
+/** Trims keep edge fades; cuts preserve the source envelope across their internal edge. */
 export function windowMix(
   clip: Clip,
   from: number,
   duration: number,
   fps: Fps,
+  mode: "trim" | "cut",
 ) {
   const { fadeIn, fadeOut } = clipFades(clip);
   const to = from + duration;
-  const nextIn = from <= 0 ? Math.min(fadeIn, duration) : 0;
+  const edges = mode === "trim" ? clipFades({ ...clip, duration }) : null;
+  const nextIn =
+    edges?.fadeIn ?? (from <= 0 && fadeIn <= duration ? fadeIn : 0);
   const nextOut =
-    to >= clip.duration ? Math.min(fadeOut, duration - nextIn) : 0;
+    edges?.fadeOut ??
+    (to >= clip.duration && fadeOut <= duration - nextIn ? fadeOut : 0);
   const seconds = (frames: number) =>
     Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6;
   const offset = seconds(from);
-  const length = seconds(duration);
   const automation = clip.automation
     ? parseAutomation(clip.automation)
     : { version: HF_AUDIO_AUTOMATION_VERSION, lanes: [] };
   const volume = automation.lanes.find((lane) => lane.target === VOLUME_TARGET);
+  // Retain the source ramp beyond a cut so extension cannot hold a partial level.
+  const length = Math.max(
+    seconds(Math.max(duration, clip.duration - from)),
+    (volume?.points.at(-1)?.t ?? 0) - offset,
+  );
   const partialIn =
-    fadeIn > 0 &&
-    ((from > 0 && from < fadeIn) || (nextIn > 0 && nextIn < fadeIn));
+    mode === "cut" && fadeIn > 0 && nextIn === 0 && from < fadeIn;
   const partialOut =
+    mode === "cut" &&
     fadeOut > 0 &&
-    ((to < clip.duration && to > clip.duration - fadeOut) ||
-      (nextOut > 0 && nextOut < fadeOut));
+    nextOut === 0 &&
+    to > clip.duration - fadeOut;
   const residual = (time: number) => {
     const frame = (time * fps.num) / fps.den;
-    const head = !partialIn
-      ? 1
-      : from <= 0
-        ? nextIn / fadeIn
-        : Math.min(1, (from + frame) / fadeIn);
-    const tail = !partialOut
-      ? 1
-      : to >= clip.duration
-        ? nextOut / fadeOut
-        : Math.min(1, (clip.duration - from - frame) / fadeOut);
+    const head = partialIn
+      ? Math.max(0, Math.min(1, (from + frame) / fadeIn))
+      : 1;
+    const tail = partialOut
+      ? Math.max(0, Math.min(1, (clip.duration - from - frame) / fadeOut))
+      : 1;
     return head * tail;
   };
   const lanes = automation.lanes.map((lane) => {

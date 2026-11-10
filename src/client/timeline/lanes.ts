@@ -1,5 +1,5 @@
 import { audioGainToText } from "@hyperframes/core/audio-gain";
-import { fadePath, gainHeight } from "./mix";
+import { fadePath } from "./mix";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
@@ -194,9 +194,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const mix = root.querySelector<HTMLElement>(
         `[data-clip-mix="${CSS.escape(clip.id)}"]`,
       );
-      const gain = mix?.querySelector<HTMLElement>('[data-mix="gain"]');
-      if (gain) gain.style.top = `${gainHeight(clip.volume)}%`;
-      mix?.querySelector("path")?.setAttribute("d", fadePath(clip, shown.fps));
+      const path = fadePath(clip, shown.fps);
+      for (const curve of mix?.querySelectorAll("path") ?? [])
+        curve.setAttribute("d", path);
       for (const edge of ["fadeIn", "fadeOut"] as const) {
         const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
         if (handle)
@@ -296,7 +296,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     );
     if (!element || !clip) return null;
     const box = element.getBoundingClientRect();
-    const mix = event.target.closest<HTMLElement>("[data-mix]")?.dataset.mix;
+    const mix = event.target.closest("[data-mix]")?.getAttribute("data-mix");
     return {
       clip,
       x: event.clientX - box.left,
