@@ -65,10 +65,19 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
       expectedRevision: read.revision,
       label: "Tighten intro",
       commands: [
-        { type: "split", at: 180 },
+        // The caller names the right halves, so it can remove them in the same batch.
+        {
+          type: "split",
+          at: 180,
+          ids: {
+            rule: ["rule-b"],
+            headline: ["headline-b"],
+            caption: ["caption-b"],
+          },
+        },
         {
           type: "remove",
-          clipIds: ["rule-2", "headline-2", "caption-2"],
+          clipIds: ["rule-b", "headline-b", "caption-b"],
           ripple: true,
         },
         { type: "setTrack", index: 2, locked: true },
@@ -169,6 +178,77 @@ test("Q through a spanning music bed persists exact NTSC HTML and undo restores 
       source,
     );
     expect(await read()).toEqual(before);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an id is spent for good: a piece named after an undone clip is refused, and redo still works", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  try {
+    const edit = async (commands: unknown[]) => {
+      const { revision } = TimelineViewSchema.parse(
+        await (
+          await fixture.request(`/projects/${project.id}/timeline`)
+        ).json(),
+      );
+      return fixture.request(`/projects/${project.id}/commands`, "POST", {
+        expectedRevision: revision,
+        commands,
+      });
+    };
+    const ids = async () =>
+      TimelineViewSchema.parse(
+        await (
+          await fixture.request(`/projects/${project.id}/timeline`)
+        ).json(),
+      ).timeline.clips.map((clip) => clip.id);
+
+    // Cut the rule and name its right half, then undo the cut.
+    const named = await edit([
+      { type: "split", at: 90, clipIds: ["rule"], ids: { rule: ["retired"] } },
+    ]);
+    expect(named.status).toBe(200);
+    expect(await ids()).toContain("retired");
+    await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+    expect(await ids()).not.toContain("retired");
+
+    // The undone clip's id cannot name a piece of another clip.
+    const reused = await edit([
+      {
+        type: "split",
+        at: 200,
+        clipIds: ["headline"],
+        ids: { headline: ["retired"] },
+      },
+    ]);
+    expect(reused.status).toBe(422);
+    expect(await reused.json()).toMatchObject({
+      code: "duplicate_id",
+      error:
+        "Command 1 (split): Id retired was used earlier in this project. Name the clip with an id never used before.",
+    });
+    const current = await edit([
+      {
+        type: "split",
+        at: 200,
+        clipIds: ["headline"],
+        ids: { headline: ["rule"] },
+      },
+    ]);
+    expect(await current.json()).toMatchObject({
+      code: "duplicate_id",
+      error: "Command 1 (split): A clip already has id rule.",
+    });
+
+    // Redo swaps the file back, so the original clip returns under its own id.
+    const redo = await fixture.request(
+      `/projects/${project.id}/history/redo`,
+      "POST",
+    );
+    expect(redo.status).toBe(200);
+    expect(await ids()).toContain("retired");
   } finally {
     await fixture.close();
   }

@@ -69,6 +69,13 @@ test("script cuts alter real media offsets, ripple one lane, restore, and share 
     expect(document.querySelector("style")?.textContent).toContain(
       `#${clips[1]!.id}`,
     );
+    // The new piece's id is one no clip has had, and the project's id list keeps it spent.
+    expect(clips[1]!.id).toMatch(/-cut-[a-z0-9]{4}$/);
+    expect(
+      JSON.parse(
+        await readFile(join(project.path, ".cutroom/ids.json"), "utf8"),
+      ).ids,
+    ).toContain(clips[1]!.id);
     expect(await readFile(join(project.path, "footage.mp4"), "utf8")).toBe(
       "source bytes stay unchanged",
     );

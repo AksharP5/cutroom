@@ -28,14 +28,26 @@ export class TimelineError extends Error {
  */
 export type ClipOrigin = { copyOf: string } | { insert: InsertClip };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
+/**
+ * Names a clip a command creates when the command does not: `base` is the id of the clip a piece
+ * is cut from (`from`), or a slug of new media (`from` null). It must return an id not in `taken`.
+ */
+export type NewId = (
+  base: string,
+  from: string | null,
+  taken: ReadonlySet<string>,
+) => string;
 /** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
 interface Batch {
+  /** Ids in the timeline and ids the project used before; a new clip takes none of them. */
   reserved: Set<string>;
+  retired: ReadonlySet<string>;
   onCreate: OnCreate;
   /** Measured source lengths in seconds, by `src`, for inserted media. */
   mediaLengths: ReadonlyMap<string, number>;
   /** Every inserted `src` known to hold no audio stream. */
   silentMedia: ReadonlySet<string>;
+  newId: NewId;
 }
 /**
  * Options for applying commands; `mediaLengths` holds measured source lengths by `src`, and
@@ -45,7 +57,33 @@ interface ApplyOptions {
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
   silentMedia?: ReadonlySet<string>;
+  /** Names new clips the commands leave unnamed; `randomClipId` unless a caller needs others. */
+  newId?: NewId;
+  /** Ids the project used before, maybe undone since. New clips never take them. */
+  retired?: ReadonlySet<string>;
 }
+/** What a command that creates clips needs: the ids in use, how to name a piece, and its origin. */
+interface Minting {
+  taken: Set<string>;
+  onCreate: OnCreate;
+  name(base: string, from: string | null): string;
+}
+
+const SUFFIX = "abcdefghijklmnopqrstuvwxyz0123456789";
+/**
+ * A readable id no clip has had: the base without an earlier random suffix, then four random
+ * letters or digits (`shot-3-k7q2`). Ids that leave the timeline are never handed out again.
+ */
+export const randomClipId: NewId = (base, from, taken) => {
+  const stem = from === null ? base : base.replace(/-[a-z0-9]{4}$/, "");
+  for (;;) {
+    const letters = [...crypto.getRandomValues(new Uint8Array(4))].map(
+      (byte) => SUFFIX[byte % SUFFIX.length],
+    );
+    const id = `${stem}-${letters.join("")}`;
+    if (!taken.has(id)) return id;
+  }
+};
 
 /**
  * Source and timeline seconds are canonical at whole microseconds, as HTML and `cutroom.json` store
@@ -105,12 +143,13 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
   };
 }
 
-const usedNames = (timeline: Timeline) =>
-  new Set(
-    timeline.clips.flatMap((clip) =>
+const usedNames = (timeline: Timeline, retired: ReadonlySet<string>) =>
+  new Set([
+    ...retired,
+    ...timeline.clips.flatMap((clip) =>
       clip.link ? [clip.id, clip.link] : [clip.id],
     ),
-  );
+  ]);
 
 function applyIn(timeline: Timeline, command: Command, batch: Batch) {
   const next = run(timeline, command, batch);
@@ -125,13 +164,17 @@ export function apply(
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
+    newId = randomClipId,
+    retired = new Set(),
   }: ApplyOptions = {},
 ): Timeline {
   return applyIn(timeline, command, {
-    reserved: usedNames(timeline),
+    reserved: usedNames(timeline, retired),
+    retired,
     onCreate,
     mediaLengths,
     silentMedia,
+    newId,
   });
 }
 
@@ -143,13 +186,17 @@ export function applyAll(
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
+    newId = randomClipId,
+    retired = new Set(),
   }: ApplyOptions = {},
 ): Timeline {
   const origins = new Map<string, ClipOrigin>();
   const batch: Batch = {
-    reserved: usedNames(timeline),
+    reserved: usedNames(timeline, retired),
+    retired,
     mediaLengths,
     silentMedia,
+    newId,
     onCreate: (id, origin) => {
       // A copy of a clip made earlier in the batch copies that clip's own origin.
       const resolved =
@@ -195,7 +242,6 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       copies.set(id, copies.get(origin.copyOf) ?? origin.copyOf);
     batch.onCreate(id, origin);
   };
-  const rippleBatch = { ...batch, onCreate };
   const trackAt = (index: number) =>
     timeline.tracks.find((track) => track.index === index);
   const byId = new Map(clips.map((clip) => [clip.id, clip]));
@@ -203,6 +249,37 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     const clip = byId.get(id);
     if (!clip) throw new TimelineError("not_found", `No clip has id ${id}.`);
     return clip;
+  };
+  // Ids the command names for the pieces it cuts, by the clip each is cut from, in cutting order.
+  const supplied = new Map(
+    Object.entries(
+      command.type === "split" ||
+        command.type === "insert" ||
+        command.type === "trim" ||
+        command.type === "remove"
+        ? (command.ids ?? {})
+        : {},
+    ).map(([from, ids]) => [from, [...ids]]),
+  );
+  const claim = (id: string) => {
+    if (batch.retired.has(id) && !byId.has(id))
+      throw new TimelineError(
+        "duplicate_id",
+        `Id ${id} was used earlier in this project. Name the clip with an id never used before.`,
+      );
+    if (taken.has(id))
+      throw new TimelineError("duplicate_id", `A clip already has id ${id}.`);
+    taken.add(id);
+    return id;
+  };
+  const mint: Minting = {
+    taken,
+    onCreate,
+    name: (base, from) =>
+      claim(
+        (from === null ? undefined : supplied.get(from)?.shift()) ??
+          batch.newId(base, from, taken),
+      ),
   };
   switch (command.type) {
     case "move": {
@@ -266,18 +343,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 editPoint(track) + (command.edge === "end" ? change : 0),
               -change,
               fps,
-              rippleBatch,
+              mint,
               ids,
             )
-          : insertTime(
-              trimmed,
-              tracks,
-              editPoint,
-              change,
-              fps,
-              rippleBatch,
-              ids,
-            );
+          : insertTime(trimmed, tracks, editPoint, change, fps, mint, ids);
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -307,7 +376,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         );
       return {
         ...timeline,
-        clips: splitClips(clips, targets, at, fps, taken, onCreate),
+        clips: splitClips(clips, targets, at, fps, mint),
       };
     }
     case "remove": {
@@ -325,32 +394,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
       ).toReversed())
-        next = removeTime(
-          next,
-          tracks,
-          () => from,
-          to - from,
-          fps,
-          rippleBatch,
-        );
+        next = removeTime(next, tracks, () => from, to - from, fps, mint);
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
     case "insert": {
       const { clip: input, track, at, mode } = command;
       assertTrackKind(input.kind, trackAt(track), input.id ?? input.src);
-      if (input.id !== undefined && taken.has(input.id))
-        throw new TimelineError(
-          "duplicate_id",
-          `A clip already has id ${input.id}.`,
-        );
       const id =
-        input.id ?? uniqueName(taken, slug(input.src, input.kind), 2, true);
-      taken.add(id);
+        input.id === undefined
+          ? mint.name(slug(input.src, input.kind), null)
+          : claim(input.id);
       const end = at + input.duration;
       let next = clips;
       if (mode === "overwrite")
-        next = clearRange(next, track, at, end, fps, taken, onCreate);
+        next = clearRange(next, track, at, end, fps, mint);
       if (mode === "insert") {
         const tracks = rippleTracks(timeline, [track]);
         const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
@@ -362,8 +420,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ).filter(spans),
           at,
           fps,
-          taken,
-          onCreate,
+          mint,
         );
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
@@ -696,7 +753,7 @@ function removeTime(
   from: (track: number) => number,
   duration: number,
   fps: Fps,
-  batch: Batch,
+  mint: Minting,
   fixed: ReadonlySet<string> = new Set(),
 ): Clip[] {
   const fixedClips = clips.filter((clip) => fixed.has(clip.id));
@@ -708,8 +765,7 @@ function removeTime(
       from(track),
       from(track) + duration,
       fps,
-      batch.reserved,
-      batch.onCreate,
+      mint,
     );
   return [
     ...fixedClips,
@@ -728,7 +784,7 @@ function insertTime(
   at: (track: number) => number,
   duration: number,
   fps: Fps,
-  batch: Batch,
+  mint: Minting,
   fixed: ReadonlySet<string>,
 ): Clip[] {
   let next = clips;
@@ -744,8 +800,7 @@ function insertTime(
       ),
       at(track),
       fps,
-      batch.reserved,
-      batch.onCreate,
+      mint,
     );
   return next.map((clip) =>
     !fixed.has(clip.id) &&
@@ -832,12 +887,11 @@ function splitClips(
   targets: Clip[],
   at: number,
   fps: Fps,
-  taken: Set<string>,
-  onCreate: OnCreate,
+  { taken, onCreate, name }: Minting,
 ): Clip[] {
   if (!targets.length) return clips;
   const rights = targets.map((clip): Clip => {
-    const id = uniqueName(taken, clip.id.replace(/-\d+$/, ""), 2);
+    const id = name(clip.id, clip.id);
     onCreate(id, { copyOf: clip.id });
     return {
       ...clip,
@@ -906,8 +960,7 @@ function clearRange(
   from: number,
   to: number,
   fps: Fps,
-  taken: Set<string>,
-  onCreate: OnCreate,
+  mint: Minting,
 ): Clip[] {
   const overlaps = (clip: Clip) => clip.start < to && clipEnd(clip) > from;
   const hits = (list: Clip[]) =>
@@ -919,8 +972,7 @@ function clearRange(
     targets.filter((clip) => clip.start < from && clipEnd(clip) > to),
     to,
     fps,
-    taken,
-    onCreate,
+    mint,
   );
   const cut = next.flatMap((clip) => {
     if (clip.track !== track || !overlaps(clip)) return [clip];
@@ -938,7 +990,7 @@ function clearRange(
   return regroupLinks(
     cut,
     new Set(targets.flatMap((clip) => clip.link ?? [])),
-    taken,
+    mint.taken,
   );
 }
 
@@ -954,14 +1006,9 @@ function mergeRanges(
   return merged;
 }
 
-function uniqueName(
-  taken: Set<string>,
-  base: string,
-  first: number,
-  bare = false,
-): string {
+function uniqueName(taken: Set<string>, base: string, first: number): string {
   let n = first;
-  let name = bare ? base : `${base}-${n++}`;
+  let name = `${base}-${n++}`;
   while (taken.has(name)) name = `${base}-${n++}`;
   taken.add(name);
   return name;

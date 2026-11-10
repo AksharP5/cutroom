@@ -290,6 +290,8 @@ export function applyTranscriptCuts(
   source: string,
   transcript: Transcript,
   cutWordIds: string[],
+  /** Names a new piece from a base such as `talk-cut`; the piece ids keep `-cut-`. */
+  newId: (base: string) => string,
 ): string {
   const { document } = parseSourceDocument(source);
   const group = [
@@ -514,7 +516,7 @@ export function applyTranscriptCuts(
       html,
       { id: rightId },
       time,
-      `${transcript.elementId}-cut-${index + 1}`,
+      newId(`${transcript.elementId}-cut`),
     );
     if (!split.matched || !split.newId)
       throw new HttpError(

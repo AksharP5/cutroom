@@ -41,6 +41,8 @@ For example, this razors every unlocked auto-select track at frame 90 and ripple
 }
 ```
 
+New pieces get ids no clip in the project has had, such as `talk-k7q2`. To edit a piece in the same batch that cuts it, name it, with a list per source clip in the order the command cuts it: `{ "type": "split", "at": 90, "ids": { "talk": ["talk-end-q3x8"] } }`. A name must never have been used in the project, even by a clip that was deleted or undone; any other name is refused with `duplicate_id`, so add a suffix of your own that is unlikely to repeat.
+
 ## Review queue
 
 Each message from Cutroom's agent panel includes a digest of unfinished notes and the project ID. Reconcile the message with that queue before working: withdraw what it cancels, with a reason. For a replacement, add the new request with `review_add`, then withdraw the old note with `replacedBy`. Each Cutroom conversation's native agent reaches these tools through a bridge carrying that conversation's own token (for Codex, set per thread), so the server credits its actions to the running message and stamps withdrawals with it. A token only works on its own project while its run is active; any other use is refused with 409. Every other client, including this server's `/mcp` endpoint and the stdio bridge from Settings, is recorded as an outside agent.

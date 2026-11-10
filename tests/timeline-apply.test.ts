@@ -6,6 +6,7 @@ import {
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
+import { countingIds } from "./clip-ids";
 import type {
   Clip,
   CommandInput,
@@ -58,6 +59,7 @@ const run = (state: Timeline, ...commands: CommandInput[]) =>
   applyAll(
     state,
     commands.map((command) => CommandSchema.parse(command)),
+    { newId: countingIds },
   );
 
 const positions = (state: Timeline) =>
@@ -861,7 +863,10 @@ test("a batch never reuses an id, so every copy comes from original markup", () 
       { type: "remove", clipIds: ["a-2"] },
       { type: "split", at: 180, clipIds: ["a-3"] },
     ].map((command) => CommandSchema.parse(command)),
-    { onCreate: (id, origin) => origins.set(id, origin) },
+    {
+      onCreate: (id, origin) => origins.set(id, origin),
+      newId: countingIds,
+    },
   );
   expect(state.clips.map((item) => item.id)).toEqual(["a-3", "a-4"]);
   expect([...origins.values()]).toEqual([
@@ -919,4 +924,50 @@ test("track kinds are stored, so an empty locked audio track stays audio", () =>
   expect(
     failure(() => run(state, { type: "setTrack", index: 0, kind: "audio" })),
   ).toBe("track_kind");
+});
+
+test("every piece a command cuts takes the caller's ids in order, and spent ids are refused", () => {
+  // Shots 2 and 4 ripple delete under a title spanning all four: the title is cut twice.
+  const state = timeline([
+    clip("s1", 0, 0, 60),
+    clip("s2", 0, 60, 60),
+    clip("s3", 0, 120, 60),
+    clip("s4", 0, 180, 60),
+    clip("title", 1, 30, 240, { kind: "element", src: null, mediaStart: null }),
+  ]);
+  const remove = (ids?: Record<string, string[]>) =>
+    CommandSchema.parse({
+      type: "remove",
+      clipIds: ["s2", "s4"],
+      ripple: true,
+      ids,
+    });
+  const cut = applyAll(state, [
+    remove({ title: ["title-after-s4", "title-after-s2"] }),
+  ]);
+  expect(positions(cut)).toEqual({
+    s1: [0, 0, 60],
+    s3: [0, 60, 60],
+    title: [1, 30, 30],
+    "title-after-s2": [1, 60, 60],
+    "title-after-s4": [1, 120, 30],
+  });
+  // A short list names the first pieces; the rest get new random ids.
+  const short = applyAll(state, [remove({ title: ["title-tail"] })]);
+  expect(short.clips.map((item) => item.id)).toEqual([
+    "s1",
+    "s3",
+    "title",
+    expect.stringMatching(/^title-[a-z0-9]{4}$/),
+    "title-tail",
+  ]);
+  // An id in the timeline, or one the project used before, is refused.
+  expect(() => applyAll(state, [remove({ title: ["s1"] })])).toThrow(
+    "A clip already has id s1.",
+  );
+  expect(() =>
+    applyAll(state, [remove({ title: ["old"] })], {
+      retired: new Set(["old"]),
+    }),
+  ).toThrow("Id old was used earlier in this project.");
 });
