@@ -222,6 +222,29 @@ export function mediaSources(html: string, scope: CompositionScope): string[] {
   ];
 }
 
+/**
+ * Reads `data-fps` the way HyperFrames does: absent means 30, and anything `parseFps` rejects,
+ * decimals like 29.97 included, is refused rather than projected at a rate the runtime ignores.
+ */
+function compositionFps(raw: string | undefined): Fps {
+  const parsed = parseFpsWithDefault(raw);
+  if (parsed.ok) return parsed.value;
+  const ignored = `HyperFrames ignores data-fps="${raw}" and plays the composition at 30 fps.`;
+  if (parsed.reason !== "ambiguous-decimal")
+    throw new TimelineError(
+      "unsupported",
+      `${ignored} Use a whole number from 1 to 240 or a fraction such as 30000/1001.`,
+    );
+  const decimal = Number(raw);
+  const ntsc = Math.round(decimal * 1.001);
+  throw new TimelineError(
+    "unsupported",
+    ntsc > 1 && Math.abs((ntsc * 1000) / 1001 - decimal) < 0.005
+      ? `${ignored} Write the exact rate, data-fps="${ntsc * 1000}/1001".`
+      : `${ignored} Write it as a whole number or a fraction.`,
+  );
+}
+
 /** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
 export function parseComposition(
   html: string,
@@ -254,8 +277,7 @@ export function parseComposition(
         ? "This file has no live element with data-composition-id."
         : "This sub-composition has no element with data-composition-id.",
     );
-  const parsedFps = parseFpsWithDefault(root.attrs["data-fps"]);
-  const fps: Fps = parsedFps.ok ? parsedFps.value : { num: 30, den: 1 };
+  const fps = compositionFps(root.attrs["data-fps"]);
   const byId = new Map<string, SourceElement>();
   for (const element of all)
     if (element.attrs.id && !byId.has(element.attrs.id))
