@@ -12,20 +12,28 @@ import { z } from "zod";
 import type { EditorContext, EditorReviewDraft } from "../../shared/editor";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
-import { api, json } from "../api";
 import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { useWorkspace } from "../workspace";
 import "./edit.css";
-import { editTimeline, loadTimeline, useTimeline } from "./timeline";
+import {
+  editTimeline,
+  loadTimeline,
+  stepHistory,
+  useTimeline,
+} from "./timeline";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import { Viewer } from "./Viewer";
 import type { Zoom } from "./Viewer";
 
-const historySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
-const changeSchema = z.object({ changed: z.string() });
+/** A file change from the preview server's watcher, which owns preview invalidation. */
+const previewChangeSchema = z.object({
+  projectId: z.string(),
+  affectsPreview: z.boolean(),
+  affectedCompositions: z.array(z.string()).nullable(),
+});
 
 const report = (error: unknown) =>
   useWorkspace.setState({
@@ -70,37 +78,36 @@ export function EditPage({
   const [revision, setRevision] = useState(0);
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
-  const [history, setHistory] = useState({ canUndo: false, canRedo: false });
+  const history = useTimeline((state) => state.history);
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
     useTimeline.setState({ view: null });
     transport.seek(0);
-    const refreshHistory = () =>
-      void api(`${base}/history`, historySchema).then(setHistory).catch(report);
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
     });
     void loadTimeline(projectId).catch(report);
-    refreshHistory();
-    const events = new EventSource(`/api/cutroom${base}/events`);
-    events.onmessage = (event) => {
-      let parsed;
-      try {
-        parsed = changeSchema.safeParse(JSON.parse(String(event.data)));
-      } catch {
-        return;
-      }
-      if (!parsed.success) return;
-      const { changed } = parsed.data;
-      const composition = /\.html?$/i.test(changed);
-      if (composition) setRevision((value) => value + 1);
-      if (composition || changed === "cutroom.json")
-        void loadTimeline(projectId).catch(report);
-      refreshHistory();
-    };
+    // Any project change can move the timeline or the undo history.
+    const projectEvents = new EventSource(`/api/cutroom${base}/events`);
+    projectEvents.onmessage = () => void loadTimeline(projectId).catch(report);
+    // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
+    const previewEvents = new EventSource("/api/events");
+    previewEvents.addEventListener("file-change", (event) => {
+      const change = previewChangeSchema.safeParse(
+        JSON.parse(String(event.data)),
+      );
+      if (
+        change.success &&
+        change.data.projectId === projectId &&
+        change.data.affectsPreview &&
+        (change.data.affectedCompositions?.includes("index.html") ?? true)
+      )
+        setRevision((value) => value + 1);
+    });
     return () => {
-      events.close();
+      projectEvents.close();
+      previewEvents.close();
       unsubscribe();
     };
   }, [base, projectId]);
@@ -136,11 +143,8 @@ export function EditPage({
     else void viewer.current?.requestFullscreen().catch(report);
   };
 
-  const step = (history: "undo" | "redo") =>
-    void api(`${base}/history/${history}`, z.unknown(), json("POST"))
-      .then(() => api(`${base}/history`, historySchema))
-      .then(setHistory)
-      .catch(report);
+  const step = (direction: "undo" | "redo") =>
+    void stepHistory(projectId, direction).catch(report);
   const mark = (
     label: string,
     range: (frame: number, current: Timeline["range"]) => Timeline["range"],

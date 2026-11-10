@@ -33,6 +33,6 @@ The new editor (Settings, New editor) uses DaVinci Resolve's Edit page keys, and
 | Loop                           | `Ctrl+/`          | `controlLoop`                     |
 | Undo                           | `Ctrl+Z`, `` ` `` | `editUndo`                        |
 | Redo                           | `Ctrl+Shift+Z`    | `editRedo`                        |
-| Fullscreen viewer              | `P`               | `workspaceViewerModeCinemaViewer` |
+| Fullscreen viewer              | `P`, `Ctrl+F`     | `workspaceViewerModeCinemaViewer` |
 
 L and J double the speed on each press, up to 8x; the other direction drops back to 1x, and Shift starts at 4x. Marks are undoable timeline edits that agents see through MCP. Out is inclusive on screen and exclusive in the engine's range.

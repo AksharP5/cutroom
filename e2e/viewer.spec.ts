@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -78,4 +80,51 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
   await page.keyboard.type("504");
   await page.keyboard.press("Enter");
   await expect(now).toHaveText("00:00:05:04");
+
+  // Marks and undo pressed faster than the server answers apply in order.
+  await page.keyboard.press("Alt+x");
+  await expect.poll(range).toEqual({ in: null, out: null });
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("i");
+  await page.keyboard.press("o");
+  await page.keyboard.press("Backquote");
+  await expect.poll(range).toEqual({ in: 30, out: null });
+  await expect(page.getByText(/In\s*00:00:01:00/)).toBeVisible();
+  await expect(page.locator(".status-error")).toHaveCount(0);
+});
+
+test("a composition that cannot play keeps the last picture and says why", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Held picture" },
+      })
+    ).json(),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.newEditor", "true"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("#headline")).toHaveText("Held picture");
+
+  const index = join(project.path, "index.html");
+  const good = await readFile(index, "utf8");
+  await writeFile(index, "<!doctype html><main>No composition</main>\n");
+  await expect(page.locator(".status-error")).toContainText(
+    "data-composition-id",
+  );
+  await expect(page.locator("iframe[title='Composition preview']")).toHaveCount(
+    1,
+  );
+  await expect(live.locator("#headline")).toHaveText("Held picture");
+
+  // Fixing the file brings the picture back and clears the report.
+  await writeFile(index, good.replace("A new composition.", "Back again."));
+  await expect(live.locator("#caption")).toHaveText("Back again.");
+  await expect(page.locator(".status-error")).toHaveCount(0);
 });

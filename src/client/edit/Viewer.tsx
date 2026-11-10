@@ -17,6 +17,8 @@ interface Slot {
 
 /** A load that has not produced a player by then has failed; the held frame stays. */
 const READY_TIMEOUT = 15_000;
+/** A seek the runtime has not confirmed by then has failed. */
+const SEEK_TIMEOUT = 10_000;
 
 const nextFrame = (win: Window) =>
   new Promise<void>((resolve) => win.requestAnimationFrame(() => resolve()));
@@ -32,10 +34,11 @@ function runtimeOf(frame: HTMLIFrameElement): RuntimePlayer | null {
     !("play" in player && typeof player.play === "function") ||
     !("pause" in player && typeof player.pause === "function") ||
     !("seek" in player && typeof player.seek === "function") ||
-    !("getTime" in player && typeof player.getTime === "function")
+    !("getTime" in player && typeof player.getTime === "function") ||
+    !("isPlaying" in player && typeof player.isPlaying === "function")
   )
     return null;
-  const { play, pause, seek, getTime } = player;
+  const { play, pause, seek, getTime, isPlaying } = player;
   const post = (action: string, payload: object) => {
     const { fps } = useTransport.getState();
     win.postMessage(
@@ -50,22 +53,42 @@ function runtimeOf(frame: HTMLIFrameElement): RuntimePlayer | null {
     );
   };
   return {
-    play: () => play.call(player),
-    pause: () => pause.call(player),
-    seek: (seconds) => seek.call(player, seconds),
+    play: () => void play.call(player),
+    pause: () => void pause.call(player),
+    seek: (seconds) => void seek.call(player, seconds),
     time: () => Number(getTime.call(player)),
+    playing: () => Boolean(isPlaying.call(player)),
     setMuted: (muted) => post("set-muted", { muted }),
   };
 }
 
-/** Resolves once the runtime has drawn the frame it was last asked to seek to. */
+/**
+ * Resolves once the runtime confirms it has finished the last seek and the frame has painted.
+ * Rejects when the runtime cannot confirm it, reports a failure, or takes too long.
+ */
 async function painted(frame: HTMLIFrameElement) {
   const win = frame.contentWindow;
-  if (!win) return;
   const wait =
-    "__hfWaitForSeekCompletion" in win ? win.__hfWaitForSeekCompletion : null;
-  if (typeof wait === "function")
-    await Promise.resolve(wait.call(win)).catch(() => {});
+    win && "__hfWaitForSeekCompletion" in win
+      ? win.__hfWaitForSeekCompletion
+      : null;
+  if (!win || typeof wait !== "function")
+    throw new Error("The preview cannot confirm that it drew the frame.");
+  let timer = 0;
+  try {
+    await Promise.race([
+      Promise.resolve(wait.call(win)),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () =>
+            reject(new Error("The preview did not draw the frame in time.")),
+          SEEK_TIMEOUT,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
   await nextFrame(win);
   await nextFrame(win);
 }
@@ -133,12 +156,21 @@ export function Viewer({
     const started = performance.now();
     let player = runtimeOf(frame);
     while (!player) {
+      const startup =
+        frame.contentWindow && "__hfStartupError" in frame.contentWindow
+          ? frame.contentWindow.__hfStartupError
+          : null;
+      if (startup)
+        throw new Error(`The preview failed to start: ${String(startup)}`);
       if (performance.now() - started > READY_TIMEOUT)
         throw new Error("The preview did not finish loading.");
       await new Promise((resolve) => setTimeout(resolve, 50));
       if (gen !== latest.current) return;
       player = runtimeOf(frame);
     }
+    // The runtime starts even on a document it cannot play; a picture needs a composition root.
+    if (!frame.contentDocument?.querySelector("[data-composition-id]"))
+      throw new Error("The preview has no element with data-composition-id.");
     // Seek until the frame on screen is the latest one asked for.
     let shown = -1;
     while (shown !== useTransport.getState().frame) {

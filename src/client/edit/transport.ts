@@ -68,6 +68,8 @@ export interface RuntimePlayer {
   seek(seconds: number): void;
   /** Seconds on the runtime's own clock, which leads at 1x so audio stays in sync. */
   time(): number;
+  /** False once the runtime stops by itself at the end of the composition. */
+  playing(): boolean;
   setMuted(muted: boolean): void;
 }
 
@@ -96,6 +98,11 @@ let origin = { frame: 0, at: 0 };
 const clamp = (frame: number) =>
   Math.max(0, Math.min(get().duration - 1, frame));
 const show = (frame: number) => player?.seek(frameTime(frame, get().fps));
+/** The frame on screen at a runtime time. */
+const frameAt = (seconds: number) => {
+  const { fps } = get();
+  return Math.floor((seconds * fps.num) / fps.den + 1e-6);
+};
 
 /** Playback wraps inside the range while loop is on, and otherwise runs the whole timeline. */
 function bounds() {
@@ -123,13 +130,22 @@ function advance(now: number) {
   const { state, fps } = get();
   const speed = velocity(state);
   if (!speed) return;
+  const { first, end } = bounds();
   // At 1x the runtime plays its media and its clock leads; shuttles step frames on ours.
-  const frame =
+  let frame =
     state.kind === "playing" && player
-      ? Math.floor((player.time() * fps.num) / fps.den + 1e-6)
+      ? frameAt(player.time())
       : origin.frame +
         Math.trunc((((now - origin.at) / 1000) * speed * fps.num) / fps.den);
-  const { first, end } = bounds();
+  // At 23.976 and 29.97 the runtime's end time floors to the last frame, one short of the
+  // engine's exclusive end, so the runtime stopping by itself there is the end.
+  if (
+    state.kind === "playing" &&
+    player &&
+    !player.playing() &&
+    frame >= end - 1
+  )
+    frame = end;
   if (frame >= end) {
     if (get().loop) restart(first);
     else return park(end - 1);
@@ -145,13 +161,21 @@ function advance(now: number) {
 
 function run(next: TransportState) {
   if (!get().duration) return;
+  const previous = get().state;
   cancelAnimationFrame(tick);
   player?.pause();
-  set({ state: next });
+  // The runtime's clock runs between frames at 1x; settle on the frame it reached, exactly.
+  const frame =
+    previous.kind === "playing" && player
+      ? clamp(frameAt(player.time()))
+      : get().frame;
+  set({ state: next, frame });
   const speed = velocity(next);
-  if (!speed) return;
+  if (!speed) {
+    show(frame);
+    return;
+  }
   const { first, end } = bounds();
-  const { frame } = get();
   // Playing forward from the last frame starts over; outside a looped range, play enters it.
   const start =
     frame >= first && frame < end
@@ -205,7 +229,7 @@ export const transport = {
   attach(next: RuntimePlayer | null, shown?: number) {
     player?.pause();
     player = next;
-    if (!next) return;
+    if (!next) return park(get().frame);
     next.setMuted(get().muted);
     const { state, frame } = get();
     if (velocity(state) || shown !== frame) restart(frame);

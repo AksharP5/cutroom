@@ -12,7 +12,7 @@ The transport follows DaVinci Resolve: L and J play, faster on each press up to 
 
 I and O set the timeline's in and out points through the same `setRange` command MCP clients use, so each mark is one undo step and agents see it. With loop on, playback repeats the range, or the whole timeline when no range is set.
 
-When the composition changes on disk, from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
+When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
 
 ## Review
 

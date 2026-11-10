@@ -51,7 +51,10 @@ export const keymap = {
   controlLoop: { label: "Loop", keys: ["Ctrl+/"] },
   editUndo: { label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { label: "Redo", keys: ["Ctrl+Shift+Z"] },
-  workspaceViewerModeCinemaViewer: { label: "Fullscreen viewer", keys: ["P"] },
+  workspaceViewerModeCinemaViewer: {
+    label: "Fullscreen viewer",
+    keys: ["P", "Ctrl+F"],
+  },
 } satisfies Record<string, Binding>;
 
 export type Action = keyof typeof keymap;

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { create } from "zustand";
 import { TimelineViewSchema } from "../../shared/timeline/schema";
 import type {
@@ -7,36 +8,54 @@ import type {
 } from "../../shared/timeline/schema";
 import { api, json } from "../api";
 
+const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
+
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
 export const useTimeline = create(() => ({
   view: null as TimelineView | null,
+  history: { canUndo: false, canRedo: false },
 }));
 
-export async function loadTimeline(projectId: string) {
-  const view = await api(
-    `/projects/${encodeURIComponent(projectId)}/timeline`,
-    TimelineViewSchema,
-  );
-  useTimeline.setState({ view });
+const project = (projectId: string) =>
+  `/projects/${encodeURIComponent(projectId)}`;
+
+let queue = Promise.resolve();
+
+/**
+ * Reads, edits, undo, and redo run one at a time. Each step starts from the view the previous one
+ * left, so quick key presses never send a stale revision and a slow read never lands over a
+ * newer view.
+ */
+function enqueue(step: () => Promise<void>) {
+  const run = queue.then(step);
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function read(projectId: string) {
+  const [view, history] = await Promise.all([
+    api(`${project(projectId)}/timeline`, TimelineViewSchema),
+    api(`${project(projectId)}/history`, HistorySchema),
+  ]);
+  useTimeline.setState({ view, history });
   return view;
 }
 
-let edits = Promise.resolve();
+export const loadTimeline = (projectId: string) =>
+  enqueue(async () => {
+    await read(projectId);
+  });
 
-/**
- * Applies commands as one undo step. Edits run one at a time, and each builds its commands from
- * the timeline the previous one left, so quick key presses never send a stale revision.
- */
-export function editTimeline(
+/** Applies commands built from the current timeline as one undo step. */
+export const editTimeline = (
   projectId: string,
   label: string,
   commands: (timeline: Timeline) => CommandInput[],
-) {
-  const edit = edits.then(async () => {
-    const current =
-      useTimeline.getState().view ?? (await loadTimeline(projectId));
-    const view = await api(
-      `/projects/${encodeURIComponent(projectId)}/commands`,
+) =>
+  enqueue(async () => {
+    const current = useTimeline.getState().view ?? (await read(projectId));
+    await api(
+      `${project(projectId)}/commands`,
       TimelineViewSchema,
       json("POST", {
         composition: current.composition,
@@ -45,8 +64,15 @@ export function editTimeline(
         commands: commands(current.timeline),
       }),
     );
-    useTimeline.setState({ view });
+    await read(projectId);
   });
-  edits = edit.catch(() => {});
-  return edit;
-}
+
+export const stepHistory = (projectId: string, step: "undo" | "redo") =>
+  enqueue(async () => {
+    await api(
+      `${project(projectId)}/history/${step}`,
+      z.unknown(),
+      json("POST"),
+    );
+    await read(projectId);
+  });
