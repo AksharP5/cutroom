@@ -153,6 +153,7 @@ export function createTimelineMedia(
       clear() {
         for (const value of values.values()) drop(value);
         values.clear();
+        held = 0;
       },
     };
   }

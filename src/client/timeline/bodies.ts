@@ -143,7 +143,6 @@ export function createBodies(
     const hair = Math.max(1, Math.round(dpr));
     wanted = [];
     media.beginPaint();
-    wanted = [];
     /** A row's waveform columns by colour, filled once per row. */
     let waves = { audio: new Path2D(), video: new Path2D() };
 
@@ -376,10 +375,11 @@ export function createBodies(
   }
 
   return {
-    /** The clips to draw. */
+    /** The clips to draw. An edit made while the view rests asks for the frames it uncovers. */
     scene(next: BodyScene) {
       scene = next;
       paint();
+      if (settled) media.wantFrames(wanted);
     },
     /**
      * Follows a zoom, scroll or resize. Cheap while the canvas still covers the view. Frames
