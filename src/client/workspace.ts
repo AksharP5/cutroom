@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+const NEW_EDITOR_KEY = "cutroom.newEditor";
+
 /**
  * The composition's frame rate from its root `data-fps`, read as HyperFrames reads it:
  * an integer or `num/den`, and 30 when absent. Core's parser is not browser-safe to import.
@@ -32,7 +34,16 @@ export const useWorkspace = create(() => ({
   } | null,
   /** The chat panel's selected native agent, once its configuration is read. */
   agent: null as { name: string; available: boolean } | null,
+  /** Cutroom's own editor in place of the embedded one, from Settings. */
+  newEditor: localStorage.getItem(NEW_EDITOR_KEY) === "true",
+  /** The new editor's latest failure, shown in the status bar. */
+  editorError: null as string | null,
 }));
+
+useWorkspace.subscribe(({ newEditor }, previous) => {
+  if (newEditor !== previous.newEditor)
+    localStorage.setItem(NEW_EDITOR_KEY, String(newEditor));
+});
 
 /** Frame rate for timecode: the open composition's, or the default before it loads. */
 export function useFps() {

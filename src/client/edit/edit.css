@@ -1,0 +1,335 @@
+/* Cutroom's own editor. Every value comes from tokens.css. */
+
+.edit-page {
+  --edit-timeline-height: var(--timeline-height);
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: var(--size-tool-row) minmax(0, 1fr) var(--space-1) var(
+      --edit-timeline-height
+    );
+  background: var(--surface-ground);
+  color: var(--text-primary);
+  font: var(--weight-regular) var(--type-sm) / var(--leading-body)
+    var(--font-sans);
+}
+.edit-page :focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Hover is a white overlay faded by opacity; press is a scale. Nothing animates color. */
+:is(.edit-tool, .edit-icon, .edit-zoom, .edit-menu button, button.edit-now) {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: default;
+  transition: transform var(--duration-press) var(--ease-out);
+}
+:is(
+  .edit-tool,
+  .edit-icon,
+  .edit-zoom,
+  .edit-menu button,
+  button.edit-now
+)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--overlay-hover);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+  pointer-events: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(
+      .edit-tool,
+      .edit-icon,
+      .edit-zoom,
+      .edit-menu button,
+      button.edit-now
+    ):not(:disabled):hover::before {
+    opacity: 1;
+  }
+  .edit-icon:not(:disabled):hover {
+    color: var(--text-primary);
+  }
+}
+:is(.edit-tool, .edit-icon, .edit-zoom, .edit-menu button):not(
+    :disabled
+  ):active {
+  transform: scale(var(--press-scale));
+}
+:is(.edit-tool, .edit-icon)[aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.edit-icon:disabled {
+  opacity: 1;
+  color: var(--glyph-faint);
+}
+
+/* Tool row */
+.edit-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--surface-panel);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.edit-tool {
+  height: var(--size-tool-button);
+  gap: 6px;
+  padding: 0 var(--space-2);
+  font-weight: var(--weight-medium);
+}
+.edit-tool kbd {
+  margin-left: 2px;
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  color: var(--text-tertiary);
+}
+.edit-grow {
+  flex: 1;
+}
+.edit-separator {
+  width: var(--stroke-hair);
+  height: var(--space-4);
+  margin: 0 var(--space-1);
+  background: var(--line);
+}
+.edit-tools .edit-icon {
+  width: var(--size-icon-button);
+  height: var(--size-icon-button);
+}
+.edit-zoom {
+  anchor-name: --edit-zoom;
+  height: var(--size-tool-button);
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  font-weight: var(--weight-medium);
+}
+.edit-menu {
+  position: fixed;
+  position-anchor: --edit-zoom;
+  inset: auto;
+  top: anchor(bottom);
+  right: anchor(right);
+  margin: var(--space-1) 0 0;
+  min-width: 96px;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  transform-origin: top right;
+  transition:
+    opacity var(--duration-panel-out) var(--ease-exit),
+    transform var(--duration-panel-out) var(--ease-exit),
+    overlay var(--duration-panel-out) allow-discrete,
+    display var(--duration-panel-out) allow-discrete;
+  opacity: 0;
+  transform: scale(var(--modal-scale));
+}
+.edit-menu:popover-open {
+  display: grid;
+  opacity: 1;
+  transform: none;
+  transition-duration: var(--duration-panel-in);
+  transition-timing-function: var(--ease-out);
+}
+@starting-style {
+  .edit-menu:popover-open {
+    opacity: 0;
+    transform: scale(var(--modal-scale));
+  }
+}
+.edit-menu button {
+  height: var(--size-row);
+  justify-content: flex-start;
+  padding: 0 var(--space-2);
+}
+.edit-menu button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+/* Viewer: stage and transport, the part that goes fullscreen */
+.edit-viewer {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-ground);
+}
+.edit-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.edit-picture {
+  position: absolute;
+  overflow: hidden;
+  box-shadow: 0 0 0 var(--stroke-hair) var(--line);
+}
+.edit-picture[data-armed] {
+  box-shadow: 0 0 0 var(--stroke-hair) var(--human);
+}
+.edit-picture[data-empty] {
+  box-shadow: none;
+}
+.edit-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+/*
+ * A reload loads over the live frame and stays all but transparent until it has painted the
+ * same frame. Not fully transparent: Chromium stops drawing video in a layer nobody can see,
+ * and the first frame after revealing one would be black.
+ */
+.edit-frame:not([data-live]) {
+  opacity: 0.01;
+}
+.edit-picture .editor-review-canvas {
+  z-index: 2;
+}
+
+/* Transport */
+.edit-transport {
+  flex: none;
+  height: var(--size-transport);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: var(--surface-panel);
+  border-top: var(--stroke-hair) solid var(--line-subtle);
+}
+.edit-transport .edit-icon {
+  width: var(--size-transport-button);
+  height: var(--size-transport-button);
+}
+.edit-timecode,
+.edit-range,
+.edit-shuttle {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+}
+.edit-timecode {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.edit-now {
+  height: 24px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--type-md);
+  color: var(--text-primary);
+}
+button.edit-now {
+  color: var(--text-primary);
+}
+input.edit-now {
+  width: calc(11ch + 12px);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line);
+  caret-color: var(--caret);
+}
+.edit-now-frames {
+  color: var(--text-secondary);
+}
+.edit-duration {
+  font-size: var(--type-xs);
+  color: var(--text-tertiary);
+}
+.edit-transport-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.edit-mirrored {
+  transform: scaleX(-1);
+}
+.edit-shuttle {
+  width: var(--size-shuttle-slot);
+  font-size: var(--type-2xs);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.edit-transport-end {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+}
+.edit-range {
+  display: flex;
+  gap: 1ch;
+  margin-right: var(--space-2);
+  font-size: var(--type-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.edit-range span {
+  color: var(--text-tertiary);
+}
+.edit-range span:not(:first-child) {
+  margin-left: 1ch;
+}
+
+/* Fullscreen only: a scrub track above the transport, range shaded */
+.edit-scrub {
+  container-type: inline-size;
+  position: relative;
+  flex: none;
+  height: var(--space-1);
+  background: var(--surface-active);
+  touch-action: none;
+}
+.edit-scrub::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-2)) 0;
+}
+.edit-scrub-range {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--range-line);
+}
+.edit-scrub-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--stroke-hair);
+  background: var(--playhead);
+  will-change: transform;
+}
+
+/* Split and the timeline below it */
+.edit-split {
+  cursor: row-resize;
+  touch-action: none;
+  background: var(--surface-ground);
+}
+.edit-timeline {
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-panel);
+}

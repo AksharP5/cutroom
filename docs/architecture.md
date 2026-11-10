@@ -26,6 +26,16 @@ Keep the HyperFrames packages on the same version. An upgrade must review each s
 
 For an upstream upgrade, update all `@hyperframes/*` dependencies and the `hyperframes` CLI together, then update `SUPPORTED_VERSION` in the build plugin. Source transforms fail when an expected upstream section changes. Review that change, adjust the integration, and run `bun run check`, `bun test`, and `bun run test:e2e` before packaging. Public editor improvements then come through the dependency. Features exclusive to the proprietary desktop application require independent implementation.
 
+## Cutroom's own editor
+
+`src/client/edit/` is replacing the embedded editor's centre piece by piece, behind the New editor setting. It previews with the same HyperFrames runtime and `/api/projects/:id/preview` route, in an iframe at the composition's size, scaled to fit.
+
+`transport.ts` holds the one playhead: an explicit `stopped | playing | shuttle | scrubbing` state, the frame, and the engine's frame rate, length, and in/out range. React renders only state changes; the timecode, playhead, and agent context subscribe to the store and follow the frame without rendering. At 1x the runtime plays its own media and its clock drives the frame, so sound stays in sync. Shuttle speeds and reverse step the runtime one seek per displayed frame. `timeline.ts` keeps the engine's timeline for the open composition and sends edits one at a time, each against the revision the previous edit left.
+
+A reload loads the new document in a second iframe over the live one, at 1% opacity, seeks it to the latest frame, and promotes it once the runtime reports the seek complete and two frames have painted. Chromium stops drawing video in a layer that cannot be seen, so a fully transparent or covered frame would show black for one frame when revealed.
+
+`src/client/keymap.ts` is the single key table, keyed by Resolve action id. It drives the handlers, button tooltips, and `docs/keyboard.md`; a test keeps the docs in step.
+
 ## Timeline engine
 
 `src/shared/timeline/` defines the timeline projection and command union as zod schemas, and a pure `apply(timeline, command)` that the browser and server share. Frames are integers at the root's `data-fps` (30 when absent); HTML and `cutroom.json` keep seconds rounded to six decimals.
