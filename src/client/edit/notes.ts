@@ -34,6 +34,7 @@ export type NoteEvent =
   | { type: "pin"; at: EditorPoint; frame: number }
   | { type: "stroke"; points: EditorPoint[]; frame: number; at?: EditorPoint }
   | { type: "undo" }
+  | { type: "removeStroke" }
   | { type: "redo" }
   | { type: "write"; body: string }
   | { type: "end"; frame: number | null }
@@ -110,9 +111,10 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
         },
       };
     }
+    case "removeStroke":
     case "undo": {
       if (!draft) return notes;
-      const body = draft.textUndo.at(-1);
+      const body = event.type === "undo" ? draft.textUndo.at(-1) : undefined;
       if (body !== undefined)
         return {
           ...notes,

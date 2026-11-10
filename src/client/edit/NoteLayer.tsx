@@ -450,7 +450,7 @@ export function NoteLayer({
                   className="icon-button"
                   aria-label="Remove last stroke"
                   title="Remove last stroke (Ctrl+Z)"
-                  onClick={() => dispatch({ type: "undo" })}
+                  onClick={() => dispatch({ type: "removeStroke" })}
                 >
                   <ArrowCounterClockwise />
                 </button>

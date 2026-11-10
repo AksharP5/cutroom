@@ -187,6 +187,9 @@ test("text since the last stroke undoes before strokes; redo restores the stroke
     { type: "stroke", points: circle, frame: 0 },
     { type: "write", body: "keep this" },
   );
+  const buttonUndo = notesReducer(notes, { type: "removeStroke" });
+  expect(buttonUndo.draft?.body).toBe("keep this");
+  expect(buttonUndo.draft?.strokes).toEqual([]);
   notes = notesReducer(notes, { type: "undo" });
   expect(notes.draft?.body).toBe("");
   expect(notes.draft?.strokes).toEqual([circle]);
