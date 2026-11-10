@@ -591,7 +591,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (!over) return;
     event.preventDefault();
     const { preview: drop, row, media } = over;
-    event.dataTransfer.dropEffect = drop?.valid ? "copy" : "none";
+    // A refused preview still needs the native drop so the edit can explain why in the header.
+    event.dataTransfer.dropEffect = drop ? "copy" : "none";
     const box = ghost.current;
     const ppf = view()?.ppf;
     if (!drop || !row || !box || !ppf) return;

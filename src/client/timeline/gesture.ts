@@ -546,6 +546,9 @@ export function dropPreview(
       clip.track === track.index && clip.start < end && clipEnd(clip) > at,
   );
   const commands: CommandInput[] = [
+    ...(timeline.tracks.some((existing) => existing.index === track.index)
+      ? []
+      : [{ type: "setTrack" as const, index: track.index, kind: track.kind }]),
     {
       type: "insert",
       mode: taken ? "insert" : "place",
