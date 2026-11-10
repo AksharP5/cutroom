@@ -1,0 +1,946 @@
+import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
+
+export type TimelineErrorCode =
+  | "not_found"
+  | "locked"
+  | "overlap"
+  | "out_of_bounds"
+  | "nothing_to_split"
+  | "duplicate_id"
+  | "track_kind"
+  | "unsupported";
+
+export class TimelineError extends Error {
+  constructor(
+    readonly code: TimelineErrorCode,
+    message: string,
+    /** Index of the failing command within its batch. */
+    readonly command?: number,
+  ) {
+    super(message);
+    this.name = "TimelineError";
+  }
+}
+
+/**
+ * Where a clip created by a batch gets its markup: a copy of a clip from the timeline the batch
+ * started with, or new media.
+ */
+export type ClipOrigin = { copyOf: string } | { insert: InsertClip };
+type OnCreate = (id: string, origin: ClipOrigin) => void;
+/** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
+interface Batch {
+  reserved: Set<string>;
+  onCreate: OnCreate;
+  /** Measured source lengths in seconds, by `src`, for inserted media. */
+  mediaLengths: ReadonlyMap<string, number>;
+}
+/** Options for applying commands; `mediaLengths` holds measured source lengths by `src`. */
+interface ApplyOptions {
+  onCreate?: OnCreate;
+  mediaLengths?: ReadonlyMap<string, number>;
+}
+
+/**
+ * Source and timeline seconds are canonical at whole microseconds, as HTML and `cutroom.json` store
+ * them. Commands compute source times exactly from frame counts and round only when writing.
+ */
+export const canonicalSeconds = (value: number) =>
+  Math.round(value * 1e6) / 1e6;
+const round6 = canonicalSeconds;
+/** Exact time of a frame, for seeking. */
+export const frameTime = (frames: number, fps: Fps) =>
+  (frames * fps.den) / fps.num;
+/** Frame time rounded to six decimals, as written to HTML and `cutroom.json`. */
+export const toSeconds = (frames: number, fps: Fps) =>
+  round6(frameTime(frames, fps));
+/**
+ * The first frame at or after a time, as the runtime shows clips: a boundary within a thousandth
+ * of a frame counts as on that frame (core `exportClipWindow`).
+ */
+export const toFrames = (seconds: number, fps: Fps) =>
+  // Adding zero turns the -0 that ceil returns just below zero into 0.
+  Math.ceil((seconds * fps.num) / fps.den - 1e-3) + 0;
+export const clipEnd = (clip: Clip) => clip.start + clip.duration;
+
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Canonical order, so parsed and applied timelines compare equal. Track kinds are stored; a clip
+ * landing on a track index that has none yet creates it, audio when every clip there is audio.
+ */
+export function normalizeTimeline(timeline: Timeline): Timeline {
+  const tracks = new Map(timeline.tracks.map((track) => [track.index, track]));
+  const audioOnly = new Map<number, boolean>();
+  for (const clip of timeline.clips)
+    if (!tracks.has(clip.track))
+      audioOnly.set(
+        clip.track,
+        (audioOnly.get(clip.track) ?? true) && clip.kind === "audio",
+      );
+  for (const [index, audio] of audioOnly)
+    tracks.set(index, {
+      index,
+      kind: audio ? "audio" : "video",
+      name: null,
+      locked: false,
+      autoSelect: true,
+    });
+  return {
+    ...timeline,
+    tracks: [...tracks.values()].sort((a, b) => a.index - b.index),
+    clips: timeline.clips.toSorted(
+      (a, b) =>
+        a.track - b.track || a.start - b.start || compareText(a.id, b.id),
+    ),
+    markers: timeline.markers.toSorted(
+      (a, b) => a.frame - b.frame || compareText(a.id, b.id),
+    ),
+  };
+}
+
+const usedNames = (timeline: Timeline) =>
+  new Set(
+    timeline.clips.flatMap((clip) =>
+      clip.link ? [clip.id, clip.link] : [clip.id],
+    ),
+  );
+
+function applyIn(timeline: Timeline, command: Command, batch: Batch) {
+  const next = run(timeline, command, batch);
+  return next === timeline ? timeline : settle(timeline, next);
+}
+
+/** Applies one command. Commands that cannot apply exactly throw a TimelineError; nothing is clamped. */
+export function apply(
+  timeline: Timeline,
+  command: Command,
+  { onCreate = () => {}, mediaLengths = new Map() }: ApplyOptions = {},
+): Timeline {
+  return applyIn(timeline, command, {
+    reserved: usedNames(timeline),
+    onCreate,
+    mediaLengths,
+  });
+}
+
+/** Applies a batch atomically: the first failure throws with its command index. */
+export function applyAll(
+  timeline: Timeline,
+  commands: readonly Command[],
+  { onCreate = () => {}, mediaLengths = new Map() }: ApplyOptions = {},
+): Timeline {
+  const origins = new Map<string, ClipOrigin>();
+  const batch: Batch = {
+    reserved: usedNames(timeline),
+    mediaLengths,
+    onCreate: (id, origin) => {
+      // A copy of a clip made earlier in the batch copies that clip's own origin.
+      const resolved =
+        ("copyOf" in origin && origins.get(origin.copyOf)) || origin;
+      origins.set(id, resolved);
+      onCreate(id, resolved);
+    },
+  };
+  return commands.reduce((current, command, index) => {
+    try {
+      return applyIn(current, command, batch);
+    } catch (error) {
+      if (!(error instanceof TimelineError)) throw error;
+      throw new TimelineError(
+        error.code,
+        `Command ${index + 1} (${command.type}): ${error.message}`,
+        index,
+      );
+    }
+  }, timeline);
+}
+
+/** Audio clips belong on audio tracks and everything else on video tracks. */
+function assertTrackKind(
+  kind: Clip["kind"],
+  track: Pick<Track, "index" | "kind"> | undefined,
+  name: string,
+) {
+  if (!track || (track.kind === "audio") === (kind === "audio")) return;
+  throw new TimelineError(
+    "track_kind",
+    `Clip ${name} is ${kind === "audio" ? "audio" : "picture"} and track ${track.index} is a ${track.kind} track.`,
+  );
+}
+
+function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
+  const { clips, fps } = timeline;
+  const { reserved: taken, onCreate } = batch;
+  const trackAt = (index: number) =>
+    timeline.tracks.find((track) => track.index === index);
+  const byId = new Map(clips.map((clip) => [clip.id, clip]));
+  const find = (id: string) => {
+    const clip = byId.get(id);
+    if (!clip) throw new TimelineError("not_found", `No clip has id ${id}.`);
+    return clip;
+  };
+  switch (command.type) {
+    case "move": {
+      const named = new Set(command.clipIds.map(find));
+      const moving = new Set(withPartners(clips, [...named]));
+      if (command.trackBy !== 0)
+        for (const clip of named)
+          assertTrackKind(
+            clip.kind,
+            trackAt(clip.track + command.trackBy),
+            clip.id,
+          );
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          moving.has(clip)
+            ? {
+                ...clip,
+                start: clip.start + command.by,
+                track: clip.track + (named.has(clip) ? command.trackBy : 0),
+              }
+            : clip,
+        ),
+      };
+    }
+    case "trim": {
+      const target = find(command.clipId);
+      const edge = (clip: Clip) =>
+        command.edge === "start" ? clip.start : clipEnd(clip);
+      const at = edge(target);
+      const delta = command.to - at;
+      if (delta === 0) return timeline;
+      // A linked group is one unit: every partner's same edge moves by the same delta.
+      const members = withPartners(clips, [target]);
+      const ids = new Set(members.map((clip) => clip.id));
+      const trimmed = clips.map((clip) => {
+        if (!ids.has(clip.id)) return clip;
+        if (command.edge === "end")
+          return { ...clip, duration: clip.duration + delta };
+        return {
+          ...clip,
+          start: command.ripple ? clip.start : clip.start + delta,
+          duration: clip.duration - delta,
+          mediaStart: advance(clip, delta, fps),
+        };
+      });
+      if (!command.ripple) return { ...timeline, clips: trimmed };
+      // The edit point is each track's trimmed edge: Q pulls everything from the head onward, W
+      // what follows the tail.
+      const edges = new Map(members.map((clip) => [clip.track, edge(clip)]));
+      return {
+        ...timeline,
+        clips: shiftAfter(
+          trimmed,
+          rippleTracks(
+            timeline,
+            members.map((clip) => clip.track),
+          ),
+          (track) => edges.get(track) ?? at,
+          command.edge === "start" ? -delta : delta,
+          ids,
+        ),
+      };
+    }
+    case "split": {
+      const { at } = command;
+      const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
+      let selected: Clip[];
+      if (command.clipIds) {
+        selected = command.clipIds.map(find);
+        const outside = selected.find((clip) => !spans(clip));
+        if (outside)
+          throw new TimelineError(
+            "out_of_bounds",
+            `Clip ${outside.id} does not span frame ${at}.`,
+          );
+      } else {
+        const tracks = rippleTracks(timeline, []);
+        selected = clips.filter(
+          (clip) => tracks.has(clip.track) && spans(clip),
+        );
+      }
+      const targets = withPartners(clips, selected).filter(spans);
+      if (!targets.length)
+        throw new TimelineError(
+          "nothing_to_split",
+          `No clip on an unlocked auto-select track spans frame ${at}.`,
+        );
+      return {
+        ...timeline,
+        clips: splitClips(clips, targets, at, fps, taken, onCreate),
+      };
+    }
+    case "remove": {
+      const removing = withPartners(clips, command.clipIds.map(find));
+      const ids = new Set(removing.map((clip) => clip.id));
+      const remaining = clips.filter((clip) => !ids.has(clip.id));
+      if (!command.ripple) return { ...timeline, clips: remaining };
+      return {
+        ...timeline,
+        clips: closeGaps(
+          remaining,
+          removing,
+          rippleTracks(
+            timeline,
+            removing.map((clip) => clip.track),
+          ),
+          new Set(
+            timeline.tracks
+              .filter((track) => track.locked)
+              .map((track) => track.index),
+          ),
+        ),
+      };
+    }
+    case "insert": {
+      const { clip: input, track, at, mode } = command;
+      assertTrackKind(input.kind, trackAt(track), input.id ?? input.src);
+      if (input.id !== undefined && taken.has(input.id))
+        throw new TimelineError(
+          "duplicate_id",
+          `A clip already has id ${input.id}.`,
+        );
+      const id =
+        input.id ?? uniqueName(taken, slug(input.src, input.kind), 2, true);
+      taken.add(id);
+      const end = at + input.duration;
+      let next = clips;
+      if (mode === "overwrite")
+        next = clearRange(next, track, at, end, fps, taken, onCreate);
+      if (mode === "insert") {
+        const tracks = rippleTracks(timeline, [track]);
+        const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
+        next = splitClips(
+          next,
+          withPartners(
+            next,
+            next.filter((clip) => tracks.has(clip.track) && spans(clip)),
+          ).filter(spans),
+          at,
+          fps,
+          taken,
+          onCreate,
+        );
+        next = shiftAfter(next, tracks, () => at, input.duration);
+      }
+      onCreate(id, { insert: input });
+      return {
+        ...timeline,
+        clips: [
+          ...next,
+          {
+            id,
+            track,
+            kind: input.kind,
+            start: at,
+            duration: input.duration,
+            mediaStart: input.kind === "image" ? null : input.mediaStart,
+            playbackRate: 1,
+            src: input.src,
+            sourceDuration:
+              input.kind === "image"
+                ? null
+                : (batch.mediaLengths.get(input.src) ?? null),
+            link: null,
+            label: input.label ?? null,
+            volume: input.volume ?? null,
+            startRef: null,
+          },
+        ],
+      };
+    }
+    case "setClip": {
+      const target = find(command.clipId);
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          clip === target
+            ? {
+                ...clip,
+                ...(command.label !== undefined && { label: command.label }),
+                ...(command.volume !== undefined && { volume: command.volume }),
+              }
+            : clip,
+        ),
+      };
+    }
+    case "setTrack": {
+      if (command.kind !== undefined)
+        for (const clip of clips)
+          if (clip.track === command.index)
+            assertTrackKind(
+              clip.kind,
+              { index: command.index, kind: command.kind },
+              clip.id,
+            );
+      const current = timeline.tracks.find(
+        (track) => track.index === command.index,
+      ) ?? {
+        index: command.index,
+        kind: command.kind ?? "video",
+        name: null,
+        locked: false,
+        autoSelect: true,
+      };
+      return {
+        ...timeline,
+        tracks: [
+          ...timeline.tracks.filter((track) => track !== current),
+          {
+            ...current,
+            ...(command.kind !== undefined && { kind: command.kind }),
+            ...(command.name !== undefined && { name: command.name }),
+            ...(command.locked !== undefined && { locked: command.locked }),
+            ...(command.autoSelect !== undefined && {
+              autoSelect: command.autoSelect,
+            }),
+          },
+        ],
+      };
+    }
+    case "setMarker": {
+      const id =
+        command.id ??
+        uniqueName(
+          new Set(timeline.markers.map((marker) => marker.id)),
+          "marker",
+          1,
+        );
+      return {
+        ...timeline,
+        markers: [
+          ...timeline.markers.filter((marker) => marker.id !== id),
+          {
+            id,
+            frame: command.frame,
+            duration: command.duration,
+            name: command.name,
+            note: command.note,
+            color: command.color,
+          },
+        ],
+      };
+    }
+    case "removeMarker": {
+      if (!timeline.markers.some((marker) => marker.id === command.id))
+        throw new TimelineError("not_found", `No marker has id ${command.id}.`);
+      return {
+        ...timeline,
+        markers: timeline.markers.filter((marker) => marker.id !== command.id),
+      };
+    }
+    case "setRange": {
+      const range = {
+        in: command.in === undefined ? timeline.range.in : command.in,
+        out: command.out === undefined ? timeline.range.out : command.out,
+      };
+      if (range.in !== null && range.out !== null && range.out <= range.in)
+        throw new TimelineError(
+          "out_of_bounds",
+          "The out point must follow the in point.",
+        );
+      return { ...timeline, range };
+    }
+  }
+}
+
+/** Validates the result of a command and settles derived state: references, duration, and order. */
+function settle(before: Timeline, after: Timeline): Timeline {
+  const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
+  const current = new Map(after.clips.map((clip) => [clip.id, clip]));
+  const locked = new Set(
+    [...before.tracks, ...after.tracks]
+      .filter((track) => track.locked)
+      .map((track) => track.index),
+  );
+  const moved = new Set<string>();
+  for (const clip of after.clips) {
+    if (clip.duration < 1)
+      throw new TimelineError(
+        "out_of_bounds",
+        `Clip ${clip.id} would be shorter than one frame.`,
+      );
+    if (clip.start < 0)
+      throw new TimelineError(
+        "out_of_bounds",
+        `Clip ${clip.id} would start before the timeline.`,
+      );
+    if (clip.track < 0)
+      throw new TimelineError(
+        "out_of_bounds",
+        `Clip ${clip.id} would move above the first track.`,
+      );
+    if (clip.mediaStart !== null && round6(clip.mediaStart) < 0)
+      throw new TimelineError(
+        "out_of_bounds",
+        `Clip ${clip.id} would start before its source media.`,
+      );
+    const old = previous.get(clip.id);
+    if (old && JSON.stringify(old) === JSON.stringify(clip)) continue;
+    if (
+      clip.sourceDuration !== null &&
+      clip.mediaStart !== null &&
+      // The frames the runtime shows before the source runs out.
+      clip.duration >
+        toFrames(
+          (clip.sourceDuration - clip.mediaStart) / clip.playbackRate,
+          after.fps,
+        )
+    )
+      throw new TimelineError(
+        "out_of_bounds",
+        `Clip ${clip.id} would run past the end of its source media.`,
+      );
+    if (locked.has(clip.track) || (old && locked.has(old.track)))
+      throw new TimelineError(
+        "locked",
+        `Clip ${clip.id} is on a locked track.`,
+      );
+    if (
+      !old ||
+      old.start !== clip.start ||
+      old.duration !== clip.duration ||
+      old.track !== clip.track
+    )
+      moved.add(clip.id);
+  }
+  for (const clip of before.clips)
+    if (!current.has(clip.id) && locked.has(clip.track))
+      throw new TimelineError(
+        "locked",
+        `Clip ${clip.id} is on a locked track.`,
+      );
+  const overlap = findOverlap(after.clips, moved);
+  if (overlap)
+    throw new TimelineError(
+      "overlap",
+      `Clip ${overlap.clip.id} would overlap ${overlap.other.id} on track ${overlap.clip.track}.`,
+    );
+  const contentEnd = (clips: Clip[]) =>
+    clips.reduce((end, clip) => Math.max(end, clipEnd(clip)), 0);
+  const beforeEnd = contentEnd(before.clips);
+  const afterEnd = contentEnd(after.clips);
+  const tail = before.duration - beforeEnd;
+  return normalizeTimeline({
+    ...after,
+    // The authored tail after the last clip is kept, as script cuts do. A root kept shorter than
+    // its content never grows on its own, and an empty root is space to fill, not a tail.
+    duration:
+      afterEnd === beforeEnd
+        ? after.duration
+        : before.clips.length === 0
+          ? Math.max(before.duration, afterEnd)
+          : tail >= 0
+            ? afterEnd + tail
+            : Math.min(before.duration, afterEnd),
+    clips: after.clips.map((clip) => {
+      if (!clip.startRef) return clip;
+      const target = current.get(clip.startRef.clipId);
+      return target && clip.start === clipEnd(target) + clip.startRef.offset
+        ? clip
+        : { ...clip, startRef: null };
+    }),
+  });
+}
+
+/** Only clips a command moved are checked, so overlaps already in the HTML stay editable. */
+function findOverlap(
+  clips: Clip[],
+  moved: ReadonlySet<string>,
+): { clip: Clip; other: Clip } | null {
+  if (!moved.size) return null;
+  const tracks = new Set(
+    clips.filter((clip) => moved.has(clip.id)).map((clip) => clip.track),
+  );
+  for (const track of tracks) {
+    let last: Clip | undefined;
+    let lastMoved: Clip | undefined;
+    const list = clips.filter((clip) => clip.track === track);
+    for (const clip of list.sort((a, b) => a.start - b.start)) {
+      const other = moved.has(clip.id) ? last : lastMoved;
+      if (other && clip.start < clipEnd(other)) return { clip, other };
+      if (!last || clipEnd(clip) > clipEnd(last)) last = clip;
+      if (
+        moved.has(clip.id) &&
+        (!lastMoved || clipEnd(clip) > clipEnd(lastMoved))
+      )
+        lastMoved = clip;
+    }
+  }
+  return null;
+}
+
+/** Linked clips (`data-link`) are edited as one. */
+function withPartners(clips: Clip[], selected: Clip[]): Clip[] {
+  const ids = new Set(selected.map((clip) => clip.id));
+  const links = new Set(
+    selected.flatMap((clip) => (clip.link ? [clip.link] : [])),
+  );
+  return clips.filter(
+    (clip) => ids.has(clip.id) || (clip.link !== null && links.has(clip.link)),
+  );
+}
+
+/** Ripple edits reach the edited tracks and every auto-select track, never a locked one. */
+function rippleTracks(timeline: Timeline, own: number[]): Set<number> {
+  const locked = new Set(
+    timeline.tracks.filter((track) => track.locked).map((track) => track.index),
+  );
+  return new Set(
+    [
+      ...own,
+      ...timeline.tracks
+        .filter((track) => track.autoSelect)
+        .map((track) => track.index),
+    ].filter((index) => !locked.has(index)),
+  );
+}
+
+/**
+ * Ripple for trims and inserts: clips at or after each track's edit point move by `delta`, and a
+ * linked group moves whole when any member does. A partner it pulls must land in free space.
+ */
+function shiftAfter(
+  clips: Clip[],
+  tracks: ReadonlySet<number>,
+  editPoint: (track: number) => number,
+  delta: number,
+  fixed: ReadonlySet<string> = new Set(),
+): Clip[] {
+  const qualifies = (clip: Clip) =>
+    !fixed.has(clip.id) &&
+    tracks.has(clip.track) &&
+    clip.start >= editPoint(clip.track);
+  const links = new Set(
+    clips.filter(qualifies).flatMap((clip) => (clip.link ? [clip.link] : [])),
+  );
+  const pulled = new Set<string>();
+  const next = clips.map((clip) => {
+    if (fixed.has(clip.id)) return clip;
+    if (!qualifies(clip)) {
+      if (clip.link === null || !links.has(clip.link)) return clip;
+      pulled.add(clip.id);
+    }
+    return { ...clip, start: clip.start + delta };
+  });
+  const overlap = findOverlap(next, pulled);
+  const blocked =
+    next.find((clip) => pulled.has(clip.id) && clip.start < 0) ??
+    (overlap && (pulled.has(overlap.clip.id) ? overlap.clip : overlap.other));
+  if (blocked)
+    throw new TimelineError(
+      "unsupported",
+      `Linked clips ${next
+        .filter((clip) => clip.link === blocked.link)
+        .map((clip) => clip.id)
+        .join(
+          ", ",
+        )} cannot move together here without leaving the timeline or overlapping another clip.`,
+    );
+  return next;
+}
+
+/**
+ * Ripple delete. Each clip closes the time removed before it on its track (tracks without removed
+ * clips close what was removed from every track). A linked group moves by its members' smallest
+ * gap and no clip passes the one before it, so sync holds and a few frames of gap may remain.
+ * Anything else that would hold a clip back, such as a clip that stays across the removed range, a
+ * partner on a locked or unreached track, or the start of the timeline, refuses the edit by name.
+ */
+function closeGaps(
+  clips: Clip[],
+  removed: Clip[],
+  tracks: ReadonlySet<number>,
+  locked: ReadonlySet<number>,
+): Clip[] {
+  const removedByTrack = new Map<number, [number, number][]>();
+  for (const clip of removed)
+    removedByTrack.set(clip.track, [
+      ...(removedByTrack.get(clip.track) ?? []),
+      [clip.start, clipEnd(clip)],
+    ]);
+  const gapsByTrack = new Map(
+    [...removedByTrack].map(([track, ranges]) => [track, mergeRanges(ranges)]),
+  );
+  const everyTrack = [...gapsByTrack.values()].reduce(intersectRanges);
+  const gapsOn = (track: number) => gapsByTrack.get(track) ?? everyTrack;
+  // A clip's own gap; partners on tracks the ripple does not reach have none and follow their group.
+  const own = new Map(
+    clips.map((clip) => {
+      if (locked.has(clip.track)) return [clip.id, 0];
+      if (!tracks.has(clip.track)) return [clip.id, -Infinity];
+      return [
+        clip.id,
+        -gapsOn(clip.track).reduce(
+          (sum, [start, end]) => (end <= clip.start ? sum + end - start : sum),
+          0,
+        ),
+      ];
+    }),
+  );
+  const delta = new Map(
+    clips.map((clip) => {
+      const value = own.get(clip.id)!;
+      return [clip.id, clip.link === null && value === -Infinity ? 0 : value];
+    }),
+  );
+  // Who held each clip back: a partner, the clip before it on its track, or itself at frame 0.
+  const heldBy = new Map<string, Clip>();
+  const groups = groupBy(
+    clips.filter((clip) => clip.link !== null),
+    (clip) => clip.link,
+  );
+  const byTrack = groupBy(
+    clips.toSorted((a, b) => a.start - b.start),
+    (clip) => clip.track,
+  );
+  // Deltas only rise toward zero, so this settles.
+  for (let changed = true; changed;) {
+    changed = false;
+    const hold = (clip: Clip, value: number, by: Clip) => {
+      if (delta.get(clip.id)! >= value) return;
+      delta.set(clip.id, value);
+      heldBy.set(clip.id, by);
+      changed = true;
+    };
+    for (const members of groups.values()) {
+      const nearest = members.reduce((best, clip) =>
+        delta.get(clip.id)! > delta.get(best.id)! ? clip : best,
+      );
+      const shared = delta.get(nearest.id)!;
+      if (shared === -Infinity) {
+        for (const clip of members) delta.set(clip.id, 0);
+        continue;
+      }
+      for (const clip of members) hold(clip, shared, nearest);
+    }
+    for (const list of byTrack.values()) {
+      let end = 0;
+      let last: Clip | undefined;
+      for (const clip of list) {
+        const value = Math.min(
+          0,
+          Math.max(delta.get(clip.id)!, end - clip.start),
+        );
+        hold(clip, value, last ?? clip);
+        const shifted = clipEnd(clip) + delta.get(clip.id)!;
+        if (shifted >= end) {
+          end = shifted;
+          last = clip;
+        }
+      }
+    }
+  }
+  for (const clip of clips) {
+    if (
+      own.get(clip.id) === -Infinity ||
+      delta.get(clip.id) === own.get(clip.id)
+    )
+      continue;
+    let root = clip;
+    const seen = new Set<Clip>();
+    while (
+      heldBy.has(root.id) &&
+      heldBy.get(root.id) !== root &&
+      !seen.has(root)
+    ) {
+      seen.add(root);
+      root = heldBy.get(root.id)!;
+    }
+    const reason = locked.has(root.track)
+      ? "is on a locked track"
+      : !tracks.has(root.track)
+        ? "is on a track the ripple does not reach"
+        : heldBy.get(root.id) === root
+          ? "would move before the start of the timeline"
+          : gapsOn(root.track).some(
+                ([start, end]) => root.start < end && clipEnd(root) > start,
+              )
+            ? `stays across the removed range on track ${root.track}`
+            : null;
+    if (reason)
+      throw new TimelineError(
+        "unsupported",
+        `Clip ${root.id} ${reason}, so ${clip.id} cannot close the gap. Move or remove it first.`,
+      );
+  }
+  return clips.map((clip) => {
+    const shift = delta.get(clip.id)!;
+    return shift === 0 ? clip : { ...clip, start: clip.start + shift };
+  });
+}
+
+function advance(clip: Clip, frames: number, fps: Fps): number | null {
+  return clip.mediaStart === null
+    ? null
+    : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
+}
+
+/** The timeline as it reads back once written: source offsets at their canonical microsecond. */
+export function canonicalTimeline(timeline: Timeline): Timeline {
+  return {
+    ...timeline,
+    clips: timeline.clips.map((clip) =>
+      clip.mediaStart === null
+        ? clip
+        : { ...clip, mediaStart: round6(clip.mediaStart) + 0 },
+    ),
+  };
+}
+
+/**
+ * Cuts each target at `at`; right halves are new clips. Afterwards each linked group is regrouped
+ * by time: pieces that overlap stay linked, the earliest such group keeps the link, later ones get
+ * a new link, and a piece that overlaps no partner is unlinked.
+ */
+function splitClips(
+  clips: Clip[],
+  targets: Clip[],
+  at: number,
+  fps: Fps,
+  taken: Set<string>,
+  onCreate: OnCreate,
+): Clip[] {
+  if (!targets.length) return clips;
+  const rights = targets.map((clip): Clip => {
+    const id = uniqueName(taken, clip.id.replace(/-\d+$/, ""), 2);
+    onCreate(id, { copyOf: clip.id });
+    return {
+      ...clip,
+      id,
+      start: at,
+      duration: clipEnd(clip) - at,
+      mediaStart: advance(clip, at - clip.start, fps),
+      startRef: null,
+    };
+  });
+  const ids = new Set(targets.map((clip) => clip.id));
+  const cut = [
+    ...clips.map((clip) =>
+      ids.has(clip.id) ? { ...clip, duration: at - clip.start } : clip,
+    ),
+    ...rights,
+  ];
+  const relinked = new Map<string, string | null>();
+  for (const link of new Set(targets.flatMap((clip) => clip.link ?? []))) {
+    const components = overlapping(cut.filter((clip) => clip.link === link));
+    let kept = false;
+    for (const component of components) {
+      const next =
+        component.length < 2 ? null : kept ? uniqueName(taken, "lk", 1) : link;
+      if (next === link) kept = true;
+      for (const clip of component) relinked.set(clip.id, next);
+    }
+  }
+  return cut.map((clip) =>
+    relinked.has(clip.id) && relinked.get(clip.id) !== clip.link
+      ? { ...clip, link: relinked.get(clip.id)! }
+      : clip,
+  );
+}
+
+/** Clips grouped by overlapping time, earliest group first. */
+function overlapping(clips: Clip[]): Clip[][] {
+  const components: Clip[][] = [];
+  let end = -Infinity;
+  for (const clip of clips.toSorted((a, b) => a.start - b.start)) {
+    if (clip.start < end) components.at(-1)!.push(clip);
+    else components.push([clip]);
+    end = clip.start < end ? Math.max(end, clipEnd(clip)) : clipEnd(clip);
+  }
+  return components;
+}
+
+function groupBy<K>(clips: Clip[], key: (clip: Clip) => K): Map<K, Clip[]> {
+  const groups = new Map<K, Clip[]>();
+  for (const clip of clips)
+    groups.set(key(clip), [...(groups.get(key(clip)) ?? []), clip]);
+  return groups;
+}
+
+/** Removes `[from, to)` from one track, cutting clips at the boundaries. Linked partners elsewhere stay whole, as in Resolve. */
+function clearRange(
+  clips: Clip[],
+  track: number,
+  from: number,
+  to: number,
+  fps: Fps,
+  taken: Set<string>,
+  onCreate: OnCreate,
+): Clip[] {
+  const overlaps = (clip: Clip) => clip.start < to && clipEnd(clip) > from;
+  const hits = (list: Clip[]) =>
+    list.filter((clip) => clip.track === track && overlaps(clip));
+  const spanning = (at: number) => (clip: Clip) =>
+    clip.start < at && at < clipEnd(clip);
+  // Cutting the far edge first keeps the surviving right piece's id the first one minted.
+  let next = splitClips(
+    clips,
+    hits(clips).filter(spanning(to)),
+    to,
+    fps,
+    taken,
+    onCreate,
+  );
+  next = splitClips(
+    next,
+    hits(next).filter(spanning(from)),
+    from,
+    fps,
+    taken,
+    onCreate,
+  );
+  const inside = new Set(hits(next).map((clip) => clip.id));
+  return next.filter((clip) => !inside.has(clip.id));
+}
+
+function intersectRanges(
+  a: [number, number][],
+  b: [number, number][],
+): [number, number][] {
+  return a.flatMap(([start, end]) =>
+    b.flatMap(([otherStart, otherEnd]): [number, number][] => {
+      const from = Math.max(start, otherStart);
+      const to = Math.min(end, otherEnd);
+      return from < to ? [[from, to]] : [];
+    }),
+  );
+}
+
+function mergeRanges(
+  ranges: (readonly [number, number])[],
+): [number, number][] {
+  const merged: [number, number][] = [];
+  for (const [start, end] of ranges.toSorted((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+function uniqueName(
+  taken: Set<string>,
+  base: string,
+  first: number,
+  bare = false,
+): string {
+  let n = first;
+  let name = bare ? base : `${base}-${n++}`;
+  while (taken.has(name)) name = `${base}-${n++}`;
+  taken.add(name);
+  return name;
+}
+
+function slug(src: string, fallback: string): string {
+  const name = src.split(/[?#]/, 1)[0]!.split("/").at(-1) ?? "";
+  return (
+    name
+      .replace(/\.[^.]*$/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || fallback
+  );
+}

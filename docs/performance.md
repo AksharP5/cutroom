@@ -22,3 +22,18 @@ The composer result does not show a reliable improvement. Browser-driver typing 
 The editor bundle contains one CodeMirror View instance instead of eight. The editor JavaScript fell from 6,176,227 to 5,110,853 bytes, and from 1,848,339 to 1,501,964 bytes with gzip. It retains the pinned upstream editor version and source-editing functionality.
 
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
+
+## Timeline engine
+
+`bun run bench:timeline` measures the timeline engine on a transcript-cut composition: 240 linked picture and sound pieces plus 20 titles, 500 clips in 75 KB of HTML. It reports median milliseconds over 31 runs and exits with an error when a step exceeds its budget. The batch is a ripple delete near the start, a razor across every track, and a ripple trim, so most clips move. A second case lifts 1,000 of 2,000 clips in one batch, as select all and delete would; each removal first checks that the clip owns its bytes.
+
+| Step                                        | Budget | November 10, 2026 |
+| ------------------------------------------- | -----: | ----------------: |
+| Parse HTML and settings into the projection |  10 ms |            3.5 ms |
+| Apply the three-command batch               |   5 ms |            1.8 ms |
+| Locate attributes and generate the edits    |   5 ms |            1.9 ms |
+| `POST /commands` with history, median of 11 |  50 ms |           18.0 ms |
+| Lift 1,000 of 2,000 clips: apply            |  20 ms |            1.1 ms |
+| Lift 1,000 of 2,000 clips: generate edits   |  20 ms |            5.4 ms |
+
+The request includes reading the source and settings, checking media files for lengths, two parses (before the edit and to verify the written result), and the history write. These figures were taken on a shared machine (load average about 4). Parsing builds the HTML spec tree with parse5. Generating edits scans the opening tags once to find attribute offsets. The ownership check visits only the clip's subtree and the owned bytes that can reach its range, found by binary search on a running maximum of their ends (text fostered out of a table can span later tags, so the ends alone are not sorted); scanning every node per removal took 121 ms for the 1,000-clip lift.

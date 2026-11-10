@@ -12,6 +12,7 @@ import { createMcpHttpHandler } from "./mcp/server";
 import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createProjectStore } from "./projects/store";
+import { createTimelineRoutes } from "./timeline/routes";
 import { createWorkspaceRoutes } from "./workspace";
 import { createTranscriptService } from "./transcript/service";
 
@@ -99,6 +100,7 @@ export async function createApp(
     createWorkspaceRoutes({ projects, dataDir, projectsDir, mcpCommand }),
   );
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
+  app.route("/api/cutroom", createTimelineRoutes(projects));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });

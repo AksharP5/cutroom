@@ -18,8 +18,28 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `transcripts_list`, `transcript_import`, `transcript_edit` | Read word timing, import a script, and cut or restore words.       |
 | `transcription_start`, `transcription_status`              | Run and inspect local transcription.                               |
 | `history_list`, `history_undo`, `history_redo`             | Use the editor's shared history.                                   |
+| `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
+| `timeline_view`                                            | Render one timeline frame as an image.                             |
 
 Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected.
+
+## Timeline
+
+Timeline edits use frames at the composition's fps. Pass the `revision` from `timeline_read` to `timeline_edit`; each successful edit returns the next revision. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
+
+For example, this razors every unlocked auto-select track at frame 90 and ripple deletes the first half of a linked clip:
+
+```json
+{
+  "projectId": "…",
+  "expectedRevision": "…",
+  "label": "Cut the intro",
+  "commands": [
+    { "type": "split", "at": 90 },
+    { "type": "remove", "clipIds": ["talk"], "ripple": true }
+  ]
+}
+```
 
 ## Review queue
 
