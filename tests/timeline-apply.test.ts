@@ -806,7 +806,9 @@ test("insert edits place, overwrite, or push the timeline", () => {
 
 test("commands that cannot apply exactly fail with typed errors", () => {
   expect(
-    failure(() => run(edit, { type: "move", clipIds: ["a"], by: 10 })),
+    failure(() =>
+      run(edit, { type: "move", clipIds: ["a"], by: 10, mode: "place" }),
+    ),
   ).toBe("overlap");
   expect(
     failure(() =>
@@ -851,6 +853,159 @@ test("commands that cannot apply exactly fail with typed errors", () => {
     );
   expect(batch).toThrow("Command 2 (move)");
   expect(edit.clips).toHaveLength(5);
+});
+
+test("moves overwrite partial and full clips without rippling or changing the moved source", () => {
+  const state = timeline([
+    clip("moving", 0, 0, 60, { mediaStart: 2, playbackRate: 2 }),
+    clip("head", 0, 90, 30),
+    clip("covered", 0, 120, 20),
+    clip("tail", 0, 140, 60, { mediaStart: 3, playbackRate: 2 }),
+    clip("later", 0, 210, 30),
+  ]);
+  const result = run(state, { type: "move", clipIds: ["moving"], by: 100 });
+  expect(positions(result)).toEqual({
+    moving: [0, 100, 60],
+    head: [0, 90, 10],
+    tail: [0, 160, 40],
+    later: [0, 210, 30],
+  });
+  expect(result.clips.find((item) => item.id === "tail")?.mediaStart).toBe(
+    4 + 1 / 3,
+  );
+  expect(result.clips.find((item) => item.id === "moving")).toMatchObject({
+    mediaStart: 2,
+    playbackRate: 2,
+    duration: 60,
+  });
+  expect(state.clips).toHaveLength(5);
+});
+
+test("an overwrite move splits a spanning clip with a fresh stable id", () => {
+  const state = timeline([
+    clip("moving", 0, 0, 30),
+    clip("under", 0, 60, 120, { mediaStart: 1, playbackRate: 2 }),
+  ]);
+  const input = {
+    type: "move",
+    clipIds: ["moving"],
+    by: 90,
+    ids: { under: ["under-tail"] },
+  } satisfies CommandInput;
+  const command = CommandSchema.parse(input);
+  const origins = new Map<string, ClipOrigin>();
+  const result = applyAll(state, [command], {
+    onCreate: (id, origin) => origins.set(id, origin),
+  });
+  expect(positions(result)).toEqual({
+    moving: [0, 90, 30],
+    under: [0, 60, 30],
+    "under-tail": [0, 120, 60],
+  });
+  expect(
+    result.clips.find((item) => item.id === "under-tail")?.mediaStart,
+  ).toBe(5);
+  expect(origins.get("under-tail")).toEqual({ copyOf: "under" });
+  expect(
+    failure(() =>
+      applyAll(state, [command], { retired: new Set(["under-tail"]) }),
+    ),
+  ).toBe("duplicate_id");
+  expect(
+    failure(() => run(state, { ...input, ids: { under: ["moving"] } })),
+  ).toBe("duplicate_id");
+});
+
+test("linked moves overwrite each partner's own range, including on a deselected track", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 30, { link: "pair" }),
+      clip("sound", 2, 0, 45, { kind: "audio", link: "pair" }),
+      clip("under", 1, 60, 120),
+      clip("bed", 2, 60, 120, { kind: "audio" }),
+      clip("other", 0, 90, 30),
+    ],
+    [{ index: 2, kind: "audio", autoSelect: false }],
+  );
+  const command = {
+    type: "move",
+    clipIds: ["picture"],
+    by: 90,
+    trackBy: 1,
+  } satisfies CommandInput;
+  expect(positions(run(state, command))).toEqual({
+    picture: [1, 90, 30],
+    sound: [2, 90, 45],
+    other: [0, 90, 30],
+    under: [1, 60, 30],
+    "under-2": [1, 120, 60],
+    bed: [2, 60, 30],
+    "bed-2": [2, 135, 45],
+  });
+  const alone = run(state, { ...command, linked: false });
+  expect(alone.clips.find((item) => item.id === "sound")?.start).toBe(0);
+  expect(alone.clips.find((item) => item.id === "bed")?.duration).toBe(120);
+  for (const index of [0, 1, 2]) {
+    const locked = {
+      ...state,
+      tracks: state.tracks.map((track) =>
+        track.index === index ? { ...track, locked: true } : track,
+      ),
+    };
+    expect(failure(() => run(locked, command))).toBe("locked");
+  }
+  // Moving only the picture vertically leaves its stationary partner's track alone,
+  // including any authored overlaps on that locked track.
+  const vertical = timeline(
+    [
+      clip("picture", 0, 0, 30, { link: "pair" }),
+      clip("sound", 2, 0, 30, { kind: "audio", link: "pair" }),
+      clip("bed", 2, 0, 120, { kind: "audio" }),
+    ],
+    [{ index: 2, kind: "audio", locked: true }],
+  );
+  expect(positions(run(vertical, { ...command, by: 0 }))).toEqual({
+    picture: [1, 0, 30],
+    sound: [2, 0, 30],
+    bed: [2, 0, 120],
+  });
+});
+
+test("a moving selection never overwrites itself, including mixed kinds changing tracks", () => {
+  const state = timeline([
+    clip("a", 0, 0, 30),
+    clip("b", 0, 30, 30),
+    clip("sound", 2, 30, 30, { kind: "audio" }),
+    clip("under", 1, 0, 150),
+  ]);
+  expect(
+    positions(
+      run(state, {
+        type: "move",
+        clipIds: ["a", "b", "sound"],
+        by: 30,
+        trackBy: 1,
+        trackClipIds: ["a", "b"],
+      }),
+    ),
+  ).toEqual({
+    a: [1, 30, 30],
+    b: [1, 60, 30],
+    sound: [2, 60, 30],
+    under: [1, 0, 30],
+    "under-2": [1, 90, 60],
+  });
+  expect(
+    positions(run(state, { type: "move", clipIds: ["a", "b"], by: 30 })),
+  ).toMatchObject({
+    a: [0, 30, 30],
+    b: [0, 60, 30],
+  });
+  expect(
+    failure(() =>
+      run(state, { type: "move", clipIds: ["a"], by: 30, trackClipIds: ["b"] }),
+    ),
+  ).toBe("unsupported");
 });
 
 test("a batch never reuses an id, so every copy comes from original markup", () => {

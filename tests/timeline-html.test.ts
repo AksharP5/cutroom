@@ -70,6 +70,41 @@ const withoutStacking = (html: string) =>
       "",
     );
 
+test("overwrite moves read back exactly at 30000/1001 with linked cuts and source offsets", () => {
+  const html = composition(
+    `
+<video id="moving" src="take.mp4" muted data-link="move" data-start="0" data-duration="0.333667" data-media-start="1.234567" data-track-index="0"></video>
+<audio id="sound" src="take.mp4" data-link="move" data-start="0" data-duration="0.333667" data-media-start="1.234567" data-track-index="1"></audio>
+<video id="under" src="under.mp4" muted data-link="under-pair" data-start="1.001" data-duration="2.002" data-media-start="2.123456" data-playback-rate="2" data-track-index="0"></video>
+<audio id="bed" src="under.mp4" data-link="under-pair" data-start="1.001" data-duration="2.002" data-media-start="2.123456" data-playback-rate="2" data-track-index="1"></audio>`,
+    "30000/1001",
+  );
+  const output = edit(html, [
+    {
+      type: "move",
+      clipIds: ["moving"],
+      by: 40,
+      ids: { under: ["under-tail"], bed: ["bed-tail"] },
+    },
+  ]);
+  const result = parseComposition(output, emptyTimelineSettings()).timeline;
+  expect(
+    result.clips.map((clip) => [
+      clip.id,
+      clip.start,
+      clip.duration,
+      clip.mediaStart,
+    ]),
+  ).toEqual([
+    ["under", 30, 10, 2.123456],
+    ["moving", 40, 10, 1.234567],
+    ["under-tail", 50, 40, 3.458123],
+    ["bed", 30, 10, 2.123456],
+    ["sound", 40, 10, 1.234567],
+    ["bed-tail", 50, 40, 3.458123],
+  ]);
+});
+
 test("the projection reads clips, references, and fps from HTML", () => {
   const { timeline } = parseComposition(source, emptyTimelineSettings());
   expect(timeline.fps).toEqual({ num: 30, den: 1 });

@@ -379,6 +379,38 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
     });
     expect(view.isError).not.toBe(true);
     expect(seeks).toEqual([String(1 / 30)]);
+    const overwritten = result.parse(
+      await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: fixture.project.id,
+          expectedRevision: edited.revision,
+          commands: [
+            {
+              type: "move",
+              clipIds: ["caption"],
+              by: -30,
+              trackBy: -2,
+              mode: "overwrite",
+              ids: { rule: ["rule-tail"] },
+            },
+          ],
+        },
+      }),
+    ).structuredContent.result;
+    expect(
+      overwritten.timeline.clips.map((clip) => [
+        clip.id,
+        clip.track,
+        clip.start,
+        clip.duration,
+      ]),
+    ).toEqual([
+      ["rule", 0, 0, 30],
+      ["caption", 0, 30, 300],
+      ["rule-tail", 0, 330, 30],
+      ["headline", 1, 0, 360],
+    ]);
   } finally {
     await client.close();
     server.stop(true);

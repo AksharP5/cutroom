@@ -131,14 +131,26 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .int()
         .default(0)
         .describe("Tracks to shift the named clips"),
+      trackClipIds: clipIds
+        .optional()
+        .describe(
+          "Which named clips shift tracks; omitted shifts every named clip. Other named clips and linked partners still move in time.",
+        ),
       linked: z
         .boolean()
         .default(true)
         .describe(
           "False moves only the named clips and leaves their linked partners where they are",
         ),
+      mode: z
+        .enum(["overwrite", "place"])
+        .default("overwrite")
+        .describe(
+          "overwrite replaces covered frames on every moving clip's destination track; place refuses overlaps",
+        ),
+      ids: pieceIds,
     })
-    .describe("Move clips and their linked partners. Overlaps are refused."),
+    .describe("Move clips and their linked partners, overwriting by default."),
   z
     .object({
       type: z.literal("trim"),

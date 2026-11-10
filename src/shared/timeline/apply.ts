@@ -256,7 +256,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       command.type === "split" ||
         command.type === "insert" ||
         command.type === "trim" ||
-        command.type === "remove"
+        command.type === "remove" ||
+        command.type === "move"
         ? (command.ids ?? {})
         : {},
     ).map(([from, ids]) => [from, [...ids]]),
@@ -284,28 +285,51 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   switch (command.type) {
     case "move": {
       const named = new Set(command.clipIds.map(find));
+      const lifted = command.trackClipIds
+        ? new Set(command.trackClipIds.map(find))
+        : named;
+      for (const clip of lifted)
+        if (!named.has(clip))
+          throw new TimelineError(
+            "unsupported",
+            `Clip ${clip.id} must be named in clipIds to change tracks.`,
+          );
+      if (command.by === 0 && command.trackBy === 0) return timeline;
       const moving = command.linked
         ? new Set(withPartners(clips, [...named]))
         : named;
       if (command.trackBy !== 0)
-        for (const clip of named)
+        for (const clip of lifted)
           assertTrackKind(
             clip.kind,
             trackAt(clip.track + command.trackBy),
             clip.id,
           );
-      return {
-        ...timeline,
-        clips: clips.map((clip) =>
-          moving.has(clip)
-            ? {
-                ...clip,
-                start: clip.start + command.by,
-                track: clip.track + (named.has(clip) ? command.trackBy : 0),
-              }
-            : clip,
-        ),
-      };
+      let next = clips.map((clip) =>
+        moving.has(clip)
+          ? {
+              ...clip,
+              start: clip.start + command.by,
+              track: clip.track + (lifted.has(clip) ? command.trackBy : 0),
+            }
+          : clip,
+      );
+      if (command.mode === "overwrite") {
+        const fixed = new Set([...moving].map((clip) => clip.id));
+        const ranges = new Map<number, [number, number][]>();
+        for (const clip of next) {
+          if (!fixed.has(clip.id)) continue;
+          const old = byId.get(clip.id)!;
+          if (clip.start === old.start && clip.track === old.track) continue;
+          const track = ranges.get(clip.track) ?? [];
+          track.push([clip.start, clipEnd(clip)]);
+          ranges.set(clip.track, track);
+        }
+        for (const [track, spans] of ranges)
+          for (const [from, to] of mergeRanges(spans).toReversed())
+            next = clearRange(next, track, from, to, fps, mint, fixed);
+      }
+      return { ...timeline, clips: next };
     }
     case "trim": {
       const target = find(command.clipId);
@@ -967,8 +991,10 @@ function clearRange(
   to: number,
   fps: Fps,
   mint: Minting,
+  fixed: ReadonlySet<string> = new Set(),
 ): Clip[] {
-  const overlaps = (clip: Clip) => clip.start < to && clipEnd(clip) > from;
+  const overlaps = (clip: Clip) =>
+    !fixed.has(clip.id) && clip.start < to && clipEnd(clip) > from;
   const hits = (list: Clip[]) =>
     list.filter((clip) => clip.track === track && overlaps(clip));
   const targets = hits(clips);

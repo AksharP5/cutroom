@@ -383,44 +383,43 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
         ? named.filter((clip) => isAudio(clip) === isAudio(grabbed))
         : named;
       const liftedIds = new Set(lifted.map((clip) => clip.id));
-      const links = new Set(lifted.flatMap((clip) => clip.link ?? []));
-      const rest = named.filter(
-        (clip) =>
-          !liftedIds.has(clip.id) &&
-          (intent.alone || !clip.link || !links.has(clip.link)),
-      );
-      const move = (clips: readonly Clip[], tracks: number): CommandInput[] =>
-        clips.length && (by || tracks)
-          ? [
-              {
-                type: "move",
-                clipIds: clips.map((clip) => clip.id),
-                by,
-                trackBy: tracks,
-                ...(intent.alone && { linked: false }),
-              },
-            ]
-          : [];
-      const commands = [...move(lifted, trackBy), ...move(rest, 0)];
-      if (!commands.length) return still("Move");
+      if (!by && !trackBy) return still("Move");
+      // One command carries the whole selection before clearing any destination frames.
+      const commands: CommandInput[] = [
+        {
+          type: "move",
+          clipIds: named.map((clip) => clip.id),
+          by,
+          trackBy,
+          ...(lifted.length !== named.length && {
+            trackClipIds: lifted.map((clip) => clip.id),
+          }),
+          mode: "overwrite",
+          ...(intent.alone && { linked: false }),
+        },
+      ];
       const moving = new Set(carried.map((clip) => clip.id));
+      const result = previewCommands(timeline, commands);
       return {
         label: "Move",
         commands,
         // Drawn where the pointer holds the clips, whether or not the engine takes them there.
-        shown: normalizeTimeline({
-          ...timeline,
-          clips: timeline.clips.map((clip) =>
-            moving.has(clip.id)
-              ? {
-                  ...clip,
-                  start: clip.start + by,
-                  track: clip.track + (liftedIds.has(clip.id) ? trackBy : 0),
-                }
-              : clip,
-          ),
-        }),
-        valid: previewCommands(timeline, commands) !== null,
+        shown:
+          result?.timeline ??
+          normalizeTimeline({
+            ...timeline,
+            clips: timeline.clips.map((clip) =>
+              moving.has(clip.id)
+                ? {
+                    ...clip,
+                    start: clip.start + by,
+                    track: clip.track + (liftedIds.has(clip.id) ? trackBy : 0),
+                  }
+                : clip,
+            ),
+          }),
+        valid: result !== null,
+        pieces: result?.pieces,
         snap: hit && by === travel + hit.by ? hit.at : null,
         delta: by,
       };

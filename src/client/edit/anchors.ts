@@ -1,4 +1,9 @@
-import type { Clip, Command, Timeline } from "../../shared/timeline/schema";
+import { clipEnd } from "../../shared/timeline/apply";
+import type {
+  Clip,
+  CommandInput,
+  Timeline,
+} from "../../shared/timeline/schema";
 
 function sameClip(seen: Clip, clip: Clip | undefined) {
   if (!clip) return false;
@@ -18,24 +23,64 @@ function sameClip(seen: Clip, clip: Clip | undefined) {
   });
 }
 
-/** Every clip a positional edit changes, including linked partners and ripple followers. */
+function occupants(timeline: Timeline, range: Clip) {
+  return timeline.clips.filter(
+    (clip) =>
+      clip.track === range.track &&
+      clip.start < clipEnd(range) &&
+      clipEnd(clip) > range.start,
+  );
+}
+
+/** Changed clips and the occupancy of overwrite destinations, including empty ranges. */
 export function editAnchors(
   before: Timeline,
   after: Timeline,
-  commands: readonly Pick<Command, "type">[],
+  commands: readonly CommandInput[],
 ) {
+  const destinations: { range: Clip; clips: Clip[] }[] = [];
   if (
     !commands.some(
       ({ type }) => type === "trim" || type === "split" || type === "move",
     )
   )
-    return [];
+    return { clips: [], destinations };
   const clips = new Map(after.clips.map((clip) => [clip.id, clip]));
-  return before.clips.filter((clip) => !sameClip(clip, clips.get(clip.id)));
+  for (const command of commands) {
+    if (command.type !== "move" || command.mode === "place") continue;
+    const named = new Set(command.clipIds);
+    const links = new Set(
+      command.linked === false
+        ? []
+        : before.clips
+            .filter((clip) => named.has(clip.id))
+            .flatMap((clip) => clip.link ?? []),
+    );
+    for (const old of before.clips) {
+      if (!named.has(old.id) && !(old.link && links.has(old.link))) continue;
+      const moved = clips.get(old.id);
+      if (!moved || (moved.start === old.start && moved.track === old.track))
+        continue;
+      destinations.push({ range: moved, clips: occupants(before, moved) });
+    }
+  }
+  return {
+    clips: before.clips.filter((clip) => !sameClip(clip, clips.get(clip.id))),
+    destinations,
+  };
 }
 
-/** A frozen edit only means what the user saw while its affected clips are unchanged. */
-export function anchorsChanged(anchors: readonly Clip[], timeline: Timeline) {
+/** Refuse changed clips or destination occupancy before replaying a frozen edit. */
+export function anchorsChanged(
+  anchors: ReturnType<typeof editAnchors>,
+  timeline: Timeline,
+) {
   const clips = new Map(timeline.clips.map((clip) => [clip.id, clip]));
-  return anchors.some((seen) => !sameClip(seen, clips.get(seen.id)));
+  if (anchors.clips.some((seen) => !sameClip(seen, clips.get(seen.id))))
+    return true;
+  return anchors.destinations.some(
+    ({ range, clips: seen }) =>
+      occupants(timeline, range).length !== seen.length ||
+      seen.some((clip) => !sameClip(clip, clips.get(clip.id))),
+  );
 }

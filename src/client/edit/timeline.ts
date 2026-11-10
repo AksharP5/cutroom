@@ -11,7 +11,6 @@ import {
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
 import type {
-  Clip,
   Command,
   CommandInput,
   Timeline,
@@ -51,11 +50,10 @@ interface Edit {
   /** Ids of the pieces the commands make. */
   creates: ReadonlySet<string>;
   /**
-   * The clips a trim, razor or move names, as shown. Trims and razors cut at absolute frames and
-   * a drag moves a clip to the place the user saw, so they only mean the same edit while the
-   * clips sit where they were.
+   * Changed clips and overwrite destination occupancy as shown, including empty ranges.
+   * An edit only means the same thing while both remain unchanged.
    */
-  anchors: Clip[];
+  anchors: ReturnType<typeof editAnchors>;
   gesture: boolean;
   failure: string | null;
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
@@ -116,12 +114,13 @@ function name(commands: Command[], timeline: Timeline) {
   let current = timeline;
   const creates = new Set<string>();
   const named = commands.map((command): Command => {
-    // Razors, inserts, and ripple trims and deletes through a spanning clip cut pieces.
+    // Positional edits can cut new pieces, including moves that overwrite a spanning clip.
     if (
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
-      command.type !== "remove"
+      command.type !== "remove" &&
+      command.type !== "move"
     ) {
       current = apply(current, command);
       return command;
@@ -154,6 +153,7 @@ function shown(projectId: string): TimelineView | null {
   const timeline = pending
     .filter((edit) => edit.projectId === projectId)
     .reduce((current, edit) => {
+      if (anchorsChanged(edit.anchors, current)) return current;
       try {
         return applyAll(current, edit.commands);
       } catch (error) {
