@@ -442,12 +442,20 @@ test("saving one review draft cannot clear a newer draft in the same project", a
     `**/api/projects/${project.id}/thumbnail/**`,
     async (route) => {
       if (route.request().resourceType() !== "fetch") return route.fallback();
-      entered();
-      await released;
       await route.fulfill({
         contentType: "image/png",
         body: Buffer.from(png, "base64"),
       });
+    },
+  );
+  // Saving now finishes before capture. Hold the annotation POST itself so the newer
+  // draft is created while the earlier save is still waiting for its answer.
+  await page.route(
+    `**/api/cutroom/projects/${project.id}/annotations`,
+    async (route) => {
+      entered();
+      await released;
+      await route.fulfill({ response: await route.fetch() });
     },
   );
   try {
@@ -481,10 +489,18 @@ test("saving one review draft cannot clear a newer draft in the same project", a
           ).annotations.length,
       )
       .toBe(1);
+    await expect(page.locator(".review-row")).toContainText(
+      "Save the earlier note",
+    );
     await expect(body).toHaveValue("Keep the new draft");
     await expect(
       page.getByRole("button", { name: "Add note", exact: true }),
     ).toBeEnabled();
+    await page.getByRole("button", { name: "Add note", exact: true }).click();
+    await expect(page.locator(".review-row")).toHaveCount(2);
+    await expect(page.locator(".review-row").nth(1)).toContainText(
+      "Keep the new draft",
+    );
   } finally {
     release();
   }
