@@ -30,7 +30,7 @@ const source = `<!doctype html>
 </main></body></html>
 `;
 
-const composition = (body: string, fps = 30) =>
+const composition = (body: string, fps: number | string = 30) =>
   `<main data-composition-id="main" data-duration="10" data-fps="${fps}">\n${body}\n</main>\n`;
 
 const edit = (html: string, commands: CommandInput[]) => {
@@ -159,6 +159,38 @@ test("compositions that cannot be edited exactly are refused", () => {
   expect(() =>
     edit(lookedUp, [{ type: "split", at: 200, clipIds: ["title"] }]),
   ).toThrow("animated by its id");
+});
+
+test("frame rates HyperFrames ignores are refused instead of read as 30 fps", () => {
+  const read = (fps: string) =>
+    parseComposition(composition("", fps), emptyTimelineSettings()).timeline
+      .fps;
+  expect(
+    parseComposition(
+      `<main data-composition-id="main" data-duration="10"></main>`,
+      emptyTimelineSettings(),
+    ).timeline.fps,
+  ).toEqual({ num: 30, den: 1 });
+  expect(read("24000/1001")).toEqual({ num: 24000, den: 1001 });
+  for (const [decimal, exact] of [
+    ["23.976", "24000/1001"],
+    ["23.98", "24000/1001"],
+    ["29.97", "30000/1001"],
+    ["47.952", "48000/1001"],
+    ["59.94", "60000/1001"],
+    ["119.88", "120000/1001"],
+  ])
+    expect(() => read(decimal)).toThrow(
+      `HyperFrames ignores data-fps="${decimal}" and plays the composition at 30 fps. Write the exact rate, data-fps="${exact}".`,
+    );
+  for (const decimal of ["12.5", "-29.97"])
+    expect(() => read(decimal)).toThrow(
+      `HyperFrames ignores data-fps="${decimal}" and plays the composition at 30 fps. Write it as a whole number or a fraction.`,
+    );
+  for (const invalid of ["fast", "0", "300", "30/0"])
+    expect(() => read(invalid)).toThrow(
+      `HyperFrames ignores data-fps="${invalid}" and plays the composition at 30 fps. Use a whole number`,
+    );
 });
 
 test("element boundaries follow the HTML spec tree, including implied end tags", () => {

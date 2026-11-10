@@ -28,7 +28,7 @@ For an upstream upgrade, update all `@hyperframes/*` dependencies and the `hyper
 
 ## Timeline engine
 
-`src/shared/timeline/` defines the timeline projection and command union as zod schemas, and a pure `apply(timeline, command)` that the browser and server share. Frames are integers at the root's `data-fps` (30 when absent); HTML and `cutroom.json` keep seconds rounded to six decimals.
+`src/shared/timeline/` defines the timeline projection and command union as zod schemas, and a pure `apply(timeline, command)` that the browser and server share. Frames are integers at the root's `data-fps` (30 when absent). A value HyperFrames ignores, including decimals such as `29.97`, is refused instead of being read as 30, and NTSC spellings name their exact rate (`30000/1001`); HTML and `cutroom.json` keep seconds rounded to six decimals.
 
 Timing model: a clip spans the frames the runtime shows. Source offsets (`data-media-start`) are canonical at the microsecond: parsed once, and command inputs are rounded in the schema. Commands compute source times exactly from frame counts (frame rate as a fraction, times playback rate) and round once, when the timeline is written. Within one batch, 300 one-frame trims land on the same microsecond as one 300-frame trim. Separate requests each store six decimals, so repeated single edits can drift by up to half a microsecond per write; 300 one-frame trims sent one request at a time measured about 100 µs (10.999900 s against 11 s at 30 fps). The projected offset is the source time at the first shown frame; a start the editor wrote, within a microsecond of a frame, never shifts it, so a rounded NTSC start reads back unchanged.
 
