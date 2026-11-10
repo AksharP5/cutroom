@@ -1,25 +1,31 @@
 import { join } from "node:path";
 import { mkdir, readdir, rm } from "node:fs/promises";
+import { z } from "zod";
 import { encodePeaks, peakSampleRate } from "./peaks";
-import { FilmstripSchema, MediaTaskSchema } from "./protocol";
+import { FilmstripSchema, MediaInfoSchema, MediaTaskSchema } from "./protocol";
+import { mediaSettings, scaleFilter, tileWidth } from "./settings";
 
-declare const self: Worker;
-let child: ReturnType<typeof Bun.spawn> | undefined;
+const task = MediaTaskSchema.parse(await Bun.stdin.json());
 let cancelled = false;
-let stopTimeout: ReturnType<typeof setTimeout> | undefined;
+let child: ReturnType<typeof Bun.spawn> | undefined;
+process.on("SIGTERM", () => {
+  cancelled = true;
+  child?.kill("SIGTERM");
+});
 const inputOptions = [
   "-protocol_whitelist",
   "file,pipe",
   "-format_whitelist",
-  "mov,matroska,webm,mp3,wav,flac,aac,ogg,aiff,avi,asf,mpeg,mpegts,flv",
+  "mov,matroska,webm,mp3,wav,flac,aac,ogg,aiff,avi,asf,mpeg,mpegts,flv,mxf,w64,caf",
 ];
-
 async function run(
   args: string[],
   consume?: (stream: ReadableStream<Uint8Array>) => Promise<unknown>,
+  onLine?: (line: string) => void,
 ) {
   if (cancelled) throw new Error("Media job cancelled.");
   const process = Bun.spawn(args, {
+    cwd: task.directory,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -28,8 +34,16 @@ async function run(
   let tail = "";
   const errors = (async () => {
     const decoder = new TextDecoder();
-    for await (const chunk of process.stderr)
-      tail = (tail + decoder.decode(chunk, { stream: true })).slice(-8000);
+    let remaining = "";
+    for await (const chunk of process.stderr) {
+      const text = decoder.decode(chunk, { stream: true });
+      tail = (tail + text).slice(-8000);
+      if (!onLine) continue;
+      const lines = (remaining + text).split("\n");
+      remaining = lines.pop() ?? "";
+      for (const line of lines) onLine(line);
+    }
+    if (onLine && remaining) onLine(remaining);
   })();
   try {
     const result = await (consume
@@ -45,129 +59,263 @@ async function run(
     if (process.exitCode === null) process.kill("SIGKILL");
     await process.exited;
     await errors;
-    clearTimeout(stopTimeout);
-    stopTimeout = undefined;
     child = undefined;
   }
 }
-
-self.onmessage = async (event: MessageEvent<unknown>) => {
-  const task = MediaTaskSchema.parse(event.data);
-  if (task.type === "cancel") {
-    cancelled = true;
-    if (child && child.exitCode === null) {
-      child.kill("SIGTERM");
-      stopTimeout ??= setTimeout(() => child?.kill("SIGKILL"), 1000);
-    }
-    return;
-  }
-  try {
-    if (task.kind === "peaks") {
-      await run(
-        [
-          task.ffmpeg,
-          "-nostdin",
-          "-v",
-          "error",
-          ...inputOptions,
-          "-threads",
-          "1",
-          "-i",
-          task.source,
-          "-map",
-          "0:a:0",
-          "-vn",
-          "-ac",
-          "1",
-          "-ar",
-          String(peakSampleRate),
-          "-c:a",
-          "pcm_s16le",
-          "-f",
-          "s16le",
-          "pipe:1",
-        ],
-        async (stream) => {
-          const peaks = await encodePeaks(stream);
-          await Bun.write(join(task.directory, "peaks.bin"), peaks);
-        },
-      );
-    } else {
-      const frames = join(task.directory, "frames");
-      await mkdir(frames);
-      await run([
-        task.ffmpeg,
-        "-nostdin",
-        "-v",
-        "error",
+const ffmpeg = [
+  task.ffmpeg,
+  "-nostdin",
+  "-v",
+  "error",
+  "-threads",
+  "1",
+  "-filter_threads",
+  "1",
+];
+const rational = (value: string | undefined, separator: string) => {
+  if (!value) return 0;
+  const [num, den] = value.split(separator).map(Number);
+  return num && den ? num / den : 0;
+};
+try {
+  if (task.kind === "probe") {
+    const raw = await run([
+      task.ffprobe,
+      "-v",
+      "error",
+      ...inputOptions,
+      "-show_entries",
+      "format=duration:stream=codec_type,channels,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio,duration:stream_side_data=rotation",
+      "-of",
+      "json",
+      task.source,
+    ]);
+    const probe = z
+      .object({
+        streams: z.array(
+          z.object({
+            codec_type: z.string(),
+            channels: z.number().optional(),
+            width: z.number().optional(),
+            height: z.number().optional(),
+            avg_frame_rate: z.string().optional(),
+            r_frame_rate: z.string().optional(),
+            sample_aspect_ratio: z.string().optional(),
+            duration: z.string().optional(),
+            side_data_list: z
+              .array(z.object({ rotation: z.number().optional() }))
+              .optional(),
+          }),
+        ),
+        format: z.object({ duration: z.string().optional() }),
+      })
+      .parse(JSON.parse(z.string().parse(raw)));
+    const audio = probe.streams.find((stream) => stream.codec_type === "audio");
+    const video = probe.streams.find((stream) => stream.codec_type === "video");
+    const rotated =
+      Math.abs(
+        video?.side_data_list?.find((data) => data.rotation !== undefined)
+          ?.rotation ?? 0,
+      ) %
+        180 ===
+      90;
+    const aspect = rational(video?.sample_aspect_ratio, ":") || 1;
+    const info = MediaInfoSchema.parse({
+      channels: audio?.channels,
+      video: video && {
+        width: rotated ? video.height : video.width,
+        height: rotated ? video.width : video.height,
+        pixelAspect: rotated ? 1 / aspect : aspect,
+        fps:
+          rational(video.avg_frame_rate, "/") ||
+          rational(video.r_frame_rate, "/") ||
+          30,
+        duration: Number(video.duration ?? probe.format.duration ?? 0),
+      },
+    });
+    await Bun.write(join(task.directory, "probe.json"), JSON.stringify(info));
+  } else if (task.kind === "peaks") {
+    const channels = task.info?.channels;
+    if (!channels) throw new Error("The media has no audio stream.");
+    await run(
+      [
+        ...ffmpeg,
         ...inputOptions,
-        "-threads",
-        "1",
-        "-filter_threads",
-        "1",
+        "-i",
+        task.source,
+        "-map",
+        "0:a:0",
+        "-vn",
+        "-ar",
+        String(peakSampleRate),
+        "-c:a",
+        "pcm_s16le",
+        "-f",
+        "s16le",
+        "pipe:1",
+      ],
+      async (stream) => {
+        await Bun.write(
+          join(task.directory, "peaks.bin"),
+          await encodePeaks(stream, channels),
+        );
+      },
+    );
+  } else {
+    const video = task.info?.video;
+    if (!video) throw new Error("The media has no video stream.");
+    if (task.kind === "frame") {
+      await run([
+        ...ffmpeg,
+        ...inputOptions,
+        "-ss",
+        String(task.time),
         "-i",
         task.source,
         "-map",
         "0:v:0",
         "-an",
         "-vf",
-        "fps=1/2:start_time=0:round=up,scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,setsar=1",
-        "-frames:v",
-        "3601",
-        "-threads",
-        "1",
-        join(frames, "frame-%06d.png"),
-      ]);
-      const count = (await readdir(frames)).length;
-      if (count > 3600)
-        throw new Error("Filmstrip previews support media up to two hours.");
-      if (!count) throw new Error("The media has no decoded video frames.");
-      const columns = Math.min(10, count);
-      const metadata = FilmstripSchema.parse({
-        version: 1,
-        interval: 2,
-        tileWidth: 160,
-        tileHeight: 90,
-        count,
-        columns,
-        rows: Math.ceil(count / columns),
-      });
-      await run([
-        task.ffmpeg,
-        "-nostdin",
-        "-v",
-        "error",
-        "-threads",
-        "1",
-        "-filter_threads",
-        "1",
-        "-framerate",
-        "1",
-        "-i",
-        join(frames, "frame-%06d.png"),
-        "-vf",
-        `tile=${columns}x${metadata.rows}:nb_frames=${count}`,
+        scaleFilter(video),
         "-frames:v",
         "1",
         "-threads",
         "1",
         "-q:v",
-        "4",
+        String(mediaSettings.jpegQuality),
         "-update",
         "1",
-        join(task.directory, "sprite.jpg"),
+        "frame.jpg",
       ]);
-      await rm(frames, { recursive: true });
+      if (!(await Bun.file(join(task.directory, "frame.jpg")).exists()))
+        throw new Error("No video frame exists at that time.");
+    } else {
+      await mkdir(join(task.directory, "frames"));
+      let lastKey = 0;
+      let maxGap = 0;
+      await run(
+        [
+          ...ffmpeg,
+          "-v",
+          "info",
+          ...inputOptions,
+          "-skip_frame",
+          "nokey",
+          "-i",
+          task.source,
+          "-map",
+          "0:v:0",
+          "-an",
+          "-vf",
+          `showinfo,fps=1/${mediaSettings.filmstripInterval}:start_time=0:round=up,${scaleFilter(video)}`,
+          "-threads",
+          "1",
+          "frames/frame-%06d.png",
+        ],
+        undefined,
+        (line) => {
+          if (!line.includes("showinfo")) return;
+          const match = /pts_time:([\d.eE+-]+)/.exec(line);
+          if (!match) return;
+          const time = Number(match[1]);
+          maxGap = Math.max(maxGap, time - lastKey);
+          lastKey = time;
+        },
+      );
+      let count = (await readdir(join(task.directory, "frames"))).length;
+      maxGap = Math.max(maxGap, video.duration - lastKey);
+      if (
+        maxGap > mediaSettings.filmstripInterval * 2 ||
+        count < Math.ceil(video.duration / mediaSettings.filmstripInterval)
+      ) {
+        await rm(join(task.directory, "frames"), { recursive: true });
+        await mkdir(join(task.directory, "frames"));
+        count = 0;
+        for (
+          let time = 0;
+          time < video.duration;
+          time += mediaSettings.filmstripInterval
+        ) {
+          const name = `frames/frame-${String(count + 1).padStart(6, "0")}.png`;
+          await run([
+            ...ffmpeg,
+            ...inputOptions,
+            "-ss",
+            String(time),
+            "-i",
+            task.source,
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            scaleFilter(video),
+            "-frames:v",
+            "1",
+            "-threads",
+            "1",
+            "-update",
+            "1",
+            name,
+          ]);
+          if (!(await Bun.file(join(task.directory, name)).exists())) break;
+          count++;
+        }
+      }
+      if (!count) throw new Error("The media has no decoded video frames.");
+      const sheets: z.infer<typeof FilmstripSchema>["sheets"] = [];
+      for (let start = 0; start < count; start += mediaSettings.tilesPerSheet) {
+        const tiles = Math.min(mediaSettings.tilesPerSheet, count - start);
+        const columns = Math.min(mediaSettings.columns, tiles);
+        const sheet = {
+          index: sheets.length,
+          start,
+          count: tiles,
+          columns,
+          rows: Math.ceil(tiles / columns),
+        };
+        await run([
+          ...ffmpeg,
+          "-framerate",
+          "1",
+          "-start_number",
+          String(start + 1),
+          "-i",
+          "frames/frame-%06d.png",
+          "-vf",
+          `tile=${columns}x${sheet.rows}:nb_frames=${tiles}`,
+          "-frames:v",
+          "1",
+          "-threads",
+          "1",
+          "-q:v",
+          String(mediaSettings.jpegQuality),
+          "-update",
+          "1",
+          `sprite-${sheet.index}.jpg`,
+        ]);
+        sheets.push(sheet);
+      }
+      await rm(join(task.directory, "frames"), { recursive: true });
+      const metadata = FilmstripSchema.parse({
+        version: 2,
+        interval: mediaSettings.filmstripInterval,
+        tileHeight: mediaSettings.tileHeight,
+        tileWidth: tileWidth(video),
+        count,
+        sheets,
+      });
       await Bun.write(
         join(task.directory, "filmstrip.json"),
         JSON.stringify(metadata),
       );
     }
-    self.postMessage({ type: "done" });
-  } catch (error) {
-    self.postMessage({
+  }
+  await Bun.stdout.write(JSON.stringify({ type: "done" }));
+} catch (error) {
+  await Bun.stdout.write(
+    JSON.stringify({
       type: "error",
       error: error instanceof Error ? error.message : String(error),
-    });
-  }
-};
+    }),
+  );
+}

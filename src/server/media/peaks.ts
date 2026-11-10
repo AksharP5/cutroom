@@ -1,15 +1,21 @@
-export const peakSampleRate = 48000;
-export const peakBucketSamples = 480;
-const mipCount = 4;
+import { mediaSettings, peakLevels } from "./settings";
+
+export const peakSampleRate = mediaSettings.peakSampleRate;
+export const peakBucketSamples = mediaSettings.peakBucketSamples;
+const mipCount = peakLevels.length;
 const headerBytes = 32 + mipCount * 16;
 
-/** CRPK v1: little-endian header, level directory, then signed int16 min/max pairs. */
-export async function encodePeaks(stream: ReadableStream<Uint8Array>) {
+/** CRPK v2: little-endian header, level directory, then signed int16 min/max pairs. */
+export async function encodePeaks(
+  stream: ReadableStream<Uint8Array>,
+  channels = 1,
+) {
   const base: number[] = [];
   let minimum = 32767;
   let maximum = -32768;
   let bucketSamples = 0;
   let totalSamples = 0;
+  let channel = 0;
   let lowByte: number | undefined;
   for await (const chunk of stream) {
     for (const byte of chunk) {
@@ -22,6 +28,8 @@ export async function encodePeaks(stream: ReadableStream<Uint8Array>) {
       lowByte = undefined;
       minimum = Math.min(minimum, sample);
       maximum = Math.max(maximum, sample);
+      if (++channel !== channels) continue;
+      channel = 0;
       totalSamples++;
       if (++bucketSamples !== peakBucketSamples) continue;
       base.push(minimum, maximum);
@@ -30,19 +38,24 @@ export async function encodePeaks(stream: ReadableStream<Uint8Array>) {
       maximum = -32768;
     }
   }
-  if (lowByte !== undefined) throw new Error("Truncated PCM audio.");
+  if (lowByte !== undefined || channel !== 0)
+    throw new Error("Truncated PCM audio.");
   if (!totalSamples) throw new Error("The media has no decoded audio samples.");
   if (bucketSamples) base.push(minimum, maximum);
   const levels = [base];
   for (let level = 1; level < mipCount; level++) {
     const previous = levels[level - 1]!;
     const pairs: number[] = [];
-    for (let index = 0; index < previous.length; index += 8) {
+    for (
+      let index = 0;
+      index < previous.length;
+      index += mediaSettings.mipFactor * 2
+    ) {
       let min = 32767;
       let max = -32768;
       for (
         let pair = index;
-        pair < Math.min(index + 8, previous.length);
+        pair < Math.min(index + mediaSettings.mipFactor * 2, previous.length);
         pair += 2
       ) {
         min = Math.min(min, previous[pair]!);
@@ -56,7 +69,7 @@ export async function encodePeaks(stream: ReadableStream<Uint8Array>) {
     headerBytes + levels.reduce((bytes, pairs) => bytes + pairs.length * 2, 0),
   );
   output.write("CRPK", 0);
-  output.writeUInt32LE(1, 4);
+  output.writeUInt32LE(2, 4);
   output.writeUInt32LE(mipCount, 8);
   output.writeUInt32LE(peakSampleRate, 12);
   output.writeDoubleLE(totalSamples, 16);
@@ -64,7 +77,7 @@ export async function encodePeaks(stream: ReadableStream<Uint8Array>) {
   let offset = headerBytes;
   for (const [index, pairs] of levels.entries()) {
     const entry = 32 + index * 16;
-    output.writeUInt32LE(peakBucketSamples * 4 ** index, entry);
+    output.writeUInt32LE(peakLevels[index]!, entry);
     output.writeUInt32LE(pairs.length / 2, entry + 4);
     output.writeUInt32LE(offset, entry + 8);
     output.writeUInt32LE(pairs.length * 2, entry + 12);

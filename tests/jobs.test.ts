@@ -16,17 +16,21 @@ test("jobs reject skipped and terminal transitions and validate progress", () =>
   );
 });
 
-test("cancellation settles only after cleanup and cannot complete or fail late", () => {
+test("cancellation cannot complete successfully or restart after it settles", () => {
   for (const start of ["queued", "running"] as const) {
     const job = createJobMachine();
     if (start === "running")
       job.transition({ status: "running", progress: 0.3 });
     job.transition({ status: "cancelling", progress: job.state.progress });
     expect(() => job.transition({ status: "done", progress: 1 })).toThrow();
-    expect(() =>
-      job.transition({ status: "failed", progress: 0, error: "late" }),
-    ).toThrow();
     job.transition({ status: "cancelled", progress: job.state.progress });
     expect(() => job.transition({ status: "running", progress: 0 })).toThrow();
   }
+});
+
+test("cancellation cleanup failures remain visible as failed jobs", () => {
+  const job = createJobMachine();
+  job.transition({ status: "cancelling", progress: 0 });
+  job.transition({ status: "failed", progress: 0, error: "Cleanup refused" });
+  expect(job.state.status).toBe("failed");
 });

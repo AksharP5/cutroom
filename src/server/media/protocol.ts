@@ -1,27 +1,49 @@
 import { z } from "zod";
+import { mediaSettings } from "./settings";
 
-export const MediaKindSchema = z.enum(["peaks", "filmstrip"]);
+export const MediaKindSchema = z.enum(["probe", "peaks", "filmstrip", "frame"]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
-export const MediaTaskSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("cancel") }),
-  z.object({
-    type: z.literal("generate"),
-    kind: MediaKindSchema,
-    source: z.string(),
-    directory: z.string(),
-    ffmpeg: z.string(),
-  }),
-]);
+export const MediaInfoSchema = z.object({
+  channels: z.number().int().positive().optional(),
+  video: z
+    .object({
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+      pixelAspect: z.number().positive(),
+      fps: z.number().positive(),
+      duration: z.number().nonnegative(),
+    })
+    .optional(),
+});
+export const MediaTaskSchema = z.object({
+  kind: MediaKindSchema,
+  source: z.string(),
+  directory: z.string(),
+  ffmpeg: z.string(),
+  ffprobe: z.string(),
+  info: MediaInfoSchema.optional(),
+  time: z.number().nonnegative().optional(),
+});
+export type MediaTask = z.infer<typeof MediaTaskSchema>;
 export const MediaEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("done") }),
   z.object({ type: z.literal("error"), error: z.string() }),
 ]);
 export const FilmstripSchema = z.object({
-  version: z.literal(1),
-  interval: z.literal(2),
-  tileWidth: z.literal(160),
-  tileHeight: z.literal(90),
-  count: z.number().int().positive().max(3600),
-  columns: z.number().int().positive().max(10),
-  rows: z.number().int().positive(),
+  version: z.literal(2),
+  interval: z.literal(mediaSettings.filmstripInterval),
+  tileWidth: z.number().int().positive(),
+  tileHeight: z.literal(mediaSettings.tileHeight),
+  count: z.number().int().positive(),
+  sheets: z
+    .array(
+      z.object({
+        index: z.number().int().nonnegative(),
+        start: z.number().int().nonnegative(),
+        count: z.number().int().positive().max(mediaSettings.tilesPerSheet),
+        columns: z.number().int().positive().max(mediaSettings.columns),
+        rows: z.number().int().positive(),
+      }),
+    )
+    .min(1),
 });

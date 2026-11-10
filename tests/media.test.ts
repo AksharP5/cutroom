@@ -38,10 +38,10 @@ async function ready(request: () => Promise<Response> | Response) {
 const PendingSchema = z.object({ key: z.string(), job: JobStateSchema });
 
 test("PCM extrema survive chunk boundaries, partial buckets, and every mip", async () => {
-  const pcm = Buffer.alloc(481 * 2);
+  const pcm = Buffer.alloc(97 * 2);
   pcm.writeInt16LE(-32768, 0);
-  pcm.writeInt16LE(32767, 958);
-  pcm.writeInt16LE(-123, 960);
+  pcm.writeInt16LE(32767, 190);
+  pcm.writeInt16LE(-123, 192);
   const bytes = await encodePeaks(
     new ReadableStream({
       start(controller) {
@@ -53,16 +53,16 @@ test("PCM extrema survive chunk boundaries, partial buckets, and every mip", asy
     }),
   );
   expect(bytes.toString("ascii", 0, 4)).toBe("CRPK");
-  expect(bytes.readUInt32LE(4)).toBe(1);
-  expect(bytes.readDoubleLE(16)).toBe(481);
+  expect(bytes.readUInt32LE(4)).toBe(2);
+  expect(bytes.readDoubleLE(16)).toBe(97);
   expect(bytes.readUInt32LE(36)).toBe(2);
-  expect(bytes.readInt16LE(96)).toBe(-32768);
-  expect(bytes.readInt16LE(98)).toBe(32767);
-  expect(bytes.readInt16LE(100)).toBe(-123);
-  expect(bytes.readInt16LE(102)).toBe(-123);
-  for (let level = 1; level < 4; level++) {
+  expect(bytes.readInt16LE(bytes.readUInt32LE(40))).toBe(-32768);
+  expect(bytes.readInt16LE(bytes.readUInt32LE(40) + 2)).toBe(32767);
+  expect(bytes.readInt16LE(bytes.readUInt32LE(40) + 4)).toBe(-123);
+  expect(bytes.readInt16LE(bytes.readUInt32LE(40) + 6)).toBe(-123);
+  for (let level = 1; level < bytes.readUInt32LE(8); level++) {
     const entry = 32 + 16 * level;
-    expect(bytes.readUInt32LE(entry)).toBe(480 * 4 ** level);
+    expect(bytes.readUInt32LE(entry)).toBe(96 * 4 ** level);
     expect(bytes.readUInt32LE(entry + 4)).toBe(1);
     const offset = bytes.readUInt32LE(entry + 8);
     expect(bytes.readInt16LE(offset)).toBe(-32768);
@@ -116,8 +116,8 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       );
       const bytes = Buffer.from(await peaks.arrayBuffer());
       expect(bytes.toString("ascii", 0, 4)).toBe("CRPK");
-      expect(bytes.readUInt32LE(36)).toBe(410);
-      expect(bytes.length).toBeLessThan(2500);
+      expect(bytes.readUInt32LE(36)).toBe(2050);
+      expect(bytes.length).toBeLessThan(12000);
       const etag = peaks.headers.get("etag")!;
       expect(
         (
@@ -132,12 +132,16 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       expect(filmstrip.status).toBe(200);
       const metadata = FilmstripSchema.extend({
         key: z.string(),
-        spriteUrl: z.string(),
+        sheets: z.array(
+          FilmstripSchema.shape.sheets.element.extend({
+            spriteUrl: z.string(),
+          }),
+        ),
       }).parse(await filmstrip.json());
       expect(metadata.count).toBe(3);
-      expect(metadata.columns).toBe(3);
-      expect(metadata.rows).toBe(1);
-      const sprite = await fixture.app.request(metadata.spriteUrl);
+      expect(metadata.sheets[0]!.columns).toBe(3);
+      expect(metadata.sheets[0]!.rows).toBe(1);
+      const sprite = await fixture.app.request(metadata.sheets[0]!.spriteUrl);
       expect(sprite.status).toBe(200);
       expect(sprite.headers.get("cache-control")).toContain("immutable");
       const image = Buffer.from(await sprite.arrayBuffer());
@@ -235,14 +239,19 @@ test.skipIf(!Bun.which("ffmpeg"))(
       workerPath,
       `
 import { appendFile } from "node:fs/promises";
-let cancelled = false;
-self.onmessage = async ({data}) => {
-  if (data.type === "cancel") { cancelled = true; return; }
-  await appendFile(${JSON.stringify(eventsPath)}, JSON.stringify({type:"start",source:data.source})+"\\n");
-  while (!cancelled) await Bun.sleep(5);
-  await appendFile(${JSON.stringify(eventsPath)}, JSON.stringify({type:"stop",source:data.source})+"\\n");
-  self.postMessage({type:"error", error:"cancelled"});
-};`,
+import {join} from "node:path";
+const data = await Bun.stdin.json();
+if(data.kind === "probe") {
+ await Bun.write(join(data.directory,"probe.json"),JSON.stringify({channels:1}));
+ console.log(JSON.stringify({type:"done"}));
+} else {
+ let cancelled=false;
+ process.on("SIGTERM",()=>{cancelled=true;});
+ await appendFile(${JSON.stringify(eventsPath)}, JSON.stringify({type:"start",source:data.source})+"\\n");
+ while (!cancelled) await Bun.sleep(5);
+ await appendFile(${JSON.stringify(eventsPath)}, JSON.stringify({type:"stop",source:data.source})+"\\n");
+ console.log(JSON.stringify({type:"error",error:"cancelled"}));
+}`,
     );
     const media = createMediaService({
       workerUrl: new URL(`file://${workerPath}`),
@@ -251,6 +260,13 @@ self.onmessage = async ({data}) => {
       const project = await fixture.store.create({ name: "Media queue" });
       for (const name of ["one.wav", "two.wav", "three.wav"])
         await writeFile(join(project.path, name), "fixture");
+      for (const name of ["one.wav", "two.wav", "three.wav"]) {
+        let probe = await media.request(project, name, "probe");
+        while (!probe.artifact) {
+          await Bun.sleep(5);
+          probe = await media.request(project, name, "probe");
+        }
+      }
       const [one, duplicate] = await Promise.all([
         media.request(project, "one.wav", "peaks"),
         media.request(project, "one.wav", "peaks"),
@@ -282,7 +298,11 @@ self.onmessage = async ({data}) => {
       expect(events.some((event) => event.source.endsWith("three.wav"))).toBe(
         false,
       );
-      expect(await readdir(join(project.path, ".cutroom/cache"))).toEqual([]);
+      expect(
+        (await readdir(join(project.path, ".cutroom/cache"))).filter((name) =>
+          name.startsWith(".media-"),
+        ),
+      ).toEqual([]);
       await expect(media.request(project, "one.wav", "peaks")).rejects.toThrow(
         "shutting down",
       );
@@ -382,8 +402,10 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(result.state.status).toBe("done");
       const bytes = await readFile(result.artifact!);
       // The input sine has a known 1/8 full-scale amplitude, including at 6 kHz.
-      expect(bytes.readInt16LE(96)).toBeLessThan(-4000);
-      expect(bytes.readInt16LE(98)).toBeGreaterThan(4000);
+      expect(bytes.readInt16LE(bytes.readUInt32LE(40))).toBeLessThan(-4000);
+      expect(bytes.readInt16LE(bytes.readUInt32LE(40) + 2)).toBeGreaterThan(
+        4000,
+      );
     } finally {
       await media.dispose();
       await fixture.close();

@@ -16,7 +16,7 @@ export const jobTransitions = {
   running: ["running", "done", "failed", "cancelling"],
   done: [],
   failed: [],
-  cancelling: ["cancelled"],
+  cancelling: ["cancelled", "failed"],
   cancelled: [],
 } satisfies Record<JobState["status"], readonly JobState["status"][]>;
 

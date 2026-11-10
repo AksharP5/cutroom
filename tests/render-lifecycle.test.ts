@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createStudioApi } from "@hyperframes/studio-server";
+import { z } from "zod";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { createThumbnailRenderer } from "../src/server/hyperframes/thumbnails";
 
@@ -129,10 +131,78 @@ test("a malformed worker event fails the job and still reaps the worker", async 
     });
     await waitFor(() => state.status === "failed");
     await workers.cancelAll();
-    expect(state.status).toBe("failed");
+    expect(String(state.status)).toBe("failed");
     expect(state.error).toContain("Invalid");
   } finally {
     await workers.cancelAll();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the HTTP render-cancel route stops its worker without shutdown and propagates cleanup failure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-render-cancel-"));
+  const workerPath = join(directory, "worker.mjs");
+  await writeFile(
+    workerPath,
+    `import {writeFile} from 'node:fs/promises';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'partial');console.log('CUTROOM_RENDER:'+JSON.stringify({type:'progress',progress:1,stage:'ready'}));setInterval(()=>{},1000);`,
+  );
+  try {
+    for (const failCleanup of [false, true]) {
+      const workers = createRenderWorkers({
+        workerPath,
+        removeOutput: async (path) => {
+          if (failCleanup) throw new Error("Disk refused cleanup");
+          await rm(path, { force: true });
+        },
+      });
+      let state: ReturnType<typeof workers.start> | undefined;
+      const project = { id: "test", dir: directory };
+      const api = createStudioApi({
+        listProjects: () => [project],
+        resolveProject: () => project,
+        bundle: async () => null,
+        lint: () => ({ findings: [] }),
+        runtimeUrl: "/runtime.js",
+        rendersDir: () => directory,
+        generateThumbnail: async () => null,
+        startRender: (options) => {
+          state = workers.start(options);
+          return state;
+        },
+      });
+      api.onError((error, c) => c.json({ error: error.message }, 500));
+      try {
+        const response = await api.request("/projects/test/render", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(response.status).toBe(200);
+        const { jobId } = z
+          .object({ jobId: z.string() })
+          .parse(await response.json());
+        await waitFor(() => state?.stage === "ready");
+        if (!state) throw new Error("The HTTP route did not start a worker.");
+        const outputPath = state.outputPath;
+        const cancelled = await api.request(`/render/${jobId}/cancel`, {
+          method: "POST",
+        });
+        if (failCleanup) {
+          expect(cancelled.status).toBe(500);
+          expect(await cancelled.text()).toContain("Disk refused cleanup");
+          expect(state.status).toBe("failed");
+          expect(state.error).toContain("Disk refused cleanup");
+          expect(existsSync(outputPath)).toBe(true);
+        } else {
+          expect(cancelled.status).toBe(200);
+          expect(await cancelled.json()).toEqual({ status: "cancelled" });
+          expect(existsSync(outputPath)).toBe(false);
+        }
+      } finally {
+        await workers.cancelAll().catch(() => {});
+      }
+    }
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
