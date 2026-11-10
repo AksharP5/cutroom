@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { connectLocalServer } from "../src/desktop/runtime";
+import { browserExecutable } from "../src/server/hyperframes/render";
+import { captureFixture } from "./capture-fixture";
 
 async function waitForPid(path: string) {
   const deadline = Date.now() + 5000;
@@ -107,3 +109,64 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
   },
   30_000,
 );
+
+for (const quit of ["normal", "SIGKILL"] as const) {
+  test.skipIf(
+    process.env.CUTROOM_TEST_DESKTOP !== "1" ||
+      process.platform !== "linux" ||
+      !browserExecutable(),
+  )(
+    `${quit} quit of the native app after a capture leaves no backend, Chromium, or profile`,
+    async () => {
+      const fixture = await captureFixture();
+      const { _electron } = await import("@playwright/test");
+      const application = await _electron.launch({
+        executablePath: join(
+          import.meta.dir,
+          "../node_modules/electron/dist/electron",
+        ),
+        args: [join(import.meta.dir, "../dist-desktop/main.cjs")],
+        env: {
+          ...Object.fromEntries(
+            Object.entries(fixture.env).filter(
+              (entry): entry is [string, string] =>
+                typeof entry[1] === "string",
+            ),
+          ),
+          ELECTRON_RUN_AS_NODE: "",
+          CUTROOM_ROOT: join(import.meta.dir, ".."),
+          CUTROOM_MUTE_AUDIO: "1",
+        },
+      });
+      const child = application.process();
+      let backend: number | undefined;
+      try {
+        await fixture.capture();
+        const children = await readFile(
+          `/proc/${child.pid}/task/${child.pid}/children`,
+          "utf8",
+        );
+        for (const pid of children.trim().split(/\s+/)) {
+          const command = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(
+            () => "",
+          );
+          if (command.includes("src/server/index.ts")) backend = Number(pid);
+        }
+        if (!backend)
+          throw new Error("The desktop did not own a backend process.");
+        const closed = application.waitForEvent("close");
+        if (quit === "normal")
+          await application.evaluate(({ app }) => app.quit());
+        else child.kill("SIGKILL");
+        await closed;
+        await fixture.expectStopped();
+        expect(processExists(backend)).toBe(false);
+      } finally {
+        await application.close().catch(() => {});
+        if (backend && processExists(backend)) process.kill(backend, "SIGKILL");
+        await fixture.close();
+      }
+    },
+    30_000,
+  );
+}

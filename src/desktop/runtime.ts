@@ -73,7 +73,7 @@ export async function connectLocalServer(options: {
     (bundledBun && existsSync(bundledBun) ? bundledBun : "bun");
   const child = spawn(bun, [join(options.root, "src/server/index.ts")], {
     cwd: options.root,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     env: {
       ...env,
       CUTROOM_PORT: new URL(options.baseUrl).port,
@@ -93,8 +93,8 @@ export async function connectLocalServer(options: {
   const record = (bytes: Buffer) => {
     diagnostics = (diagnostics + bytes.toString()).slice(-8000);
   };
-  child.stdout.on("data", record);
-  child.stderr.on("data", record);
+  child.stdout?.on("data", record);
+  child.stderr?.on("data", record);
   const exited = new Promise<void>((done) => child.once("close", () => done()));
   let stopped = false;
   const stop = async () => {
