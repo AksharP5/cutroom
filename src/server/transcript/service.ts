@@ -383,17 +383,6 @@ export function createTranscriptService(
         },
       };
       const controller = new AbortController();
-      controller.signal.addEventListener(
-        "abort",
-        () => {
-          if (machine.state.status === "running")
-            machine.transition({
-              status: "cancelling",
-              progress: machine.state.progress,
-            });
-        },
-        { once: true },
-      );
       jobs.set(job.id, job);
       controllers.set(job.id, controller);
       const run = (async () => {
@@ -447,9 +436,14 @@ export function createTranscriptService(
             controller.signal,
           );
           job.transcriptId = transcript.id;
-
           job.message = `Transcribed ${words.length} words`;
         } catch (error) {
+          // A completed history write wins a late abort; only an interrupted operation cancels.
+          if (controller.signal.aborted)
+            machine.transition({
+              status: "cancelling",
+              progress: machine.state.progress,
+            });
           failure = error instanceof Error ? error.message : String(error);
           job.error = failure;
           job.message = controller.signal.aborted

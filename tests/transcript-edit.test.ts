@@ -944,3 +944,63 @@ test("malformed media URLs do not hide valid footage or escape the import bounda
     await fixture.close();
   }
 });
+
+test("a cancellation arriving after a transcript write commits still reports its successful import", async () => {
+  const fixture = await projectFixture();
+  const entered = gate();
+  const engine = gate();
+  const service = createTranscriptService(fixture.store, {
+    availability: async () => installedWhisper,
+    transcribe: async (options) => {
+      if (!options.dir) throw new Error("Expected a scratch directory.");
+      const transcriptPath = join(options.dir, "words.json");
+      await writeFile(transcriptPath, JSON.stringify(words));
+      entered.release();
+      await engine.waiting;
+      return {
+        kind: "transcribed",
+        engine: "whisper",
+        model: "small.en",
+        detectedLanguage: "en",
+        wordCount: words.length,
+        durationSeconds: 10,
+        speechOnsetSeconds: 2,
+        transcriptPath,
+      };
+    },
+  });
+  try {
+    const project = await fixture.store.create({
+      name: "Committed transcription",
+    });
+    await writeFile(join(project.path, "index.html"), source);
+    await writeFile(join(project.path, "footage.mp4"), "unchanged source");
+    const job = await service.start(project, {
+      mediaPath: "footage.mp4",
+      sourceFile: "index.html",
+      elementId: "footage",
+      language: "en",
+    });
+    await entered.waiting;
+    const writeDocument = fixture.store.writeDocument;
+    fixture.store.writeDocument = async (...args) => {
+      await writeDocument(...args);
+      service.cancel(job.id);
+    };
+    engine.release();
+    const deadline = performance.now() + 3000;
+    while (job.status === "running") {
+      if (performance.now() > deadline)
+        throw new Error("The committed job did not settle.");
+      await Bun.sleep(5);
+    }
+    expect((await fixture.store.document(project)).transcripts).toHaveLength(1);
+    expect(job.status).toBe("complete");
+    expect(job.progress).toBe(1);
+    expect(job.transcriptId).toBeString();
+  } finally {
+    engine.release();
+    await service.dispose();
+    await fixture.close();
+  }
+});
