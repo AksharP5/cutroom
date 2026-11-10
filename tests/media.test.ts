@@ -38,10 +38,10 @@ async function ready(request: () => Promise<Response> | Response) {
 const PendingSchema = z.object({ key: z.string(), job: JobStateSchema });
 
 test("PCM extrema survive chunk boundaries, partial buckets, and every mip", async () => {
-  const pcm = Buffer.alloc(81 * 2);
+  const pcm = Buffer.alloc(481 * 2);
   pcm.writeInt16LE(-32768, 0);
-  pcm.writeInt16LE(32767, 158);
-  pcm.writeInt16LE(-123, 160);
+  pcm.writeInt16LE(32767, 958);
+  pcm.writeInt16LE(-123, 960);
   const bytes = await encodePeaks(
     new ReadableStream({
       start(controller) {
@@ -54,7 +54,7 @@ test("PCM extrema survive chunk boundaries, partial buckets, and every mip", asy
   );
   expect(bytes.toString("ascii", 0, 4)).toBe("CRPK");
   expect(bytes.readUInt32LE(4)).toBe(1);
-  expect(bytes.readDoubleLE(16)).toBe(81);
+  expect(bytes.readDoubleLE(16)).toBe(481);
   expect(bytes.readUInt32LE(36)).toBe(2);
   expect(bytes.readInt16LE(96)).toBe(-32768);
   expect(bytes.readInt16LE(98)).toBe(32767);
@@ -62,7 +62,7 @@ test("PCM extrema survive chunk boundaries, partial buckets, and every mip", asy
   expect(bytes.readInt16LE(102)).toBe(-123);
   for (let level = 1; level < 4; level++) {
     const entry = 32 + 16 * level;
-    expect(bytes.readUInt32LE(entry)).toBe(80 * 4 ** level);
+    expect(bytes.readUInt32LE(entry)).toBe(480 * 4 ** level);
     expect(bytes.readUInt32LE(entry + 4)).toBe(1);
     const offset = bytes.readUInt32LE(entry + 8);
     expect(bytes.readInt16LE(offset)).toBe(-32768);
@@ -348,6 +348,42 @@ test.skipIf(!Bun.which("ffmpeg"))(
           name.startsWith(".media-"),
         ),
       ).toEqual([]);
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "waveform extrema retain audible high frequencies before bucket reduction",
+  async () => {
+    const fixture = await projectFixture();
+    const media = createMediaService();
+    try {
+      const project = await fixture.store.create({
+        name: "High-frequency waveform",
+      });
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=6000:sample_rate=48000:duration=0.1",
+        join(project.path, "tone.wav"),
+      ]);
+      let result = await media.request(project, "tone.wav", "peaks");
+      const deadline = performance.now() + 5000;
+      while (!result.artifact && result.state.status !== "failed") {
+        if (performance.now() > deadline)
+          throw new Error("The peaks did not finish.");
+        await Bun.sleep(10);
+        result = await media.request(project, "tone.wav", "peaks");
+      }
+      expect(result.state.status).toBe("done");
+      const bytes = await readFile(result.artifact!);
+      // The input sine has a known 1/8 full-scale amplitude, including at 6 kHz.
+      expect(bytes.readInt16LE(96)).toBeLessThan(-4000);
+      expect(bytes.readInt16LE(98)).toBeGreaterThan(4000);
     } finally {
       await media.dispose();
       await fixture.close();

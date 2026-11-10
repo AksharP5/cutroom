@@ -62,14 +62,14 @@ The service shares concurrent requests for the same key and admits two worker th
 
 The cache lives in `<project>/.cutroom/cache/<key>/`. Its SHA-256 key includes the recipe version, output kind, canonical media path, size, nanosecond mtime, and ctime. This file fingerprint avoids reading an entire large video before a warm response. It invalidates on edits, replacements, and moves, even when a replacement preserves mtime. It is not a byte-content hash, so identical copies can produce separate entries. The source fingerprint is checked again before publishing. Completed directories appear by atomic rename; temporary frames never remain in the cache. Old entries are disposable and are not automatically evicted yet. Failed jobs are remembered in memory, up to 256 entries, to prevent every poll from restarting FFmpeg. A source change or service restart permits another attempt.
 
-Peaks decode the first audio stream to mono signed 16-bit PCM at 8 kHz. The base level contains one min/max pair per 80 samples, or 100 pairs per second. Three additional levels reduce groups of four pairs by their extrema. The final partial bucket and partial mip groups retain their samples. The binary format is little-endian:
+Peaks decode the first audio stream to mono signed 16-bit PCM at 48 kHz. The base level contains one min/max pair per 480 samples, or 100 pairs per second. Three additional levels reduce groups of four pairs by their extrema. The final partial bucket and partial mip groups retain their samples. The binary format is little-endian:
 
 | Byte offset | Field                                                                                                |
 | ----------- | ---------------------------------------------------------------------------------------------------- |
 | 0           | ASCII `CRPK`                                                                                         |
 | 4           | uint32 version, currently 1                                                                          |
 | 8           | uint32 level count, currently 4                                                                      |
-| 12          | uint32 decoded sample rate, currently 8000                                                           |
+| 12          | uint32 decoded sample rate, currently 48000                                                          |
 | 16          | float64 total decoded sample count                                                                   |
 | 24          | uint32 base bucket sample count, currently 80                                                        |
 | 28          | uint32 reserved, currently 0                                                                         |

@@ -1,5 +1,5 @@
-export const peakSampleRate = 8000;
-export const peakBucketSamples = 80;
+export const peakSampleRate = 48000;
+export const peakBucketSamples = 480;
 const mipCount = 4;
 const headerBytes = 32 + mipCount * 16;
 
