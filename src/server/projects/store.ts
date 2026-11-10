@@ -271,16 +271,9 @@ export async function createProjectStore(options: {
       expectedVersion: fileContentVersion(before),
     };
   };
-  const writeDocument = async (
-    project: Project,
-    value: ProjectDocument,
-    additional: FileMutationInput[] = [],
-  ) => {
-    ProjectDocumentSchema.parse(value);
-    const mutation = await documentMutation(project, value);
+  const writeFiles = (project: Project, mutations: FileMutationInput[]) => {
     try {
-      applyFileMutations(project.path, [...additional, mutation]);
-      documentReads.set(value, mutation.after);
+      applyFileMutations(project.path, mutations);
     } catch (error) {
       if (
         error instanceof Error &&
@@ -293,6 +286,16 @@ export async function createProjectStore(options: {
       throw error;
     }
   };
+  const writeDocument = async (
+    project: Project,
+    value: ProjectDocument,
+    additional: FileMutationInput[] = [],
+  ) => {
+    ProjectDocumentSchema.parse(value);
+    const mutation = await documentMutation(project, value);
+    writeFiles(project, [...additional, mutation]);
+    documentReads.set(value, mutation.after);
+  };
   return {
     dataDir,
     projectsDir,
@@ -304,6 +307,7 @@ export async function createProjectStore(options: {
     mutate,
     document,
     writeDocument,
+    writeFiles,
     async create(raw: CreateProjectInput) {
       return track(async () => {
         const input = CreateProjectSchema.parse(raw);

@@ -1,0 +1,854 @@
+import { parseFpsWithDefault } from "@hyperframes/core";
+import {
+  DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
+  isSubCompositionHost,
+  parseNumeric,
+  readClipTiming,
+  readMediaOffsetSeconds,
+  readPlaybackRate,
+  resolveMediaDuration,
+  scanHtmlOpeningTags,
+  topLevelElements,
+} from "@hyperframes/parsers";
+import type { ClipTiming, HtmlOpeningTagSpan } from "@hyperframes/parsers";
+import { defaultTreeAdapter, parse } from "parse5";
+import type { DefaultTreeAdapterTypes } from "parse5";
+import {
+  TimelineError,
+  canonicalSeconds,
+  frameTime,
+  normalizeTimeline,
+  toFrames,
+  toSeconds,
+} from "../../shared/timeline/apply";
+import type { ClipOrigin } from "../../shared/timeline/apply";
+import type {
+  Clip,
+  ClipKind,
+  Fps,
+  InsertClip,
+  Timeline,
+  TimelineSettings,
+} from "../../shared/timeline/schema";
+
+/** One element of the source, located by byte offsets so edits can leave everything else untouched. */
+interface SourceRange {
+  start: number;
+  end: number;
+  /** The bytes the node itself writes: an element's start and end tags, or a text node's text. */
+  own: [number, number][];
+}
+
+interface OwnedBytes {
+  start: number;
+  end: number;
+  /** The owning node's index in `nodes`. */
+  node: number;
+  /** The largest `end` among this range and every range sorted before it. */
+  reach: number;
+}
+
+interface SourceElement {
+  tag: string;
+  attrs: Record<string, string>;
+  children: SourceElement[];
+  /** A `<template>`'s inert content, outside the live tree. */
+  content: SourceElement[];
+  start: number;
+  openEnd: number;
+  end: number;
+  /** Its position among the located nodes, in tree order. */
+  index: number;
+  /** Elements and text nodes the spec tree places inside it. */
+  inner: number;
+}
+
+export interface ParsedComposition {
+  html: string;
+  timeline: Timeline;
+  root: SourceElement;
+  rootDurationAuthored: boolean;
+  elements: Map<string, SourceElement>;
+  /** Clips without an id attribute, which carry a positional stand-in id. */
+  anonymous: Set<string>;
+  ids: Set<string>;
+  scriptsAndStyles: string[];
+  /** Source offsets of every element and text node, sorted. */
+  /** Source range of every element (start tag through end tag) and text node, in tree order. */
+  nodes: SourceRange[];
+  /**
+   * Every node's own bytes, sorted by start. Ranges can overlap: text the parser fosters out of a
+   * table merges into the text before it, so that text node's range spans the table's tags.
+   */
+  owned: OwnedBytes[];
+}
+
+/**
+ * The HTML spec tree (parse5) with source offsets. Elements the parser implied, such as a missing
+ * `<body>`, have no source and their children take their place.
+ */
+function parseElements(html: string) {
+  const nodes: SourceRange[] = [];
+  const visit = (children: DefaultTreeAdapterTypes.ChildNode[]) => {
+    const elements: SourceElement[] = [];
+    for (const node of children) {
+      if (defaultTreeAdapter.isTextNode(node)) {
+        const location = node.sourceCodeLocation;
+        if (location)
+          nodes.push({
+            start: location.startOffset,
+            end: location.endOffset,
+            own: [[location.startOffset, location.endOffset]],
+          });
+        continue;
+      }
+      if (!defaultTreeAdapter.isElementNode(node)) continue;
+      const location = node.sourceCodeLocation;
+      if (!location?.startTag) {
+        elements.push(...visit(node.childNodes));
+        continue;
+      }
+      const index = nodes.length;
+      const { startTag, endTag } = location;
+      nodes.push({
+        start: location.startOffset,
+        end: location.endOffset,
+        own: [
+          [startTag.startOffset, startTag.endOffset],
+          ...(endTag
+            ? [[endTag.startOffset, endTag.endOffset] as [number, number]]
+            : []),
+        ],
+      });
+      const inert = "content" in node;
+      const inside = visit(inert ? node.content.childNodes : node.childNodes);
+      elements.push({
+        tag: node.tagName,
+        attrs: Object.fromEntries(
+          node.attrs.map((attribute) => [attribute.name, attribute.value]),
+        ),
+        children: inert ? [] : inside,
+        content: inert ? inside : [],
+        start: location.startOffset,
+        openEnd: location.startTag.endOffset,
+        end: location.endOffset,
+        index,
+        inner: nodes.length - index - 1,
+      });
+    }
+    return elements;
+  };
+  const roots = visit(parse(html, { sourceCodeLocationInfo: true }).childNodes);
+  let reach = 0;
+  const owned = nodes
+    .flatMap((node, index) =>
+      node.own.map(([start, end]) => ({ start, end, node: index })),
+    )
+    .sort((a, b) => a.start - b.start)
+    .map((range) => {
+      reach = Math.max(reach, range.end);
+      return { ...range, reach };
+    });
+  return { roots, nodes, owned };
+}
+
+function* descendants(elements: SourceElement[]): Generator<SourceElement> {
+  for (const element of elements) {
+    yield element;
+    yield* descendants(element.children);
+  }
+}
+
+function clipKind(element: SourceElement): ClipKind {
+  if (element.tag === "video" || element.tag === "audio") return element.tag;
+  if (element.tag === "img") return "image";
+  return isSubCompositionHost(element) ? "composition" : "element";
+}
+
+/**
+ * The source time at a clip's first shown frame. An authored start between frames shifts it by the
+ * gap to that frame; a start the editor wrote, within a microsecond of the frame, does not, so the
+ * offset never depends on how the start was rounded. A start a hair past a frame shows from that
+ * frame, before the source begins, and a media element seeks a negative time to 0.
+ */
+function sourceAtFirstFrame(
+  authored: number,
+  untilFirstFrame: number,
+  playbackRate: number,
+): number {
+  const shift = Math.abs(untilFirstFrame) <= 1e-6 ? 0 : untilFirstFrame;
+  return Math.max(0, canonicalSeconds(authored + shift * playbackRate)) + 0;
+}
+
+const sourceOf = (element: SourceElement) =>
+  element.attrs.src ??
+  element.children.find((child) => child.tag === "source")?.attrs.src ??
+  null;
+
+/**
+ * How HyperFrames loads a composition file. The project's entry document renders its live tree, as
+ * the browser builds it, so `<template>` content there is inert. Any other file is loaded as a
+ * sub-composition, whose content is its first live `<template>` when it has one.
+ */
+export type CompositionScope = "document" | "sub-composition";
+export const compositionScope = (path: string): CompositionScope =>
+  path === "index.html" ? "document" : "sub-composition";
+
+/** The elements a composition renders in its scope; projection, readback, and media all use it. */
+function scopeElements(
+  roots: SourceElement[],
+  scope: CompositionScope,
+): SourceElement[] {
+  const live = [...descendants(roots)];
+  const template =
+    scope === "sub-composition"
+      ? live.find((element) => element.tag === "template")
+      : undefined;
+  return template ? [...descendants(template.content)] : live;
+}
+
+/** Media files whose length the projection needs, as authored `src` values. */
+export function mediaSources(html: string, scope: CompositionScope): string[] {
+  return [
+    ...new Set(
+      scopeElements(parseElements(html).roots, scope)
+        .filter((element) => element.tag === "video" || element.tag === "audio")
+        .flatMap((element) => sourceOf(element) ?? []),
+    ),
+  ];
+}
+
+/** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
+export function parseComposition(
+  html: string,
+  settings: TimelineSettings,
+  {
+    scope = "document",
+    mediaLengths = new Map(),
+  }: {
+    scope?: CompositionScope;
+    /** Measured source lengths in seconds, by `src`. */
+    mediaLengths?: ReadonlyMap<string, number>;
+  } = {},
+): ParsedComposition {
+  const { roots, nodes, owned } = parseElements(html);
+  const rootOf = (elements: SourceElement[]) =>
+    elements.find(
+      (element) =>
+        element.attrs["data-root"] === "true" &&
+        element.attrs["data-composition-id"] !== undefined,
+    ) ??
+    elements.find(
+      (element) => element.attrs["data-composition-id"] !== undefined,
+    );
+  const all = scopeElements(roots, scope);
+  const root = rootOf(all);
+  if (!root)
+    throw new TimelineError(
+      "unsupported",
+      scope === "document"
+        ? "This file has no live element with data-composition-id."
+        : "This sub-composition has no element with data-composition-id.",
+    );
+  const parsedFps = parseFpsWithDefault(root.attrs["data-fps"]);
+  const fps: Fps = parsedFps.ok ? parsedFps.value : { num: 30, den: 1 };
+  const byId = new Map<string, SourceElement>();
+  for (const element of all)
+    if (element.attrs.id && !byId.has(element.attrs.id))
+      byId.set(element.attrs.id, element);
+  const lengthOf = (element: SourceElement) => {
+    if (element.tag !== "video" && element.tag !== "audio") return null;
+    const src = sourceOf(element);
+    return src ? (mediaLengths.get(src) ?? null) : null;
+  };
+
+  type Timing = ClipTiming & { begin: number; finish: number | null };
+  const timings = new Map<SourceElement, Timing>();
+  const resolving = new Set<SourceElement>();
+  const timing = (element: SourceElement): Timing => {
+    const known = timings.get(element);
+    if (known) return known;
+    resolving.add(element);
+    const attribute = (name: string) => element.attrs[name] ?? null;
+    const read = readClipTiming(
+      { getAttribute: attribute },
+      {
+        resolveReferenceEnd: (refId) => {
+          const target = byId.get(refId);
+          // A reference cycle resolves to nothing, as in the runtime.
+          if (!target || resolving.has(target)) return null;
+          const resolved = timing(target);
+          return resolved.finish ?? resolved.begin;
+        },
+      },
+    );
+    resolving.delete(element);
+    const begin = read.start ?? 0;
+    const kind = clipKind(element);
+    const duration =
+      read.duration ??
+      (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null) ??
+      (kind === "video" || kind === "audio"
+        ? resolveMediaDuration({
+            tag: kind,
+            authoredDurationSeconds: null,
+            sourceDurationSeconds: lengthOf(element),
+            mediaStartSeconds: readMediaOffsetSeconds(attribute),
+            playbackRate: readPlaybackRate(attribute),
+          }).seconds
+        : null);
+    const result = {
+      ...read,
+      begin,
+      finish: duration === null ? null : begin + duration,
+    };
+    timings.set(element, result);
+    return result;
+  };
+
+  const rows: {
+    id: string;
+    element: SourceElement;
+    read: Timing;
+    start: number;
+    end: number;
+  }[] = [];
+  const clipIds = new Map<SourceElement, string>();
+  const used = new Set<string>();
+  const anonymous = new Set<string>();
+  let synthetic = 0;
+  for (const element of topLevelElements(root)) {
+    if (element.attrs["data-start"] === undefined) continue;
+    const read = timing(element);
+    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
+    if (read.finish === null)
+      throw new TimelineError(
+        "unsupported",
+        element.tag === "video" || element.tag === "audio"
+          ? `Clip ${name} has no data-duration and its media length could not be measured.`
+          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
+      );
+    if (read.trackIndex < 0)
+      throw new TimelineError(
+        "unsupported",
+        `Clip ${name} has a negative data-track-index.`,
+      );
+    const start = toFrames(read.begin, fps);
+    const end = toFrames(read.finish, fps);
+    // Shorter than a frame is never on screen, and the editor cannot address it.
+    if (end <= start) continue;
+    // Clips without a unique id get a positional stand-in; edits locate them by offset, not id.
+    let id = element.attrs.id || element.attrs["data-hf-id"];
+    while (!id || used.has(id) || (id !== element.attrs.id && byId.has(id)))
+      id = `clip-${++synthetic}`;
+    if (!element.attrs.id) anonymous.add(id);
+    used.add(id);
+    clipIds.set(element, id);
+    rows.push({ id, element, read, start, end });
+  }
+
+  const clips = rows.map(({ id, element, read, start, end }): Clip => {
+    const kind = clipKind(element);
+    const attribute = (name: string) => element.attrs[name] ?? null;
+    const reference =
+      read.startExpression?.kind === "reference" && read.start !== null
+        ? byId.get(read.startExpression.refId)
+        : undefined;
+    const referenced = reference && clipIds.get(reference);
+    const referencedEnd = reference && timing(reference).finish;
+    const volume = parseNumeric(element.attrs["data-volume"]);
+    const playbackRate = readPlaybackRate(attribute);
+    return {
+      id,
+      track: read.trackIndex,
+      kind,
+      start,
+      duration: end - start,
+      mediaStart:
+        kind === "video" || kind === "audio" || kind === "composition"
+          ? sourceAtFirstFrame(
+              readMediaOffsetSeconds(attribute),
+              frameTime(start, fps) - read.begin,
+              playbackRate,
+            )
+          : null,
+      playbackRate,
+      src:
+        kind === "composition"
+          ? (element.attrs["data-composition-src"] ?? null)
+          : kind === "element"
+            ? null
+            : sourceOf(element),
+      sourceDuration: lengthOf(element),
+      link: element.attrs["data-link"] || null,
+      label:
+        element.attrs["data-timeline-label"] ??
+        element.attrs["data-label"] ??
+        null,
+      volume: volume !== null && volume >= 0 ? volume : null,
+      startRef:
+        referenced && typeof referencedEnd === "number"
+          ? {
+              clipId: referenced,
+              offset: start - toFrames(referencedEnd, fps),
+            }
+          : null,
+    };
+  });
+
+  const rootDuration = parseNumeric(root.attrs["data-duration"]);
+  const rootDurationAuthored = rootDuration !== null && rootDuration > 0;
+  const timeline = normalizeTimeline({
+    fps,
+    duration: rootDurationAuthored
+      ? toFrames(rootDuration, fps)
+      : clips.reduce(
+          (max, clip) => Math.max(max, clip.start + clip.duration),
+          0,
+        ),
+    tracks: settings.tracks,
+    clips,
+    markers: settings.markers.map(({ time, duration, ...marker }) => ({
+      ...marker,
+      frame: toFrames(time, fps),
+      duration: toFrames(duration, fps),
+    })),
+    range: {
+      in: settings.range.in === null ? null : toFrames(settings.range.in, fps),
+      out:
+        settings.range.out === null ? null : toFrames(settings.range.out, fps),
+    },
+  });
+  return {
+    html,
+    timeline,
+    root,
+    rootDurationAuthored,
+    elements: new Map(rows.map(({ id, element }) => [id, element])),
+    anonymous,
+    ids: new Set(byId.keys()),
+    nodes,
+    owned,
+    scriptsAndStyles: all
+      .filter((element) => element.tag === "script" || element.tag === "style")
+      .map((element) => html.slice(element.openEnd, element.end)),
+  };
+}
+
+export function settingsOf(timeline: Timeline): TimelineSettings {
+  const seconds = (frame: number | null) =>
+    frame === null ? null : toSeconds(frame, timeline.fps);
+  return {
+    tracks: timeline.tracks,
+    markers: timeline.markers.map(({ frame, duration, ...marker }) => ({
+      ...marker,
+      time: toSeconds(frame, timeline.fps),
+      duration: toSeconds(duration, timeline.fps),
+    })),
+    range: { in: seconds(timeline.range.in), out: seconds(timeline.range.out) },
+  };
+}
+
+interface Edit {
+  start: number;
+  end: number;
+  text: string;
+}
+type AttributeChange = readonly [name: string, value: string | null];
+
+function escapeAttribute(value: string, quote = '"'): string {
+  const escaped = value.replaceAll("&", "&amp;");
+  return quote === "'"
+    ? escaped.replaceAll("'", "&#39;")
+    : escaped.replaceAll('"', "&quot;");
+}
+
+function leadingSpace(html: string, at: number): number {
+  while (at > 0 && /[\t\n\f\r ]/.test(html[at - 1]!)) at--;
+  return at;
+}
+
+/**
+ * Attribute offsets of an element's opening tag. The attribute scanner must find a tag at the
+ * offsets the parser reported, or the tag is not edited.
+ */
+function openingTag(
+  spans: ReadonlyMap<number, HtmlOpeningTagSpan>,
+  element: SourceElement,
+  name: string,
+): HtmlOpeningTagSpan {
+  const span = spans.get(element.start);
+  if (!span?.closed || span.end !== element.openEnd)
+    throw new TimelineError(
+      "unsupported",
+      `Clip ${name}'s opening tag cannot be edited safely. Edit it in the source instead.`,
+    );
+  return span;
+}
+
+/**
+ * Index of the first owned range whose `reach` passes `offset`. No range before it can end after
+ * `offset`, and `reach` only grows, so the search is sound even though ends are not sorted.
+ */
+function firstReachingPast(owned: OwnedBytes[], offset: number): number {
+  let low = 0;
+  let high = owned.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (owned[middle]!.reach <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/**
+ * The end of an element that owns its source bytes: every start tag, end tag, and text there
+ * belongs to its subtree, and its whole subtree is there. Otherwise removing or copying those bytes
+ * would take markup the browser places elsewhere, like a `<div>` written inside a `<table>`, text
+ * merged into the text before it, or the `</b>` that closes a bold begun outside it.
+ */
+function elementEnd(
+  parsed: ParsedComposition,
+  element: SourceElement,
+  name: string,
+): number {
+  const last = element.index + element.inner;
+  const { nodes, owned } = parsed;
+  let foreign = nodes
+    .slice(element.index, last + 1)
+    .some((node) => node.start < element.start || node.end > element.end);
+  // Only ranges from the first that reaches past the element's start, up to its end, can overlap it.
+  for (
+    let at = firstReachingPast(owned, element.start);
+    !foreign && at < owned.length && owned[at]!.start < element.end;
+    at++
+  ) {
+    const range = owned[at]!;
+    foreign =
+      range.end > element.start &&
+      (range.node < element.index || range.node > last);
+  }
+  if (foreign)
+    throw new TimelineError(
+      "unsupported",
+      `Clip ${name} contains markup the browser places outside it, so it cannot be cut or removed here. Edit it in the source instead.`,
+    );
+  return element.end;
+}
+
+/** Rewrites only the named attributes, keeping their quoting and every other byte. */
+function attributeEdits(
+  span: HtmlOpeningTagSpan,
+  html: string,
+  changes: AttributeChange[],
+): Edit[] {
+  const edits: Edit[] = [];
+  let added = "";
+  for (const [name, value] of changes) {
+    const attribute = span.attributes.find((item) => item.name === name);
+    if (!attribute) {
+      if (value !== null) added += ` ${name}="${escapeAttribute(value)}"`;
+    } else if (value === null) {
+      edits.push({
+        start: leadingSpace(html, attribute.start),
+        end: attribute.end,
+        text: "",
+      });
+    } else if (
+      attribute.kind === "value" &&
+      (attribute.quote || /^[^\s"'=<>`&]+$/.test(value))
+    ) {
+      edits.push({
+        start: attribute.valueStart,
+        end: attribute.valueEnd,
+        text: escapeAttribute(value, attribute.quote),
+      });
+    } else {
+      edits.push({
+        start: attribute.start,
+        end: attribute.end,
+        text: `${name}="${escapeAttribute(value)}"`,
+      });
+    }
+  }
+  if (added) {
+    const at = span.attributes.at(-1)?.end ?? span.start + 1 + span.name.length;
+    edits.push({ start: at, end: at, text: added });
+  }
+  return edits;
+}
+
+function applyEdits(source: string, edits: Edit[]): string {
+  let output = "";
+  let cursor = 0;
+  for (const edit of edits.toSorted(
+    (a, b) => a.start - b.start || a.end - b.end,
+  )) {
+    if (edit.start < cursor) throw new Error("Timeline edits overlap.");
+    output += source.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+  }
+  return output + source.slice(cursor);
+}
+
+/** The attribute changes that turn `before` into `after` on `element`. */
+function clipChanges(
+  before: Clip,
+  after: Clip,
+  element: SourceElement,
+  fps: Fps,
+): AttributeChange[] {
+  const has = (name: string) => element.attrs[name] !== undefined;
+  const changes: AttributeChange[] = [];
+  const writeStart =
+    after.startRef === null &&
+    (before.start !== after.start || before.startRef !== null);
+  if (writeStart)
+    changes.push(["data-start", String(toSeconds(after.start, fps))]);
+  // Start and duration are written together so both land on the frame grid.
+  if (writeStart || before.duration !== after.duration) {
+    changes.push(["data-duration", String(toSeconds(after.duration, fps))]);
+    if (has("data-end")) changes.push(["data-end", null]);
+  }
+  if (before.track !== after.track) {
+    changes.push(["data-track-index", String(after.track)]);
+    if (has("data-layer")) changes.push(["data-layer", null]);
+  }
+  const mediaStart =
+    after.mediaStart === null ? null : canonicalSeconds(after.mediaStart) + 0;
+  const authoredMediaStart = canonicalSeconds(
+    readMediaOffsetSeconds((name) => element.attrs[name] ?? null),
+  );
+  if (
+    mediaStart !== null &&
+    (mediaStart !== before.mediaStart ||
+      (writeStart && authoredMediaStart !== mediaStart))
+  )
+    changes.push([
+      has("data-playback-start") ||
+      (!has("data-media-start") && after.kind === "composition")
+        ? "data-playback-start"
+        : "data-media-start",
+      String(mediaStart),
+    ]);
+  if (before.volume !== after.volume)
+    changes.push([
+      "data-volume",
+      after.volume === null ? null : String(after.volume),
+    ]);
+  if (before.label !== after.label) {
+    if (after.label === null)
+      changes.push(["data-timeline-label", null], ["data-label", null]);
+    else
+      changes.push([
+        has("data-label") && !has("data-timeline-label")
+          ? "data-label"
+          : "data-timeline-label",
+        after.label,
+      ]);
+  }
+  if (before.link !== after.link) changes.push(["data-link", after.link]);
+  return changes;
+}
+
+function indentOf(html: string, at: number): string {
+  const lineStart = html.lastIndexOf("\n", at - 1) + 1;
+  const indent = html.slice(lineStart, at);
+  return /^[\t ]*$/.test(indent) ? indent : "";
+}
+
+function copyMarkup(
+  parsed: ParsedComposition,
+  template: Clip,
+  clip: Clip,
+): string {
+  const element = parsed.elements.get(template.id)!;
+  const authoredId = element.attrs.id;
+  const escaped = authoredId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reference =
+    escaped && new RegExp(`#${escaped}(?![\\w-])|(["'\`])${escaped}\\1`);
+  if (reference && parsed.scriptsAndStyles.some((text) => reference.test(text)))
+    throw new TimelineError(
+      "unsupported",
+      `Clip ${template.id} is styled or animated by its id, so a cut copy would lose that. Edit it in the source instead.`,
+    );
+  const source = parsed.html.slice(
+    element.start,
+    elementEnd(parsed, element, template.id),
+  );
+  const [first, ...inner] = scanHtmlOpeningTags(source);
+  if (inner.some((span) => span.attributes.some((item) => item.name === "id")))
+    throw new TimelineError(
+      "unsupported",
+      `Clip ${template.id} contains elements with ids, which a cut copy would duplicate. Edit it in the source instead.`,
+    );
+  const origin = element.attrs["data-sync-origin"];
+  return applyEdits(source, [
+    ...attributeEdits(first!, source, [
+      ["id", clip.id],
+      ["data-hf-id", null],
+      ...clipChanges(template, clip, element, parsed.timeline.fps),
+      ...(origin !== undefined &&
+      clip.link !== null &&
+      clip.link !== template.link
+        ? [["data-sync-origin", clip.link] as const]
+        : []),
+    ]),
+    ...inner.flatMap((span) =>
+      attributeEdits(span, source, [["data-hf-id", null]]),
+    ),
+  ]);
+}
+
+function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
+  const attributes: AttributeChange[] = [
+    ["id", clip.id],
+    ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
+    ["src", input.src],
+    ["data-start", String(toSeconds(clip.start, fps))],
+    ["data-duration", String(toSeconds(clip.duration, fps))],
+    ["data-track-index", String(clip.track)],
+    ...(clip.mediaStart
+      ? [
+          [
+            "data-media-start",
+            String(canonicalSeconds(clip.mediaStart)),
+          ] as const,
+        ]
+      : []),
+    ...(clip.volume !== null
+      ? [["data-volume", String(clip.volume)] as const]
+      : []),
+    ...(clip.label !== null
+      ? [["data-timeline-label", clip.label] as const]
+      : []),
+    ...(clip.kind === "video"
+      ? [
+          input.muted
+            ? (["muted", null] as const)
+            : (["data-has-audio", "true"] as const),
+        ]
+      : []),
+  ];
+  const text = attributes
+    .map(([name, value]) =>
+      value === null ? ` ${name}` : ` ${name}="${escapeAttribute(value)}"`,
+    )
+    .join("");
+  const tag = clip.kind === "image" ? "img" : clip.kind;
+  return tag === "img" ? `<img${text}>` : `<${tag}${text}></${tag}>`;
+}
+
+/**
+ * Turns an applied timeline into minimal source edits: changed attributes, removed elements, and
+ * new clips. Anonymous clips the edit touches or renumbers get their stand-in id written, so the
+ * result reads back with the same ids.
+ */
+export function patchComposition(
+  parsed: ParsedComposition,
+  after: Timeline,
+  origins: ReadonlyMap<string, ClipOrigin>,
+): string {
+  const { html, timeline: before } = parsed;
+  const { fps } = before;
+  const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
+  const current = new Map(after.clips.map((clip) => [clip.id, clip]));
+  const templates = new Set(
+    [...origins.values()].flatMap((origin) =>
+      "copyOf" in origin ? [origin.copyOf] : [],
+    ),
+  );
+  const firstRemovedAnonymous = Math.min(
+    ...before.clips
+      .filter((clip) => parsed.anonymous.has(clip.id) && !current.has(clip.id))
+      .map((clip) => parsed.elements.get(clip.id)!.start),
+  );
+  const spans = new Map(
+    scanHtmlOpeningTags(html).map((span) => [span.start, span]),
+  );
+  const edits: Edit[] = [];
+  const removedIds = new Set<string>();
+  for (const clip of before.clips) {
+    const element = parsed.elements.get(clip.id)!;
+    const next = current.get(clip.id);
+    if (next) {
+      const changes = clipChanges(clip, next, element, fps);
+      if (
+        parsed.anonymous.has(clip.id) &&
+        (changes.length ||
+          templates.has(clip.id) ||
+          element.start > firstRemovedAnonymous)
+      )
+        changes.push(["id", clip.id]);
+      if (changes.length)
+        edits.push(
+          ...attributeEdits(openingTag(spans, element, clip.id), html, changes),
+        );
+      continue;
+    }
+    if (element.attrs.id) removedIds.add(element.attrs.id);
+    // Removing an element on its own line also removes the line.
+    const lineStart = html.lastIndexOf("\n", element.start - 1);
+    const ownLine =
+      lineStart >= 0 &&
+      /^[\t ]*$/.test(html.slice(lineStart + 1, element.start));
+    // An implied end tag leaves trailing whitespace inside the element; it stays in the source.
+    edits.push({
+      start: ownLine ? lineStart : element.start,
+      end: Math.max(
+        element.openEnd,
+        leadingSpace(html, elementEnd(parsed, element, clip.id)),
+      ),
+      text: "",
+    });
+  }
+
+  const inserts = new Map<number, string[]>();
+  // New media goes after the last clip in the source, or first in the root.
+  const lastClip = [...parsed.elements].reduce<
+    [string, SourceElement] | undefined
+  >(
+    (last, entry) => (!last || entry[1].start > last[1].start ? entry : last),
+    undefined,
+  );
+  for (const clip of after.clips.toSorted(
+    (a, b) => a.start - b.start || a.track - b.track,
+  )) {
+    if (previous.has(clip.id)) continue;
+    if (parsed.ids.has(clip.id) && !removedIds.has(clip.id))
+      throw new TimelineError(
+        "duplicate_id",
+        `Another element already has id ${clip.id}.`,
+      );
+    const origin = origins.get(clip.id);
+    if (!origin) throw new Error(`Clip ${clip.id} has no origin.`);
+    if ("insert" in origin) {
+      const at = lastClip
+        ? elementEnd(parsed, lastClip[1], lastClip[0])
+        : parsed.root.openEnd;
+      const indent = lastClip ? indentOf(html, lastClip[1].start) : "";
+      inserts.set(at, [
+        ...(inserts.get(at) ?? []),
+        `\n${indent}${insertMarkup(clip, origin.insert, fps)}`,
+      ]);
+      continue;
+    }
+    const template = previous.get(origin.copyOf)!;
+    const element = parsed.elements.get(template.id)!;
+    const at = elementEnd(parsed, element, template.id);
+    inserts.set(at, [
+      ...(inserts.get(at) ?? []),
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip)}`,
+    ]);
+  }
+  for (const [at, texts] of inserts)
+    edits.push({ start: at, end: at, text: texts.join("") });
+
+  if (parsed.rootDurationAuthored && after.duration !== before.duration)
+    edits.push(
+      ...attributeEdits(openingTag(spans, parsed.root, "root"), html, [
+        ["data-duration", String(toSeconds(after.duration, fps))],
+      ]),
+    );
+  return applyEdits(html, edits);
+}

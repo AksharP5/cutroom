@@ -34,6 +34,23 @@ A direct cut removes the selected words' source intervals, splits the media elem
 
 Direct script edits currently require a local, independently timed media element. Nested timed scenes, linked media, independently changed split pieces, and media-specific scripted animation are refused rather than rewritten ambiguously. Use the agent handoff for those edits.
 
+## Timeline commands
+
+The timeline is a projection of composition HTML in integer frames: a clip starts on the first frame the runtime shows it, and ends after the last. Tracks are `data-track-index` values. Track kind (video or audio), name, lock, and auto-select, plus markers and the in/out range, live in `cutroom.json`; a track keeps its kind when it is empty. Audio clips go on audio tracks and everything else on video tracks; a move, insert, or kind change that breaks this fails with `track_kind`. Commands follow DaVinci Resolve's Edit page:
+
+- Linked clips (`data-link`) are one unit: they move, split, and delete together, and a trim moves the same edge of every partner by the same number of frames, as with Resolve's Linked Selection. J and L cuts keep their offset.
+- Lift (`remove`) leaves a gap. Ripple delete closes it on the removed clips' tracks and every auto-select track. Clips later than the gap move earlier by the removed time (on tracks with nothing removed, the time removed from every track); a clip that spans the gap stays.
+- `trim` with `ripple` keeps the clip's start and shifts clips at or after the trimmed edge by the change in length. Q trims the start to the playhead, so everything from the clip's head onward moves; W trims the end, moving what follows it.
+- A ripple moves each linked group by one amount. Ripple delete closes a group by the smallest gap among its members' tracks, and no clip passes the one before it, so sync holds and a few frames of gap may remain on one track. That leftover gap is the only thing a ripple delete holds back: if a clip would stay put because a spanning clip, a partner on a locked or unreached track, or the start of the timeline is in its way, the edit fails with `unsupported`, naming the clip in the way. A trim or insert that would pull a partner before zero or into another clip is refused with `unsupported`, naming the linked clips.
+- A cut keeps a piece linked while it still overlaps a partner in time; a piece left with no overlapping partner is unlinked.
+- `split` without clip IDs cuts every clip under the frame on auto-select tracks. Right halves of a linked group share a new link.
+- `insert` places a clip, overwrites the range on its own track (linked partners on other tracks stay whole), or splits and pushes auto-select tracks.
+- Locked tracks never change. Ripple edits skip them, and editing a clip on one fails.
+
+A command that cannot apply exactly fails with a typed error such as `overlap`, `locked`, or `out_of_bounds`; values are never clamped. Moved clips may not overlap another clip on their track, although overlaps already authored in HTML stay editable. Video and audio without `data-duration` take their length from the source file, measured with ffprobe; trims cannot run past the end of the source. A start written as a clip reference (`data-start="intro"`) is kept while it still resolves to the edited position and becomes an absolute time otherwise. Clips styled or animated by id, or containing elements with ids, cannot be split because the copy would lose or duplicate them. The root's length keeps its authored tail after the last clip; a root kept shorter than its content does not grow, and clips placed in an empty composition only lengthen it if they run past its end.
+
+A batch writes only the attributes it changes, removed elements, and new clips; all other bytes stay as authored. Clips without an `id` get their positional id written when an edit touches them or would renumber them. It is one undo step, and a stale revision is refused.
+
 ## Concurrent edits and undo
 
 Editor writes, script changes, annotations, and MCP commands share a history. A save based on an older source version returns a conflict instead of overwriting a newer edit. External agents can also edit files directly; the watcher refreshes the preview and the history observes those changes. Accepted outside changes update a clean source buffer even while it has focus. Pending typing keeps the normal save and conflict handling.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TimelineSettingsSchema } from "./timeline/schema";
 
 export const PointSchema = z.object({
   x: z.number().min(0).max(1),
@@ -72,11 +73,22 @@ export const TranscriptViewSchema = TranscriptSchema.extend({
   ),
   duration: z.number().nonnegative(),
 });
-export const ProjectDocumentSchema = z.object({
-  schemaVersion: z.literal(1),
-  annotations: z.array(AnnotationSchema),
-  transcripts: z.array(TranscriptSchema),
-});
+const LegacyDocumentSchema = z.looseObject({ schemaVersion: z.literal(1) });
+/** Version 2 adds per-composition timeline settings. Older documents migrate on read. */
+export const ProjectDocumentSchema = z.preprocess(
+  (value) => {
+    const legacy = LegacyDocumentSchema.safeParse(value);
+    return legacy.success
+      ? { ...legacy.data, schemaVersion: 2, timelines: {} }
+      : value;
+  },
+  z.object({
+    schemaVersion: z.literal(2),
+    annotations: z.array(AnnotationSchema),
+    transcripts: z.array(TranscriptSchema),
+    timelines: z.record(z.string(), TimelineSettingsSchema),
+  }),
+);
 export const ProjectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -154,7 +166,8 @@ export type TranscriptJob = z.infer<typeof TranscriptJobSchema>;
 export type MediaClip = z.infer<typeof MediaClipSchema>;
 
 export const emptyProjectDocument = (): ProjectDocument => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   annotations: [],
   transcripts: [],
+  timelines: {},
 });

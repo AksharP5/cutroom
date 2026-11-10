@@ -14,6 +14,7 @@ import {
   TranscribeInputSchema,
   TranscriptImportSchema,
 } from "../../shared/project";
+import { registerTimelineTools } from "./timelineTools";
 
 type LocalFetch = (
   url: string,
@@ -297,6 +298,9 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) => request(`/projects/${id(input.projectId)}/history/redo`, "POST"),
   );
   registerReviewTools(server, request);
+  registerTimelineTools(server, request, async (path) =>
+    fetchLocal(`${baseUrl}${path}`),
+  );
   return server;
 }
 
