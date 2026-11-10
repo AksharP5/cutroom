@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { embeddedEditor } from "./embedded";
@@ -97,7 +98,9 @@ test("source editing saves, updates the preview, and supports native editor undo
   );
   expect(saved.ok()).toBeTruthy();
   await expect(frame.locator("#headline")).toHaveText("An outside edit");
-  await page.getByRole("button", { name: "Select (V)", exact: true }).click();
+  await page
+    .getByRole("button", { name: hint("editPointer"), exact: true })
+    .click();
   await expect(editor).toContainText("An outside edit");
   await editor.press("Control+End");
   await editor.press("Enter");

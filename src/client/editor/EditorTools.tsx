@@ -6,6 +6,7 @@ import {
   PencilSimple,
 } from "@phosphor-icons/react";
 import type { EditorMode } from "../../shared/editor";
+import { hint, keymap } from "../keymap";
 
 export const EditorToolsContext = createContext<{
   mode: EditorMode;
@@ -23,12 +24,11 @@ export function EditorTools() {
       <div className="mode-switch" role="toolbar" aria-label="Preview tools">
         {(
           [
-            { id: "select", label: "Select", key: "V", icon: Cursor },
-            { id: "draw", label: "Draw", key: "D", icon: PencilSimple },
+            { id: "select", action: "editPointer", icon: Cursor },
+            { id: "draw", action: "cutroomDraw", icon: PencilSimple },
             {
               id: "comment",
-              label: "Comment",
-              key: "C",
+              action: "cutroomComment",
               icon: ChatTeardropText,
             },
           ] as const
@@ -36,8 +36,8 @@ export function EditorTools() {
           <button
             key={item.id}
             className="tool-button"
-            aria-label={`${item.label} (${item.key})`}
-            title={`${item.label} (${item.key})`}
+            aria-label={hint(item.action)}
+            title={hint(item.action)}
             aria-pressed={tools.mode === item.id}
             onClick={() => tools.setMode(item.id)}
           >
@@ -45,8 +45,8 @@ export function EditorTools() {
               size={15}
               weight={tools.mode === item.id ? "fill" : "regular"}
             />
-            <span>{item.label}</span>
-            <kbd aria-hidden="true">{item.key}</kbd>
+            <span>{keymap[item.action].label}</span>
+            <kbd aria-hidden="true">{keymap[item.action].keys[0]}</kbd>
           </button>
         ))}
       </div>

@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
@@ -96,7 +97,9 @@ test("visual review, native skill selection, and script edits survive real works
   await expect(composer).toHaveValue("Use $storyboard ");
   await composer.fill("");
 
-  await page.getByRole("button", { name: "Comment (C)", exact: true }).click();
+  await page
+    .getByRole("button", { name: hint("cutroomComment"), exact: true })
+    .click();
   const canvas = page.getByLabel("Pin a comment on the composition");
   await expect(canvas).toBeVisible();
   await canvas.click({ position: { x: 150, y: 120 } });

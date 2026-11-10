@@ -1913,7 +1913,9 @@ option {
 .welcome-instructions kbd {
   display: inline-grid;
   place-items: center;
-  width: 20px;
+  min-width: 20px;
+  padding: 0 4px;
+  white-space: nowrap;
   height: 20px;
   border-radius: var(--radius-control);
   background: var(--surface-raised);

@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
@@ -378,7 +379,7 @@ test("a frame capture finishing in an old project cannot clear a new project's d
   );
   try {
     await page
-      .getByRole("button", { name: "Comment (C)", exact: true })
+      .getByRole("button", { name: hint("cutroomComment"), exact: true })
       .click();
     await page
       .getByLabel("Pin a comment on the composition")
@@ -395,7 +396,7 @@ test("a frame capture finishing in an old project cannot clear a new project's d
       page.getByRole("button", { name: "Capture two", exact: true }),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "Comment (C)", exact: true })
+      .getByRole("button", { name: hint("cutroomComment"), exact: true })
       .click();
     await page
       .getByLabel("Pin a comment on the composition")

@@ -1,3 +1,4 @@
+import { hint } from "../src/client/keymap";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -452,7 +453,7 @@ test("saving one review draft cannot clear a newer draft in the same project", a
   );
   try {
     await page
-      .getByRole("button", { name: "Comment (C)", exact: true })
+      .getByRole("button", { name: hint("cutroomComment"), exact: true })
       .click();
     await page
       .getByLabel("Pin a comment on the composition")
@@ -463,7 +464,7 @@ test("saving one review draft cannot clear a newer draft in the same project", a
     await started;
     await expect(body).toBeDisabled();
     await page
-      .getByRole("button", { name: "Comment (C)", exact: true })
+      .getByRole("button", { name: hint("cutroomComment"), exact: true })
       .click();
     await page
       .getByLabel("Pin a comment on the composition")
