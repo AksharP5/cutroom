@@ -500,6 +500,75 @@ test("notes saved before the review queue keep their meaning", async () => {
   });
 });
 
+test("late frame attachments preserve sent notes, MCP review_list, and the note's undo step", async () => {
+  const queue = await setup();
+  const base = `/projects/${queue.project.id}`;
+  const note = AnnotationSchema.parse(
+    await queue.request(`${base}/annotations`, "POST", {
+      kind: "drawing",
+      body: "Keep this stroke",
+      time: 2,
+      point: { x: 0.3, y: 0.4 },
+      strokes: [
+        {
+          points: [
+            { x: 0.2, y: 0.3 },
+            { x: 0.4, y: 0.5 },
+          ],
+          color: "#F1CF5A",
+        },
+      ],
+    }),
+  );
+  const complete = ReviewItemSchema.parse(
+    await queue.request(`${base}/review/${note.id}/agent`, "POST", {
+      type: "complete",
+      note: "Already fixed",
+    }),
+  );
+  const history = await queue.store.history(queue.project);
+  const revisions = history.list().map((entry) => entry.id);
+  const framePath = ".cutroom/attachments/late.png";
+  await queue.request(`${base}/review/${note.id}/frame`, "PUT", { framePath });
+  const expected = { ...complete, framePath };
+  expect(await queue.items()).toEqual([expected]);
+  expect(await createReviewService(queue.store).list(queue.project)).toEqual([
+    expected,
+  ]);
+  const listed = await call(queue.mcp, "review_list", {
+    projectId: queue.project.id,
+  });
+  expect(
+    z
+      .object({ result: z.object({ items: z.array(ReviewItemSchema) }) })
+      .parse(listed.structuredContent).result.items,
+  ).toEqual([expected]);
+  expect(history.list().map((entry) => entry.id)).toEqual(revisions);
+  // A capture is metadata. It must not make content edits to sent notes legal.
+  expect(
+    (
+      await queue.fetchRaw(`${base}/annotations/${note.id}`, "PATCH", {
+        body: "Changed",
+      })
+    ).status,
+  ).toBe(409);
+
+  const draft = await queue.note("Undo this note");
+  await queue.items();
+  await queue.request(`${base}/history/undo`, "POST");
+  // Rendering can finish after undo. Keep the image for redo without restoring the note.
+  await queue.request(`${base}/review/${draft}/frame`, "PUT", { framePath });
+  expect((await queue.items()).map((item) => item.id)).toEqual([note.id]);
+  await queue.request(`${base}/history/redo`, "POST");
+  expect(
+    (await queue.items()).find((item) => item.id === draft)?.framePath,
+  ).toBe(framePath);
+  expect(
+    (await queue.fetchRaw(`${base}/review/missing/frame`, "PUT", { framePath }))
+      .status,
+  ).toBe(404);
+});
+
 describe("review queue regressions", () => {
   test("owner instructions survive a claim and an interrupted run", async () => {
     const queue = await setup(async (_turn, mcp) => {

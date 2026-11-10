@@ -191,7 +191,7 @@ export function App() {
     return result.projects;
   }, []);
   const refreshDocument = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || activeProjectId.current !== projectId) return;
     const request = ++documentRequest.current;
     const result = await api(`/projects/${projectId}/notebook`, NotebookSchema);
     if (
@@ -335,9 +335,16 @@ export function App() {
   const saveNote = useCallback(
     async (draft: EditorReviewDraft, body: string) => {
       if (!projectId) throw new Error("No project is open.");
-      const { id, captureError } = await saveReviewNote(projectId, draft, body);
-      if (captureError && activeProjectId.current === projectId)
-        showToast(`Note saved without a frame image. ${captureError}`);
+      const { id, capture } = await saveReviewNote(projectId, draft, body);
+      void capture
+        .then((captureError) => {
+          if (captureError && activeProjectId.current === projectId)
+            showToast(`Note saved without a frame image. ${captureError}`);
+          return refreshDocument();
+        })
+        .catch((error: unknown) =>
+          showToast(error instanceof Error ? error.message : String(error)),
+        );
       // The note is saved; a failed refresh must not reopen it, or it would be saved twice.
       void refreshDocument().catch((error: unknown) =>
         showToast(error instanceof Error ? error.message : String(error)),
@@ -515,22 +522,10 @@ export function App() {
                     onCancel={() => setReviewState(null)}
                     onSave={async (body) => {
                       if (!reviewDraft) return;
-                      const { captureError } = await saveReviewNote(
-                        project.id,
-                        reviewDraft,
-                        body,
-                      );
+                      await saveNote(reviewDraft, body);
                       setReviewState((current) =>
                         current?.draft === reviewDraft ? null : current,
                       );
-                      await refreshDocument();
-                      if (
-                        captureError &&
-                        activeProjectId.current === project.id
-                      )
-                        showToast(
-                          `Note saved without a frame image. ${captureError}`,
-                        );
                     }}
                     onSeek={(item) =>
                       void seek(item.time, item.compositionPath)

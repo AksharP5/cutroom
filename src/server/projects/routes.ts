@@ -19,6 +19,7 @@ import {
   AgentReviewActionSchema,
   HumanReviewActionSchema,
   ReviewAddSchema,
+  NoteContentSchema,
 } from "../../shared/review";
 import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
@@ -157,6 +158,15 @@ export function createProjectRoutes(
     return c.json({
       items: await reviews.list(project),
     });
+  });
+  api.put("/projects/:id/review/:noteId/frame", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { framePath } = parseInput(
+      NoteContentSchema.pick({ framePath: true }).required(),
+      await c.req.json(),
+    );
+    await reviews.attachFrame(project, c.req.param("noteId"), framePath);
+    return c.json({ ok: true });
   });
   api.post("/projects/:id/review", async (c) => {
     const project = await store.get(c.req.param("id"));
