@@ -91,8 +91,6 @@ function find(items: ReviewItem[], id: string) {
 export function createReviewService(store: ProjectStore) {
   const turns = new Map<string, ReviewTurn>();
   const queues = new Map<string, Promise<unknown>>();
-  /** Sent by native agents' MCP bridge so their calls are credited to the running turn. */
-  const agentToken = randomUUID();
   // Outside MCP clients act in this server's lifetime; their claims return to the queue after a restart.
   const external: ReviewTurn = {
     id: `external:${randomUUID()}`,
@@ -275,12 +273,18 @@ export function createReviewService(store: ProjectStore) {
     });
 
   return {
-    agentToken,
-    /** The agent behind a request: the running native turn only when it presents the token. */
-    agent: (project: Project, token: string | undefined): ReviewActor => ({
-      kind: "agent",
-      turn: (token === agentToken && turns.get(project.id)) || external,
-    }),
+    /**
+     * The agent behind a request. A conversation's token only acts on the project whose run it
+     * belongs to, while that run is active; anything else is refused rather than guessed.
+     */
+    agent(project: Project, token: string | undefined): ReviewActor {
+      if (token === undefined || token === "external")
+        return { kind: "agent", turn: external };
+      const turn = turns.get(project.id);
+      if (turn?.kind !== "message" || turn.token !== token)
+        throw new HttpError(409, "No Cutroom run is active for this project.");
+      return { kind: "agent", turn };
+    },
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
     list: (project: Project) => serialize(project, () => reconcile(project)),
     async act(

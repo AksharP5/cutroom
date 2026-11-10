@@ -135,6 +135,7 @@ export class CodexRuntime implements AgentRuntime {
   constructor(
     private readonly client: CodexClient,
     private readonly options: RuntimeOptions,
+    private readonly threadConfig: Record<string, string> = {},
   ) {
     this.unlisten = client.subscribe((message) => {
       try {
@@ -159,6 +160,9 @@ export class CodexRuntime implements AgentRuntime {
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
         serviceName: "cutroom",
+        ...(Object.keys(this.threadConfig).length && {
+          config: this.threadConfig,
+        }),
       })
       .then((value) => {
         const id = threadResultSchema.parse(value).thread.id;

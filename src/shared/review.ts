@@ -65,8 +65,13 @@ export const ReviewStateSchema = z.object({
 });
 export type ReviewState = z.infer<typeof ReviewStateSchema>;
 
-/** The run an agent acts in: the owner's message in Cutroom, or an outside MCP client. */
-export type ReviewTurn = { id: string; kind: "message" | "external" };
+/**
+ * The run an agent acts in: the owner's message in Cutroom, identified by the token its
+ * conversation's MCP bridge carries, or an outside MCP client.
+ */
+export type ReviewTurn =
+  | { kind: "message"; id: string; token: string }
+  | { kind: "external"; id: string };
 export type ReviewActor =
   { kind: "human" } | { kind: "agent"; turn: ReviewTurn };
 

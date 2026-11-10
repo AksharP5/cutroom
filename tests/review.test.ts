@@ -10,7 +10,11 @@ import type { AgentTurn } from "../src/shared/agent";
 import { HttpError } from "../src/shared/errors";
 import { AnnotationSchema } from "../src/shared/project";
 import type { Project } from "../src/shared/project";
-import { ReviewItemSchema, transition } from "../src/shared/review";
+import {
+  AGENT_HEADER,
+  ReviewItemSchema,
+  transition,
+} from "../src/shared/review";
 import type {
   Review,
   ReviewAction,
@@ -35,7 +39,7 @@ afterEach(async () => {
 const human: ReviewActor = { kind: "human" };
 const agent: ReviewActor = {
   kind: "agent",
-  turn: { id: "message-1", kind: "message" },
+  turn: { id: "message-1", kind: "message", token: "token-1" },
 };
 const outside: ReviewActor = {
   kind: "agent",
@@ -210,7 +214,14 @@ async function setup(
     return client;
   };
   const mcp = await connect();
-  const native = await connect(review.agentToken);
+  // Each conversation's runtime gets its own token, as the native factory gives its MCP bridge.
+  const natives = new Map<string, Promise<Client>>();
+  const nativeClient = (token: string) => {
+    const client = natives.get(token) ?? connect(token);
+    natives.set(token, client);
+    return client;
+  };
+  const tokens: string[] = [];
   const turns: AgentTurn[] = [];
   const runtimeFactory: RuntimeFactory = {
     capabilities: async (provider) => ({
@@ -220,12 +231,13 @@ async function setup(
       models: [],
       mcpServers: [],
     }),
-    create: () => {
+    create: (_provider, options) => {
       beforeCreate();
+      tokens.push(options.agentToken);
       return {
         send: async (turn) => {
           turns.push(turn);
-          await run(turn, native);
+          await run(turn, await nativeClient(options.agentToken));
         },
         interrupt: async () => {},
         dispose: () => {},
@@ -268,16 +280,25 @@ async function setup(
     Object.fromEntries(
       (await items()).map((item) => [item.body, item.review.status]),
     );
-  const fetchRaw = (path: string, method = "GET", body?: unknown) =>
+  const fetchRaw = (
+    path: string,
+    method = "GET",
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) =>
     app.request(`/api/cutroom${path}`, {
       method,
-      ...(body !== undefined && {
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
+      headers: {
+        ...headers,
+        ...(body !== undefined && { "content-type": "application/json" }),
+      },
+      ...(body !== undefined && { body: JSON.stringify(body) }),
     });
   return {
     fetchRaw,
+    tokens,
+    nativeClient,
+    app,
     mcp,
     directory,
     store,
@@ -945,5 +966,46 @@ describe("review round 3 regressions", () => {
       by: "human",
     });
     expect(queue.turns.at(-1)?.context).toContain("Make it much warmer");
+  });
+});
+
+describe("review identity binding", () => {
+  test("a conversation's token is refused when its run is not active", async () => {
+    const queue = await setup();
+    const id = await queue.note("Trim the end");
+    await send(queue.agents, queue.project, "Go");
+    const late = await queue.fetchRaw(
+      `/projects/${queue.project.id}/review/${id}/agent`,
+      "POST",
+      { type: "claim" },
+      { [AGENT_HEADER]: queue.tokens[0]! },
+    );
+    expect(late.status).toBe(409);
+    expect(await late.text()).toContain("No Cutroom run is active");
+    expect((await queue.status())["Trim the end"]).toBe("queued");
+  });
+
+  test("a conversation's token cannot act on another project", async () => {
+    let attempt: Response | undefined;
+    const queue = await setup(async () => {
+      attempt = await queue.fetchRaw(
+        `/projects/${other.id}/review/${elsewhere}/agent`,
+        "POST",
+        { type: "claim" },
+        { [AGENT_HEADER]: queue.tokens[0]! },
+      );
+    });
+    const other = await queue.store.create({ name: "Other project" });
+    const added = ReviewItemSchema.parse(
+      await queue.request(`/projects/${other.id}/review`, "POST", {
+        body: "Not yours",
+      }),
+    );
+    const elsewhere = added.id;
+    await queue.note("Yours");
+    await send(queue.agents, queue.project, "Go");
+    expect(attempt?.status).toBe(409);
+    const [item] = await queue.review.list(other);
+    expect(item?.review.status).toBe("queued");
   });
 });

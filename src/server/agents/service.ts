@@ -64,6 +64,8 @@ export class AgentService {
   private readonly factory: RuntimeFactory;
   private readonly path: string;
   private readonly sequences = new Map<string, number>();
+  /** One per conversation, so review actions are bound to that conversation's project and run. */
+  private readonly agentTokens = new Map<string, string>();
   private writeChain = Promise.resolve();
   private saveTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
@@ -72,8 +74,7 @@ export class AgentService {
   constructor(private readonly options: AgentServiceOptions) {
     this.path = join(options.dataDir, "agents.json");
     this.factory =
-      options.runtimeFactory ??
-      createNativeRuntimeFactory(options.studioUrl, options.review.agentToken);
+      options.runtimeFactory ?? createNativeRuntimeFactory(options.studioUrl);
   }
 
   async load() {
@@ -101,6 +102,12 @@ export class AgentService {
       }
       this.sessions.set(session.id, session);
     }
+  }
+
+  private agentToken(id: string) {
+    const token = this.agentTokens.get(id) ?? crypto.randomUUID();
+    this.agentTokens.set(id, token);
+    return token;
   }
 
   private requireSession(id: string) {
@@ -359,6 +366,7 @@ export class AgentService {
     const review = await this.options.review.beginTurn(project, {
       id: message.id,
       kind: "message",
+      token: this.agentToken(id),
     });
     const endReview = (operation.endReview = () => {
       if (!this.disposed)
@@ -383,6 +391,7 @@ export class AgentService {
         cwd: project.path,
         model: session.model,
         nativeSessionId: session.nativeSessionId,
+        agentToken: this.agentToken(id),
         emit: (event) => {
           if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
             return;
