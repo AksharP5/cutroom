@@ -1,0 +1,8 @@
+{
+  "timing": "Voiceover A1\nInput\nSystem default\nFake Default Audio Input\nFake Audio Input 1\nFake Audio Input 2\n\nInput delay 10 ms. Compensation 21 ms.\n\nOverlaps go on a new audio track. Esc discards the take.\n\nRecord (Shift+R)",
+  "clipStartFrame": 30,
+  "sourceOffsetSamples": 22973,
+  "sourceCorrelation": 0.997180069054789,
+  "exportCorrelation": 0.9944685285183139,
+  "exportOffsetMs": 0
+}
