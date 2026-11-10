@@ -1,3 +1,4 @@
+import { toolTarget } from "./agent";
 import type { AgentMessage } from "./agent";
 
 /** How a tool call reads once done, while running, and when asking permission. */
@@ -136,4 +137,19 @@ export function describeTool(
   const object = [subject, target].filter(Boolean).join(" ");
   if (verb) return { verb: pick(verb), object };
   return { verb: pick(["Used", "Using", "Use"]), object };
+}
+
+export function approvalTitle(
+  tool: string,
+  input: Record<string, unknown>,
+  cwd: string,
+) {
+  const target = toolTarget(input, cwd);
+  const { verb, object } = describeTool({ tool, target }, "ask");
+  const count =
+    tool.endsWith("__timeline_edit") && Array.isArray(input.commands)
+      ? input.commands.length
+      : undefined;
+  const note = typeof input.noteId === "string" ? ` (${input.noteId})` : "";
+  return `${verb} ${object}${count === undefined ? note : ` (${count} ${count === 1 ? "change" : "changes"})`}?`;
 }

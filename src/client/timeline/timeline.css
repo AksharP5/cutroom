@@ -809,3 +809,16 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.tl-agent-change {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100% - 1px);
+  height: var(--stroke-rail);
+  margin-top: calc(var(--size-track-video) - var(--stroke-rail));
+  background: var(--agent);
+  pointer-events: none;
+}
+.tl-agent-change.on-audio {
+  margin-top: calc(var(--size-track-audio) - var(--stroke-rail));
+}

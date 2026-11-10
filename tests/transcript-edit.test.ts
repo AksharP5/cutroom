@@ -142,7 +142,10 @@ test("script cuts alter real media offsets, ripple one lane, restore, and share 
 
 test("a script cut that removes the original piece spends its id, so restoring the word never duplicates it", async () => {
   const fixture = await projectFixture();
-  fixture.app.route("/api/cutroom", createTimelineRoutes(fixture.store));
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
   try {
     const project = await fixture.store.create({ name: "Spent ids" });
     await writeFile(join(project.path, "index.html"), source);
@@ -1127,3 +1130,42 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     }
   },
 );
+
+test("an agent's script cut marks the changed pieces and ripple followers, keeping other tracks unmarked", async () => {
+  const fixture = await projectFixture();
+  try {
+    const project = await fixture.store.create({ name: "Agent script cut" });
+    await writeFile(
+      join(project.path, "index.html"),
+      source.replace(/<style>.*?<\/style>/, ""),
+    );
+    await writeFile(join(project.path, "footage.mp4"), "source bytes");
+    const transcript = TranscriptSchema.parse(
+      await (
+        await fixture.request(
+          `/projects/${project.id}/transcripts/import`,
+          "POST",
+          { mediaPath: "footage.mp4", elementId: "footage", words },
+        )
+      ).json(),
+    );
+    const response = await fixture.app.request(
+      `/api/cutroom/projects/${project.id}/transcripts/${transcript.id}/cuts`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-cutroom-agent": "external",
+        },
+        body: JSON.stringify({ wordIds: ["three", "four"], action: "cut" }),
+      },
+    );
+    expect(response.status).toBe(200);
+    const changes = await fixture.review.changedClips(project, "index.html");
+    expect(changes).toHaveLength(3);
+    expect(changes).toContain("following");
+    expect(changes).not.toContain("other-track");
+  } finally {
+    await fixture.close();
+  }
+});

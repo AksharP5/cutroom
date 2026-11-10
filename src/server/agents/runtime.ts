@@ -13,6 +13,7 @@ export interface RuntimeOptions {
   cwd: string;
   /** Identifies this conversation's review actions; its MCP bridge sends it with every call. */
   agentToken: string;
+  allowCutroomEdits?: () => boolean;
   model?: string;
   nativeSessionId?: string;
   emit: (event: AgentEvent) => void;

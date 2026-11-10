@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowCounterClockwise,
+  ArrowUp,
+  ArrowDown,
   ArrowUpRight,
   ChatTeardropText,
   PencilSimple,
@@ -15,11 +17,13 @@ import type {
   ReviewItem,
   ReviewStatus,
 } from "../../shared/review";
+import { unfinishedStatuses } from "../../shared/review";
 import { FpsSchema } from "../../shared/timeline/schema";
 import { api, frameTimecode } from "../api";
 import { strokePath } from "../edit/notes";
 import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
 import { useFps } from "../workspace";
+import { useTimeline } from "../edit/timeline";
 import { Modal } from "./Modal";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
@@ -121,6 +125,8 @@ export function ReviewPanel({
   onSeek,
   onAct,
   onDelete,
+  onReorder,
+  onAcceptChanges,
   onSend,
 }: {
   projectId: string;
@@ -132,8 +138,11 @@ export function ReviewPanel({
   onSeek: (item: ReviewItem) => void;
   onAct: (item: ReviewItem, action: HumanAction) => Promise<void>;
   onDelete: (item: ReviewItem) => Promise<void>;
+  onReorder: (noteId: string, beforeId: string | null) => Promise<void>;
+  onAcceptChanges: () => Promise<void>;
   onSend: () => void;
 }) {
+  const hasChanges = useTimeline((state) => !!state.view?.agentChanges?.length);
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
@@ -158,6 +167,9 @@ export function ReviewPanel({
     else setBody("");
   }, [draft]);
   const fresh = items.filter((item) => item.review.status === "open");
+  const queued = items.filter((item) =>
+    unfinishedStatuses.some((status) => status === item.review.status),
+  );
   const current = items.filter((item) => item.review.status !== "withdrawn");
   const accepted = items.filter((item) => item.review.status === "accepted");
   const number = noteNumbers(items);
@@ -182,6 +194,7 @@ export function ReviewPanel({
     const status = item.review.status;
     const answering = answer?.id === item.id ? answer : null;
     const result = outcome(item);
+    const at = queued.findIndex((candidate) => candidate.id === item.id);
     const open =
       (type: "reject" | "reply") =>
       (event: { currentTarget: HTMLButtonElement }) => {
@@ -220,6 +233,34 @@ export function ReviewPanel({
                   : "Comment"}
             </span>
             <div className="review-row-actions">
+              {at >= 0 && (
+                <>
+                  <button
+                    className="icon-button"
+                    aria-label="Move note up"
+                    title="Move note up"
+                    disabled={at === 0}
+                    onClick={() =>
+                      void run(() => onReorder(item.id, queued[at - 1]!.id))
+                    }
+                  >
+                    <ArrowUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="Move note down"
+                    title="Move note down"
+                    disabled={at === queued.length - 1}
+                    onClick={() =>
+                      void run(() =>
+                        onReorder(item.id, queued[at + 2]?.id ?? null),
+                      )
+                    }
+                  >
+                    <ArrowDown />
+                  </button>
+                </>
+              )}
               {status === "withdrawn" && (
                 <button
                   className="icon-button"
@@ -244,25 +285,23 @@ export function ReviewPanel({
                   <Queue />
                 </button>
               )}
-              {status !== "open" &&
-                status !== "withdrawn" &&
-                status !== "accepted" && (
-                  <button
-                    className="icon-button"
-                    aria-label="Withdraw"
-                    title="Withdraw"
-                    onClick={() =>
-                      void run(() =>
-                        onAct(item, {
-                          type: "withdraw",
-                          reason: "Withdrawn in Review.",
-                        }),
-                      )
-                    }
-                  >
-                    <X />
-                  </button>
-                )}
+              {status !== "withdrawn" && status !== "accepted" && (
+                <button
+                  className="icon-button"
+                  aria-label="Withdraw"
+                  title="Withdraw"
+                  onClick={() =>
+                    void run(() =>
+                      onAct(item, {
+                        type: "withdraw",
+                        reason: "Withdrawn in Review.",
+                      }),
+                    )
+                  }
+                >
+                  <X />
+                </button>
+              )}
               {status === "open" && (
                 <button
                   className="icon-button"
@@ -382,6 +421,14 @@ export function ReviewPanel({
 
   return (
     <section className="review-panel" aria-label="Review notes">
+      {hasChanges && (
+        <button
+          className="text-button quiet"
+          onClick={() => void run(onAcceptChanges)}
+        >
+          Accept agent changes
+        </button>
+      )}
       {current.length > 0 && (
         <div className="review-summary">
           {current.length} {current.length === 1 ? "note" : "notes"},{" "}
@@ -471,8 +518,8 @@ export function ReviewPanel({
         </div>
       )}
       {groups.map(([title, statuses]) => {
-        const members = statuses.flatMap((status) =>
-          items.filter((item) => item.review.status === status),
+        const members = items.filter((item) =>
+          statuses.some((status) => status === item.review.status),
         );
         if (!members.length) return null;
         return (

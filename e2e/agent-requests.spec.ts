@@ -95,7 +95,7 @@ test("a long agent question keeps its answer and the composer in a short window"
   await expectInWindow(page.getByLabel("Message your agent"), page);
 });
 
-test("an approval stays one line above the composer", async ({
+test("an approval shows the full target and scoped Always allow in a short window", async ({
   page,
   request,
 }) => {
@@ -109,6 +109,7 @@ test("an approval stays one line above the composer", async ({
   );
   await openWaiting(page, project.id, {
     id: "approval-1",
+    canAllowCutroomEdits: true,
     kind: "approval",
     title: "Write compositions/an-unusually-long-composition-name.html?",
     tool: "mcp__cutroom_studio__source_write",
@@ -123,10 +124,18 @@ test("an approval stays one line above the composer", async ({
     await title.boundingBox(),
     await allow.boundingBox(),
   ];
-  // One line, ending at least 12px before the actions.
-  expect(titleBox?.height).toBeLessThanOrEqual(16);
-  expect((titleBox?.x ?? 0) + (titleBox?.width ?? 0)).toBeLessThanOrEqual(
-    (allowBox?.x ?? 0) - 12,
+  expect(titleBox?.height).toBeGreaterThan(16);
+  expect((titleBox?.y ?? 0) + (titleBox?.height ?? 0)).toBeLessThanOrEqual(
+    allowBox?.y ?? 0,
+  );
+  expect(
+    await title.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await expectInWindow(
+    approval.getByRole("button", { name: "Always allow Cutroom edits" }),
+    page,
   );
   await expectInWindow(page.getByLabel("Message your agent"), page);
 });

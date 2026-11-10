@@ -547,6 +547,22 @@ export function App() {
                       );
                       await refreshDocument();
                     }}
+                    onAcceptChanges={async () => {
+                      await api(
+                        `/projects/${projectId}/review/changes/accept`,
+                        z.unknown(),
+                        json("POST"),
+                      );
+                      await refreshDocument();
+                    }}
+                    onReorder={async (noteId, beforeId) => {
+                      await api(
+                        `/projects/${projectId}/review/order`,
+                        z.unknown(),
+                        json("PATCH", { noteId, beforeId }),
+                      );
+                      await refreshDocument();
+                    }}
                     onDelete={async (item) => {
                       await api(
                         `/projects/${projectId}/annotations/${item.id}`,

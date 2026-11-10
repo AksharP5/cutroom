@@ -37,7 +37,7 @@ export function slideClips(
     const transform = `translate(${x}px, ${y}px)`;
     const selector = CSS.escape(id);
     for (const element of root.querySelectorAll(
-      `[data-clip="${selector}"], [data-clip-label="${selector}"], [data-clip-outline="${selector}"]`,
+      `[data-clip="${selector}"], [data-clip-label="${selector}"], [data-clip-outline="${selector}"], [data-agent-change="${selector}"]`,
     ))
       element.animate([{ transform }, { transform: "none" }], {
         duration,

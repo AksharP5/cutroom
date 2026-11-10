@@ -1,3 +1,5 @@
+import { AGENT_HEADER } from "../../shared/review";
+import type { ReviewService } from "../projects/review";
 import { posix } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -55,7 +57,10 @@ const refused = (c: Context, error: unknown) => {
   );
 };
 
-export function createTimelineRoutes(store: ProjectStore) {
+export function createTimelineRoutes(
+  store: ProjectStore,
+  reviews: ReviewService,
+) {
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -190,6 +195,7 @@ export function createTimelineRoutes(store: ProjectStore) {
         composition,
         revision,
         timeline: parsed.timeline,
+        agentChanges: await reviews.changedClips(project, composition),
       } satisfies TimelineView);
     } catch (error) {
       return refused(c, error);
@@ -200,9 +206,23 @@ export function createTimelineRoutes(store: ProjectStore) {
     const input = parseInput(CommandBatchSchema, await c.req.json());
     const batch = { ...input, composition: canonical(input.composition) };
     try {
-      return c.json(
-        await store.mutate(project, batch.label, () => edit(project, batch)),
-      );
+      return c.json({
+        ...(await reviews.editComposition(
+          project,
+          batch.composition,
+          c.req.header(AGENT_HEADER),
+          () =>
+            store.mutate(
+              project,
+              batch.label,
+              () => edit(project, batch),
+              c.req.header(AGENT_HEADER)
+                ? { kind: "agent", name: "Agent" }
+                : undefined,
+            ),
+        )),
+        agentChanges: await reviews.changedClips(project, batch.composition),
+      });
     } catch (error) {
       return refused(c, error);
     }

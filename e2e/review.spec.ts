@@ -222,3 +222,84 @@ test("typing a note after a stroke never drives the editor, and another note kee
   await page.keyboard.type(" to play");
   await untouched("look in to play");
 });
+
+test("owner queue order and withdrawal survive reload, and Accept clears the changed clip underline", async ({
+  page,
+  request,
+}) => {
+  await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
+    route.fulfill({
+      json: {
+        provider: "codex",
+        available: false,
+        skills: [],
+        models: [],
+        mcpServers: [],
+      },
+    }),
+  );
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Agent change review" },
+      })
+    ).json(),
+  );
+  const base = `/api/cutroom/projects/${project.id}`;
+  const note = async (body: string) =>
+    ReviewItemSchema.parse(
+      await (
+        await request.post(`${base}/review`, { data: { body, time: 0 } })
+      ).json(),
+    );
+  const first = await note("First note");
+  const second = await note("Second note");
+  await request.post(`${base}/review/${first.id}/agent`, {
+    data: { type: "claim" },
+  });
+  const before = TimelineViewSchema.parse(
+    await (await request.get(`${base}/timeline`)).json(),
+  );
+  const edited = await request.post(`${base}/commands`, {
+    headers: { "x-cutroom-agent": "external" },
+    data: {
+      expectedRevision: before.revision,
+      commands: [
+        { type: "setClip", clipId: "headline", label: "Agent opening" },
+      ],
+    },
+  });
+  expect(edited.ok()).toBe(true);
+  await request.post(`${base}/review/${first.id}/agent`, {
+    data: { type: "complete", note: "Renamed headline" },
+  });
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  const row = (body: string) =>
+    page
+      .locator(".review-row")
+      .filter({ has: page.locator(".review-row-body", { hasText: body }) });
+  await expect(page.locator('[data-agent-change="headline"]')).toBeVisible();
+  await row("First note")
+    .getByRole("button", { name: "Move note down" })
+    .click();
+  await expect(row("First note").locator(".note-pin")).toHaveText("2");
+  await page.reload();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(row("Second note").locator(".note-pin")).toHaveText("1");
+  await row("Second note")
+    .getByRole("button", { name: "Withdraw", exact: true })
+    .click();
+  await expect(row("Second note")).toContainText(
+    "You withdrew it: Withdrawn in Review.",
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(row("Second note")).toContainText(
+    "You withdrew it: Withdrawn in Review.",
+  );
+  await row("First note")
+    .getByRole("button", { name: "Accept", exact: true })
+    .click();
+  await expect(page.locator("[data-agent-change]")).toHaveCount(0);
+});

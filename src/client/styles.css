@@ -1019,20 +1019,27 @@ option {
 }
 .agent-request-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   min-height: 28px;
 }
+.agent-permissions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  color: var(--agent);
+}
 .agent-request-title {
-  flex: 1;
+  flex: 1 0 100%;
   min-width: 0;
-  margin-right: 10px;
-  overflow: hidden;
+  padding-block: var(--space-2);
   color: var(--text-secondary);
   line-height: var(--leading-body);
   text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .agent-request-title:hover {
   color: var(--text-primary);
@@ -1042,22 +1049,6 @@ option {
 }
 .agent-request pre {
   margin: 0 8px 6px 0;
-}
-.agent-request-title:has(.agent-request-file) {
-  display: flex;
-}
-.agent-request-title > span {
-  flex: none;
-}
-.agent-request-title > span:first-child {
-  margin-right: 0.25em;
-}
-.agent-request-title > .agent-request-file {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  direction: rtl;
-  text-overflow: ellipsis;
 }
 /* A question lives in the transcript, so a long one scrolls instead of hiding its actions. */
 .agent-request[aria-label="Agent question"] {

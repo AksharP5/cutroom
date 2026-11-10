@@ -1,33 +1,94 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk/core";
+import type {
+  Options,
+  PermissionUpdate,
+} from "@anthropic-ai/claude-agent-sdk/core";
+import { z } from "zod";
 import { createMcpServer } from "../mcp/server";
 
-// Use the registered annotations, including tools added by the review and timeline modules.
+// The registry is the permission boundary. Unknown tools always ask.
 const tools = Array.from(createMcpServer().toolRegistry, ([name, tool]) => ({
   name,
   readOnly: tool.annotations?.readOnlyHint === true,
 }));
+const editTools = new Set(
+  tools.filter((tool) => !tool.readOnly).map((tool) => tool.name),
+);
 
-export const claudeToolPermissions = {
-  allowedTools: tools
-    .filter((tool) => tool.readOnly)
-    .map(({ name }) => `mcp__cutroom_studio__${name}`),
-  settings: {
-    permissions: {
-      ask: tools
-        .filter((tool) => !tool.readOnly)
-        .map(({ name }) => `mcp__cutroom_studio__${name}`),
-    },
-  },
-} satisfies Pick<Options, "allowedTools" | "settings">;
+export function isCutroomEdit(tool: string) {
+  const prefix = "mcp__cutroom_studio__";
+  return tool.startsWith(prefix) && editTools.has(tool.slice(prefix.length));
+}
 
-export const codexToolPermissions: Record<string, string> = {
-  "mcp_servers.cutroom_studio.default_tools_approval_mode": "prompt",
-  ...Object.fromEntries(
-    tools
-      .filter((tool) => tool.readOnly)
-      .map(({ name }) => [
-        `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
-        "approve",
-      ]),
-  ),
+export function claudeToolPermissions(always = false) {
+  // Native ask/deny rules take precedence over these allow entries. Do not add our own
+  // ask rules: they would also override an owner choosing Always allow during a turn.
+  return {
+    allowedTools: tools
+      .filter((tool) => tool.readOnly || always)
+      .map(({ name }) => `mcp__cutroom_studio__${name}`),
+  } satisfies Pick<Options, "allowedTools">;
+}
+
+export const claudeEditPermission: PermissionUpdate = {
+  type: "addRules",
+  behavior: "allow",
+  destination: "session",
+  rules: [...editTools].map((name) => ({
+    toolName: `mcp__cutroom_studio__${name}`,
+  })),
 };
+
+const approvalMode = z.enum(["auto", "prompt", "approve"]);
+const codexNativeConfigSchema = z.object({
+  mcp_servers: z
+    .object({
+      cutroom_studio: z
+        .object({
+          default_tools_approval_mode: approvalMode.nullish(),
+          tools: z
+            .record(
+              z.string(),
+              z.object({ approval_mode: approvalMode.nullish() }),
+            )
+            .default({}),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+export const codexPermissionConfigSchema = z.object({
+  config: codexNativeConfigSchema,
+  layers: z.array(z.object({ config: codexNativeConfigSchema })).nullish(),
+});
+export type CodexToolConfig = NonNullable<
+  NonNullable<
+    z.infer<typeof codexNativeConfigSchema>["mcp_servers"]
+  >["cutroom_studio"]
+>;
+
+export function codexAsks(configs: readonly CodexToolConfig[], name: string) {
+  return configs.some(
+    (config) =>
+      (config.tools[name]?.approval_mode ??
+        config.default_tools_approval_mode) === "prompt",
+  );
+}
+
+export function codexToolPermissions(
+  always = false,
+  configs: readonly CodexToolConfig[] = [],
+): Record<string, string> {
+  return {
+    "mcp_servers.cutroom_studio.default_tools_approval_mode": "prompt",
+    ...Object.fromEntries(
+      tools.map(({ name, readOnly }) => [
+        `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
+        codexAsks(configs, name)
+          ? "prompt"
+          : readOnly || always
+            ? "approve"
+            : "prompt",
+      ]),
+    ),
+  };
+}

@@ -13,6 +13,7 @@ import {
   agentSessionSummarySchema,
   toolTarget,
 } from "../src/shared/agent";
+import { codexToolPermissions } from "../src/server/agents/tool-permissions";
 import { CodexClient } from "../src/server/agents/codex-client";
 import { CodexRuntime } from "../src/server/agents/codex";
 import { createAgentRoutes } from "../src/server/agents/routes";
@@ -599,6 +600,7 @@ const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
 for await (const line of createInterface({input:process.stdin})) {
   const input = JSON.parse(line);
   if (input.method === "initialize") reply({id:input.id,result:{}});
+  if (input.method === "config/read") reply({id:input.id,result:{config:{}}});
   if (input.method === "thread/start" || input.method === "thread/resume") { appendFileSync(process.argv[2] + ".thread", JSON.stringify(input.params)); reply({id:input.id,result:{thread:{id:"native-session"}}}); }
   if (input.method === "turn/start") {
     appendFileSync(process.argv[2],JSON.stringify(input.params)+"\n");
@@ -683,6 +685,7 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
   expect(
     JSON.parse(await readFile(`${recording}.thread`, "utf8")).config,
   ).toEqual({
+    ...codexToolPermissions(),
     "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token",
   });
   const sent = JSON.parse((await readFile(recording, "utf8")).trim());
@@ -759,4 +762,165 @@ test("tool targets read relative to the project", () => {
   // Paths outside the project stay absolute, so nothing is misattributed.
   expect(toolTarget({ file_path: "/etc/hosts" }, project)).toBe("/etc/hosts");
   expect(toolTarget({ projectId: "abc", frame: 12 }, project)).toBeUndefined();
+});
+
+test("Always allow is saved per project, rejects other tools, and revocation cancels a pending run", async () => {
+  let allowed = false;
+  const runtime = factory(async (options) => {
+    await options.request({
+      id: "edit",
+      kind: "approval",
+      tool: "mcp__cutroom_studio__timeline_edit",
+      title: "Edit the timeline?",
+      input: {},
+      canAllowCutroomEdits: true,
+    });
+    allowed = options.allowCutroomEdits?.() ?? false;
+    await options.request({
+      id: "shell",
+      kind: "approval",
+      tool: "Shell",
+      title: "Run a command?",
+      input: {},
+    });
+  });
+  const { service, projects, project, dataDir } = await setup(runtime);
+  const other = await projects.create({ name: "Separate permissions" });
+  const session = await service.create({
+    projectId: project.id,
+    provider: "codex",
+  });
+  await service.send(session.id, { text: "Edit", skills: [], attachments: [] });
+  await idle(service, session.id, "waiting");
+  await service.respond(session.id, {
+    requestId: "edit",
+    decision: "allow",
+    alwaysAllowCutroomEdits: true,
+  });
+  await idle(service, session.id, "waiting");
+  expect(allowed).toBe(true);
+  expect(await service.permissions(other.id)).toEqual({
+    alwaysAllowCutroomEdits: false,
+  });
+  await expect(
+    service.respond(session.id, {
+      requestId: "shell",
+      decision: "allow",
+      alwaysAllowCutroomEdits: true,
+    }),
+  ).rejects.toThrow("only to Cutroom");
+  expect(service.get(session.id).pendingRequest?.id).toBe("shell");
+  const restored = await createAgentService({
+    projects,
+    review: createReviewService(projects),
+    dataDir,
+    runtimeFactory: runtime,
+  });
+  cleanup.push(() => restored.dispose());
+  expect(await restored.permissions(project.id)).toEqual({
+    alwaysAllowCutroomEdits: true,
+  });
+  const routes = createAgentRoutes(service);
+  const revoked = await routes.request(
+    `/projects/${project.id}/agent-permissions`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ alwaysAllowCutroomEdits: false }),
+    },
+  );
+  expect(revoked.status).toBe(200);
+  expect(service.get(session.id).pendingRequest).toBeUndefined();
+  expect(service.get(session.id).status).toBe("idle");
+  expect(await service.permissions(project.id)).toEqual({
+    alwaysAllowCutroomEdits: false,
+  });
+  expect(
+    JSON.parse(await readFile(join(dataDir, "agents.json"), "utf8"))
+      .cutroomEdits[project.id],
+  ).toBe(false);
+});
+
+test("Codex uses privileged MCP approval metadata, honors explicit prompt rules, and never auto-answers server forms or other tools", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-mcp-permissions-"));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const script = join(directory, "provider.mjs");
+  await writeFile(
+    script,
+    String.raw`
+import {createInterface} from 'node:readline';
+const reply = value => process.stdout.write(JSON.stringify(value)+'\n');
+const requests = [
+ ['cutroom_studio','timeline_edit',{commands:[{}, {}, {}]}],
+ ['cutroom_studio','source_write',{path:'index.html'}],
+ ['other','timeline_edit',{}],
+ ['cutroom_studio',null,{}],
+ ['cutroom_studio','unknown',{}],
+];
+let at = 0;
+const next = () => {
+  const entry = requests[at++];
+  if (!entry) {reply({method:'turn/completed',params:{threadId:'thread',turn:{id:'turn',status:'completed'}}});return;}
+  const [serverName,tool,args] = entry;
+  reply({id:at,method:'mcpServer/elicitation/request',params:{threadId:'thread',serverName,mode:'form',message:'Allow the raw MCP name?',requestedSchema:{type:'object',properties:{}},...(tool && {_meta:{codex_approval_kind:'mcp_tool_call',tool_name:tool,tool_params:args}})}});
+};
+for await(const line of createInterface({input:process.stdin})) {
+ const m=JSON.parse(line);
+ if(m.method==='initialize')reply({id:m.id,result:{}});
+ if(m.method==='config/read')reply({id:m.id,result:{config:{},layers:[{disabledReason:'Untrusted project',config:{mcp_servers:{cutroom_studio:{tools:process.argv[2]==='prompt'?{source_write:{approval_mode:'prompt'}}:{}}}}}]}});
+ if(m.method==='thread/start')reply({id:m.id,result:{thread:{id:'thread'}}});
+ if(m.method==='turn/start'){reply({id:m.id,result:{turn:{id:'turn'}}});next();}
+ if(!m.method && m.result?.action)next();
+}
+`,
+  );
+  for (const prompt of [false, true]) {
+    const client = new CodexClient({
+      executable: process.execPath,
+      args: [script, prompt ? "prompt" : "default"],
+    });
+    let always = false;
+    const requests: AgentRequest[] = [];
+    const runtime = new CodexRuntime(client, {
+      cwd: directory,
+      agentToken: "token",
+      emit() {},
+      allowCutroomEdits: () => always,
+      request: async (request) => {
+        requests.push(request);
+        if (request.tool === "mcp__cutroom_studio__timeline_edit")
+          always = true;
+        return {
+          requestId: request.id,
+          decision: "allow",
+          alwaysAllowCutroomEdits: request.canAllowCutroomEdits,
+        };
+      },
+    });
+    try {
+      await runtime.send({ text: "Edit", skills: [], attachments: [] });
+      expect(requests[0]?.title).toBe("Edit the timeline (3 changes)?");
+      expect(requests[0]?.canAllowCutroomEdits).toBe(true);
+      expect(
+        requests.some(
+          (request) => request.tool === "mcp__cutroom_studio__source_write",
+        ),
+      ).toBe(prompt);
+      expect(
+        requests.filter((request) => request.canAllowCutroomEdits),
+      ).toHaveLength(1);
+      expect(requests.map((request) => request.tool)).toContain(
+        "mcp__other__timeline_edit",
+      );
+      expect(requests.map((request) => request.tool)).toContain(
+        "mcpServer/elicitation/request",
+      );
+      expect(requests.map((request) => request.tool)).toContain(
+        "mcp__cutroom_studio__unknown",
+      );
+    } finally {
+      runtime.dispose();
+      client.dispose();
+    }
+  }
 });

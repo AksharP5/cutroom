@@ -153,10 +153,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     if (shown !== base || next.size || placed.current.size || preview.current)
       for (const element of root.querySelectorAll<HTMLElement>(
-        "[data-clip], [data-clip-label], [data-clip-outline]",
+        "[data-clip], [data-clip-label], [data-clip-outline], [data-agent-change]",
       )) {
-        const { clip, clipLabel, clipOutline } = element.dataset;
-        const id = clip ?? clipLabel ?? clipOutline ?? "";
+        const { clip, clipLabel, clipOutline, agentChange } = element.dataset;
+        const id = clip ?? clipLabel ?? clipOutline ?? agentChange ?? "";
         element.hidden = !surviving.has(id);
         const at = next.get(id);
         const move = at ? `translate(${at.x}px, ${at.y}px)` : "";

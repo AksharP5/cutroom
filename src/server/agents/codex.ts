@@ -6,6 +6,14 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
+import { approvalTitle } from "../../shared/toolRow";
+import {
+  codexAsks,
+  codexPermissionConfigSchema,
+  codexToolPermissions,
+  isCutroomEdit,
+} from "./tool-permissions";
+import type { CodexToolConfig } from "./tool-permissions";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
 import { agentPrompt, completeMessage } from "./runtime";
@@ -75,6 +83,15 @@ const turnCompletedSchema = z.object({
     error: z.object({ message: z.string() }).nullable().optional(),
   }),
 });
+const mcpApprovalSchema = z.object({
+  serverName: z.string(),
+  _meta: z.object({
+    codex_approval_kind: z.literal("mcp_tool_call"),
+    tool_name: z.string(),
+    tool_params: z.record(z.string(), z.unknown()),
+  }),
+});
+
 const nativeQuestionsSchema = z.array(
   z
     .object({
@@ -121,6 +138,7 @@ export async function codexCapabilities(
 
 export class CodexRuntime implements AgentRuntime {
   private threadId?: string;
+  private permissionConfigs: CodexToolConfig[] = [];
   private turnId?: string;
   private stopRequested = false;
   private turnFinished = false;
@@ -151,26 +169,49 @@ export class CodexRuntime implements AgentRuntime {
 
   private ensureThread() {
     if (this.threadId) return Promise.resolve(this.threadId);
-    this.starting ??= this.client
-      .call(this.options.nativeSessionId ? "thread/resume" : "thread/start", {
-        ...(this.options.nativeSessionId
-          ? { threadId: this.options.nativeSessionId, excludeTurns: true }
-          : {}),
-        cwd: this.options.cwd,
-        ...(this.options.model ? { model: this.options.model } : {}),
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        serviceName: "cutroom",
-        ...(Object.keys(this.threadConfig).length && {
-          config: this.threadConfig,
+    this.starting ??= (async () => {
+      const native = codexPermissionConfigSchema.parse(
+        await this.client.call("config/read", {
+          cwd: this.options.cwd,
+          includeLayers: true,
         }),
-      })
-      .then((value) => {
-        const id = threadResultSchema.parse(value).thread.id;
-        this.threadId = id;
-        this.options.emit({ type: "native-session", nativeSessionId: id });
-        return id;
-      });
+      );
+      // Even an untrusted project's ask rules may restrict Cutroom's grant. Read
+      // restrictions only; never enable tools or permissions from a disabled layer.
+      this.permissionConfigs = [
+        native.config,
+        ...(native.layers ?? []).map((layer) => layer.config),
+      ].flatMap((config) =>
+        config.mcp_servers?.cutroom_studio
+          ? [config.mcp_servers.cutroom_studio]
+          : [],
+      );
+      return this.client.call(
+        this.options.nativeSessionId ? "thread/resume" : "thread/start",
+        {
+          ...(this.options.nativeSessionId
+            ? { threadId: this.options.nativeSessionId, excludeTurns: true }
+            : {}),
+          cwd: this.options.cwd,
+          ...(this.options.model ? { model: this.options.model } : {}),
+          approvalPolicy: "on-request",
+          sandbox: "workspace-write",
+          serviceName: "cutroom",
+          config: {
+            ...this.threadConfig,
+            ...codexToolPermissions(
+              this.options.allowCutroomEdits?.(),
+              this.permissionConfigs,
+            ),
+          },
+        },
+      );
+    })().then((value) => {
+      const id = threadResultSchema.parse(value).thread.id;
+      this.threadId = id;
+      this.options.emit({ type: "native-session", nativeSessionId: id });
+      return id;
+    });
     return this.starting;
   }
 
@@ -429,19 +470,44 @@ export class CodexRuntime implements AgentRuntime {
           multiple: question.multiSelect ?? false,
         }))
       : undefined;
+    // Only Codex's privileged approval metadata identifies an MCP tool approval.
+    // A server's own form or a message mentioning Cutroom never grants edit access.
+    const approval =
+      method === "mcpServer/elicitation/request"
+        ? mcpApprovalSchema.safeParse(params).data
+        : undefined;
+    const tool = approval
+      ? `mcp__${approval.serverName}__${approval._meta.tool_name}`
+      : method === "item/commandExecution/requestApproval"
+        ? "Shell"
+        : method === "item/fileChange/requestApproval"
+          ? "Files"
+          : method;
+    const input = approval?._meta.tool_params ?? params;
+    const canAllowCutroomEdits =
+      isCutroomEdit(tool) &&
+      !codexAsks(this.permissionConfigs, approval?._meta.tool_name ?? "");
+    if (canAllowCutroomEdits && this.options.allowCutroomEdits?.()) {
+      this.client.respond(id, { action: "accept", content: null });
+      return;
+    }
+    const target = toolTarget(input, this.options.cwd);
     const request: AgentRequest = {
       id: String(id),
       kind: questions ? "question" : "approval",
-      tool: method,
-      title:
-        typeof params.reason === "string"
+      tool,
+      canAllowCutroomEdits,
+      ...(target && { target }),
+      title: approval
+        ? approvalTitle(tool, input, this.options.cwd)
+        : typeof params.reason === "string"
           ? params.reason
           : typeof params.command === "string"
             ? params.command
             : typeof params.message === "string"
               ? params.message
               : "Codex needs your permission",
-      input: params,
+      input,
       ...(questions ? { questions } : {}),
     };
     const response = await this.options.request(request);

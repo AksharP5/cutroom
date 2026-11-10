@@ -3,12 +3,12 @@ import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
 import { nextTrackIndex } from "../../shared/timeline/tracks";
 import { editKeys } from "../edit/keys";
-import { editTimeline, useTimeline } from "../edit/timeline";
+import { editTimeline, loadTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
-import { useWorkspace } from "../workspace";
+import { reportEditorError, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
 import { Timeline } from "./Timeline";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
@@ -68,6 +68,11 @@ export function ProjectTimeline({
   const setSelection = (next: Selection) =>
     useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
+  useEffect(() => {
+    void loadTimeline(projectId).catch((error) =>
+      reportEditorError("timeline", error),
+    );
+  }, [projectId, notes]);
 
   useEffect(() => {
     if (timeline)
@@ -155,6 +160,7 @@ export function ProjectTimeline({
       source={{ projectId, composition: view.composition }}
       clock={clock}
       pins={pins}
+      agentChanges={new Set(view.agentChanges)}
       selection={selection}
       onSelect={setSelection}
       tool={tool}

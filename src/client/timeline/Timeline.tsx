@@ -82,6 +82,7 @@ export interface TimelineProps {
   clock: TimelineClock;
   /** Review notes shown on the ruler's top edge. */
   pins: readonly TimelinePin[];
+  agentChanges?: ReadonlySet<string>;
   selection: Selection;
   onSelect(selection: Selection): void;
   /** What a press on a clip does: move and resize, ripple and roll, or razor. */
@@ -461,6 +462,7 @@ export function Timeline({
   source,
   clock,
   pins,
+  agentChanges,
   selection,
   onSelect,
   tool,
@@ -852,6 +854,21 @@ export function Timeline({
                   />
                 ))}
                 <canvas className="tl-bodies" ref={canvas} />
+                {clips
+                  .filter(({ clip }) => agentChanges?.has(clip.id))
+                  .map(({ clip, row }) => (
+                    <i
+                      key={clip.id}
+                      className={`tl-agent-change on-${row.track.kind}`}
+                      data-agent-change={clip.id}
+                      title="Agent change awaiting acceptance"
+                      style={{
+                        "--s": clip.start,
+                        "--d": clip.duration,
+                        top: row.top,
+                      }}
+                    />
+                  ))}
                 {clips.map(
                   ({ clip, row }) =>
                     selection.ids.has(clip.id) && (

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import {
+  agentPermissionsSchema,
   agentProviderSchema,
   agentResponseSchema,
   agentTurnSchema,
@@ -27,6 +28,18 @@ export function createAgentRoutes(service: AgentService) {
     return c.json({ error: error.message }, 500);
   });
 
+  app.get("/projects/:id/agent-permissions", async (c) =>
+    c.json(await service.permissions(c.req.param("id"))),
+  );
+  app.patch("/projects/:id/agent-permissions", async (c) => {
+    const input = agentPermissionsSchema.parse(await c.req.json());
+    return c.json(
+      await service.setPermissions(
+        c.req.param("id"),
+        input.alwaysAllowCutroomEdits,
+      ),
+    );
+  });
   app.get("/agents/capabilities", async (c) => {
     const provider = agentProviderSchema.parse(c.req.query("provider"));
     const projectId = z.string().min(1).parse(c.req.query("projectId"));

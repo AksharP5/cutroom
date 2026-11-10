@@ -8,6 +8,8 @@ import { createMcpServer } from "../src/server/mcp/server";
 import {
   claudeToolPermissions,
   codexToolPermissions,
+  isCutroomEdit,
+  claudeEditPermission,
 } from "../src/server/agents/tool-permissions";
 
 const reads = [
@@ -20,6 +22,7 @@ const reads = [
   "history_list",
   "review_list",
   "timeline_read",
+  "timeline_view",
 ];
 
 test("native permission rules match every tool advertised over MCP", async () => {
@@ -35,30 +38,62 @@ test("native permission rules match every tool advertised over MCP", async () =>
         .filter((tool) => tool.annotations?.readOnlyHint)
         .map((tool) => tool.name),
     ).toEqual(reads);
-    for (const tool of tools) {
-      const name = `mcp__cutroom_studio__${tool.name}`;
-      const readOnly = reads.includes(tool.name);
-      expect(claudeToolPermissions.allowedTools.includes(name)).toBe(readOnly);
+    for (const always of [false, true]) {
+      const claude = claudeToolPermissions(always);
+      const codex = codexToolPermissions(always);
+      for (const tool of tools) {
+        const name = `mcp__cutroom_studio__${tool.name}`;
+        const allowed = reads.includes(tool.name) || always;
+        expect(claude.allowedTools.includes(name)).toBe(allowed);
+        expect(
+          codex[`mcp_servers.cutroom_studio.tools.${tool.name}.approval_mode`],
+        ).toBe(allowed ? "approve" : "prompt");
+        expect(isCutroomEdit(name)).toBe(!reads.includes(tool.name));
+      }
       expect(
-        claudeToolPermissions.settings.permissions.ask.includes(name),
-      ).toBe(!readOnly);
-      const mode =
-        codexToolPermissions[
-          `mcp_servers.cutroom_studio.tools.${tool.name}.approval_mode`
-        ];
-      if (readOnly) expect(mode).toBe("approve");
-      else expect(mode).toBeUndefined();
+        claude.allowedTools.every((name) =>
+          name.startsWith("mcp__cutroom_studio__"),
+        ),
+      ).toBe(true);
+      expect(
+        codex["mcp_servers.cutroom_studio.default_tools_approval_mode"],
+      ).toBe("prompt");
     }
-    expect(claudeToolPermissions.allowedTools).toHaveLength(reads.length);
-    expect(claudeToolPermissions.settings.permissions.ask).toHaveLength(
-      tools.length - reads.length,
-    );
+    for (const tool of [
+      "Bash",
+      "Shell",
+      "mcp__other__timeline_edit",
+      "mcp__cutroom_studio__unknown",
+      "mcp__cutroom_studio__timeline_read",
+    ])
+      expect(isCutroomEdit(tool)).toBe(false);
+    expect(claudeEditPermission.destination).toBe("session");
+    const configured = codexToolPermissions(true, [
+      {
+        tools: {
+          timeline_edit: { approval_mode: "prompt" },
+          timeline_view: { approval_mode: "prompt" },
+        },
+      },
+    ]);
     expect(
-      codexToolPermissions[
-        "mcp_servers.cutroom_studio.default_tools_approval_mode"
+      configured[
+        "mcp_servers.cutroom_studio.tools.timeline_edit.approval_mode"
       ],
     ).toBe("prompt");
-    expect(Object.keys(codexToolPermissions)).toHaveLength(reads.length + 1);
+    expect(
+      configured[
+        "mcp_servers.cutroom_studio.tools.timeline_view.approval_mode"
+      ],
+    ).toBe("prompt");
+    expect(
+      codexToolPermissions(true, [
+        {
+          default_tools_approval_mode: "prompt",
+          tools: {},
+        },
+      ])["mcp_servers.cutroom_studio.tools.source_write.approval_mode"],
+    ).toBe("prompt");
   } finally {
     await client.close();
     await server.close();
@@ -85,6 +120,7 @@ const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
 for await (const line of createInterface({input:process.stdin})) {
   const message = JSON.parse(line);
   if (message.method === "initialize") reply({id:message.id,result:{}});
+  if (message.method === "config/read") reply({id:message.id,result:{config:{}}});
   if (message.method === "thread/start" || message.method === "thread/resume") {
     await Bun.write(process.env.RECORDING + ".thread", JSON.stringify(message.params));
     reply({id:message.id,result:{thread:{id:"test-thread"}}});
@@ -113,7 +149,7 @@ test("native factories wire scoped rules into fresh and resumed sessions", async
       `import { createNativeRuntimeFactory } from ${JSON.stringify(join(import.meta.dir, "../src/server/agents/factory.ts"))};
 const factory = createNativeRuntimeFactory();
 const runtime = factory.create(process.argv[2], {
-  cwd: process.cwd(), agentToken: "test-token", nativeSessionId: process.argv[3], emit() {},
+  cwd: process.cwd(), allowCutroomEdits: () => process.argv[4] === "true", agentToken: "test-token", nativeSessionId: process.argv[3], emit() {},
   request: async () => { throw new Error("The wiring fixture must not request approval"); }
 });
 try {
@@ -123,59 +159,60 @@ try {
 `,
     );
     for (const provider of ["claude", "codex"] as const) {
-      for (const resume of [false, true]) {
-        const recording = join(directory, `${provider}-${resume}`);
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            runner,
-            provider,
-            ...(resume ? ["previous-session"] : []),
-          ],
-          {
-            cwd: directory,
-            env: {
-              ...process.env,
-              PATH: `${directory}:${process.env.PATH}`,
-              RECORDING: recording,
+      for (const resume of [false, true])
+        for (const always of [false, true]) {
+          const recording = join(directory, `${provider}-${resume}-${always}`);
+          const child = Bun.spawn(
+            [
+              process.execPath,
+              runner,
+              provider,
+              resume ? "previous-session" : "",
+              String(always),
+            ],
+            {
+              cwd: directory,
+              env: {
+                ...process.env,
+                PATH: `${directory}:${process.env.PATH}`,
+                RECORDING: recording,
+              },
+              stdout: "pipe",
+              stderr: "pipe",
             },
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-        );
-        const [output, error, code] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ]);
-        expect(code, error).toBe(0);
-        expect(output.trim()).toBe("done");
-        if (provider === "claude") {
-          const args: string[] = JSON.parse(
-            await readFile(`${recording}.args`, "utf8"),
           );
-          expect(args).toContain("--permission-mode=default");
-          expect(
-            args
-              .find((arg) => arg.startsWith("--allowedTools="))
-              ?.slice("--allowedTools=".length)
-              .split(","),
-          ).toEqual(claudeToolPermissions.allowedTools);
-          expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual(
-            claudeToolPermissions.settings,
-          );
-        } else {
-          const thread = JSON.parse(
-            await readFile(`${recording}.thread`, "utf8"),
-          );
-          expect(thread.approvalPolicy).toBe("on-request");
-          expect(thread.sandbox).toBe("workspace-write");
-          expect(thread.config).toEqual({
-            ...codexToolPermissions,
-            "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token",
-          });
+          const [output, error, code] = await Promise.all([
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+            child.exited,
+          ]);
+          expect(code, error).toBe(0);
+          expect(output.trim()).toBe("done");
+          if (provider === "claude") {
+            const args: string[] = JSON.parse(
+              await readFile(`${recording}.args`, "utf8"),
+            );
+            expect(args).toContain("--permission-mode=default");
+            expect(
+              args
+                .find((arg) => arg.startsWith("--allowedTools="))
+                ?.slice("--allowedTools=".length)
+                .split(","),
+            ).toEqual(claudeToolPermissions(always).allowedTools);
+            expect(args).not.toContain("--settings");
+          } else {
+            const thread = JSON.parse(
+              await readFile(`${recording}.thread`, "utf8"),
+            );
+            expect(thread.approvalPolicy).toBe("on-request");
+            expect(thread.sandbox).toBe("workspace-write");
+            expect(thread.config).toEqual({
+              ...codexToolPermissions(always),
+              "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN":
+                "test-token",
+            });
+          }
         }
-      }
     }
   } finally {
     await rm(directory, { recursive: true, force: true });

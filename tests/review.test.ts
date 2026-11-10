@@ -1275,3 +1275,68 @@ test("annotations accept one validated client id and reject duplicates", async (
   const invalid = await queue.fetchRaw(path, "POST", { ...body, id: "../bad" });
   expect(invalid.status).toBe(400);
 });
+
+test("owner reorders persist through reload, agent cannot reorder, and withdrawal keeps its reason", async () => {
+  const { review, store, project, note, items, fetchRaw, mcp } = await setup();
+  const first = await note("First");
+  const second = await note("Second");
+  const third = await note("Third");
+  const reordered = await fetchRaw(
+    `/projects/${project.id}/review/order`,
+    "PATCH",
+    { noteId: third, beforeId: first },
+  );
+  expect(reordered.status).toBe(200);
+  expect((await items()).map((item) => item.id)).toEqual([
+    third,
+    first,
+    second,
+  ]);
+  expect(
+    (await createReviewService(store).list(project)).map((item) => item.id),
+  ).toEqual([third, first, second]);
+  const turn = await review.beginTurn(project, {
+    kind: "message",
+    id: "owner-message",
+    token: "owner-token",
+  });
+  try {
+    const denied = await fetchRaw(
+      `/projects/${project.id}/review/order`,
+      "PATCH",
+      { noteId: first, beforeId: third },
+      { [AGENT_HEADER]: "owner-token" },
+    );
+    expect(denied.status).toBe(409);
+    const moved = await mcp.callTool({
+      name: "review_reorder",
+      arguments: { projectId: project.id, noteId: second, beforeId: third },
+    });
+    expect(moved.isError).not.toBe(true);
+    expect((await items()).map((item) => item.id)).toEqual([
+      second,
+      third,
+      first,
+    ]);
+    const withdrawn = await fetchRaw(
+      `/projects/${project.id}/review/${third}/human`,
+      "POST",
+      { type: "withdraw", reason: "Changed the plan." },
+    );
+    expect(withdrawn.status).toBe(200);
+    expect(
+      (await items()).find((item) => item.id === third)?.review,
+    ).toMatchObject({
+      status: "withdrawn",
+      by: "human",
+      reason: "Changed the plan.",
+    });
+    expect(
+      (await createReviewService(store).list(project)).find(
+        (item) => item.id === third,
+      )?.review.status,
+    ).toBe("withdrawn");
+  } finally {
+    await turn.end();
+  }
+});

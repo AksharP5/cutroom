@@ -15,6 +15,7 @@ import {
   parseComposition,
   patchComposition,
 } from "../src/server/timeline/composition";
+import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 
 /**
@@ -112,7 +113,8 @@ const store = await createProjectStore({ dataDir: directory });
 try {
   const project = await store.create({ name: "Timeline benchmark" });
   await writeFile(join(project.path, "index.html"), html);
-  const app = new Hono().route("/", createTimelineRoutes(store));
+  const review = createReviewService(store);
+  const app = new Hono().route("/", createTimelineRoutes(store, review));
   const read = async () =>
     TimelineViewSchema.parse(
       await (await app.request(`/projects/${project.id}/timeline`)).json(),

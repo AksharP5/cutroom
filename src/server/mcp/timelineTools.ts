@@ -67,8 +67,8 @@ export function registerTimelineTools(
     {
       description: "Render one timeline frame as an image.",
       inputSchema: { ...input, frame: z.number().int().nonnegative() },
-      // Capture still executes project-authored JavaScript; retain explicit tool approval.
-      annotations: { ...readOnly, readOnlyHint: false },
+      // The thumbnail route captures in the capability-scoped, opaque renderer.
+      annotations: readOnly,
     },
     async ({ projectId, composition, frame }): Promise<CallToolResult> => {
       const failed = (text: string): CallToolResult => ({

@@ -283,6 +283,7 @@ export const CommandBatchSchema = z.object({
 });
 
 export const TimelineViewSchema = z.object({
+  agentChanges: z.array(z.string()).optional(),
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,
