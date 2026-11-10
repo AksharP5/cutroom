@@ -5,6 +5,7 @@ import { encodePeaks, peakSampleRate } from "./peaks";
 import { FilmstripSchema, MediaInfoSchema, MediaTaskSchema } from "./protocol";
 import { mediaSettings } from "../../shared/media";
 import { scaleFilter, tileWidth } from "./settings";
+import { localMediaInputOptions } from "./input";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
 let cancelled = false;
@@ -13,12 +14,7 @@ process.on("SIGTERM", () => {
   cancelled = true;
   child?.kill("SIGTERM");
 });
-const inputOptions = [
-  "-protocol_whitelist",
-  "file,pipe",
-  "-format_whitelist",
-  "mov,matroska,webm,mp3,wav,flac,aac,ogg,aiff,avi,asf,mpeg,mpegts,flv,mxf,w64,caf",
-];
+
 async function run(
   args: string[],
   consume?: (stream: ReadableStream<Uint8Array>) => Promise<unknown>,
@@ -84,7 +80,7 @@ try {
       task.ffprobe,
       "-v",
       "error",
-      ...inputOptions,
+      ...localMediaInputOptions,
       "-show_entries",
       "format=duration:stream=codec_type,channels,width,height,avg_frame_rate,r_frame_rate,sample_aspect_ratio,duration:stream_side_data=rotation",
       "-of",
@@ -141,7 +137,7 @@ try {
     await run(
       [
         ...ffmpeg,
-        ...inputOptions,
+        ...localMediaInputOptions,
         "-i",
         task.source,
         "-map",
@@ -168,7 +164,7 @@ try {
     if (task.kind === "frame") {
       await run([
         ...ffmpeg,
-        ...inputOptions,
+        ...localMediaInputOptions,
         "-ss",
         String(task.time),
         "-i",
@@ -200,7 +196,7 @@ try {
           ...ffmpeg,
           "-v",
           "info",
-          ...inputOptions,
+          ...localMediaInputOptions,
           "-skip_frame",
           "nokey",
           "-i",
@@ -241,7 +237,7 @@ try {
         const name = `frames/frame-${String(count + 1).padStart(6, "0")}.png`;
         await run([
           ...ffmpeg,
-          ...inputOptions,
+          ...localMediaInputOptions,
           "-ss",
           String(seekTime),
           "-i",

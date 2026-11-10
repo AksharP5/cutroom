@@ -567,6 +567,68 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
 );
 
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "timeline reads refuse HLS playlists that reference outside files or network media",
+  async () => {
+    const fixture = await timelineFixture();
+    let networkReads = 0;
+    const outside = join(fixture.directory, "outside.ts");
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        networkReads++;
+        return new Response(Bun.file(outside));
+      },
+    });
+    try {
+      const made = Bun.spawnSync(
+        [
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:sample_rate=44100",
+          "-t",
+          "1",
+          "-c:a",
+          "aac",
+          "-f",
+          "mpegts",
+          outside,
+        ],
+        { stderr: "pipe" },
+      );
+      expect(made.exitCode).toBe(0);
+      for (const [name, segment] of [
+        ["escape.m3u8", outside],
+        ["disguised.mp4", outside],
+        ["network.m3u8", `http://127.0.0.1:${server.port}/outside.ts`],
+      ]) {
+        await writeFile(
+          join(fixture.project.path, name),
+          `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:1,\n${segment}\n#EXT-X-ENDLIST\n`,
+        );
+        await writeFile(
+          join(fixture.project.path, "index.html"),
+          `<main data-composition-id="main" data-duration="4"><audio id="bed" src="${name}" data-start="0" data-track-index="0"></audio></main>`,
+        );
+        const response = await fixture.request(
+          `/projects/${fixture.project.id}/timeline`,
+        );
+        expect(response.status, name).toBe(422);
+        expect(await response.text()).toContain("could not be measured");
+      }
+      expect(networkReads).toBe(0);
+    } finally {
+      server.stop(true);
+      await fixture.close();
+    }
+  },
+);
+
 test("a scene edit declares the entry layer in the same undo step", async () => {
   const fixture = await timelineFixture();
   const { project } = fixture;

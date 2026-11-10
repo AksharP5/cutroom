@@ -13,6 +13,7 @@ import type {
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
 import { describeTool } from "../../shared/toolRow";
+import { claudeToolPermissions } from "./tool-permissions";
 import { InputQueue } from "./input-queue";
 import { agentPrompt, completeMessage, toolCalls } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
@@ -57,6 +58,7 @@ function nativeOptions(cwd: string, studioMcp: StudioMcp): Options {
     systemPrompt: { type: "preset", preset: "claude_code" },
     includePartialMessages: true,
     permissionMode: "default",
+    ...claudeToolPermissions,
     mcpServers: studioMcp,
   };
 }

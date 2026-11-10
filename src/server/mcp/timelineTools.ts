@@ -29,7 +29,7 @@ const readOnly = {
 };
 
 export function registerTimelineTools(
-  server: McpServer,
+  server: Pick<McpServer, "registerTool">,
   request: JsonRequest,
   fetchLocal: LocalFetch,
 ) {
@@ -67,7 +67,8 @@ export function registerTimelineTools(
     {
       description: "Render one timeline frame as an image.",
       inputSchema: { ...input, frame: z.number().int().nonnegative() },
-      annotations: readOnly,
+      // Rendering executes composition JavaScript on Cutroom's origin.
+      annotations: { ...readOnly, readOnlyHint: false },
     },
     async ({ projectId, composition, frame }): Promise<CallToolResult> => {
       const failed = (text: string): CallToolResult => ({

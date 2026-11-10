@@ -2,6 +2,7 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk/core";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AgentCapabilities, AgentProvider } from "../../shared/agent";
+import { codexToolPermissions } from "./tool-permissions";
 import { ClaudeRuntime, claudeCapabilities } from "./claude";
 import { CodexClient } from "./codex-client";
 import { CodexRuntime, codexCapabilities } from "./codex";
@@ -86,6 +87,7 @@ export function createNativeRuntimeFactory(
             options,
             existsSync(bridge)
               ? {
+                  ...codexToolPermissions,
                   "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN":
                     options.agentToken,
                 }
