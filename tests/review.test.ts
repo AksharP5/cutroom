@@ -56,7 +56,7 @@ const reviews: Record<ReviewStatus, Review> = {
     note: "Title is 96px.",
     revision: null,
   },
-  accepted: { status: "accepted", updatedAt: at },
+  accepted: { status: "accepted", updatedAt: at, by: "human" },
   blocked: { status: "blocked", updatedAt: at, question: "Which logo?" },
   withdrawn: {
     status: "withdrawn",
@@ -164,8 +164,14 @@ describe("review transitions", () => {
     expect(released).toEqual({
       review: { status: "queued", updatedAt: at },
       instructions: [
-        { text: "Bigger.", at, source: "review" },
-        { text: "Double it.", at, source: "chat", messageId: "message-1" },
+        { text: "Bigger.", at, source: "review", by: "human" },
+        {
+          text: "Double it.",
+          at,
+          source: "chat",
+          by: "agent",
+          messageId: "message-1",
+        },
       ],
     });
   });
@@ -408,7 +414,9 @@ test("notes persist until the agent finishes or withdraws them, then the owner a
         reason: "Not mine to withdraw.",
       },
     ),
-  ).rejects.toThrow("The agent cannot withdraw a note that is accepted.");
+  ).rejects.toThrow(
+    "The outside agent cannot withdraw a note that is accepted.",
+  );
 });
 
 test("an unrelated follow-up still carries every unfinished note", async () => {
@@ -1007,5 +1015,54 @@ describe("review identity binding", () => {
     expect(attempt?.status).toBe(409);
     const [item] = await queue.review.list(other);
     expect(item?.review.status).toBe("queued");
+  });
+});
+
+describe("owner actions over MCP", () => {
+  test("an outside client acts for the owner, but Cutroom's agent cannot accept its own work", async () => {
+    let refused = "";
+    const queue = await setup(async (_turn, native) => {
+      const [item] = await queue.items();
+      await call(native, "review_complete", {
+        projectId: queue.project.id,
+        noteId: item!.id,
+        note: "Swapped the logo.",
+      });
+      const accepted = await native.callTool({
+        name: "review_accept",
+        arguments: { projectId: queue.project.id, noteId: item!.id },
+      });
+      refused = JSON.stringify(accepted.content);
+    });
+    const id = await queue.note("Swap the logo");
+    await send(queue.agents, queue.project, "Go");
+    expect(refused).toContain("409");
+    await call(queue.mcp, "review_send_back", {
+      projectId: queue.project.id,
+      noteId: id,
+      note: "Use the white version.",
+    });
+    const [sentBack] = await queue.items();
+    expect(sentBack?.review.status).toBe("queued");
+    expect(sentBack?.instructions).toEqual([
+      expect.objectContaining({
+        text: "Use the white version.",
+        by: "external",
+      }),
+    ]);
+    await queue.request(
+      `/projects/${queue.project.id}/review/${id}/agent`,
+      "POST",
+      { type: "complete", note: "Now white." },
+    );
+    await call(queue.mcp, "review_accept", {
+      projectId: queue.project.id,
+      noteId: id,
+    });
+    const [accepted] = await queue.items();
+    expect(accepted?.review).toMatchObject({
+      status: "accepted",
+      by: "external",
+    });
   });
 });

@@ -19,7 +19,10 @@ const annotations = {
   openWorldHint: false,
 };
 
-/** The agent's side of the review queue. Accept, send back, restore, and returning a claim stay with the owner. */
+/**
+ * The review queue over MCP. Any client works the queue. An outside client may also act for
+ * the owner (recorded as an outside agent); Cutroom's own agent may not judge its own work.
+ */
 export function registerReviewTools(server: McpServer, request: LocalRequest) {
   const id = encodeURIComponent;
   const act = (projectId: string, noteId: string, action: object) =>
@@ -92,5 +95,55 @@ export function registerReviewTools(server: McpServer, request: LocalRequest) {
     },
     ({ projectId, noteId, ...input }) =>
       act(projectId, noteId, { type: "withdraw", ...input }),
+  );
+  const delegate =
+    " For an outside client acting for the owner; Cutroom's own agent is refused.";
+  server.registerTool(
+    "review_accept",
+    {
+      description: `Accept a done note.${delegate}`,
+      inputSchema: note,
+      annotations,
+    },
+    ({ projectId, noteId }) => act(projectId, noteId, { type: "accept" }),
+  );
+  server.registerTool(
+    "review_send_back",
+    {
+      description: `Return a done note to the queue with what still needs to change.${delegate}`,
+      inputSchema: reviewActions.reject.omit({ type: true }).extend(note),
+      annotations,
+    },
+    ({ projectId, noteId, ...input }) =>
+      act(projectId, noteId, { type: "reject", ...input }),
+  );
+  server.registerTool(
+    "review_reply",
+    {
+      description: `Answer a blocked note's question and return it to the queue.${delegate}`,
+      inputSchema: reviewActions.reply.omit({ type: true }).extend(note),
+      annotations,
+    },
+    ({ projectId, noteId, ...input }) =>
+      act(projectId, noteId, { type: "reply", ...input }),
+  );
+  server.registerTool(
+    "review_restore",
+    {
+      description: `Return a withdrawn note to the queue. Its content must match what was sent.${delegate}`,
+      inputSchema: note,
+      annotations,
+    },
+    ({ projectId, noteId }) => act(projectId, noteId, { type: "restore" }),
+  );
+  server.registerTool(
+    "review_release",
+    {
+      description:
+        "Return a claimed note to the queue, for example a claim left by a client that stopped.",
+      inputSchema: note,
+      annotations,
+    },
+    ({ projectId, noteId }) => act(projectId, noteId, { type: "release" }),
   );
 }

@@ -103,7 +103,9 @@ export function ReviewPanel({
           <p className="review-outcome" key={instruction.at}>
             {instruction.source === "chat"
               ? "You answered in chat: "
-              : "You added: "}
+              : instruction.by === "external"
+                ? "An outside agent added for you: "
+                : "You added: "}
             {instruction.text}
           </p>
         ))}

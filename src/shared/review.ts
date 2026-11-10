@@ -5,6 +5,8 @@ import { HttpError } from "./errors";
 
 const text = z.string().trim().min(1).max(4_000);
 const updatedAt = z.string();
+/** The owner in Review, Cutroom's own agent in a run, or an outside MCP client acting for the owner. */
+const by = z.enum(["human", "agent", "external"]);
 
 /**
  * Header Cutroom's MCP bridge adds to every request it forwards. A native agent's bridge
@@ -34,13 +36,14 @@ export const ReviewSchema = z.discriminatedUnion("status", [
     status: z.literal("accepted"),
     updatedAt,
     note: text.optional(),
+    by,
   }),
   z.object({ status: z.literal("blocked"), updatedAt, question: text }),
   z.object({
     status: z.literal("withdrawn"),
     updatedAt,
     reason: text,
-    by: z.enum(["human", "agent", "external"]),
+    by,
     messageId: z.string().optional(),
     replacedBy: z.string().optional(),
   }),
@@ -57,6 +60,7 @@ export const InstructionSchema = z.object({
   text,
   at: z.string(),
   source: z.enum(["review", "chat"]),
+  by,
   messageId: z.string().optional(),
 });
 export const ReviewStateSchema = z.object({
@@ -131,11 +135,17 @@ export const HumanReviewActionSchema = z.discriminatedUnion("type", [
   reviewActions.release,
   reviewActions.withdraw.omit({ replacedBy: true }),
 ]);
+/** Everything an MCP client may ask for; the transition table decides what its role allows. */
 export const AgentReviewActionSchema = z.discriminatedUnion("type", [
   reviewActions.claim,
   reviewActions.complete,
   reviewActions.block,
   reviewActions.withdraw,
+  reviewActions.accept,
+  reviewActions.reject,
+  reviewActions.reply,
+  reviewActions.restore,
+  reviewActions.release,
 ]);
 export type ReviewAction = z.infer<typeof ReviewActionSchema>;
 
@@ -148,23 +158,32 @@ export const unfinishedStatuses = [
   "done",
 ] as const satisfies readonly ReviewStatus[];
 
-type Rule = { readonly [K in ReviewActor["kind"]]?: readonly ReviewStatus[] };
+type Role = z.infer<typeof by>;
+type Rule = { readonly [R in Role]?: readonly ReviewStatus[] };
+const claimable = ["open", "queued", "blocked"] as const;
+const completable = ["open", "queued", "working", "blocked"] as const;
+const blockable = ["queued", "working"] as const;
 
-/** Which states each actor may leave through each action. Anything absent is refused. */
+/**
+ * Which states each role may leave through each action. Anything absent is refused.
+ * An outside MCP client works the queue and may also act for the owner; Cutroom's own
+ * agent may not accept, send back, answer, or restore its own work.
+ */
 const transitions = {
   send: { human: ["open"] },
-  claim: { agent: ["open", "queued", "blocked"] },
-  complete: { agent: ["open", "queued", "working", "blocked"] },
-  block: { agent: ["queued", "working"] },
-  release: { agent: ["working"], human: ["working"] },
+  claim: { agent: claimable, external: claimable },
+  complete: { agent: completable, external: completable },
+  block: { agent: blockable, external: blockable },
+  release: { human: ["working"], agent: ["working"], external: ["working"] },
   withdraw: {
     human: unfinishedStatuses,
     agent: ["queued", "working", "blocked", "done"],
+    external: unfinishedStatuses,
   },
-  accept: { human: ["done"] },
-  reject: { human: ["done"] },
-  reply: { human: ["blocked"] },
-  restore: { human: ["withdrawn"] },
+  accept: { human: ["done"], external: ["done"] },
+  reject: { human: ["done"], external: ["done"] },
+  reply: { human: ["blocked"], external: ["blocked"] },
+  restore: { human: ["withdrawn"], external: ["withdrawn"] },
 } as const satisfies Record<ReviewAction["type"], Rule>;
 
 export function transition(
@@ -173,13 +192,18 @@ export function transition(
   actor: ReviewActor,
   now = new Date().toISOString(),
 ): ReviewState {
+  const turn = actor.kind === "agent" ? actor.turn : undefined;
+  const role: Role = !turn
+    ? "human"
+    : turn.kind === "external"
+      ? "external"
+      : "agent";
   const rule: Rule = transitions[next.type];
-  if (!rule[actor.kind]?.includes(review.status))
+  if (!rule[role]?.includes(review.status))
     throw new HttpError(
       409,
-      `The ${actor.kind} cannot ${next.type} a note that is ${review.status}.`,
+      `The ${role === "external" ? "outside agent" : role} cannot ${next.type} a note that is ${review.status}.`,
     );
-  const turn = actor.kind === "agent" ? actor.turn : undefined;
   const messageId = turn?.kind === "message" ? turn.id : undefined;
   const to = (review: Review): ReviewState => ({ review, instructions });
   switch (next.type) {
@@ -193,7 +217,7 @@ export function transition(
         review: { status: "queued", updatedAt: now },
         instructions: [
           ...instructions,
-          { text: next.note, at: now, source: "review" },
+          { text: next.note, at: now, source: "review", by: role },
         ],
       };
     case "claim": {
@@ -218,6 +242,7 @@ export function transition(
             text: next.answer,
             at: now,
             source: "chat",
+            by: role,
             ...(messageId && { messageId }),
           },
         ],
@@ -236,6 +261,7 @@ export function transition(
       return to({
         status: "accepted",
         updatedAt: now,
+        by: role,
         ...(review.status === "done" && { note: review.note }),
       });
     case "withdraw":
@@ -243,7 +269,7 @@ export function transition(
         status: "withdrawn",
         updatedAt: now,
         reason: next.reason,
-        by: turn?.kind === "external" ? "external" : actor.kind,
+        by: role,
         ...(messageId && { messageId }),
         ...(next.replacedBy && { replacedBy: next.replacedBy }),
       });
@@ -256,7 +282,8 @@ export function migrateLegacyStatus(
   updatedAt: string,
 ): Review {
   if (status === "sent") return { status: "queued", updatedAt };
-  if (status === "resolved") return { status: "accepted", updatedAt };
+  if (status === "resolved")
+    return { status: "accepted", updatedAt, by: "human" };
   return { status: "open", updatedAt };
 }
 
