@@ -42,7 +42,7 @@ if(task.kind === "probe") {
  if(${JSON.stringify(mode)} === "frames") {
   let cancelled=false;
   process.on("SIGTERM",()=>cancelled=true);
-  while(!cancelled && !await Bun.file(${JSON.stringify(release)}).exists()) await Bun.sleep(5);
+  while(!cancelled && !await Bun.file(${JSON.stringify(release)}+"-"+task.time).exists()) await Bun.sleep(5);
   if(cancelled) {console.log(JSON.stringify({type:"error",error:"cancelled"}));process.exit(0);}
  }
  if(task.kind === "filmstrip") {
@@ -186,12 +186,17 @@ test.skipIf(!Bun.which("ffmpeg"))(
   async () => {
     const f = await controlledFixture("frames");
     try {
+      const readEvents = async () =>
+        z.array(z.object({ time: z.number() })).parse(
+          (await readFile(f.log, "utf8").catch(() => ""))
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line)),
+        );
       await f.media.request(f.project, "frame.mp4", "frame", 1);
       await f.media.request(f.project, "frame.mp4", "frame", 2);
-      await until(
-        async () => readFile(f.log, "utf8").catch(() => ""),
-        (log) => log.trim().split("\n").length === 2,
-      );
+      await until(readEvents, (events) => events.length === 2);
       for (let index = 90; index < 150; index++)
         expect(
           (await f.media.request(f.project, "frame.mp4", "frame", index / 30))
@@ -208,19 +213,13 @@ test.skipIf(!Bun.which("ffmpeg"))(
         3,
       );
       expect(revisited.state.status).toBe("queued");
-      await writeFile(f.release, "release workers");
-      await until(
-        () => f.media.request(f.project, "frame.mp4", "frame", 10),
-        (result) => !!result.artifact,
-      );
-      const events = z.array(z.object({ time: z.number() })).parse(
-        (await readFile(f.log, "utf8"))
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      );
-      expect(events.slice(2, 4).map((event) => event.time)).toContain(10);
-      expect(events.slice(2, 4).map((event) => event.time)).toContain(3);
+      // Free one slot at a time; every newly started frame stays gated.
+      await writeFile(`${f.release}-1`, "release worker");
+      const first = await until(readEvents, (events) => events.length === 3);
+      expect(first.slice(2).map((event) => event.time)).toEqual([3]);
+      await writeFile(`${f.release}-2`, "release worker");
+      const events = await until(readEvents, (events) => events.length === 4);
+      expect(events.slice(2).map((event) => event.time)).toEqual([3, 10]);
     } finally {
       await f.close();
     }
