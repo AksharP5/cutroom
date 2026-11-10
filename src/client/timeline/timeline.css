@@ -869,9 +869,10 @@
   pointer-events: stroke;
 }
 .tl-fade-handle {
+  --handle-width: 8px;
   position: absolute;
   top: 1px;
-  width: 8px;
+  width: min(var(--handle-width), 100%);
   height: 9px;
   background: var(--text-secondary);
   border: 1px solid var(--surface-panel);
@@ -879,10 +880,10 @@
   pointer-events: auto;
 }
 .tl-fade-handle[data-mix="fadeIn"] {
-  transform: translateX(-0%);
+  left: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
 }
 .tl-fade-handle[data-mix="fadeOut"] {
-  transform: translateX(0%);
+  right: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
 }
 .tl-lanes[data-cursor="gain"] {
   cursor: ns-resize;

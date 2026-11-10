@@ -11,6 +11,7 @@ import {
   normalizeTimeline,
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
+import { clipFades } from "../../shared/timeline/mix";
 import type {
   Clip,
   CommandInput,
@@ -403,12 +404,12 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
     }
     case "fade": {
       const clip = find(intent.clipId);
-      const other = intent.edge === "fadeIn" ? clip.fadeOut : clip.fadeIn;
       const length = Math.max(
         0,
         Math.min(
-          clip.duration - other,
-          clip[intent.edge] + (intent.edge === "fadeIn" ? travel : -travel),
+          clip.duration,
+          Math.round(clipFades(clip)[intent.edge]) +
+            (intent.edge === "fadeIn" ? travel : -travel),
         ),
       );
       return edit(

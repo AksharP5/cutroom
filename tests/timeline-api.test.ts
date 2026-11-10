@@ -1010,16 +1010,18 @@ test("MCP clip gain and frame fades read back exactly and each batch undoes in o
               clipId: "music",
               volume: gain,
               fadeIn: 1,
-              fadeOut: 60,
+              fadeOut: 120,
             },
+            { type: "trim", clipId: "music", edge: "end", to: 60 },
           ],
         },
       }),
     ).structuredContent.result;
     expect(changed.timeline.clips[0]).toMatchObject({
       volume: gain,
+      duration: 60,
       fadeIn: 1,
-      fadeOut: 60,
+      fadeOut: 120,
     });
     expect(await read()).toEqual(changed);
     await fixture.request(`/projects/${project.id}/history/undo`, "POST");

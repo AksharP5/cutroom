@@ -12,14 +12,9 @@ import type { HfAutomationLane } from "@hyperframes/core/audio-automation";
 import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import type { Clip, Fps } from "./schema";
 
-/** Native fades on the frame grid, including externally authored fades that overlap. */
+/** Effective fades, in frames, using the same proportional clamp as preview and render. */
 export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
-  const fades = clampFadesToDuration(clip, clip.duration);
-  const fadeIn = Math.round(fades.fadeIn);
-  return {
-    fadeIn,
-    fadeOut: Math.min(Math.round(fades.fadeOut), clip.duration - fadeIn),
-  };
+  return clampFadesToDuration(clip, clip.duration);
 }
 
 /** Trims keep edge fades; cuts preserve the source envelope across their internal edge. */
@@ -30,14 +25,19 @@ export function windowMix(
   fps: Fps,
   mode: "trim" | "cut",
 ) {
-  const { fadeIn, fadeOut } = clipFades(clip);
+  if (mode === "trim" && (from === 0 || !clip.automation)) return {};
+  const { fadeIn, fadeOut } =
+    mode === "cut" ? clipFades(clip) : { fadeIn: 0, fadeOut: 0 };
   const to = from + duration;
-  const edges = mode === "trim" ? clipFades({ ...clip, duration }) : null;
+  // A scaled fade must be baked: retaining its authored length would rescale it to the cut piece.
   const nextIn =
-    edges?.fadeIn ?? (from <= 0 && fadeIn <= duration ? fadeIn : 0);
+    from <= 0 && fadeIn === clip.fadeIn && fadeIn <= duration ? fadeIn : 0;
   const nextOut =
-    edges?.fadeOut ??
-    (to >= clip.duration && fadeOut <= duration - nextIn ? fadeOut : 0);
+    to >= clip.duration &&
+    fadeOut === clip.fadeOut &&
+    fadeOut <= duration - nextIn
+      ? fadeOut
+      : 0;
   const seconds = (frames: number) =>
     Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6;
   const offset = seconds(from);
@@ -50,13 +50,9 @@ export function windowMix(
     seconds(Math.max(duration, clip.duration - from)),
     (volume?.points.at(-1)?.t ?? 0) - offset,
   );
-  const partialIn =
-    mode === "cut" && fadeIn > 0 && nextIn === 0 && from < fadeIn;
+  const partialIn = fadeIn > 0 && nextIn === 0 && from < fadeIn;
   const partialOut =
-    mode === "cut" &&
-    fadeOut > 0 &&
-    nextOut === 0 &&
-    to > clip.duration - fadeOut;
+    fadeOut > 0 && nextOut === 0 && to > clip.duration - fadeOut;
   const residual = (time: number) => {
     const frame = (time * fps.num) / fps.den;
     const head = partialIn
@@ -69,7 +65,7 @@ export function windowMix(
   };
   const lanes = automation.lanes.map((lane) => {
     if (from === 0) return lane;
-    // Keeping the point beyond the end retains the exact outgoing segment on a tail trim.
+    // Known limit: a head trim loses earlier clip-local points; restoring them needs source-anchored keyframes.
     const points = lane.points
       .filter((point) => point.t > offset)
       .map((point) => ({ ...point, t: Math.max(0, point.t - offset) }));
@@ -134,8 +130,7 @@ export function windowMix(
     else lanes[index] = lane;
   }
   return {
-    fadeIn: nextIn,
-    fadeOut: nextOut,
+    ...(mode === "cut" && { fadeIn: nextIn, fadeOut: nextOut }),
     automation: lanes.length
       ? serializeAutomation({ ...automation, lanes })
       : null,

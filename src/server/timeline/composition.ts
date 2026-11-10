@@ -2,7 +2,6 @@ import {
   parseAutomation,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
-import { clipFades } from "../../shared/timeline/mix";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
@@ -441,11 +440,8 @@ export function parseComposition(
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
-      ...clipFades({
-        duration: end - start,
-        fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
-        fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
-      }),
+      fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
+      fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
         ? serializeAutomation(parseAutomation(element.attrs["data-automation"]))
         : null,
@@ -720,15 +716,11 @@ function clipChanges(
       "data-volume",
       after.volume === null ? null : String(after.volume),
     ]);
-  const writeFades =
-    before.duration !== after.duration ||
-    before.fadeIn !== after.fadeIn ||
-    before.fadeOut !== after.fadeOut;
   for (const [field, attribute] of [
     ["fadeIn", "data-fade-in"],
     ["fadeOut", "data-fade-out"],
   ] as const)
-    if (writeFades)
+    if (before[field] !== after[field])
       changes.push([
         attribute,
         after[field] ? String(toSeconds(after[field], fps)) : null,

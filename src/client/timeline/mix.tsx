@@ -11,6 +11,7 @@ import {
 } from "@hyperframes/core/audio-automation";
 import { fadeGain } from "@hyperframes/core/audio-fade";
 import type { Clip, Fps } from "../../shared/timeline/schema";
+import { clipFades } from "../../shared/timeline/mix";
 import type { Row } from "./math";
 
 export function gainHeight(volume: Clip["volume"]) {
@@ -19,6 +20,7 @@ export function gainHeight(volume: Clip["volume"]) {
 
 /** Draw native automation and fades at the clip's gain level. */
 export function fadePath(clip: Clip, fps: Fps) {
+  const fades = clipFades(clip);
   const lane = clip.automation
     ? parseAutomation(clip.automation).lanes.find(
         (lane) => lane.target === VOLUME_TARGET,
@@ -28,8 +30,8 @@ export function fadePath(clip: Clip, fps: Fps) {
   const times = [
     ...new Set([
       ...Array.from({ length: 33 }, (_, index) => (clip.duration * index) / 32),
-      clip.fadeIn,
-      clip.duration - clip.fadeOut,
+      fades.fadeIn,
+      clip.duration - fades.fadeOut,
       ...(lane?.points.map((point) => point.t * framesPerSecond) ?? []),
     ]),
   ]
@@ -57,6 +59,7 @@ export const ClipMix = memo(function ClipMix({
   fps: Fps;
 }) {
   const path = fadePath(clip, fps);
+  const fades = clipFades(clip);
   return (
     <div
       className={`tl-mix on-${row.track.kind}${row.track.locked ? " locked" : ""}`}
@@ -77,14 +80,14 @@ export const ClipMix = memo(function ClipMix({
       <i
         className="tl-fade-handle"
         data-mix="fadeIn"
-        title={`Fade in: ${clip.fadeIn} frames`}
-        style={{ left: `${(clip.fadeIn / clip.duration) * 100}%` }}
+        title={`Fade in: ${clip.fadeIn} authored frames`}
+        style={{ "--fade": `${(fades.fadeIn / clip.duration) * 100}%` }}
       />
       <i
         className="tl-fade-handle"
         data-mix="fadeOut"
-        title={`Fade out: ${clip.fadeOut} frames`}
-        style={{ right: `${(clip.fadeOut / clip.duration) * 100}%` }}
+        title={`Fade out: ${clip.fadeOut} authored frames`}
+        style={{ "--fade": `${(fades.fadeOut / clip.duration) * 100}%` }}
       />
     </div>
   );

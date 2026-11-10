@@ -251,7 +251,7 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
     .toEqual({ duration: 120, fadeOut: 0 });
   await expect(
     page.locator('[data-clip-mix="music"] [data-mix="fadeOut"]'),
-  ).toHaveAttribute("style", "right: 0%;");
+  ).toHaveAttribute("style", "--fade: 0%;");
   await page.screenshot({ path: info.outputPath("split-envelope.png") });
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await music()).duration).toBe(240);
@@ -267,10 +267,10 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
       duration: (await music()).duration,
       fadeOut: (await music()).fadeOut,
     }))
-    .toEqual({ duration: 60, fadeOut: 60 });
+    .toEqual({ duration: 60, fadeOut: 120 });
   await drag(page, '[data-clip-mix="music"] [data-mix="fadeOut"]', 35, 0);
-  await expect.poll(async () => (await music()).fadeOut).toBeGreaterThan(0);
-  expect((await music()).fadeOut).toBeLessThanOrEqual(60);
+  await expect.poll(async () => (await music()).fadeOut).toBeLessThan(60);
+  expect((await music()).fadeOut).toBeGreaterThan(0);
   await page.screenshot({ path: info.outputPath("trimmed-envelope.png") });
 });
 
@@ -408,9 +408,11 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
       .poll(() => clip.evaluate((element) => element.getAnimations().length))
       .toBe(0);
     const box = (await clip.boundingBox())!;
-    const x = edge === "start" ? box.x + 1 : box.x + box.width - 1;
+    const x = edge === "start" ? box.x + 3 : box.x + box.width - 3;
     const y = box.y + 12;
-    await page.mouse.move(x, y);
+    await clip.hover({
+      position: { x: edge === "start" ? 3 : box.width - 3, y: 12 },
+    });
     await page.mouse.down();
     await page.mouse.move(x + dx, y, { steps: 12 });
     await page.mouse.up();
@@ -418,13 +420,13 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
   const evidence = [];
   for (const roll of [false, true]) {
     await page.keyboard.press(roll ? "t" : "a");
-    await edgeDrag(roll ? "next" : "music", -60 * ppf, roll ? "start" : "end");
+    await edgeDrag(roll ? "next" : "music", -180 * ppf, roll ? "start" : "end");
     await expect
       .poll(
         async () =>
           (await read()).clips.find((clip) => clip.id === "music")?.duration,
       )
-      .toBe(180);
+      .toBe(60);
     const short = await read();
     expect(short.clips.find((clip) => clip.id === "music")).toMatchObject({
       fadeOut: 120,
@@ -433,7 +435,16 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
     await page.screenshot({
       path: info.outputPath(`${roll ? "roll" : "trim"}-short.png`),
     });
-    await edgeDrag(roll ? "next" : "music", 60 * ppf, roll ? "start" : "end");
+    await expect(
+      page.locator('[data-clip-mix="music"] [data-mix="fadeOut"]'),
+    ).toHaveAttribute("style", "--fade: 100%;");
+    const handle = (await page
+      .locator('[data-clip-mix="music"] [data-mix="fadeOut"]')
+      .boundingBox())!;
+    const clip = (await page.locator('[data-clip="music"]').boundingBox())!;
+    expect(handle.x).toBeGreaterThanOrEqual(clip.x);
+    expect(handle.x + handle.width).toBeLessThanOrEqual(clip.x + clip.width);
+    await edgeDrag(roll ? "next" : "music", 180 * ppf, roll ? "start" : "end");
     await expect.poll(read).toEqual(initial);
     evidence.push({
       gesture: roll ? "roll" : "trim",
@@ -446,6 +457,47 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
     await expect.poll(read).toEqual(initial);
     expect(await readFile(index, "utf8")).toBe(source);
   }
+  await page.keyboard.press("a");
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 40, y: 12 } });
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("400");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("e");
+  await expect.poll(async () => (await read()).clips.length).toBe(3);
+  const split = await read();
+  const right = split.clips.find((clip) => clip.start === 120)!;
+  const splitBytes = await readFile(index, "utf8");
+  await edgeDrag(right.id, -60 * ppf, "end");
+  await expect
+    .poll(
+      async () =>
+        (await read()).clips.find((clip) => clip.id === right.id)?.duration,
+    )
+    .toBe(60);
+  expect(
+    (await read()).clips.find((clip) => clip.id === right.id),
+  ).toMatchObject({ fadeOut: 120, automation: null });
+  await edgeDrag(right.id, 60 * ppf, "end");
+  await expect.poll(read).toEqual(split);
+  evidence.push({
+    gesture: "split-right-trim",
+    restored: (await read()).clips,
+  });
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(
+      async () =>
+        (await read()).clips.find((clip) => clip.id === right.id)?.duration,
+    )
+    .toBe(60);
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(split);
+  expect(await readFile(index, "utf8")).toBe(splitBytes);
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(initial);
+  expect(await readFile(index, "utf8")).toBe(source);
   await writeFile(
     info.outputPath("edge-readback.json"),
     JSON.stringify(evidence, null, 2),

@@ -50,7 +50,7 @@ export const ClipSchema = z.object({
   volume: z.number().nonnegative().nullable(),
   /** Static inline opacity; null leaves the authored stylesheet in control. */
   opacity: opacity.nullable(),
-  /** Clip-edge fades, in timeline frames. */
+  /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame.default(0),
   fadeOut: frame.default(0),
   /** HyperFrames clip-local automation, stored in its native attribute format. */
@@ -246,10 +246,14 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe("Linear clip gain, 0 for silence, 1 for unity, up to +12 dB"),
       fadeIn: frame
         .optional()
-        .describe("Fade-in length in timeline frames; 0 clears it"),
+        .describe(
+          "Authored fade-in length in frames; 0 clears it. Playback proportionally scales fades to fit the clip.",
+        ),
       fadeOut: frame
         .optional()
-        .describe("Fade-out length in timeline frames; 0 clears it"),
+        .describe(
+          "Authored fade-out length in frames; 0 clears it. Playback proportionally scales fades to fit the clip.",
+        ),
       opacity: opacity.nullable().optional(),
       enabled: z
         .boolean()

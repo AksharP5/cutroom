@@ -104,6 +104,20 @@ const drag = (
   playhead = 0,
 ) => beginDrag(timeline, intent, new Set(selection), origin, playhead);
 
+test("fade drags start at the effective handle and edit only that authored edge", () => {
+  const timeline = sequence();
+  timeline.clips = [clip("music", 2, 0, 61, { fadeIn: 60, fadeOut: 180 })];
+  const preview = dragPreview(
+    drag({ kind: "fade", clipId: "music", edge: "fadeOut" }, [], 15, timeline),
+    { frame: 20, track: 2, reach: 0 },
+  );
+  expect(preview.valid).toBe(true);
+  expect(preview.commands).toEqual([
+    { type: "setClip", clipId: "music", fadeOut: 41 },
+  ]);
+  expect(preview.shown.clips[0]).toMatchObject({ fadeIn: 60, fadeOut: 41 });
+});
+
 test("frozen edit anchors include linked partners and ripple followers but ignore unrelated clips", () => {
   const before = sequence();
   const commands = [

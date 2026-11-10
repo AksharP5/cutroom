@@ -1,5 +1,6 @@
 import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { fadePath } from "./mix";
+import { clipFades } from "../../shared/timeline/mix";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
@@ -197,11 +198,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const path = fadePath(clip, shown.fps);
       for (const curve of mix?.querySelectorAll("path") ?? [])
         curve.setAttribute("d", path);
+      const fades = clipFades(clip);
       for (const edge of ["fadeIn", "fadeOut"] as const) {
         const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
         if (handle)
-          handle.style[edge === "fadeIn" ? "left" : "right"] =
-            `${(clip[edge] / clip.duration) * 100}%`;
+          handle.style.setProperty(
+            "--fade",
+            `${(fades[edge] / clip.duration) * 100}%`,
+          );
       }
     }
     placed.current = next;

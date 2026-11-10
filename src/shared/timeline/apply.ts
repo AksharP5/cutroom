@@ -577,14 +577,6 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const target = find(command.clipId);
       const fadeIn = command.fadeIn ?? target.fadeIn;
       const fadeOut = command.fadeOut ?? target.fadeOut;
-      if (
-        (command.fadeIn !== undefined || command.fadeOut !== undefined) &&
-        fadeIn + fadeOut > target.duration
-      )
-        throw new TimelineError(
-          "out_of_bounds",
-          "Fades must fit inside the clip.",
-        );
       return {
         ...timeline,
         clips: clips.map((clip) =>

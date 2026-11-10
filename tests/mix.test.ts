@@ -9,6 +9,7 @@ import {
   processCompositionAudio,
 } from "@hyperframes/engine";
 import { applyAll } from "../src/shared/timeline/apply";
+import { clipFades } from "../src/shared/timeline/mix";
 import {
   CommandSchema,
   emptyTimelineSettings,
@@ -69,16 +70,12 @@ test("gain and frame fades round-trip exactly through HTML and the producer's au
       settingsOf(cleared),
     ).timeline,
   ).toEqual(cleared);
-  expect(() =>
-    applyAll(cleared, [
-      CommandSchema.parse({
-        type: "setClip",
-        clipId: "music",
-        fadeIn: 300,
-        fadeOut: 1,
-      }),
-    ]),
-  ).toThrow("Fades must fit inside the clip");
+  const overlapping = edited(patchComposition(parsed, cleared, new Map()), [
+    { type: "setClip", clipId: "music", fadeIn: 300, fadeOut: 1 },
+  ]);
+  expect(
+    overlapping.timeline.clips.find((clip) => clip.id === "music"),
+  ).toMatchObject({ fadeIn: 300, fadeOut: 1 });
 });
 
 test("preview media opts into the opaque frame's CORS audio path without changing script strings", () => {
@@ -119,16 +116,21 @@ function edited(source: string, commands: CommandInput[]) {
   return { html, timeline: next };
 }
 
-async function render(root: string, source: string, name: string) {
+async function render(
+  root: string,
+  source: string,
+  name: string,
+  duration = 8,
+) {
   const output = join(root, `${name}.m4a`);
   const result = await processCompositionAudio(
     parseAudioElements(source),
     root,
     join(root, name),
     output,
-    8,
+    duration,
   );
-  expect(result.success, result.error).toBe(true);
+  expect(result.success, `${name}: ${result.error}`).toBe(true);
   return ffmpeg([
     "-i",
     output,
@@ -153,6 +155,31 @@ function peak(samples: Float32Array, time: number) {
 const faded = (fadeIn: number, fadeOut: number) =>
   `<main data-composition-id="main" data-duration="8" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="8" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"></audio></main>`;
 
+test("shortening below an authored fade then restoring the edge preserves the native mix", () => {
+  for (const split of [false, true]) {
+    const source = split
+      ? edited(faded(0, 4), [{ type: "split", clipIds: ["music"], at: 120 }])
+          .html
+      : faded(0, 4);
+    const clipId = split ? "music-2" : "music";
+    const original = parseComposition(source, emptyTimelineSettings()).timeline;
+    const shortened = edited(source, [
+      { type: "trim", clipId, edge: "end", to: split ? 180 : 60 },
+    ]);
+    expect(
+      shortened.timeline.clips.find((clip) => clip.id === clipId),
+    ).toMatchObject({
+      duration: 60,
+      fadeOut: 120,
+      automation: null,
+    });
+    expect(
+      edited(shortened.html, [{ type: "trim", clipId, edge: "end", to: 240 }])
+        .timeline,
+    ).toEqual(original);
+  }
+});
+
 test.skipIf(!Bun.which("ffmpeg"))(
   "splitting fades preserves the rendered audio, including cuts inside either fade",
   async () => {
@@ -170,6 +197,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         [2, 6, 30],
         [2, 6, 120],
         [2, 6, 180],
+        [3, 7, 30],
         [2, 6, 120, true],
         [0, 4, 120, true],
       ] as const) {
@@ -210,7 +238,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
   60_000,
 );
 
-test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving piece and editable", () => {
+test("trim and Q/W retain authored fades while overwrite and ripple cuts preserve the source envelope", () => {
   const source = faded(2, 6).replace(
     "</main>",
     '<div id="edit" data-start="0" data-duration="8" data-track-index="1"></div></main>',
@@ -241,8 +269,8 @@ test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving pie
     expect(music.length).toBeGreaterThan(0);
     expect(music.map((clip) => [clip.fadeIn, clip.fadeOut])).toEqual(
       [
-        [[15, 45]],
-        [[15, 45]],
+        [[60, 180]],
+        [[60, 180]],
         [[0, 0]],
         [[60, 0]],
         [
@@ -257,7 +285,8 @@ test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving pie
       ][index],
     );
     for (const clip of music) {
-      expect(clip.fadeIn + clip.fadeOut).toBeLessThanOrEqual(clip.duration);
+      const fades = clipFades(clip);
+      expect(fades.fadeIn + fades.fadeOut).toBeLessThanOrEqual(clip.duration);
       expect(() =>
         edited(result.html, [
           {
@@ -271,7 +300,7 @@ test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving pie
   }
 });
 
-test("editing overlapping authored fades writes the normalized pair that the timeline shows", () => {
+test("overlapping fades retain authored readback and use the runtime's proportional display lengths", () => {
   const source = faded(2, 6).replaceAll(
     'data-duration="8"',
     'data-duration="2"',
@@ -279,21 +308,29 @@ test("editing overlapping authored fades writes the normalized pair that the tim
   const parsed = parseComposition(source, emptyTimelineSettings());
   expect(parsed.timeline.clips[0]).toMatchObject({
     duration: 60,
+    fadeIn: 60,
+    fadeOut: 180,
+  });
+  expect(clipFades(parsed.timeline.clips[0]!)).toEqual({
     fadeIn: 15,
     fadeOut: 45,
+  });
+  expect(clipFades({ ...parsed.timeline.clips[0]!, duration: 61 })).toEqual({
+    fadeIn: 15.25,
+    fadeOut: 45.75,
   });
   const result = edited(source, [
     { type: "setClip", clipId: "music", fadeOut: 30 },
   ]);
-  expect(result.timeline.clips[0]).toMatchObject({ fadeIn: 15, fadeOut: 30 });
+  expect(result.timeline.clips[0]).toMatchObject({ fadeIn: 60, fadeOut: 30 });
   expect(parseAudioElements(result.html)[0]).toMatchObject({
-    fadeIn: 0.5,
+    fadeIn: 2,
     fadeOut: 1,
   });
 });
 
 test.skipIf(!Bun.which("ffmpeg"))(
-  "trim and roll out and back retain native edge fades and their rendered levels",
+  "trim, roll, Q/W and split-piece shortening out and back retain native fades and rendered audio",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "cutroom-edge-audio-"));
     try {
@@ -305,31 +342,51 @@ test.skipIf(!Bun.which("ffmpeg"))(
         join(root, "tone.wav"),
       ]);
       const source = faded(0, 4);
-      for (const roll of [false, true]) {
-        const original = roll
-          ? source.replace(
-              "</main>",
-              '<audio id="next" src="tone.wav" data-start="8" data-duration="4" data-media-start="8" data-track-index="0" data-fade-in="2"></audio></main>',
-            )
-          : source;
+      for (const mode of ["trim", "roll", "Q", "W", "split"] as const) {
+        const original =
+          mode === "roll"
+            ? source.replace(
+                "</main>",
+                '<audio id="next" src="tone.wav" data-start="8" data-duration="4" data-media-start="8" data-track-index="0" data-fade-in="2"></audio></main>',
+              )
+            : mode === "split"
+              ? edited(source, [{ type: "split", clipIds: ["music"], at: 120 }])
+                  .html
+              : mode === "Q"
+                ? source
+                    .replace('data-duration="8"', 'data-duration="14"')
+                    .replace(
+                      'data-start="0"',
+                      'data-start="6" data-media-start="6"',
+                    )
+                : source;
+        const clipId = mode === "split" ? "music-2" : "music";
+        const edge = mode === "Q" ? "start" : "end";
+        const ripple = mode === "Q" || mode === "W";
         const shortened = edited(original, [
-          { type: "trim", clipId: "music", edge: "end", to: 180 },
-          ...(roll
+          {
+            type: "trim",
+            clipId,
+            edge,
+            to: mode === "Q" ? 360 : mode === "split" ? 180 : 60,
+            ripple,
+          },
+          ...(mode === "roll"
             ? [
                 {
                   type: "trim",
                   clipId: "next",
                   edge: "start",
-                  to: 180,
+                  to: 60,
                 } as const,
               ]
             : []),
         ]);
         expect(
-          shortened.timeline.clips.find((clip) => clip.id === "music"),
-        ).toMatchObject({ duration: 180, fadeOut: 120, automation: null });
+          shortened.timeline.clips.find((clip) => clip.id === clipId),
+        ).toMatchObject({ duration: 60, fadeOut: 120, automation: null });
         const restored = edited(shortened.html, [
-          ...(roll
+          ...(mode === "roll"
             ? [
                 {
                   type: "trim",
@@ -339,7 +396,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
                 } as const,
               ]
             : []),
-          { type: "trim", clipId: "music", edge: "end", to: 240 },
+          { type: "trim", clipId, edge, to: mode === "Q" ? 0 : 240, ripple },
         ]);
         expect(restored.timeline).toEqual(
           parseComposition(original, emptyTimelineSettings()).timeline,
@@ -347,32 +404,30 @@ test.skipIf(!Bun.which("ffmpeg"))(
         const reference = await render(
           root,
           original,
-          `edge-reference-${roll}`,
+          `edge-reference-${mode}`,
+          16,
         );
-        for (const [name, result, times, expected] of [
-          [
-            "short",
-            shortened,
-            [1, 3, 5, 5.8],
-            faded(0, 4).replaceAll('data-duration="8"', 'data-duration="6"'),
-          ],
-          ["back", restored, [1, 3, 5, 6.5, 7.8], original],
-        ] as const) {
-          const actual = await render(
+        const actual = await render(
+          root,
+          restored.html,
+          `edge-${mode}-back`,
+          16,
+        );
+        expect(actual, mode).toEqual(reference);
+        if (mode === "trim") {
+          const shortReference = await render(
             root,
-            result.html,
-            `edge-${roll}-${name}`,
+            faded(0, 4).replaceAll('data-duration="8"', 'data-duration="2"'),
+            "edge-short-reference",
+            16,
           );
-          const wanted =
-            name === "back"
-              ? reference
-              : await render(root, expected, `edge-short-reference-${roll}`);
-          for (const time of times)
-            expect(
-              Math.abs(
-                20 * Math.log10(peak(actual, time) / peak(wanted, time)),
-              ),
-            ).toBeLessThan(1);
+          const shortAudio = await render(
+            root,
+            shortened.html,
+            "edge-short",
+            16,
+          );
+          expect(shortAudio).toEqual(shortReference);
         }
       }
     } finally {
