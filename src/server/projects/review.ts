@@ -41,7 +41,8 @@ const ReviewFileSchema = z.object({
   ),
 });
 type ReviewFile = z.infer<typeof ReviewFileSchema>;
-type Removal = { actor: ReviewActor; reason: string };
+/** Who changed a sent note's content, and how: "by undo", "outside Cutroom", and so on. */
+type Cause = { actor: ReviewActor; how: string };
 
 /** Review status is unreadable. Only review actions stop; transcripts and chat keep working. */
 export class ReviewFileError extends HttpError {
@@ -97,9 +98,9 @@ export function createReviewService(store: ProjectStore) {
     id: `external:${randomUUID()}`,
     kind: "external",
   };
-  const outside: Removal = {
+  const outside: Cause = {
     actor: { kind: "agent", turn: external },
-    reason: "Removed from cutroom.json outside Cutroom.",
+    how: "outside Cutroom",
   };
 
   const serialize = <T>(project: Project, work: () => Promise<T>) => {
@@ -115,9 +116,7 @@ export function createReviewService(store: ProjectStore) {
     return pending;
   };
 
-  const readState = async (
-    project: Project,
-  ): Promise<{ exists: boolean; state: ReviewFile }> => {
+  const readState = async (project: Project): Promise<ReviewFile> => {
     // A missing `.cutroom` folder means no review state has been saved yet.
     const raw = await projectPath(project, REVIEW_STATE_PATH, true)
       .then((path) => readFile(path, "utf8"))
@@ -125,8 +124,7 @@ export function createReviewService(store: ProjectStore) {
         if (isMissing(error)) return null;
         throw error;
       });
-    if (raw === null)
-      return { exists: false, state: { schemaVersion: 1, items: [] } };
+    if (raw === null) return { schemaVersion: 1, items: [] };
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -135,7 +133,7 @@ export function createReviewService(store: ProjectStore) {
     }
     const parsed = ReviewFileSchema.safeParse(json);
     if (!parsed.success) throw new ReviewFileError();
-    return { exists: true, state: parsed.data };
+    return parsed.data;
   };
 
   const writeState = async (project: Project, state: ReviewFile) => {
@@ -151,15 +149,23 @@ export function createReviewService(store: ProjectStore) {
   };
 
   /**
-   * Joins note content with review state in the owner's order. A submitted note whose content
-   * is gone stays visible from its snapshot and becomes withdrawn, never silently dropped.
+   * The one place review status is derived and saved. Joins live note content with review.json in
+   * the owner's order, applies `change`, and persists the result, so a read never shows a transition
+   * that is not saved. Once a note is sent, review.json's copy is the request: if its live content is
+   * removed or no longer matches, the note becomes withdrawn, credited to `cause`.
+   * Only call inside `serialize`.
    */
-  const join = (
+  const reconcile = async (
     project: Project,
-    state: ReviewFile,
-    document: ProjectDocument,
-    removal: Removal,
-  ): ReviewItem[] => {
+    cause = outside,
+    change: (items: ReviewItem[], document: ProjectDocument) => ReviewItem[] = (
+      items,
+    ) => items,
+  ) => {
+    const [state, document] = await Promise.all([
+      readState(project),
+      store.document(project),
+    ]);
     const live = [external.id, turns.get(project.id)?.id];
     const annotations = new Map(
       document.annotations.map(({ status, ...content }) => [
@@ -170,72 +176,54 @@ export function createReviewService(store: ProjectStore) {
     const stored = new Set(state.items.map((item) => item.id));
     const entries = [
       ...state.items.flatMap((entry) => {
-        const annotation = annotations.get(entry.id);
-        const content = annotation?.content ?? entry.content;
-        return content ? [{ ...entry, content, missing: !annotation }] : [];
+        const found = annotations.get(entry.id)?.content;
+        const request =
+          entry.review.status === "open" ? found : (entry.content ?? found);
+        return request ? [{ ...entry, request, found }] : [];
       }),
       ...[...annotations.values()]
         .filter(({ content }) => !stored.has(content.id))
         .map(({ content, status }) => ({
-          content,
           review: migrateLegacyStatus(status, content.updatedAt),
           instructions: [],
-          missing: false,
+          request: content,
+          found: content,
         })),
     ];
-    return entries.flatMap(({ content, review, instructions, missing }) => {
-      const current = { review, instructions };
-      if (missing && review.status === "open") return [];
-      const removed =
-        missing &&
-        unfinishedStatuses.some((status) => status === review.status);
-      // A claim whose run has ended (finished, crashed, or a previous server) returns to the queue.
-      const stale =
-        review.status === "working" && !live.includes(review.turnId);
-      const next = removed
-        ? transition(
-            current,
-            { type: "withdraw", reason: removal.reason },
-            removal.actor,
-          )
-        : stale
-          ? transition(
+    const items = entries.map(
+      ({ review, instructions, request, found }): ReviewItem => {
+        const current = { review, instructions };
+        const drift = !found
+          ? "Removed"
+          : sameContent(found, request)
+            ? null
+            : "Changed";
+        const sent =
+          review.status !== "open" &&
+          unfinishedStatuses.some((status) => status === review.status);
+        if (drift && sent)
+          return {
+            ...request,
+            ...transition(
+              current,
+              { type: "withdraw", reason: `${drift} ${cause.how}` },
+              cause.actor,
+            ),
+          };
+        // A claim whose run has ended (finished, crashed, or a previous server) returns to the queue.
+        if (review.status === "working" && !live.includes(review.turnId))
+          return {
+            ...request,
+            ...transition(
               current,
               { type: "release" },
               { kind: "agent", turn: external },
-            )
-          : current;
-      return [{ ...content, ...next }];
-    });
-  };
-
-  /** Statuses now live in review.json, so the copies in an older `cutroom.json` go, once. */
-  const removeLegacyStatus = (project: Project) =>
-    store
-      .mutate(project, "Move review status out of cutroom.json", async () => {
-        const document = await store.document(project);
-        if (!document.annotations.some((annotation) => annotation.status))
-          return;
-        document.annotations = document.annotations.map(
-          ({ status: _status, ...annotation }) => annotation,
-        );
-        await store.writeDocument(project, document);
-      })
-      .catch((error: unknown) =>
-        console.error("Legacy review status stays in cutroom.json:", error),
-      );
-
-  /** Reads, changes, and writes review state. Only call inside `serialize`. */
-  const apply = async (
-    project: Project,
-    change: (items: ReviewItem[], document: ProjectDocument) => ReviewItem[],
-    removal = outside,
-  ) => {
-    const [{ exists, state }, document] = await Promise.all([
-      readState(project),
-      store.document(project),
-    ]);
-    const next = change(join(project, state, document, removal), document);
+            ),
+          };
+        return { ...request, ...current };
+      },
+    );
+    const next = change(items, document);
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
@@ -252,16 +240,11 @@ export function createReviewService(store: ProjectStore) {
     };
     if (JSON.stringify(written) !== JSON.stringify(state))
       await writeState(project, written);
-    if (!exists && document.annotations.some((annotation) => annotation.status))
-      await removeLegacyStatus(project);
     return next;
   };
 
-  const update = (
-    project: Project,
-    change: Parameters<typeof apply>[1],
-    removal?: Removal,
-  ) => serialize(project, () => apply(project, change, removal));
+  const update = (project: Project, change: Parameters<typeof reconcile>[2]) =>
+    serialize(project, () => reconcile(project, outside, change));
 
   /** Changes a draft's content. Submitted notes only change through review actions. */
   const changeDraft = (
@@ -271,7 +254,7 @@ export function createReviewService(store: ProjectStore) {
     change: (annotations: Annotation[], index: number) => Annotation[],
   ) =>
     serialize(project, async () => {
-      const [item] = (await apply(project, (items) => items)).filter(
+      const [item] = (await reconcile(project)).filter(
         (candidate) => candidate.id === id,
       );
       if (item && item.review.status !== "open")
@@ -299,14 +282,7 @@ export function createReviewService(store: ProjectStore) {
       turn: (token === agentToken && turns.get(project.id)) || external,
     }),
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
-    list: (project: Project) =>
-      serialize(project, async () => {
-        const [{ state }, document] = await Promise.all([
-          readState(project),
-          store.document(project),
-        ]);
-        return join(project, state, document, outside);
-      }),
+    list: (project: Project) => serialize(project, () => reconcile(project)),
     async act(
       project: Project,
       id: string,
@@ -321,15 +297,23 @@ export function createReviewService(store: ProjectStore) {
             }
           : action;
       const items = await update(project, (items, document) => {
-        find(items, id);
-        if (
-          stamped.type === "restore" &&
-          !document.annotations.some((annotation) => annotation.id === id)
-        )
-          throw new HttpError(
-            409,
-            "This note's content was removed. Redo it before restoring the request.",
-          );
+        const {
+          review: _review,
+          instructions: _instructions,
+          ...request
+        } = find(items, id);
+        const found = document.annotations.find(
+          (annotation) => annotation.id === id,
+        );
+        // Restoring re-queues what was sent, so the live note must match it again.
+        if (stamped.type === "restore") {
+          const { status: _status, ...content } = found ?? {};
+          if (!found || !sameContent(content, request))
+            throw new HttpError(
+              409,
+              "This note's content was removed or changed. Redo it before restoring the request.",
+            );
+        }
         return items.map((item) =>
           item.id === id
             ? { ...item, ...transition(item, stamped, actor) }
@@ -346,7 +330,7 @@ export function createReviewService(store: ProjectStore) {
           project,
           AnnotationInputSchema.parse({ ...input, kind: "comment" }),
         );
-        const items = await apply(project, (items) =>
+        const items = await reconcile(project, outside, (items) =>
           items.map((item) =>
             item.id === annotation.id
               ? {
@@ -375,26 +359,26 @@ export function createReviewService(store: ProjectStore) {
         annotations.filter((_annotation, at) => at !== index),
       ),
     /**
-     * The project's history as seen by `actor`. Undo, redo, and restore run in the review queue, and
-     * any sent note whose content they remove becomes withdrawn, credited to `actor`.
+     * The project's history as seen by `actor`. Undo, redo, and restore run in the review queue,
+     * reconciled before (so earlier outside edits keep their own cause) and after, so any sent note
+     * they remove or change becomes withdrawn, credited to `actor`.
      */
     history(project: Project, history: ProjectHistory, actor: ReviewActor) {
-      const guarded = <T>(reason: string, change: () => Promise<T>) =>
+      const guarded = <T>(how: string, change: () => Promise<T>) =>
         serialize(project, async () => {
+          await reconcile(project);
           const result = await change();
-          await apply(project, (items) => items, { actor, reason });
+          await reconcile(project, { actor, how });
           return result;
         });
       const overrides: Partial<ProjectHistory> = {
         step: (direction, ...rest) =>
-          guarded(
-            direction === "back" ? "Removed by undo" : "Removed by redo",
-            () => history.step(direction, ...rest),
+          guarded(direction === "back" ? "by undo" : "by redo", () =>
+            history.step(direction, ...rest),
           ),
-        undo: (...args) =>
-          guarded("Removed by undo", () => history.undo(...args)),
+        undo: (...args) => guarded("by undo", () => history.undo(...args)),
         restore: (...args) =>
-          guarded("Removed by restoring an earlier version", () =>
+          guarded("by restoring an earlier version", () =>
             history.restore(...args),
           ),
       };
@@ -491,4 +475,17 @@ export function reviewDigest(project: Project, items: ReviewItem[]) {
     ...lines,
     "Reconcile this message with the queue before anything else. Newer intent wins: when the message cancels or replaces a note, call review_withdraw with a short reason instead of doing it (for a replacement, add the new request with review_add and pass its ID as replacedBy). If the message answers a blocked note, call review_claim with that answer and continue. Then work through the queued notes in order: review_claim when you start one, review_complete with a short note when it is finished, and review_block with a question when you need the owner. Notes you do not finish stay queued; never drop one silently. Use review_list for drawings and full detail.",
   ].join("\n");
+}
+
+/** Compares note content regardless of key order, as saved by different files. */
+function sameContent(a: object, b: object) {
+  const canonical = (value: object) =>
+    JSON.stringify(value, (_key, inner: unknown) =>
+      inner && typeof inner === "object" && !Array.isArray(inner)
+        ? Object.fromEntries(
+            Object.entries(inner).sort(([x], [y]) => x.localeCompare(y)),
+          )
+        : inner,
+    );
+  return canonical(a) === canonical(b);
 }

@@ -624,7 +624,7 @@ describe("review queue regressions", () => {
     expect(doneWithdraw.status).toBe(200);
   });
 
-  test("migrating a legacy status removes it from cutroom.json", async () => {
+  test("project documents never echo a stale legacy status", async () => {
     const queue = await setup();
     await writeFile(
       join(queue.project.path, "cutroom.json"),
@@ -650,10 +650,6 @@ describe("review queue regressions", () => {
       JSON.stringify(
         await queue.request(`/projects/${queue.project.id}/document`),
       ),
-    ).not.toContain('"status"');
-    await send(queue.agents, queue.project, "Go");
-    expect(
-      await Bun.file(join(queue.project.path, "cutroom.json")).text(),
     ).not.toContain('"status"');
     expect(await queue.status()).toEqual({ "Sent earlier": "queued" });
   });
@@ -761,38 +757,6 @@ describe("review round 2 regressions", () => {
     });
     await queue.request(`${history}/redo`, "POST");
     expect((await queue.status())["Warm up the grade"]).toBe("withdrawn");
-  });
-
-  test("legacy status cleanup runs once, so undoing it keeps redo", async () => {
-    const queue = await setup();
-    await writeFile(
-      join(queue.project.path, "cutroom.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        annotations: [
-          {
-            id: "legacy",
-            kind: "comment",
-            compositionPath: "index.html",
-            body: "Sent earlier",
-            time: 0,
-            strokes: [],
-            status: "sent",
-            createdAt: at,
-            updatedAt: at,
-          },
-        ],
-        transcripts: [],
-      }),
-    );
-    await send(queue.agents, queue.project, "Go");
-    const history = `/projects/${queue.project.id}/history`;
-    await queue.request(`${history}/undo`, "POST");
-    await send(queue.agents, queue.project, "Again");
-    const state = z
-      .object({ canRedo: z.boolean() })
-      .parse(await queue.request(history));
-    expect(state.canRedo).toBe(true);
   });
 
   test("an outside client acting during a native turn keeps its own identity", async () => {
@@ -903,5 +867,83 @@ test("the editor's own undo button withdraws a sent note as the owner", async ()
     status: "withdrawn",
     reason: "Removed by undo",
     by: "human",
+  });
+});
+
+describe("review round 3 regressions", () => {
+  test("an outside removal stays withdrawn after the file comes back", async () => {
+    const queue = await setup();
+    await queue.request(`/projects/${queue.project.id}/review`, "POST", {
+      body: "Warm up the grade",
+    });
+    const file = join(queue.project.path, "cutroom.json");
+    const original = await Bun.file(file).text();
+    await writeFile(
+      file,
+      JSON.stringify({ schemaVersion: 1, annotations: [], transcripts: [] }),
+    );
+    const [removed] = await queue.items();
+    expect(removed?.review).toMatchObject({
+      status: "withdrawn",
+      reason: "Removed outside Cutroom",
+      by: "external",
+    });
+    await writeFile(file, original);
+    const [returned] = await queue.items();
+    expect(returned?.review.status).toBe("withdrawn");
+    expect(returned?.body).toBe("Warm up the grade");
+  });
+
+  test("undo of a legacy sent note before any review change withdraws it", async () => {
+    const queue = await setup();
+    // History is open before the legacy note arrives, so its arrival is an undoable change.
+    await queue.request(`/projects/${queue.project.id}/history`);
+    await writeFile(
+      join(queue.project.path, "cutroom.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        annotations: [
+          {
+            id: "legacy",
+            kind: "comment",
+            compositionPath: "index.html",
+            body: "Sent earlier",
+            time: 0,
+            strokes: [],
+            status: "sent",
+            createdAt: at,
+            updatedAt: at,
+          },
+        ],
+        transcripts: [],
+      }),
+    );
+    await queue.request(`/projects/${queue.project.id}/history/undo`, "POST");
+    const [item] = await queue.items();
+    expect(item?.body).toBe("Sent earlier");
+    expect(item?.review).toMatchObject({
+      status: "withdrawn",
+      reason: "Removed by undo",
+    });
+  });
+
+  test("undo that changes a sent request's text withdraws it and keeps what was sent", async () => {
+    const queue = await setup();
+    const id = await queue.note("Make it warmer");
+    await queue.request(
+      `/projects/${queue.project.id}/annotations/${id}`,
+      "PATCH",
+      { body: "Make it much warmer" },
+    );
+    await send(queue.agents, queue.project, "Go");
+    await queue.request(`/projects/${queue.project.id}/history/undo`, "POST");
+    const [item] = await queue.items();
+    expect(item?.body).toBe("Make it much warmer");
+    expect(item?.review).toMatchObject({
+      status: "withdrawn",
+      reason: "Changed by undo",
+      by: "human",
+    });
+    expect(queue.turns.at(-1)?.context).toContain("Make it much warmer");
   });
 });
