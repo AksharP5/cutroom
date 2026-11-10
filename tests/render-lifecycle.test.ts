@@ -144,7 +144,7 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
   const workerPath = join(directory, "worker.mjs");
   await writeFile(
     workerPath,
-    `import {writeFile} from 'node:fs/promises';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'partial');console.log('CUTROOM_RENDER:'+JSON.stringify({type:'progress',progress:1,stage:'ready'}));setInterval(()=>{},1000);`,
+    `import {writeFile} from 'node:fs/promises';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'partial');await writeFile(outputPath+'.pid',String(process.pid));console.log('CUTROOM_RENDER:'+JSON.stringify({type:'progress',progress:1,stage:'ready'}));setInterval(()=>{},1000);`,
   );
   try {
     for (const failCleanup of [false, true]) {
@@ -187,6 +187,8 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
         const cancelled = await api.request(`/render/${jobId}/cancel`, {
           method: "POST",
         });
+        const workerPid = Number(await readFile(`${outputPath}.pid`, "utf8"));
+        expect(() => process.kill(workerPid, 0)).toThrow();
         if (failCleanup) {
           expect(cancelled.status).toBe(500);
           expect(await cancelled.text()).toContain("Disk refused cleanup");
