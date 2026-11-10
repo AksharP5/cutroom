@@ -48,6 +48,8 @@ Filmstrips and waveforms are drawn by `bodies.ts` on one canvas that lies over t
 
 Draft notes and pending saves live in `edit/noteStore.ts`, keyed by project outside the editor's lifetime. A save failure returns the original draft, including every stroke, even if another project is open. The client creates a UUID before saving and sends it to the annotation endpoint, which validates it and rejects duplicates. Pending and durable notes reconcile by that id before numbering. Frame captures start immediately and run in parallel; `noteStore.ts` queues annotation posts per project in commit order so capture completion cannot reorder their numbers. A failed post still lets the next queued note save. Saved notes show at their exact frame when parked; during playback a crossed note stays for at least one second and fades over 200ms. Accepted and withdrawn notes leave the picture.
 
+The note overlay lives in the trusted viewer stage outside the sandboxed iframe. It fetches the server thumbnail, whose renderer loads the isolated preview, and composites the note's strokes onto that PNG in the workspace before storing the attachment.
+
 ## Timeline engine
 
 `src/shared/timeline/` defines the timeline projection and command union as zod schemas, and a pure `apply(timeline, command)` that the browser and server share. Frames are integers at the root's `data-fps` (30 when absent). A value HyperFrames ignores, including decimals such as `29.97`, is refused instead of being read as 30, and NTSC spellings name their exact rate (`30000/1001`); HTML and `cutroom.json` keep seconds rounded to six decimals.

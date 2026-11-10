@@ -1,19 +1,26 @@
-import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { expect, test } from "./fixtures";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
-async function openProject(page: Page, name: string) {
+async function openProject(
+  page: Page,
+  request: APIRequestContext,
+  name: string,
+) {
   const project = ProjectSchema.parse(
     await (
-      await page.request.post("/api/cutroom/projects", { data: { name } })
+      await request.post("/api/cutroom/projects", { data: { name } })
     ).json(),
   );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.newEditor", "true");
+  });
   await page.goto(`/#project/${project.id}`);
   await expect(
     page
@@ -24,6 +31,7 @@ async function openProject(page: Page, name: string) {
   const picture = page.locator(".edit-picture");
   return {
     id: project.id,
+    path: project.path,
     base,
     picture,
     /** A point on the picture, in its 0 to 1 coordinates. */
@@ -35,10 +43,10 @@ async function openProject(page: Page, name: string) {
     notes: async () =>
       z
         .object({ items: z.array(ReviewItemSchema) })
-        .parse(await (await page.request.get(`${base}/review`)).json()).items,
+        .parse(await (await request.get(`${base}/review`)).json()).items,
     range: async () =>
       TimelineViewSchema.parse(
-        await (await page.request.get(`${base}/timeline`)).json(),
+        await (await request.get(`${base}/timeline`)).json(),
       ).timeline.range,
   };
 }
@@ -58,8 +66,9 @@ async function pinPoint(page: Page, name: string) {
 
 test("a comment pins where you click, takes every key while you type, and stays put through a resize", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Pinned comment");
+  const project = await openProject(page, request, "Pinned comment");
   const now = page.getByRole("button", { name: /^Current time/ });
   const stop = page.getByRole("button", { name: "Stop" });
   const note = page.getByLabel("What should change?");
@@ -127,8 +136,9 @@ test("a comment pins where you click, takes every key while you type, and stays 
 
 test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved notes show only at their time", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Drawn notes");
+  const project = await openProject(page, request, "Drawn notes");
   const pencil = page.locator(".edit-note-pencil path[d]:not([data-live])");
   const stroke = async (points: [number, number][]) => {
     const [first, ...rest] = points;
@@ -245,11 +255,10 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
 
 test("ruler scrubbing returns focus to an open note and exit io never edits the timeline", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Ruler focus");
-  const before = await (
-    await page.request.get(`${project.base}/timeline`)
-  ).json();
+  const project = await openProject(page, request, "Ruler focus");
+  const before = await (await request.get(`${project.base}/timeline`)).json();
   await page.keyboard.press("n");
   const at = await project.at(0.3, 0.4);
   await page.mouse.click(at.x, at.y);
@@ -262,9 +271,9 @@ test("ruler scrubbing returns focus to an open note and exit io never edits the 
   await expect(
     page.getByRole("button", { name: "Stop", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
-  expect(
-    await (await page.request.get(`${project.base}/timeline`)).json(),
-  ).toEqual(before);
+  expect(await (await request.get(`${project.base}/timeline`)).json()).toEqual(
+    before,
+  );
   await page.getByRole("button", { name: "Set end", exact: true }).click();
   // Even a focusable editor button cannot send subsequent printable keys to shortcuts.
   await page.getByRole("button", { name: /^Select/ }).click();
@@ -279,9 +288,9 @@ test("ruler scrubbing returns focus to an open note and exit io never edits the 
   await page.getByRole("button", { name: /^Select/ }).click();
   await page.keyboard.press("Control+Backslash");
   await expect(field).toBeFocused();
-  expect(
-    await (await page.request.get(`${project.base}/timeline`)).json(),
-  ).toEqual(before);
+  expect(await (await request.get(`${project.base}/timeline`)).json()).toEqual(
+    before,
+  );
 });
 
 async function quickCapture(page: Page, projectId: string) {
@@ -302,12 +311,13 @@ async function quickCapture(page: Page, projectId: string) {
 
 test("drafts and a two-stroke failed save recover in their project after switching away", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Draft owner A");
+  const project = await openProject(page, request, "Draft owner A");
   await quickCapture(page, project.id);
   const second = ProjectSchema.parse(
     await (
-      await page.request.post("/api/cutroom/projects", {
+      await request.post("/api/cutroom/projects", {
         data: { name: "Draft owner B" },
       })
     ).json(),
@@ -380,8 +390,9 @@ test("drafts and a two-stroke failed save recover in their project after switchi
 
 test("a notebook arriving before its POST response never duplicates a note or advances its next number", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Stable identity");
+  const project = await openProject(page, request, "Stable identity");
   await quickCapture(page, project.id);
   let release = () => {};
   const held = new Promise<void>((resolve) => {
@@ -435,8 +446,9 @@ for (const viewport of [
 ]) {
   test(`popover stays fully visible with 8px clearance at ${viewport.width}x${viewport.height}`, async ({
     page,
+    request,
   }) => {
-    const project = await openProject(page, "Popover edges");
+    const project = await openProject(page, request, "Popover edges");
     await page.setViewportSize(viewport);
     await page.keyboard.press("n");
     for (const [x, y] of [
@@ -491,8 +503,9 @@ for (const viewport of [
 
 test("text undo precedes stroke undo, stroke redo returns it, and saved-note undo offers Redo", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Undo notes");
+  const project = await openProject(page, request, "Undo notes");
   await quickCapture(page, project.id);
   await page.keyboard.press("Shift+n");
   const a = await project.at(0.1, 0.5);
@@ -531,11 +544,12 @@ test("text undo precedes stroke undo, stroke redo returns it, and saved-note und
 
 test("single-frame notes stay readable in playback and acceptance removes both pin and strokes", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Readable playback");
+  const project = await openProject(page, request, "Readable playback");
   const item = AnnotationSchema.parse(
     await (
-      await page.request.post(`${project.base}/annotations`, {
+      await request.post(`${project.base}/annotations`, {
         data: {
           kind: "drawing",
           body: "Check this frame",
@@ -587,7 +601,7 @@ test("single-frame notes stay readable in playback and acceptance removes both p
   await expect(
     page.locator(".edit-note-pencil path[d]:not([data-live])"),
   ).toHaveCount(1);
-  const completed = await page.request.post(
+  const completed = await request.post(
     `${project.base}/review/${item.id}/agent`,
     { data: { type: "complete", note: "Checked" } },
   );
@@ -601,8 +615,9 @@ test("single-frame notes stay readable in playback and acceptance removes both p
 
 test("finishing another stroke moves the popover clear of all ink and a slow 400px line stores under 80 points", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Clear ink");
+  const project = await openProject(page, request, "Clear ink");
   await quickCapture(page, project.id);
   await page.keyboard.press("Shift+n");
   const start = await project.at(0.1, 0.6);
@@ -650,8 +665,9 @@ test("finishing another stroke moves the popover clear of all ink and a slow 400
 
 test("ink spanning the whole picture gets space beside the picture", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "Full-picture drawing");
+  const project = await openProject(page, request, "Full-picture drawing");
   await page.keyboard.press("Shift+n");
   const corners = await Promise.all(
     [
@@ -687,8 +703,9 @@ test("ink spanning the whole picture gets space beside the picture", async ({
 
 test("six alternating notes on one frame keep their drafted numbers when the first capture is late", async ({
   page,
+  request,
 }, testInfo) => {
-  const project = await openProject(page, "One-frame review pass");
+  const project = await openProject(page, request, "One-frame review pass");
   await quickCapture(page, project.id);
   let release = () => {};
   const held = new Promise<void>((resolve) => {
@@ -767,8 +784,9 @@ test("six alternating notes on one frame keep their drafted numbers when the fir
 
 test("Esc after setting or clearing a note end discards the note and keeps its tool armed", async ({
   page,
+  request,
 }) => {
-  const project = await openProject(page, "End then escape");
+  const project = await openProject(page, request, "End then escape");
   const field = page.getByLabel("What should change?");
   for (const clearEnd of [false, true]) {
     await page
@@ -795,4 +813,129 @@ test("Esc after setting or clearing a note end discards the note and keeps its t
     ).toHaveAttribute("aria-pressed", "true");
   }
   expect(await project.notes()).toHaveLength(0);
+});
+
+test("six notes capture the sandboxed picture with both strokes and no black frames", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = await openProject(page, request, "Isolated note pass");
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html>
+<html><head><style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden}
+main{position:relative;width:1920px;height:1080px;background:rgb(24,74,120)}
+#headline{position:absolute;left:10%;top:10%;color:white;font:100px sans-serif}
+#band{position:absolute;left:5%;top:78%;width:80%;height:8%;background:white}
+</style></head><body>
+<main id="capture-surface" data-composition-id="main" data-width="1920" data-height="1080" data-duration="12" data-fps="30" data-no-timeline>
+<div id="headline" class="clip" data-start="0" data-duration="12" data-track-index="1">Isolated note pass</div>
+<div id="band" class="clip" data-start="0" data-duration="12" data-track-index="0"></div>
+</main></body></html>`,
+  );
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#capture-surface"),
+  ).toBeVisible();
+  await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+    "sandbox",
+    "allow-scripts",
+  );
+  for (let index = 0; index < 6; index++) {
+    const drawing = index % 2 === 0;
+    await page
+      .getByRole("button", { name: drawing ? /^Draw/ : /^Comment/ })
+      .click();
+    if (drawing) {
+      for (const y of [0.35, 0.65]) {
+        const start = await project.at(0.1 + index * 0.12, y);
+        const end = await project.at(0.18 + index * 0.12, y);
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(end.x, end.y, { steps: 8 });
+        await page.mouse.up();
+      }
+    } else {
+      const point = await project.at(0.2 + index * 0.1, 0.82);
+      await page.mouse.click(point.x, point.y);
+    }
+    await expect(
+      page.getByRole("form", { name: `Note ${index + 1}`, exact: true }),
+    ).toBeVisible();
+    const field = page.getByLabel("What should change?");
+    await field.fill(`Capture ${index + 1}`);
+    await field.press("Enter");
+  }
+  await expect.poll(async () => (await project.notes()).length).toBe(6);
+  const saved = await project.notes();
+  expect(saved.map((note) => note.body)).toEqual([
+    "Capture 1",
+    "Capture 2",
+    "Capture 3",
+    "Capture 4",
+    "Capture 5",
+    "Capture 6",
+  ]);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.locator(".notebook-content > div:visible")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  for (const [index, note] of saved.entries()) {
+    expect(note.framePath).toBeTruthy();
+    expect(note.strokes).toHaveLength(index % 2 === 0 ? 2 : 0);
+    const url = await page
+      .locator(`#review-note-${note.id} img`)
+      .getAttribute("src");
+    if (!url) throw new Error(`Capture ${index + 1} has no saved image.`);
+    const points = [
+      { x: 0.9, y: 0.9 },
+      ...(index % 2 === 0
+        ? [0.35, 0.65].map((y) => ({ x: 0.14 + index * 0.12, y }))
+        : []),
+    ];
+    const pixels = await page.evaluate(
+      async ({ url, points }) => {
+        const response = await fetch(url);
+        if (!response.ok)
+          throw new Error(`Saved capture returned ${response.status}.`);
+        const image = await createImageBitmap(await response.blob());
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const paint = canvas.getContext("2d")!;
+        paint.drawImage(image, 0, 0);
+        const samples = points.map(({ x, y }) =>
+          Array.from(
+            paint.getImageData(
+              Math.floor(x * image.width),
+              Math.floor(y * image.height),
+              1,
+              1,
+            ).data,
+          ),
+        );
+        const size = { width: image.width, height: image.height };
+        image.close();
+        return { size, samples };
+      },
+      { url, points },
+    );
+    expect(pixels.size).toEqual({ width: 1920, height: 1080 });
+    expect(pixels.samples[0]).toEqual([24, 74, 120, 255]);
+    for (const sample of pixels.samples.slice(1)) {
+      expect(sample[0]).toBeGreaterThan(180);
+      expect(sample[1]).toBeGreaterThan(140);
+      expect(sample[2]).toBeLessThan(140);
+      expect(sample[3]).toBe(255);
+    }
+    await writeFile(
+      testInfo.outputPath(`capture-${index + 1}.png`),
+      await (await request.get(url)).body(),
+    );
+  }
+  await expect(page.locator(".toast")).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("sandboxed-six-note-pass.png"),
+  });
 });
