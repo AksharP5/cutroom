@@ -16,16 +16,23 @@ export function createNativeRuntimeFactory(
   const discoveries = new Set<AbortController>();
   const bridge = resolve(import.meta.dir, "../mcp/stdio.ts");
   const command = Bun.which("bun") ?? process.execPath;
-  const mcp: NonNullable<Options["mcpServers"]> = existsSync(bridge)
-    ? {
-        cutroom_studio: {
-          type: "stdio" as const,
-          command,
-          args: [bridge],
-          env: { CUTROOM_URL: studioUrl },
-        },
-      }
-    : {};
+  // A conversation's token lets the server credit its review actions to its own run.
+  const studioMcp = (
+    agentToken?: string,
+  ): NonNullable<Options["mcpServers"]> =>
+    existsSync(bridge)
+      ? {
+          cutroom_studio: {
+            type: "stdio" as const,
+            command,
+            args: [bridge],
+            env: {
+              CUTROOM_URL: studioUrl,
+              ...(agentToken && { CUTROOM_AGENT_TOKEN: agentToken }),
+            },
+          },
+        }
+      : {};
   const codexClient = () => {
     if (!codex?.connected)
       codex = new CodexClient({
@@ -57,7 +64,7 @@ export function createNativeRuntimeFactory(
       try {
         return provider === "codex"
           ? await codexCapabilities(codexClient(), cwd)
-          : await claudeCapabilities(cwd, mcp, controller.signal);
+          : await claudeCapabilities(cwd, studioMcp(), controller.signal);
       } catch (error) {
         return {
           provider,
@@ -72,9 +79,19 @@ export function createNativeRuntimeFactory(
       }
     },
     create(provider: AgentProvider, options: RuntimeOptions) {
+      // Codex starts MCP servers per thread and applies the thread's config overrides to them.
       return provider === "codex"
-        ? new CodexRuntime(codexClient(), options)
-        : new ClaudeRuntime(options, mcp);
+        ? new CodexRuntime(
+            codexClient(),
+            options,
+            existsSync(bridge)
+              ? {
+                  "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN":
+                    options.agentToken,
+                }
+              : {},
+          )
+        : new ClaudeRuntime(options, studioMcp(options.agentToken));
     },
     dispose() {
       for (const controller of discoveries) controller.abort();

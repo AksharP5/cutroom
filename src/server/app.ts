@@ -9,6 +9,7 @@ import { version } from "../shared/version";
 import { createAgentRoutes, createAgentService } from "./agents";
 import { createHyperframesApi } from "./hyperframes/api";
 import { createMcpHttpHandler } from "./mcp/server";
+import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createProjectStore } from "./projects/store";
 import { createWorkspaceRoutes } from "./workspace";
@@ -38,12 +39,14 @@ export async function createApp(
   const port = options.port ?? Number(process.env.CUTROOM_PORT || 4317);
   const baseUrl = `http://127.0.0.1:${port}`;
   const projects = await createProjectStore({ dataDir, projectsDir });
+  const review = createReviewService(projects);
   const agents = await createAgentService({
     projects,
+    review,
     dataDir,
     studioUrl: baseUrl,
   });
-  const editor = createHyperframesApi(projects);
+  const editor = createHyperframesApi(projects, review);
   const transcripts = createTranscriptService(projects);
   const app = new Hono();
   let closing = false;
@@ -95,7 +98,7 @@ export async function createApp(
     "/api/cutroom",
     createWorkspaceRoutes({ projects, dataDir, projectsDir, mcpCommand }),
   );
-  app.route("/api/cutroom", createProjectRoutes(projects, transcripts));
+  app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });

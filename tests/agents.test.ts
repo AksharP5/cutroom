@@ -22,6 +22,7 @@ import type {
   RuntimeOptions,
 } from "../src/server/agents/runtime";
 import { createProjectStore } from "../src/server/projects/store";
+import { createReviewService } from "../src/server/projects/review";
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
@@ -39,6 +40,7 @@ async function setup(runtimeFactory: RuntimeFactory) {
   const dataDir = join(directory, "chat");
   const service = await createAgentService({
     projects,
+    review: createReviewService(projects),
     dataDir,
     runtimeFactory,
   });
@@ -135,6 +137,7 @@ describe("agent conversations", () => {
     let resumedModel: string | undefined;
     const restored = await createAgentService({
       projects,
+      review: createReviewService(projects),
       dataDir,
       runtimeFactory: factory(async (options) => {
         resumed = options.nativeSessionId;
@@ -541,7 +544,7 @@ const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
 for await (const line of createInterface({input:process.stdin})) {
   const input = JSON.parse(line);
   if (input.method === "initialize") reply({id:input.id,result:{}});
-  if (input.method === "thread/start" || input.method === "thread/resume") reply({id:input.id,result:{thread:{id:"native-session"}}});
+  if (input.method === "thread/start" || input.method === "thread/resume") { appendFileSync(process.argv[2] + ".thread", JSON.stringify(input.params)); reply({id:input.id,result:{thread:{id:"native-session"}}}); }
   if (input.method === "turn/start") {
     appendFileSync(process.argv[2],JSON.stringify(input.params)+"\n");
     reply({id:input.id,result:{turn:{id:"native-turn"}}});
@@ -587,20 +590,25 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
   cleanup.push(() => client.dispose());
   const events: AgentEvent[] = [];
   const requests: AgentRequest[] = [];
-  const runtime = new CodexRuntime(client, {
-    cwd: directory,
-    emit: (event) => events.push(event),
-    request: async (request) => {
-      requests.push(request);
-      return request.kind === "question"
-        ? {
-            requestId: request.id,
-            decision: "allow",
-            answers: { formats: ["MP4", "MOV"] },
-          }
-        : { requestId: request.id, decision: "deny" };
+  const runtime = new CodexRuntime(
+    client,
+    {
+      cwd: directory,
+      agentToken: "test-token",
+      emit: (event) => events.push(event),
+      request: async (request) => {
+        requests.push(request);
+        return request.kind === "question"
+          ? {
+              requestId: request.id,
+              decision: "allow",
+              answers: { formats: ["MP4", "MOV"] },
+            }
+          : { requestId: request.id, decision: "deny" };
+      },
     },
-  });
+    { "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token" },
+  );
   cleanup.push(() => runtime.dispose());
   await runtime.send({
     text: "$editing Refine this scene",
@@ -615,6 +623,12 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
     type: "delta",
     messageId: "answer",
     text: "Declined.",
+  });
+  // Codex applies a thread's config overrides to the MCP servers it starts for that thread.
+  expect(
+    JSON.parse(await readFile(`${recording}.thread`, "utf8")).config,
+  ).toEqual({
+    "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token",
   });
   const sent = JSON.parse((await readFile(recording, "utf8")).trim());
   expect(sent.input).toContainEqual({
@@ -651,6 +665,7 @@ test("Codex accepts nullable running command output and streams it before comple
   const events: AgentEvent[] = [];
   const runtime = new CodexRuntime(client, {
     cwd: directory,
+    agentToken: "test-token",
     emit: (event) => events.push(event),
     request: async (request) => ({ requestId: request.id, decision: "deny" }),
   });

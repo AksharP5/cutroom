@@ -21,19 +21,19 @@ const annotationFields = {
   elementId: z.string().max(200).optional(),
   point: PointSchema.optional(),
   strokes: z.array(StrokeSchema).max(100),
-  status: z.enum(["open", "sent", "resolved"]),
 };
 export const AnnotationInputSchema = z.object({
   ...annotationFields,
   compositionPath: annotationFields.compositionPath.default("index.html"),
   body: annotationFields.body.default(""),
   strokes: annotationFields.strokes.default([]),
-  status: annotationFields.status.default("open"),
 });
 export const AnnotationSchema = AnnotationInputSchema.extend({
   id: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /** Status saved before review state moved to `.cutroom/review.json`. Read only to migrate it. */
+  status: z.enum(["open", "sent", "resolved"]).optional(),
 });
 export const AnnotationPatchSchema = z.object(annotationFields).partial();
 export const WordSchema = z
@@ -76,10 +76,6 @@ export const ProjectDocumentSchema = z.object({
   schemaVersion: z.literal(1),
   annotations: z.array(AnnotationSchema),
   transcripts: z.array(TranscriptSchema),
-});
-export const ProjectNotebookSchema = z.object({
-  annotations: z.array(AnnotationSchema),
-  transcriptVersion: z.string(),
 });
 export const ProjectSchema = z.object({
   id: z.string(),

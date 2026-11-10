@@ -2,11 +2,8 @@ import { expect, test } from "bun:test";
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSourceDocument } from "@hyperframes/studio-server";
-import {
-  ProjectDocumentSchema,
-  ProjectNotebookSchema,
-  TranscriptSchema,
-} from "../src/shared/project";
+import { ProjectDocumentSchema, TranscriptSchema } from "../src/shared/project";
+import { NotebookSchema } from "../src/shared/review";
 import { createTranscriptService } from "../src/server/transcript/service";
 import { listMedia } from "../src/server/projects/media";
 import { projectFixture } from "./project-fixture";
@@ -467,28 +464,25 @@ test("notebook refreshes exclude transcript words and only revise when script da
       language: "en",
       words,
     });
-    const before = ProjectNotebookSchema.strict().parse(
+    const before = NotebookSchema.strict().parse(
       await (await fixture.request(`/projects/${project.id}/notebook`)).json(),
     );
-    expect(Object.keys(before).sort()).toEqual([
-      "annotations",
-      "transcriptVersion",
-    ]);
+    expect(Object.keys(before).sort()).toEqual(["items", "transcriptVersion"]);
     await fixture.request(`/projects/${project.id}/annotations`, "POST", {
       kind: "comment",
       body: "A new note",
       time: 0,
     });
-    const annotated = ProjectNotebookSchema.strict().parse(
+    const annotated = NotebookSchema.strict().parse(
       await (await fixture.request(`/projects/${project.id}/notebook`)).json(),
     );
-    expect(annotated.annotations).toHaveLength(1);
+    expect(annotated.items).toHaveLength(1);
     expect(annotated.transcriptVersion).toBe(before.transcriptVersion);
     await service.cutWords(project, transcript.id, {
       wordIds: ["three"],
       action: "cut",
     });
-    const cut = ProjectNotebookSchema.strict().parse(
+    const cut = NotebookSchema.strict().parse(
       await (await fixture.request(`/projects/${project.id}/notebook`)).json(),
     );
     expect(cut.transcriptVersion).not.toBe(before.transcriptVersion);

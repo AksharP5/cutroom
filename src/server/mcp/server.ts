@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { version } from "../../shared/version";
+import { AGENT_HEADER } from "../../shared/review";
+import { registerReviewTools } from "./reviewTools";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
@@ -20,6 +22,8 @@ type LocalFetch = (
 interface McpOptions {
   baseUrl?: string;
   fetch?: LocalFetch;
+  /** Set only in the bridge Cutroom gives its native agents; other clients act as `external`. */
+  agentToken?: string;
 }
 const project = {
   projectId: z.string().describe("Project ID returned by projects_list"),
@@ -48,17 +52,18 @@ export function createMcpServer(options: McpOptions = {}) {
     { name: "cutroom", version },
     {
       instructions:
-        "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Never modify source media to cut the timeline.",
+        "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Review notes persist until you complete, block, or withdraw them with the review tools; reconcile each new message with the queue first. Never modify source media to cut the timeline.",
     },
   );
   const request = async (path: string, method = "GET", body?: unknown) => {
     try {
       const response = await fetchLocal(`${baseUrl}/api/cutroom${path}`, {
         method,
-        ...(body !== undefined && {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }),
+        headers: {
+          [AGENT_HEADER]: options.agentToken ?? "external",
+          ...(body !== undefined && { "content-type": "application/json" }),
+        },
+        ...(body !== undefined && { body: JSON.stringify(body) }),
       });
       const text = await response.text();
       if (!response.ok)
@@ -182,7 +187,8 @@ export function createMcpServer(options: McpOptions = {}) {
   server.registerTool(
     "annotation_update",
     {
-      description: "Update an annotation's note or mark it sent or resolved.",
+      description:
+        "Update an unsent note's text, timing, or geometry. Sent notes only change through the review tools.",
       inputSchema: AnnotationPatchSchema.extend(annotation),
       annotations: edit,
     },
@@ -196,7 +202,8 @@ export function createMcpServer(options: McpOptions = {}) {
   server.registerTool(
     "annotation_remove",
     {
-      description: "Remove one annotation. The editor's undo can restore it.",
+      description:
+        "Remove a note that has not been sent. Withdraw sent notes with review_withdraw instead.",
       inputSchema: annotation,
       annotations: edit,
     },
@@ -289,6 +296,7 @@ export function createMcpServer(options: McpOptions = {}) {
     },
     (input) => request(`/projects/${id(input.projectId)}/history/redo`, "POST"),
   );
+  registerReviewTools(server, request);
   return server;
 }
 

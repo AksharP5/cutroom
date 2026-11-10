@@ -1840,3 +1840,36 @@ option {
     line-height: 36px;
   }
 }
+
+/* Review queue */
+.review-group > h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 16px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.review-group > h3 > span {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  color: var(--text-3);
+}
+.review-outcome {
+  margin: 6px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.review-answer {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0;
+}
+.review-answer > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}

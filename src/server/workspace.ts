@@ -24,6 +24,7 @@ import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { projectPath } from "./projects/store";
+import { REVIEW_STATE_PATH } from "../shared/review";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
@@ -172,8 +173,10 @@ export function createWorkspaceRoutes(options: {
         project.path,
         { recursive: true },
         (_event, filename) => {
+          if (!filename) return;
+          const review = filename.replaceAll("\\", "/") === REVIEW_STATE_PATH;
           if (
-            !filename ||
+            !review &&
             filename
               .split(/[\\/]/)
               .some((part) => part.startsWith(".") || part === "node_modules")

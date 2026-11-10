@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
+import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
 import { browserExecutable } from "../src/server/hyperframes/render";
 
@@ -50,7 +51,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       source,
       '<!doctype html><html><head><meta charset="utf-8"><title>Render parity</title><style>html,body{margin:0;overflow:hidden}</style></head><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="1" style="position:relative;width:320px;height:240px"><div id="swatch" class="clip" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;background:rgb(255,0,0)"></div></main></body></html>',
     );
-    const api = createHyperframesApi(store);
+    const api = createHyperframesApi(store, createReviewService(store));
     const app = new Hono().route("/api", api);
     const server = Bun.serve({
       hostname: "127.0.0.1",

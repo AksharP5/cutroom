@@ -101,12 +101,12 @@ test("annotations persist with source history and metadata rejects stale replace
         await fixture.request(
           `/projects/${project.id}/annotations/${annotation.id}`,
           "PATCH",
-          { status: "sent" },
+          { body: "Move the title left" },
         )
       ).json(),
     );
-    expect(updated.status).toBe("sent");
-    expect(updated.body).toBe("Move the title");
+    expect(updated.body).toBe("Move the title left");
+    expect(updated.kind).toBe("drawing");
     expect(updated.compositionPath).toBe("scenes/intro.html");
     expect(updated.strokes[0]?.points).toHaveLength(2);
     const read = await fixture.store.document(project);

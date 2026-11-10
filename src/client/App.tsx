@@ -20,13 +20,13 @@ import {
   TerminalWindow,
 } from "@phosphor-icons/react";
 import { z } from "zod";
+import { ProjectSchema, type Project } from "../shared/project";
 import {
-  AnnotationSchema,
-  ProjectNotebookSchema,
-  ProjectSchema,
-  type Annotation,
-  type Project,
-} from "../shared/project";
+  NotebookSchema,
+  REVIEW_STATE_PATH,
+  ReviewItemSchema,
+  type Notebook,
+} from "../shared/review";
 import type {
   EditorContext,
   EditorMode,
@@ -57,10 +57,7 @@ const statusSchema = z.object({
   dataDir: z.string(),
   mcpCommand: z.string(),
 });
-const emptyDocument: z.infer<typeof ProjectNotebookSchema> = {
-  annotations: [],
-  transcriptVersion: "",
-};
+const emptyDocument: Notebook = { items: [], transcriptVersion: "" };
 
 class EditorBoundary extends Component<
   { children: ReactNode },
@@ -98,7 +95,7 @@ export function App() {
   const [projectId, setProjectId] = useState<string | null>(projectFromHash);
   const [documentState, setDocumentState] = useState<{
     projectId: string;
-    document: z.infer<typeof ProjectNotebookSchema>;
+    document: Notebook;
   } | null>(null);
   const projectDocument =
     documentState?.projectId === projectId
@@ -127,9 +124,9 @@ export function App() {
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
   const exporting = useWorkspace((state) => state.exporting);
-  const openNotes = projectDocument.annotations.filter(
-    (item) => item.status === "open",
-  ).length;
+  const newNotes = projectDocument.items.filter(
+    (item) => item.review.status === "open",
+  );
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | null
   >(null);
@@ -158,10 +155,7 @@ export function App() {
   const refreshDocument = useCallback(async () => {
     if (!projectId) return;
     const request = ++documentRequest.current;
-    const result = await api(
-      `/projects/${projectId}/notebook`,
-      ProjectNotebookSchema,
-    );
+    const result = await api(`/projects/${projectId}/notebook`, NotebookSchema);
     if (
       activeProjectId.current === projectId &&
       request === documentRequest.current
@@ -203,7 +197,10 @@ export function App() {
           .parse(JSON.parse(event.data));
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
-        else if (payload.changed !== "cutroom.json") {
+        else if (
+          payload.changed !== "cutroom.json" &&
+          payload.changed !== REVIEW_STATE_PATH
+        ) {
           useWorkspace.setState((state) => ({
             mediaRevision: state.mediaRevision + 1,
           }));
@@ -291,34 +288,16 @@ export function App() {
     const { refreshEditor } = await import("./editor/CutroomEditor");
     refreshEditor();
   }, [projectId, refreshDocument]);
+  // The server adds the review queue digest to each message.
   function getContext() {
-    const notes = projectDocument.annotations.filter(
-      (item) => item.status === "open",
-    );
     return JSON.stringify(
       {
         project: project ? { name: project.name, path: project.path } : null,
         editor: context.current,
-        reviewNotes: notes,
       },
       null,
       2,
     );
-  }
-  async function markSent() {
-    const notes = projectDocument.annotations.filter(
-      (item) => item.status === "open",
-    );
-    await Promise.all(
-      notes.map((item) =>
-        api(
-          `/projects/${projectId}/annotations/${item.id}`,
-          AnnotationSchema,
-          json("PATCH", { status: "sent" }),
-        ),
-      ),
-    );
-    await refreshDocument();
   }
 
   return (
@@ -418,8 +397,8 @@ export function App() {
                 }}
               >
                 Review
-                {openNotes > 0 && (
-                  <span className="note-count">{openNotes}</span>
+                {newNotes.length > 0 && (
+                  <span className="note-count">{newNotes.length}</span>
                 )}
               </button>
               <button
@@ -444,7 +423,8 @@ export function App() {
                 <div hidden={panel !== "review"}>
                   <ReviewPanel
                     projectId={project.id}
-                    annotations={projectDocument.annotations}
+                    items={projectDocument.items}
+                    reviewError={projectDocument.reviewError}
                     draft={reviewDraft}
                     onCancel={() => setReviewState(null)}
                     onSave={async (body) => {
@@ -466,20 +446,20 @@ export function App() {
                           `Note saved without a frame image. ${captureError}`,
                         );
                     }}
-                    onSeek={(annotation) =>
-                      void seek(annotation.time, annotation.compositionPath)
+                    onSeek={(item) =>
+                      void seek(item.time, item.compositionPath)
                     }
-                    onResolve={async (annotation) => {
+                    onAct={async (item, action) => {
                       await api(
-                        `/projects/${projectId}/annotations/${annotation.id}`,
-                        AnnotationSchema,
-                        json("PATCH", { status: "resolved" }),
+                        `/projects/${projectId}/review/${item.id}/human`,
+                        ReviewItemSchema,
+                        json("POST", action),
                       );
                       await refreshDocument();
                     }}
-                    onDelete={async (annotation) => {
+                    onDelete={async (item) => {
                       await api(
-                        `/projects/${projectId}/annotations/${annotation.id}`,
+                        `/projects/${projectId}/annotations/${item.id}`,
                         z.unknown(),
                         json("DELETE"),
                       );
@@ -487,7 +467,7 @@ export function App() {
                     }}
                     onSend={() =>
                       ask(
-                        `Apply my ${projectDocument.annotations.filter((item) => item.status === "open").length} pending review notes. They are included with this message's project context.`,
+                        `Apply my ${newNotes.length} pending review notes. They are included with this message's project context.`,
                       )
                     }
                   />
@@ -510,12 +490,12 @@ export function App() {
               visible={chatVisible}
               getContext={getContext}
               getReviewAttachments={() =>
-                projectDocument.annotations
-                  .filter((note) => note.status === "open" && note.framePath)
-                  .flatMap((note) => (note.framePath ? [note.framePath] : []))
+                newNotes.flatMap((note) =>
+                  note.framePath ? [note.framePath] : [],
+                )
               }
               onSent={() =>
-                void markSent().catch((error: unknown) =>
+                void refreshDocument().catch((error: unknown) =>
                   setError(
                     error instanceof Error ? error.message : String(error),
                   ),
@@ -566,14 +546,14 @@ export function App() {
             >
               {project.path.replace(/^\/home\/[^/]+/, "~")}
             </button>
-            {openNotes > 0 && (
+            {newNotes.length > 0 && (
               <button
                 onClick={() => {
                   setPanel("review");
                   setWorkPanel("notebook");
                 }}
               >
-                {openNotes} open {openNotes === 1 ? "note" : "notes"}
+                {newNotes.length} new {newNotes.length === 1 ? "note" : "notes"}
               </button>
             )}
             {exporting && <span className="status-job">Exporting</span>}
