@@ -31,7 +31,7 @@ import {
   patchComposition,
   settingsOf,
 } from "./composition";
-import { mediaLengths } from "./media";
+import { mediaFacts } from "./media";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -63,7 +63,7 @@ export function createTimelineRoutes(store: ProjectStore) {
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const lengths = await mediaLengths(
+    const { lengths } = await mediaFacts(
       project,
       composition,
       mediaSources(source.content, scope),
@@ -92,22 +92,21 @@ export function createTimelineRoutes(store: ProjectStore) {
         409,
         "The timeline changed since it was read. Read it again before editing.",
       );
-    const lengths = new Map([
-      ...current.lengths,
-      ...(await mediaLengths(
-        project,
-        composition,
-        batch.commands.flatMap((command) =>
-          command.type === "insert" ? [command.clip.src] : [],
-        ),
-      )),
-    ]);
+    const inserted = await mediaFacts(
+      project,
+      composition,
+      batch.commands.flatMap((command) =>
+        command.type === "insert" ? [command.clip.src] : [],
+      ),
+    );
+    const lengths = new Map([...current.lengths, ...inserted.lengths]);
     const origins = new Map<string, ClipOrigin>();
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
         onCreate: (id, origin) => origins.set(id, origin),
         mediaLengths: lengths,
+        silentMedia: inserted.silent,
       }),
     );
     const html = patchComposition(current.parsed, timeline, origins);

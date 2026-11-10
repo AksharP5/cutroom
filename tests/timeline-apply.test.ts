@@ -29,6 +29,7 @@ const clip = (
   playbackRate: 1,
   src: "talk.mp4",
   sourceDuration: null,
+  hasAudio: false,
   link: null,
   label: null,
   volume: null,

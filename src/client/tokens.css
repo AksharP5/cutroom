@@ -77,7 +77,7 @@
   --playhead: #ff4f3a; /* 5.7 on panel; playhead and meter clip only */
   --danger: #ff7a6b; /* 7.4 on panel; errors */
   --selection: #ededed; /* paper: selection outline, brackets, in/out */
-  --range-band: rgb(237 237 237 / 0.07); /* in/out band in the ruler */
+  --range-band: rgb(237 237 237 / 0.08); /* in/out band in the ruler */
   --range-line: rgb(237 237 237 / 0.28); /* 1px in/out lines through tracks */
 
   /* Focus, text selection, caret, scrollbars */
@@ -124,6 +124,7 @@
   --clip-head-text: var(--text-primary); /* 6.6 min (audio head) */
   --clip-head-meta: #d0d0d0; /* durations on heads, 5.0 min (audio head) */
   --wave-audio: #77ad69; /* music/effects, 30% less chroma than the rail */
+  --wave-video: #7287bf; /* a video clip's own sound, same rule */
   --wave-vo: #c97690;
   --clip-filmstrip-seam: rgb(0 0 0 / 0.55);
 
@@ -171,6 +172,7 @@
   --size-track-id: 24px; /* id slot; names and line-2 buttons share this indent */
   --size-marker-w: 8px;
   --size-marker-h: 10px;
+  --size-range-bracket: 12px; /* in/out brackets, up from the ruler's bottom edge */
   --size-tick-major: 8px;
   --size-tick-minor: 4px;
   --icon-xs: 10px; /* chevrons, keyframe diamonds */

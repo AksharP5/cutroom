@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { KeyboardEvent, PointerEvent } from "react";
+import type { KeyboardEvent, PointerEvent, RefObject } from "react";
 import { flushSync } from "react-dom";
 import {
   CursorClick,
@@ -36,6 +36,8 @@ import {
   zoomToSlider,
 } from "./math";
 import type { FrameRange, Row, RowSizes, TickStep } from "./math";
+import { createBodies } from "./bodies";
+import type { Bodies } from "./bodies";
 import { clickSelection, emptySelection, marqueeSelection } from "./selection";
 import type { Selection } from "./selection";
 import { createViewport } from "./view";
@@ -65,6 +67,8 @@ export interface TimelinePin {
 }
 export interface TimelineProps {
   timeline: TimelineData;
+  /** Where the clips' media is read from: filmstrips and waveforms come from this project's cache. */
+  source: { projectId: string; composition: string };
   clock: TimelineClock;
   /** Review notes shown on the ruler's top edge. */
   pins: readonly TimelinePin[];
@@ -147,9 +151,23 @@ const ClipBody = memo(function ClipBody({
       className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${selected ? " selected" : ""}`}
       data-clip={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
-    >
-      {selected && <i className="tl-selected" />}
-    </div>
+    />
+  );
+});
+
+/** Drawn over the clip bodies' canvas, so the outline and its brackets stay whole on a filmstrip. */
+const ClipOutline = memo(function ClipOutline({
+  clip,
+  row,
+}: {
+  clip: Clip;
+  row: Row;
+}) {
+  return (
+    <i
+      className={`tl-selected on-${row.track.kind}`}
+      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+    />
   );
 });
 
@@ -195,9 +213,12 @@ const Ruler = memo(function Ruler({
   markers,
   pins,
   range,
+  labels,
   onSeek,
   onOpenPin,
 }: {
+  /** The element holding the timecode labels, which the view writes its scroll offset to. */
+  labels: RefObject<HTMLDivElement | null>;
   frames: FrameRange;
   step: TickStep;
   fps: Fps;
@@ -213,54 +234,60 @@ const Ruler = memo(function Ruler({
   const shown = (frame: number) => frame >= frames.from && frame < frames.to;
   const marked = range.in !== null || range.out !== null;
   const from = range.in ?? 0;
+  // A marker's name ends before the next thing on the ruler's bottom band.
+  const stops = [
+    ...markers.map((marker) => marker.frame),
+    ...(range.in === null ? [] : [range.in]),
+    ...(range.out === null ? [] : [range.out]),
+  ].sort((a, b) => a - b);
   return (
     <>
-      <div className="tl-scaled">
-        {marked && (
-          <i
-            className="tl-range"
-            style={{ "--f": from, "--d": (range.out ?? end) - from }}
-          />
-        )}
-        {ticks.map((frame) => (
-          <span
-            key={frame}
-            className="tl-tick"
-            style={{ "--f": frame, "--step": step.major }}
-          >
-            {Array.from({ length: Math.max(0, minors - 1) }, (_, index) => (
-              <i key={index} style={{ "--n": (index + 1) / minors }} />
-            ))}
-          </span>
-        ))}
+      <div className="tl-time">
+        <div className="tl-scaled">
+          {marked && (
+            <i
+              className="tl-range"
+              style={{ "--f": from, "--d": (range.out ?? end) - from }}
+            />
+          )}
+          {ticks.map((frame) => (
+            <span
+              key={frame}
+              className="tl-tick"
+              style={{ "--f": frame, "--step": step.major }}
+            >
+              {Array.from({ length: Math.max(0, minors - 1) }, (_, index) => (
+                <i key={index} style={{ "--n": (index + 1) / minors }} />
+              ))}
+            </span>
+          ))}
+        </div>
+        <div className="tl-tick-labels" ref={labels}>
+          {ticks.map((frame) => (
+            <span
+              key={frame}
+              className="tl-tick-label"
+              data-unscaled
+              style={{ "--f": frame }}
+            >
+              {formatTimecode(frame, fps)}
+            </span>
+          ))}
+        </div>
       </div>
-      {ticks.map((frame) => (
-        <span
-          key={frame}
-          className="tl-tick-label"
-          data-unscaled
-          style={{ "--f": frame }}
-        >
-          {formatTimecode(frame, fps)}
-        </span>
-      ))}
       {range.in !== null && (
-        <>
-          <i
-            className="tl-bracket in"
-            data-unscaled
-            style={{ "--f": range.in }}
-          />
-        </>
+        <i
+          className="tl-bracket in"
+          data-unscaled
+          style={{ "--f": range.in }}
+        />
       )}
       {range.out !== null && (
-        <>
-          <i
-            className="tl-bracket out"
-            data-unscaled
-            style={{ "--f": range.out }}
-          />
-        </>
+        <i
+          className="tl-bracket out"
+          data-unscaled
+          style={{ "--f": range.out }}
+        />
       )}
       {markers
         .filter((marker) => shown(marker.frame))
@@ -269,12 +296,15 @@ const Ruler = memo(function Ruler({
             key={marker.id}
             className={`tl-marker ${marker.color}`}
             data-unscaled
-            style={{ "--f": marker.frame }}
+            style={{
+              "--f": marker.frame,
+              "--next": stops.find((frame) => frame > marker.frame) ?? end * 2,
+            }}
             title={marker.note || undefined}
             aria-label={`Marker ${marker.name || formatTimecode(marker.frame, fps)}`}
             onClick={() => onSeek(marker.frame)}
           >
-            {marker.name}
+            {marker.name && <span>{marker.name}</span>}
           </button>
         ))}
       {pins
@@ -349,6 +379,7 @@ const TrackHeads = memo(function TrackHeads({
  */
 export function Timeline({
   timeline,
+  source,
   clock,
   pins,
   selection,
@@ -367,6 +398,9 @@ export function Timeline({
   const playhead = useRef<HTMLElement>(null);
   const playheadHead = useRef<HTMLElement>(null);
   const marquee = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const tickLabels = useRef<HTMLDivElement>(null);
+  const bodies = useRef<Bodies | null>(null);
   const viewport = useRef<TimelineViewport | null>(null);
   const scrubbing = useRef(false);
   const drag = useRef<{
@@ -385,6 +419,25 @@ export function Timeline({
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
 
   useLayoutEffect(() => {
+    if (!canvas.current) return;
+    const created = createBodies(
+      canvas.current,
+      source.projectId,
+      source.composition,
+    );
+    bodies.current = created;
+    const view = viewport.current?.state();
+    if (view) created.view(view);
+    return () => {
+      created.destroy();
+      bodies.current = null;
+    };
+  }, [source.projectId, source.composition]);
+  useLayoutEffect(() => {
+    bodies.current?.scene({ rows: layout.rows, tracks, fps });
+  }, [source.projectId, source.composition, layout, tracks, fps]);
+
+  useLayoutEffect(() => {
     if (!scroller.current || !grid.current) return;
     const created = createViewport(
       scroller.current,
@@ -392,6 +445,12 @@ export function Timeline({
       sizes.head,
       (flush) => {
         const state = created.state();
+        bodies.current?.view(state);
+        // Labels start 4px right of their ticks.
+        tickLabels.current?.style.setProperty(
+          "--cut",
+          String(state.frames.from - 4 / state.ppf),
+        );
         const position = zoomToSlider(state.ppf, state.fit);
         slider.current?.style.setProperty("--zoom", String(position));
         slider.current?.setAttribute(
@@ -573,7 +632,11 @@ export function Timeline({
   return (
     <div className="tl">
       <div className="tl-scroll" ref={scroller}>
-        <div className="tl-grid" ref={grid} style={{ "--frames": frames }}>
+        <div
+          className="tl-grid"
+          ref={grid}
+          style={{ "--frames": frames, "--span": Math.max(1, frames) }}
+        >
           <div className="tl-corner">
             <button
               className="tl-zoom-step"
@@ -643,6 +706,7 @@ export function Timeline({
                 markers={timeline.markers}
                 pins={pins}
                 range={timeline.range}
+                labels={tickLabels}
                 onSeek={onSeek}
                 onOpenPin={onOpenPin}
               />
@@ -668,34 +732,43 @@ export function Timeline({
               />
             ))}
             <i className="tl-divider" style={{ top: layout.dividerTop }} />
-            <div className="tl-scaled">
-              {clips.map(({ clip, row }) => (
-                <ClipBody
-                  key={clip.id}
-                  clip={clip}
-                  row={row}
-                  selected={selection.ids.has(clip.id)}
-                />
-              ))}
-            </div>
-            <div className="tl-names">
-              {mounted &&
-                clips
-                  .filter(
-                    ({ clip }) =>
-                      clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
-                  )
-                  .map(({ clip, row }) => (
-                    <ClipLabel
-                      key={clip.id}
-                      clip={clip}
-                      row={row}
-                      fps={fps}
-                      timed={
-                        clip.duration * mounted.labelPpf >= LENGTH_MIN_WIDTH
-                      }
-                    />
-                  ))}
+            <div className="tl-time">
+              <div className="tl-scaled">
+                {clips.map(({ clip, row }) => (
+                  <ClipBody
+                    key={clip.id}
+                    clip={clip}
+                    row={row}
+                    selected={selection.ids.has(clip.id)}
+                  />
+                ))}
+                <canvas className="tl-bodies" ref={canvas} />
+                {clips.map(
+                  ({ clip, row }) =>
+                    selection.ids.has(clip.id) && (
+                      <ClipOutline key={clip.id} clip={clip} row={row} />
+                    ),
+                )}
+              </div>
+              <div className="tl-names">
+                {mounted &&
+                  clips
+                    .filter(
+                      ({ clip }) =>
+                        clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                    )
+                    .map(({ clip, row }) => (
+                      <ClipLabel
+                        key={clip.id}
+                        clip={clip}
+                        row={row}
+                        fps={fps}
+                        timed={
+                          clip.duration * mounted.labelPpf >= LENGTH_MIN_WIDTH
+                        }
+                      />
+                    ))}
+              </div>
             </div>
             {timeline.clips.length === 0 && (
               <p className="tl-empty">Drop media here</p>

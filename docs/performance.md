@@ -69,4 +69,21 @@ The timeline must stay at the display rate with 500 clips. On November 10, 2026,
 
 At fit, all 500 clips are on screen as one element each. A zoom step writes `--ppf` and one scroll offset; the style pass for 500 clips is about 3 ms of the main-thread time above. The late zoom frames are the steps where React mounts or unmounts clips and labels as the view crosses a mounted range. Scrolling runs on the compositor: 40 clips are mounted at 2 px per frame and a render happens every half view.
 
+### Clip bodies
+
+Filmstrips and waveforms must not cost the timeline its frame rate. On November 10, 2026 the same 500-clip composition was opened over real media (a twelve-minute 720p H.264 file with sound, so 240 filmstrips and 240 waveforms) in Chromium 1720x1050, headless with hardware GL. Each gesture was driven one input event per animation frame. The first three columns are animation-frame intervals without tracing, two runs each; a late frame is an interval over 20 ms. Main thread per frame is thread time from a separate traced run, which also slows the page. Load average was 1 to 6.
+
+| Gesture                                       |  p95 before | p95 after |                Late before |    Late after | Main thread per frame, before to after |
+| --------------------------------------------- | ----------: | --------: | -------------------------: | ------------: | -------------------------------------: |
+| Ctrl+wheel zoom, fit to 32 px per frame, back |     33.4 ms |   16.8 ms |            113, 117 of 910 |   2, 1 of 910 |                        16.3 to 10.5 ms |
+| Ctrl+wheel zoom, fit to 2 px per frame        | 33 to 50 ms |   16.8 ms | 36 to 46 of 120, four runs | 1 to 2 of 120 |                        26.3 to 13.1 ms |
+| Scroll time at 2 px per frame, 8 px a frame   |     16.8 ms |   16.8 ms |                0, 2 of 900 |   0, 0 of 900 |                          3.3 to 3.6 ms |
+| Scroll time at 32 px per frame, 8 px a frame  |     16.8 ms |   16.8 ms |                2, 1 of 900 |   0, 0 of 900 |                          2.7 to 2.9 ms |
+| Play 1x at fit, 5 s                           |     16.8 ms |   16.8 ms |                0, 0 of 300 |   0, 0 of 300 |                          3.1 to 3.3 ms |
+| Play 1x at 2 px per frame, 5 s, paging        |     16.8 ms |   16.8 ms |                0, 0 of 300 |   0, 1 of 300 |                          3.0 to 3.3 ms |
+
+Before is main without clip bodies. It missed frames while zooming near fit because every zoom step restyled every element under the grid: `--ppf` was inherited, so about 790 elements per step. With `--ppf` not inherited and clips placed in percent, a step restyles about 100. Drawing the bodies costs about 0.7 ms of script per zoom step, averaged over that sweep under a sampling profiler, and nothing while scrolling or playing: the canvas is drawn again only when the zoom changes, about every half view of scrolling, and when media arrives. React committed 0 or 1 times in five seconds of playback, and about once per five zoom steps, as before, when the view leaves its mounted range.
+
+At 32 px per frame every filmstrip tile is its own frame from the server. Frames are asked for only after the view has rested 150 ms, so scrolling there draws the sprite's frames and costs the same as at any other zoom.
+
 Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.
