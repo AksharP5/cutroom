@@ -128,3 +128,38 @@ test("a composition that cannot play keeps the last picture and says why", async
   await expect(live.locator("#caption")).toHaveText("Back again.");
   await expect(page.locator(".status-error")).toHaveCount(0);
 });
+
+test("a timeline the engine refuses stays reported after the picture reloads", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Refused timeline" },
+      })
+    ).json(),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.newEditor", "true"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("#headline")).toHaveText("Refused timeline");
+
+  // The runtime plays a clip without a length; the engine cannot place it.
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "</main>",
+      '<div id="extra" class="clip" data-start="1" data-track-index="3">Extra</div></main>',
+    ),
+  );
+  // The reloaded picture arrives after the engine's refusal and must not hide it.
+  await expect(live.locator("#extra")).toHaveCount(1);
+  const status = page.locator(".status-error");
+  await expect(status).toContainText("Clip extra has no data-duration");
+  await page.waitForTimeout(500);
+  await expect(status).toContainText("Clip extra has no data-duration");
+});

@@ -15,6 +15,8 @@ export function StatusBar({
   const composition = useWorkspace((state) => state.composition);
   const exporting = useWorkspace((state) => state.exporting);
   const agent = useWorkspace((state) => state.agent);
+  const { timeline, viewer } = useWorkspace((state) => state.editorErrors);
+  const editorError = timeline ?? viewer;
   // Sent notes only: unsent ones are not in the agent's queue yet.
   const queue = items.filter(
     (item) =>
@@ -31,6 +33,11 @@ export function StatusBar({
       >
         {folder}
       </button>
+      {editorError && (
+        <span className="status-error" role="alert" title={editorError}>
+          {editorError}
+        </span>
+      )}
       <span className="status-space" />
       {composition && (
         <span className="mono">{Number(composition.fps.toFixed(3))} fps</span>

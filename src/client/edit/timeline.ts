@@ -7,11 +7,14 @@ import type {
   TimelineView,
 } from "../../shared/timeline/schema";
 import { api, json } from "../api";
+import { reportEditorError } from "../workspace";
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
 export const useTimeline = create(() => ({
+  /** The project the views belong to; a read for another project is dropped. */
+  projectId: null as string | null,
   view: null as TimelineView | null,
   history: { canUndo: false, canRedo: false },
 }));
@@ -37,7 +40,10 @@ async function read(projectId: string) {
     api(`${project(projectId)}/timeline`, TimelineViewSchema),
     api(`${project(projectId)}/history`, HistorySchema),
   ]);
+  if (useTimeline.getState().projectId !== projectId) return view;
   useTimeline.setState({ view, history });
+  // The engine read this timeline, so an earlier refusal no longer stands.
+  reportEditorError("timeline", null);
   return view;
 }
 

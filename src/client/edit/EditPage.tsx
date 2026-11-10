@@ -15,7 +15,7 @@ import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
-import { useWorkspace } from "../workspace";
+import { reportEditorError } from "../workspace";
 import "./edit.css";
 import {
   editTimeline,
@@ -35,10 +35,7 @@ const previewChangeSchema = z.object({
   affectedCompositions: z.array(z.string()).nullable(),
 });
 
-const report = (error: unknown) =>
-  useWorkspace.setState({
-    editorError: error instanceof Error ? error.message : String(error),
-  });
+const report = (error: unknown) => reportEditorError("timeline", error);
 
 /** Clip boundaries on tracks that take part in edits, for Up and Down. */
 function edits({ clips, tracks }: Timeline) {
@@ -82,7 +79,7 @@ export function EditPage({
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
-    useTimeline.setState({ view: null });
+    useTimeline.setState({ projectId, view: null });
     transport.seek(0);
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
@@ -106,6 +103,7 @@ export function EditPage({
         setRevision((value) => value + 1);
     });
     return () => {
+      reportEditorError("timeline", null);
       projectEvents.close();
       previewEvents.close();
       unsubscribe();
@@ -140,7 +138,10 @@ export function EditPage({
   }, []);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
-    else void viewer.current?.requestFullscreen().catch(report);
+    else
+      void viewer.current
+        ?.requestFullscreen()
+        .catch((error: unknown) => reportEditorError("viewer", error));
   };
 
   const step = (direction: "undo" | "redo") =>

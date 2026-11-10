@@ -3,7 +3,7 @@ import { runtimeProtocolMetadata } from "@hyperframes/core/runtime/protocol";
 import type { EditorMode, EditorReviewDraft } from "../../shared/editor";
 import { frameTime } from "../../shared/timeline/apply";
 import { ReviewCanvas } from "../components/ReviewCanvas";
-import { useWorkspace } from "../workspace";
+import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
 import { transport, useTransport } from "./transport";
 import type { RuntimePlayer } from "./transport";
 
@@ -147,7 +147,8 @@ export function Viewer({
   useEffect(
     () => () => {
       transport.attach(null);
-      useWorkspace.setState({ editorError: null });
+      reportEditorError("viewer", null);
+      useWorkspace.setState({ composition: null });
     },
     [],
   );
@@ -180,10 +181,22 @@ export function Viewer({
       if (gen !== latest.current) return;
       if (useTransport.getState().state.kind !== "stopped") break;
     }
-    setLive({ gen, ...sizeOf(frame) });
+    const size = sizeOf(frame);
+    setLive({ gen, ...size });
     setPending(null);
+    // The status bar shows the open composition's rate and size, as with the embedded editor.
+    useWorkspace.setState({
+      composition: {
+        fps: compositionFps(
+          frame.contentDocument
+            ?.querySelector("[data-composition-id]")
+            ?.getAttribute("data-fps"),
+        ),
+        ...size,
+      },
+    });
     transport.attach(player, shown);
-    useWorkspace.setState({ editorError: null });
+    reportEditorError("viewer", null);
   };
 
   const fit = live ?? { width: 1920, height: 1080 };
@@ -233,10 +246,7 @@ export function Viewer({
                 void load(gen, event.currentTarget).catch((error: unknown) => {
                   if (gen !== latest.current) return;
                   setPending(null);
-                  useWorkspace.setState({
-                    editorError:
-                      error instanceof Error ? error.message : String(error),
-                  });
+                  reportEditorError("viewer", error);
                 })
               }
             />
