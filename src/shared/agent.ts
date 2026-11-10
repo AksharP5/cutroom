@@ -40,8 +40,43 @@ export const agentMessageSchema = z.object({
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "failed"]).default("complete"),
   tool: z.string().optional(),
+  /** What a tool call acted on, such as a file path or command, kept after its result arrives. */
+  target: z.string().optional(),
 });
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
+
+const targetKeys = [
+  "file_path",
+  "notebook_path",
+  "path",
+  "command",
+  "pattern",
+  "url",
+  "query",
+  "description",
+] as const;
+
+/**
+ * The first line of the input field that names what a tool call acts on, with paths inside
+ * the project written relative to it: `/home/me/cut/index.html` reads as `index.html`.
+ */
+export function toolTarget(
+  input: unknown,
+  project: string,
+): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const root = project.replace(/\/+$/, "");
+  for (const key of targetKeys) {
+    const value: unknown = Reflect.get(input, key);
+    if (typeof value !== "string" || !value.trim()) continue;
+    const line = value.trim().split("\n", 1)[0] ?? "";
+    return (line === root ? "." : line.replaceAll(`${root}/`, "")).slice(
+      0,
+      240,
+    );
+  }
+  return undefined;
+}
 
 export const agentQuestionSchema = z.object({
   id: z.string(),
@@ -57,6 +92,8 @@ export const agentRequestSchema = z.object({
   title: z.string(),
   tool: z.string(),
   input: z.record(z.string(), z.unknown()),
+  /** What the tool would act on, relative to the project, as on tool rows. */
+  target: z.string().optional(),
   questions: z.array(agentQuestionSchema).optional(),
 });
 export type AgentRequest = z.infer<typeof agentRequestSchema>;

@@ -22,7 +22,9 @@ Codex and Claude Code are installed and authenticated by the user. Cutroom does 
 
 ## Interface assets
 
-Inter, IBM Plex Sans, and IBM Plex Mono are distributed under the SIL Open Font License 1.1. Their notices are preserved in [licenses/INTER.txt](licenses/INTER.txt), [licenses/IBM-PLEX-SANS.txt](licenses/IBM-PLEX-SANS.txt) and [licenses/IBM-PLEX-MONO.txt](licenses/IBM-PLEX-MONO.txt). New projects receive the IBM Plex Sans font files and their license.
+Instrument Sans and Martian Mono are vendored in `src/client/fonts/` as variable WOFF2 files and distributed under the SIL Open Font License 1.1. Their notices are preserved in [licenses/INSTRUMENT-SANS.txt](licenses/INSTRUMENT-SANS.txt) and [licenses/MARTIAN-MONO.txt](licenses/MARTIAN-MONO.txt). IBM Plex Sans is also distributed under the SIL Open Font License 1.1; its notice is preserved in [licenses/IBM-PLEX-SANS.txt](licenses/IBM-PLEX-SANS.txt). New projects receive the IBM Plex Sans font files and their license.
+
+The Cutroom logo, mark, favicons, and application icon are original Cutroom assets.
 
 Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, and other dependencies retain the license files in their installed packages.
 

@@ -1,4 +1,5 @@
-import { FilmSlate, FolderOpen, Plus } from "@phosphor-icons/react";
+import { FolderOpen, Plus } from "@phosphor-icons/react";
+import { Logo } from "./Logo";
 
 export function EmptyState({
   onCreate,
@@ -9,10 +10,7 @@ export function EmptyState({
 }) {
   return (
     <section className="welcome">
-      <div className="welcome-wordmark">
-        <FilmSlate />
-        <span>cutroom</span>
-      </div>
+      <Logo />
       <h1>Make the next cut.</h1>
       <p>Your footage, your agents, your workspace.</p>
       <div className="welcome-actions">

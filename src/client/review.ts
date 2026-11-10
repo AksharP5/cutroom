@@ -8,6 +8,10 @@ export async function saveReviewNote(
   draft: EditorReviewDraft,
   body: string,
 ) {
+  // Marks are the human's yellow pencil, read from the tokens.
+  const pencil = getComputedStyle(document.documentElement)
+    .getPropertyValue("--human")
+    .trim();
   let framePath: string | undefined;
   let captureError = "";
   if (draft.frameUrl) {
@@ -24,7 +28,7 @@ export async function saveReviewNote(
       if (!paint) throw new Error("The browser could not draw the frame.");
       paint.drawImage(image, 0, 0);
       if (draft.kind === "draw" && draft.points.length) {
-        paint.strokeStyle = "#f39a6a";
+        paint.strokeStyle = pencil;
         paint.lineWidth = Math.max(3, image.width / 400);
         paint.lineCap = "round";
         paint.lineJoin = "round";
@@ -60,7 +64,7 @@ export async function saveReviewNote(
       point: draft.points[0],
       strokes:
         draft.kind === "draw" && draft.points.length
-          ? [{ points: draft.points, color: "#f39a6a" }]
+          ? [{ points: draft.points, color: pencil }]
           : [],
       framePath,
     }),

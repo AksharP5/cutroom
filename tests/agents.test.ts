@@ -11,6 +11,7 @@ import { z } from "zod";
 import {
   agentEventEnvelopeSchema,
   agentSessionSummarySchema,
+  toolTarget,
 } from "../src/shared/agent";
 import { CodexClient } from "../src/server/agents/codex-client";
 import { CodexRuntime } from "../src/server/agents/codex";
@@ -21,6 +22,7 @@ import type {
   RuntimeFactory,
   RuntimeOptions,
 } from "../src/server/agents/runtime";
+import { toolCalls } from "../src/server/agents/runtime";
 import { createProjectStore } from "../src/server/projects/store";
 import { createReviewService } from "../src/server/projects/review";
 
@@ -159,6 +161,59 @@ describe("agent conversations", () => {
     await idle(restored, session.id);
     expect(resumed).toBe("native-42");
     expect(resumedModel).toBe("chosen-model");
+  });
+
+  test("a tool call names its project file from start through result and reload", async () => {
+    const { service, project, projects, dataDir } = await setup(
+      factory(async (options) => {
+        // Claude Code reports absolute paths; the row should say what a person would.
+        const tools = toolCalls(options.cwd);
+        options.emit({
+          type: "message",
+          message: tools.start("edit-1", "Edit", {
+            file_path: join(options.cwd, "index.html"),
+            old_string: "a",
+            new_string: "b",
+          }),
+        });
+        options.emit({
+          type: "message",
+          message: tools.finish("edit-1", "The file was updated.", false),
+        });
+      }),
+    );
+    const session = await service.create({
+      projectId: project.id,
+      provider: "claude",
+    });
+    await service.send(session.id, {
+      text: "Edit the title",
+      skills: [],
+      attachments: [],
+    });
+    await idle(service, session.id);
+    const expected = {
+      id: "edit-1",
+      role: "tool",
+      tool: "Edit",
+      target: "index.html",
+      text: "The file was updated.",
+      status: "complete",
+    };
+    expect(service.get(session.id).messages).toContainEqual(
+      expect.objectContaining(expected),
+    );
+    await service.dispose();
+    const restored = await createAgentService({
+      projects,
+      review: createReviewService(projects),
+      dataDir,
+      runtimeFactory: factory(async () => {}),
+    });
+    cleanup.push(() => restored.dispose());
+    expect(restored.get(session.id).messages).toContainEqual(
+      expect.objectContaining(expected),
+    );
   });
 
   test("waits for an approval and refuses stale answers", async () => {
@@ -689,5 +744,19 @@ test("Codex accepts nullable running command output and streams it before comple
     role: "tool",
     text: "printf checked\nfirst second",
     status: "complete",
+    target: "printf checked",
   });
+});
+
+test("tool targets read relative to the project", () => {
+  const project = "/home/me/Cutroom/grain-3";
+  expect(
+    toolTarget({ file_path: `${project}/compositions/intro.html` }, project),
+  ).toBe("compositions/intro.html");
+  expect(toolTarget({ command: `ls ${project}/assets` }, project)).toBe(
+    "ls assets",
+  );
+  // Paths outside the project stay absolute, so nothing is misattributed.
+  expect(toolTarget({ file_path: "/etc/hosts" }, project)).toBe("/etc/hosts");
+  expect(toolTarget({ projectId: "abc", frame: 12 }, project)).toBeUndefined();
 });

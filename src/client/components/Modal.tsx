@@ -7,7 +7,7 @@ export function Modal({
   onClose,
   wide = false,
 }: {
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;

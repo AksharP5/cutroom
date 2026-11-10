@@ -87,12 +87,8 @@ test("visual review, native skill selection, and script edits survive real works
   await expect(page.getByRole("listbox", { name: "Skills" })).toBeVisible();
   await composer.press("Enter");
   await expect(composer).toHaveValue("Use $storyboard ");
-  await page
-    .getByRole("button", { name: "Toggle agent chat", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Toggle agent chat", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await expect(composer).toHaveValue("Use $storyboard ");
   await page.reload();
   await expect(composer).toHaveValue("Use $storyboard ");

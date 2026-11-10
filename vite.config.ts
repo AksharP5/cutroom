@@ -26,6 +26,11 @@ export default defineConfig({
       "@codemirror/state",
     ],
   },
+  // Lightning CSS expands the tokens' @custom-media breakpoints, which browsers cannot read yet.
+  css: {
+    transformer: "lightningcss",
+    lightningcss: { drafts: { customMedia: true } },
+  },
   define: {
     "import.meta.env.VITE_HYPERFRAMES_NO_TELEMETRY": JSON.stringify("1"),
   },

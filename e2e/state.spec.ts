@@ -62,7 +62,7 @@ test("changing projects closes a saved review frame and clears project-local rev
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByRole("button", { name: "View annotated frame" }).click();
   await expect(
-    page.getByRole("dialog", { name: "Review at 00:00.00" }),
+    page.getByRole("dialog", { name: "Review at 00:00:00:00" }),
   ).toBeVisible();
   await page.evaluate((id) => {
     location.hash = `project/${id}`;
@@ -139,9 +139,13 @@ test("an in-flight agent submission cannot switch conversations or erase the nex
     await expect(
       page.getByLabel("Agent provider", { exact: true }),
     ).toBeDisabled();
+    // While a turn is in flight, the presence line replaces the conversation controls.
+    await expect(page.getByLabel("Conversation", { exact: true })).toHaveCount(
+      0,
+    );
     await expect(
       page.getByRole("button", { name: "New conversation", exact: true }),
-    ).toBeDisabled();
+    ).toHaveCount(0);
     await composer.fill("The next request");
     release();
     await expect(

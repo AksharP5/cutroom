@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { FilmStrip, Image, Plus, Waveform } from "@phosphor-icons/react";
+import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
-import { useWorkspace } from "../workspace";
+import { frameTimecode } from "../api";
+import { useFps, useWorkspace } from "../workspace";
 
 // Mirrors the formats the upload route validates. `.ts` transport streams are left out so
 // TypeScript files in a project are never listed as video.
@@ -20,17 +21,14 @@ const mediaKinds = [
       "mts",
       "m2ts",
     ],
-    icon: FilmStrip,
   },
   {
     kind: "audio",
     extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"],
-    icon: Waveform,
   },
   {
     kind: "image",
     extensions: ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"],
-    icon: Image,
   },
 ] as const;
 const acceptedFiles = mediaKinds
@@ -58,6 +56,72 @@ const mediaKind = (path: string) => {
   );
 };
 
+/** One row: a thumbnail, the file name, and its length read from the file itself. */
+function MediaRow({
+  projectId,
+  path,
+  kind,
+}: {
+  projectId: string;
+  path: string;
+  kind: (typeof mediaKinds)[number]["kind"];
+}) {
+  const fps = useFps();
+  const [duration, setDuration] = useState<number | null>(null);
+  // Decoders start only for rows that have been on screen.
+  const row = useRef<HTMLLIElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const element = row.current;
+    if (!element || seen) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) setSeen(true);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [seen]);
+  const changed = useWorkspace((state) => state.fileChanges[path]);
+  useEffect(() => setDuration(null), [changed]);
+  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${changed}` : ""}`;
+  const measure = (element: HTMLMediaElement) => {
+    if (Number.isFinite(element.duration)) setDuration(element.duration);
+  };
+  return (
+    <li className="media-row" title={path} data-kind={kind} ref={row}>
+      <span className="media-thumb" aria-hidden="true">
+        {seen && kind === "video" && (
+          <video
+            src={`${src}#t=0.1`}
+            preload="metadata"
+            muted
+            playsInline
+            onLoadedMetadata={(event) => measure(event.currentTarget)}
+          />
+        )}
+        {kind === "audio" && (
+          <>
+            <Waveform size={14} />
+            {seen && (
+              <audio
+                src={src}
+                preload="metadata"
+                onLoadedMetadata={(event) => measure(event.currentTarget)}
+              />
+            )}
+          </>
+        )}
+        {kind === "image" && <img src={src} alt="" loading="lazy" />}
+      </span>
+      <span className="media-name">{path.split("/").at(-1)}</span>
+      <span className="media-duration mono">
+        {kind === "image"
+          ? "Still"
+          : duration !== null && frameTimecode(duration, fps)}
+      </span>
+    </li>
+  );
+}
+
 export function MediaPanel({
   projectId,
   hidden,
@@ -68,7 +132,7 @@ export function MediaPanel({
   // Read here rather than in the shell, so a burst of file events re-renders only this panel.
   const revision = useWorkspace((state) => state.mediaRevision);
   const [media, setMedia] = useState<
-    { path: string; type: (typeof mediaKinds)[number] }[] | null
+    { path: string; kind: (typeof mediaKinds)[number]["kind"] }[] | null
   >(null);
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -92,7 +156,7 @@ export function MediaPanel({
       files
         .flatMap((path) => {
           const type = mediaKind(path);
-          return type ? [{ path, type }] : [];
+          return type ? [{ path, kind: type.kind }] : [];
         })
         .sort((a, b) => a.path.localeCompare(b.path)),
     );
@@ -196,7 +260,7 @@ export function MediaPanel({
           disabled={importing}
           onClick={() => picker.current?.click()}
         >
-          <Plus size={14} />
+          <Plus />
         </button>
         <input
           ref={picker}
@@ -215,27 +279,25 @@ export function MediaPanel({
           {message}
         </p>
       )}
-      {media?.length === 0 ? (
-        <div className="media-empty">
-          <strong>{importing ? "Importing" : "No media yet"}</strong>
-          <span>Drop files here or import from your computer.</span>
-        </div>
-      ) : (
-        <ul className="media-list">
-          {media?.map(({ path, type }) => {
-            const Icon = type.icon;
-            const name = path.split("/").at(-1) ?? path;
-            const extension = name.split(".").at(-1);
-            return (
-              <li key={path} title={path} data-kind={type.kind}>
-                <Icon size={14} aria-label={type.kind} />
-                <span>{name.slice(0, -(extension?.length ?? 0) - 1)}</span>
-                <small>{extension}</small>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <div className="media-body">
+        {media?.length === 0 ? (
+          <div className="media-empty">
+            <strong>{importing ? "Importing" : "No media yet"}</strong>
+            <span>Drop files here or import from your computer.</span>
+          </div>
+        ) : (
+          <ul className="media-list">
+            {media?.map(({ path, kind }) => (
+              <MediaRow
+                key={path}
+                projectId={projectId}
+                path={path}
+                kind={kind}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

@@ -11,8 +11,10 @@ import type {
   AgentRequest,
   AgentTurn,
 } from "../../shared/agent";
+import { toolTarget } from "../../shared/agent";
+import { describeTool } from "../../shared/toolRow";
 import { InputQueue } from "./input-queue";
-import { agentPrompt, completeMessage } from "./runtime";
+import { agentPrompt, completeMessage, toolCalls } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const authStatusSchema = z.object({
@@ -138,7 +140,7 @@ export class ClaudeRuntime implements AgentRuntime {
   private active?: { resolve: () => void; reject: (error: Error) => void };
   private currentMessageId?: string;
   private readonly text = new Map<string, string>();
-  private readonly toolNames = new Map<string, string>();
+  private readonly tools: ReturnType<typeof toolCalls>;
   private nativeSessionId?: string;
   private hasAssistantText = false;
   private disposed = false;
@@ -149,6 +151,7 @@ export class ClaudeRuntime implements AgentRuntime {
     private readonly studioMcp: StudioMcp,
   ) {
     this.nativeSessionId = options.nativeSessionId;
+    this.tools = toolCalls(options.cwd);
   }
 
   private ensureQuery() {
@@ -179,6 +182,9 @@ export class ClaudeRuntime implements AgentRuntime {
   }
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
+    // "Write index.html?" rather than the tool's internal name.
+    const target = toolTarget(input, this.options.cwd);
+    const { verb, object } = describeTool({ tool, target }, "ask");
     const questions =
       tool === "AskUserQuestion"
         ? questionInputSchema.safeParse(input)
@@ -191,8 +197,9 @@ export class ClaudeRuntime implements AgentRuntime {
         context.decisionReason ??
         (tool === "AskUserQuestion"
           ? "Claude has a question"
-          : `Allow ${tool}?`),
+          : `${[verb, object].filter(Boolean).join(" ")}?`),
       input,
+      ...(target ? { target } : {}),
       ...(questions?.success
         ? {
             questions: questions.data.questions.map((question) => ({
@@ -274,7 +281,7 @@ export class ClaudeRuntime implements AgentRuntime {
       this.active = undefined;
       this.currentMessageId = undefined;
       this.text.clear();
-      this.toolNames.clear();
+      this.tools.clear();
     }
   }
 
@@ -352,18 +359,9 @@ export class ClaudeRuntime implements AgentRuntime {
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
-        this.toolNames.set(block.id, block.name);
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              JSON.stringify(block.input, null, 2).slice(-32_000),
-              "tool",
-              block.id,
-              block.name,
-            ),
-            status: "streaming",
-          },
+          message: this.tools.start(block.id, block.name, block.input),
         });
       }
       return;
@@ -378,19 +376,13 @@ export class ClaudeRuntime implements AgentRuntime {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content ?? "", null, 2);
-        const tool = this.toolNames.get(block.tool_use_id) ?? "Tool";
-        this.toolNames.delete(block.tool_use_id);
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              text.slice(-32_000),
-              "tool",
-              block.tool_use_id,
-              tool,
-            ),
-            status: block.is_error ? "failed" : "complete",
-          },
+          message: this.tools.finish(
+            block.tool_use_id,
+            text,
+            block.is_error === true,
+          ),
         });
       }
       return;
