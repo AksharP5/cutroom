@@ -631,7 +631,7 @@ ${kept}  <video id="next" src="next.mp4" data-start="2.002" data-duration="1.001
   <video id="span-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="1"></video>
   <audio id="sound" src="span.mp4" data-link="av" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="2"></audio>
   <audio id="sound-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="2"></audio>
-  <video id="starts-2" src="starts.mp4" data-start="1.001" data-duration="1.001" data-media-start="3.001" data-playback-rate="2" data-track-index="3"></video>
+  <video id="starts" src="starts.mp4" data-start="1.001" data-duration="1.001" data-media-start="3.001" data-playback-rate="2" data-track-index="3"></video>
   <video id="ends" src="ends.mp4" data-start="0" data-duration="1.001" data-track-index="4"></video>
 </main>
 `);
@@ -652,9 +652,25 @@ test("Q at NTSC frame one writes source offsets rounded once to the microsecond"
     .toBe(`<head><style data-cutroom-track-stacking="main">@layer cutroom-tracks{:where([data-composition-id="main"] [data-start][data-track-index="0"]:not(audio):not([data-composition-id="main"] :is([data-start],[data-composition-id],[data-composition-src]) *)){z-index:0}}</style></head>
 <main data-composition-id="main" data-duration="9.976633" data-fps="30000/1001">
   <video id="talk" src="talk.mp4" data-start="0" data-duration="2.969633" data-media-start="1.033367" data-track-index="0"></video>
-  <audio id="bed-2" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
+  <audio id="bed" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
 </main>
 `);
+});
+
+test("Q trims a referenced music bed in place without copying its script target", () => {
+  const script = `<script>gsap.to("#bed", { opacity: 0.5 });</script>`;
+  const html =
+    composition(`<video id="shot" src="shot.mp4" data-start="0" data-duration="3" data-track-index="0"></video>
+<audio id="bed" src="bed.wav" data-start="0" data-duration="5" data-media-start="2" data-track-index="1"></audio>
+${script}`);
+  const output = edit(html, [
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+  ]);
+  expect(output).toContain(
+    `<audio id="bed" src="bed.wav" data-start="0" data-duration="4" data-media-start="3" data-track-index="1"></audio>`,
+  );
+  expect(output).toContain(script);
+  expect(output).not.toContain("bed-2");
 });
 
 test("removing an anonymous clip writes ids on the clips it would renumber", () => {

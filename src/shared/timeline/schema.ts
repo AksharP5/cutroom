@@ -155,7 +155,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .boolean()
         .default(false)
         .describe(
-          "Remove the selected time ranges across unlocked auto-select tracks, cutting overlapping clips and closing the full gap",
+          "Remove the selected time ranges across edited and unlocked auto-select tracks, cutting overlapping clips and closing the full gap",
         ),
     })
     .describe("Lift or ripple delete clips and their linked partners."),

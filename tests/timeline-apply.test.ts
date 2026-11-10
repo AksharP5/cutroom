@@ -251,7 +251,7 @@ for (const [name, command, target] of [
       next: [0, 60, 30],
       span: [1, 0, 30],
       "span-2": [1, 30, 30],
-      "starts-2": [2, 30, 30],
+      starts: [2, 30, 30],
       ends: [3, 0, 30],
       before: [5, 0, 30],
       after: [6, 30, 30],
@@ -259,9 +259,9 @@ for (const [name, command, target] of [
     expect(result.clips.find((item) => item.id === "span-2")?.mediaStart).toBe(
       5,
     );
-    expect(
-      result.clips.find((item) => item.id === "starts-2")?.mediaStart,
-    ).toBe(1.5);
+    expect(result.clips.find((item) => item.id === "starts")?.mediaStart).toBe(
+      1.5,
+    );
     expect(positions(state).span).toEqual([1, 0, 90]);
   });
 
@@ -287,7 +287,8 @@ for (const [name, command, target] of [
       };
       expect(() => run(linked, command)).toThrow("Clip bed");
       expect(failure(() => run(linked, command))).toBe("unsupported");
-      // The selected clip's own partner cannot be edited through a protected track either.
+      // Selecting a clip cannot edit its locked partner either.
+      if (!protection.locked) return;
       const selectedLink = {
         ...state,
         clips: state.clips.map((item) =>
@@ -298,6 +299,55 @@ for (const [name, command, target] of [
       expect(failure(() => run(selectedLink, command))).toBe("unsupported");
     });
   }
+}
+
+for (const [name, command, expected] of [
+  [
+    "Q",
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+    {
+      shot: [0, 0, 60],
+      sound: [1, 0, 60],
+      next: [0, 60, 30],
+      "next-sound": [1, 60, 30],
+    },
+  ],
+  [
+    "W",
+    { type: "trim", clipId: "shot", edge: "end", to: 60, ripple: true },
+    {
+      shot: [0, 0, 60],
+      sound: [1, 0, 60],
+      next: [0, 60, 30],
+      "next-sound": [1, 60, 30],
+    },
+  ],
+  [
+    "Shift+X",
+    { type: "remove", clipIds: ["shot"], ripple: true },
+    { next: [0, 0, 30], "next-sound": [1, 0, 30] },
+  ],
+] satisfies [string, CommandInput, Record<string, number[]>][]) {
+  test(`${name} ripples explicitly edited auto-select-off tracks and their partners`, () => {
+    const state = timeline(
+      [
+        clip("shot", 0, 0, 90, { link: "av" }),
+        clip("sound", 1, 0, 90, { kind: "audio", link: "av" }),
+        clip("next", 0, 90, 30, { link: "next-av" }),
+        clip("next-sound", 1, 90, 30, { kind: "audio", link: "next-av" }),
+        clip("excluded", 2, 0, 150),
+      ],
+      [
+        { index: 0, autoSelect: false },
+        { index: 1, kind: "audio", autoSelect: false },
+        { index: 2, autoSelect: false },
+      ],
+    );
+    expect(positions(run(state, command))).toEqual({
+      ...expected,
+      excluded: [2, 0, 150],
+    });
+  });
 }
 
 test("Q on the first clip cuts a music bed at zero without pulling it before the timeline", () => {
@@ -316,7 +366,7 @@ test("Q on the first clip cuts a music bed at zero without pulling it before the
   expect(positions(result)).toEqual({
     talk: [0, 0, 60],
     next: [0, 60, 30],
-    "bed-2": [1, 0, 120],
+    bed: [1, 0, 120],
   });
   expect(result.clips.map((item) => item.mediaStart)).toEqual([2, 0, 3]);
 });
@@ -367,7 +417,7 @@ test("ripple delete trims a J-cut head under B-roll and keeps its surviving sour
   });
   expect(positions(result)).toEqual({
     shot: [0, 100, 50],
-    "head-2": [1, 100, 50],
+    head: [1, 100, 50],
   });
   expect(result.clips.map((item) => [item.link, item.mediaStart])).toEqual([
     ["av", 2],
@@ -451,7 +501,7 @@ test("ripple delete removes the union of selected linked spans without a smalles
     ),
   ).toEqual({
     s2: [0, 0, 100],
-    "s2-sound-2": [1, 0, 100],
+    "s2-sound": [1, 0, 100],
     broll: [0, 100, 50],
     title: [2, 50, 30],
   });
@@ -468,6 +518,36 @@ test("ripple delete removes the union of selected linked spans without a smalles
       ),
     ),
   ).toEqual({ "take-2": [0, 0, 100], "take-sound-2": [1, 0, 100] });
+});
+
+test("deleting a J-cut pair trims the preceding picture inside the selected union", () => {
+  const state = timeline([
+    clip("previous", 0, 0, 100, { link: "previous-av", mediaStart: 2 }),
+    clip("previous-sound", 1, 0, 90, {
+      kind: "audio",
+      link: "previous-av",
+      mediaStart: 2,
+    }),
+    clip("shot", 0, 100, 100, { link: "av", mediaStart: 10 }),
+    clip("head", 1, 90, 110, {
+      kind: "audio",
+      link: "av",
+      mediaStart: 9.666667,
+    }),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["shot"],
+    ripple: true,
+  });
+  expect(positions(result)).toEqual({
+    previous: [0, 0, 90],
+    "previous-sound": [1, 0, 90],
+  });
+  expect(result.clips.map((item) => [item.link, item.mediaStart])).toEqual([
+    ["previous-av", 2],
+    ["previous-av", 2],
+  ]);
 });
 
 test("separate ripple deletions preserve the unselected interval between them", () => {

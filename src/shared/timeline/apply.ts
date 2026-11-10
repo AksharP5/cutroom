@@ -171,7 +171,15 @@ function assertTrackKind(
 
 function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   const { clips, fps } = timeline;
-  const { reserved: taken, onCreate } = batch;
+  const { reserved: taken } = batch;
+  // Sync checks compare each surviving piece with its source in this command's input.
+  const copies = new Map<string, string>();
+  const onCreate: OnCreate = (id, origin) => {
+    if ("copyOf" in origin)
+      copies.set(id, copies.get(origin.copyOf) ?? origin.copyOf);
+    batch.onCreate(id, origin);
+  };
+  const rippleBatch = { ...batch, onCreate };
   const trackAt = (index: number) =>
     timeline.tracks.find((track) => track.index === index);
   const byId = new Map(clips.map((clip) => [clip.id, clip]));
@@ -229,7 +237,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const edges = new Map(members.map((clip) => [clip.track, edge(clip)]));
       const editPoint = (track: number) => edges.get(track) ?? at;
       const change = command.edge === "start" ? -delta : delta;
-      const tracks = rippleTracks(timeline, []);
+      const tracks = rippleTracks(
+        timeline,
+        members.map((clip) => clip.track),
+      );
       const next =
         change < 0
           ? removeTime(
@@ -239,11 +250,19 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 editPoint(track) + (command.edge === "end" ? change : 0),
               -change,
               fps,
-              batch,
+              rippleBatch,
               ids,
             )
-          : insertTime(trimmed, tracks, editPoint, change, fps, batch, ids);
-      assertRippleSync(timeline, next);
+          : insertTime(
+              trimmed,
+              tracks,
+              editPoint,
+              change,
+              fps,
+              rippleBatch,
+              ids,
+            );
+      assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
     case "split": {
@@ -280,15 +299,25 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const ids = new Set(removing.map((clip) => clip.id));
       const remaining = clips.filter((clip) => !ids.has(clip.id));
       if (!command.ripple) return { ...timeline, clips: remaining };
-      const tracks = rippleTracks(timeline, []);
+      const tracks = rippleTracks(
+        timeline,
+        removing.map((clip) => clip.track),
+      );
       // Close the selected intervals once on every participating track. Working right to left
       // keeps earlier ranges in the original timeline's coordinates.
       let next = remaining;
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
       ).toReversed())
-        next = removeTime(next, tracks, () => from, to - from, fps, batch);
-      assertRippleSync(timeline, next);
+        next = removeTime(
+          next,
+          tracks,
+          () => from,
+          to - from,
+          fps,
+          rippleBatch,
+        );
+      assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
     case "insert": {
@@ -707,27 +736,46 @@ function insertTime(
 }
 
 /** Protected clips stay unchanged; a link cannot pull one into a ripple. */
-function assertRippleSync(before: Timeline, clips: Clip[]) {
+function assertRippleSync(
+  before: Timeline,
+  clips: Clip[],
+  tracks: ReadonlySet<number>,
+  copies: ReadonlyMap<string, string>,
+) {
   const protectedTracks = new Map(
     before.tracks
-      .filter((track) => track.locked || !track.autoSelect)
+      .filter((track) => !tracks.has(track.index))
       .map((track) => [track.index, track]),
   );
   if (!protectedTracks.size) return;
+  const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
   const current = new Map(clips.map((clip) => [clip.id, clip]));
-  const changedLinks = new Set<string>();
-  for (const clip of before.clips)
-    if (
-      clip.link &&
-      JSON.stringify(clip) !== JSON.stringify(current.get(clip.id))
-    )
-      changedLinks.add(clip.link);
+  const shifted = new Map<string, Clip[]>();
+  for (const clip of clips) {
+    const old = previous.get(copies.get(clip.id) ?? clip.id);
+    if (!old?.link) continue;
+    const sourceAtStart =
+      (old.mediaStart ?? 0) +
+      frameTime(clip.start - old.start, before.fps) * old.playbackRate;
+    if (round6(clip.mediaStart ?? 0) === round6(sourceAtStart)) continue;
+    const partners = shifted.get(old.link) ?? [];
+    partners.push(clip);
+    shifted.set(old.link, partners);
+  }
   for (const clip of before.clips) {
     const track = protectedTracks.get(clip.track);
     if (!track) continue;
     const changed =
       JSON.stringify(clip) !== JSON.stringify(current.get(clip.id));
-    if (!changed && !(clip.link && changedLinks.has(clip.link))) continue;
+    const outOfSync =
+      clip.link &&
+      shifted
+        .get(clip.link)
+        ?.some(
+          (partner) =>
+            partner.start < clipEnd(clip) && clipEnd(partner) > clip.start,
+        );
+    if (!changed && !outOfSync) continue;
     throw new TimelineError(
       track.locked && !clip.link ? "locked" : "unsupported",
       `Clip ${clip.id} is on ${track.locked ? "a locked" : "an auto-select-off"} track, so the ripple cannot preserve sync.`,
@@ -829,27 +877,28 @@ function clearRange(
   const overlaps = (clip: Clip) => clip.start < to && clipEnd(clip) > from;
   const hits = (list: Clip[]) =>
     list.filter((clip) => clip.track === track && overlaps(clip));
-  const spanning = (at: number) => (clip: Clip) =>
-    clip.start < at && at < clipEnd(clip);
-  // Cutting the far edge first keeps the surviving right piece's id the first one minted.
-  let next = splitClips(
+  // Only a clip with surviving material on both sides needs a copy.
+  const next = splitClips(
     clips,
-    hits(clips).filter(spanning(to)),
+    hits(clips).filter((clip) => clip.start < from && clipEnd(clip) > to),
     to,
     fps,
     taken,
     onCreate,
   );
-  next = splitClips(
-    next,
-    hits(next).filter(spanning(from)),
-    from,
-    fps,
-    taken,
-    onCreate,
-  );
-  const inside = new Set(hits(next).map((clip) => clip.id));
-  return next.filter((clip) => !inside.has(clip.id));
+  return next.flatMap((clip) => {
+    if (clip.track !== track || !overlaps(clip)) return [clip];
+    if (clip.start < from) return [{ ...clip, duration: from - clip.start }];
+    if (clipEnd(clip) <= to) return [];
+    return [
+      {
+        ...clip,
+        start: to,
+        duration: clipEnd(clip) - to,
+        mediaStart: advance(clip, to - clip.start, fps),
+      },
+    ];
+  });
 }
 
 function mergeRanges(

@@ -152,13 +152,13 @@ test("Q through a spanning music bed persists exact NTSC HTML and undo restores 
       ]),
     ).toEqual([
       ["talk", 0, 89, 1.033367],
-      ["bed-2", 0, 179, 2.066733],
+      ["bed", 0, 179, 2.066733],
     ]);
     expect(await readFile(join(project.path, "index.html"), "utf8"))
       .toBe(`<head><style data-cutroom-track-stacking="main">@layer cutroom-tracks{:where([data-composition-id="main"] [data-start][data-track-index="0"]:not(audio):not([data-composition-id="main"] :is([data-start],[data-composition-id],[data-composition-src]) *)){z-index:0}}</style></head>
 <main data-composition-id="main" data-duration="9.976633" data-fps="30000/1001">
   <video id="talk" src="talk.mp4" data-start="0" data-duration="2.969633" data-media-start="1.033367" data-track-index="0"></video>
-  <audio id="bed-2" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
+  <audio id="bed" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
 </main>
 `);
     expect(
@@ -173,6 +173,67 @@ test("Q through a spanning music bed persists exact NTSC HTML and undo restores 
     await fixture.close();
   }
 });
+
+for (const protection of [{ locked: true }, { autoSelect: false }]) {
+  test(`ripple delete can shorten an L-cut tail linked to an unchanged ${Object.keys(protection)[0]} picture`, async () => {
+    const fixture = await timelineFixture();
+    const { project } = fixture;
+    const shot = `<video id="shot" src="shot.mp4" data-start="0" data-duration="3.333333" data-media-start="2" data-link="av" data-track-index="0"></video>`;
+    try {
+      await writeFile(
+        join(project.path, "index.html"),
+        `<main data-composition-id="main" data-duration="10" data-fps="30">
+  ${shot}
+  <audio id="tail" src="shot.mp4" data-start="0" data-duration="4" data-media-start="2" data-link="av" data-track-index="1"></audio>
+  <video id="broll" src="broll.mp4" data-start="3.333333" data-duration="1.666667" data-track-index="2"></video>
+</main>`,
+      );
+      const read = async () =>
+        TimelineViewSchema.parse(
+          await (
+            await fixture.request(`/projects/${project.id}/timeline`)
+          ).json(),
+        );
+      const initial = await read();
+      const protectedTrack = await fixture.request(
+        `/projects/${project.id}/commands`,
+        "POST",
+        {
+          expectedRevision: initial.revision,
+          commands: [{ type: "setTrack", index: 0, ...protection }],
+        },
+      );
+      expect(protectedTrack.status).toBe(200);
+      const before = await read();
+      const originalFiles = await fixture.files();
+      const response = await fixture.request(
+        `/projects/${project.id}/commands`,
+        "POST",
+        {
+          expectedRevision: before.revision,
+          commands: [{ type: "remove", clipIds: ["broll"], ripple: true }],
+        },
+      );
+      expect(response.status).toBe(200);
+      const after = TimelineViewSchema.parse(await response.json());
+      expect(after.timeline.clips).toEqual([
+        before.timeline.clips[0],
+        { ...before.timeline.clips[1], duration: 100 },
+      ]);
+      expect(await read()).toEqual(after);
+      expect(
+        await readFile(join(project.path, "index.html"), "utf8"),
+      ).toContain(shot);
+      expect(
+        (await fixture.request(`/projects/${project.id}/history/undo`, "POST"))
+          .status,
+      ).toBe(200);
+      expect(await fixture.files()).toEqual(originalFiles);
+    } finally {
+      await fixture.close();
+    }
+  });
+}
 
 test("an MCP agent reads and edits the timeline through the batch endpoint", async () => {
   const fixture = await timelineFixture();
