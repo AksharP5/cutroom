@@ -18,6 +18,7 @@ const talk = `<video id="talk" src="talk.mp4" muted data-link="lk-1" data-sync-o
 const voice = `<audio id="voice" src="talk.mp4" data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="2"></audio>`;
 const title = `<DIV id='title' class=clip data-start=6 data-duration="4" data-track-index="1" data-hf-id="hf-9"><b data-hf-id="hf-10">Hi</b></DIV>`;
 const after = `<div id="after" class="clip" data-start="title" data-duration="2" data-track-index="1">Next</div>`;
+const track0Stacking = `<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}}</style>`;
 const source = `<!doctype html>
 <html><head><style>.clip{position:absolute}</style>
 <script>const markup = "<div data-start='1'></div>";</script></head>
@@ -85,13 +86,21 @@ test("edits change only the attributes they need and keep references", () => {
     source
       .replace(`\n  ${talk}\n  ${voice}`, "")
       .replace(`data-duration="4"`, `data-duration="3"`)
-      .replace(`data-duration="12"`, `data-duration="11"`),
+      .replace(`data-duration="12"`, `data-duration="11"`)
+      .replace(
+        `data-fps="30">`,
+        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
+      ),
   );
   const moved = edit(source, [{ type: "move", clipIds: ["after"], by: 15 }]);
   expect(moved).toBe(
     source
       .replace(`data-start="title"`, `data-start="10.5"`)
-      .replace(`data-duration="12"`, `data-duration="12.5"`),
+      .replace(`data-duration="12"`, `data-duration="12.5"`)
+      .replace(
+        `data-fps="30">`,
+        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
+      ),
   );
 });
 
@@ -134,8 +143,65 @@ test("split, ripple delete, and insert round-trip without touching other markup"
         `${after}\n`,
         `${after.replace(`data-start="title"`, `data-start="8"`)}\n  <audio id="bed-theme" src="music/bed &amp; theme.wav" data-start="0" data-duration="3" data-track-index="3"></audio>\n`,
       )
-      .replace(`data-duration="12"`, `data-duration="10"`),
+      .replace(`data-duration="12"`, `data-duration="10"`)
+      .replace(
+        `data-fps="30">`,
+        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
+      ),
   );
+});
+
+test("visual placements maintain track stacking without rewriting authored styles", () => {
+  const html = composition(
+    `<style>.title{z-index:40}</style><div id="title" class="clip title" style="color:red;z-index:50!important" data-start="0" data-duration="2" data-track-index="1">Title</div>`,
+  );
+  const inserted = edit(html, [
+    {
+      type: "insert",
+      track: 0,
+      at: 0,
+      clip: { id: "picture", kind: "image", src: "picture.png", duration: 60 },
+    },
+  ]);
+  expect(inserted).toContain(`<style>.title{z-index:40}</style>`);
+  expect(inserted).toContain(`style="color:red;z-index:50!important"`);
+  expect(inserted).toContain(`[data-track-index="0"]:not(audio)`);
+  expect(inserted).toContain(`{z-index:0}`);
+  const moved = edit(inserted, [
+    { type: "move", clipIds: ["title"], trackBy: 2 },
+  ]);
+  expect(moved).toContain(`data-track-index="3"`);
+  expect(moved).toContain(`[data-track-index="3"]:not(audio)`);
+  expect(moved).toContain(`{z-index:3}`);
+  expect(moved).toContain(`style="color:red;z-index:50!important"`);
+  expect(moved.match(/<style data-cutroom-track-stacking>/g)).toHaveLength(1);
+  expect(edit(moved, [{ type: "move", clipIds: ["title"], by: 30 }])).toBe(
+    moved
+      .replace(`data-duration="10"`, `data-duration="11"`)
+      .replace(
+        `id="title" class="clip title" style="color:red;z-index:50!important" data-start="0"`,
+        `id="title" class="clip title" style="color:red;z-index:50!important" data-start="1"`,
+      ),
+  );
+});
+
+test("audio placement leaves stacking and authored markup alone", () => {
+  const html = composition(
+    `<audio id="bed" src="bed.wav" style="z-index:90" data-start="0" data-duration="2" data-track-index="0"></audio>`,
+  );
+  expect(edit(html, [{ type: "move", clipIds: ["bed"], trackBy: 1 }])).toBe(
+    html.replace(`data-track-index="0"`, `data-track-index="1"`),
+  );
+  const inserted = edit(html, [
+    {
+      type: "insert",
+      track: 1,
+      at: 0,
+      clip: { kind: "audio", src: "voice.wav", duration: 60 },
+    },
+  ]);
+  expect(inserted).not.toContain("data-cutroom-track-stacking");
+  expect(inserted).toContain(`style="z-index:90"`);
 });
 
 test("compositions that cannot be edited exactly are refused", () => {
@@ -239,6 +305,7 @@ test("inert template content never becomes the root or answers an id", () => {
   expect(edit(html, [{ type: "move", clipIds: ["title"], by: 30 }])).toBe(
     html
       .replace(`data-duration="10"`, `data-duration="11"`)
+      .replace(`data-fps="30">`, `data-fps="30">\n${track0Stacking}`)
       .replace(
         `data-start="0" data-duration="2">Title`,
         `data-start="1" data-duration="2">Title`,
@@ -296,7 +363,10 @@ test("a sub-composition edits its first template even when a later one is named 
         `data-start="0" data-duration="1" data-track-index="0">Helper`,
         `data-start="1" data-duration="1" data-track-index="0">Helper`,
       )
-      .replace(`data-duration="4"`, `data-duration="5"`)}\n${named}\n`,
+      .replace(
+        `data-duration="4">`,
+        `data-duration="5">\n${track0Stacking}`,
+      )}\n${named}\n`,
   );
 });
 
@@ -352,6 +422,7 @@ test("frames are the ones the runtime shows, and moves keep the source in sync",
   expect(edit(html, [{ type: "move", clipIds: ["v"], by: 24 }])).toBe(
     html
       .replace(`data-duration="10"`, `data-duration="11"`)
+      .replace(`data-fps="24">`, `data-fps="24">\n${track0Stacking}`)
       .replace(
         `data-start="0.1" data-duration="1" data-media-start="2"`,
         `data-start="1.125" data-duration="1" data-media-start="2.025"`,

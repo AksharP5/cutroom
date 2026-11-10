@@ -220,7 +220,10 @@ test("the entry document reads its live tree and a scene file its template", asy
     ).toBe(
       scene
         .replace(`data-start="0"`, `data-start="1"`)
-        .replace(`data-duration="4"`, `data-duration="5"`),
+        .replace(
+          `data-duration="4">`,
+          `data-duration="5">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}}</style>`,
+        ),
     );
   } finally {
     await fixture.close();

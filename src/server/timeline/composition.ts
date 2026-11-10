@@ -794,6 +794,46 @@ export function patchComposition(
   );
   const edits: Edit[] = [];
   const removedIds = new Set<string>();
+  const stacking = parsed.root.children.find(
+    (element) =>
+      element.tag === "style" &&
+      element.attrs["data-cutroom-track-stacking"] !== undefined,
+  );
+  const placed = after.clips.some((clip) => {
+    if (clip.kind === "audio") return false;
+    const prior = previous.get(clip.id);
+    return (
+      prior === undefined ||
+      prior.track !== clip.track ||
+      prior.start !== clip.start
+    );
+  });
+  if (stacking || placed) {
+    // A low-priority layer supplies track defaults without overriding authored z-index.
+    const tracks = new Set(
+      after.clips
+        .filter((clip) => clip.kind !== "audio")
+        .map((clip) => clip.track),
+    );
+    const rules = [...tracks]
+      .sort((a, b) => a - b)
+      .map(
+        (index) =>
+          `:where([data-track-index="${index}"]:not(audio),[data-layer="${index}"]:not([data-track-index]):not(audio)){z-index:${index}}`,
+      )
+      .join("");
+    const text = `<style data-cutroom-track-stacking>@layer cutroom-tracks{${rules}}</style>`;
+    if (stacking) {
+      if (html.slice(stacking.start, stacking.end) !== text)
+        edits.push({ start: stacking.start, end: stacking.end, text });
+    } else {
+      edits.push({
+        start: parsed.root.openEnd,
+        end: parsed.root.openEnd,
+        text: `\n${text}`,
+      });
+    }
+  }
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
     const next = current.get(clip.id);
