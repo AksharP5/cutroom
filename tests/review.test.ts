@@ -1164,3 +1164,30 @@ describe("review round 4 regressions", () => {
     expect(item?.review.status).toBe("queued");
   });
 });
+
+test("history changes nothing while review.json is unreadable, even if cutroom.json is too", async () => {
+  const queue = await setup();
+  await queue.note("Warm up the grade");
+  await send(queue.agents, queue.project, "Go");
+  const history = `/projects/${queue.project.id}/history`;
+  await queue.request(history);
+  const document = join(queue.project.path, "cutroom.json");
+  const state = join(queue.project.path, ".cutroom", "review.json");
+  await writeFile(document, "{broken document");
+  await writeFile(state, "{broken review");
+  const ledger = await queue.store.history(queue.project);
+  const guarded = queue.review.history(queue.project, ledger, {
+    kind: "human",
+  });
+  const [first] = ledger.list();
+  // The two files used to be read in a race; repeat so a lucky ordering cannot pass.
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    expect((await queue.fetchRaw(`${history}/undo`, "POST")).status).toBe(422);
+    expect((await queue.fetchRaw(`${history}/redo`, "POST")).status).toBe(422);
+    await expect(
+      guarded.restore(first!.id, { kind: "person", name: "You" }),
+    ).rejects.toThrow("review.json");
+    expect(await Bun.file(document).text()).toBe("{broken document");
+    expect(await Bun.file(state).text()).toBe("{broken review");
+  }
+});

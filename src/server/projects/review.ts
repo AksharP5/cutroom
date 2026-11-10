@@ -160,10 +160,10 @@ export function createReviewService(store: ProjectStore) {
       items,
     ) => items,
   ) => {
-    const [state, document] = await Promise.all([
-      readState(project),
-      store.document(project),
-    ]);
+    // Review state first: an unreadable review.json must always win over an unreadable
+    // cutroom.json, or history could run when it should be blocked.
+    const state = await readState(project);
+    const document = await store.document(project);
     const live = [external.id, turns.get(project.id)?.id];
     const annotations = new Map(
       document.annotations.map(({ status, ...content }) => [
