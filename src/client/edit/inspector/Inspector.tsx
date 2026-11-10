@@ -131,23 +131,6 @@ export function Inspector({ projectId }: { projectId: string }) {
     <aside
       ref={root}
       id="clip-inspector"
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        const width = Number.parseFloat(
-          getComputedStyle(document.documentElement).getPropertyValue(
-            "--breakpoint-drawer",
-          ),
-        );
-        if (!matchMedia(`(width < ${width}px)`).matches) return;
-        event.preventDefault();
-        event.stopPropagation();
-        useWorkspace.setState({ inspector: false });
-        document
-          .querySelector<HTMLButtonElement>(
-            '.edit-tools [aria-label="Inspector"]',
-          )
-          ?.focus();
-      }}
       className="clip-inspector"
       aria-label="Inspector"
       data-open={open}

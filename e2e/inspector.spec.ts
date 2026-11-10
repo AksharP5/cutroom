@@ -561,4 +561,29 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await expect(
     page.getByRole("button", { name: "Inspector", exact: true }),
   ).toBeFocused();
+  const toggle = page.getByRole("button", { name: "Inspector", exact: true });
+  // The usual drawer entry point leaves focus on its toolbar toggle.
+  await toggle.click();
+  await expect(inspector).toHaveAttribute("data-open", "true");
+  await expect(toggle).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveAttribute("data-open", "false");
+  await expect(toggle).toBeFocused();
+  await expect(inspector).toHaveCSS("opacity", "0");
+  await expect(page.locator('[data-clip="opening-title"]')).toHaveClass(
+    /selected/,
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-clip="opening-title"]')).not.toHaveClass(
+    /selected/,
+  );
+  await page.locator('[data-clip="opening-title"]').click();
+  await toggle.click();
+  await opacity.fill("70%");
+  await opacity.press("Escape");
+  await expect(opacity).toHaveValue("30%");
+  await expect(inspector).toHaveAttribute("data-open", "true");
+  await page.keyboard.press("Escape");
+  await expect(inspector).toHaveAttribute("data-open", "false");
+  await expect(toggle).toBeFocused();
 });

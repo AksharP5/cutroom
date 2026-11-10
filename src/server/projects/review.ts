@@ -30,7 +30,7 @@ import { HttpError } from "../../shared/errors";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
 import { ClipEditSchema } from "../../shared/timeline/schema";
-import { clipVersions } from "./changes";
+import { clipVersions, sourceClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
@@ -384,11 +384,11 @@ export function createReviewService(store: ProjectStore) {
   /** Project the active history onto the ledger. Undo changes visibility, never approval. */
   const currentEdits = async (project: Project, composition?: string) => {
     const state = await readState(project);
+    const history = await store.history(project);
+    const entries = history.list();
+    const positions = new Map(entries.map((entry, index) => [entry.id, index]));
     const undone = new Set(
-      (await store.history(project))
-        .list()
-        .filter((entry) => entry.undone)
-        .map((entry) => entry.id),
+      entries.filter((entry) => entry.undone).map((entry) => entry.id),
     );
     const edits = state.clipEdits.filter(
       (edit) =>
@@ -404,32 +404,77 @@ export function createReviewService(store: ProjectStore) {
               .map((edit) => edit.composition),
           ),
         ].map(
-          async (path) =>
-            [path, await clipVersions(store, project, path)] as const,
+          async (path) => [path, await clipVersions(project, path)] as const,
         ),
       ),
     );
     const latest = new Map<string, (typeof edits)[number]>();
-    const owner = new Map<string, number>();
     const key = (
       edit: Pick<(typeof edits)[number], "composition" | "clipId">,
     ) => JSON.stringify([edit.composition, edit.clipId]);
-    edits.forEach((edit, index) => {
+    edits.forEach((edit) => {
       latest.set(key(edit), edit);
-      if (edit.by === "human") owner.set(key(edit), index);
     });
-    return edits.map(
-      ({ signature: _signature, noteIds: _noteIds, ...edit }, index) => {
-        if (edit.by === "human" || edit.accepted)
-          return { ...edit, resolution: undefined };
-        if ((owner.get(key(edit)) ?? -1) > index)
-          return { ...edit, resolution: "owner" as const };
-        const signature = latest.get(key(edit))?.signature;
-        return signature !== undefined &&
-          versions.get(edit.composition)?.get(edit.clipId) === signature
-          ? { ...edit, resolution: undefined }
-          : { ...edit, resolution: "source" as const };
-      },
+    const recorded = new Map(
+      edits.map((edit) => [JSON.stringify([edit.historyId, key(edit)]), edit]),
+    );
+    // Cache immutable blobs only within this projection; resolution is never persisted.
+    const snapshots = new Map<string, Promise<Map<string, string>>>();
+    const snapshot = (hash: string | null, composition: string) => {
+      if (hash === null) return Promise.resolve(new Map<string, string>());
+      const id = JSON.stringify([hash, composition]);
+      let versions = snapshots.get(id);
+      if (!versions) {
+        versions = history
+          .readBlob(hash)
+          .then((content) =>
+            sourceClipVersions(content.toString("utf8"), composition),
+          );
+        snapshots.set(id, versions);
+      }
+      return versions;
+    };
+    return Promise.all(
+      edits.map(
+        async (
+          { signature: _signature, noteIds: _noteIds, ...edit },
+          index,
+        ) => {
+          if (edit.by === "human" || edit.accepted)
+            return { ...edit, resolution: undefined };
+          const position = edit.historyId && positions.get(edit.historyId);
+          if (typeof position === "number") {
+            for (const entry of entries.slice(position + 1)) {
+              // Undo/redo changes which original entries count, rather than replacing their work.
+              if (entry.undone || entry.undoes) continue;
+              const row = recorded.get(JSON.stringify([entry.id, key(edit)]));
+              if (row?.by === "human")
+                return { ...edit, resolution: "owner" as const };
+              if (row?.by === "agent") continue;
+              const file = entry.files.find(
+                (file) => file.path === edit.composition,
+              );
+              if (!file) continue;
+              const [before, after] = await Promise.all([
+                snapshot(file.before, edit.composition),
+                snapshot(file.after, edit.composition),
+              ]);
+              if (before.get(edit.clipId) !== after.get(edit.clipId))
+                return { ...edit, resolution: "source" as const };
+            }
+          } else if (
+            edits
+              .slice(index + 1)
+              .some((row) => key(row) === key(edit) && row.by === "human")
+          )
+            return { ...edit, resolution: "owner" as const };
+          const signature = latest.get(key(edit))?.signature;
+          return signature !== undefined &&
+            versions.get(edit.composition)?.get(edit.clipId) === signature
+            ? { ...edit, resolution: undefined }
+            : { ...edit, resolution: "source" as const };
+        },
+      ),
     );
   };
 
@@ -453,7 +498,7 @@ export function createReviewService(store: ProjectStore) {
         let before: Map<string, string>;
         try {
           items = await reconcile(project);
-          before = await clipVersions(store, project, composition);
+          before = await clipVersions(project, composition);
         } catch (error) {
           // Broken review metadata cannot stop repairing source or using the timeline.
           if (
@@ -484,7 +529,7 @@ export function createReviewService(store: ProjectStore) {
         const noteIds =
           noteId === undefined ? claimed.map((item) => item.id) : [noteId];
         const result = await work();
-        const after = await clipVersions(store, project, composition);
+        const after = await clipVersions(project, composition);
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
             (id) => before.get(id) !== after.get(id),

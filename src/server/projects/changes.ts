@@ -4,24 +4,19 @@ import type { Project } from "../../shared/project";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { readSource } from "./store";
-import type { ProjectStore } from "./store";
 
 /** Stable clip ids and their authored content, including shared styles and animation. */
-export async function clipVersions(
-  store: ProjectStore,
-  project: Project,
-  composition: string,
-) {
-  const [source, document] = await Promise.all([
-    readSource(project, composition),
-    store.document(project),
-  ]);
+export async function clipVersions(project: Project, composition: string) {
+  const source = await readSource(project, composition);
+  return sourceClipVersions(source.content, composition);
+}
+
+/** Clip signatures depend on authored HTML, not the sidecar's tracks, markers or range. */
+export function sourceClipVersions(source: string, composition: string) {
   try {
-    const parsed = parseComposition(
-      source.content,
-      document.timelines[composition] ?? emptyTimelineSettings(),
-      { scope: compositionScope(composition) },
-    );
+    const parsed = parseComposition(source, emptyTimelineSettings(), {
+      scope: compositionScope(composition),
+    });
     const shared = createHash("sha256")
       .update(JSON.stringify(parsed.scriptsAndStyles))
       .digest("hex");
@@ -41,7 +36,7 @@ export async function clipVersions(
             ...authored
           } = clip;
           // HyperFrames stamps editor identity onto untouched nodes during script cuts.
-          const html = source.content
+          const html = source
             .slice(element.start, element.end)
             .replace(/\sdata-hf-id="[^"]*"/g, "");
           const signature = createHash("sha256")
