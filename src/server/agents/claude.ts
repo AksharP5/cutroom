@@ -183,13 +183,8 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
     // "Write index.html?" rather than the tool's internal name.
-    const ask = (name: string, value: unknown) => {
-      const { verb, object } = describeTool(
-        { tool: name, target: toolTarget(value, this.options.cwd) },
-        "ask",
-      );
-      return `${[verb, object].filter(Boolean).join(" ")}?`;
-    };
+    const target = toolTarget(input, this.options.cwd);
+    const { verb, object } = describeTool({ tool, target }, "ask");
     const questions =
       tool === "AskUserQuestion"
         ? questionInputSchema.safeParse(input)
@@ -202,8 +197,9 @@ export class ClaudeRuntime implements AgentRuntime {
         context.decisionReason ??
         (tool === "AskUserQuestion"
           ? "Claude has a question"
-          : ask(tool, input)),
+          : `${[verb, object].filter(Boolean).join(" ")}?`),
       input,
+      ...(target ? { target } : {}),
       ...(questions?.success
         ? {
             questions: questions.data.questions.map((question) => ({

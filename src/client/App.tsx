@@ -448,6 +448,7 @@ export function App() {
               <div className="notebook-content">
                 <div hidden={panel !== "review"}>
                   <ReviewPanel
+                    key={project.id}
                     projectId={project.id}
                     items={projectDocument.items}
                     reviewError={projectDocument.reviewError}
@@ -529,16 +530,7 @@ export function App() {
               }
               prompt={prompt}
               onPromptConsumed={consumePrompt}
-              workingNote={
-                workingIndex < 0
-                  ? null
-                  : {
-                      number: workingIndex + 1,
-                      total: projectDocument.items.filter(
-                        (item) => item.review.status !== "withdrawn",
-                      ).length,
-                    }
-              }
+              workingNote={workingIndex < 0 ? null : workingIndex + 1}
               pickAttachment={() =>
                 new Promise((resolve) => {
                   attachmentResolve.current = {

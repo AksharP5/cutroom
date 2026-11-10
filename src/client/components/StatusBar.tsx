@@ -15,7 +15,11 @@ export function StatusBar({
   const composition = useWorkspace((state) => state.composition);
   const exporting = useWorkspace((state) => state.exporting);
   const agent = useWorkspace((state) => state.agent);
-  const queue = items.filter((item) => item.review.status !== "withdrawn");
+  // Sent notes only: unsent ones are not in the agent's queue yet.
+  const queue = items.filter(
+    (item) =>
+      item.review.status !== "withdrawn" && item.review.status !== "open",
+  );
   const accepted = queue.filter((item) => item.review.status === "accepted");
   const folder = project.path.split(/[\\/]/).filter(Boolean).at(-1);
   return (
@@ -39,7 +43,7 @@ export function StatusBar({
       {queue.length > 0 && (
         <button
           onClick={onReview}
-          title="Accepted notes of all notes not withdrawn"
+          title="Accepted notes of the notes sent to the agent"
         >
           Queue {accepted.length}/{queue.length}
         </button>

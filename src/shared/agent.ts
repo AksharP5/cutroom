@@ -92,6 +92,8 @@ export const agentRequestSchema = z.object({
   title: z.string(),
   tool: z.string(),
   input: z.record(z.string(), z.unknown()),
+  /** What the tool would act on, relative to the project, as on tool rows. */
+  target: z.string().optional(),
   questions: z.array(agentQuestionSchema).optional(),
 });
 export type AgentRequest = z.infer<typeof agentRequestSchema>;

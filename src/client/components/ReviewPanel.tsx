@@ -77,7 +77,7 @@ function outcome(item: ReviewItem) {
  * composition never changes it. Unknown rates show no timecode rather than a guess.
  */
 function useNoteFps(projectId: string, items: ReviewItem[]) {
-  const [rates, setRates] = useState(new Map<string, number>());
+  const [rates, setRates] = useState(new Map<string, number | Error>());
   const paths = [...new Set(items.map((item) => item.compositionPath))];
   const missing = paths.filter((path) => !rates.has(path)).join("\n");
   useEffect(() => {
@@ -88,9 +88,12 @@ function useNoteFps(projectId: string, items: ReviewItem[]) {
         `/projects/${projectId}/timeline?composition=${encodeURIComponent(path)}`,
         timelineFpsSchema,
       )
-        .then(({ timeline: { fps } }) => fps.num / fps.den)
-        // A composition that no longer parses still needs a readable timecode.
-        .catch(() => 30)
+        .then(
+          ({ timeline: { fps } }) => fps.num / fps.den,
+          // An unreadable composition shows no timecode rather than a guessed rate.
+          (error: unknown) =>
+            error instanceof Error ? error : new Error(String(error)),
+        )
         .then((rate) => {
           if (!cancelled)
             setRates((current) => new Map(current).set(path, rate));
@@ -100,6 +103,10 @@ function useNoteFps(projectId: string, items: ReviewItem[]) {
     };
   }, [projectId, missing]);
   return (item: ReviewItem) => rates.get(item.compositionPath);
+}
+
+function noteTimecode(item: ReviewItem, rate: number | Error | undefined) {
+  return typeof rate === "number" ? frameTimecode(item.time, rate) : "";
 }
 
 export function ReviewPanel({
@@ -150,10 +157,7 @@ export function ReviewPanel({
   const number = new Map(items.map((item, index) => [item.id, index + 1]));
   const frameUrl = (path: string) =>
     `/api/cutroom/projects/${projectId}/attachments/${encodeURIComponent(path.split("/").at(-1) ?? "")}`;
-  const timecode = (item: ReviewItem) => {
-    const fps = noteFps(item);
-    return fps === undefined ? "" : frameTimecode(item.time, fps);
-  };
+  const timecode = (item: ReviewItem) => noteTimecode(item, noteFps(item));
 
   async function run(action: () => Promise<void>) {
     setError("");
@@ -187,7 +191,12 @@ export function ReviewPanel({
           <div className="review-row-meta">
             <button
               className="note-seek mono"
-              title="Go to this moment"
+              title={(() => {
+                const rate = noteFps(item);
+                return rate instanceof Error
+                  ? `Go to this moment. Its frame rate could not be read: ${rate.message}`
+                  : "Go to this moment";
+              })()}
               onClick={() => onSeek(item)}
             >
               {timecode(item)}

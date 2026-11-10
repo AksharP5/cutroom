@@ -113,6 +113,7 @@ test("an approval stays one line above the composer", async ({
     title: "Write compositions/an-unusually-long-composition-name.html?",
     tool: "mcp__cutroom_studio__source_write",
     input: { path: "compositions/an-unusually-long-composition-name.html" },
+    target: "compositions/an-unusually-long-composition-name.html",
   });
   const approval = page.getByRole("region", { name: "Permission request" });
   const allow = approval.getByRole("button", { name: "Allow once" });

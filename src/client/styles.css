@@ -991,7 +991,6 @@ option {
 }
 .chat-tool pre,
 .agent-request pre {
-  margin: 2px 0 6px 20px;
   max-height: 220px;
   overflow: auto;
   padding: 6px 8px;
@@ -1032,8 +1031,27 @@ option {
 .agent-request-title:hover {
   color: var(--text-primary);
 }
-.agent-request > pre {
+.chat-tool pre {
+  margin: 2px 0 6px 20px;
+}
+.agent-request pre {
   margin: 0 8px 6px 0;
+}
+.agent-request-title:has(.agent-request-file) {
+  display: flex;
+}
+.agent-request-title > span {
+  flex: none;
+}
+.agent-request-title > span:first-child {
+  margin-right: 0.25em;
+}
+.agent-request-title > .agent-request-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-overflow: ellipsis;
 }
 /* A question lives in the transcript, so a long one scrolls instead of hiding its actions. */
 .agent-request[aria-label="Agent question"] {
@@ -1944,6 +1962,10 @@ option {
   margin: 0;
   font-size: var(--type-md);
   font-weight: var(--weight-semibold);
+}
+/* Mono runs wide; at 87.5% it reads level with the sans text beside it. */
+.modal-heading h2 .mono {
+  font-size: 0.875em;
 }
 .modal-actions {
   display: flex;

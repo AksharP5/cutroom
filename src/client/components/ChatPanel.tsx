@@ -26,7 +26,7 @@ import {
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
-import { describeTool, hiddenTools } from "../../shared/toolRow";
+import { describeTool, hiddenTools, targetsFile } from "../../shared/toolRow";
 import { useWorkspace } from "../workspace";
 
 const sessionListSchema = z.object({
@@ -113,10 +113,10 @@ const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
           <CaretRight className="chat-tool-caret" size={10} weight="bold" />
         )}
         <span className="chat-tool-verb">{verb}</span>
-        {/* Long paths lose their start, so the file name stays visible. */}
+        {/* Long file paths lose their start, so the file name stays visible. */}
         <span
           className="chat-tool-target"
-          data-path={object.includes("/") || undefined}
+          data-path={targetsFile(message.tool) || undefined}
         >
           <bdi>{object}</bdi>
         </span>
@@ -168,6 +168,14 @@ function RequestCard({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [showInput, setShowInput] = useState(false);
+  // "Write …/opening/index.html?": a long path gives up its start, never the file name.
+  const ask = describeTool(request, "ask");
+  const fileAsk =
+    request.target &&
+    targetsFile(request.tool) &&
+    request.title === `${ask.verb} ${ask.object}?`
+      ? ask
+      : null;
   async function respond(decision: "allow" | "deny") {
     setSending(true);
     setError("");
@@ -210,10 +218,21 @@ function RequestCard({
             <button
               className="agent-request-title"
               title={request.title}
+              aria-label={request.title}
               aria-expanded={showInput}
               onClick={() => setShowInput((value) => !value)}
             >
-              {request.title}
+              {fileAsk ? (
+                <>
+                  <span>{fileAsk.verb}</span>
+                  <span className="agent-request-file">
+                    <bdi>{fileAsk.object}</bdi>
+                  </span>
+                  <span>?</span>
+                </>
+              ) : (
+                request.title
+              )}
             </button>
             {actions}
           </div>
@@ -402,8 +421,8 @@ export function ChatPanel({
   prompt: string | null;
   onPromptConsumed: () => void;
   pickAttachment: () => Promise<string | null>;
-  /** The review note the agent has claimed, numbered as in Review. */
-  workingNote: { number: number; total: number } | null;
+  /** The number, as in Review, of the note the agent has claimed. */
+  workingNote: number | null;
 }) {
   const [provider, setProvider] = useState<AgentProvider>("codex");
   const [model, setModel] = useState("");
@@ -790,7 +809,7 @@ export function ChatPanel({
             {busy &&
               session?.status === "running" &&
               workingNote &&
-              ` on note ${workingNote.number} of ${workingNote.total}`}
+              ` on note ${workingNote}`}
           </span>
           {busy && turnStart && <Elapsed since={turnStart} />}
           <button

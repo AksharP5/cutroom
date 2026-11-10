@@ -23,6 +23,18 @@ const nativeTools: Record<string, Verb> = {
   todowrite: ["Planned", "Planning", "Plan"],
 };
 
+/** Tools whose target is a file path, so a long one keeps its file name. */
+const fileTools = new Set([
+  "read",
+  "edit",
+  "multiedit",
+  "write",
+  "notebookedit",
+  "files",
+  "source_read",
+  "source_write",
+]);
+
 /** Cutroom's own MCP tools, named for what they do to the project. */
 const cutroomTools: Record<
   string,
@@ -101,6 +113,11 @@ const toolVerbs: Record<string, Verb> = {
 
 /** Plumbing the agent uses to find its tools; never shown as a row. */
 export const hiddenTools = new Set(["ToolSearch"]);
+
+/** Whether a tool call's target is a file, which should truncate from its start. */
+export function targetsFile(tool = "") {
+  return fileTools.has((tool.split(/__|: /).at(-1) ?? tool).toLowerCase());
+}
 
 /** One line for a tool call: a verb and what it acted on. */
 export function describeTool(
