@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { peakRange } from "../src/server/media/range";
 import { join } from "node:path";
