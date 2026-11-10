@@ -226,22 +226,25 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         };
       });
       if (!command.ripple) return { ...timeline, clips: trimmed };
-      // The edit point is each track's trimmed edge: Q pulls everything from the head onward, W
-      // what follows the tail.
       const edges = new Map(members.map((clip) => [clip.track, edge(clip)]));
-      return {
-        ...timeline,
-        clips: shiftAfter(
-          trimmed,
-          rippleTracks(
-            timeline,
-            members.map((clip) => clip.track),
-          ),
-          (track) => edges.get(track) ?? at,
-          command.edge === "start" ? -delta : delta,
-          ids,
-        ),
-      };
+      const editPoint = (track: number) => edges.get(track) ?? at;
+      const change = command.edge === "start" ? -delta : delta;
+      const tracks = rippleTracks(timeline, []);
+      const next =
+        change < 0
+          ? removeTime(
+              trimmed,
+              tracks,
+              (track) =>
+                editPoint(track) + (command.edge === "end" ? change : 0),
+              -change,
+              fps,
+              batch,
+              ids,
+            )
+          : insertTime(trimmed, tracks, editPoint, change, fps, batch, ids);
+      assertRippleSync(timeline, next);
+      return { ...timeline, clips: next };
     }
     case "split": {
       const { at } = command;
@@ -277,22 +280,16 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const ids = new Set(removing.map((clip) => clip.id));
       const remaining = clips.filter((clip) => !ids.has(clip.id));
       if (!command.ripple) return { ...timeline, clips: remaining };
-      return {
-        ...timeline,
-        clips: closeGaps(
-          remaining,
-          removing,
-          rippleTracks(
-            timeline,
-            removing.map((clip) => clip.track),
-          ),
-          new Set(
-            timeline.tracks
-              .filter((track) => track.locked)
-              .map((track) => track.index),
-          ),
-        ),
-      };
+      const tracks = rippleTracks(timeline, []);
+      // Close the selected intervals once on every participating track. Working right to left
+      // keeps earlier ranges in the original timeline's coordinates.
+      let next = remaining;
+      for (const [from, to] of mergeRanges(
+        removing.map((clip) => [clip.start, clipEnd(clip)] as const),
+      ).toReversed())
+        next = removeTime(next, tracks, () => from, to - from, fps, batch);
+      assertRippleSync(timeline, next);
+      return { ...timeline, clips: next };
     }
     case "insert": {
       const { clip: input, track, at, mode } = command;
@@ -599,7 +596,7 @@ function rippleTracks(timeline: Timeline, own: number[]): Set<number> {
 }
 
 /**
- * Ripple for trims and inserts: clips at or after each track's edit point move by `delta`, and a
+ * Insert ripple: clips at or after the edit point move by `delta`, and a
  * linked group moves whole when any member does. A partner it pulls must land in free space.
  */
 function shiftAfter(
@@ -642,134 +639,100 @@ function shiftAfter(
   return next;
 }
 
-/**
- * Ripple delete. Each clip closes the time removed before it on its track (tracks without removed
- * clips close what was removed from every track). A linked group moves by its members' smallest
- * gap and no clip passes the one before it, so sync holds and a few frames of gap may remain.
- * Anything else that would hold a clip back, such as a clip that stays across the removed range, a
- * partner on a locked or unreached track, or the start of the timeline, refuses the edit by name.
- */
-function closeGaps(
+/** Remove an exact interval on each participating track, then close it. */
+function removeTime(
   clips: Clip[],
-  removed: Clip[],
   tracks: ReadonlySet<number>,
-  locked: ReadonlySet<number>,
+  from: (track: number) => number,
+  duration: number,
+  fps: Fps,
+  batch: Batch,
+  fixed: ReadonlySet<string> = new Set(),
 ): Clip[] {
-  const removedByTrack = new Map<number, [number, number][]>();
-  for (const clip of removed)
-    removedByTrack.set(clip.track, [
-      ...(removedByTrack.get(clip.track) ?? []),
-      [clip.start, clipEnd(clip)],
-    ]);
-  const gapsByTrack = new Map(
-    [...removedByTrack].map(([track, ranges]) => [track, mergeRanges(ranges)]),
+  const fixedClips = clips.filter((clip) => fixed.has(clip.id));
+  let next = clips.filter((clip) => !fixed.has(clip.id));
+  for (const track of tracks)
+    next = clearRange(
+      next,
+      track,
+      from(track),
+      from(track) + duration,
+      fps,
+      batch.reserved,
+      batch.onCreate,
+    );
+  return [
+    ...fixedClips,
+    ...next.map((clip) =>
+      tracks.has(clip.track) && clip.start >= from(clip.track) + duration
+        ? { ...clip, start: clip.start - duration }
+        : clip,
+    ),
+  ];
+}
+
+/** Extending a ripple trim opens time at the old edge, cutting overlapping clips there. */
+function insertTime(
+  clips: Clip[],
+  tracks: ReadonlySet<number>,
+  at: (track: number) => number,
+  duration: number,
+  fps: Fps,
+  batch: Batch,
+  fixed: ReadonlySet<string>,
+): Clip[] {
+  let next = clips;
+  for (const track of tracks)
+    next = splitClips(
+      next,
+      next.filter(
+        (clip) =>
+          !fixed.has(clip.id) &&
+          clip.track === track &&
+          clip.start < at(track) &&
+          at(track) < clipEnd(clip),
+      ),
+      at(track),
+      fps,
+      batch.reserved,
+      batch.onCreate,
+    );
+  return next.map((clip) =>
+    !fixed.has(clip.id) &&
+    tracks.has(clip.track) &&
+    clip.start >= at(clip.track)
+      ? { ...clip, start: clip.start + duration }
+      : clip,
   );
-  const everyTrack = [...gapsByTrack.values()].reduce(intersectRanges);
-  const gapsOn = (track: number) => gapsByTrack.get(track) ?? everyTrack;
-  // A clip's own gap; partners on tracks the ripple does not reach have none and follow their group.
-  const own = new Map(
-    clips.map((clip) => {
-      if (locked.has(clip.track)) return [clip.id, 0];
-      if (!tracks.has(clip.track)) return [clip.id, -Infinity];
-      return [
-        clip.id,
-        -gapsOn(clip.track).reduce(
-          (sum, [start, end]) => (end <= clip.start ? sum + end - start : sum),
-          0,
-        ),
-      ];
-    }),
+}
+
+/** Protected clips stay unchanged; a link cannot pull one into a ripple. */
+function assertRippleSync(before: Timeline, clips: Clip[]) {
+  const protectedTracks = new Map(
+    before.tracks
+      .filter((track) => track.locked || !track.autoSelect)
+      .map((track) => [track.index, track]),
   );
-  const delta = new Map(
-    clips.map((clip) => {
-      const value = own.get(clip.id)!;
-      return [clip.id, clip.link === null && value === -Infinity ? 0 : value];
-    }),
-  );
-  // Who held each clip back: a partner, the clip before it on its track, or itself at frame 0.
-  const heldBy = new Map<string, Clip>();
-  const groups = groupBy(
-    clips.filter((clip) => clip.link !== null),
-    (clip) => clip.link,
-  );
-  const byTrack = groupBy(
-    clips.toSorted((a, b) => a.start - b.start),
-    (clip) => clip.track,
-  );
-  // Deltas only rise toward zero, so this settles.
-  for (let changed = true; changed;) {
-    changed = false;
-    const hold = (clip: Clip, value: number, by: Clip) => {
-      if (delta.get(clip.id)! >= value) return;
-      delta.set(clip.id, value);
-      heldBy.set(clip.id, by);
-      changed = true;
-    };
-    for (const members of groups.values()) {
-      const nearest = members.reduce((best, clip) =>
-        delta.get(clip.id)! > delta.get(best.id)! ? clip : best,
-      );
-      const shared = delta.get(nearest.id)!;
-      if (shared === -Infinity) {
-        for (const clip of members) delta.set(clip.id, 0);
-        continue;
-      }
-      for (const clip of members) hold(clip, shared, nearest);
-    }
-    for (const list of byTrack.values()) {
-      let end = 0;
-      let last: Clip | undefined;
-      for (const clip of list) {
-        const value = Math.min(
-          0,
-          Math.max(delta.get(clip.id)!, end - clip.start),
-        );
-        hold(clip, value, last ?? clip);
-        const shifted = clipEnd(clip) + delta.get(clip.id)!;
-        if (shifted >= end) {
-          end = shifted;
-          last = clip;
-        }
-      }
-    }
-  }
-  for (const clip of clips) {
+  if (!protectedTracks.size) return;
+  const current = new Map(clips.map((clip) => [clip.id, clip]));
+  const changedLinks = new Set<string>();
+  for (const clip of before.clips)
     if (
-      own.get(clip.id) === -Infinity ||
-      delta.get(clip.id) === own.get(clip.id)
+      clip.link &&
+      JSON.stringify(clip) !== JSON.stringify(current.get(clip.id))
     )
-      continue;
-    let root = clip;
-    const seen = new Set<Clip>();
-    while (
-      heldBy.has(root.id) &&
-      heldBy.get(root.id) !== root &&
-      !seen.has(root)
-    ) {
-      seen.add(root);
-      root = heldBy.get(root.id)!;
-    }
-    const reason = locked.has(root.track)
-      ? "is on a locked track"
-      : !tracks.has(root.track)
-        ? "is on a track the ripple does not reach"
-        : heldBy.get(root.id) === root
-          ? "would move before the start of the timeline"
-          : gapsOn(root.track).some(
-                ([start, end]) => root.start < end && clipEnd(root) > start,
-              )
-            ? `stays across the removed range on track ${root.track}`
-            : null;
-    if (reason)
-      throw new TimelineError(
-        "unsupported",
-        `Clip ${root.id} ${reason}, so ${clip.id} cannot close the gap. Move or remove it first.`,
-      );
+      changedLinks.add(clip.link);
+  for (const clip of before.clips) {
+    const track = protectedTracks.get(clip.track);
+    if (!track) continue;
+    const changed =
+      JSON.stringify(clip) !== JSON.stringify(current.get(clip.id));
+    if (!changed && !(clip.link && changedLinks.has(clip.link))) continue;
+    throw new TimelineError(
+      track.locked && !clip.link ? "locked" : "unsupported",
+      `Clip ${clip.id} is on ${track.locked ? "a locked" : "an auto-select-off"} track, so the ripple cannot preserve sync.`,
+    );
   }
-  return clips.map((clip) => {
-    const shift = delta.get(clip.id)!;
-    return shift === 0 ? clip : { ...clip, start: clip.start + shift };
-  });
 }
 
 function advance(clip: Clip, frames: number, fps: Fps): number | null {
@@ -853,13 +816,6 @@ function overlapping(clips: Clip[]): Clip[][] {
   return components;
 }
 
-function groupBy<K>(clips: Clip[], key: (clip: Clip) => K): Map<K, Clip[]> {
-  const groups = new Map<K, Clip[]>();
-  for (const clip of clips)
-    groups.set(key(clip), [...(groups.get(key(clip)) ?? []), clip]);
-  return groups;
-}
-
 /** Removes `[from, to)` from one track, cutting clips at the boundaries. Linked partners elsewhere stay whole, as in Resolve. */
 function clearRange(
   clips: Clip[],
@@ -894,19 +850,6 @@ function clearRange(
   );
   const inside = new Set(hits(next).map((clip) => clip.id));
   return next.filter((clip) => !inside.has(clip.id));
-}
-
-function intersectRanges(
-  a: [number, number][],
-  b: [number, number][],
-): [number, number][] {
-  return a.flatMap(([start, end]) =>
-    b.flatMap(([otherStart, otherEnd]): [number, number][] => {
-      const from = Math.max(start, otherStart);
-      const to = Math.min(end, otherEnd);
-      return from < to ? [[from, to]] : [];
-    }),
-  );
 }
 
 function mergeRanges(

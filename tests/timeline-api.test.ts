@@ -112,6 +112,68 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
   }
 });
 
+test("Q through a spanning music bed persists exact NTSC HTML and undo restores it", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const source = `<main data-composition-id="main" data-duration="10.01" data-fps="30000/1001">
+  <video id="talk" src="talk.mp4" data-start="0" data-duration="3.003" data-media-start="1" data-track-index="0"></video>
+  <audio id="bed" src="bed.wav" data-start="0" data-duration="6.006" data-media-start="2" data-playback-rate="2" data-track-index="1"></audio>
+</main>
+`;
+  try {
+    await writeFile(join(project.path, "index.html"), source);
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (
+          await fixture.request(`/projects/${project.id}/timeline`)
+        ).json(),
+      );
+    const before = await read();
+    const response = await fixture.request(
+      `/projects/${project.id}/commands`,
+      "POST",
+      {
+        expectedRevision: before.revision,
+        label: "Ripple start to frame one",
+        commands: [
+          { type: "trim", clipId: "talk", edge: "start", to: 1, ripple: true },
+        ],
+      },
+    );
+    expect(response.status).toBe(200);
+    const after = TimelineViewSchema.parse(await response.json());
+    expect(await read()).toEqual(after);
+    expect(
+      after.timeline.clips.map((clip) => [
+        clip.id,
+        clip.start,
+        clip.duration,
+        clip.mediaStart,
+      ]),
+    ).toEqual([
+      ["talk", 0, 89, 1.033367],
+      ["bed-2", 0, 179, 2.066733],
+    ]);
+    expect(await readFile(join(project.path, "index.html"), "utf8"))
+      .toBe(`<head><style data-cutroom-track-stacking="main">@layer cutroom-tracks{:where([data-composition-id="main"] [data-start][data-track-index="0"]:not(audio):not([data-composition-id="main"] :is([data-start],[data-composition-id],[data-composition-src]) *)){z-index:0}}</style></head>
+<main data-composition-id="main" data-duration="9.976633" data-fps="30000/1001">
+  <video id="talk" src="talk.mp4" data-start="0" data-duration="2.969633" data-media-start="1.033367" data-track-index="0"></video>
+  <audio id="bed-2" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
+</main>
+`);
+    expect(
+      (await fixture.request(`/projects/${project.id}/history/undo`, "POST"))
+        .status,
+    ).toBe(200);
+    expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+      source,
+    );
+    expect(await read()).toEqual(before);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("an MCP agent reads and edits the timeline through the batch endpoint", async () => {
   const fixture = await timelineFixture();
   const seeks: string[] = [];
