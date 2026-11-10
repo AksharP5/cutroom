@@ -199,7 +199,10 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       );
       await media.request(project, "list.m3u8", "peaks");
       let result = await media.request(project, "list.m3u8", "peaks");
+      const deadline = performance.now() + 5000;
       while (result.state.status === "running") {
+        if (performance.now() > deadline)
+          throw new Error("The playlist job did not fail.");
         await Bun.sleep(10);
         result = await media.request(project, "list.m3u8", "peaks");
       }

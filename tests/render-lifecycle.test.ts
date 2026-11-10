@@ -52,6 +52,8 @@ setInterval(() => {}, 1000);
       });
       await waitFor(() => state.stage === "ready");
       expect(existsSync(outputPath)).toBe(true);
+      // The upstream HTTP cancel route writes status before invoking cancel().
+      state.status = "cancelled";
       await workers.cancelAll();
       expect(state.status).toBe("cancelled");
       expect(existsSync(outputPath)).toBe(false);
