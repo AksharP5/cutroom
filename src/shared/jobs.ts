@@ -12,7 +12,7 @@ export const JobStateSchema = z.discriminatedUnion("status", [
 export type JobState = z.infer<typeof JobStateSchema>;
 
 export const jobTransitions = {
-  queued: ["running", "failed", "cancelling"],
+  queued: ["running", "cancelling"],
   running: ["running", "done", "failed", "cancelling"],
   done: [],
   failed: [],

@@ -51,3 +51,33 @@ Local transcription uses an already installed Whisper runtime and complete model
 ## External agents
 
 Both MCP transports forward to the running server. They do not open a second project store or write files independently. The server binds to loopback and rejects foreign browser origins and rebinding hostnames. This endpoint is intended for agents on the same machine, not public network exposure.
+
+## Background jobs and timeline media cache
+
+Render, transcription, waveform, and filmstrip jobs use the transition table in `src/shared/jobs.ts`. Jobs move from `queued` to `running`, then `done` or `failed`. Queued and running jobs may enter `cancelling`; only cleanup completion moves them to `cancelled`. Running progress uses 0 to 1. The existing render adapter still exposes `rendering` / `complete` and 0 to 100 progress; transcription still exposes `running` / `complete` and 0 to 1. Transcription MCP status forwards that same HTTP response. This version has no render-status MCP tool.
+
+`GET /api/cutroom/projects/:id/media/peaks?path=<project-relative-path>` returns a binary waveform. `GET /api/cutroom/projects/:id/media/filmstrip?path=...` returns JSON with `version`, `interval`, `tileWidth`, `tileHeight`, `columns`, `rows`, `count`, `key`, and `spriteUrl`. Both return `202 {key, job}` with `Retry-After: 1` and `Cache-Control: no-store` while queued or running. Poll the same URL. A failed job returns `422 {key, job}`, including its error. Missing FFmpeg returns 503. No media-cache MCP tools are registered.
+
+The service shares concurrent requests for the same key and admits two worker threads at a time. Each worker runs one FFmpeg process at a time. Audio decoding, peak aggregation, and sprite assembly run outside the server thread. Shutdown cancels the queue, terminates active FFmpeg processes, and awaits scratch cleanup before closing project histories. Paths and cache locations use the project boundary check, including symlinks. FFmpeg accepts local media demuxers only, excluding playlists and network protocols that could follow references beyond that boundary.
+
+The cache lives in `<project>/.cutroom/cache/<key>/`. Its SHA-256 key includes the recipe version, output kind, canonical media path, size, nanosecond mtime, and ctime. This file fingerprint avoids reading an entire large video before a warm response. It invalidates on edits, replacements, and moves, even when a replacement preserves mtime. It is not a byte-content hash, so identical copies can produce separate entries. The source fingerprint is checked again before publishing. Completed directories appear by atomic rename; temporary frames never remain in the cache. Old entries are disposable and are not automatically evicted yet. Failed jobs are remembered in memory, up to 256 entries, to prevent every poll from restarting FFmpeg. A source change or service restart permits another attempt.
+
+Peaks decode the first audio stream to mono signed 16-bit PCM at 8 kHz. The base level contains one min/max pair per 80 samples, or 100 pairs per second. Three additional levels reduce groups of four pairs by their extrema. The final partial bucket and partial mip groups retain their samples. The binary format is little-endian:
+
+| Byte offset | Field                                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| 0           | ASCII `CRPK`                                                                                         |
+| 4           | uint32 version, currently 1                                                                          |
+| 8           | uint32 level count, currently 4                                                                      |
+| 12          | uint32 decoded sample rate, currently 8000                                                           |
+| 16          | float64 total decoded sample count                                                                   |
+| 24          | uint32 base bucket sample count, currently 80                                                        |
+| 28          | uint32 reserved, currently 0                                                                         |
+| 32          | One 16-byte directory entry per level: uint32 samples per pair, pair count, byte offset, byte length |
+| 96          | Level payloads in order, each pair an int16 minimum followed by an int16 maximum                     |
+
+Normalize amplitudes by 32768. Level bucket widths are 0.01, 0.04, 0.16, and 0.64 seconds. Duration is total samples divided by sample rate.
+
+Filmstrips sample the first video stream at 0, 2, 4, ... seconds. They preserve aspect ratio within 160 by 90 pixels, pad with black, and pack at most ten tiles per row into one JPEG. Tiles are ordered left to right, then top to bottom; unused cells in the final row are black. Count comes from decoded frames, so a longer audio stream cannot add phantom tiles. A sprite is limited to 3600 tiles, or two hours of video, to bound sheet dimensions and memory. Audio-only media has no filmstrip; video without audio has no peaks. Unsupported streams return a failed job rather than an empty success.
+
+The source-path endpoints return `Cache-Control: private, max-age=0, must-revalidate` with an ETag derived from the key, so a changed file is rechecked on the next request. A matching `If-None-Match` returns 304. The key-addressed sprite URL returns `private, max-age=31536000, immutable`. These generated assets stay on local disk and are safe to regenerate.
