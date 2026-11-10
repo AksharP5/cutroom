@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -19,13 +19,16 @@ import {
   createProjectSignatureAsync,
   createStudioApi,
   fileContentVersion,
+  getMimeType,
   identifyFileWrite,
+  requestSubPath,
 } from "@hyperframes/studio-server";
 import type {
   ResolvedProject,
   StudioApiAdapter,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
+import { projectPath } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
@@ -244,17 +247,42 @@ export function createHyperframesApi(
     const prefix = `/api/isolated/${key}/`;
     const url = new URL(c.req.url);
     const path = url.pathname.slice(prefix.length);
-    const target =
+    let target =
       path === "runtime.js" || path.startsWith("vendor/npm/")
         ? `/${path}`
         : path === "preview" || path.startsWith("preview/")
           ? `/projects/${encodeURIComponent(projectId)}/${path}`
           : null;
     if (!target) return c.notFound();
-    const response = await api.request(`${url.origin}${target}${url.search}`, {
-      headers: c.req.raw.headers,
-    });
+    let response: Response;
+    let assetContentType: string | undefined;
+    try {
+      if (path.startsWith("preview/")) {
+        const project = await store.get(projectId);
+        const composition = path.startsWith("preview/comp/");
+        const file = requestSubPath(
+          c.req.url,
+          composition ? "isolated/:key/preview/comp" : "isolated/:key/preview",
+        );
+        const canonical = await projectPath(project, file);
+        const asset = relative(project.path, canonical)
+          .split(sep)
+          .map(encodeURIComponent)
+          .join("/");
+        target = `/projects/${encodeURIComponent(projectId)}/preview/${composition ? "comp/" : ""}${asset}`;
+        if (!composition && !url.searchParams.has("hf-proxy"))
+          assetContentType = getMimeType(file);
+      }
+      response = await api.request(`${url.origin}${target}${url.search}`, {
+        headers: c.req.raw.headers,
+      });
+    } catch (error) {
+      if (!(error instanceof HttpError)) throw error;
+      response = c.text(error.message, error.status);
+    }
     const headers = new Headers(response.headers);
+    if (response.ok && assetContentType)
+      headers.set("Content-Type", assetContentType);
     headers.set(
       "Content-Security-Policy",
       previewPolicy(`${url.origin}${prefix}`),

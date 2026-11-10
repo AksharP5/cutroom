@@ -37,6 +37,12 @@ export function registerRenderIsolation() {
   const isolation = JSON.stringify(
     new URL("./isolation.ts", import.meta.url).href,
   );
+  const projectPaths = JSON.stringify(
+    new URL("../projects/path.ts", import.meta.url).href,
+  );
+  const httpErrors = JSON.stringify(
+    new URL("../../shared/errors.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
   let captureLoaded = false;
   registerHooks({
@@ -49,10 +55,24 @@ export function registerRenderIsolation() {
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
+        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\n${source}`;
         source = replaceOnce(
           source,
           "function createFileServer(options) {",
           `function createFileServer(options) {\n  const cutroomPolicy = ${previewPolicy.toString()};`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "      const candidate = join(root, relativePath);\n      if (isPathInside(candidate, root)) file = openRegularFile(candidate);",
+          `      try {
+        const candidate = await projectPath({ path: root }, relativePath);
+        file = openRegularFile(candidate);
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 404) continue;
+        if (error instanceof HttpError) return c.text(error.message, error.status);
+        throw error;
+      }`,
           url,
         );
         source = replaceOnce(
@@ -67,6 +87,12 @@ export function registerRenderIsolation() {
     c.header("X-Content-Type-Options", "nosniff");
   });
   app.get("/*", async (c) => {`,
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "      const ext = extname(filePath).toLowerCase();",
+          "      const ext = extname(relativePath).toLowerCase();",
           url,
         );
         producerLoaded = true;
