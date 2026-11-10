@@ -36,6 +36,7 @@ const mediaKinds = [
 const acceptedFiles = mediaKinds
   .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
   .join(",");
+const UPLOAD_BYTES = 500 * 1024 * 1024;
 const STILL_IMPORTING =
   "Still importing. Drop the next files when it finishes.";
 const UPLOAD_LIMIT =
@@ -122,6 +123,11 @@ export function MediaPanel({
     }
     if (importing) {
       setMessage(STILL_IMPORTING);
+      return;
+    }
+    // Refuse before sending: a server rejecting a huge body can surface as a reset, not a 413.
+    if (media.reduce((total, file) => total + file.size, 0) > UPLOAD_BYTES) {
+      setMessage(UPLOAD_LIMIT);
       return;
     }
     const body = new FormData();
