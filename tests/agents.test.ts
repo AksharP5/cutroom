@@ -480,7 +480,9 @@ describe("agent conversations", () => {
           decision: "allow",
         }),
       ).rejects.toThrow();
-      await idle(service, session.id);
+      // The turn ends idle, then its own history save fails too, so the
+      // session settles in error. Waiting for idle races that second failure.
+      await idle(service, session.id, "error");
       expect(decision).toBe("deny");
       expect(service.get(session.id).pendingRequest).toBeUndefined();
     } finally {
