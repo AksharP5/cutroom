@@ -27,7 +27,7 @@ import type {
   ReviewTurn,
 } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
-import { isMissing, projectPath } from "./store";
+import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
 
 const ReviewFileSchema = z.object({
@@ -49,7 +49,7 @@ export class ReviewFileError extends HttpError {
   constructor() {
     super(
       422,
-      `Review status in ${REVIEW_STATE_PATH} is unreadable. Repair the file to keep reviewing; no note changes status until then.`,
+      `Review status in ${REVIEW_STATE_PATH} is unreadable. Repair the file to keep reviewing; until then no note changes status and undo, redo, and restore are blocked so no sent request is lost.`,
     );
   }
 }
@@ -221,7 +221,14 @@ export function createReviewService(store: ProjectStore) {
         return { ...request, ...current };
       },
     );
-    const next = change(items, document);
+    // A refused change still saves what reconciling found, without the refused change.
+    let refusal: { error: unknown } | undefined;
+    let next = items;
+    try {
+      next = change(items, document);
+    } catch (error) {
+      refusal = { error };
+    }
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
@@ -236,8 +243,9 @@ export function createReviewService(store: ProjectStore) {
         ...state.items.filter((item) => !visible.has(item.id)),
       ],
     };
-    if (JSON.stringify(written) !== JSON.stringify(state))
-      await writeState(project, written);
+    // Parsed and built objects order their keys differently; only a real change is written.
+    if (!sameContent(written, state)) await writeState(project, written);
+    if (refusal) throw refusal.error;
     return next;
   };
 
@@ -272,19 +280,21 @@ export function createReviewService(store: ProjectStore) {
       });
     });
 
+  /**
+   * The agent behind a request. A conversation's token only acts on the project whose run it
+   * belongs to, while that run is active; anything else is refused rather than guessed.
+   */
+  const agent = (project: Project, token: string | undefined): ReviewActor => {
+    if (token === undefined || token === "external")
+      return { kind: "agent", turn: external };
+    const turn = turns.get(project.id);
+    if (turn?.kind !== "message" || turn.token !== token)
+      throw new HttpError(409, "No Cutroom run is active for this project.");
+    return { kind: "agent", turn };
+  };
+
   return {
-    /**
-     * The agent behind a request. A conversation's token only acts on the project whose run it
-     * belongs to, while that run is active; anything else is refused rather than guessed.
-     */
-    agent(project: Project, token: string | undefined): ReviewActor {
-      if (token === undefined || token === "external")
-        return { kind: "agent", turn: external };
-      const turn = turns.get(project.id);
-      if (turn?.kind !== "message" || turn.token !== token)
-        throw new HttpError(409, "No Cutroom run is active for this project.");
-      return { kind: "agent", turn };
-    },
+    agent,
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
     list: (project: Project) => serialize(project, () => reconcile(project)),
     async act(
@@ -327,8 +337,14 @@ export function createReviewService(store: ProjectStore) {
       return find(items, id);
     },
     /** An agent's new request skips the draft state: it is already part of the work queue. */
-    add: (project: Project, input: z.output<typeof ReviewAddSchema>) =>
+    add: (
+      project: Project,
+      input: z.output<typeof ReviewAddSchema>,
+      token: string | undefined,
+    ) =>
       serialize(project, async () => {
+        // Checked in the queue, so the run cannot end between the check and the add.
+        agent(project, token);
         const annotation = await addAnnotation(
           store,
           project,
@@ -368,11 +384,16 @@ export function createReviewService(store: ProjectStore) {
      * they remove or change becomes withdrawn, credited to `actor`.
      */
     history(project: Project, history: ProjectHistory, actor: ReviewActor) {
+      // History is how an unreadable cutroom.json gets repaired, so that alone never blocks it.
+      // The saved review state is kept and reconciled once the document can be read again.
+      const unlessUnreadable = (error: unknown) => {
+        if (!(error instanceof ProjectDocumentError)) throw error;
+      };
       const guarded = <T>(how: string, change: () => Promise<T>) =>
         serialize(project, async () => {
-          await reconcile(project);
+          await reconcile(project).catch(unlessUnreadable);
           const result = await change();
-          await reconcile(project, { actor, how });
+          await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });
       const overrides: Partial<ProjectHistory> = {

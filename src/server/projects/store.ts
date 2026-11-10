@@ -43,6 +43,16 @@ const RegistrySchema = z.object({
   projects: z.array(ProjectSchema),
 });
 const DOCUMENT_PATH = "cutroom.json";
+
+/** cutroom.json cannot be read. Project history can still restore it. */
+export class ProjectDocumentError extends HttpError {
+  constructor(detail: string) {
+    super(
+      422,
+      `cutroom.json ${detail}. Restore it from project history before editing.`,
+    );
+  }
+}
 const PERSON: HistoryWho = { kind: "person", name: "You" };
 
 export async function projectPath(
@@ -221,17 +231,10 @@ export async function createProjectStore(options: {
     try {
       json = JSON.parse(raw);
     } catch {
-      throw new HttpError(
-        422,
-        "cutroom.json is not valid JSON. Restore it from project history before editing.",
-      );
+      throw new ProjectDocumentError("is not valid JSON");
     }
     const parsed = ProjectDocumentSchema.safeParse(json);
-    if (!parsed.success)
-      throw new HttpError(
-        422,
-        "cutroom.json is invalid. Restore it from project history before editing.",
-      );
+    if (!parsed.success) throw new ProjectDocumentError("is invalid");
     documentReads.set(parsed.data, raw);
     return parsed.data;
   };

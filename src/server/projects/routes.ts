@@ -161,7 +161,10 @@ export function createProjectRoutes(
   api.post("/projects/:id/review", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(ReviewAddSchema, await c.req.json());
-    return c.json(await reviews.add(project, input), 201);
+    return c.json(
+      await reviews.add(project, input, c.req.header(AGENT_HEADER)),
+      201,
+    );
   });
   api.post("/projects/:id/review/:itemId/human", async (c) => {
     const project = await store.get(c.req.param("id"));

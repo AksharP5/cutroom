@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -1073,5 +1073,94 @@ describe("owner actions over MCP", () => {
       status: "accepted",
       by: "external",
     });
+  });
+});
+
+describe("review round 4 regressions", () => {
+  test("reading the queue twice does not rewrite review.json", async () => {
+    const queue = await setup();
+    const id = await queue.note("Bigger title");
+    await send(queue.agents, queue.project, "Go");
+    const base = `/projects/${queue.project.id}/review/${id}`;
+    await queue.request(`${base}/agent`, "POST", {
+      type: "complete",
+      note: "Title is 96px.",
+    });
+    await queue.request(`${base}/human`, "POST", { type: "accept" });
+    await queue.note("Fade the music");
+    await queue.review.list(queue.project);
+    const path = join(queue.project.path, ".cutroom", "review.json");
+    const before = await stat(path);
+    await queue.review.list(queue.project);
+    await queue.review.list(queue.project);
+    const after = await stat(path);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  test("a refused action still saves the withdrawal it detected", async () => {
+    const queue = await setup();
+    const { id } = ReviewItemSchema.parse(
+      await queue.request(`/projects/${queue.project.id}/review`, "POST", {
+        body: "Warm up the grade",
+      }),
+    );
+    const file = join(queue.project.path, "cutroom.json");
+    const original = await Bun.file(file).text();
+    await writeFile(
+      file,
+      JSON.stringify({ schemaVersion: 1, annotations: [], transcripts: [] }),
+    );
+    const refused = await queue.fetchRaw(
+      `/projects/${queue.project.id}/review/${id}/agent`,
+      "POST",
+      { type: "complete", note: "Done." },
+    );
+    expect(refused.status).toBe(409);
+    await writeFile(file, original);
+    const [item] = await queue.items();
+    expect(item?.review).toMatchObject({
+      status: "withdrawn",
+      reason: "Removed outside Cutroom",
+    });
+  });
+
+  test("review_add checks a conversation's token like every other action", async () => {
+    let during: Response | undefined;
+    const queue = await setup(async () => {
+      during = await queue.fetchRaw(
+        `/projects/${other.id}/review`,
+        "POST",
+        { body: "Not yours" },
+        { [AGENT_HEADER]: queue.tokens[0]! },
+      );
+    });
+    const other = await queue.store.create({ name: "Other project" });
+    await queue.note("Yours");
+    await send(queue.agents, queue.project, "Go");
+    expect(during?.status).toBe(409);
+    const after = await queue.fetchRaw(
+      `/projects/${queue.project.id}/review`,
+      "POST",
+      { body: "After the run" },
+      { [AGENT_HEADER]: queue.tokens[0]! },
+    );
+    expect(after.status).toBe(409);
+    expect(await queue.review.list(other)).toHaveLength(0);
+    expect(Object.keys(await queue.status())).toEqual(["Yours"]);
+  });
+
+  test("undo can repair an unreadable cutroom.json", async () => {
+    const queue = await setup();
+    await queue.note("Warm up the grade");
+    await send(queue.agents, queue.project, "Go");
+    const history = `/projects/${queue.project.id}/history`;
+    await queue.request(history);
+    await writeFile(join(queue.project.path, "cutroom.json"), "{oops");
+    const undo = await queue.fetchRaw(`${history}/undo`, "POST");
+    expect(undo.status).toBe(200);
+    const [item] = await queue.items();
+    expect(item?.body).toBe("Warm up the grade");
+    expect(item?.review.status).toBe("queued");
   });
 });
