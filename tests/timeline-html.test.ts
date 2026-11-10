@@ -244,6 +244,30 @@ test("an entry document uses its live tree and a sub-composition its template", 
   ).toEqual([["v", 60]]);
 });
 
+test("a sub-composition edits its first template even when a later one is named for it", () => {
+  // Preview and render inline the first template here, so that is the one an edit must change.
+  const first = `<template id="helper"><div data-composition-id="helper" data-duration="4"><p id="helper-text" class="clip" data-start="0" data-duration="1" data-track-index="0">Helper</p><video id="h" src="h.mp4" data-start="0" data-duration="1"></video></div></template>`;
+  const named = `<template id="intro-template"><div data-composition-id="intro" data-duration="4"><p id="title" class="clip" data-start="0" data-duration="1" data-track-index="0">Intro</p><video id="i" src="i.mp4" data-start="0" data-duration="1"></video></div></template>`;
+  const html = `${first}\n${named}\n`;
+  expect(mediaSources(html, "sub-composition")).toEqual(["h.mp4"]);
+  const parsed = parseComposition(html, emptyTimelineSettings(), {
+    scope: "sub-composition",
+  });
+  const timeline = canonicalTimeline(
+    applyAll(parsed.timeline, [
+      CommandSchema.parse({ type: "move", clipIds: ["helper-text"], by: 30 }),
+    ]),
+  );
+  expect(patchComposition(parsed, timeline, new Map())).toBe(
+    `${first
+      .replace(
+        `data-start="0" data-duration="1" data-track-index="0">Helper`,
+        `data-start="1" data-duration="1" data-track-index="0">Helper`,
+      )
+      .replace(`data-duration="4"`, `data-duration="5"`)}\n${named}\n`,
+  );
+});
+
 test("text the browser fosters out of a table row is never cut with the row", () => {
   for (const html of [
     composition(

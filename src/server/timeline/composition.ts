@@ -73,7 +73,6 @@ export interface ParsedComposition {
   anonymous: Set<string>;
   ids: Set<string>;
   scriptsAndStyles: string[];
-  /** Source offsets of every element and text node, sorted. */
   /** Source range of every element (start tag through end tag) and text node, in tree order. */
   nodes: SourceRange[];
   /**
@@ -189,6 +188,11 @@ const sourceOf = (element: SourceElement) =>
  * How HyperFrames loads a composition file. The project's entry document renders its live tree, as
  * the browser builds it, so `<template>` content there is inert. Any other file is loaded as a
  * sub-composition, whose content is its first live `<template>` when it has one.
+ *
+ * Preview and render both inline sub-compositions through `resolveSubCompositionContent` in
+ * `@hyperframes/parsers`, which takes `querySelector("template")` even when a later template is
+ * named `<id>-template`. The runtime's in-browser loader prefers `<id>-template`, but it only sees
+ * files the bundler skipped, and render refuses those.
  */
 export type CompositionScope = "document" | "sub-composition";
 export const compositionScope = (path: string): CompositionScope =>
