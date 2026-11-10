@@ -9,7 +9,7 @@ import {
   PencilSimple,
 } from "@phosphor-icons/react";
 import { z } from "zod";
-import type { EditorContext, EditorReviewDraft } from "../../shared/editor";
+import type { EditorContext } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
@@ -28,6 +28,7 @@ import {
 } from "./timeline";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
+import type { SaveNote } from "./NoteLayer";
 import { Viewer } from "./Viewer";
 import type { Zoom } from "./Viewer";
 
@@ -65,14 +66,14 @@ export function EditPage({
   projectId,
   notes,
   onContext,
-  onReview,
+  onSaveNote,
   onOpenNote,
 }: {
   projectId: string;
-  /** Review notes, shown as pins on the timeline ruler. */
+  /** Review notes, shown as pins on the picture and the timeline ruler. */
   notes: readonly ReviewItem[];
   onContext?: (context: EditorContext) => void;
-  onReview?: (draft: EditorReviewDraft) => void;
+  onSaveNote: SaveNote;
   onOpenNote(id: string): void;
 }) {
   const editorTools = useContext(EditorToolsContext);
@@ -319,7 +320,9 @@ export function EditPage({
           revision={revision}
           zoom={zoom}
           mode={mode}
-          onReview={onReview}
+          notes={notes}
+          onOpenNote={onOpenNote}
+          onSaveNote={onSaveNote}
         />
         <TransportBar fullscreen={fullscreen} onFullscreen={toggleFullscreen} />
       </section>

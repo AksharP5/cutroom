@@ -326,6 +326,26 @@ export function App() {
         ?.scrollIntoView({ block: "nearest" }),
     );
   }, []);
+  /**
+   * Saves a note made on the new editor's picture. Review comes forward in the left column if
+   * that column is showing, so each note is seen joining the queue.
+   */
+  const saveNote = useCallback(
+    async (draft: EditorReviewDraft, body: string) => {
+      if (!projectId) throw new Error("No project is open.");
+      setPanel("review");
+      setWorkPanel((current) => current && "notebook");
+      const { id, captureError } = await saveReviewNote(projectId, draft, body);
+      if (captureError && activeProjectId.current === projectId)
+        showToast(`Note saved without a frame image. ${captureError}`);
+      // The note is saved; a failed refresh must not reopen it, or it would be saved twice.
+      void refreshDocument().catch((error: unknown) =>
+        showToast(error instanceof Error ? error.message : String(error)),
+      );
+      return id;
+    },
+    [projectId, refreshDocument],
+  );
   const consumePrompt = useCallback(() => setPromptState(null), []);
   const ask = useCallback(
     (value: string) => {
@@ -492,7 +512,7 @@ export function App() {
                     onCancel={() => setReviewState(null)}
                     onSave={async (body) => {
                       if (!reviewDraft) return;
-                      const captureError = await saveReviewNote(
+                      const { captureError } = await saveReviewNote(
                         project.id,
                         reviewDraft,
                         body,
@@ -605,7 +625,7 @@ export function App() {
                       projectId={project.id}
                       notes={projectDocument.items}
                       onContext={onContext}
-                      onReview={onReview}
+                      onSaveNote={saveNote}
                       onOpenNote={openReview}
                     />
                   ) : (

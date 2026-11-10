@@ -13,11 +13,14 @@ export interface EditorContext {
   selectedElementIds: string[];
 }
 
+/** A note marked on the picture, ready to save. With strokes it is a drawing, otherwise a comment. */
 export interface EditorReviewDraft {
-  kind: "draw" | "comment";
   time: number;
+  /** The start of the last frame the note covers. */
+  endTime?: number;
   compositionPath: string;
-  points: EditorPoint[];
+  /** Where its pin sits. */
+  point?: EditorPoint;
+  strokes: EditorPoint[][];
   elementIds: string[];
-  frameUrl: string;
 }

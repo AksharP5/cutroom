@@ -5,6 +5,7 @@ import { editKeys } from "../edit/keys";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
+import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
 import { Timeline } from "./Timeline";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
@@ -93,24 +94,24 @@ export function ProjectTimeline({
     editDeselectAll: () => setSelection(emptySelection),
   });
 
-  const pins = useMemo(
-    () =>
-      view
-        ? notes.flatMap((note): TimelinePin[] => {
-            const state = pinStates[note.review.status];
-            return state && note.compositionPath === view.composition
-              ? [
-                  {
-                    id: note.id,
-                    frame: toFrames(note.time, view.timeline.fps),
-                    state,
-                  },
-                ]
-              : [];
-          })
-        : [],
-    [notes, view],
-  );
+  const pins = useMemo(() => {
+    const numbers = noteNumbers(notes);
+    return view
+      ? notes.flatMap((note): TimelinePin[] => {
+          const state = pinStates[note.review.status];
+          return state && note.compositionPath === view.composition
+            ? [
+                {
+                  id: note.id,
+                  number: numbers.get(note.id) ?? 0,
+                  frame: toFrames(note.time, view.timeline.fps),
+                  state,
+                },
+              ]
+            : [];
+        })
+      : [];
+  }, [notes, view]);
 
   // The toggle is worked out from the timeline as shown, with earlier edits already on it,
   // so two quick clicks flip twice. A track the timeline does not hold yet

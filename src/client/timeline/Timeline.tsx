@@ -64,6 +64,8 @@ export interface TimelineClock {
 }
 export interface TimelinePin {
   id: string;
+  /** The note's number, as Review and the picture show it. */
+  number: number;
   frame: number;
   state: "queued" | "working" | "review" | "accepted";
 }
@@ -316,7 +318,7 @@ const Ruler = memo(function Ruler({
             className={`tl-pin ${pin.state}`}
             data-unscaled
             style={{ "--f": pin.frame }}
-            aria-label={`Review note at ${formatTimecode(pin.frame, fps)}, ${pinLabels[pin.state]}`}
+            aria-label={`Review note ${pin.number} at ${formatTimecode(pin.frame, fps)}, ${pinLabels[pin.state]}`}
             onClick={() => {
               onSeek(pin.frame);
               onOpenPin(pin.id);

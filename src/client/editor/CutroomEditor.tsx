@@ -60,10 +60,9 @@ function context(): EditorContext {
 }
 
 function ReviewOverlay({
-  projectId,
   mode,
   onReview,
-}: Pick<CutroomEditorProps, "projectId" | "mode" | "onReview">) {
+}: Pick<CutroomEditorProps, "mode" | "onReview">) {
   const host = useRef<HTMLDivElement>(null);
   const iframe = usePreviewIframeStore((state) => state.iframe);
   const rect = usePreviewCompositionRect(host, iframe);
@@ -98,7 +97,6 @@ function ReviewOverlay({
           }}
         >
           <ReviewCanvas
-            projectId={projectId}
             mode={mode}
             begin={() => {
               usePlayerStore.getState().requestPlayback(false);
@@ -273,11 +271,7 @@ export function CutroomEditor({
       {mountedProjectId === projectId && (
         <>
           <NativeStudio key={projectId} />
-          <ReviewOverlay
-            projectId={projectId}
-            mode={mode}
-            onReview={onReview}
-          />
+          <ReviewOverlay mode={mode} onReview={onReview} />
         </>
       )}
     </div>
