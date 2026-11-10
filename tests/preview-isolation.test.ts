@@ -64,7 +64,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       await next();
     });
     app.route("/api/cutroom", createProjectRoutes(projects, review));
-    app.route("/api/cutroom", createTimelineRoutes(projects));
+    app.route("/api/cutroom", createTimelineRoutes(projects, review));
     app.route("/api/cutroom", createAgentRoutes(agents));
     app.route("/api", editor);
     app.get("/host/:id", (c) =>

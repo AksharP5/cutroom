@@ -1,3 +1,7 @@
+import { AGENT_HEADER } from "../../shared/review";
+import { projectMutationGuard } from "../projects/authorization";
+import { sourceWriteGuard } from "./source-guard";
+import { projectStatePath } from "../projects/path";
 import { watch } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
@@ -62,6 +66,16 @@ export function createHyperframesApi(
   reviews: ReviewService,
 ) {
   const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
+  api.use("/projects/:id/*", sourceWriteGuard(store));
+  api.use("/render/*", async (c, next) => {
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
+      c.req.header(AGENT_HEADER) !== undefined
+    )
+      throw new HttpError(409, "Only the owner can control render jobs.");
+    await next();
+  });
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<string, ReturnType<typeof watch>>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -179,6 +193,13 @@ export function createHyperframesApi(
       throw error;
     });
     if (!project) return null;
+    // The upstream preview and animation writers own these fixed paths too.
+    for (const path of [
+      ".hyperframes",
+      ".hyperframes/preview",
+      ...STUDIO_SIGNATURE_MANIFEST_PATHS,
+    ])
+      await projectStatePath(project, path, true);
     const resolved = { id: project.id, dir: project.path, title: project.name };
     watchProject(resolved);
     return resolved;

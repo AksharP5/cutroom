@@ -50,10 +50,11 @@ async function assetFixture() {
     });
   </script></body></html>`,
   );
-  const api = createHyperframesApi(store, createReviewService(store));
+  const review = createReviewService(store);
+  const api = createHyperframesApi(store, review);
   const app = new Hono()
     .route("/api", api)
-    .route("/api/cutroom", createTimelineRoutes(store));
+    .route("/api/cutroom", createTimelineRoutes(store, review));
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,

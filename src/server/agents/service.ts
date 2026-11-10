@@ -20,12 +20,14 @@ import { projectPath } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { createNativeRuntimeFactory } from "./factory";
+import { isCutroomEdit } from "./tool-permissions";
 import { completeMessage } from "./runtime";
 import type { AgentRuntime, RuntimeFactory } from "./runtime";
 
 const storedSessionsSchema = z.object({
   version: z.literal(1),
   sessions: z.array(agentSessionSchema),
+  cutroomEdits: z.record(z.string(), z.boolean()).default({}),
 });
 type PendingRequest = {
   request: AgentRequest;
@@ -66,6 +68,8 @@ export class AgentService {
   private readonly sequences = new Map<string, number>();
   /** One per conversation, so review actions are bound to that conversation's project and run. */
   private readonly agentTokens = new Map<string, string>();
+  private cutroomEdits: Record<string, boolean> = {};
+  private readonly runtimePermissions = new Map<string, boolean>();
   private writeChain = Promise.resolve();
   private saveTimer?: ReturnType<typeof setTimeout>;
   private disposed = false;
@@ -87,6 +91,7 @@ export class AgentService {
       throw error;
     }
     const stored = storedSessionsSchema.parse(JSON.parse(content));
+    this.cutroomEdits = stored.cutroomEdits;
     for (const session of stored.sessions) {
       if (session.status === "running" || session.status === "waiting") {
         session.status = "idle";
@@ -119,6 +124,47 @@ export class AgentService {
   private requireOpen() {
     if (this.disposed)
       throw new HttpError(503, "Cutroom's agent service is closed.");
+  }
+
+  async permissions(projectId: string) {
+    this.requireOpen();
+    await this.options.projects.get(projectId);
+    return { alwaysAllowCutroomEdits: this.cutroomEdits[projectId] === true };
+  }
+
+  async setPermissions(projectId: string, always: boolean) {
+    await this.permissions(projectId);
+    const previous = this.cutroomEdits[projectId];
+    this.cutroomEdits[projectId] = always;
+    try {
+      await this.persist();
+    } catch (error) {
+      this.cutroomEdits[projectId] = previous ?? false;
+      throw error;
+    }
+    // Revocation stops active native sessions too: their native allow entries must not outlive it.
+    if (!always)
+      for (const session of this.sessions.values()) {
+        if (session.projectId !== projectId) continue;
+        await this.interrupt(session.id).catch((error: unknown) => {
+          // Dispose below still closes the native process and its session allow entries.
+          console.error(
+            `Failed to interrupt agent session ${session.id}; closing it.`,
+            error,
+          );
+        });
+        this.runtimes.get(session.id)?.dispose();
+        this.runtimes.delete(session.id);
+        const operation = this.operations.get(session.id);
+        if (operation?.kind === "turn") {
+          operation.endReview?.();
+          this.operations.delete(session.id);
+          this.finishStreaming(session.id, "complete");
+          this.apply(session.id, { type: "status", status: "idle" });
+        }
+      }
+    await this.persist();
+    return { alwaysAllowCutroomEdits: always };
   }
 
   async capabilities(
@@ -386,12 +432,20 @@ export class AgentService {
     }
     operation.phase = "running";
     let runtime = this.runtimes.get(id);
+    const always = this.cutroomEdits[session.projectId] === true;
+    if (runtime && this.runtimePermissions.get(id) !== always) {
+      runtime.dispose();
+      this.runtimes.delete(id);
+      runtime = undefined;
+    }
     if (!runtime) {
+      this.runtimePermissions.set(id, always);
       runtime = this.factory.create(session.provider, {
         cwd: project.path,
         model: session.model,
         nativeSessionId: session.nativeSessionId,
         agentToken: this.agentToken(id),
+        allowCutroomEdits: () => this.cutroomEdits[session.projectId] === true,
         emit: (event) => {
           if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
             return;
@@ -478,6 +532,24 @@ export class AgentService {
         409,
         "This request has already been answered or cancelled.",
       );
+    if (response.alwaysAllowCutroomEdits) {
+      if (
+        response.decision !== "allow" ||
+        !current.request.canAllowCutroomEdits ||
+        !isCutroomEdit(current.request.tool)
+      )
+        throw new HttpError(
+          400,
+          "Always allow applies only to Cutroom edit approvals.",
+        );
+      await this.setPermissions(session.projectId, true);
+      if (
+        queue[0] !== current ||
+        operation?.kind !== "turn" ||
+        operation.controller.signal.aborted
+      )
+        throw new HttpError(409, "This request was cancelled.");
+    }
     queue.shift();
     current.removeAbortListener();
     session.pendingRequest = undefined;
@@ -657,6 +729,7 @@ export class AgentService {
     const content = JSON.stringify({
       version: 1,
       sessions: [...this.sessions.values()],
+      cutroomEdits: this.cutroomEdits,
     });
     const write = async () => {
       await mkdir(this.options.dataDir, { recursive: true });

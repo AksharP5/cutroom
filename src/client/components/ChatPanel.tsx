@@ -14,6 +14,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { z } from "zod";
 import {
+  agentPermissionsSchema,
   agentCapabilitiesSchema,
   agentEventEnvelopeSchema,
   agentSessionSchema,
@@ -163,25 +164,18 @@ function RequestCard({
   onRespond: (
     decision: "allow" | "deny",
     answers?: Record<string, string | string[]>,
+    alwaysAllowCutroomEdits?: boolean,
   ) => Promise<void>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [showInput, setShowInput] = useState(false);
-  // "Write …/opening/index.html?": a long path gives up its start, never the file name.
-  const ask = describeTool(request, "ask");
-  const fileAsk =
-    request.target &&
-    targetsFile(request.tool) &&
-    request.title === `${ask.verb} ${ask.object}?`
-      ? ask
-      : null;
-  async function respond(decision: "allow" | "deny") {
+  async function respond(decision: "allow" | "deny", always = false) {
     setSending(true);
     setError("");
     try {
-      await onRespond(decision, answers);
+      await onRespond(decision, answers, always);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -197,6 +191,15 @@ function RequestCard({
       >
         {request.kind === "question" ? "Answer" : "Allow once"}
       </button>
+      {request.canAllowCutroomEdits && (
+        <button
+          className="text-button"
+          disabled={sending}
+          onClick={() => void respond("allow", true)}
+        >
+          Always allow Cutroom edits
+        </button>
+      )}
       <button
         className="text-button quiet"
         disabled={sending}
@@ -223,19 +226,16 @@ function RequestCard({
               aria-expanded={showInput}
               onClick={() => setShowInput((value) => !value)}
             >
-              {fileAsk ? (
-                <>
-                  <span>{fileAsk.verb}</span>
-                  <span className="agent-request-file">
-                    <bdi>{fileAsk.object}</bdi>
-                  </span>
-                  <span>?</span>
-                </>
-              ) : (
-                request.title
-              )}
+              {request.title}
             </button>
+            <code className="agent-request-tool">{request.tool}</code>
             {actions}
+            {request.canAllowCutroomEdits && (
+              <p className="agent-request-scope">
+                This project's Cutroom edits, every conversation, until you
+                revoke. Shell and native file changes still ask.
+              </p>
+            )}
           </div>
           {showInput && <pre>{JSON.stringify(request.input, null, 2)}</pre>}
         </>
@@ -319,6 +319,7 @@ const ConversationMessages = memo(function ConversationMessages({
   onRespond: (
     decision: "allow" | "deny",
     answers?: Record<string, string | string[]>,
+    alwaysAllowCutroomEdits?: boolean,
   ) => Promise<void>;
 }) {
   // Consecutive tool calls read as one block of verb rows. Empty replies and tool
@@ -425,6 +426,20 @@ export function ChatPanel({
   /** The number, as in Review, of the note the agent has claimed. */
   workingNote: number | null;
 }) {
+  const [alwaysAllow, setAlwaysAllow] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void api(`/projects/${projectId}/agent-permissions`, agentPermissionsSchema)
+      .then((value) => {
+        if (!cancelled) setAlwaysAllow(value.alwaysAllowCutroomEdits);
+      })
+      .catch((error) => {
+        if (!cancelled) setError(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
   const [provider, setProvider] = useState<AgentProvider>("codex");
   const [model, setModel] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(
@@ -666,14 +681,16 @@ export function ChatPanel({
     async (
       decision: "allow" | "deny",
       answers?: Record<string, string | string[]>,
+      alwaysAllowCutroomEdits?: boolean,
     ) => {
       if (!sessionId || !requestId)
         throw new Error("This request is no longer active.");
       await api(
         `/agents/sessions/${sessionId}/responses`,
         acceptedSchema,
-        json("POST", { requestId, decision, answers }),
+        json("POST", { requestId, decision, answers, alwaysAllowCutroomEdits }),
       );
+      if (alwaysAllowCutroomEdits) setAlwaysAllow(true);
     },
     [sessionId, requestId],
   );
@@ -895,6 +912,25 @@ export function ChatPanel({
             }}
           >
             <Plus />
+          </button>
+        </div>
+      )}
+      {alwaysAllow && (
+        <div className="agent-permissions">
+          <span>Cutroom edits always allowed</span>
+          <button
+            className="text-button quiet"
+            onClick={() => {
+              void api(
+                `/projects/${projectId}/agent-permissions`,
+                agentPermissionsSchema,
+                json("PATCH", { alwaysAllowCutroomEdits: false }),
+              )
+                .then(() => setAlwaysAllow(false))
+                .catch((error) => setError(String(error)));
+            }}
+          >
+            Revoke
           </button>
         </div>
       )}

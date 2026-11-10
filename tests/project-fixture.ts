@@ -13,9 +13,10 @@ export async function projectFixture() {
     dataDir: join(directory, "data"),
     projectsDir: join(directory, "projects"),
   });
+  const review = createReviewService(store);
   const app = new Hono().route(
     "/api/cutroom",
-    createProjectRoutes(store, createReviewService(store)),
+    createProjectRoutes(store, review),
   );
   app.onError((error, c) =>
     c.json(
@@ -33,6 +34,7 @@ export async function projectFixture() {
     });
   return {
     directory,
+    review,
     store,
     app,
     request,

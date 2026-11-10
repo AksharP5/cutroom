@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { createWorkspaceRoutes } from "../src/server/workspace";
+import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
 import { ProjectSchema } from "../src/shared/project";
 
@@ -171,6 +172,7 @@ test("annotation captures cannot write through a project symlink", async () => {
   await symlink(outside, join(project.path, ".cutroom"));
   const app = createWorkspaceRoutes({
     projects: store,
+    review: createReviewService(store),
     dataDir: root,
     projectsDir: store.projectsDir,
     mcpCommand: "cutroom mcp",
@@ -198,6 +200,7 @@ test("user-selected attachments are copied into the project and project files ar
   await writeFile(source, "A chosen reference");
   const app = createWorkspaceRoutes({
     projects: store,
+    review: createReviewService(store),
     dataDir: root,
     projectsDir: store.projectsDir,
     mcpCommand: "cutroom mcp",

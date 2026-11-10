@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { ReviewAddSchema, reviewActions } from "../../shared/review";
+import {
+  ReviewAddSchema,
+  ReviewReorderSchema,
+  reviewActions,
+} from "../../shared/review";
 
 type LocalRequest = (
   path: string,
@@ -98,6 +102,17 @@ export function registerReviewTools(
     },
     ({ projectId, noteId, ...input }) =>
       act(projectId, noteId, { type: "withdraw", ...input }),
+  );
+  server.registerTool(
+    "review_reorder",
+    {
+      description:
+        "Reorder an unfinished note before another, or at the end when beforeId is null. Only an outside client acting for the owner may reorder; Cutroom's own agent is refused.",
+      inputSchema: ReviewReorderSchema.extend(project),
+      annotations,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/review/order`, "PATCH", input),
   );
   const delegate =
     " For an outside client acting for the owner; Cutroom's own agent is refused.";

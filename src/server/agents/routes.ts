@@ -1,7 +1,9 @@
+import { AGENT_HEADER } from "../../shared/review";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import {
+  agentPermissionsSchema,
   agentProviderSchema,
   agentResponseSchema,
   agentTurnSchema,
@@ -13,6 +15,17 @@ import type { AgentService } from "./service";
 
 export function createAgentRoutes(service: AgentService) {
   const app = new Hono();
+  app.use("*", async (c, next) => {
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
+      c.req.header(AGENT_HEADER) !== undefined
+    )
+      throw new HttpError(
+        409,
+        "Only the owner can control agents and their permissions.",
+      );
+    await next();
+  });
   app.onError((error, c) => {
     if (error instanceof HttpError)
       return c.json({ error: error.message }, error.status);
@@ -27,6 +40,18 @@ export function createAgentRoutes(service: AgentService) {
     return c.json({ error: error.message }, 500);
   });
 
+  app.get("/projects/:id/agent-permissions", async (c) =>
+    c.json(await service.permissions(c.req.param("id"))),
+  );
+  app.patch("/projects/:id/agent-permissions", async (c) => {
+    const input = agentPermissionsSchema.parse(await c.req.json());
+    return c.json(
+      await service.setPermissions(
+        c.req.param("id"),
+        input.alwaysAllowCutroomEdits,
+      ),
+    );
+  });
   app.get("/agents/capabilities", async (c) => {
     const provider = agentProviderSchema.parse(c.req.query("provider"));
     const projectId = z.string().min(1).parse(c.req.query("projectId"));

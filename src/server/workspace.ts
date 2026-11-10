@@ -1,3 +1,5 @@
+import { projectMutationGuard } from "./projects/authorization";
+import type { ReviewService } from "./projects/review";
 import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
 import { constants } from "node:fs";
@@ -29,6 +31,7 @@ import type { FileChange } from "./hyperframes/api";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
+  review: ReviewService;
   dataDir: string;
   projectsDir: string;
   mcpCommand: string;
@@ -38,6 +41,7 @@ export function createWorkspaceRoutes(options: {
   ) => () => void;
 }) {
   const app = new Hono();
+  app.use("/projects/:id/*", projectMutationGuard(options.review));
   app.get("/status", (c) =>
     c.json({
       version,

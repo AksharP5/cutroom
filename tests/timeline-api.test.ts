@@ -12,7 +12,10 @@ import { projectFixture } from "./project-fixture";
 
 const timelineFixture = async () => {
   const fixture = await projectFixture();
-  fixture.app.route("/api/cutroom", createTimelineRoutes(fixture.store));
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
   const project = await fixture.store.create({ name: "Timeline" });
   const files = () =>
     Promise.all(

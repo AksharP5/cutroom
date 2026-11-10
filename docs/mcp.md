@@ -12,6 +12,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `annotation_add`, `annotation_update`, `annotation_remove` | Add a new timed note, edit its content, or remove an unsent note.  |
 | `review_list`, `review_add`                                | Read the review queue or add a queued request.                     |
 | `review_claim`, `review_complete`, `review_block`          | Start, finish, or ask a question about a queued note.              |
+| `review_reorder`                                           | Move a note before another, or to the end, for the owner.          |
 | `review_withdraw`                                          | Withdraw a note the owner's newer message cancels.                 |
 | `review_accept`, `review_send_back`, `review_reply`        | Act for the owner on done or blocked notes (outside clients only). |
 | `review_restore`, `review_release`                         | Re-queue a withdrawn note or a stuck claim.                        |
@@ -21,7 +22,9 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
 | `timeline_view`                                            | Render one timeline frame as an image.                             |
 
-Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected.
+Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
+
+`source_write` only edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
 
 ## Timeline
 
@@ -50,3 +53,7 @@ Each message from Cutroom's agent panel includes a digest of unfinished notes an
 Claim a note before working on it, then complete it with a short note or block it with a question. Claim and complete also accept new notes, so an outside client can work them directly. To claim a blocked note the owner answered in a message, pass that answer; it is saved on the note. `review_complete` records the latest history entry unless you pass a `revision`. A claim lasts for the current Cutroom run, or for the server's lifetime when made by an outside client; unfinished notes then return to the queue. An outside client acts as the owner's delegate: it may also accept, send back, answer, restore, and release notes, and each of those is recorded as an outside agent. Cutroom's own agent may release its claim but cannot accept, send back, answer, or restore its own work. Once sent, a note cannot be edited with `annotation_update` or removed with `annotation_remove`; withdraw it instead. If `history_undo` or `history_redo` removes or changes a sent note's content, the request becomes withdrawn and is credited to you.
 
 MCP mutations use the same server commands as the interface. Edits to project files and note content appear in its undo history; review status lives outside it. File watchers update the visible preview and the Review panel.
+
+`review_reorder` takes `noteId` and `beforeId`. Set `beforeId` to another unfinished note or `null` for the end. This changes the saved owner order used by Review, note numbers, and the next agent digest. Cutroom's own agent cannot reorder; outside clients may act for the owner.
+
+Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the run has several claimed notes. It must name a note claimed by that run. With one claimed note it is automatic; ambiguous edits are refused before writing, so accepting one note never accepts another note's clips.

@@ -293,6 +293,11 @@ export const ReviewItemSchema = NoteContentSchema.extend(
 );
 export type ReviewItem = z.infer<typeof ReviewItemSchema>;
 
+export const ReviewReorderSchema = z.object({
+  noteId: z.string().min(1),
+  beforeId: z.string().min(1).nullable(),
+});
+
 export const ReviewAddSchema = z.object({
   body: z.string().trim().min(1).max(20_000),
   time: z.number().finite().nonnegative().default(0),

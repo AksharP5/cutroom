@@ -1,3 +1,4 @@
+import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -20,6 +21,7 @@ import {
   HumanReviewActionSchema,
   ReviewAddSchema,
   NoteContentSchema,
+  ReviewReorderSchema,
 } from "../../shared/review";
 import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
@@ -28,7 +30,8 @@ import type { TranscriptService } from "../transcript/service";
 import { listMedia } from "./media";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
-import { projectPath, readSource } from "./store";
+import { readSource } from "./store";
+import { projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 
 export function parseInput<T extends z.ZodType>(
@@ -53,6 +56,8 @@ export function createProjectRoutes(
   transcripts: TranscriptService = createTranscriptService(store),
 ) {
   const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
+  api.use("/projects", projectMutationGuard(reviews));
   api.get("/projects", async (c) => c.json({ projects: await store.list() }));
   api.post("/projects", async (c) =>
     c.json(
@@ -112,27 +117,36 @@ export function createProjectRoutes(
   api.put("/projects/:id/source", async (c) => {
     const project = await store.get(c.req.param("id"));
     const body = parseInput(SourceWriteSchema, await c.req.json());
-    const result = await store.mutate(
+    const token = c.req.header(AGENT_HEADER);
+    const result = await reviews.editComposition(
       project,
-      `Edit ${body.path}`,
-      async () => {
-        const source = await readSource(project, body.path);
-        if (source.version !== body.expectedVersion)
-          throw new HttpError(
-            409,
-            "The file changed outside this editor. Refresh before saving.",
-          );
-        applyFileMutations(project.path, [
-          {
-            sourceFile: body.path,
-            absPath: await projectPath(project, body.path),
-            before: source.content,
-            after: body.content,
-            expectedVersion: body.expectedVersion,
+      body.path,
+      token,
+      () =>
+        store.mutate(
+          project,
+          `Edit ${body.path}`,
+          async () => {
+            const source = await readSource(project, body.path);
+            if (source.version !== body.expectedVersion)
+              throw new HttpError(
+                409,
+                "The file changed outside this editor. Refresh before saving.",
+              );
+            applyFileMutations(project.path, [
+              {
+                sourceFile: body.path,
+                absPath: await projectWritePath(project, body.path),
+                before: source.content,
+                after: body.content,
+                expectedVersion: body.expectedVersion,
+              },
+            ]);
+            return readSource(project, body.path);
           },
-        ]);
-        return readSource(project, body.path);
-      },
+          token ? { kind: "agent", name: "Agent" } : undefined,
+        ),
+      body.noteId,
     );
     return c.json(result);
   });
@@ -176,7 +190,28 @@ export function createProjectRoutes(
       201,
     );
   });
+  api.post("/projects/:id/review/changes/accept", async (c) => {
+    if (c.req.header(AGENT_HEADER))
+      throw new HttpError(409, "Only the owner can accept agent changes.");
+    await reviews.acceptChanges(await store.get(c.req.param("id")));
+    return c.json({ ok: true });
+  });
+  api.patch("/projects/:id/review/order", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { noteId, beforeId } = parseInput(
+      ReviewReorderSchema,
+      await c.req.json(),
+    );
+    const token = c.req.header(AGENT_HEADER);
+    const actor: ReviewActor =
+      token === undefined ? { kind: "human" } : reviews.agent(project, token);
+    return c.json({
+      items: await reviews.reorder(project, noteId, beforeId, actor),
+    });
+  });
   api.post("/projects/:id/review/:itemId/human", async (c) => {
+    if (c.req.header(AGENT_HEADER) !== undefined)
+      throw new HttpError(409, "Agents must use the agent review route.");
     const project = await store.get(c.req.param("id"));
     const action = parseInput(HumanReviewActionSchema, await c.req.json());
     return c.json(
@@ -222,18 +257,29 @@ export function createProjectRoutes(
   api.get("/transcription-jobs/:jobId", (c) =>
     c.json(transcripts.getJob(c.req.param("jobId"))),
   );
-  api.delete("/transcription-jobs/:jobId", (c) =>
-    c.json(transcripts.cancel(c.req.param("jobId"))),
-  );
-  api.post("/projects/:id/transcripts/:transcriptId/cuts", async (c) =>
-    c.json(
-      await transcripts.cutWords(
-        await store.get(c.req.param("id")),
-        c.req.param("transcriptId"),
-        parseInput(CutWordsSchema, await c.req.json()),
+  api.delete("/transcription-jobs/:jobId", (c) => {
+    const job = transcripts.getJob(c.req.param("jobId"));
+    reviews.authorize(c.req.header(AGENT_HEADER), job.projectId);
+    return c.json(transcripts.cancel(job.id));
+  });
+  api.post("/projects/:id/transcripts/:transcriptId/cuts", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const transcriptId = c.req.param("transcriptId");
+    const input = parseInput(CutWordsSchema, await c.req.json());
+    const transcript = (await store.document(project)).transcripts.find(
+      (item) => item.id === transcriptId,
+    );
+    if (!transcript) throw new HttpError(404, "Transcript not found.");
+    return c.json(
+      await reviews.editComposition(
+        project,
+        transcript.sourceFile,
+        c.req.header(AGENT_HEADER),
+        () => transcripts.cutWords(project, transcriptId, input),
+        input.noteId,
       ),
-    ),
-  );
+    );
+  });
   api.get("/projects/:id/history", async (c) => {
     const history = await store.history(await store.get(c.req.param("id")));
     return c.json({

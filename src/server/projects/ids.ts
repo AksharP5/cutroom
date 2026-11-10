@@ -3,9 +3,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import type { Project } from "../../shared/project";
-import { isMissing, projectPath } from "./store";
+import { isMissing } from "./store";
+import { projectStatePath } from "./path";
 
-const LEDGER_PATH = ".cutroom/ids.json";
+export const LEDGER_PATH = ".cutroom/ids.json";
 const LedgerSchema = z.object({ ids: z.array(z.string()) });
 
 /**
@@ -13,7 +14,7 @@ const LedgerSchema = z.object({ ids: z.array(z.string()) });
  * so a clip that was undone can come back; no other clip may take its id in the meantime.
  */
 export async function usedClipIds(project: Project): Promise<Set<string>> {
-  const raw = await projectPath(project, LEDGER_PATH, true)
+  const raw = await projectStatePath(project, LEDGER_PATH, true)
     .then((path) => readFile(path, "utf8"))
     .catch((error: unknown) => {
       if (isMissing(error)) return null;
@@ -44,10 +45,10 @@ export async function recordClipIds(project: Project, ids: Iterable<string>) {
   const before = used.size;
   for (const id of ids) used.add(id);
   if (used.size === before) return;
-  await mkdir(await projectPath(project, ".cutroom", true), {
+  await mkdir(await projectStatePath(project, ".cutroom", true), {
     recursive: true,
   });
-  const path = await projectPath(project, LEDGER_PATH, true);
+  const path = await projectStatePath(project, LEDGER_PATH, true);
   const temporary = `${path}.${randomUUID()}.tmp`;
   await writeFile(
     temporary,

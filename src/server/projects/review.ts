@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ProjectHistory } from "@hyperframes/studio-server";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   AnnotationInputSchema,
@@ -29,9 +29,23 @@ import type {
 import { HttpError } from "../../shared/errors";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
+import { clipVersions } from "./changes";
+import { projectStatePath, projectWritePath } from "./path";
+import { posix, relative, sep } from "node:path";
+import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
+  changes: z
+    .array(
+      z.object({
+        composition: z.string(),
+        clipId: z.string(),
+        signature: z.string(),
+        noteIds: z.array(z.string()),
+      }),
+    )
+    .default([]),
   items: z.array(
     ReviewStateSchema.extend({
       id: z.string(),
@@ -120,13 +134,13 @@ export function createReviewService(store: ProjectStore) {
 
   const readState = async (project: Project): Promise<ReviewFile> => {
     // A missing `.cutroom` folder means no review state has been saved yet.
-    const raw = await projectPath(project, REVIEW_STATE_PATH, true)
+    const raw = await projectStatePath(project, REVIEW_STATE_PATH, true)
       .then((path) => readFile(path, "utf8"))
       .catch((error: unknown) => {
         if (isMissing(error)) return null;
         throw error;
       });
-    if (raw === null) return { schemaVersion: 1, items: [] };
+    if (raw === null) return { schemaVersion: 1, items: [], changes: [] };
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -139,10 +153,10 @@ export function createReviewService(store: ProjectStore) {
   };
 
   const writeState = async (project: Project, state: ReviewFile) => {
-    await mkdir(await projectPath(project, ".cutroom", true), {
+    await mkdir(await projectStatePath(project, ".cutroom", true), {
       recursive: true,
     });
-    const path = await projectPath(project, REVIEW_STATE_PATH, true);
+    const path = await projectStatePath(project, REVIEW_STATE_PATH, true);
     const temporary = `${path}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
       mode: 0o600,
@@ -239,6 +253,14 @@ export function createReviewService(store: ProjectStore) {
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
+      changes: state.changes.filter(
+        (change) =>
+          !change.noteIds.length ||
+          change.noteIds.some(
+            (id) =>
+              next.find((item) => item.id === id)?.review.status !== "accepted",
+          ),
+      ),
       items: [
         ...next.map(({ review, instructions, ...content }) => ({
           id: content.id,
@@ -295,17 +317,133 @@ export function createReviewService(store: ProjectStore) {
    * The agent behind a request. A conversation's token only acts on the project whose run it
    * belongs to, while that run is active; anything else is refused rather than guessed.
    */
-  const agent = (project: Project, token: string | undefined): ReviewActor => {
-    if (token === undefined || token === "external")
-      return { kind: "agent", turn: external };
-    const turn = turns.get(project.id);
+  const authorize = (token: string | undefined, projectId?: string) => {
+    if (token === undefined || token === "external") return;
+    const turn =
+      projectId === undefined
+        ? [...turns.values()].find(
+            (turn) => turn.kind === "message" && turn.token === token,
+          )
+        : turns.get(projectId);
     if (turn?.kind !== "message" || turn.token !== token)
       throw new HttpError(409, "No Cutroom run is active for this project.");
-    return { kind: "agent", turn };
+    return turn;
   };
+  const agent = (
+    project: Project,
+    token: string | undefined,
+  ): Extract<ReviewActor, { kind: "agent" }> => ({
+    kind: "agent",
+    turn: authorize(token, project.id) ?? external,
+  });
 
   return {
     agent,
+    authorize,
+    /** Source and timeline edits share the review queue, so accepting cannot race attribution. */
+    editComposition: <T>(
+      project: Project,
+      composition: string,
+      token: string | undefined,
+      work: () => Promise<T>,
+      noteId?: string,
+    ) =>
+      serialize(project, async () => {
+        authorize(token, project.id);
+        await projectWritePath(project, composition);
+        composition = posix.normalize(composition.replaceAll("\\", "/"));
+        if (!composition.endsWith(".html")) return work();
+        let items: ReviewItem[];
+        let before: Map<string, string>;
+        try {
+          items = await reconcile(project);
+          before = await clipVersions(store, project, composition);
+        } catch (error) {
+          // Broken review metadata cannot stop repairing source or using the timeline.
+          if (
+            error instanceof ReviewFileError ||
+            error instanceof ProjectDocumentError
+          )
+            return work();
+          throw error;
+        }
+        const actor = token === undefined ? undefined : agent(project, token);
+        const claimed = actor
+          ? items.filter(
+              (item) =>
+                item.review.status === "working" &&
+                item.review.turnId === actor.turn.id,
+            )
+          : [];
+        if (noteId !== undefined && !claimed.some((item) => item.id === noteId))
+          throw new HttpError(
+            409,
+            "The edit's note must be claimed by this run.",
+          );
+        if (claimed.length > 1 && noteId === undefined)
+          throw new HttpError(
+            409,
+            "Pass noteId to identify which claimed note this edit addresses.",
+          );
+        const noteIds =
+          noteId === undefined ? claimed.map((item) => item.id) : [noteId];
+        const result = await work();
+        const after = await clipVersions(store, project, composition);
+        const changed = new Set(
+          [...before.keys(), ...after.keys()].filter(
+            (id) => before.get(id) !== after.get(id),
+          ),
+        );
+        if (!changed.size) return result;
+        const state = await readState(project);
+        state.changes = state.changes.filter(
+          (change) =>
+            change.composition !== composition || !changed.has(change.clipId),
+        );
+        if (actor) {
+          for (const id of changed) {
+            const signature = after.get(id);
+            if (signature)
+              state.changes.push({
+                composition,
+                clipId: id,
+                signature,
+                noteIds,
+              });
+          }
+        }
+        await writeState(project, state);
+        return result;
+      }),
+    changedClips: (project: Project, composition: string) =>
+      serialize(project, async () => {
+        composition = posix.normalize(composition.replaceAll("\\", "/"));
+        try {
+          await reconcile(project);
+        } catch (error) {
+          if (error instanceof ReviewFileError) return [];
+          throw error;
+        }
+        const state = await readState(project);
+        if (!state.changes.some((change) => change.composition === composition))
+          return [];
+        const versions = await clipVersions(store, project, composition);
+        const changes = state.changes.filter(
+          (change) =>
+            change.composition !== composition ||
+            versions.get(change.clipId) === change.signature,
+        );
+        if (changes.length !== state.changes.length)
+          await writeState(project, { ...state, changes });
+        return changes
+          .filter((change) => change.composition === composition)
+          .map((change) => change.clipId);
+      }),
+    acceptChanges: (project: Project) =>
+      serialize(project, async () => {
+        const state = await readState(project);
+        await writeState(project, { ...state, changes: [] });
+      }),
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
     list: (project: Project) => serialize(project, () => reconcile(project)),
     /** An attachment may arrive after the note was sent, accepted, or undone. It changes no request. */
@@ -361,6 +499,33 @@ export function createReviewService(store: ProjectStore) {
       });
       return find(items, id);
     },
+    reorder: (
+      project: Project,
+      noteId: string,
+      beforeId: string | null,
+      actor: ReviewActor,
+    ) =>
+      update(project, (items) => {
+        if (actor.kind === "agent" && actor.turn.kind !== "external")
+          throw new HttpError(409, "Only the owner can reorder the queue.");
+        const item = find(items, noteId);
+        if (!unfinishedStatuses.some((status) => status === item.review.status))
+          throw new HttpError(409, "Only unfinished notes can be reordered.");
+        if (noteId === beforeId) return items;
+        if (
+          beforeId !== null &&
+          !unfinishedStatuses.some(
+            (status) => status === find(items, beforeId).review.status,
+          )
+        )
+          throw new HttpError(409, "Move before an unfinished note.");
+        const rest = items.filter((candidate) => candidate.id !== noteId);
+        const at =
+          beforeId === null
+            ? rest.length
+            : rest.findIndex((candidate) => candidate.id === beforeId);
+        return [...rest.slice(0, at), item, ...rest.slice(at)];
+      }),
     /** An agent's new request skips the draft state: it is already part of the work queue. */
     add: (
       project: Project,
@@ -414,22 +579,78 @@ export function createReviewService(store: ProjectStore) {
       const unlessUnreadable = (error: unknown) => {
         if (!(error instanceof ProjectDocumentError)) throw error;
       };
-      const guarded = <T>(how: string, change: () => Promise<T>) =>
+      const guarded = <T>(
+        how: string,
+        paths: () => string[],
+        change: () => Promise<T>,
+      ) =>
         serialize(project, async () => {
           await reconcile(project).catch(unlessUnreadable);
+          await history.checkpoint();
+          for (const path of paths()) {
+            // History also owns these fixed app sidecars, never native agent configuration.
+            if (
+              [
+                ...STUDIO_SIGNATURE_MANIFEST_PATHS,
+                ".media/manifest.jsonl",
+              ].includes(path)
+            ) {
+              const absolute = await projectPath(project, path, true);
+              if (
+                relative(await realpath(project.path), absolute)
+                  .split(sep)
+                  .join("/") === path
+              )
+                continue;
+            }
+            await projectWritePath(project, path, {
+              sourceOnly: false,
+              allowMissing: true,
+            });
+          }
           const result = await change();
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });
       const overrides: Partial<ProjectHistory> = {
-        step: (direction, ...rest) =>
-          guarded(direction === "back" ? "by undo" : "by redo", () =>
-            history.step(direction, ...rest),
+        step: (direction, who, options) =>
+          guarded(
+            direction === "back" ? "by undo" : "by redo",
+            () =>
+              history.next(direction, who)?.files.map((file) => file.path) ??
+              [],
+            () => history.step(direction, who, options),
           ),
-        undo: (...args) => guarded("by undo", () => history.undo(...args)),
-        restore: (...args) =>
-          guarded("by restoring an earlier version", () =>
-            history.restore(...args),
+        undo: (id, options) =>
+          guarded(
+            "by undo",
+            () => {
+              const entries = history.list();
+              const index = entries.findIndex((entry) => entry.id === id);
+              if (index < 0) return [];
+              const selected =
+                options.mode === "back-to-before"
+                  ? entries.slice(index)
+                  : [entries[index]!];
+              return selected.flatMap((entry) =>
+                entry.files.map((file) => file.path),
+              );
+            },
+            () => history.undo(id, options),
+          ),
+        restore: (point, who, options) =>
+          guarded(
+            "by restoring an earlier version",
+            () => {
+              const target = history.peek(point);
+              if (!target) return [];
+              const current =
+                history.peek(history.list().at(-1)?.id ?? "start") ?? {};
+              return [
+                ...new Set([...Object.keys(target), ...Object.keys(current)]),
+              ].filter((path) => target[path] !== current[path]);
+            },
+            () => history.restore(point, who, options),
           ),
       };
       return new Proxy(history, {

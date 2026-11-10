@@ -1,3 +1,6 @@
+import { projectMutationGuard } from "../projects/authorization";
+import { AGENT_HEADER } from "../../shared/review";
+import type { ReviewService } from "../projects/review";
 import { posix } from "node:path";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -22,7 +25,8 @@ import type {
 } from "../../shared/timeline/schema";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
-import { projectPath, readSource } from "../projects/store";
+import { readSource } from "../projects/store";
+import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
@@ -55,7 +59,10 @@ const refused = (c: Context, error: unknown) => {
   );
 };
 
-export function createTimelineRoutes(store: ProjectStore) {
+export function createTimelineRoutes(
+  store: ProjectStore,
+  reviews: ReviewService,
+) {
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -141,7 +148,7 @@ export function createTimelineRoutes(store: ProjectStore) {
         : [
             {
               sourceFile: composition,
-              absPath: await projectPath(project, composition),
+              absPath: await projectWritePath(project, composition),
               before: current.source.content,
               after: html,
               expectedVersion: current.source.version,
@@ -157,7 +164,7 @@ export function createTimelineRoutes(store: ProjectStore) {
       if (declared !== entry.content)
         files.push({
           sourceFile: "index.html",
-          absPath: await projectPath(project, "index.html"),
+          absPath: await projectWritePath(project, "index.html"),
           before: entry.content,
           after: declared,
           expectedVersion: entry.version,
@@ -181,6 +188,7 @@ export function createTimelineRoutes(store: ProjectStore) {
   };
 
   const api = new Hono();
+  api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.get("/projects/:id/timeline", async (c) => {
     const project = await store.get(c.req.param("id"));
     const composition = canonical(c.req.query("composition") ?? "index.html");
@@ -190,6 +198,7 @@ export function createTimelineRoutes(store: ProjectStore) {
         composition,
         revision,
         timeline: parsed.timeline,
+        agentChanges: await reviews.changedClips(project, composition),
       } satisfies TimelineView);
     } catch (error) {
       return refused(c, error);
@@ -200,9 +209,24 @@ export function createTimelineRoutes(store: ProjectStore) {
     const input = parseInput(CommandBatchSchema, await c.req.json());
     const batch = { ...input, composition: canonical(input.composition) };
     try {
-      return c.json(
-        await store.mutate(project, batch.label, () => edit(project, batch)),
-      );
+      return c.json({
+        ...(await reviews.editComposition(
+          project,
+          batch.composition,
+          c.req.header(AGENT_HEADER),
+          () =>
+            store.mutate(
+              project,
+              batch.label,
+              () => edit(project, batch),
+              c.req.header(AGENT_HEADER)
+                ? { kind: "agent", name: "Agent" }
+                : undefined,
+            ),
+          batch.noteId,
+        )),
+        agentChanges: await reviews.changedClips(project, batch.composition),
+      });
     } catch (error) {
       return refused(c, error);
     }

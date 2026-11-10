@@ -49,6 +49,13 @@ const targetKeys = [
   "file_path",
   "notebook_path",
   "path",
+  "mediaPath",
+  "sourceFile",
+  "composition",
+  "compositionPath",
+  "elementId",
+  "transcriptId",
+  "annotationId",
   "command",
   "pattern",
   "url",
@@ -70,10 +77,7 @@ export function toolTarget(
     const value: unknown = Reflect.get(input, key);
     if (typeof value !== "string" || !value.trim()) continue;
     const line = value.trim().split("\n", 1)[0] ?? "";
-    return (line === root ? "." : line.replaceAll(`${root}/`, "")).slice(
-      0,
-      240,
-    );
+    return line === root ? "." : line.replaceAll(`${root}/`, "");
   }
   return undefined;
 }
@@ -95,6 +99,7 @@ export const agentRequestSchema = z.object({
   /** What the tool would act on, relative to the project, as on tool rows. */
   target: z.string().optional(),
   questions: z.array(agentQuestionSchema).optional(),
+  canAllowCutroomEdits: z.boolean().optional(),
 });
 export type AgentRequest = z.infer<typeof agentRequestSchema>;
 
@@ -160,9 +165,14 @@ export const agentTurnSchema = z
   );
 export type AgentTurn = z.infer<typeof agentTurnSchema>;
 
+export const agentPermissionsSchema = z.object({
+  alwaysAllowCutroomEdits: z.boolean(),
+});
+
 export const agentResponseSchema = z.object({
   requestId: z.string().min(1),
   decision: z.enum(["allow", "deny"]),
+  alwaysAllowCutroomEdits: z.boolean().optional(),
   answers: z
     .record(z.string(), z.union([z.string(), z.array(z.string())]))
     .optional(),
