@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
+import { clipFades } from "../src/shared/timeline/mix";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
 import {
@@ -104,18 +105,41 @@ const drag = (
   playhead = 0,
 ) => beginDrag(timeline, intent, new Set(selection), origin, playhead);
 
-test("fade drags start at the effective handle and edit only that authored edge", () => {
+test("fade drags on a clip shorter than its fades keep both handles where they are drawn", () => {
   const timeline = sequence();
+  // 60/180 authored on 61 frames: the runtime scales them to 15.25 and 45.75.
   timeline.clips = [clip("music", 2, 0, 61, { fadeIn: 60, fadeOut: 180 })];
-  const preview = dragPreview(
-    drag({ kind: "fade", clipId: "music", edge: "fadeOut" }, [], 15, timeline),
-    { frame: 20, track: 2, reach: 0 },
+  const fadeOut = drag(
+    { kind: "fade", clipId: "music", edge: "fadeOut" },
+    [],
+    15,
+    timeline,
   );
+  const preview = dragPreview(fadeOut, { frame: 20, track: 2, reach: 0 });
   expect(preview.valid).toBe(true);
-  expect(preview.commands).toEqual([
-    { type: "setClip", clipId: "music", fadeOut: 41 },
-  ]);
-  expect(preview.shown.clips[0]).toMatchObject({ fadeIn: 60, fadeOut: 41 });
+  expect(clipFades(preview.shown.clips[0]!)).toEqual({
+    fadeIn: 15,
+    fadeOut: 41,
+  });
+  // Dragging back to where the handle started writes nothing, so authored lengths survive.
+  expect(
+    dragPreview(fadeOut, { frame: 15, track: 2, reach: 0 }).commands,
+  ).toEqual([]);
+  const fadeIn = drag(
+    { kind: "fade", clipId: "music", edge: "fadeIn" },
+    [],
+    15,
+    timeline,
+  );
+  expect(
+    clipFades(
+      dragPreview(fadeIn, { frame: 10, track: 2, reach: 0 }).shown.clips[0]!,
+    ),
+  ).toEqual({ fadeIn: 10, fadeOut: 46 });
+  // The handles already meet, and they never cross.
+  expect(
+    dragPreview(fadeIn, { frame: 40, track: 2, reach: 0 }).commands,
+  ).toEqual([]);
 });
 
 test("frozen edit anchors include linked partners and ripple followers but ignore unrelated clips", () => {

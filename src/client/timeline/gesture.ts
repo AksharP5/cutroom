@@ -404,19 +404,33 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
     }
     case "fade": {
       const clip = find(intent.clipId);
+      const effective = clipFades(clip);
+      const other = intent.edge === "fadeIn" ? "fadeOut" : "fadeIn";
+      const kept = Math.round(effective[other]);
+      const start = Math.round(effective[intent.edge]);
+      // The handles meet but never cross, so the runtime never rescales them mid-drag.
       const length = Math.max(
         0,
         Math.min(
-          clip.duration,
-          Math.round(clipFades(clip)[intent.edge]) +
-            (intent.edge === "fadeIn" ? travel : -travel),
+          clip.duration - kept,
+          start + (intent.edge === "fadeIn" ? travel : -travel),
         ),
       );
+      // Fades longer than the clip are scaled by the runtime. Committing the other edge's
+      // drawn length keeps that handle in place; an unchanged handle keeps authored lengths.
+      const overlong = clip.fadeIn + clip.fadeOut > clip.duration;
       return edit(
         intent.edge === "fadeIn" ? "Fade in" : "Fade out",
-        length === clip[intent.edge]
+        length === start
           ? []
-          : [{ type: "setClip", clipId: clip.id, [intent.edge]: length }],
+          : [
+              {
+                type: "setClip",
+                clipId: clip.id,
+                [intent.edge]: length,
+                ...(overlong && { [other]: kept }),
+              },
+            ],
         length,
         null,
       );
