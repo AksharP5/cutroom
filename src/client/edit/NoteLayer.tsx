@@ -9,7 +9,7 @@ import type {
 import type { ReviewItem } from "../../shared/review";
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
-import { comboOf } from "../keymap";
+import { actionFor, comboOf } from "../keymap";
 import { noteNumbers } from "../review";
 import { formatTimecode } from "./timecode";
 import {
@@ -204,9 +204,8 @@ export function NoteLayer({
         const end = input.selectionEnd;
         input.setRangeText(event.key, start, end, "end");
         dispatchNote(projectId, { type: "write", body: input.value });
-      } else if (event.key === "Enter") {
+      } else if (actionFor(event)) {
         field.current?.focus({ preventScroll: true });
-        return;
       } else return;
       event.preventDefault();
       event.stopImmediatePropagation();

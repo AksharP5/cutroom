@@ -191,8 +191,12 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   await page.mouse.click(spot.x, spot.y);
   await page.keyboard.type("Hold this longer");
   await page.getByRole("button", { name: /^Select/ }).click();
-  await page.keyboard.press("Shift+ArrowRight");
-  await page.keyboard.press("Shift+ArrowRight");
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).getPropertyValue("--ppf")),
+    );
+  await page.locator(".tl-ruler").click({ position: { x: 90 * ppf, y: 15 } });
   await page.getByRole("button", { name: "Set end" }).click();
   expect(
     await page.locator(".edit-note-popover").evaluate((element) => {
@@ -266,6 +270,18 @@ test("ruler scrubbing returns focus to an open note and exit io never edits the 
   await page.getByRole("button", { name: /^Select/ }).click();
   await page.keyboard.type(" x i o");
   await expect(field).toHaveValue("Keep exit io x i o");
+  // Selection is allowed with the mouse; Delete and modified shortcuts must still stay local.
+  await page
+    .locator('[data-clip="headline"]')
+    .click({ position: { x: 60, y: 20 } });
+  await page.keyboard.press("Delete");
+  await expect(field).toBeFocused();
+  await page.getByRole("button", { name: /^Select/ }).click();
+  await page.keyboard.press("Control+Backslash");
+  await expect(field).toBeFocused();
+  expect(
+    await (await page.request.get(`${project.base}/timeline`)).json(),
+  ).toEqual(before);
 });
 
 async function quickCapture(page: Page, projectId: string) {
