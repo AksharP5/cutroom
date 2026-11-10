@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { mediaSettings } from "./settings";
+import { mediaSettings } from "../../shared/media";
 
 export const MediaKindSchema = z.enum(["probe", "peaks", "filmstrip", "frame"]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;

@@ -3,7 +3,8 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { z } from "zod";
 import { encodePeaks, peakSampleRate } from "./peaks";
 import { FilmstripSchema, MediaInfoSchema, MediaTaskSchema } from "./protocol";
-import { mediaSettings, scaleFilter, tileWidth } from "./settings";
+import { mediaSettings } from "../../shared/media";
+import { scaleFilter, tileWidth } from "./settings";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
 let cancelled = false;
@@ -225,7 +226,7 @@ try {
       let count = (await readdir(join(task.directory, "frames"))).length;
       maxGap = Math.max(maxGap, video.duration - lastKey);
       if (
-        maxGap > mediaSettings.filmstripInterval * 2 ||
+        maxGap > mediaSettings.filmstripInterval ||
         count < Math.ceil(video.duration / mediaSettings.filmstripInterval)
       ) {
         await rm(join(task.directory, "frames"), { recursive: true });

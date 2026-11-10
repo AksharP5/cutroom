@@ -24,6 +24,7 @@ type MediaResult = {
 };
 type MediaJob = {
   kind: MediaKind;
+  sequence: number;
   machine: ReturnType<typeof createJobMachine>;
   run: () => Promise<void>;
   cancel?: () => void;
@@ -50,11 +51,18 @@ export function createMediaService(
   const running = new Map<MediaJob, Promise<void>>();
   const cleanupErrors: Error[] = [];
   let closing = false;
+  let sequence = 0;
   const removeDirectory =
     options.removeDirectory ??
     ((directory: string) => rm(directory, { recursive: true, force: true }));
   const pump = () => {
-    queue.sort((a, b) => priority[a.kind] - priority[b.kind]);
+    queue.sort(
+      (a, b) =>
+        priority[a.kind] - priority[b.kind] ||
+        (a.kind === "frame"
+          ? b.sequence - a.sequence
+          : a.sequence - b.sequence),
+    );
     while (!closing && running.size < 2 && queue.length) {
       // An overview may never occupy the slot needed by peaks or visible frame requests.
       const overviewRunning = [...running.keys()].some(
@@ -81,6 +89,7 @@ export function createMediaService(
   ): Promise<MediaResult> => {
     if (closing)
       throw new HttpError(503, "The media service is shutting down.");
+    const requestSequence = sequence++;
     const source = await projectPath(project, path);
     const identity = await fingerprint(source);
     let info: z.infer<typeof MediaInfoSchema> | undefined;
@@ -89,6 +98,10 @@ export function createMediaService(
       const probe = await request(project, path, "probe");
       if (!probe.artifact) return probe;
       info = MediaInfoSchema.parse(await Bun.file(probe.artifact).json());
+      if (kind === "peaks" && !info.channels)
+        throw new HttpError(422, "The media has no audio stream.");
+      if (kind === "filmstrip" && !info.video)
+        throw new HttpError(422, "The media has no video stream.");
       if (kind === "frame") {
         if (!info.video)
           throw new HttpError(422, "The media has no video stream.");
@@ -99,7 +112,7 @@ export function createMediaService(
       }
     }
     const key = createHash("sha256")
-      .update(`media-v3\0${kind}\0${identity}\0${frame ?? ""}`)
+      .update(`media-v4\0${kind}\0${identity}\0${frame ?? ""}`)
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
@@ -141,6 +154,7 @@ export function createMediaService(
     const machine = createJobMachine();
     const job: MediaJob = {
       kind,
+      sequence: requestSequence,
       machine,
       run: async () => {
         let scratch: string | undefined;
@@ -196,7 +210,7 @@ export function createMediaService(
             });
           else machine.transition({ status: "done", progress: 1 });
           if (machine.state.status === "failed")
-            job.retryAt = Date.now() + (options.failureTtlMs ?? 1000);
+            job.retryAt = Date.now() + (options.failureTtlMs ?? 30_000);
           else jobs.delete(directory);
         }
       },

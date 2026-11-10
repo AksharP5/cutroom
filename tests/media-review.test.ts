@@ -431,3 +431,74 @@ test("a two-hour cached waveform serves a kilobyte overview without sending base
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "three-second GOPs seek tiles at 2, 8, and 14 seconds",
+  async () => {
+    const f = await fixture();
+    try {
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "color=red:size=160x90:rate=30:duration=20",
+        "-vf",
+        "drawbox=c=blue:t=fill:enable='between(t,1.5,2.5)+between(t,7.5,8.5)+between(t,13.5,14.5)'",
+        "-c:v",
+        "libx264",
+        "-g",
+        "90",
+        "-keyint_min",
+        "90",
+        "-sc_threshold",
+        "0",
+        "-threads",
+        "1",
+        join(f.project.path, "three-second-gop.mp4"),
+      ]);
+      const response = await ready(() =>
+        f.request(`${f.url}/filmstrip?path=three-second-gop.mp4`),
+      );
+      expect(response.status).toBe(200);
+      const metadata = z
+        .object({
+          count: z.number(),
+          sheets: z.array(z.object({ spriteUrl: z.string() })),
+        })
+        .parse(await response.json());
+      expect(metadata.count).toBe(10);
+      const sprite = join(f.directory, "three-second-gop.jpg");
+      await Bun.write(
+        sprite,
+        await f.app.request(metadata.sheets[0]!.spriteUrl),
+      );
+      const decoder = Bun.spawn(
+        [
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          sprite,
+          "-vf",
+          "crop=1600:2:0:0,format=rgb24",
+          "-frames:v",
+          "1",
+          "-f",
+          "rawvideo",
+          "pipe:1",
+        ],
+        { stdout: "pipe", stderr: "ignore" },
+      );
+      const pixels = new Uint8Array(
+        await new Response(decoder.stdout).arrayBuffer(),
+      );
+      expect(await decoder.exited).toBe(0);
+      for (const x of [160, 640, 1120]) {
+        expect(pixels[x * 3 + 2]).toBeGreaterThan(230);
+        expect(pixels[x * 3]).toBeLessThan(20);
+      }
+    } finally {
+      await f.close();
+    }
+  },
+);

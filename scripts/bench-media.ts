@@ -5,7 +5,7 @@ import { chromium } from "@playwright/test";
 import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { FilmstripSchema } from "../src/server/media/protocol";
-import { mediaSettings, peakLevels } from "../src/server/media/settings";
+import { mediaSettings, peakLevels } from "../src/shared/media";
 
 const output = await mkdtemp(join(tmpdir(), "cutroom-media-bench-"));
 const runtime = await createApp({

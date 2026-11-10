@@ -1,4 +1,4 @@
-import { mediaSettings, peakLevels } from "./settings";
+import { mediaSettings, peakLevels } from "../../shared/media";
 
 export const peakSampleRate = mediaSettings.peakSampleRate;
 export const peakBucketSamples = mediaSettings.peakBucketSamples;

@@ -355,14 +355,16 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "sine=duration=0.2",
         join(project.path, "audio.wav"),
       ]);
-      let audio = await media.request(project, "audio.wav", "filmstrip");
-      while (audio.state.status === "running") {
+      let probe = await media.request(project, "audio.wav", "probe");
+      while (!probe.artifact) {
         if (performance.now() > deadline)
-          throw new Error("The audio-only job did not fail.");
+          throw new Error("The audio probe did not finish.");
         await Bun.sleep(10);
-        audio = await media.request(project, "audio.wav", "filmstrip");
+        probe = await media.request(project, "audio.wav", "probe");
       }
-      expect(audio.state.status).toBe("failed");
+      await expect(
+        media.request(project, "audio.wav", "filmstrip"),
+      ).rejects.toThrow("no video stream");
       expect(
         (await readdir(join(project.path, ".cutroom/cache"))).filter((name) =>
           name.startsWith(".media-"),

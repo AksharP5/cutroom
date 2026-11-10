@@ -388,6 +388,7 @@ export function createTranscriptService(
       const run = (async () => {
         let scratch: string | undefined;
         let failure: string | undefined;
+        let cleanupFailure: string | undefined;
         try {
           scratch = await mkdtemp(join(tmpdir(), "cutroom-transcribe-"));
           controller.signal.throwIfAborted();
@@ -453,12 +454,19 @@ export function createTranscriptService(
           try {
             if (scratch) await rm(scratch, { recursive: true, force: true });
           } catch (error) {
-            failure = error instanceof Error ? error.message : String(error);
-            job.error = failure;
+            cleanupFailure =
+              error instanceof Error ? error.message : String(error);
+            job.error = cleanupFailure;
             job.message = "Transcription cleanup failed";
           }
           controllers.delete(job.id);
-          if (machine.state.status === "cancelling")
+          if (cleanupFailure)
+            machine.transition({
+              status: "failed",
+              progress: machine.state.progress,
+              error: cleanupFailure,
+            });
+          else if (machine.state.status === "cancelling")
             machine.transition({
               status: "cancelled",
               progress: machine.state.progress,
