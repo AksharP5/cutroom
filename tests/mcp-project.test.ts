@@ -7,6 +7,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { createProjectRoutes } from "../src/server/projects/routes";
+import { createReviewService } from "../src/server/projects/review";
 import { createTranscriptService } from "../src/server/transcript/service";
 import {
   ProjectSchema,
@@ -174,7 +175,11 @@ test("MCP transcription status retains the legacy job shape through successful a
   });
   const api = new Hono().route(
     "/api/cutroom",
-    createProjectRoutes(fixture.store, service),
+    createProjectRoutes(
+      fixture.store,
+      createReviewService(fixture.store),
+      service,
+    ),
   );
   const handler = createMcpHttpHandler({
     fetch: (url, init) => api.request(url, init),
