@@ -794,6 +794,11 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         );
         expect(made.stderr.toString()).toBe("");
       }
+      const voice = Bun.spawnSync(
+        ["ffmpeg", "-v", "error", ...tone, join(path, "voice.wav")],
+        { stderr: "pipe" },
+      );
+      expect(voice.exitCode).toBe(0);
       const { revision } = result.parse(
         await client.callTool({
           name: "timeline_read",
@@ -812,7 +817,28 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
           arguments: {
             projectId: id,
             expectedRevision: revision,
-            commands: [insert("silent.mp4", 0), insert("sound.mp4", 10)],
+            commands: [
+              {
+                type: "setTrack",
+                index: 4,
+                kind: "audio",
+                name: "Voice",
+                solo: true,
+              },
+              {
+                type: "insert",
+                track: 4,
+                at: 0,
+                clip: {
+                  id: "voice",
+                  kind: "audio",
+                  src: "voice.wav",
+                  duration: 30,
+                },
+              },
+              insert("silent.mp4", 0),
+              insert("sound.mp4", 10),
+            ],
           },
         }),
       ).structuredContent.result;
@@ -848,6 +874,8 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       const [html] = await fixture.files();
       expect(html).toMatch(/<video id="silent"[^>]*data-has-audio="false"/);
       expect(html).toMatch(/<video id="sound"[^>]*muted/);
+      expect(pair[1]?.track).not.toBe(4);
+      expect(html).toMatch(/<audio[^>]*src="sound.mp4"[^>]*data-hidden/);
       await fixture.request(`/projects/${id}/history/undo`, "POST");
       expect(await fixture.files()).toEqual(original);
     } finally {
