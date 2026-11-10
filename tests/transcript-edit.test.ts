@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import { ProjectDocumentSchema, TranscriptSchema } from "../src/shared/project";
@@ -944,3 +944,121 @@ test("malformed media URLs do not hide valid footage or escape the import bounda
     await fixture.close();
   }
 });
+
+test("a cancellation arriving after a transcript write commits still reports its successful import", async () => {
+  const fixture = await projectFixture();
+  const entered = gate();
+  const engine = gate();
+  const service = createTranscriptService(fixture.store, {
+    availability: async () => installedWhisper,
+    transcribe: async (options) => {
+      if (!options.dir) throw new Error("Expected a scratch directory.");
+      const transcriptPath = join(options.dir, "words.json");
+      await writeFile(transcriptPath, JSON.stringify(words));
+      entered.release();
+      await engine.waiting;
+      return {
+        kind: "transcribed",
+        engine: "whisper",
+        model: "small.en",
+        detectedLanguage: "en",
+        wordCount: words.length,
+        durationSeconds: 10,
+        speechOnsetSeconds: 2,
+        transcriptPath,
+      };
+    },
+  });
+  try {
+    const project = await fixture.store.create({
+      name: "Committed transcription",
+    });
+    await writeFile(join(project.path, "index.html"), source);
+    await writeFile(join(project.path, "footage.mp4"), "unchanged source");
+    const job = await service.start(project, {
+      mediaPath: "footage.mp4",
+      sourceFile: "index.html",
+      elementId: "footage",
+      language: "en",
+    });
+    await entered.waiting;
+    const writeDocument = fixture.store.writeDocument;
+    fixture.store.writeDocument = async (...args) => {
+      await writeDocument(...args);
+      service.cancel(job.id);
+    };
+    engine.release();
+    const deadline = performance.now() + 3000;
+    while (job.status === "running") {
+      if (performance.now() > deadline)
+        throw new Error("The committed job did not settle.");
+      await Bun.sleep(5);
+    }
+    expect((await fixture.store.document(project)).transcripts).toHaveLength(1);
+    expect(job.status).toBe("complete");
+    expect(job.progress).toBe(1);
+    expect(job.transcriptId).toBeString();
+  } finally {
+    engine.release();
+    await service.dispose();
+    await fixture.close();
+  }
+});
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "cancelled transcription reports failure when read-only scratch cannot be cleaned",
+  async () => {
+    const fixture = await projectFixture();
+    const entered = gate();
+    let scratch: string | undefined;
+    const service = createTranscriptService(fixture.store, {
+      availability: async () => installedWhisper,
+      transcribe: async (options) => {
+        if (!options.dir || !options.signal)
+          throw new Error("Expected cancellable scratch work.");
+        scratch = options.dir;
+        await writeFile(join(scratch, "decoded.wav"), "partial decoded audio");
+        await chmod(scratch, 0o500);
+        const signal = options.signal;
+        return new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+          entered.release();
+        });
+      },
+    });
+    try {
+      const project = await fixture.store.create({
+        name: "Read-only transcription scratch",
+      });
+      await writeFile(join(project.path, "index.html"), source);
+      await writeFile(join(project.path, "footage.mp4"), "source");
+      const job = await service.start(project, {
+        mediaPath: "footage.mp4",
+        sourceFile: "index.html",
+        elementId: "footage",
+        language: "en",
+      });
+      await entered.waiting;
+      service.cancel(job.id);
+      await service.dispose();
+      expect(job.status).toBe("failed");
+      expect(job.message).toBe("Transcription cleanup failed");
+      expect(job.error).toMatch(/EACCES|EPERM/);
+      expect(await readFile(join(scratch!, "decoded.wav"), "utf8")).toBe(
+        "partial decoded audio",
+      );
+      expect((await fixture.store.document(project)).transcripts).toHaveLength(
+        0,
+      );
+    } finally {
+      await service.dispose();
+      if (scratch) {
+        await chmod(scratch, 0o700);
+        await rm(scratch, { recursive: true, force: true });
+      }
+      await fixture.close();
+    }
+  },
+);

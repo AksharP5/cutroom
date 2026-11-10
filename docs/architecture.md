@@ -51,3 +51,52 @@ Local transcription uses an already installed Whisper runtime and complete model
 ## External agents
 
 Both MCP transports forward to the running server. They do not open a second project store or write files independently. The server binds to loopback and rejects foreign browser origins and rebinding hostnames. This endpoint is intended for agents on the same machine, not public network exposure.
+
+## Background jobs and timeline media cache
+
+Render, transcription, waveform, filmstrip, and precise-frame jobs use `src/shared/jobs.ts`. Jobs move from `queued` to `running`, then `done` or `failed`. Cancellation enters `cancelling`, then `cancelled` only after cleanup succeeds. Cleanup failure takes precedence over cancellation and enters `failed`. Render and media cleanup errors also propagate through their cancel/shutdown calls. Running progress uses 0 to 1. The render adapter preserves `rendering` / `complete` and 0 to 100 progress; transcription preserves `running` / `complete` and 0 to 1. Transcription MCP status forwards the same HTTP response; there is no render-status MCP tool.
+
+The migration also fixes main's HTTP render-cancel bug. Upstream assigns `status = "cancelled"` before invoking `cancel()`. Main's old cancel guard then returned without stopping the worker. The adapter now translates that assignment into the cancellation transition, keeps the HTTP status `rendering` during cleanup, and lets the route await cancellation. Cleanup errors return a failure instead of claiming the partial export was removed.
+
+### Media endpoints
+
+- `GET /api/cutroom/projects/:id/media/peaks?path=...` returns the complete binary cache file. Add `level`, `start`, and `end` to stream just one mip level and time range. Times are seconds; end is exclusive. Buckets intersecting the requested range are included. Defaults are level 0, start 0, end of media. A nonexistent level or reversed range returns 400.
+- `GET /api/cutroom/projects/:id/media/filmstrip?path=...` returns version 2 metadata with `interval`, `tileWidth`, `tileHeight`, `count`, `key`, and `sheets`. Each sheet has `index`, `start`, `count`, `columns`, `rows`, and `spriteUrl`. Tile indexes run left to right, then top to bottom, within a sheet. The final row may contain black unused cells.
+- `GET /api/cutroom/projects/:id/media/frame?path=...&time=...` returns a small JPEG at the requested source frame. Time is quantized down to a frame using the probed native frame rate. The cache key includes that frame index, so requests for the same frame share work.
+
+These endpoints return `202 {key, job}` with `Retry-After: 1` and `Cache-Control: no-store` while preparing. Poll the same URL. Shared source probing is itself a queued job; its key may be replaced by the asset job's key on a subsequent poll. Failed jobs return `422 {key, job}` with an error, remain visible for thirty seconds, then permit retry on the next request. Missing audio/video streams are rejected with 422 from the cached probe information, before an asset worker starts. Editing the source changes its fingerprint and permits an immediate retry. Missing FFmpeg or ffprobe returns 503. Source-path responses use private revalidation ETags; matching `If-None-Match` returns 304. Peak ETags include the selected level and bucket range. Key-addressed sheet URLs are private and immutable, with a sheet-specific ETag. No media MCP tools are registered.
+
+### Scheduling and storage
+
+The service runs at most two media worker processes. Frame requests have the highest priority and run newest-first within that priority. Requesting an already queued frame again moves its shared job to the front. Probing and peaks follow, with FIFO ordering at their priority. Only one filmstrip job may run at a time, reserving capacity for interactive work. Each worker runs one FFmpeg or ffprobe process at a time. Decoding, min/max aggregation, and sprite assembly run outside the server process. On POSIX, the server owns each worker's process group and kills its FFmpeg descendants even if the worker crashes. Shutdown cancels queued jobs, terminates active groups, awaits all cleanup, and propagates cleanup errors before project histories close.
+
+The cache lives in `<project>/.cutroom/cache/<key>/`. Its SHA-256 key includes the recipe version, output kind, canonical source path, size, nanosecond mtime/ctime, inode, and device. Frame keys also include the source-frame index. This fingerprint avoids hashing an entire large video before every warm response. Inode/device identify replacements whose timestamps were preserved, including copies from filesystems where ctime mirrors mtime. Identical copies may use separate cache entries. The source fingerprint is checked again before atomic publication. Complete directories appear by rename; temporary frame files are cleaned before publication. Disk-cache eviction is deferred; entries are disposable.
+
+Paths and cache locations use the project boundary check, including symlinks. FFmpeg accepts local media demuxers, including MXF, Wave64, and CAF, while excluding playlists and network protocols. Frame patterns and sprite paths are relative to the worker's task directory, so a percent sign in the project path cannot become a pattern directive.
+
+### Waveform format
+
+The first audio stream decodes to interleaved signed int16 PCM at 48 kHz without downmixing. Each bucket takes extrema across every channel, preserving out-of-phase stereo and a one-sided microphone at full amplitude. Base buckets span 96 sample frames, or 2 ms. Mips reduce groups of four pairs until the first level covering the four-second target. Widths are 2, 8, 32, 128, 512, 2048, and 8192 ms. The final partial bucket and partial mip groups retain their samples. These constants live in `src/shared/media.ts`.
+
+CRPK version 2 is little-endian. The complete file has a 144-byte header/directory followed by all seven level payloads. A ranged response has a 48-byte header/directory and only its selected pairs; it remains a valid CRPK file.
+
+| Byte offset | Field                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| 0           | ASCII `CRPK`                                                                                                        |
+| 4           | uint32 version, currently 2                                                                                         |
+| 8           | uint32 number of levels in this response                                                                            |
+| 12          | uint32 decoded sample rate, currently 48000                                                                         |
+| 16          | float64 total decoded sample-frame count, including all channels once per frame                                     |
+| 24          | uint32 base bucket width in sample frames, currently 96                                                             |
+| 28          | uint32 first bucket index in the selected level, zero for a full file                                               |
+| 32          | One 16-byte directory entry per returned level: uint32 sample frames per pair, pair count, byte offset, byte length |
+
+Each payload pair is an int16 minimum followed by an int16 maximum. Normalize amplitudes by 32768. Duration is total sample frames divided by sample rate. For ranged responses, pair time is `(firstBucket + pairIndex) * sampleFramesPerPair / sampleRate`. The server reads the directory and streams only the requested payload bytes. A two-hour overview at the coarsest level is 879 pairs plus header, or 3564 bytes, instead of the roughly 19 MB complete file.
+
+### Filmstrips and precise frames
+
+Overview frames use keyframe-only decoding at the fixed two-second interval. A gap beyond the interval plus one source frame triggers per-tile seeking. Otherwise the worker keeps the keyframe tiles and seeks only missing tail slots. Seeks use source-frame boundaries so the last frame is available when the final tile slot lies within its duration. A long audio stream cannot add phantom video tiles; seeking stops when no video frame exists. Frames retain the source display aspect ratio, including pixel aspect and rotation, at a fixed height of 90. Width rounds to an even pixel count for JPEG. No portrait letterboxing is applied.
+
+Sprites contain at most 100 tiles and ten columns. This bounds sheet memory and dimensions and removes the former two-hour single-sheet limit. Precise on-demand frames use accurate seeking rather than keyframe-only decoding, making shots within an overview interval reachable. Interval, height, sheet limits, and JPEG quality share the same constants used by the metadata schema and FFmpeg filters.
+
+Run `bun run bench:media` to generate a nominal 60-second 1080p testsrc2/sine sample at 30000/1001 fps with a 60-frame GOP and a brief blue shot inside overview tile 0. The benchmark exercises the three endpoints cold and for 30 warm reads, checks the tile count against the probed NTSC duration, records per-mip bytes, range bytes, health latency and logical/allocated cache sizes, and captures a dark 1720-pixel-wide image. It also creates a lossless impulse fixture and draws a 32-pixel-per-frame crop at 60 fps beside the on-demand frame. The script prints its temporary output directory and retains all generated evidence.

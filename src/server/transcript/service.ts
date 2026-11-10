@@ -21,6 +21,7 @@ import type {
   TranscriptJob,
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
+import { createJobMachine } from "../../shared/jobs";
 import {
   parseSourceDocument,
   patchElementInHtml,
@@ -359,18 +360,35 @@ export function createTranscriptService(
       const { mediaPath: inputPath } = await readClip(project, input);
       if (disposed)
         throw new HttpError(503, "The transcription service is shutting down.");
+      const machine = createJobMachine();
+      machine.transition({ status: "running", progress: 0 });
       const job: TranscriptJob = {
         id: randomUUID(),
         projectId: project.id,
-        status: "running",
+        get status() {
+          switch (machine.state.status) {
+            case "done":
+              return "complete";
+            case "failed":
+              return "failed";
+            case "cancelled":
+              return "cancelled";
+            default:
+              return "running";
+          }
+        },
         message: "Preparing audio",
-        progress: 0,
+        get progress() {
+          return machine.state.progress;
+        },
       };
       const controller = new AbortController();
       jobs.set(job.id, job);
       controllers.set(job.id, controller);
       const run = (async () => {
         let scratch: string | undefined;
+        let failure: string | undefined;
+        let cleanupFailure: string | undefined;
         try {
           scratch = await mkdtemp(join(tmpdir(), "cutroom-transcribe-"));
           controller.signal.throwIfAborted();
@@ -396,11 +414,14 @@ export function createTranscriptService(
                     "The installed model changed while transcription was starting.",
                   ),
                 );
-              if (event.type === "words")
-                job.progress = Math.min(
-                  0.95,
-                  event.through / Math.max(event.through + 5, 1),
-                );
+              if (event.type === "words" && machine.state.status === "running")
+                machine.transition({
+                  status: "running",
+                  progress: Math.min(
+                    0.95,
+                    event.through / Math.max(event.through + 5, 1),
+                  ),
+                });
             },
           });
           controller.signal.throwIfAborted();
@@ -416,26 +437,49 @@ export function createTranscriptService(
             controller.signal,
           );
           job.transcriptId = transcript.id;
-          job.status = "complete";
-          job.progress = 1;
           job.message = `Transcribed ${words.length} words`;
         } catch (error) {
-          job.status = controller.signal.aborted ? "cancelled" : "failed";
-          job.error = error instanceof Error ? error.message : String(error);
-          job.message =
-            job.status === "cancelled"
-              ? "Transcription cancelled"
-              : "Transcription failed";
+          // A completed history write wins a late abort; only an interrupted operation cancels.
+          if (controller.signal.aborted)
+            machine.transition({
+              status: "cancelling",
+              progress: machine.state.progress,
+            });
+          failure = error instanceof Error ? error.message : String(error);
+          job.error = failure;
+          job.message = controller.signal.aborted
+            ? "Transcription cancelled"
+            : "Transcription failed";
         } finally {
-          if (scratch) await rm(scratch, { recursive: true, force: true });
+          try {
+            if (scratch) await rm(scratch, { recursive: true, force: true });
+          } catch (error) {
+            cleanupFailure =
+              error instanceof Error ? error.message : String(error);
+            job.error = cleanupFailure;
+            job.message = "Transcription cleanup failed";
+          }
           controllers.delete(job.id);
+          if (cleanupFailure)
+            machine.transition({
+              status: "failed",
+              progress: machine.state.progress,
+              error: cleanupFailure,
+            });
+          else if (machine.state.status === "cancelling")
+            machine.transition({
+              status: "cancelled",
+              progress: machine.state.progress,
+            });
+          else if (failure)
+            machine.transition({
+              status: "failed",
+              progress: machine.state.progress,
+              error: failure,
+            });
+          else machine.transition({ status: "done", progress: 1 });
         }
-      })().catch((error: unknown) => {
-        job.status = "failed";
-        job.error = error instanceof Error ? error.message : String(error);
-        job.message = "Transcription cleanup failed";
-        controllers.delete(job.id);
-      });
+      })();
       running.add(run);
       void run.finally(() => running.delete(run));
       return job;

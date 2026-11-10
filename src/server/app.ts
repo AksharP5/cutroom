@@ -15,6 +15,7 @@ import { createProjectStore } from "./projects/store";
 import { createTimelineRoutes } from "./timeline/routes";
 import { createWorkspaceRoutes } from "./workspace";
 import { createTranscriptService } from "./transcript/service";
+import { createMediaRoutes } from "./media/routes";
 
 export async function createApp(
   options: {
@@ -49,6 +50,7 @@ export async function createApp(
   });
   const editor = createHyperframesApi(projects, review);
   const transcripts = createTranscriptService(projects);
+  const media = createMediaRoutes(projects);
   const app = new Hono();
   let closing = false;
   let shutdown: Promise<void> | undefined;
@@ -102,6 +104,7 @@ export async function createApp(
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
   app.route("/api/cutroom", createTimelineRoutes(projects));
   app.route("/api/cutroom", createAgentRoutes(agents));
+  app.route("/api/cutroom", media);
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });
   app.all("/mcp", (c) => mcp(c.req.raw));
@@ -125,6 +128,7 @@ export async function createApp(
           () => agents.dispose(),
           () => transcripts.dispose(),
           () => editor.dispose(),
+          () => media.dispose(),
           () => projects.close(),
         ]) {
           try {

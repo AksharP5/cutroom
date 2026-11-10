@@ -7,6 +7,7 @@ import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { HttpError } from "../../shared/errors";
+import { createJobMachine } from "../../shared/jobs";
 
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
 type RenderState = ReturnType<StudioApiAdapter["startRender"]>;
@@ -37,9 +38,13 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
 export function createRenderWorkers(
-  configuration: { workerPath?: string; stopTimeoutMs?: number } = {},
+  configuration: {
+    workerPath?: string;
+    stopTimeoutMs?: number;
+    removeOutput?: (path: string) => Promise<void>;
+  } = {},
 ) {
-  const running = new Map<() => void, Promise<void>>();
+  const running = new Set<() => Promise<void>>();
   let closing = false;
   return {
     start(options: RenderOptions): RenderState {
@@ -47,7 +52,12 @@ export function createRenderWorkers(
       let worker: ReturnType<typeof Bun.spawn> | undefined;
       let errors: Promise<string> | undefined;
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
-      let cancelled = false;
+      const job = createJobMachine();
+      job.transition({ status: "running", progress: 0 });
+      let failure: string | undefined;
+      let cleanupFailure: string | undefined;
+      let task: Promise<void>;
+      const isCancelling = () => job.state.status === "cancelling";
       const signalWorker = (signal: NodeJS.Signals) => {
         if (!worker) return;
         try {
@@ -70,27 +80,53 @@ export function createRenderWorkers(
         }, configuration.stopTimeoutMs ?? 6000);
       };
       const cancel = () => {
-        if (state.status !== "rendering") return;
-        cancelled = true;
-        state.status = "cancelled";
-        stopWorker();
+        if (job.state.status === "running") {
+          job.transition({
+            status: "cancelling",
+            progress: job.state.progress,
+          });
+          stopWorker();
+        }
+        return task.then(() => {
+          if (cleanupFailure) throw new Error(cleanupFailure);
+        });
       };
       const state: RenderState = {
         id: options.jobId,
-        status: "rendering",
-        progress: 0,
+        get status() {
+          switch (job.state.status) {
+            case "done":
+              return "complete";
+            case "failed":
+              return "failed";
+            case "cancelled":
+              return "cancelled";
+            default:
+              return "rendering";
+          }
+        },
+        // The upstream cancel route assigns status before calling cancel().
+        set status(value) {
+          if (value === "cancelled") void cancel().catch(() => {});
+        },
+        get progress() {
+          return job.state.progress * 100;
+        },
+        get error() {
+          return job.state.status === "failed" ? job.state.error : undefined;
+        },
         outputPath: options.outputPath,
         cancel,
       };
       const started = performance.now();
-      const task = (async () => {
+      task = (async () => {
         const node = Bun.which("node");
         if (!node)
           throw new Error(
             "Node.js 22.18 or newer is required for local video exports.",
           );
         await mkdir(dirname(options.outputPath), { recursive: true });
-        if (cancelled) return;
+        if (isCancelling()) return;
         const config: Omit<RenderRequestOptions, "engineConfig"> = {
           fps: options.fps,
           quality:
@@ -142,7 +178,6 @@ export function createRenderWorkers(
         const decoder = new TextDecoder();
         let remaining = "";
         let completed = false;
-        let failure: string | undefined;
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -155,12 +190,16 @@ export function createRenderWorkers(
               JSON.parse(line.slice("CUTROOM_RENDER:".length)),
             );
             if (event.type === "progress") {
-              state.progress = event.progress;
+              if (job.state.status !== "running") continue;
+              job.transition({
+                status: "running",
+                progress: Math.max(0, Math.min(1, event.progress / 100)),
+              });
               state.stage = event.stage;
             }
             if (event.type === "error") {
               failure = event.message;
-              if (event.cancelled) cancel();
+              if (event.cancelled) void cancel().catch(() => {});
             }
             if (event.type === "complete") {
               completed = true;
@@ -170,7 +209,7 @@ export function createRenderWorkers(
         }
         const exitCode = await child.exited;
         const stderr = await errors;
-        if (cancelled) return;
+        if (isCancelling()) return;
         if (!completed || exitCode !== 0)
           throw new Error(
             failure ||
@@ -184,15 +223,10 @@ export function createRenderWorkers(
             durationMs: Math.round(performance.now() - started),
           }),
         );
-        if (cancelled) return;
-        state.status = "complete";
-        state.progress = 100;
+        if (isCancelling()) return;
       })()
         .catch((error: unknown) => {
-          state.status = cancelled ? "cancelled" : "failed";
-          if (!cancelled)
-            state.error =
-              error instanceof Error ? error.message : String(error);
+          failure = error instanceof Error ? error.message : String(error);
           stopWorker();
         })
         .finally(async () => {
@@ -200,8 +234,11 @@ export function createRenderWorkers(
             await worker?.exited;
             signalWorker("SIGKILL");
             await errors;
-            if (cancelled || state.status === "failed") {
-              await rm(options.outputPath, { force: true });
+            if (isCancelling() || failure) {
+              await (
+                configuration.removeOutput ??
+                ((path: string) => rm(path, { force: true }))
+              )(options.outputPath);
               await rm(
                 options.outputPath.replace(
                   /\.(mp4|webm|mov|gif)$/,
@@ -210,22 +247,44 @@ export function createRenderWorkers(
                 { force: true },
               );
             }
+          } catch (error) {
+            cleanupFailure = `Render cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
           } finally {
             clearTimeout(stopTimeout);
+            if (cleanupFailure)
+              job.transition({
+                status: "failed",
+                progress: job.state.progress,
+                error: cleanupFailure,
+              });
+            else if (isCancelling())
+              job.transition({
+                status: "cancelled",
+                progress: job.state.progress,
+              });
+            else if (failure)
+              job.transition({
+                status: "failed",
+                progress: job.state.progress,
+                error: failure,
+              });
+            else job.transition({ status: "done", progress: 1 });
             running.delete(cancel);
           }
-        })
-        .catch((error: unknown) => {
-          state.status = "failed";
-          state.error = `Render cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
         });
-      running.set(cancel, task);
+      running.add(cancel);
       return state;
     },
     async cancelAll() {
       closing = true;
-      for (const cancel of running.keys()) cancel();
-      await Promise.all([...running.values()]);
+      const results = await Promise.allSettled(
+        [...running].map((cancel) => cancel()),
+      );
+      const failures = results
+        .filter((result) => result.status === "rejected")
+        .map((result) => result.reason);
+      if (failures.length)
+        throw new AggregateError(failures, "Render cleanup failed.");
     },
   };
 }
