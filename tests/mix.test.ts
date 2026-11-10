@@ -8,7 +8,7 @@ import {
   parseAudioElements,
   processCompositionAudio,
 } from "@hyperframes/engine";
-import { applyAll } from "../src/shared/timeline/apply";
+import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
 import {
   CommandSchema,
@@ -465,4 +465,31 @@ test("head trims keep edge fades, and extending a cut ramp reaches its original 
       automation.lanes.find((lane) => lane.target === "volume")?.points.at(-1),
     ).toMatchObject({ t: 8, v: fadeOut ? 0 : 1 });
   }
+});
+
+test("a cut that would exceed HyperFrames' automation limit is refused, not thrown as an internal error", () => {
+  // A dense ducking lane over a fade bakes more points than the native format accepts.
+  const points = Array.from({ length: 200 }, (_, index) => ({
+    t: (index * 8) / 200,
+    v: index % 2 ? 0.4 : 0.9,
+    curve: 0.5,
+  }));
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [{ target: "volume", points }],
+  }).replaceAll('"', "&quot;");
+  const source = `<main data-composition-id="main" data-duration="8" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="8" data-fade-out="4" data-automation="${automation}"></audio></main>`;
+  const parsed = parseComposition(source, emptyTimelineSettings());
+  let refusal: unknown;
+  try {
+    applyAll(
+      parsed.timeline,
+      [CommandSchema.parse({ type: "split", clipIds: ["music"], at: 180 })],
+      { newId: countingIds },
+    );
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal).toBeInstanceOf(TimelineError);
+  expect(refusal).toMatchObject({ code: "unsupported" });
 });

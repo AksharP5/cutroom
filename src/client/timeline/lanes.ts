@@ -189,10 +189,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         old.fadeIn === clip.fadeIn &&
         old.fadeOut === clip.fadeOut &&
         old.automation === clip.automation &&
-        old.duration === clip.duration &&
-        !preview.current?.commands.some(
-          (command) => command.type === "setClip" && command.clipId === clip.id,
-        );
+        old.duration === clip.duration;
       if (!unchanged) remixing.add(clip.id);
       else if (!remixed.current.has(clip.id)) continue;
       const mix = root.querySelector<HTMLElement>(

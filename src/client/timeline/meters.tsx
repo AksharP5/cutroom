@@ -15,8 +15,14 @@ const height = (level: number) =>
 export function AudioMeters() {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const channels =
-      root.current?.querySelectorAll<HTMLElement>(".tl-meter-channel");
+    const channels = [
+      ...(root.current?.querySelectorAll<HTMLElement>(".tl-meter-channel") ??
+        []),
+    ].map((channel) => ({
+      channel,
+      level: channel.querySelector<HTMLElement>(".tl-meter-level")!,
+      peak: channel.querySelector<HTMLElement>(".tl-meter-peak")!,
+    }));
     const peaks = [0, 0];
     const held = [0, 0];
     let previous = performance.now();
@@ -24,7 +30,7 @@ export function AudioMeters() {
       const now = performance.now();
       const elapsed = Math.min(100, now - previous);
       previous = now;
-      channels?.forEach((channel, index) => {
+      channels.forEach(({ channel, level: bar, peak }, index) => {
         const value = index === 0 ? level.l : level.r;
         const current = height(value);
         if (current >= peaks[index]!) {
@@ -32,10 +38,9 @@ export function AudioMeters() {
           held[index] = now + 1500;
         } else if (now > held[index]!)
           peaks[index] = Math.max(current, peaks[index]! - elapsed / 2500);
-        channel.querySelector<HTMLElement>(".tl-meter-level")!.style.transform =
-          `scaleY(${current})`;
-        channel.querySelector<HTMLElement>(".tl-meter-peak")!.style.bottom =
-          `${peaks[index]! * 100}%`;
+        // Clipping the lit segments keeps each LED its size; the peak line moves on the compositor.
+        bar.style.clipPath = `inset(${(1 - current) * 100}% 0 0 0)`;
+        peak.style.transform = `translateY(${(1 - peaks[index]!) * 100}%)`;
         channel.dataset.clipping = String(value >= 1);
       });
     });

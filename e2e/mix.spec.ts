@@ -102,14 +102,16 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   await page.keyboard.press("Space");
   await expect
     .poll(() =>
-      page
-        .locator(".tl-meter-level")
-        .evaluateAll((bars) =>
-          bars.every(
-            (bar) =>
-              new DOMMatrixReadOnly(getComputedStyle(bar).transform).m22 > 0.1,
-          ),
+      page.locator(".tl-meter-level").evaluateAll((bars) =>
+        // The lit part is what the clip-path's top inset leaves.
+        bars.every(
+          (bar) =>
+            Number.parseFloat(
+              /inset\(([\d.]+)%/.exec(getComputedStyle(bar).clipPath)?.[1] ??
+                "100",
+            ) < 90,
         ),
+      ),
     )
     .toBe(true);
   await page.keyboard.press("k");

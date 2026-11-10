@@ -10,6 +10,7 @@ import {
 } from "@hyperframes/core/audio-automation";
 import type { HfAutomationLane } from "@hyperframes/core/audio-automation";
 import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
+import { TimelineError } from "./errors";
 import type { Clip, Fps } from "./schema";
 
 /** Effective fades, in frames, using the same proportional clamp as preview and render. */
@@ -47,7 +48,7 @@ export function windowMix(
   const volume = automation.lanes.find((lane) => lane.target === VOLUME_TARGET);
   // Retain the source ramp beyond a cut so extension cannot hold a partial level.
   const length = Math.max(
-    seconds(Math.max(duration, clip.duration - from)),
+    seconds(clip.duration - from),
     (volume?.points.at(-1)?.t ?? 0) - offset,
   );
   const partialIn = fadeIn > 0 && nextIn === 0 && from < fadeIn;
@@ -121,7 +122,8 @@ export function windowMix(
     for (let index = 1; index < times.length; index++)
       append(times[index - 1]!, times[index]!);
     if (points.length > MAX_AUTOMATION_POINTS)
-      throw new Error(
+      throw new TimelineError(
+        "unsupported",
         "The cut would exceed HyperFrames' volume automation limit.",
       );
     const lane = { target: VOLUME_TARGET, points };

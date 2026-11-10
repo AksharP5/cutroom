@@ -925,24 +925,23 @@
 .tl-meter-level {
   position: absolute;
   inset: 0;
-  transform: scaleY(0);
-  transform-origin: bottom;
+  clip-path: inset(100% 0 0 0);
   background: repeating-linear-gradient(
     to top,
     var(--meter-on) 0 2px,
     transparent 2px 3px
   );
 }
+/* Full height so translateY is a fraction of the meter; the line is its top 2px. */
 .tl-meter-peak {
+  --peak: var(--meter-peak);
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  bottom: 0;
-  background: var(--meter-peak);
+  inset: -2px 0 2px;
+  transform: translateY(100%);
+  background: linear-gradient(var(--peak) 0 2px, transparent 2px);
 }
 .tl-meter-channel[data-clipping="true"] .tl-meter-peak {
-  background: var(--meter-clip);
+  --peak: var(--meter-clip);
 }
 .tl-meter-scale {
   position: absolute;
