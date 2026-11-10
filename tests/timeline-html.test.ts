@@ -236,6 +236,12 @@ test("a scene's defaults survive template loading without entering its clip chil
   expect(output).toContain(
     `<div data-composition-id="scene" data-duration="2.033333"><div id="box"`,
   );
+  const second = edit(
+    output,
+    [{ type: "move", clipIds: ["box"], by: 1 }],
+    "sub-composition",
+  );
+  expect(second.match(/<style data-cutroom-track-stacking=/g)).toHaveLength(1);
 });
 
 test("duration edits establish stacking, while label edits do not", () => {

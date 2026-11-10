@@ -847,7 +847,7 @@ export function declareTrackLayer(html: string): string {
   ]);
 }
 
-/** Owns the defaults' scope, cascade order, and migration from a block placed inside the root. */
+/** Owns the defaults' scope and cascade order. */
 function stackingEdits(
   parsed: ParsedComposition,
   after: Timeline,
@@ -855,21 +855,11 @@ function stackingEdits(
 ): Edit[] | null {
   const { html, root } = parsed;
   const compositionId = root.attrs["data-composition-id"]!;
-  const source = [...descendants(parsed.roots, true)];
-  const blocks = source.filter((element) => {
-    if (element.tag !== "style") return false;
-    const owner = element.attrs["data-cutroom-track-stacking"];
-    if (owner === compositionId) return true;
-    if (owner !== "") return false;
-    // Older blocks have no owner. A nested composition's legacy block belongs to that scene.
-    return !source.some(
-      (parent) =>
-        parent !== root &&
-        parent.attrs["data-composition-id"] !== undefined &&
-        parent.start < element.start &&
-        parent.end > element.end,
-    );
-  });
+  const blocks = [...descendants(parsed.roots, true)].filter(
+    (element) =>
+      element.tag === "style" &&
+      element.attrs["data-cutroom-track-stacking"] === compositionId,
+  );
   const placed = after.clips.some((clip) => {
     if (clip.kind === "audio") return false;
     const prior = previous.get(clip.id);
