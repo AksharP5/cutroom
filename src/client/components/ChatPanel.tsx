@@ -28,6 +28,7 @@ import {
 import { api, json } from "../api";
 import { describeTool, hiddenTools, targetsFile } from "../../shared/toolRow";
 import { useWorkspace } from "../workspace";
+import { waitForNoteCaptures } from "../edit/noteStore";
 
 const sessionListSchema = z.object({
   sessions: z.array(
@@ -416,7 +417,7 @@ export function ChatPanel({
   projectId: string;
   visible: boolean;
   getContext: () => string;
-  getReviewAttachments: () => string[];
+  getReviewAttachments: () => Promise<string[]>;
   onSent: () => void;
   prompt: string | null;
   onPromptConsumed: () => void;
@@ -726,9 +727,6 @@ export function ChatPanel({
     if ((!draft.trim() && !attachments.length) || controlsLocked) return;
     const text = draft;
     const submittedAttachments = attachments;
-    const files = [
-      ...new Set([...submittedAttachments, ...getReviewAttachments()]),
-    ].slice(0, 30);
     const context = getContext();
     const submission: TurnSubmission = {
       kind: "turn",
@@ -738,6 +736,15 @@ export function ChatPanel({
     setOperation(submission);
     setError("");
     try {
+      await waitForNoteCaptures(projectId);
+      if (submission.stopped) return;
+      const files = [
+        ...new Set([
+          ...submittedAttachments,
+          ...(await getReviewAttachments()),
+        ]),
+      ].slice(0, 30);
+      if (submission.stopped) return;
       let active = session;
       if (!active || active.provider !== provider) {
         active = await api(

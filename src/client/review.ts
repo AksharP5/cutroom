@@ -4,7 +4,7 @@ import type { EditorReviewDraft } from "../shared/editor";
 import type { ReviewItem } from "../shared/review";
 import { api, json } from "./api";
 import { strokePath } from "./edit/notes";
-import { saveNoteInOrder } from "./edit/noteStore";
+import { saveNoteInOrder, trackNoteCapture } from "./edit/noteStore";
 
 /** Notes are numbered in the owner's order, the same in Review, on the ruler, and on the picture. */
 export const noteNumbers = (items: readonly ReviewItem[]) =>
@@ -34,7 +34,7 @@ export async function saveReviewNote(
 ) {
   const tokens = getComputedStyle(document.documentElement);
   const pencil = tokens.getPropertyValue("--human").trim();
-  const { id } = await saveNoteInOrder(projectId, () =>
+  const saved = saveNoteInOrder(projectId, () =>
     api(
       `/projects/${projectId}/annotations`,
       AnnotationSchema,
@@ -51,8 +51,13 @@ export async function saveReviewNote(
       }),
     ),
   );
-  const capture = captureReviewFrame(projectId, draft).then(
-    async ({ framePath, captureError }) => {
+  const capture = trackNoteCapture(
+    projectId,
+    saved.then(async ({ id }) => {
+      const { framePath, captureError } = await captureReviewFrame(
+        projectId,
+        draft,
+      );
       if (!framePath) return captureError;
       try {
         await api(
@@ -64,8 +69,9 @@ export async function saveReviewNote(
       } catch (error) {
         return error instanceof Error ? error.message : String(error);
       }
-    },
+    }),
   );
+  const { id } = await saved;
   return { id, capture };
 }
 

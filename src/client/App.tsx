@@ -342,13 +342,15 @@ export function App() {
             showToast(`Note saved without a frame image. ${captureError}`);
           return refreshDocument();
         })
-        .catch((error: unknown) =>
-          showToast(error instanceof Error ? error.message : String(error)),
-        );
+        .catch((error: unknown) => {
+          if (activeProjectId.current === projectId)
+            showToast(error instanceof Error ? error.message : String(error));
+        });
       // The note is saved; a failed refresh must not reopen it, or it would be saved twice.
-      void refreshDocument().catch((error: unknown) =>
-        showToast(error instanceof Error ? error.message : String(error)),
-      );
+      void refreshDocument().catch((error: unknown) => {
+        if (activeProjectId.current === projectId)
+          showToast(error instanceof Error ? error.message : String(error));
+      });
       return id;
     },
     [projectId, refreshDocument],
@@ -570,11 +572,17 @@ export function App() {
               projectId={project.id}
               visible={chatVisible}
               getContext={getContext}
-              getReviewAttachments={() =>
-                newNotes.flatMap((note) =>
-                  note.framePath ? [note.framePath] : [],
-                )
-              }
+              getReviewAttachments={async () => {
+                const notebook = await api(
+                  `/projects/${project.id}/notebook`,
+                  NotebookSchema,
+                );
+                return notebook.items.flatMap((note) =>
+                  note.review.status === "open" && note.framePath
+                    ? [note.framePath]
+                    : [],
+                );
+              }}
               onSent={() =>
                 void refreshDocument().catch((error: unknown) =>
                   showToast(
