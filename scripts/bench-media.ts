@@ -5,6 +5,7 @@ import { chromium } from "@playwright/test";
 import { z } from "zod";
 import { createApp } from "../src/server/app";
 import { FilmstripSchema } from "../src/server/media/protocol";
+import { mediaSettings, peakLevels } from "../src/server/media/settings";
 
 const output = await mkdtemp(join(tmpdir(), "cutroom-media-bench-"));
 const runtime = await createApp({
@@ -41,18 +42,36 @@ async function size(
     { bytes: 0, allocatedBytes: (await stat(directory)).blocks * 512 },
   );
 }
+async function ffmpeg(args: string[]) {
+  const child = Bun.spawn(["ffmpeg", "-nostdin", "-v", "error", ...args], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const errors = await new Response(child.stderr).text();
+  if ((await child.exited) !== 0) throw new Error(errors);
+}
+async function ready(url: string) {
+  const deadline = performance.now() + 120000;
+  while (true) {
+    const response = await fetch(url);
+    if (response.status !== 202) {
+      if (response.status !== 200) throw new Error(await response.text());
+      return response;
+    }
+    await response.arrayBuffer();
+    if (performance.now() > deadline)
+      throw new Error("Media benchmark timed out.");
+    await Bun.sleep(5);
+  }
+}
 const results = [];
 try {
   const project = await runtime.projects.create({
     name: "60s 1080p media benchmark",
     duration: 60,
   });
-  const samplePath = join(project.path, "sample.mp4");
+  const source = join(project.path, "sample.mp4");
   const command = [
-    "ffmpeg",
-    "-nostdin",
-    "-v",
-    "error",
     "-f",
     "lavfi",
     "-i",
@@ -63,53 +82,53 @@ try {
     "sine=frequency=440:sample_rate=48000:duration=60",
     "-af",
     "volume=0.2+0.8*abs(sin(PI*t/6)):eval=frame",
+    "-vf",
+    "drawbox=c=blue:t=fill:enable='between(t,0.8,1.199)'",
     "-c:v",
     "libx264",
     "-preset",
     "ultrafast",
     "-crf",
     "28",
+    "-g",
+    "60",
+    "-keyint_min",
+    "60",
+    "-sc_threshold",
+    "0",
     "-threads",
     "2",
     "-c:a",
     "aac",
     "-b:a",
     "128k",
-    samplePath,
+    source,
   ];
-  const generate = Bun.spawn(command, { stdout: "ignore", stderr: "pipe" });
-  const errors = await new Response(generate.stderr).text();
-  if ((await generate.exited) !== 0) throw new Error(errors);
-  for (const kind of ["peaks", "filmstrip"] as const) {
-    const url = `${origin}/api/cutroom/projects/${project.id}/media/${kind}?path=sample.mp4`;
+  await ffmpeg(command);
+  const base = `${origin}/api/cutroom/projects/${project.id}/media`;
+  for (const kind of ["peaks", "filmstrip", "frame"] as const) {
+    const url = `${base}/${kind}?path=sample.mp4${kind === "frame" ? "&time=1" : ""}`;
     const health: number[] = [];
     let measuring = true;
     const healthTask = (async () => {
       while (measuring) {
-        const started = performance.now();
+        const start = performance.now();
         const response = await fetch(`${origin}/health`);
         await response.arrayBuffer();
-        health.push(performance.now() - started);
+        health.push(performance.now() - start);
         await Bun.sleep(10);
       }
     })();
     const started = performance.now();
-    let response = await fetch(url);
+    const first = await fetch(url);
     const admittedMs = performance.now() - started;
-    const firstStatus = response.status;
-    const deadline = performance.now() + 120000;
-    while (response.status === 202) {
-      await response.arrayBuffer();
-      if (performance.now() > deadline)
-        throw new Error("Media benchmark timed out.");
-      await Bun.sleep(5);
-      response = await fetch(url);
-    }
+    const firstStatus = first.status;
+    await first.arrayBuffer();
+    const response = await ready(url);
     const payload = Buffer.from(await response.arrayBuffer());
     const coldMs = performance.now() - started;
     measuring = false;
     await healthTask;
-    if (response.status !== 200) throw new Error(payload.toString());
     const warm: number[] = [];
     for (let index = 0; index < 30; index++) {
       const start = performance.now();
@@ -119,21 +138,17 @@ try {
       warm.push(performance.now() - start);
     }
     warm.sort((a, b) => a - b);
-    if (kind === "peaks") await Bun.write(join(output, "peaks.bin"), payload);
-    else {
-      const metadata = FilmstripSchema.extend({
-        key: z.string(),
-        spriteUrl: z.string(),
-      }).parse(JSON.parse(payload.toString()));
-      await Bun.write(
-        join(output, "filmstrip.json"),
-        JSON.stringify(metadata, null, 2),
-      );
-      await Bun.write(
-        join(output, "sprite.jpg"),
-        await fetch(`${origin}${metadata.spriteUrl}`),
-      );
-    }
+    await Bun.write(
+      join(
+        output,
+        kind === "peaks"
+          ? "peaks.bin"
+          : kind === "frame"
+            ? "frame.jpg"
+            : "filmstrip.json",
+      ),
+      payload,
+    );
     results.push({
       kind,
       firstStatus,
@@ -145,6 +160,17 @@ try {
       healthSamples: health.length,
     });
   }
+  const mainCache = await size(join(project.path, ".cutroom/cache"));
+  const metadata = FilmstripSchema.extend({
+    sheets: z.array(
+      FilmstripSchema.shape.sheets.element.extend({ spriteUrl: z.string() }),
+    ),
+  }).parse(await Bun.file(join(output, "filmstrip.json")).json());
+  for (const sheet of metadata.sheets)
+    await Bun.write(
+      join(output, `sprite-${sheet.index}.jpg`),
+      await fetch(`${origin}${sheet.spriteUrl}`),
+    );
   const peaks = Buffer.from(
     await Bun.file(join(output, "peaks.bin")).arrayBuffer(),
   );
@@ -157,39 +183,96 @@ try {
       bytes: peaks.readUInt32LE(entry + 12),
     };
   });
-  const cache = join(project.path, ".cutroom/cache");
-  const cacheSize = await size(cache);
+  const overview = Buffer.from(
+    await (
+      await ready(`${base}/peaks?path=sample.mp4&level=2&start=0&end=60`)
+    ).arrayBuffer(),
+  );
+  await Bun.write(join(output, "overview.bin"), overview);
+  // A lossless impulse fixture makes the maximum-zoom comparison independent of AAC smearing.
+  const pcm = Buffer.alloc(48000 * 2);
+  for (let sample = 24000; sample < 24024; sample++)
+    pcm.writeInt16LE(29000, sample * 2);
+  for (let sample = 24384; sample < 24408; sample++)
+    pcm.writeInt16LE(-29000, sample * 2);
+  const wav = Buffer.alloc(44 + pcm.length);
+  wav.write("RIFF");
+  wav.writeUInt32LE(36 + pcm.length, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(48000, 24);
+  wav.writeUInt32LE(96000, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(pcm.length, 40);
+  pcm.copy(wav, 44);
+  await Bun.write(join(project.path, "impulses.wav"), wav);
+  await Bun.write(join(output, "impulses.pcm"), pcm);
+  const detail = Buffer.from(
+    await (
+      await ready(`${base}/peaks?path=impulses.wav&level=0&start=0.4&end=0.7`)
+    ).arrayBuffer(),
+  );
+  await Bun.write(join(output, "detail.bin"), detail);
   const report = {
     runtime: `Bun ${Bun.version}`,
     cpu: cpus()[0]?.model,
-    sample: "60s 1920x1080 30fps H.264 + AAC sine with amplitude envelope",
-    samplePath,
-    command,
+    sample:
+      "60s 1920x1080 30fps H.264 + AAC, two-second GOP, blue shot at 0.8–1.2s",
+    source,
+    command: ["ffmpeg", "-nostdin", "-v", "error", ...command],
     warmRuns: 30,
     results,
-    cacheBytes: cacheSize.bytes,
-    cacheAllocatedBytes: cacheSize.allocatedBytes,
-    peaksHeaderBytes: 96,
+    cacheBytes: mainCache.bytes,
+    cacheAllocatedBytes: mainCache.allocatedBytes,
+    peaksHeaderBytes: 32 + peakLevels.length * 16,
     levels,
+    overviewResponseBytes: overview.length,
+    detailResponseBytes: detail.length,
     output,
   };
   await writeFile(
     join(output, "metrics.json"),
     JSON.stringify(report, null, 2),
   );
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#0e0e10;color:#e8e8ea;font:16px sans-serif}main{padding:32px}h1{font-size:26px;margin:0 0 8px}p{color:#9a9aa2;margin:0 0 24px}h2{font-size:16px;margin:24px 0 10px}canvas{display:block;width:100%;height:180px;background:#151517}img{display:block;max-width:100%;height:auto}.time{display:flex;justify-content:space-between;font:12px monospace;color:#9a9aa2;margin-top:8px}</style></head><body><main><h1>Cutroom media cache</h1><p>60 seconds · 1920×1080 · 30 fps · testsrc2 + 440 Hz sine with amplitude envelope</p><h2>Waveform · 100 min/max pairs per second · display gain ×7.1</h2><canvas width="1600" height="180"></canvas><div class="time"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span><span>01:00</span></div><h2>Filmstrip · 160×90 tiles every 2 seconds · 30 frames</h2><img src="data:image/jpeg;base64,${Buffer.from(await Bun.file(join(output, "sprite.jpg")).arrayBuffer()).toString("base64")}"><h2>Cold generation and cached reads · milliseconds</h2><canvas id="chart" width="1600" height="180"></canvas></main><script>const raw=Uint8Array.from(atob('${peaks.toString("base64")}'),c=>c.charCodeAt(0));const view=new DataView(raw.buffer);const c=document.querySelector('canvas'),ctx=c.getContext('2d');const offset=view.getUint32(40,true),count=view.getUint32(36,true);ctx.strokeStyle='#4da66c';ctx.lineWidth=1;ctx.beginPath();for(let x=0;x<c.width;x++){let min=32767,max=-32768;for(let i=Math.floor(x*count/c.width);i<Math.ceil((x+1)*count/c.width);i++){min=Math.min(min,view.getInt16(offset+i*4,true));max=Math.max(max,view.getInt16(offset+i*4+2,true));}ctx.moveTo(x,90-max/32768*640);ctx.lineTo(x,90-min/32768*640);}ctx.stroke();const chart=document.getElementById('chart'),cx=chart.getContext('2d');const rows=${JSON.stringify(results)};cx.font='16px sans-serif';rows.forEach((r,i)=>{let y=22+i*80;cx.fillStyle='#e8e8ea';cx.fillText(r.kind,0,y+14);cx.fillStyle='#3b6ea8';cx.fillRect(130,y,Math.max(1,r.coldMs/Math.max(...rows.map(r=>r.coldMs))*900),18);cx.fillStyle='#df764c';cx.fillRect(130,y+26,Math.max(2,r.warmMedianMs/Math.max(...rows.map(r=>r.coldMs))*900),18);cx.fillStyle='#9a9aa2';cx.fillText('cold '+r.coldMs.toFixed(1)+' ms · warm median '+r.warmMedianMs.toFixed(2)+' ms',1060,y+20);});</script></body></html>`;
+  const image = (path: string) =>
+    Bun.file(join(output, path))
+      .arrayBuffer()
+      .then((bytes) => Buffer.from(bytes).toString("base64"));
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  body{margin:0;background:#0e0e10;color:#e8e8ea;font:16px sans-serif}main{padding:32px}h1{font-size:26px;margin:0 0 8px}p{color:#9a9aa2;margin:0 0 16px}h2{font-size:16px;margin:20px 0 10px}canvas{display:block;background:#151517}#overview{width:100%;height:150px}.row{display:flex;gap:28px;align-items:flex-start}.detail{width:576px}.detail p{font-size:13px;margin-top:8px}.frame img{height:180px;image-rendering:auto}#sprite{width:100%;height:auto}.time{display:flex;justify-content:space-between;color:#9a9aa2;font:12px monospace;margin-top:6px}#chart{width:100%;height:160px}
+  </style></head><body><main><h1>Cutroom media detail</h1><p>60 seconds · 1920×1080 · 30 fps · 48 kHz peaks across channels · native-frame seeking</p>
+  <h2>Overview · 32 ms buckets · ${overview.length.toLocaleString()} bytes downloaded · display gain ×7.1</h2><canvas id="overview" width="1600" height="150"></canvas><div class="time"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span><span>01:00</span></div>
+  <div class="row"><div class="detail"><h2>Maximum zoom · 32 px/frame at 60 fps</h2><canvas id="detail" width="576" height="140"></canvas><div class="time"><span>0.400 s</span><span>0.500 s</span><span>0.600 s</span><span>0.700 s</span></div><p>2 ms buckets. Two lossless impulses, 8 ms apart. Unity gain.</p></div><div class="frame"><h2>On-demand frame · 1.000 s</h2><img src="data:image/jpeg;base64,${await image("frame.jpg")}"><p>The blue shot at 0.8–1.2 s falls inside overview tile 0.</p></div></div>
+  <h2>Overview filmstrip · keyframes · ${metadata.count} tiles · ${metadata.tileWidth}×${mediaSettings.tileHeight}</h2><img id="sprite" src="data:image/jpeg;base64,${await image("sprite-0.jpg")}">
+  <h2>Cold generation and cached responses · milliseconds</h2><canvas id="chart" width="1600" height="160"></canvas>
+  </main><script>
+  function draw(id,raw,start,end,gain){const data=Uint8Array.from(atob(raw),c=>c.charCodeAt(0)),v=new DataView(data.buffer),c=document.getElementById(id),ctx=c.getContext('2d'),n=v.getUint32(36,true),off=v.getUint32(40,true),first=v.getUint32(28,true),width=v.getUint32(32,true)/v.getUint32(12,true);ctx.strokeStyle='#2a2a2e';ctx.beginPath();ctx.moveTo(0,c.height/2);ctx.lineTo(c.width,c.height/2);ctx.stroke();ctx.fillStyle='#4da66c';for(let i=0;i<n;i++){const x=((first+i)*width-start)/(end-start)*c.width,w=width/(end-start)*c.width,min=v.getInt16(off+i*4,true),max=v.getInt16(off+i*4+2,true);ctx.fillRect(x,c.height/2-max/32768*c.height/2*gain,Math.max(1,w),Math.max(1,(max-min)/32768*c.height/2*gain));}}
+  draw('overview','${overview.toString("base64")}',0,60,7.1);draw('detail','${detail.toString("base64")}',0.4,0.7,1);
+  const cx=document.getElementById('chart').getContext('2d'),rows=${JSON.stringify(results)};cx.font='16px sans-serif';rows.forEach((r,i)=>{let y=6+i*50;cx.fillStyle='#e8e8ea';cx.fillText(r.kind,0,y+14);cx.fillStyle='#3b6ea8';cx.fillRect(110,y,Math.max(1,r.coldMs/Math.max(...rows.map(r=>r.coldMs))*900),16);cx.fillStyle='#df764c';cx.fillRect(110,y+19,Math.max(2,r.warmMedianMs/Math.max(...rows.map(r=>r.coldMs))*900),10);cx.fillStyle='#9a9aa2';cx.fillText('cold '+r.coldMs.toFixed(1)+' ms · warm median '+r.warmMedianMs.toFixed(2)+' ms',1050,y+16);});
+  </script></body></html>`;
   await writeFile(join(output, "evidence.html"), html);
   const page = await browser.newPage({
     viewport: { width: 1720, height: 1050 },
     colorScheme: "dark",
   });
   await page.setContent(html);
-  await page.screenshot({ path: join(output, "media-output.png") });
-  await page.locator("img").screenshot({ path: join(output, "filmstrip.png") });
+  await page.screenshot({
+    path: join(output, "media-output.png"),
+    fullPage: true,
+  });
   await page
-    .locator("canvas")
-    .first()
-    .screenshot({ path: join(output, "peaks.png") });
+    .locator("#detail")
+    .screenshot({ path: join(output, "peaks-max-zoom.png") });
+  await page
+    .locator(".frame")
+    .screenshot({ path: join(output, "on-demand-frame.png") });
+  await page
+    .locator("#sprite")
+    .screenshot({ path: join(output, "filmstrip.png") });
   console.log(JSON.stringify(report, null, 2));
 } finally {
   await browser.close();
