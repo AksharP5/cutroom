@@ -106,6 +106,13 @@ async function open(
   return { project, timeline, read, at, drag, agent, initial: await read() };
 }
 
+async function refusalEvidence(page: Page, name: string) {
+  const directory = process.env.CUTROOM_REFUSAL_EVIDENCE;
+  if (!directory) return;
+  await expect(page.locator(".toast")).toHaveCSS("opacity", "1");
+  await page.screenshot({ path: join(directory, name) });
+}
+
 const shots = [
   ["shot-1", 0, 0, 90],
   ["shot-2", 0, 90, 90],
@@ -638,6 +645,11 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   await page.mouse.up();
   expect(await read()).toEqual(initial);
 
+  await refusalEvidence(page, "picture-drop.png");
+  await expect(page.locator(".toast")).toContainText(
+    "Clip red.mp4 is picture and A1 is an audio track.",
+  );
+
   // Free space takes the clip as it is.
   await hold(await at(420));
   await expect(timeline.locator(".tl-ghost")).toBeVisible();
@@ -668,4 +680,109 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   await expect.poll(read).toEqual(placed);
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(initial);
+});
+
+test("a refused audio drop explains the destination track kind", async ({
+  page,
+  request,
+}) => {
+  const { project, timeline, read, at, initial } = await open(
+    page,
+    request,
+    "Refused audio drop",
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=duration=2",
+    "-y",
+    join(project.path, "tone.wav"),
+  ]);
+  const row = page
+    .getByRole("region", { name: "Media", exact: true })
+    .getByRole("listitem")
+    .filter({ hasText: "tone.wav" });
+  await expect(row).toHaveAttribute("draggable", "true");
+  const to = await at(420);
+  await row.hover();
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 10 });
+  await page.mouse.move(to.x, to.y);
+  await expect(timeline.locator(".tl-lanes")).toHaveAttribute(
+    "data-refused",
+    "",
+  );
+  await page.mouse.up();
+  await refusalEvidence(page, "audio-drop.png");
+  await expect(page.locator(".toast")).toContainText(
+    "Clip tone.wav is audio and V1 is a video track.",
+  );
+  expect(await read()).toEqual(initial);
+});
+
+test("a refused move names its locked destination", async ({
+  page,
+  request,
+}) => {
+  const { timeline, read, at, drag, initial } = await open(
+    page,
+    request,
+    "Locked destination",
+  );
+  await timeline.getByRole("button", { name: "Lock V2", exact: true }).click();
+  await drag(await at(300), await at(300, "V2"));
+  await refusalEvidence(page, "locked-track.png");
+  await expect(page.locator(".toast")).toContainText("V2 is locked.");
+  expect(await read()).toEqual(initial);
+});
+
+test("a trim after an overwrite names the short sound partner", async ({
+  page,
+  request,
+}) => {
+  const { project, timeline, agent, read } = await open(
+    page,
+    request,
+    "Short sound partner",
+    true,
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=duration=2",
+    "-y",
+    join(project.path, "tone.wav"),
+  ]);
+  await agent([
+    { type: "setClip", clipId: "shot-4", label: "red.mp4" },
+    { type: "setClip", clipId: "partner", label: "red.mp4" },
+    {
+      type: "insert",
+      mode: "overwrite",
+      track: 2,
+      at: 300,
+      clip: { src: "tone.wav", kind: "audio", duration: 60 },
+    },
+  ]);
+  await expect(timeline.locator('[data-clip="partner"]')).toHaveAttribute(
+    "style",
+    /--d: 30/,
+  );
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("1100");
+  await page.keyboard.press("Enter");
+  await timeline.locator('[data-clip="shot-4"]').click();
+  const before = await read();
+  await page.keyboard.press("q");
+  await refusalEvidence(page, "short-partner.png");
+  await expect(page.locator(".toast")).toContainText(
+    "Clip red.mp4 on A1 would be shorter than one frame.",
+  );
+  expect(await read()).toEqual(before);
 });

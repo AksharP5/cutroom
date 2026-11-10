@@ -262,10 +262,22 @@ const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function humanReason(message: string, timeline: Timeline) {
   const text = message.replace(/^Command \d+ \(\w+\): /, "");
   const rows = trackRows(timeline.tracks, noSizes).rows;
+  const tracksByName = new Map<string, Set<number>>();
+  for (const clip of timeline.clips) {
+    const name = clipName(clip);
+    const tracks = tracksByName.get(name) ?? new Set<number>();
+    tracks.add(clip.track);
+    tracksByName.set(name, tracks);
+  }
   const names = new Map(
-    timeline.clips
-      .filter((clip) => clipName(clip) !== clip.id)
-      .map((clip) => [clip.id, clipName(clip)]),
+    timeline.clips.map((clip) => {
+      const name = clipName(clip);
+      const row = rows.find((row) => row.track.index === clip.track);
+      return [
+        clip.id,
+        tracksByName.get(name)!.size > 1 && row ? `${name} on ${row.id}` : name,
+      ] as const;
+    }),
   );
   const ids = [...names.keys()].sort((a, b) => b.length - a.length);
   const withNames = ids.length
@@ -279,7 +291,7 @@ function humanReason(message: string, timeline: Timeline) {
     : text;
   return withNames
     .replace(
-      /\btrack (\d+)\b/g,
+      /\btrack (\d+)\b/gi,
       (whole, index: string) =>
         rows.find((row) => row.track.index === Number(index))?.id ?? whole,
     )

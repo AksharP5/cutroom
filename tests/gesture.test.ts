@@ -610,6 +610,16 @@ test("dropped media is placed in free space, inserted over a clip, and refused o
   const wrong = dropPreview(timeline, media, audio, 420, 0, 0);
   expect(wrong.valid).toBe(false);
   expect(wrong.shown).toBe(timeline);
+  // An empty placeholder row has no persisted track yet; its kind still constrains the drop.
+  const placeholder = dropPreview(
+    timeline,
+    media,
+    { index: 3, kind: "audio" },
+    420,
+    0,
+    0,
+  );
+  expect(() => committed(timeline, placeholder)).toThrow("an audio track");
   expect(
     dropPreview(
       timeline,

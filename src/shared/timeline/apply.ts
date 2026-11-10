@@ -228,7 +228,7 @@ function assertTrackKind(
   if (!track || (track.kind === "audio") === (kind === "audio")) return;
   throw new TimelineError(
     "track_kind",
-    `Clip ${name} is ${kind === "audio" ? "audio" : "picture"} and track ${track.index} is a ${track.kind} track.`,
+    `Clip ${name} is ${kind === "audio" ? "audio" : "picture"} and track ${track.index} is ${track.kind === "audio" ? "an" : "a"} ${track.kind} track.`,
   );
 }
 
@@ -630,7 +630,7 @@ function settle(before: Timeline, after: Timeline): Timeline {
     if (locked.has(clip.track) || (old && locked.has(old.track)))
       throw new TimelineError(
         "locked",
-        `Clip ${clip.id} is on a locked track.`,
+        `Track ${locked.has(clip.track) ? clip.track : old?.track} is locked.`,
       );
     if (
       !old ||
@@ -642,10 +642,7 @@ function settle(before: Timeline, after: Timeline): Timeline {
   }
   for (const clip of before.clips)
     if (!current.has(clip.id) && locked.has(clip.track))
-      throw new TimelineError(
-        "locked",
-        `Clip ${clip.id} is on a locked track.`,
-      );
+      throw new TimelineError("locked", `Track ${clip.track} is locked.`);
   const overlap = findOverlap(after.clips, moved);
   if (overlap)
     throw new TimelineError(
