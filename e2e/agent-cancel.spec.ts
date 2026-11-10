@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import type { AgentSession } from "../src/shared/agent";

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import {
   ProjectSchema,
   ProjectDocumentSchema,
@@ -219,7 +219,10 @@ test("visual review, native skill selection, and script edits survive real works
     .click();
   await expect(composer).toHaveValue(/pending review notes/);
   await composer.fill("");
-  await page.screenshot({ path: "artifacts/workspace.png", fullPage: true });
+  await page.screenshot({
+    path: `${process.env.CUTROOM_E2E_DIR ?? "artifacts"}/workspace.png`,
+    fullPage: true,
+  });
   const document = ProjectDocumentSchema.parse(
     await (await request.get(`/api/cutroom/projects/${id}/document`)).json(),
   );

@@ -8,15 +8,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   applyFileMutations,
   fileContentVersion,
@@ -37,6 +29,9 @@ import type {
   ProjectDocument,
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
+import { isMissing, projectPath } from "./path";
+
+export { isMissing, projectPath } from "./path";
 
 const RegistrySchema = z.object({
   schemaVersion: z.literal(1),
@@ -54,38 +49,6 @@ export class ProjectDocumentError extends HttpError {
   }
 }
 const PERSON: HistoryWho = { kind: "person", name: "You" };
-
-export async function projectPath(
-  project: Project,
-  path: string,
-  allowMissing = false,
-): Promise<string> {
-  if (!path || isAbsolute(path) || path.includes("\0"))
-    throw new HttpError(400, "Use a project-relative file path.");
-  const target = resolve(project.path, path);
-  const rel = relative(project.path, target);
-  if (rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel))
-    throw new HttpError(403, "That path is outside the project.");
-  const canonical = await realpath(target).catch(async (error: unknown) => {
-    if (!isMissing(error)) throw error;
-    if (!allowMissing) throw new HttpError(404, "Project file not found.");
-    return join(await realpath(dirname(target)), basename(target));
-  });
-  const canonicalRoot = await realpath(project.path);
-  const canonicalRelative = relative(canonicalRoot, canonical);
-  if (
-    canonicalRelative.startsWith(`..${sep}`) ||
-    canonicalRelative === ".." ||
-    isAbsolute(canonicalRelative)
-  ) {
-    throw new HttpError(403, "Links outside the project cannot be accessed.");
-  }
-  return canonical;
-}
-
-export function isMissing(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
 
 export async function readSource(project: Project, path = "index.html") {
   const absolute = await projectPath(project, path);

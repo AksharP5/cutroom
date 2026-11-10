@@ -1,12 +1,16 @@
 import { z } from "zod";
-import {
+import { registerRenderIsolation } from "./renderIsolation.ts";
+
+const verifyIsolation = registerRenderIsolation();
+const {
   createConsoleLogger,
   createRenderJob,
   executeRenderJob,
   parseRenderRequest,
   renderConfigFromRequest,
   resolveConfig,
-} from "@hyperframes/producer";
+} = await import("@hyperframes/producer");
+verifyIsolation();
 
 const Input = z.object({
   projectDir: z.string(),

@@ -69,6 +69,7 @@ export function createMcpServer(options: McpOptions = {}) {
       const response = await fetchLocal(`${baseUrl}/api/cutroom${path}`, {
         method,
         headers: {
+          origin: baseUrl,
           [AGENT_HEADER]: options.agentToken ?? "external",
           ...(body !== undefined && { "content-type": "application/json" }),
         },

