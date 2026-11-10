@@ -41,7 +41,7 @@ For example, this razors every unlocked auto-select track at frame 90 and ripple
 }
 ```
 
-New pieces get ids no clip in the project has had, such as `talk-k7q2`. To edit a piece in the same batch that cuts it, name it, with a list per source clip in the order the command cuts it: `{ "type": "split", "at": 90, "ids": { "talk": ["talk-end-q3x8"] } }`. A name must never have been used in the project, even by a clip that was deleted or undone; any other name is refused with `duplicate_id`, so add a suffix of your own that is unlikely to repeat.
+New pieces get ids no clip in the project has had, such as `talk-k7q2xa`. To edit a piece in the same batch that cuts it, name it, with a list per source clip in the order the command cuts it (a ripple through several ranges cuts a spanning clip once per range, last range first): `{ "type": "split", "at": 90, "ids": { "talk": ["talk-end-q3x8"] } }`. A name must never have been used in the project, even by a clip that was deleted or undone; any other name is refused with `duplicate_id`, so add a suffix of your own that is unlikely to repeat.
 
 ## Review queue
 

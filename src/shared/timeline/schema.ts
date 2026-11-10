@@ -111,7 +111,7 @@ const pieceIds = z
   .record(clipId, z.array(clipId).min(1).max(10_000))
   .optional()
   .describe(
-    "Ids for the pieces this command cuts off, keyed by the id of the clip they are cut from, in the order the command cuts them (a ripple through several ranges cuts one clip more than once). Each id must never have been used in this project, even by a clip that was deleted or undone; any other id is refused with duplicate_id. Pieces without one get a new random id.",
+    "Ids for the pieces this command cuts off, keyed by the id of the clip they are cut from, in the order the command cuts them. A ripple through several ranges cuts a spanning clip once per range, last range first. Each id must never have been used in this project, even by a clip that was deleted or undone; any other id is refused with duplicate_id. Pieces without one get a new random id.",
   );
 
 export const CommandSchema = z.discriminatedUnion("type", [

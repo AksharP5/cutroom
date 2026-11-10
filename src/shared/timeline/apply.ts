@@ -71,13 +71,13 @@ interface Minting {
 
 const SUFFIX = "abcdefghijklmnopqrstuvwxyz0123456789";
 /**
- * A readable id no clip has had: the base without an earlier random suffix, then four random
- * letters or digits (`shot-3-k7q2`). Ids that leave the timeline are never handed out again.
+ * A readable id no clip has had: the base without an earlier random suffix, then six random
+ * letters or digits (`shot-3-k7q2xa`). Ids that leave the timeline are never handed out again.
  */
 export const randomClipId: NewId = (base, from, taken) => {
-  const stem = from === null ? base : base.replace(/-[a-z0-9]{4}$/, "");
+  const stem = from === null ? base : base.replace(/-[a-z0-9]{6}$/, "");
   for (;;) {
-    const letters = [...crypto.getRandomValues(new Uint8Array(4))].map(
+    const letters = [...crypto.getRandomValues(new Uint8Array(6))].map(
       (byte) => SUFFIX[byte % SUFFIX.length],
     );
     const id = `${stem}-${letters.join("")}`;

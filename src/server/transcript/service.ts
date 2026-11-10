@@ -321,7 +321,6 @@ export function createTranscriptService(
             ),
           ].map((element) => element.id),
         ]);
-        const created: string[] = [];
         const after = applyTranscriptCuts(
           source.content,
           transcript,
@@ -329,11 +328,11 @@ export function createTranscriptService(
           (base) => {
             const id = randomClipId(base, null, used);
             used.add(id);
-            created.push(id);
             return id;
           },
         );
-        await recordClipIds(project, created);
+        // The original piece and every old piece leave the file, so their ids are spent too.
+        await recordClipIds(project, used);
         transcript.cutWordIds = nextIds;
         await store.writeDocument(project, document, [
           {

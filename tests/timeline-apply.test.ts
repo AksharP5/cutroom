@@ -958,7 +958,7 @@ test("every piece a command cuts takes the caller's ids in order, and spent ids 
     "s1",
     "s3",
     "title",
-    expect.stringMatching(/^title-[a-z0-9]{4}$/),
+    expect.stringMatching(/^title-[a-z0-9]{6}$/),
     "title-tail",
   ]);
   // An id in the timeline, or one the project used before, is refused.
