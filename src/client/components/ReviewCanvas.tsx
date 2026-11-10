@@ -13,12 +13,10 @@ export interface ReviewTarget {
  * composition's rectangle. `begin` stops playback and names the frame being marked.
  */
 export function ReviewCanvas({
-  projectId,
   mode,
   begin,
   onReview,
 }: {
-  projectId: string;
   mode: "draw" | "comment";
   begin: () => ReviewTarget;
   onReview?: (draft: EditorReviewDraft) => void;
@@ -109,21 +107,14 @@ export function ReviewCanvas({
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
     const marked = target.current;
-    if (marked && points.current.length > 0) {
-      const params = new URLSearchParams({
-        t: marked.time.toFixed(3),
-        format: "png",
-        output: "source",
-      });
+    if (marked && points.current.length > 0)
       onReview?.({
-        kind: mode,
         time: marked.time,
         compositionPath: marked.compositionPath,
-        points: [...points.current],
+        point: points.current[0],
+        strokes: mode === "draw" ? [[...points.current]] : [],
         elementIds: marked.elementIds,
-        frameUrl: `/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(marked.compositionPath)}?${params}`,
       });
-    }
     clearDrawing();
   };
 

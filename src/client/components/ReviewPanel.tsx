@@ -17,6 +17,8 @@ import type {
 } from "../../shared/review";
 import { FpsSchema } from "../../shared/timeline/schema";
 import { api, frameTimecode } from "../api";
+import { strokePath } from "../edit/notes";
+import { frameCaptureUrl, noteNumbers } from "../review";
 import { useFps } from "../workspace";
 import { Modal } from "./Modal";
 
@@ -158,7 +160,7 @@ export function ReviewPanel({
   const fresh = items.filter((item) => item.review.status === "open");
   const current = items.filter((item) => item.review.status !== "withdrawn");
   const accepted = items.filter((item) => item.review.status === "accepted");
-  const number = new Map(items.map((item, index) => [item.id, index + 1]));
+  const number = noteNumbers(items);
   const frameUrl = (path: string) =>
     `/api/cutroom/projects/${projectId}/attachments/${encodeURIComponent(path.split("/").at(-1) ?? "")}`;
   const timecode = (item: ReviewItem) => noteTimecode(item, noteFps(item));
@@ -406,7 +408,7 @@ export function ReviewPanel({
         >
           <div className="review-draft-heading">
             <span>
-              {draft.kind === "draw" ? <PencilSimple /> : <ChatTeardropText />}
+              {draft.strokes.length ? <PencilSimple /> : <ChatTeardropText />}
               Note at{" "}
               <span className="mono">
                 {frameTimecode(draft.time, draftFps)}
@@ -422,20 +424,19 @@ export function ReviewPanel({
             </button>
           </div>
           <div className="annotation-frame">
-            <img src={draft.frameUrl} alt="Frame for this note" />
-            {draft.kind === "draw" && (
-              <svg
-                viewBox="0 0 1 1"
-                preserveAspectRatio="none"
-                aria-hidden="true"
-              >
-                <polyline
-                  points={draft.points
-                    .map((point) => `${point.x},${point.y}`)
-                    .join(" ")}
-                />
-              </svg>
-            )}
+            <img
+              src={frameCaptureUrl(projectId, draft)}
+              alt="Frame for this note"
+            />
+            <svg
+              viewBox="0 0 1 1"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              {draft.strokes.map((points, index) => (
+                <path key={index} d={strokePath(points)} />
+              ))}
+            </svg>
           </div>
           <label className="sr-only" htmlFor="review-body">
             What should change?

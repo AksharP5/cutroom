@@ -6,7 +6,9 @@ Canvas and timeline controls come from the pinned public HyperFrames editor. Cut
 
 Settings has a New editor switch, off by default. It replaces the embedded editor's centre with Cutroom's own tool row, viewer, transport, and a timeline below a draggable split. The timeline shows and selects clips and cuts them with Resolve's editing keys; dragging clips, the inspector, file panels, and export are not there yet, so switch back for those.
 
-The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. Draw and Comment work as in the embedded editor, and the picture outline turns yellow while one is armed.
+The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. The picture outline turns yellow while Draw or Comment is armed.
+
+Notes are made on the picture. Comment drops a numbered pin where you click and opens a note beside it; Enter adds it, Shift+Enter starts a new line, and Esc discards it. Draw keeps every stroke on the picture until the note is added, and Ctrl+Z takes back the last stroke while the note is open, never the project's last edit. A drawing needs no words. Set end ends a note at the playhead, so it covers a range. Clicking the picture again before adding a note moves its pin and keeps what you typed and drew. The tool stays armed, so the next click starts the next note while the last one saves. A note that fails to save reopens with the reason. Saved notes keep their pins and strokes on the picture while the playhead is on their frame or range, and clicking a pin shows the note in Review. Pins on the picture, dots on the ruler, and rows in Review share one number per note.
 
 The transport follows DaVinci Resolve: L and J play, faster on each press up to 8x; K stops; arrows step frames, seconds, and edits. [Every key](keyboard.md). Timecode is `HH:MM:SS:FF` at the nominal rate, without drop frames. Click it to type a time: digits fill from the right, Enter seeks, and Esc cancels. Playback at 1x is audible, and Mute silences it. Faster speeds and reverse step through frames silently.
 
@@ -32,7 +34,9 @@ Zoom runs from the whole timeline to 32px per frame. The slider in the ruler's c
 
 Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the note content remains in `cutroom.json` so undo restores it. Captured frames can be reopened from the notebook and are attached when new notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.
 
-A stroke or a comment click opens the note and puts the cursor in its text, so typing never reaches the editor's shortcuts. Marking again before saving replaces the mark and keeps the words already typed; only closing the note clears them.
+A stroke or a comment click opens the note and puts the cursor in its text, so typing never reaches the editor's shortcuts. In the new editor, scrubbing with a note open moves the playhead without changing the note's start frame. Draw adds strokes to that open note at its original frame. Comment moves its pin and start frame to the new click, keeping its words and strokes. Set end uses the playhead as the note's last frame; setting or clearing it returns focus to the text. Esc discards the note and keeps the chosen tool armed.
+
+Ctrl+Z undoes typed words, with a new undo step after a pause of a second, before undoing strokes. Ctrl+Shift+Z restores them. Adding a note closes its popover immediately. Frame captures run in parallel in the background, while each project's notes post in the order they were added, so a slower drawing capture cannot swap its number with a later comment.
 
 Each note stays in the queue until an explicit step finishes it:
 

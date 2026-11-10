@@ -149,6 +149,7 @@ export function App() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const error = useWorkspace((state) => state.toast);
+  const toastAction = useWorkspace((state) => state.toastAction);
   const [toastLeaving, setToastLeaving] = useState(false);
   useEffect(() => setToastLeaving(false), [error]);
   const attachmentResolve = useRef<{
@@ -266,7 +267,9 @@ export function App() {
       const target = event.target;
       if (
         target instanceof HTMLElement &&
-        (target.closest("input,textarea,select,[contenteditable=true]") ||
+        (target.closest(
+          "input,textarea,select,[contenteditable=true],.edit-note-popover",
+        ) ||
           target.closest("dialog"))
       )
         return;
@@ -326,6 +329,21 @@ export function App() {
         ?.scrollIntoView({ block: "nearest" }),
     );
   }, []);
+  /** Saves a note on the picture without changing the current work panel. */
+  const saveNote = useCallback(
+    async (draft: EditorReviewDraft, body: string) => {
+      if (!projectId) throw new Error("No project is open.");
+      const { id, captureError } = await saveReviewNote(projectId, draft, body);
+      if (captureError && activeProjectId.current === projectId)
+        showToast(`Note saved without a frame image. ${captureError}`);
+      // The note is saved; a failed refresh must not reopen it, or it would be saved twice.
+      void refreshDocument().catch((error: unknown) =>
+        showToast(error instanceof Error ? error.message : String(error)),
+      );
+      return id;
+    },
+    [projectId, refreshDocument],
+  );
   const consumePrompt = useCallback(() => setPromptState(null), []);
   const ask = useCallback(
     (value: string) => {
@@ -405,6 +423,9 @@ export function App() {
               }}
             >
               <span title={error}>{error}</span>
+              {toastAction && (
+                <button onClick={toastAction.run}>{toastAction.label}</button>
+              )}
               <button onClick={() => setToastLeaving(true)}>Dismiss</button>
             </div>
           )}
@@ -492,7 +513,7 @@ export function App() {
                     onCancel={() => setReviewState(null)}
                     onSave={async (body) => {
                       if (!reviewDraft) return;
-                      const captureError = await saveReviewNote(
+                      const { captureError } = await saveReviewNote(
                         project.id,
                         reviewDraft,
                         body,
@@ -605,7 +626,7 @@ export function App() {
                       projectId={project.id}
                       notes={projectDocument.items}
                       onContext={onContext}
-                      onReview={onReview}
+                      onSaveNote={saveNote}
                       onOpenNote={openReview}
                     />
                   ) : (

@@ -104,7 +104,7 @@
   --marker-sand: #c4a77c;
 
   /* Pencil marks on the picture. Casing keeps them legible on any footage. */
-  --pencil-casing: rgb(0 0 0 / 0.45);
+  --pencil-casing: rgb(0 0 0 / 0.7);
 
   /* Clip kinds: rail (2px top edge), head (name strip fill), body (flat fill). */
   --clip-video: #6884d6;
@@ -234,7 +234,7 @@
   --stroke-bracket: 2px;
   --stroke-rail: 2px; /* kind rail, agent underline, tab indicator, user rule */
   --stroke-pencil: 3px;
-  --stroke-pencil-casing: 5px;
+  --stroke-pencil-casing: 7px;
 
   /* Layers */
   --z-clip: 1;
@@ -258,6 +258,7 @@
   --duration-press: 90ms;
   --duration-hover: 120ms;
   --duration-fade: 160ms;
+  --duration-note-fade: 200ms;
   --duration-panel-in: 200ms;
   --duration-panel-out: 120ms;
   --duration-indicator: 220ms;

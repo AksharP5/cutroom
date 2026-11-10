@@ -236,3 +236,70 @@ test("MCP transcription status retains the legacy job shape through successful a
     await fixture.close();
   }
 });
+
+test("review_list gives an agent every stroke, the pin, and the range of a note made on the picture", async () => {
+  const fixture = await projectFixture();
+  const project = await fixture.store.create({ name: "Picture notes" });
+  const handler = createMcpHttpHandler({
+    fetch: (url, init) => fixture.app.request(url, init),
+  });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+  const client = new Client({ name: "cutroom-review-test", version: "1.0.0" });
+  const strokes = [
+    {
+      points: [
+        { x: 0.2, y: 0.5 },
+        { x: 0.4, y: 0.3 },
+      ],
+      color: "#f2c94c",
+    },
+    { points: [{ x: 0.7, y: 0.7 }], color: "#f2c94c" },
+  ];
+  try {
+    // What the editor sends for a drawing with no words.
+    const saved = await fixture.request(
+      `/projects/${project.id}/annotations`,
+      "POST",
+      {
+        kind: "drawing",
+        body: "",
+        time: 1,
+        endTime: 2.5,
+        compositionPath: "index.html",
+        point: { x: 0.4, y: 0.3 },
+        strokes,
+      },
+    );
+    expect(saved.ok).toBe(true);
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const listed = await client.callTool({
+      name: "review_list",
+      arguments: { projectId: project.id },
+    });
+    const { items } = z
+      .object({
+        structuredContent: z.object({
+          result: z.object({ items: z.array(z.unknown()) }),
+        }),
+      })
+      .parse(listed).structuredContent.result;
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "drawing",
+        time: 1,
+        endTime: 2.5,
+        point: { x: 0.4, y: 0.3 },
+        strokes,
+        review: expect.objectContaining({ status: "open" }),
+      }),
+    ]);
+  } finally {
+    await client.close();
+    await server.stop(true);
+    await fixture.close();
+  }
+});

@@ -9,7 +9,8 @@ import {
   PencilSimple,
 } from "@phosphor-icons/react";
 import { z } from "zod";
-import type { EditorContext, EditorReviewDraft } from "../../shared/editor";
+import type { EditorContext } from "../../shared/editor";
+import { ReviewItemSchema } from "../../shared/review";
 import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
@@ -17,7 +18,9 @@ import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
-import { reportEditorError } from "../workspace";
+import { api } from "../api";
+import { noteNumbers } from "../review";
+import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
 import {
   editTimeline,
@@ -28,6 +31,7 @@ import {
 } from "./timeline";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
+import type { SaveNote } from "./NoteLayer";
 import { Viewer } from "./Viewer";
 import type { Zoom } from "./Viewer";
 
@@ -65,14 +69,14 @@ export function EditPage({
   projectId,
   notes,
   onContext,
-  onReview,
+  onSaveNote,
   onOpenNote,
 }: {
   projectId: string;
-  /** Review notes, shown as pins on the timeline ruler. */
+  /** Review notes, shown as pins on the picture and the timeline ruler. */
   notes: readonly ReviewItem[];
   onContext?: (context: EditorContext) => void;
-  onReview?: (draft: EditorReviewDraft) => void;
+  onSaveNote: SaveNote;
   onOpenNote(id: string): void;
 }) {
   const editorTools = useContext(EditorToolsContext);
@@ -158,8 +162,29 @@ export function EditPage({
         .catch((error: unknown) => reportEditorError("viewer", error));
   };
 
-  const step = (direction: "undo" | "redo") =>
-    void stepHistory(projectId, direction).catch(report);
+  const step = (direction: "undo" | "redo") => {
+    const before = notes;
+    void stepHistory(projectId, direction)
+      .then(async () => {
+        if (direction !== "undo" || !before.length) return;
+        const after = await api(
+          `${base}/review`,
+          z.object({ items: z.array(ReviewItemSchema) }),
+        );
+        const removed = before.find(
+          (note) => !after.items.some((item) => item.id === note.id),
+        );
+        if (removed && useTimeline.getState().projectId === projectId)
+          showToast(`Note ${noteNumbers(before).get(removed.id)} removed ·`, {
+            label: "Redo",
+            run: () => {
+              showToast("");
+              void stepHistory(projectId, "redo").catch(report);
+            },
+          });
+      })
+      .catch(report);
+  };
   const mark = (
     label: string,
     range: (frame: number, current: Timeline["range"]) => Timeline["range"],
@@ -319,7 +344,9 @@ export function EditPage({
           revision={revision}
           zoom={zoom}
           mode={mode}
-          onReview={onReview}
+          notes={notes}
+          onOpenNote={onOpenNote}
+          onSaveNote={onSaveNote}
         />
         <TransportBar fullscreen={fullscreen} onFullscreen={toggleFullscreen} />
       </section>

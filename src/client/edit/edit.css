@@ -200,8 +200,141 @@
 .edit-frame:not([data-live]) {
   opacity: 0.01;
 }
-.edit-picture .editor-review-canvas {
-  z-index: 2;
+/* Notes on the picture: pins, pencil strokes, and the open note's popover */
+.edit-notes {
+  position: absolute;
+  pointer-events: none;
+}
+.edit-note-surface {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: crosshair;
+}
+.edit-note-surface[data-mode="comment"] {
+  cursor: cell;
+}
+.edit-note-strokes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.edit-note-strokes path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.edit-note-casing path {
+  stroke: var(--pencil-casing);
+  stroke-width: var(--stroke-pencil-casing);
+}
+.edit-note-pencil path {
+  stroke: var(--human);
+  stroke-width: var(--stroke-pencil);
+}
+.edit-note-pin {
+  position: absolute;
+  width: var(--size-pin-viewer);
+  height: var(--size-pin-viewer);
+  margin: 0;
+  transform: translateY(-100%);
+  pointer-events: auto;
+}
+/* Footage shows through hollow pins, so they sit on the panel color. */
+.edit-note-pin:is([data-status="open"], [data-status="accepted"]) {
+  background: var(--surface-panel);
+}
+.edit-note-pin[data-status="draft"] {
+  background: var(--human);
+  color: var(--on-human);
+}
+button.edit-note-pin {
+  cursor: default;
+}
+.edit-note-popover {
+  position: absolute;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  pointer-events: auto;
+  transition:
+    opacity var(--duration-panel-in) var(--ease-out),
+    transform var(--duration-panel-in) var(--ease-out);
+}
+@starting-style {
+  .edit-note-popover {
+    opacity: 0;
+    transform: scale(var(--modal-scale));
+  }
+}
+.edit-note-popover textarea {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  field-sizing: content;
+  min-height: calc(2 * var(--leading-chat) + 14px);
+  max-height: calc(6 * var(--leading-chat) + 14px);
+  resize: none;
+  font-size: var(--type-md);
+  line-height: var(--leading-chat);
+}
+.edit-note-popover textarea:focus-visible {
+  outline: none;
+}
+.edit-note-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--type-xs);
+}
+.edit-note-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  align-items: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.edit-note-time {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.edit-note-foot[data-ranged] .edit-note-time {
+  flex-basis: 100%;
+}
+.edit-note-time > .mono {
+  padding-right: var(--space-1);
+}
+.edit-note-foot .icon-button {
+  width: var(--size-tool-button);
+  height: var(--size-tool-button);
+}
+.edit-note-foot .icon-button svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+.edit-note-end.text-button,
+.edit-note-foot .primary-button {
+  height: var(--size-tool-button);
+  padding: 0 var(--space-2);
+  font-size: var(--type-xs);
+}
+.edit-note-end.text-button {
+  gap: var(--space-1);
+}
+.edit-note-foot .primary-button {
+  margin-left: var(--space-1);
 }
 
 /* Transport */
@@ -332,4 +465,17 @@ input.edit-now {
   min-height: 0;
   overflow: hidden;
   background: var(--surface-panel);
+}
+
+.edit-note-popover {
+  overflow: auto;
+}
+.edit-note-mark,
+.edit-note-pin {
+  opacity: 1;
+  transition: opacity var(--duration-note-fade) linear;
+}
+.edit-note-mark[data-fading],
+.edit-note-pin[data-fading] {
+  opacity: 0;
 }

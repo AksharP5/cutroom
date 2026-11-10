@@ -1343,7 +1343,7 @@ option {
   width: 100%;
   height: 100%;
 }
-.annotation-frame polyline {
+.annotation-frame path {
   fill: none;
   stroke: var(--human);
   stroke-width: var(--stroke-pencil);

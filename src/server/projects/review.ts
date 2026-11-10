@@ -64,10 +64,12 @@ export function addAnnotation(
     input.kind === "drawing" ? "Add drawing" : "Add comment",
     async () => {
       const document = await store.document(project);
+      if (input.id && document.annotations.some((note) => note.id === input.id))
+        throw new HttpError(409, "A note with this id already exists.");
       const now = new Date().toISOString();
       const annotation = {
         ...input,
-        id: randomUUID(),
+        id: input.id ?? randomUUID(),
         createdAt: now,
         updatedAt: now,
       };

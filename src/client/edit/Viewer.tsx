@@ -1,8 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { EditorMode, EditorReviewDraft } from "../../shared/editor";
+import type { EditorMode } from "../../shared/editor";
+import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
-import { ReviewCanvas } from "../components/ReviewCanvas";
 import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
+import { useProjectNotes } from "./noteStore";
+import { POPOVER_WIDTH } from "./notes";
+import { NoteLayer } from "./NoteLayer";
+import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview } from "./preview";
 
@@ -26,19 +30,31 @@ export function Viewer({
   revision,
   zoom,
   mode,
-  onReview,
+  notes,
+  onOpenNote,
+  onSaveNote,
 }: {
   projectId: string;
   /** Changes whenever the composition changes on disk. */
   revision: number;
   zoom: Zoom;
   mode: EditorMode;
-  onReview?: (draft: EditorReviewDraft) => void;
+  notes: readonly ReviewItem[];
+  onOpenNote(id: string): void;
+  onSaveNote: SaveNote;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const connections = useRef(
     new Map<number, ReturnType<typeof connectPreview>>(),
   );
+  const draftId = useProjectNotes(
+    (state) => state.projects[projectId]?.draft?.id,
+  );
+  const drawing = useProjectNotes(
+    (state) => !!state.projects[projectId]?.draft?.strokes.length,
+  );
+  const [roomFor, setRoomFor] = useState<string | null>(null);
+  const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [live, setLive] = useState<Slot | null>(null);
@@ -124,14 +140,21 @@ export function Viewer({
 
   const fit = live ?? { width: 1920, height: 1080 };
   const scale =
-    zoom === "actual"
+    zoom === "actual" && !reserveNote
       ? 1
       : Math.min(
-          (stageSize.width - 24) / fit.width,
+          (stageSize.width - (reserveNote ? POPOVER_WIDTH + 48 : 24)) /
+            fit.width,
           (stageSize.height - 24) / fit.height,
         );
   const width = Math.max(0, Math.floor(fit.width * scale));
   const height = Math.max(0, Math.floor(fit.height * scale));
+  const box = {
+    width,
+    height,
+    left: reserveNote ? 12 : Math.floor((stageSize.width - width) / 2),
+    top: Math.floor((stageSize.height - height) / 2),
+  };
   const armed = mode === "draw" || mode === "comment";
   const slots = [live?.gen, pending].filter(
     (gen): gen is number => gen != null,
@@ -143,12 +166,7 @@ export function Viewer({
         className="edit-picture"
         data-armed={armed || undefined}
         data-empty={!live || undefined}
-        style={{
-          width,
-          height,
-          left: Math.floor((stageSize.width - width) / 2),
-          top: Math.floor((stageSize.height - height) / 2),
-        }}
+        style={box}
       >
         {slots.map((gen) => {
           const size = gen === live?.gen ? live : fit;
@@ -178,23 +196,19 @@ export function Viewer({
             />
           );
         })}
-        {armed && (
-          <ReviewCanvas
-            projectId={projectId}
-            mode={mode}
-            begin={() => {
-              transport.dispatch({ type: "stop" });
-              const { frame, fps } = useTransport.getState();
-              return {
-                time: frameTime(frame, fps),
-                compositionPath: "index.html",
-                elementIds: [],
-              };
-            }}
-            onReview={onReview}
-          />
-        )}
       </div>
+      <NoteLayer
+        projectId={projectId}
+        stageSize={stageSize}
+        onNeedsRoom={() => {
+          if (draftId) setRoomFor(draftId);
+        }}
+        box={box}
+        mode={mode}
+        notes={notes}
+        onOpenNote={onOpenNote}
+        onSave={onSaveNote}
+      />
     </div>
   );
 }

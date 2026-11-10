@@ -48,6 +48,8 @@ The new editor (Settings, New editor) uses DaVinci Resolve's Edit page keys, and
 | Turn clips on or off                         | `D`                      | `editClipEnabled`                 |
 | Add a marker                                 | `M`                      | `markMarkerAdd`                   |
 
+While a note is open on the picture, its text takes every key: Enter adds it, Shift+Enter starts a new line, Esc discards it, and Ctrl+Z undoes text typed since the last stroke by word or after a one-second pause before taking back strokes. Ctrl+Shift+Z restores strokes and undone text. Ruler clicks return focus to the note.
+
 L and J double the speed on each press, up to 8x; the other direction drops back to 1x, and Shift starts at 4x. Marks are undoable timeline edits that agents see through MCP. Out is inclusive on screen and exclusive in the engine's range.
 
 Timeline zoom keys hold the playhead still when it is on screen, and the middle of the view otherwise. Shift+V selects the clips under the playhead on unlocked tracks with auto-select on.
