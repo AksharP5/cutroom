@@ -170,8 +170,8 @@ test("a refused edit is taken back and the header shows the engine's reason", as
   );
   await page.getByRole("button", { name: "Dismiss" }).click();
 
-  // The server refuses after the timeline already showed the lift. The lift applied to the view
-  // the user saw, so a refusal there means the clips changed under it.
+  // The server refuses after the timeline already showed the lift. Nobody else edited, so the
+  // header gives the engine's reason in timeline terms.
   await page.route("**/api/cutroom/projects/*/commands", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     await route.fulfill({
@@ -189,7 +189,7 @@ test("a refused edit is taken back and the header shows the engine's reason", as
   await expect(timeline.locator('[data-clip="shot-2"]')).toHaveCount(0);
   await expect(timeline.locator('[data-clip="shot-2"]')).toHaveCount(1);
   await expect(page.locator(".toast span")).toHaveText(
-    "An agent changed those clips first. Press it again.",
+    "Clip shot-2 would overlap shot-3 on V1.",
   );
   expect(await clips()).toHaveLength(4);
 
@@ -274,7 +274,7 @@ test("X on a clip an agent deleted is refused, even after the agent cuts where i
   );
 });
 
-test("X lifts the editor's own piece, not an agent's piece over the same frames", async ({
+test("X never lifts an agent's piece over the same frames as the editor's refused cut", async ({
   page,
   request,
 }) => {
@@ -294,8 +294,12 @@ test("X lifts the editor's own piece, not an agent's piece over the same frames"
     await agent([{ type: "split", at: 45, clipIds: ["shot-1"] }])
   ).find((clip) => clip.start === 45)!.id;
   release();
+  // Shot 1 changed under the razor, so the razor and the X on its piece are taken back.
+  await expect(page.locator(".toast span")).toHaveText(
+    "An agent changed those clips first. Press it again.",
+  );
   await expect.poll(clips).toEqual([
-    ["shot-1", 0, 30],
+    ["shot-1", 0, 45],
     [theirs, 45, 45],
     ["shot-2", 90, 90],
     ["shot-3", 180, 90],
@@ -516,3 +520,37 @@ test("an X on a title piece is taken back when the ripple that made it is refuse
   expect(after.find((clip) => clip.id === "title")?.duration).toBe(390);
   await expect(timeline.locator("[data-clip].selected")).toHaveCount(0);
 });
+
+for (const [name, change] of [
+  // An agent ripple trims a second off shot 1, so shot 2 starts a second earlier.
+  [
+    "ripple trims the shot before",
+    { type: "trim", clipId: "shot-1", edge: "end", to: 60, ripple: true },
+  ],
+  // An agent moves shot 2 up to V2 and a second earlier.
+  [
+    "moves the shot",
+    { type: "move", clipIds: ["shot-2"], by: -30, trackBy: 1 },
+  ],
+] as const)
+  test(`Q and E at absolute frames are refused when an agent ${name} first`, async ({
+    page,
+    request,
+  }) => {
+    const { clips, seek, agent, hold } = await open(page, request, "Moved");
+    const release = await hold();
+    // At 4s both keys act on shot 2, which the view shows at 3s to 6s.
+    await seek("0400");
+    await page.keyboard.press("q");
+    await page.keyboard.press("e");
+    const after = await agent([change]);
+    release();
+
+    // The same frames would now cut shot 2 somewhere else, so neither key is sent.
+    await expect(page.locator(".toast span")).toHaveText(
+      "An agent changed those clips first. Press it again.",
+    );
+    await expect
+      .poll(clips)
+      .toEqual(after.map((clip) => [clip.id, clip.start, clip.duration]));
+  });

@@ -11,6 +11,7 @@ import {
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
 import type {
+  Clip,
   Command,
   CommandInput,
   Timeline,
@@ -46,6 +47,11 @@ interface Edit {
   uses: ReadonlySet<string>;
   /** Ids of the pieces the commands make. */
   creates: ReadonlySet<string>;
+  /**
+   * The clips a trim or razor names, as shown. Those commands cut at absolute frames, so they
+   * only mean the same cut while the clips sit where they were.
+   */
+  anchors: Clip[];
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
   dropped: boolean;
 }
@@ -159,11 +165,30 @@ export const loadTimeline = (projectId: string) =>
  * other edit left their clips alone, as with a marker after an agent's marker.
  */
 async function send(edit: Edit) {
+  const changed = new Error(
+    "An agent changed those clips first. Press it again.",
+  );
   for (const retry of [false, true]) {
     const base =
       !retry && confirmed?.projectId === edit.projectId
         ? confirmed.view
         : await read(edit.projectId);
+    // A cut at absolute frames only means the same cut while the clips it names are where the
+    // user saw them; an agent may have moved them since, whether or not the revision is stale.
+    if (
+      edit.anchors.some((seen) => {
+        const clip = base.timeline.clips.find((item) => item.id === seen.id);
+        return (
+          !clip ||
+          clip.start !== seen.start ||
+          clip.duration !== seen.duration ||
+          clip.track !== seen.track ||
+          // The server keeps source offsets to the microsecond; a shown piece may not be rounded yet.
+          Math.abs((clip.mediaStart ?? -1) - (seen.mediaStart ?? -1)) > 1e-6
+        );
+      })
+    )
+      throw changed;
     try {
       await api(
         `${project(edit.projectId)}/commands`,
@@ -181,11 +206,11 @@ async function send(edit: Edit) {
       if (error.status === 409 && !retry) continue;
       if (error.status === 409)
         throw new Error("An agent edited first. Press it again.");
-      // The commands applied to the view the user saw, so the engine refusing them here means
-      // the clips changed since. Checks only the server makes, such as exact readback, keep
-      // their own reason.
-      if (error.status === 422 && error.code !== "unsupported")
-        throw new Error("An agent changed those clips first. Press it again.");
+      // After someone else's edit, the engine refusing commands that applied to the view the
+      // user saw means the clips changed. Checks only the server makes, such as exact readback,
+      // keep their own reason.
+      if (retry && error.status === 422 && error.code !== "unsupported")
+        throw changed;
       throw error;
     }
   }
@@ -286,6 +311,13 @@ export async function editTimeline(
         ),
       ),
       creates,
+      anchors: view.timeline.clips.filter((clip) =>
+        commands.some(
+          (command) =>
+            (command.type === "trim" && command.clipId === clip.id) ||
+            (command.type === "split" && command.clipIds?.includes(clip.id)),
+        ),
+      ),
       dropped: false,
     };
     const made = edit;
