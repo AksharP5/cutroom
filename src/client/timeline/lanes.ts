@@ -184,6 +184,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
         old?.volume === clip.volume &&
         old.fadeIn === clip.fadeIn &&
         old.fadeOut === clip.fadeOut &&
+        old.automation === clip.automation &&
+        old.duration === clip.duration &&
         !preview.current?.commands.some(
           (command) => command.type === "setClip" && command.clipId === clip.id,
         )
@@ -194,7 +196,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       );
       const gain = mix?.querySelector<HTMLElement>('[data-mix="gain"]');
       if (gain) gain.style.top = `${gainHeight(clip.volume)}%`;
-      mix?.querySelector("path")?.setAttribute("d", fadePath(clip));
+      mix?.querySelector("path")?.setAttribute("d", fadePath(clip, shown.fps));
       for (const edge of ["fadeIn", "fadeOut"] as const) {
         const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
         if (handle)

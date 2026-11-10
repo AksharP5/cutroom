@@ -53,6 +53,8 @@ export const ClipSchema = z.object({
   /** Clip-edge fades, in timeline frames. */
   fadeIn: frame.default(0),
   fadeOut: frame.default(0),
+  /** HyperFrames clip-local automation, stored in its native attribute format. */
+  automation: z.string().nullable().default(null),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */

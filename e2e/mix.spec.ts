@@ -235,4 +235,41 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   expect(
     await page.locator(".tl-meter-level").first().getAttribute("style"),
   ).toBe(idle);
+  await page.screenshot({ path: info.outputPath("mix-envelope.png") });
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("400");
+  await page.keyboard.press("Enter");
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 40, y: 7 } });
+  await page.keyboard.press("e");
+  await expect
+    .poll(async () => ({
+      duration: (await music()).duration,
+      fadeOut: (await music()).fadeOut,
+    }))
+    .toEqual({ duration: 120, fadeOut: 0 });
+  await expect(
+    page.locator('[data-clip-mix="music"] [data-mix="fadeOut"]'),
+  ).toHaveAttribute("style", "right: 0%;");
+  await page.screenshot({ path: info.outputPath("split-envelope.png") });
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await music()).duration).toBe(240);
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("200");
+  await page.keyboard.press("Enter");
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 40, y: 7 } });
+  await page.keyboard.press("w");
+  await expect
+    .poll(async () => ({
+      duration: (await music()).duration,
+      fadeOut: (await music()).fadeOut,
+    }))
+    .toEqual({ duration: 60, fadeOut: 0 });
+  await drag(page, '[data-clip-mix="music"] [data-mix="fadeOut"]', -35, 0);
+  await expect.poll(async () => (await music()).fadeOut).toBeGreaterThan(0);
+  expect((await music()).fadeOut).toBeLessThanOrEqual(60);
+  await page.screenshot({ path: info.outputPath("trimmed-envelope.png") });
 });

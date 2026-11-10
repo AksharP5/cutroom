@@ -37,6 +37,7 @@ const clip = (
   opacity: null,
   fadeIn: 0,
   fadeOut: 0,
+  automation: null,
   enabled: true,
   startRef: null,
   ...extra,

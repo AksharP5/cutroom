@@ -874,7 +874,12 @@ export function Timeline({
                 {clips
                   .filter(({ clip }) => clip.hasAudio)
                   .map(({ clip, row }) => (
-                    <ClipMix key={clip.id} clip={clip} row={row} />
+                    <ClipMix
+                      key={clip.id}
+                      clip={clip}
+                      row={row}
+                      fps={timeline.fps}
+                    />
                   ))}
                 {clips.map(
                   ({ clip, row }) =>

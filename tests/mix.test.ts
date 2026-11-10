@@ -1,11 +1,19 @@
 import { expect, test } from "bun:test";
 import { audioDbToGain, MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
-import { parseAudioElements } from "@hyperframes/engine";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  parseAudioElements,
+  processCompositionAudio,
+} from "@hyperframes/engine";
 import { applyAll } from "../src/shared/timeline/apply";
 import {
   CommandSchema,
   emptyTimelineSettings,
 } from "../src/shared/timeline/schema";
+import { countingIds } from "./clip-ids";
+import type { ClipOrigin } from "../src/shared/timeline/apply";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
   parseComposition,
@@ -81,4 +89,204 @@ test("preview media opts into the opaque frame's CORS audio path without changin
     '<audio crossorigin="use-credentials" src="other.wav">',
   );
   expect(preview).toContain('const tag = "<audio>"');
+});
+
+async function ffmpeg(args: string[]) {
+  const process = Bun.spawn(["ffmpeg", "-v", "error", "-nostdin", ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [bytes, error, code] = await Promise.all([
+    new Response(process.stdout).arrayBuffer(),
+    new Response(process.stderr).text(),
+    process.exited,
+  ]);
+  if (code !== 0) throw new Error(error);
+  return new Float32Array(bytes);
+}
+
+function edited(source: string, commands: CommandInput[]) {
+  const parsed = parseComposition(source, emptyTimelineSettings());
+  const origins = new Map<string, ClipOrigin>();
+  const next = applyAll(
+    parsed.timeline,
+    commands.map((command) => CommandSchema.parse(command)),
+    { newId: countingIds, onCreate: (id, origin) => origins.set(id, origin) },
+  );
+  const html = patchComposition(parsed, next, origins);
+  expect(parseComposition(html, settingsOf(next)).timeline).toEqual(next);
+  return { html, timeline: next };
+}
+
+const faded = (fadeIn: number, fadeOut: number) =>
+  `<main data-composition-id="main" data-duration="8" data-fps="30"><audio id="music" src="tone.wav" data-start="0" data-duration="8" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"></audio></main>`;
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "splitting fades preserves the rendered audio, including cuts inside either fade",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "cutroom-split-audio-"));
+    try {
+      await ffmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=220:duration=8:sample_rate=48000",
+        join(root, "tone.wav"),
+      ]);
+      const render = async (source: string, name: string) => {
+        const output = join(root, `${name}.m4a`);
+        const result = await processCompositionAudio(
+          parseAudioElements(source),
+          root,
+          join(root, name),
+          output,
+          8,
+        );
+        expect(result.success, result.error).toBe(true);
+        return ffmpeg([
+          "-i",
+          output,
+          "-ac",
+          "1",
+          "-ar",
+          "48000",
+          "-f",
+          "f32le",
+          "pipe:1",
+        ]);
+      };
+      const peak = (samples: Float32Array, time: number) =>
+        samples
+          .subarray(
+            Math.round((time - 0.01) * 48000),
+            Math.round((time + 0.01) * 48000),
+          )
+          .reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
+      for (const [fadeIn, fadeOut, at, automated] of [
+        [0, 4, 120],
+        [2, 6, 30],
+        [2, 6, 120],
+        [2, 6, 180],
+        [2, 6, 120, true],
+        [0, 4, 120, true],
+      ] as const) {
+        const source = faded(fadeIn, fadeOut).replace(
+          "<audio ",
+          automated
+            ? `<audio data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0.3,"curve":1},{"t":8,"v":0.9}]}]}' `
+            : "<audio ",
+        );
+        const reference = await render(
+          source,
+          `whole-${fadeIn}-${fadeOut}-${at}-${automated}`,
+        );
+        const split = edited(source, [
+          { type: "split", clipIds: ["music"], at },
+        ]);
+        const actual = await render(
+          split.html,
+          `split-${fadeIn}-${fadeOut}-${at}-${automated}`,
+        );
+        const levels = [0.5, 1.5, 2, 3.95, 4.05, 5, 6.5, 7.8].map((time) => ({
+          time,
+          differenceDb:
+            20 * Math.log10(peak(actual, time) / peak(reference, time)),
+        }));
+        for (const level of levels)
+          expect(
+            Math.abs(level.differenceDb),
+            JSON.stringify({ fadeIn, fadeOut, at, levels }),
+          ).toBeLessThan(1);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
+
+test("trim, Q/W, overwrite and ripple cuts keep fades inside every surviving piece and editable", () => {
+  const source = faded(2, 6).replace(
+    "</main>",
+    '<div id="edit" data-start="0" data-duration="8" data-track-index="1"></div></main>',
+  );
+  const cases: CommandInput[][] = [
+    [{ type: "trim", clipId: "music", edge: "end", to: 60 }],
+    [{ type: "trim", clipId: "music", edge: "start", to: 180 }],
+    [{ type: "trim", clipId: "edit", edge: "start", to: 180, ripple: true }],
+    [{ type: "trim", clipId: "edit", edge: "end", to: 60, ripple: true }],
+    [
+      {
+        type: "insert",
+        track: 0,
+        at: 60,
+        mode: "overwrite",
+        clip: { kind: "audio", src: "tone.wav", duration: 120 },
+      },
+    ],
+    [
+      { type: "split", clipIds: ["edit"], at: 60 },
+      { type: "split", clipIds: ["edit-2"], at: 180 },
+      { type: "remove", clipIds: ["edit-2"], ripple: true },
+    ],
+  ];
+  for (const [index, commands] of cases.entries()) {
+    const result = edited(source, commands);
+    const music = result.timeline.clips.filter((clip) => clip.kind === "audio");
+    expect(music.length).toBeGreaterThan(0);
+    expect(music.map((clip) => [clip.fadeIn, clip.fadeOut])).toEqual(
+      [
+        [[60, 0]],
+        [[0, 60]],
+        [[0, 60]],
+        [[60, 0]],
+        [
+          [60, 0],
+          [0, 0],
+          [0, 60],
+        ],
+        [
+          [60, 0],
+          [0, 60],
+        ],
+      ][index],
+    );
+    for (const clip of music) {
+      expect(clip.fadeIn + clip.fadeOut).toBeLessThanOrEqual(clip.duration);
+      expect(() =>
+        edited(result.html, [
+          {
+            type: "setClip",
+            clipId: clip.id,
+            fadeOut: clip.duration - clip.fadeIn,
+          },
+        ]),
+      ).not.toThrow();
+    }
+    if (commands[0]!.type === "trim" && commands[0]!.edge === "start")
+      expect(music[0]!.fadeIn).toBe(0);
+    if (commands[0]!.type === "trim" && commands[0]!.edge === "end")
+      expect(music[0]!.fadeOut).toBe(0);
+  }
+});
+
+test("editing overlapping authored fades writes the normalized pair that the timeline shows", () => {
+  const source = faded(2, 6).replaceAll(
+    'data-duration="8"',
+    'data-duration="2"',
+  );
+  const parsed = parseComposition(source, emptyTimelineSettings());
+  expect(parsed.timeline.clips[0]).toMatchObject({
+    duration: 60,
+    fadeIn: 15,
+    fadeOut: 45,
+  });
+  const result = edited(source, [
+    { type: "setClip", clipId: "music", fadeOut: 30 },
+  ]);
+  expect(result.timeline.clips[0]).toMatchObject({ fadeIn: 15, fadeOut: 30 });
+  expect(parseAudioElements(result.html)[0]).toMatchObject({
+    fadeIn: 0.5,
+    fadeOut: 1,
+  });
 });

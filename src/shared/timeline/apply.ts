@@ -1,4 +1,5 @@
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
+import { windowMix } from "./mix";
 import { newTrack, nextTrackIndex } from "./tracks";
 
 export type TimelineErrorCode =
@@ -339,12 +340,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const trimmed = clips.map((clip) => {
         if (!ids.has(clip.id)) return clip;
         if (command.edge === "end")
-          return { ...clip, duration: clip.duration + delta };
+          return windowClip(clip, clip.start, clipEnd(clip) + delta, fps);
         return {
-          ...clip,
+          ...windowClip(clip, clip.start + delta, clipEnd(clip), fps),
           start: command.ripple ? clip.start : clip.start + delta,
-          duration: clip.duration - delta,
-          mediaStart: advance(clip, delta, fps),
         };
       });
       if (!command.ripple) return { ...timeline, clips: trimmed };
@@ -480,6 +479,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         opacity: null,
         fadeIn: 0,
         fadeOut: 0,
+        automation: null,
         enabled: true,
         startRef: null,
       };
@@ -992,6 +992,19 @@ function advance(clip: Clip, frames: number, fps: Fps): number | null {
     : clip.mediaStart + ((frames * fps.den) / fps.num) * clip.playbackRate;
 }
 
+/** Every cut or trim takes one source/audio window before any ripple moves it. */
+function windowClip(clip: Clip, start: number, end: number, fps: Fps): Clip {
+  const duration = end - start;
+  if (duration <= 0) return { ...clip, start, duration };
+  return {
+    ...clip,
+    ...windowMix(clip, start - clip.start, duration, fps),
+    start,
+    duration,
+    mediaStart: advance(clip, start - clip.start, fps),
+  };
+}
+
 /** The timeline as it reads back once written: source offsets at their canonical microsecond. */
 export function canonicalTimeline(timeline: Timeline): Timeline {
   return {
@@ -1021,18 +1034,15 @@ function splitClips(
     const id = name(clip.id, clip.id);
     onCreate(id, { copyOf: clip.id });
     return {
-      ...clip,
+      ...windowClip(clip, at, clipEnd(clip), fps),
       id,
-      start: at,
-      duration: clipEnd(clip) - at,
-      mediaStart: advance(clip, at - clip.start, fps),
       startRef: null,
     };
   });
   const ids = new Set(targets.map((clip) => clip.id));
   const cut = [
     ...clips.map((clip) =>
-      ids.has(clip.id) ? { ...clip, duration: at - clip.start } : clip,
+      ids.has(clip.id) ? windowClip(clip, clip.start, at, fps) : clip,
     ),
     ...rights,
   ];
@@ -1105,16 +1115,9 @@ function clearRange(
   );
   const cut = next.flatMap((clip) => {
     if (clip.track !== track || !overlaps(clip)) return [clip];
-    if (clip.start < from) return [{ ...clip, duration: from - clip.start }];
+    if (clip.start < from) return [windowClip(clip, clip.start, from, fps)];
     if (clipEnd(clip) <= to) return [];
-    return [
-      {
-        ...clip,
-        start: to,
-        duration: clipEnd(clip) - to,
-        mediaStart: advance(clip, to - clip.start, fps),
-      },
-    ];
+    return [windowClip(clip, to, clipEnd(clip), fps)];
   });
   return regroupLinks(
     cut,

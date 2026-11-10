@@ -872,15 +872,6 @@
   cursor: ns-resize;
   pointer-events: auto;
 }
-.tl-gain::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: var(--text-primary);
-}
 .tl-fade-handle {
   position: absolute;
   top: 1px;
