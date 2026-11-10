@@ -66,6 +66,9 @@ const track = (index: number, extra: Partial<Track> = {}): Track => ({
   name: null,
   locked: false,
   autoSelect: true,
+  enabled: true,
+  muted: false,
+  solo: false,
   ...extra,
 });
 const timeline = (clips: Clip[], tracks: Track[]): Timeline =>

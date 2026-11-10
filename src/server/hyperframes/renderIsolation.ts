@@ -16,7 +16,7 @@ function replaceOnce(
 }
 
 /** Version-checked host changes, like studioPlugin. No dependency files are modified. */
-export function registerRenderIsolation() {
+export function registerRenderIsolation(sources: Record<string, string> = {}) {
   for (const name of ["producer", "engine"]) {
     const manifest: unknown = JSON.parse(
       readFileSync(
@@ -55,7 +55,19 @@ export function registerRenderIsolation() {
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
+          "rebaseDirectEntryAssetPaths(cutroomSources[htmlPath] ?? readTextFile(htmlPath), projectDir, htmlPath)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "const rawSubHtml = normalizeCompositionSrcs(read.text, projectDir);",
+          "const rawSubHtml = normalizeCompositionSrcs(cutroomSources[filePath] ?? read.text, projectDir);",
+          url,
+        );
         source = replaceOnce(
           source,
           "function createFileServer(options) {",
@@ -93,6 +105,13 @@ export function registerRenderIsolation() {
           source,
           "      const ext = extname(filePath).toLowerCase();",
           "      const ext = extname(relativePath).toLowerCase();",
+          url,
+        );
+        // Static parsing excludes hidden media. Browser probing must not add it back to the mix.
+        source = replaceOnce(
+          source,
+          "    mediaEls.forEach((el) => {\n      const htmlEl = el;",
+          '    mediaEls.forEach((el) => {\n      const htmlEl = el;\n      if (htmlEl.closest("[data-hidden]")) return;',
           url,
         );
         producerLoaded = true;

@@ -1,4 +1,5 @@
 import { parseFpsWithDefault } from "@hyperframes/core";
+import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
   isSubCompositionHost,
@@ -22,6 +23,8 @@ import {
   toSeconds,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
+import { trackMix } from "../../shared/timeline/tracks";
+import type { TrackMix } from "../../shared/timeline/tracks";
 import type {
   Clip,
   ClipKind,
@@ -258,8 +261,11 @@ export function parseComposition(
   {
     scope = "document",
     mediaLengths = new Map(),
+    rootId,
   }: {
     scope?: CompositionScope;
+    /** A bundled scene instance whose tracks are mixed independently of its parent. */
+    rootId?: string;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
@@ -275,7 +281,10 @@ export function parseComposition(
       (element) => element.attrs["data-composition-id"] !== undefined,
     );
   const all = scopeElements(roots, scope);
-  const root = rootOf(all);
+  const root =
+    rootId === undefined
+      ? rootOf(all)
+      : all.find((element) => element.attrs["data-composition-id"] === rootId);
   if (!root)
     throw new TimelineError(
       "unsupported",
@@ -415,7 +424,8 @@ export function parseComposition(
       hasAudio:
         kind === "audio" ||
         (kind === "video" &&
-          element.attrs.muted === undefined &&
+          (element.attrs.muted === undefined ||
+            element.attrs["data-cutroom-muted"] !== undefined) &&
           (element.attrs["data-has-audio"] ?? "true") === "true"),
       link: element.attrs["data-link"] || null,
       label:
@@ -423,7 +433,9 @@ export function parseComposition(
         element.attrs["data-label"] ??
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
-      enabled: element.attrs["data-hidden"] === undefined,
+      enabled:
+        element.attrs["data-hidden"] === undefined ||
+        element.attrs["data-cutroom-track-hidden"] !== undefined,
       startRef:
         referenced && typeof referencedEnd === "number"
           ? {
@@ -642,7 +654,8 @@ function clipChanges(
   after: Clip,
   element: SourceElement,
   fps: Fps,
-  normalizeTracks = false,
+  normalizeTracks: boolean,
+  mix: TrackMix,
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
@@ -699,9 +712,83 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
-  if (before.enabled !== after.enabled)
-    changes.push(["data-hidden", after.enabled ? null : ""]);
+  const hidden = !after.enabled || mix.hidden.has(after.track);
+  const trackHidden = after.enabled && mix.hidden.has(after.track);
+  if (has("data-hidden") !== hidden)
+    changes.push(["data-hidden", hidden ? "" : null]);
+  if (has("data-cutroom-track-hidden") !== trackHidden)
+    changes.push(["data-cutroom-track-hidden", trackHidden ? "" : null]);
+  // Muting embedded sound must keep the picture visible and preserve the authored mute.
+  const soundOff =
+    after.kind === "video" &&
+    after.hasAudio &&
+    (!after.enabled || mix.muted.has(after.track));
+  const authoredMuted = has("muted") && !has("data-cutroom-muted");
+  if (has("muted") !== (authoredMuted || soundOff))
+    changes.push(["muted", authoredMuted || soundOff ? "" : null]);
+  if (has("data-cutroom-muted") !== (soundOff && !authoredMuted))
+    changes.push([
+      "data-cutroom-muted",
+      soundOff && !authoredMuted ? "" : null,
+    ]);
   return changes;
+}
+
+/** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */
+export function applyTrackMix(parsed: ParsedComposition): string {
+  const { html, timeline } = parsed;
+  const spans = new Map(
+    scanHtmlOpeningTags(html).map((span) => [span.start, span]),
+  );
+  const mix = trackMix(timeline.tracks);
+  return applyEdits(
+    html,
+    timeline.clips.flatMap((clip) => {
+      const element = parsed.elements.get(clip.id)!;
+      return attributeEdits(
+        openingTag(spans, element, clip.id),
+        html,
+        clipChanges(clip, clip, element, timeline.fps, false, mix),
+      );
+    }),
+  );
+}
+
+/** Sidecar settings belong to a file, including every instance of that file in a preview bundle. */
+export function mixCompositionInstances(
+  html: string,
+  settings: TimelineSettings,
+  composition: string,
+  activeComposition: string,
+  mediaLengths: ReadonlyMap<string, number>,
+) {
+  const canonical = (path: string) =>
+    posix.normalize(path.replaceAll("\\", "/")).replace(/^\/+/, "");
+  const elements = scopeElements(parseElements(html).roots, "document");
+  const root =
+    elements.find(
+      ({ attrs }) =>
+        attrs["data-root"] === "true" &&
+        attrs["data-composition-id"] !== undefined,
+    ) ??
+    elements.find(({ attrs }) => attrs["data-composition-id"] !== undefined);
+  const ids = elements.flatMap((element) => {
+    const { attrs } = element;
+    const id = attrs["data-composition-id"];
+    const file = attrs["data-composition-file"];
+    return id &&
+      (file
+        ? canonical(file) === canonical(composition)
+        : element === root &&
+          canonical(activeComposition) === canonical(composition))
+      ? [id]
+      : [];
+  });
+  for (const rootId of ids)
+    html = applyTrackMix(
+      parseComposition(html, settings, { rootId, mediaLengths }),
+    );
+  return html;
 }
 
 function indentOf(html: string, at: number): string {
@@ -715,6 +802,7 @@ function copyMarkup(
   template: Clip,
   clip: Clip,
   normalizeTracks: boolean,
+  mix: TrackMix,
 ): string {
   const element = parsed.elements.get(template.id)!;
   const authoredId = element.attrs.id;
@@ -747,6 +835,7 @@ function copyMarkup(
         element,
         parsed.timeline.fps,
         normalizeTracks,
+        mix,
       ),
       ...(origin !== undefined &&
       clip.link !== null &&
@@ -760,7 +849,12 @@ function copyMarkup(
   ]);
 }
 
-function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
+function insertMarkup(
+  clip: Clip,
+  input: InsertClip,
+  fps: Fps,
+  mix: TrackMix,
+): string {
   const attributes: AttributeChange[] = [
     ["id", clip.id],
     ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
@@ -776,6 +870,18 @@ function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
+    ...(clip.link ? [["data-link", clip.link] as const] : []),
+    ...(!clip.enabled || mix.hidden.has(clip.track)
+      ? [["data-hidden", ""] as const]
+      : []),
+    ...(clip.enabled && mix.hidden.has(clip.track)
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...(clip.kind === "video" &&
+    clip.hasAudio &&
+    (!clip.enabled || mix.muted.has(clip.track))
+      ? [["muted", ""] as const, ["data-cutroom-muted", ""] as const]
+      : []),
     ...(clip.mediaStart
       ? [
           [
@@ -950,13 +1056,21 @@ export function patchComposition(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   const stacking = stackingEdits(parsed, after, previous);
+  const mix = trackMix(after.tracks);
   const edits: Edit[] = stacking ?? [];
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
     const next = current.get(clip.id);
     if (next) {
-      const changes = clipChanges(clip, next, element, fps, stacking !== null);
+      const changes = clipChanges(
+        clip,
+        next,
+        element,
+        fps,
+        stacking !== null,
+        mix,
+      );
       if (
         parsed.anonymous.has(clip.id) &&
         (changes.length ||
@@ -1013,7 +1127,7 @@ export function patchComposition(
       const indent = lastClip ? indentOf(html, lastClip[1].start) : "";
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${indent}${insertMarkup(clip, origin.insert, fps)}`,
+        `\n${indent}${insertMarkup(clip, origin.insert, fps, mix)}`,
       ]);
       continue;
     }
@@ -1022,7 +1136,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null)}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix)}`,
     ]);
   }
   for (const [at, texts] of inserts)

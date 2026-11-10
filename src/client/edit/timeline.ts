@@ -127,17 +127,29 @@ function name(commands: Command[], timeline: Timeline) {
     }
     const ids: Record<string, string[]> = { ...command.ids };
     let clipId = command.type === "insert" ? command.clip.id : undefined;
+    let audioId =
+      command.type === "insert" ? command.linkedAudio?.id : undefined;
     current = apply(current, command, {
+      onCreate: (id, origin) => {
+        creates.add(id);
+        if (command.type !== "insert" || !("insert" in origin)) return;
+        if (origin.insert.kind === command.clip.kind) clipId = id;
+        else audioId = id;
+      },
       newId: (base, from, taken) => {
         const id = randomClipId(base, from, taken);
         creates.add(id);
-        if (from === null) clipId = id;
-        else ids[from] = [...(ids[from] ?? []), id];
+        if (from !== null) ids[from] = [...(ids[from] ?? []), id];
         return id;
       },
     });
     return command.type === "insert"
-      ? { ...command, ids, clip: { ...command.clip, id: clipId } }
+      ? {
+          ...command,
+          ids,
+          clip: { ...command.clip, id: clipId },
+          ...(audioId !== undefined && { linkedAudio: { id: audioId } }),
+        }
       : { ...command, ids };
   });
   return { commands: named, creates, timeline: current };

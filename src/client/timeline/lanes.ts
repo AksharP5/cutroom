@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
+import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { formatTimecode } from "../edit/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
 import type { Bodies } from "./bodies";
@@ -562,13 +563,30 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const media = mediaDrag();
     if (!media || !event.dataTransfer.types.includes(MEDIA_DRAG_TYPE))
       return null;
-    const row = rowAt(event.clientY);
+    let row = rowAt(event.clientY);
+    const rows = latest.current.rows;
+    const { y } = local(event.clientX, event.clientY);
+    const first = rows[0];
+    const last = rows.at(-1);
+    const above = first && y < first.top && media.kind !== "audio";
+    const below = last && y >= last.top + last.height && media.kind === "audio";
+    const creating = above || below;
+    if (creating) {
+      const kind = above ? "video" : "audio";
+      row = {
+        track: newTrack(nextTrackIndex(rows.map((row) => row.track)), kind),
+        id: kind === "video" ? "New video track" : "New audio track",
+        top: above ? 0 : last!.top + last!.height + 1,
+        height: above ? first!.height : last!.height,
+      };
+    }
     const { timeline, playhead } = latest.current;
     const { fps } = timeline;
     const dragged = {
       kind: media.kind,
       src: media.path,
       frames: Math.max(1, Math.floor((media.seconds * fps.num) / fps.den)),
+      hasAudio: media.hasAudio,
     };
     return {
       media: dragged,
@@ -582,6 +600,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
           frameAt(event.clientX),
           playhead(),
           reach(event.ctrlKey || event.metaKey),
+          creating
+            ? rows
+                .filter(
+                  (row) =>
+                    !timeline.tracks.some(
+                      (track) => track.index === row.track.index,
+                    ),
+                )
+                .map((row) => row.track)
+            : [],
         ),
     };
   }
@@ -601,8 +629,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
     drawn.current = key;
     render(latest.current.timeline, drop);
     box.className = `tl-ghost ${media.kind}`;
+    box.dataset.newTrack = latest.current.rows.some(
+      (item) => item.track.index === row.track.index,
+    )
+      ? "false"
+      : "true";
     box.style.width = `${Math.max(1, media.frames * ppf - 1)}px`;
-    box.textContent = media.src.split("/").at(-1) ?? "";
+    box.textContent = `${box.dataset.newTrack === "true" ? `${row.id}: ` : ""}${media.src.split("/").at(-1) ?? ""}`;
     mark(box, drop.at ?? 0, row);
   }
 

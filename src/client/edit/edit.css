@@ -125,6 +125,13 @@
   width: var(--size-icon-button);
   height: var(--size-icon-button);
 }
+.edit-export-notice {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
 .edit-export {
   height: var(--size-tool-button);
   padding: 0 9px;

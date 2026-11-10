@@ -1,6 +1,7 @@
 import { mediaSettings, peakLevels } from "../../shared/media";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
+import { newTrack } from "../../shared/timeline/tracks";
 import { nominal } from "../edit/timecode";
 
 /** A CSS time in milliseconds. Built CSS is minified, which writes `220ms` as `.22s`. */
@@ -153,20 +154,13 @@ export interface RowSizes {
   /** Seam under every lane. */
   seam: number;
   divider: number;
+  padding?: number;
 }
 export interface RowLayout {
   rows: Row[];
   dividerTop: number;
   height: number;
 }
-
-const placeholder = (index: number, kind: Track["kind"]): Track => ({
-  index,
-  kind,
-  name: null,
-  locked: false,
-  autoSelect: true,
-});
 
 /**
  * Video tracks stack upward from the divider and audio tracks downward. There is always at least
@@ -182,12 +176,12 @@ export function trackRows(
     if (all.some((track) => track.kind === kind)) continue;
     let index = 0;
     while (all.some((track) => track.index === index)) index++;
-    all.push(placeholder(index, kind));
+    all.push(newTrack(index, kind));
   }
   const video = all.filter((track) => track.kind === "video");
   const audio = all.filter((track) => track.kind === "audio");
   const rows: Row[] = [];
-  let top = 0;
+  let top = sizes.padding ?? 0;
   for (const [index, track] of video.toReversed().entries()) {
     rows.push({
       track,
@@ -203,7 +197,7 @@ export function trackRows(
     rows.push({ track, id: `A${index + 1}`, top, height: sizes.audio });
     top += sizes.audio + sizes.seam;
   }
-  return { rows, dividerTop, height: top };
+  return { rows, dividerTop, height: top + (sizes.padding ?? 0) };
 }
 
 /** Rows that touch a vertical span. */

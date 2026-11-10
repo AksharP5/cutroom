@@ -7,6 +7,7 @@ import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
+import { readTrackMix } from "../src/server/timeline/mix";
 import { projectFixture } from "./project-fixture";
 
 const timelineFixture = async () => {
@@ -21,6 +22,78 @@ const timelineFixture = async () => {
     );
   return { ...fixture, project, files };
 };
+
+test("outside HTML uses persisted mute and solo on read without a history write or undo loop", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const endpoint = `/projects/${project.id}/timeline`;
+  const read = async () =>
+    TimelineViewSchema.parse(await (await fixture.request(endpoint)).json());
+  try {
+    const view = await read();
+    const response = await fixture.request(
+      `/projects/${project.id}/commands`,
+      "POST",
+      {
+        expectedRevision: view.revision,
+        commands: [
+          {
+            type: "setTrack",
+            index: 3,
+            kind: "audio",
+            name: "Voice",
+            solo: true,
+          },
+          {
+            type: "setTrack",
+            index: 4,
+            kind: "audio",
+            name: "Music",
+            muted: true,
+          },
+        ],
+      },
+    );
+    expect(response.status).toBe(200);
+    const index = join(project.path, "index.html");
+    await writeFile(
+      index,
+      (await readFile(index, "utf8")).replace(
+        "</main>",
+        `
+      <audio id="music" src="music.wav" data-start="0" data-duration="2" data-track-index="4"></audio>
+      <audio id="new-track" src="music.wav" data-start="0" data-duration="2" data-track-index="5"></audio>
+      <video id="embedded" src="picture.mp4" data-start="0" data-duration="2" data-track-index="6"></video>
+    </main>`,
+      ),
+    );
+    const mixed = await read();
+    expect(
+      mixed.timeline.clips
+        .filter((clip) => ["music", "new-track", "embedded"].includes(clip.id))
+        .every((clip) => clip.enabled),
+    ).toBe(true);
+    const raw = await readFile(index, "utf8");
+    const [prepared] = await readTrackMix(fixture.store, project);
+    const written = prepared!.html;
+    expect(written).toMatch(
+      /id="music"[^>]*data-hidden="" data-cutroom-track-hidden=""/,
+    );
+    expect(written).toMatch(
+      /id="new-track"[^>]*data-hidden="" data-cutroom-track-hidden=""/,
+    );
+    expect(written).toMatch(/id="embedded"[^>]*muted="" data-cutroom-muted=""/);
+    expect(await read()).toEqual(mixed);
+    expect(await readFile(index, "utf8")).toBe(raw);
+    expect((await readTrackMix(fixture.store, project))[0]!.html).toBe(written);
+    await fixture.request(`/projects/${project.id}/history/undo`, "POST", {});
+    expect(
+      (await read()).timeline.clips.some((clip) => clip.id === "music"),
+    ).toBe(false);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("a command batch is atomic, one undo step, and refuses stale revisions", async () => {
   const fixture = await timelineFixture();
@@ -345,6 +418,8 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
       (tool) => tool.name === "timeline_edit",
     );
     expect(JSON.stringify(edit?.inputSchema)).toContain("insert");
+    expect(JSON.stringify(edit?.inputSchema)).toContain("linkedAudio");
+    expect(JSON.stringify(edit?.inputSchema)).toContain("solo");
     expect(JSON.stringify(edit?.inputSchema)).not.toContain("sourceDuration");
     const read = result.parse(
       await client.callTool({
@@ -373,6 +448,54 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
     const stale = await client.callTool(editCall);
     expect(stale.isError).toBe(true);
     expect(JSON.stringify(stale.content)).toContain("409");
+    const mixed = result.parse(
+      await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: fixture.project.id,
+          expectedRevision: edited.revision,
+          label: "Set up the mix",
+          commands: [
+            {
+              type: "setTrack",
+              index: 3,
+              kind: "audio",
+              name: "Music",
+              muted: true,
+              solo: true,
+            },
+            { type: "setTrack", index: 0, enabled: false },
+          ],
+        },
+      }),
+    ).structuredContent.result;
+    expect(mixed.timeline.tracks.at(-1)).toMatchObject({
+      index: 3,
+      kind: "audio",
+      name: "Music",
+      muted: true,
+      solo: true,
+    });
+    expect(
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: fixture.project.id },
+        }),
+      ).structuredContent.result,
+    ).toEqual(mixed);
+    await fixture.request(
+      `/projects/${fixture.project.id}/history/undo`,
+      "POST",
+    );
+    expect(
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: fixture.project.id },
+        }),
+      ).structuredContent.result.timeline,
+    ).toEqual(edited.timeline);
     const view = await client.callTool({
       name: "timeline_view",
       arguments: { projectId: fixture.project.id, frame: 1 },
@@ -707,10 +830,30 @@ test("a scene edit declares the entry layer in the same undo step", async () => 
 });
 
 test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
-  "an inserted video is marked as having sound only when its file has an audio stream",
+  "ordinary MCP video inserts create linked audio by default, with exact readback and one undo step",
   async () => {
     const fixture = await timelineFixture();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({
+      name: "cutroom-insert-test",
+      version: "1.0.0",
+    });
+    const result = z.object({
+      structuredContent: z.object({ result: TimelineViewSchema }),
+    });
     try {
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const original = await fixture.files();
       const { path, id } = fixture.project;
       const picture = ["-f", "lavfi", "-i", "color=c=gray:s=64x36:r=10:d=1"];
       const tone = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"];
@@ -724,28 +867,93 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         );
         expect(made.stderr.toString()).toBe("");
       }
-      const { revision } = TimelineViewSchema.parse(
-        await (await fixture.request(`/projects/${id}/timeline`)).json(),
+      const voice = Bun.spawnSync(
+        ["ffmpeg", "-v", "error", ...tone, join(path, "voice.wav")],
+        { stderr: "pipe" },
       );
+      expect(voice.exitCode).toBe(0);
+      const { revision } = result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: id },
+        }),
+      ).structuredContent.result;
       const insert = (src: string, at: number) => ({
         type: "insert",
         track: 5,
         at,
         clip: { id: src.replace(".mp4", ""), kind: "video", src, duration: 10 },
       });
-      const edited = await fixture.request(`/projects/${id}/commands`, "POST", {
-        expectedRevision: revision,
-        commands: [insert("silent.mp4", 0), insert("sound.mp4", 10)],
-      });
-      const { timeline } = TimelineViewSchema.parse(await edited.json());
+      const edited = result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: id,
+            expectedRevision: revision,
+            commands: [
+              {
+                type: "setTrack",
+                index: 4,
+                kind: "audio",
+                name: "Voice",
+                solo: true,
+              },
+              {
+                type: "insert",
+                track: 4,
+                at: 0,
+                clip: {
+                  id: "voice",
+                  kind: "audio",
+                  src: "voice.wav",
+                  duration: 30,
+                },
+              },
+              insert("silent.mp4", 0),
+              insert("sound.mp4", 10),
+            ],
+          },
+        }),
+      ).structuredContent.result;
+      const { timeline } = edited;
       const sounding = (clipId: string) =>
         timeline.clips.find((clip) => clip.id === clipId)?.hasAudio;
       expect(sounding("silent")).toBe(false);
-      expect(sounding("sound")).toBe(true);
+      expect(sounding("sound")).toBe(false);
+      expect(
+        timeline.clips.find((clip) => clip.id === "silent")?.link,
+      ).toBeNull();
+      const pair = timeline.clips.filter((clip) => clip.src === "sound.mp4");
+      expect(pair).toHaveLength(2);
+      expect(pair.map((clip) => [clip.kind, clip.hasAudio, clip.link])).toEqual(
+        [
+          ["video", false, "sound"],
+          ["audio", true, "sound"],
+        ],
+      );
+      expect(pair[1]).toMatchObject({
+        start: 10,
+        duration: 10,
+        sourceDuration: 1,
+      });
+      expect(
+        result.parse(
+          await client.callTool({
+            name: "timeline_read",
+            arguments: { projectId: id },
+          }),
+        ).structuredContent.result,
+      ).toEqual(edited);
       const [html] = await fixture.files();
       expect(html).toMatch(/<video id="silent"[^>]*data-has-audio="false"/);
-      expect(html).toMatch(/<video id="sound"[^>]*data-has-audio="true"/);
+      expect(html).toMatch(/<video id="sound"[^>]*muted/);
+      expect(pair[1]?.track).not.toBe(4);
+      expect(html).toMatch(/<audio[^>]*src="sound.mp4"[^>]*data-hidden/);
+      await fixture.request(`/projects/${id}/history/undo`, "POST");
+      expect(await fixture.files()).toEqual(original);
     } finally {
+      await client.close();
+      server.stop(true);
       await fixture.close();
     }
   },

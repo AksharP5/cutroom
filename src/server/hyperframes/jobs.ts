@@ -40,6 +40,7 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 export function createRenderWorkers(
   configuration: {
     workerPath?: string;
+    sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
     stopTimeoutMs?: number;
     removeOutput?: (path: string) => Promise<void>;
   } = {},
@@ -142,6 +143,10 @@ export function createRenderWorkers(
           useGpu: options.useGpu,
           pageMotionBlur: options.pageMotionBlur,
         };
+        const sources = await configuration.sourceOverrides?.(
+          options.project.id,
+        );
+        if (isCancelling()) return;
         const child = Bun.spawn(
           [
             node,
@@ -170,6 +175,7 @@ export function createRenderWorkers(
             projectDir: options.project.dir,
             outputPath: options.outputPath,
             options: config,
+            sources,
           }),
         );
         child.stdin.end();

@@ -43,6 +43,8 @@ If your agent is signed out, authenticate through its own CLI with `codex login`
 
 **Media** at the top left lists the project's video, audio, and images. Import files with **+** or drop them on the panel; they are copied into `assets/`. Switch between **Agent**, **Review**, and **Script** below it. Drafts stay in place when you change tabs.
 
+Drop media above the top video track or below the last audio track to add a track. Right-click the track headers to add an empty video or audio track. Click a track name to rename it; Enter saves and Esc cancels. Video enable, audio **M**ute, and **S**olo affect both preview and export. Solo stays with the project, and mute wins over solo. Each change has one undo step. Videos with sound get a linked audio clip automatically.
+
 Use **Select**, **Draw**, and **Comment** above the viewer. Their keys are listed in the [keyboard shortcuts](docs/keyboard.md). In Script, select a word and Shift-click another to select a passage. Cuts ripple the selected media lane; other tracks keep their authored timing. Complex scripted or linked edits can be handed to the agent.
 
 See [local transcription](docs/transcription.md) and [editing behavior](docs/editing.md) for supported inputs and undo details.

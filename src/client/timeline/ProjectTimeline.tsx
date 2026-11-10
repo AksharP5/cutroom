@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
+import { nextTrackIndex } from "../../shared/timeline/tracks";
 import { editKeys } from "../edit/keys";
 import { editTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
@@ -127,7 +128,13 @@ export function ProjectTimeline({
   const toggleTrack: TimelineProps["onToggleTrack"] = (shown, setting) =>
     void editTimeline(
       projectId,
-      setting === "locked" ? "Lock or unlock track" : "Toggle auto-select",
+      {
+        locked: "Lock or unlock track",
+        autoSelect: "Toggle auto-select",
+        enabled: "Enable or disable track",
+        muted: "Mute or unmute track",
+        solo: "Solo or unsolo track",
+      }[setting],
       ({ tracks }) => {
         const track = tracks.find((item) => item.index === shown.index);
         return [
@@ -163,6 +170,21 @@ export function ProjectTimeline({
       onScrub={transport.scrub}
       onScrubEnd={transport.release}
       onToggleTrack={toggleTrack}
+      onRenameTrack={(track, name) =>
+        void editTimeline(projectId, "Rename track", () => [
+          {
+            type: "setTrack",
+            index: track.index,
+            kind: track.kind,
+            name: name || null,
+          },
+        ])
+      }
+      onAddTrack={(kind) =>
+        void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
+          { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
+        ])
+      }
       onOpenPin={onOpenNote}
     />
   );

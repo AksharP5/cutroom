@@ -372,11 +372,43 @@
   font-stretch: var(--stretch-mono);
 }
 .tl-head-name {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
   overflow: hidden;
   font-weight: var(--weight-medium);
   font-stretch: var(--stretch-condensed);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tl-head-name::placeholder {
+  color: var(--text-secondary);
+}
+.tl-head-name:focus {
+  background: var(--surface-active);
+}
+.tl-track-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  width: 180px;
+  padding: 4px;
+  border: var(--stroke-hair) solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+}
+.tl-track-menu button {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  text-align: left;
+}
+.tl-track-menu button:hover {
+  background: var(--surface-active);
 }
 .tl-head-buttons {
   display: flex;

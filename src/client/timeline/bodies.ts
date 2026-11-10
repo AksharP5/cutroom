@@ -11,6 +11,7 @@ import {
 import type { FrameRange, Row, TrackClips } from "./math";
 import { PEAK_CHUNK, createTimelineMedia } from "./media";
 import type { ViewState } from "./view";
+import { clipVisible, trackMix } from "../../shared/timeline/tracks";
 
 export interface BodyScene {
   rows: readonly Row[];
@@ -375,6 +376,7 @@ export function createBodies(
     }
 
     const frames = { from: left / ppf, to: right / ppf };
+    const suppressed = trackMix(scene.rows.map((row) => row.track)).hidden;
     for (const row of rowsBetween(scene.rows, top, bottom)) {
       const track = scene.tracks.get(row.track.index);
       if (!track) continue;
@@ -395,9 +397,11 @@ export function createBodies(
         if (!pictured && !placed.hasAudio) continue;
         // A clip an edit moved is drawn where its box is on its way there.
         const shift = offset(placed.id, now);
-        const clip = shift.x
-          ? { ...placed, start: placed.start + shift.x / ppf }
-          : placed;
+        const enabled = clipVisible(placed, suppressed);
+        const clip =
+          shift.x || enabled !== placed.enabled
+            ? { ...placed, start: placed.start + shift.x / ppf, enabled }
+            : placed;
         const down = Math.round(shift.y * dpr);
         const clipTop = y0 + down;
         const clipBottom = y1 + down;
