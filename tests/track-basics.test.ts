@@ -160,3 +160,67 @@ test("adding an empty track and a clip on it is an exact command batch, includin
     "effect",
   );
 });
+
+test("mute and solo suppress embedded video sound without hiding picture or losing authored mute and gain", () => {
+  let parsed = parseComposition(
+    source.replace(
+      'src="picture.mp4" muted',
+      'src="picture.mp4" data-has-audio="true" data-volume="0.5"',
+    ),
+    emptyTimelineSettings(),
+  );
+  const edit = (...commands: CommandInput[]) => {
+    const timeline = applyAll(
+      parsed.timeline,
+      commands.map((command) => CommandSchema.parse(command)),
+    );
+    const html = patchComposition(parsed, timeline, new Map());
+    parsed = parseComposition(html, settingsOf(timeline));
+    expect(parsed.timeline).toEqual(timeline);
+    expect(
+      parsed.timeline.clips.find((clip) => clip.id === "picture"),
+    ).toMatchObject({ hasAudio: true, enabled: true, volume: 0.5 });
+    expect(html).not.toMatch(/id="picture"[^>]*data-hidden/);
+    return html;
+  };
+  let html = edit({ type: "setTrack", index: 0, muted: true });
+  expect(html).toMatch(/id="picture"[^>]*muted="" data-cutroom-muted=""/);
+  expect(parseAudioElements(html).map((audio) => audio.src)).not.toContain(
+    "picture.mp4",
+  );
+  html = edit(
+    { type: "setTrack", index: 0, muted: false },
+    { type: "setTrack", index: 1, solo: true },
+  );
+  expect(parseAudioElements(html).map((audio) => audio.id)).toEqual(["voice"]);
+  html = edit({ type: "setTrack", index: 1, solo: false });
+  expect(html).not.toMatch(/id="picture"[^>]*data-cutroom-muted/);
+  expect(html).not.toMatch(/id="picture"[^>]*\bmuted/);
+  expect(
+    parseAudioElements(html).find((audio) => audio.src === "picture.mp4")
+      ?.volume,
+  ).toBe(0.5);
+
+  // Authored mute is not owned by the track override and must survive toggling a solo.
+  const authored = parseComposition(
+    source.replace('id="music"', 'id="music" muted'),
+    emptyTimelineSettings(),
+  );
+  const solo = applyAll(authored.timeline, [
+    CommandSchema.parse({ type: "setTrack", index: 1, solo: true }),
+  ]);
+  const suppressed = parseComposition(
+    patchComposition(authored, solo, new Map()),
+    settingsOf(solo),
+  );
+  const restored = applyAll(suppressed.timeline, [
+    CommandSchema.parse({ type: "setTrack", index: 1, solo: false }),
+  ]);
+  const normal = patchComposition(suppressed, restored, new Map());
+  expect(normal).toMatch(/id="picture"[^>]*\bmuted/);
+  expect(normal).toContain('<audio id="music" muted src="music.wav"');
+  expect(normal).not.toMatch(/id="music"[^>]*data-cutroom-muted/);
+  expect(parseComposition(normal, settingsOf(restored)).timeline).toEqual(
+    restored,
+  );
+});

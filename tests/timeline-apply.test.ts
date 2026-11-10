@@ -693,7 +693,7 @@ test("cuts keep a piece linked while it still overlaps its partner", () => {
     mode: "overwrite",
     track: 0,
     at: 120,
-    clip: { kind: "video", src: "broll.mp4", duration: 20 },
+    clip: { kind: "video", src: "broll.mp4", duration: 20, muted: true },
   });
   expect(covered.clips.map((item) => [item.id, item.link])).toEqual([
     ["s2", "l2"],
@@ -776,7 +776,7 @@ test("insert edits place, overwrite, or push the timeline", () => {
     type: "insert",
     track: 0,
     at: 15,
-    clip: { kind: "video", src: "media/B Roll.mp4", duration: 10 },
+    clip: { kind: "video", src: "media/B Roll.mp4", duration: 10, muted: true },
   } as const;
   expect(failure(() => run(edit, media))).toBe("overlap");
   expect(positions(run(edit, { ...media, mode: "overwrite" }))).toMatchObject({

@@ -95,6 +95,13 @@ export function registerRenderIsolation() {
           "      const ext = extname(relativePath).toLowerCase();",
           url,
         );
+        // Static parsing excludes hidden media. Browser probing must not add it back to the mix.
+        source = replaceOnce(
+          source,
+          "    mediaEls.forEach((el) => {\n      const htmlEl = el;",
+          '    mediaEls.forEach((el) => {\n      const htmlEl = el;\n      if (htmlEl.closest("[data-hidden]")) return;',
+          url,
+        );
         producerLoaded = true;
       } else {
         source = `import { isolateCapturePage as cutroomIsolatePage } from ${isolation};\n${source}`;

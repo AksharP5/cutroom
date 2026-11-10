@@ -212,7 +212,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .object({ id: clipId.optional() })
         .optional()
         .describe(
-          "Video only: place its sound on the first unlocked audio track with room, creating one if needed. The video is muted. Silent sources stay video-only.",
+          "Optional id for video's linked audio clip. Video inserts split sound onto the first free unlocked audio track by default, creating a track if needed. Silent sources and clip.muted=true stay video-only.",
         ),
       ids: pieceIds,
     })
@@ -242,7 +242,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       solo: z.boolean().optional(),
     })
     .describe(
-      "Create a track or change its name, lock, auto-select, enable, mute or solo. Mute and solo apply to audio tracks; solo also affects export.",
+      "Create a track or change its name, lock, auto-select, enable, mute or solo. Mute covers all sound on the track, including embedded video audio. Solo selects audio tracks and affects preview and export.",
     ),
   z
     .object({

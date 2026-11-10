@@ -10,6 +10,8 @@ The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version
 
 Cutroom does not include code or assets extracted from the proprietary HyperFrames desktop application. HyperFrames and HeyGen names describe dependency provenance, not affiliation or endorsement.
 
+Cutroom also applies a version-checked loading transform to HyperFrames producer 0.9.26 browser media discovery in `src/server/hyperframes/renderIsolation.ts`, excluding media under `data-hidden` so browser probing preserves the static renderer's visibility and audio exclusions. Dependency files remain unchanged.
+
 ## GSAP
 
 GSAP 3.15.0 retains its [Standard No Charge License](https://gsap.com/community/standard-license/), including restrictions on competing visual animation builders. Cutroom's scope is local video composition and export. The licensor's FAQ permits AI-generated GSAP code and niche visual tools that do not directly compete with Webflow. Reassess that license before adding website-building capabilities or changing the product's scope. GSAP is not covered by Cutroom's MIT license.

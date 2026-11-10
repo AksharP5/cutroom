@@ -566,8 +566,8 @@ export function dropPreview(
         kind: media.kind,
         src: media.src,
         duration: media.frames,
+        muted: media.kind === "video" && !media.hasAudio,
       },
-      ...(media.kind === "video" && media.hasAudio && { linkedAudio: {} }),
     },
   ];
   const fits = (track.kind === "audio") === (media.kind === "audio");

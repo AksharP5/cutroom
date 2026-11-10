@@ -451,7 +451,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
       const separate =
-        command.linkedAudio &&
+        input.kind === "video" &&
         !input.muted &&
         !batch.silentMedia.has(input.src);
       const video = separate ? { ...input, muted: true } : input;
@@ -553,11 +553,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         timeline.tracks.find((track) => track.index === command.index) ??
         newTrack(command.index, command.kind ?? "video");
       const kind = command.kind ?? current.kind;
-      if (kind !== "audio" && (command.muted || command.solo))
-        throw new TimelineError(
-          "track_kind",
-          "Mute and solo require an audio track.",
-        );
+      if (kind !== "audio" && command.solo)
+        throw new TimelineError("track_kind", "Solo requires an audio track.");
       return {
         ...timeline,
         tracks: [

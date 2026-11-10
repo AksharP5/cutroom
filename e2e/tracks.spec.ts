@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import type { CommandInput } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
 const exec = promisify(execFile);
@@ -29,20 +30,7 @@ async function drop(
   await page.mouse.up();
 }
 
-test("build and mix picture, voice and music with track drops, then export exactly what is audible", async ({
-  page,
-  request,
-}, info) => {
-  test.setTimeout(180_000);
-  const created = await request.post("/api/cutroom/projects", {
-    data: { name: "Tracks to mix on", width: 320, height: 240, duration: 2 },
-  });
-  expect(created.ok(), await created.text()).toBe(true);
-  const project = ProjectSchema.parse(await created.json());
-  await writeFile(
-    join(project.path, "index.html"),
-    '<!doctype html><html><head><style>html,body{margin:0;background:#000}main{position:relative;width:320px;height:180px}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="180" data-duration="2" data-fps="30"></main></body></html>',
-  );
+async function makeMedia(directory: string) {
   await exec("ffmpeg", [
     "-v",
     "error",
@@ -61,7 +49,7 @@ test("build and mix picture, voice and music with track drops, then export exact
     "-c:a",
     "aac",
     "-shortest",
-    join(project.path, "Picture.mp4"),
+    join(directory, "Picture.mp4"),
   ]);
   for (const [name, frequency] of [
     ["Voice", 660],
@@ -74,8 +62,70 @@ test("build and mix picture, voice and music with track drops, then export exact
       "lavfi",
       "-i",
       `sine=frequency=${frequency}:duration=2`,
-      join(project.path, `${name}.wav`),
+      join(directory, `${name}.wav`),
     ]);
+}
+
+async function exportAudio(page: Page, path: string) {
+  const download = page.waitForEvent("download", { timeout: 60_000 });
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await (await download).saveAs(path);
+  const { stdout } = await exec(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      "0.25",
+      "-i",
+      path,
+      "-t",
+      "1",
+      "-vn",
+      "-af",
+      "pan=mono|c0=c0",
+      "-ar",
+      "48000",
+      "-f",
+      "f32le",
+      "pipe:1",
+    ],
+    { encoding: "buffer", maxBuffer: 2 ** 20 },
+  );
+  const samples = new Float32Array(
+    stdout.buffer,
+    stdout.byteOffset,
+    stdout.byteLength / 4,
+  );
+  const levels = [440, 660, 880].map((frequency) => {
+    let sin = 0,
+      cos = 0;
+    for (const [index, sample] of samples.entries()) {
+      const angle = (2 * Math.PI * frequency * index) / 48000;
+      sin += sample * Math.sin(angle);
+      cos += sample * Math.cos(angle);
+    }
+    return (2 * Math.hypot(sin, cos)) / samples.length;
+  });
+  return { path, levels };
+}
+
+test("build and mix picture, voice and music with track drops, then export exactly what is audible", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(180_000);
+  const created = await request.post("/api/cutroom/projects", {
+    data: { name: "Tracks to mix on", width: 320, height: 240, duration: 2 },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const project = ProjectSchema.parse(await created.json());
+  // An unknown root duration forces the producer through browser media discovery.
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><head><style>html,body{margin:0;background:#000}main{position:relative;width:320px;height:180px}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="180" data-duration="0" data-fps="30"></main></body></html>',
+  );
+  await makeMedia(project.path);
   const read = async () =>
     TimelineViewSchema.parse(
       await (
@@ -142,51 +192,7 @@ test("build and mix picture, voice and music with track drops, then export exact
     page.getByRole("button", { name: "Solo A4", exact: true }),
   ).toHaveCount(0);
 
-  const exportAudio = async (name: string) => {
-    const download = page.waitForEvent("download", { timeout: 60_000 });
-    await page.getByRole("button", { name: "Export", exact: true }).click();
-    const path = info.outputPath(`${name}.mp4`);
-    await (await download).saveAs(path);
-    const { stdout } = await exec(
-      "ffmpeg",
-      [
-        "-v",
-        "error",
-        "-ss",
-        "0.25",
-        "-i",
-        path,
-        "-t",
-        "1",
-        "-vn",
-        "-af",
-        "pan=mono|c0=c0",
-        "-ar",
-        "48000",
-        "-f",
-        "f32le",
-        "pipe:1",
-      ],
-      { encoding: "buffer", maxBuffer: 2 ** 20 },
-    );
-    const samples = new Float32Array(
-      stdout.buffer,
-      stdout.byteOffset,
-      stdout.byteLength / 4,
-    );
-    const levels = [440, 660, 880].map((frequency) => {
-      let sin = 0,
-        cos = 0;
-      for (const [index, sample] of samples.entries()) {
-        const angle = (2 * Math.PI * frequency * index) / 48000;
-        sin += sample * Math.sin(angle);
-        cos += sample * Math.cos(angle);
-      }
-      return (2 * Math.hypot(sin, cos)) / samples.length;
-    });
-    return { path, levels };
-  };
-  const all = await exportAudio("all");
+  const all = await exportAudio(page, info.outputPath("all.mp4"));
   for (const level of all.levels) expect(level).toBeCloseTo(0.125, 2);
   // M and S are live while the transport is playing, and export uses that same mix.
   await page.keyboard.press("Space");
@@ -206,7 +212,7 @@ test("build and mix picture, voice and music with track drops, then export exact
     )
     .toBe(0);
   await page.keyboard.press("k");
-  const muted = await exportAudio("music-muted");
+  const muted = await exportAudio(page, info.outputPath("music-muted.mp4"));
   expect(muted.levels[0]).toBeCloseTo(all.levels[0], 2);
   expect(muted.levels[1]).toBeCloseTo(all.levels[1], 2);
   expect(muted.levels[2]).toBeLessThan(0.001);
@@ -240,7 +246,7 @@ test("build and mix picture, voice and music with track drops, then export exact
     .toBe(1);
   await page.keyboard.press("k");
   await page.getByRole("button", { name: "Enable V2", exact: true }).click();
-  const solo = await exportAudio("voice-solo");
+  const solo = await exportAudio(page, info.outputPath("voice-solo.mp4"));
   expect(solo.levels[0]).toBeLessThan(0.001);
   expect(solo.levels[1]).toBeCloseTo(all.levels[1], 2);
   expect(solo.levels[2]).toBeLessThan(0.001);
@@ -269,4 +275,98 @@ test("build and mix picture, voice and music with track drops, then export exact
     page.getByRole("button", { name: "Solo A2", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await expect(name).toHaveValue("Music");
+});
+
+test("browser-probed exports honor mute and solo for authored video sound while keeping its picture", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(180_000);
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Embedded video sound",
+          width: 320,
+          height: 240,
+          duration: 2,
+        },
+      })
+    ).json(),
+  );
+  await makeMedia(project.path);
+  // The producer must probe the browser to resolve a zero root duration.
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0;background:#000}main{position:relative;width:320px;height:180px}video{width:100%;height:100%}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="180" data-duration="0" data-fps="30">
+    <video id="picture" src="Picture.mp4" data-start="0" data-duration="2" data-track-index="0" data-has-audio="true"></video>
+    <audio id="voice" src="Voice.wav" data-start="0" data-duration="2" data-track-index="1"></audio>
+    <audio id="music" src="Music.wav" data-start="0" data-duration="2" data-track-index="2"></audio>
+  </main></body></html>`,
+  );
+  const edit = async (commands: CommandInput[]) => {
+    const view = TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    );
+    const response = await request.post(
+      `/api/cutroom/projects/${project.id}/commands`,
+      { data: { expectedRevision: view.revision, commands } },
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    const edited = TimelineViewSchema.parse(await response.json());
+    expect(
+      edited.timeline.clips.find((clip) => clip.id === "picture"),
+    ).toMatchObject({ enabled: true, hasAudio: true });
+    return edited;
+  };
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  const normal = await exportAudio(
+    page,
+    info.outputPath("embedded-normal.mp4"),
+  );
+  for (const level of normal.levels) expect(level).toBeCloseTo(0.125, 2);
+  await edit([{ type: "setTrack", index: 0, muted: true }]);
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#picture"),
+  ).toHaveAttribute("muted", "");
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#picture"),
+  ).not.toHaveAttribute("data-hidden");
+  const muted = await exportAudio(page, info.outputPath("embedded-muted.mp4"));
+  expect(muted.levels[0]).toBeLessThan(0.001);
+  expect(muted.levels[1]).toBeCloseTo(normal.levels[1], 2);
+  expect(muted.levels[2]).toBeCloseTo(normal.levels[2], 2);
+  const { stdout: pixel } = await exec(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      muted.path,
+      "-frames:v",
+      "1",
+      "-vf",
+      "scale=1:1",
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "rgb24",
+      "pipe:1",
+    ],
+    { encoding: "buffer" },
+  );
+  expect(pixel[0]).toBeGreaterThan(200);
+  expect(pixel[1]).toBeLessThan(5);
+  expect(pixel[2]).toBeLessThan(5);
+  await edit([
+    { type: "setTrack", index: 0, muted: false },
+    { type: "setTrack", index: 1, solo: true },
+  ]);
+  const solo = await exportAudio(page, info.outputPath("embedded-solo.mp4"));
+  expect(solo.levels[0]).toBeLessThan(0.001);
+  expect(solo.levels[1]).toBeCloseTo(normal.levels[1], 2);
+  expect(solo.levels[2]).toBeLessThan(0.001);
 });

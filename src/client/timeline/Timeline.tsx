@@ -24,7 +24,7 @@ import type {
   Timeline as TimelineData,
   Track,
 } from "../../shared/timeline/schema";
-import { clipVisible, suppressedTracks } from "../../shared/timeline/tracks";
+import { clipVisible, trackMix } from "../../shared/timeline/tracks";
 import {
   MAX_PPF,
   clipName,
@@ -672,7 +672,7 @@ export function Timeline({
     ? rowsBetween(layout.rows, mounted.rows.from, mounted.rows.to)
     : [];
   const suppressed = useMemo(
-    () => suppressedTracks(timeline.tracks),
+    () => trackMix(timeline.tracks).hidden,
     [timeline.tracks],
   );
   const clips = mounted

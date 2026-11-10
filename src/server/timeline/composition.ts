@@ -22,7 +22,8 @@ import {
   toSeconds,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
-import { suppressedTracks } from "../../shared/timeline/tracks";
+import { trackMix } from "../../shared/timeline/tracks";
+import type { TrackMix } from "../../shared/timeline/tracks";
 import type {
   Clip,
   ClipKind,
@@ -416,7 +417,8 @@ export function parseComposition(
       hasAudio:
         kind === "audio" ||
         (kind === "video" &&
-          element.attrs.muted === undefined &&
+          (element.attrs.muted === undefined ||
+            element.attrs["data-cutroom-muted"] !== undefined) &&
           (element.attrs["data-has-audio"] ?? "true") === "true"),
       link: element.attrs["data-link"] || null,
       label:
@@ -645,8 +647,8 @@ function clipChanges(
   after: Clip,
   element: SourceElement,
   fps: Fps,
-  normalizeTracks = false,
-  suppressed: ReadonlySet<number> = new Set(),
+  normalizeTracks: boolean,
+  mix: TrackMix,
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
@@ -703,12 +705,25 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
-  const hidden = !after.enabled || suppressed.has(after.track);
-  const trackHidden = after.enabled && suppressed.has(after.track);
+  const hidden = !after.enabled || mix.hidden.has(after.track);
+  const trackHidden = after.enabled && mix.hidden.has(after.track);
   if (has("data-hidden") !== hidden)
     changes.push(["data-hidden", hidden ? "" : null]);
   if (has("data-cutroom-track-hidden") !== trackHidden)
     changes.push(["data-cutroom-track-hidden", trackHidden ? "" : null]);
+  // Muting embedded sound must keep the picture visible and preserve the authored mute.
+  const soundOff =
+    after.kind === "video" &&
+    after.hasAudio &&
+    (!after.enabled || mix.muted.has(after.track));
+  const authoredMuted = has("muted") && !has("data-cutroom-muted");
+  if (has("muted") !== (authoredMuted || soundOff))
+    changes.push(["muted", authoredMuted || soundOff ? "" : null]);
+  if (has("data-cutroom-muted") !== (soundOff && !authoredMuted))
+    changes.push([
+      "data-cutroom-muted",
+      soundOff && !authoredMuted ? "" : null,
+    ]);
   return changes;
 }
 
@@ -723,7 +738,7 @@ function copyMarkup(
   template: Clip,
   clip: Clip,
   normalizeTracks: boolean,
-  suppressed: ReadonlySet<number>,
+  mix: TrackMix,
 ): string {
   const element = parsed.elements.get(template.id)!;
   const authoredId = element.attrs.id;
@@ -756,7 +771,7 @@ function copyMarkup(
         element,
         parsed.timeline.fps,
         normalizeTracks,
-        suppressed,
+        mix,
       ),
       ...(origin !== undefined &&
       clip.link !== null &&
@@ -774,7 +789,7 @@ function insertMarkup(
   clip: Clip,
   input: InsertClip,
   fps: Fps,
-  suppressed: ReadonlySet<number>,
+  mix: TrackMix,
 ): string {
   const attributes: AttributeChange[] = [
     ["id", clip.id],
@@ -792,11 +807,16 @@ function insertMarkup(
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
     ...(clip.link ? [["data-link", clip.link] as const] : []),
-    ...(!clip.enabled || suppressed.has(clip.track)
+    ...(!clip.enabled || mix.hidden.has(clip.track)
       ? [["data-hidden", ""] as const]
       : []),
-    ...(clip.enabled && suppressed.has(clip.track)
+    ...(clip.enabled && mix.hidden.has(clip.track)
       ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...(clip.kind === "video" &&
+    clip.hasAudio &&
+    (!clip.enabled || mix.muted.has(clip.track))
+      ? [["muted", ""] as const, ["data-cutroom-muted", ""] as const]
       : []),
     ...(clip.mediaStart
       ? [
@@ -972,7 +992,7 @@ export function patchComposition(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   const stacking = stackingEdits(parsed, after, previous);
-  const suppressed = suppressedTracks(after.tracks);
+  const mix = trackMix(after.tracks);
   const edits: Edit[] = stacking ?? [];
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
@@ -985,7 +1005,7 @@ export function patchComposition(
         element,
         fps,
         stacking !== null,
-        suppressed,
+        mix,
       );
       if (
         parsed.anonymous.has(clip.id) &&
@@ -1043,7 +1063,7 @@ export function patchComposition(
       const indent = lastClip ? indentOf(html, lastClip[1].start) : "";
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${indent}${insertMarkup(clip, origin.insert, fps, suppressed)}`,
+        `\n${indent}${insertMarkup(clip, origin.insert, fps, mix)}`,
       ]);
       continue;
     }
@@ -1052,7 +1072,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, suppressed)}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix)}`,
     ]);
   }
   for (const [at, texts] of inserts)

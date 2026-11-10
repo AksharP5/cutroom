@@ -11,7 +11,7 @@ import {
 import type { FrameRange, Row, TrackClips } from "./math";
 import { PEAK_CHUNK, createTimelineMedia } from "./media";
 import type { ViewState } from "./view";
-import { clipVisible, suppressedTracks } from "../../shared/timeline/tracks";
+import { clipVisible, trackMix } from "../../shared/timeline/tracks";
 
 export interface BodyScene {
   rows: readonly Row[];
@@ -376,7 +376,7 @@ export function createBodies(
     }
 
     const frames = { from: left / ppf, to: right / ppf };
-    const suppressed = suppressedTracks(scene.rows.map((row) => row.track));
+    const suppressed = trackMix(scene.rows.map((row) => row.track)).hidden;
     for (const row of rowsBetween(scene.rows, top, bottom)) {
       const track = scene.tracks.get(row.track.index);
       if (!track) continue;

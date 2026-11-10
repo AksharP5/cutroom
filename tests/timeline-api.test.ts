@@ -757,10 +757,30 @@ test("a scene edit declares the entry layer in the same undo step", async () => 
 });
 
 test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
-  "an inserted video is marked as having sound only when its file has an audio stream",
+  "ordinary MCP video inserts create linked audio by default, with exact readback and one undo step",
   async () => {
     const fixture = await timelineFixture();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({
+      name: "cutroom-insert-test",
+      version: "1.0.0",
+    });
+    const result = z.object({
+      structuredContent: z.object({ result: TimelineViewSchema }),
+    });
     try {
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const original = await fixture.files();
       const { path, id } = fixture.project;
       const picture = ["-f", "lavfi", "-i", "color=c=gray:s=64x36:r=10:d=1"];
       const tone = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"];
@@ -774,28 +794,65 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         );
         expect(made.stderr.toString()).toBe("");
       }
-      const { revision } = TimelineViewSchema.parse(
-        await (await fixture.request(`/projects/${id}/timeline`)).json(),
-      );
+      const { revision } = result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: id },
+        }),
+      ).structuredContent.result;
       const insert = (src: string, at: number) => ({
         type: "insert",
         track: 5,
         at,
         clip: { id: src.replace(".mp4", ""), kind: "video", src, duration: 10 },
       });
-      const edited = await fixture.request(`/projects/${id}/commands`, "POST", {
-        expectedRevision: revision,
-        commands: [insert("silent.mp4", 0), insert("sound.mp4", 10)],
-      });
-      const { timeline } = TimelineViewSchema.parse(await edited.json());
+      const edited = result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: id,
+            expectedRevision: revision,
+            commands: [insert("silent.mp4", 0), insert("sound.mp4", 10)],
+          },
+        }),
+      ).structuredContent.result;
+      const { timeline } = edited;
       const sounding = (clipId: string) =>
         timeline.clips.find((clip) => clip.id === clipId)?.hasAudio;
       expect(sounding("silent")).toBe(false);
-      expect(sounding("sound")).toBe(true);
+      expect(sounding("sound")).toBe(false);
+      expect(
+        timeline.clips.find((clip) => clip.id === "silent")?.link,
+      ).toBeNull();
+      const pair = timeline.clips.filter((clip) => clip.src === "sound.mp4");
+      expect(pair).toHaveLength(2);
+      expect(pair.map((clip) => [clip.kind, clip.hasAudio, clip.link])).toEqual(
+        [
+          ["video", false, "sound"],
+          ["audio", true, "sound"],
+        ],
+      );
+      expect(pair[1]).toMatchObject({
+        start: 10,
+        duration: 10,
+        sourceDuration: 1,
+      });
+      expect(
+        result.parse(
+          await client.callTool({
+            name: "timeline_read",
+            arguments: { projectId: id },
+          }),
+        ).structuredContent.result,
+      ).toEqual(edited);
       const [html] = await fixture.files();
       expect(html).toMatch(/<video id="silent"[^>]*data-has-audio="false"/);
-      expect(html).toMatch(/<video id="sound"[^>]*data-has-audio="true"/);
+      expect(html).toMatch(/<video id="sound"[^>]*muted/);
+      await fixture.request(`/projects/${id}/history/undo`, "POST");
+      expect(await fixture.files()).toEqual(original);
     } finally {
+      await client.close();
+      server.stop(true);
       await fixture.close();
     }
   },
