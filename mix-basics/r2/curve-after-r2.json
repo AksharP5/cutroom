@@ -1,0 +1,42 @@
+{
+  "before": {
+    "id": "music",
+    "track": 0,
+    "kind": "audio",
+    "start": 0,
+    "duration": 240,
+    "mediaStart": 0,
+    "playbackRate": 1,
+    "src": "tone.wav",
+    "sourceDuration": 8,
+    "hasAudio": true,
+    "link": null,
+    "label": null,
+    "volume": null,
+    "fadeIn": 0,
+    "fadeOut": 120,
+    "automation": null,
+    "enabled": true,
+    "startRef": null
+  },
+  "after": {
+    "id": "music",
+    "track": 0,
+    "kind": "audio",
+    "start": 0,
+    "duration": 240,
+    "mediaStart": 0,
+    "playbackRate": 1,
+    "src": "tone.wav",
+    "sourceDuration": 8,
+    "hasAudio": true,
+    "link": null,
+    "label": null,
+    "volume": 1.9952623149688795,
+    "fadeIn": 0,
+    "fadeOut": 120,
+    "automation": null,
+    "enabled": true,
+    "startRef": null
+  }
+}

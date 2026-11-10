@@ -1,0 +1,251 @@
+[
+  {
+    "operation": "trim",
+    "shortened": [
+      {
+        "id": "music",
+        "track": 0,
+        "kind": "audio",
+        "start": 0,
+        "duration": 180,
+        "mediaStart": 0,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": "{\"version\":1,\"lanes\":[{\"target\":\"volume\",\"points\":[{\"t\":0,\"v\":1},{\"t\":4,\"v\":1},{\"t\":6,\"v\":0.5}]}]}",
+        "enabled": true,
+        "startRef": null
+      }
+    ],
+    "restored": [
+      {
+        "id": "music",
+        "track": 0,
+        "kind": "audio",
+        "start": 0,
+        "duration": 240,
+        "mediaStart": 0,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": "{\"version\":1,\"lanes\":[{\"target\":\"volume\",\"points\":[{\"t\":0,\"v\":1},{\"t\":4,\"v\":1},{\"t\":6,\"v\":0.5}]}]}",
+        "enabled": true,
+        "startRef": null
+      }
+    ],
+    "levels": [
+      {
+        "time": 2,
+        "differenceDb": 0
+      },
+      {
+        "time": 3.95,
+        "differenceDb": 0
+      },
+      {
+        "time": 5,
+        "differenceDb": 0.00009839516988035025
+      },
+      {
+        "time": 6.5,
+        "differenceDb": 2.443744085847719
+      },
+      {
+        "time": 7.8,
+        "differenceDb": 19.7314957238615
+      }
+    ]
+  },
+  {
+    "operation": "roll",
+    "shortened": [
+      {
+        "id": "music",
+        "track": 0,
+        "kind": "audio",
+        "start": 0,
+        "duration": 180,
+        "mediaStart": 0,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": "{\"version\":1,\"lanes\":[{\"target\":\"volume\",\"points\":[{\"t\":0,\"v\":1},{\"t\":4,\"v\":1},{\"t\":6,\"v\":0.5}]}]}",
+        "enabled": true,
+        "startRef": null
+      },
+      {
+        "id": "next",
+        "track": 0,
+        "kind": "audio",
+        "start": 180,
+        "duration": 180,
+        "mediaStart": 6,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 60,
+        "fadeOut": 0,
+        "automation": null,
+        "enabled": true,
+        "startRef": null
+      }
+    ],
+    "restored": [
+      {
+        "id": "music",
+        "track": 0,
+        "kind": "audio",
+        "start": 0,
+        "duration": 240,
+        "mediaStart": 0,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": "{\"version\":1,\"lanes\":[{\"target\":\"volume\",\"points\":[{\"t\":0,\"v\":1},{\"t\":4,\"v\":1},{\"t\":6,\"v\":0.5}]}]}",
+        "enabled": true,
+        "startRef": null
+      },
+      {
+        "id": "next",
+        "track": 0,
+        "kind": "audio",
+        "start": 240,
+        "duration": 120,
+        "mediaStart": 8,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": null,
+        "enabled": true,
+        "startRef": null
+      }
+    ],
+    "levels": [
+      {
+        "time": 2,
+        "differenceDb": 0
+      },
+      {
+        "time": 3.95,
+        "differenceDb": 0
+      },
+      {
+        "time": 5,
+        "differenceDb": 0.00009839516988035025
+      },
+      {
+        "time": 6.5,
+        "differenceDb": 2.443744085847719
+      },
+      {
+        "time": 7.8,
+        "differenceDb": 19.7314957238615
+      }
+    ]
+  },
+  {
+    "operation": "split",
+    "readback": [
+      {
+        "id": "music",
+        "track": 0,
+        "kind": "audio",
+        "start": 0,
+        "duration": 120,
+        "mediaStart": 0,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 0,
+        "automation": null,
+        "enabled": true,
+        "startRef": null
+      },
+      {
+        "id": "music-2",
+        "track": 0,
+        "kind": "audio",
+        "start": 120,
+        "duration": 120,
+        "mediaStart": 4,
+        "playbackRate": 1,
+        "src": "tone.wav",
+        "sourceDuration": null,
+        "hasAudio": true,
+        "link": null,
+        "label": null,
+        "volume": null,
+        "fadeIn": 0,
+        "fadeOut": 120,
+        "automation": null,
+        "enabled": true,
+        "startRef": null
+      }
+    ],
+    "levels": [
+      {
+        "time": 2,
+        "differenceDb": 0
+      },
+      {
+        "time": 3.95,
+        "differenceDb": 0
+      },
+      {
+        "time": 4.05,
+        "differenceDb": 0
+      },
+      {
+        "time": 5,
+        "differenceDb": 0
+      },
+      {
+        "time": 6.5,
+        "differenceDb": 0
+      },
+      {
+        "time": 7.8,
+        "differenceDb": 0
+      }
+    ]
+  }
+]
