@@ -198,10 +198,18 @@ export function App() {
       setDocumentState({ projectId, document: result });
   }, [projectId]);
 
+  // Agents create projects while the page is open, so the list reloads whenever the link
+  // names a project it lacks and each time the picker opens.
+  const known = project !== undefined;
+  const browsing = dialog === "projects";
   useEffect(() => {
+    if (known && !browsing) return;
     void loadProjects().catch((error: unknown) =>
       setError(error instanceof Error ? error.message : String(error)),
     );
+  }, [projectId, known, browsing, loadProjects]);
+
+  useEffect(() => {
     void api("/status", statusSchema)
       .then(setStatus)
       .catch((error: unknown) =>

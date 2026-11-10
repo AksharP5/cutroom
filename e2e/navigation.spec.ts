@@ -486,3 +486,43 @@ test("saving one review draft cannot clear a newer draft in the same project", a
     release();
   }
 });
+
+test("a project an agent creates after the page loads opens without a reload", async ({
+  page,
+  request,
+}) => {
+  await localAgent(page);
+  const create = async (name: string) =>
+    ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: `${name} ${crypto.randomUUID()}` },
+        })
+      ).json(),
+    );
+  const open = await create("Open before");
+  await page.goto(`/#project/${open.id}`);
+  await expect(
+    page.getByRole("button", { name: open.name, exact: true }),
+  ).toBeVisible();
+
+  const linked = await create("Agent link");
+  await page.evaluate((id) => {
+    window.location.hash = `project/${id}`;
+  }, linked.id);
+  await expect(
+    page.getByRole("button", { name: linked.name, exact: true }),
+  ).toBeVisible();
+
+  const picked = await create("Agent pick");
+  await page
+    .getByRole("button", { name: "Cutroom projects", exact: true })
+    .click();
+  await page
+    .getByRole("button")
+    .filter({ has: page.getByText(picked.name, { exact: true }) })
+    .click();
+  await expect(
+    page.getByRole("button", { name: picked.name, exact: true }),
+  ).toBeVisible();
+});
