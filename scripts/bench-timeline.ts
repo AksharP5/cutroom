@@ -18,12 +18,14 @@ import {
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 
 /**
- * Median milliseconds a step may take: the 500-clip edit, and lifting 1,000 of 2,000 clips in one
+ * Median milliseconds a step may take: the 500-clip edit, ripple-deleting 120 separate ranges,
+ * and lifting 1,000 of 2,000 clips in one
  * batch (select all, delete), where every removal checks that the clip owns its bytes.
  */
 const budgets = {
   parse: 10,
   apply: 5,
+  multiRangeApply: 15,
   patch: 5,
   request: 50,
   bulkApply: 20,
@@ -55,6 +57,13 @@ const edits: CommandInput[] = [
   { type: "trim", clipId: "talk-10", edge: "end", to: 790, ripple: true },
 ];
 const commands = edits.map((command) => CommandSchema.parse(command));
+const multiRangeCommands = [
+  CommandSchema.parse({
+    type: "remove",
+    clipIds: Array.from({ length: 120 }, (_, index) => `talk-${index * 2}`),
+    ripple: true,
+  }),
+];
 
 const median = (step: () => void) => {
   const times = Array.from({ length: runs }, () => {
@@ -91,6 +100,7 @@ const bulkEdited = applyAll(bulk.timeline, bulkCommands);
 const results = {
   parse: median(() => parseComposition(html, emptyTimelineSettings())),
   apply: median(() => applyAll(parsed.timeline, commands)),
+  multiRangeApply: median(() => applyAll(parsed.timeline, multiRangeCommands)),
   patch: median(() => patchComposition(parsed, edited, origins)),
   request: 0,
   bulkApply: median(() => applyAll(bulk.timeline, bulkCommands)),

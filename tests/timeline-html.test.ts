@@ -594,6 +594,102 @@ test("source offsets stay exact through retimes, repeated trims, and inserts", (
   ).toContain(`data-media-start="1.234568"`);
 });
 
+for (const [name, target, command, kept] of [
+  [
+    "Q",
+    `  <video id="edit" src="edit.mp4" data-start="1.001" data-duration="2.002" data-media-start="1" data-track-index="0"></video>`,
+    { type: "trim", clipId: "edit", edge: "start", to: 60, ripple: true },
+    `  <video id="edit" src="edit.mp4" data-start="1.001" data-duration="1.001" data-media-start="2.001" data-track-index="0"></video>\n`,
+  ],
+  [
+    "W",
+    `  <video id="edit" src="edit.mp4" data-start="0" data-duration="2.002" data-media-start="1" data-track-index="0"></video>`,
+    { type: "trim", clipId: "edit", edge: "end", to: 30, ripple: true },
+    `  <video id="edit" src="edit.mp4" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="0"></video>\n`,
+  ],
+  [
+    "delete",
+    `  <video id="edit" src="edit.mp4" data-start="1.001" data-duration="1.001" data-media-start="1" data-track-index="0"></video>`,
+    { type: "remove", clipIds: ["edit"], ripple: true },
+    "",
+  ],
+] satisfies [string, string, CommandInput, string][]) {
+  test(`${name} writes exact NTSC cuts, links and retimed source offsets and reads them back`, () => {
+    const html = `<main data-composition-id="main" data-duration="10.01" data-fps="30000/1001">
+${target}
+  <video id="next" src="next.mp4" data-start="3.003" data-duration="1.001" data-track-index="0"></video>
+  <video id="span" src="span.mp4" data-link="av" data-start="0" data-duration="3.003" data-media-start="1" data-track-index="1"></video>
+  <audio id="sound" src="span.mp4" data-link="av" data-start="0" data-duration="3.003" data-media-start="1" data-track-index="2"></audio>
+  <video id="starts" src="starts.mp4" data-start="1.5015" data-duration="1.5015" data-media-start="2" data-playback-rate="2" data-track-index="3"></video>
+  <video id="ends" src="ends.mp4" data-start="0" data-duration="1.5015" data-track-index="4"></video>
+</main>
+`;
+    expect(withoutStacking(edit(html, [command])))
+      .toBe(`<main data-composition-id="main" data-duration="9.009" data-fps="30000/1001">
+${kept}  <video id="next" src="next.mp4" data-start="2.002" data-duration="1.001" data-track-index="0"></video>
+  <video id="span" src="span.mp4" data-link="av" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="1"></video>
+  <video id="span-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="1"></video>
+  <audio id="sound" src="span.mp4" data-link="av" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="2"></audio>
+  <audio id="sound-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="2"></audio>
+  <video id="starts" src="starts.mp4" data-start="1.001" data-duration="1.001" data-media-start="3.001" data-playback-rate="2" data-track-index="3"></video>
+  <video id="ends" src="ends.mp4" data-start="0" data-duration="1.001" data-track-index="4"></video>
+</main>
+`);
+  });
+}
+
+test("Q at NTSC frame one writes source offsets rounded once to the microsecond", () => {
+  const html = `<main data-composition-id="main" data-duration="10.01" data-fps="30000/1001">
+  <video id="talk" src="talk.mp4" data-start="0" data-duration="3.003" data-media-start="1" data-track-index="0"></video>
+  <audio id="bed" src="bed.wav" data-start="0" data-duration="6.006" data-media-start="2" data-playback-rate="2" data-track-index="1"></audio>
+</main>
+`;
+  expect(
+    edit(html, [
+      { type: "trim", clipId: "talk", edge: "start", to: 1, ripple: true },
+    ]),
+  )
+    .toBe(`<head><style data-cutroom-track-stacking="main">@layer cutroom-tracks{:where([data-composition-id="main"] [data-start][data-track-index="0"]:not(audio):not([data-composition-id="main"] :is([data-start],[data-composition-id],[data-composition-src]) *)){z-index:0}}</style></head>
+<main data-composition-id="main" data-duration="9.976633" data-fps="30000/1001">
+  <video id="talk" src="talk.mp4" data-start="0" data-duration="2.969633" data-media-start="1.033367" data-track-index="0"></video>
+  <audio id="bed" src="bed.wav" data-start="0" data-duration="5.972633" data-media-start="2.066733" data-playback-rate="2" data-track-index="1"></audio>
+</main>
+`);
+});
+
+test("Q trims a referenced music bed in place without copying its script target", () => {
+  const script = `<script>gsap.to("#bed", { opacity: 0.5 });</script>`;
+  const html =
+    composition(`<video id="shot" src="shot.mp4" data-start="0" data-duration="3" data-track-index="0"></video>
+<audio id="bed" src="bed.wav" data-start="0" data-duration="5" data-media-start="2" data-track-index="1"></audio>
+${script}`);
+  const output = edit(html, [
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+  ]);
+  expect(output).toContain(
+    `<audio id="bed" src="bed.wav" data-start="0" data-duration="4" data-media-start="3" data-track-index="1"></audio>`,
+  );
+  expect(output).toContain(script);
+  expect(output).not.toContain("bed-2");
+});
+
+test("a range cut removes stale links in HTML so lifting the picture keeps the surviving audio", () => {
+  const html =
+    composition(`<video id="v" src="v.mp4" data-start="0" data-duration="1.333333" data-link="av" data-track-index="0"></video>
+<audio id="a" src="a.wav" data-start="1" data-duration="1.333333" data-media-start="1" data-link="av" data-track-index="1"></audio>
+<video id="edit" src="edit.mp4" data-start="1" data-duration="1" data-track-index="2"></video>`);
+  expect(
+    edit(html, [
+      { type: "remove", clipIds: ["edit"], ripple: true },
+      { type: "remove", clipIds: ["v"] },
+    ]),
+  ).toBe(
+    composition(
+      `<audio id="a" src="a.wav" data-start="1" data-duration="0.333333" data-media-start="2" data-track-index="1"></audio>`,
+    ).replace(`data-duration="10"`, `data-duration="9"`),
+  );
+});
+
 test("removing an anonymous clip writes ids on the clips it would renumber", () => {
   const clips = ["A", "B", "C"].map(
     (text, index) =>

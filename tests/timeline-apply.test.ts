@@ -160,7 +160,6 @@ test("Q and W trim to the playhead and ripple the rest of the edit", () => {
   expect(positions(w)).toEqual({
     talk: [0, 0, 45],
     next: [0, 45, 60],
-    title: [1, 45, 30],
   });
   expect(
     positions(
@@ -213,52 +212,281 @@ test("a linked group is one unit: trims move every partner's same edge", () => {
   });
 });
 
-test("ripple delete refuses, by name, anything that would hold a clip back", () => {
-  const refusal = (state: Timeline) => {
-    try {
-      run(state, { type: "remove", clipIds: ["x"], ripple: true });
-    } catch (error) {
-      if (error instanceof TimelineError) return [error.code, error.message];
-    }
-    return null;
-  };
-  // A title spanning the removed range stays, so the title after it cannot follow the picture.
-  const spanning = timeline([
-    clip("x", 0, 0, 30),
-    clip("b", 0, 30, 100),
-    clip("t1", 1, 20, 40),
-    clip("t2", 1, 60, 50),
+for (const [name, command, target] of [
+  [
+    "Q",
+    { type: "trim", clipId: "edit", edge: "start", to: 60, ripple: true },
+    clip("edit", 0, 30, 60),
+  ],
+  [
+    "W",
+    { type: "trim", clipId: "edit", edge: "end", to: 30, ripple: true },
+    clip("edit", 0, 0, 60),
+  ],
+  [
+    "delete",
+    { type: "remove", clipIds: ["edit"], ripple: true },
+    clip("edit", 0, 30, 30),
+  ],
+] satisfies [string, CommandInput, Clip][]) {
+  test(`${name} removes exactly [30, 60), including partial overlaps on other tracks`, () => {
+    const state = timeline([
+      target,
+      clip("next", 0, 90, 30),
+      clip("span", 1, 0, 90, { mediaStart: 1, playbackRate: 2 }),
+      clip("starts", 2, 45, 45, { mediaStart: 1 }),
+      clip("ends", 3, 0, 45),
+      clip("inside", 4, 40, 10),
+      clip("before", 5, 0, 30),
+      clip("after", 6, 60, 30),
+      clip("exact", 7, 30, 30),
+    ]);
+    const result = run(state, command);
+    expect(positions(result)).toEqual({
+      ...(name === "Q"
+        ? { edit: [0, 30, 30] }
+        : name === "W"
+          ? { edit: [0, 0, 30] }
+          : {}),
+      next: [0, 60, 30],
+      span: [1, 0, 30],
+      "span-2": [1, 30, 30],
+      starts: [2, 30, 30],
+      ends: [3, 0, 30],
+      before: [5, 0, 30],
+      after: [6, 30, 30],
+    });
+    expect(result.clips.find((item) => item.id === "span-2")?.mediaStart).toBe(
+      5,
+    );
+    expect(result.clips.find((item) => item.id === "starts")?.mediaStart).toBe(
+      1.5,
+    );
+    expect(positions(state).span).toEqual([1, 0, 90]);
+  });
+
+  for (const protection of [{ locked: true }, { autoSelect: false }]) {
+    test(`${name} leaves ${Object.keys(protection)[0]} spanning clips alone and names linked blockers`, () => {
+      const state = timeline(
+        [
+          target,
+          clip("picture", 1, 0, 90),
+          clip("bed", 2, 0, 90, { kind: "audio" }),
+        ],
+        [{ index: 2, kind: "audio", ...protection }],
+      );
+      const result = run(state, command);
+      expect(result.clips.find((item) => item.id === "bed")).toEqual(
+        state.clips.find((item) => item.id === "bed"),
+      );
+      const linked = {
+        ...state,
+        clips: state.clips.map((item) =>
+          item.id === "edit" ? item : { ...item, link: "av" },
+        ),
+      };
+      expect(() => run(linked, command)).toThrow("Clip bed");
+      expect(failure(() => run(linked, command))).toBe("unsupported");
+      // Selecting a clip cannot edit its locked partner either.
+      if (!protection.locked) return;
+      const selectedLink = {
+        ...state,
+        clips: state.clips.map((item) =>
+          item.id === "picture" ? item : { ...item, link: "av" },
+        ),
+      };
+      expect(() => run(selectedLink, command)).toThrow("Clip bed");
+      expect(failure(() => run(selectedLink, command))).toBe("unsupported");
+    });
+  }
+}
+
+for (const [name, command, expected] of [
+  [
+    "Q",
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+    {
+      shot: [0, 0, 60],
+      sound: [1, 0, 60],
+      next: [0, 60, 30],
+      "next-sound": [1, 60, 30],
+    },
+  ],
+  [
+    "W",
+    { type: "trim", clipId: "shot", edge: "end", to: 60, ripple: true },
+    {
+      shot: [0, 0, 60],
+      sound: [1, 0, 60],
+      next: [0, 60, 30],
+      "next-sound": [1, 60, 30],
+    },
+  ],
+  [
+    "Shift+X",
+    { type: "remove", clipIds: ["shot"], ripple: true },
+    { next: [0, 0, 30], "next-sound": [1, 0, 30] },
+  ],
+] satisfies [string, CommandInput, Record<string, number[]>][]) {
+  test(`${name} ripples explicitly edited auto-select-off tracks and their partners`, () => {
+    const state = timeline(
+      [
+        clip("shot", 0, 0, 90, { link: "av" }),
+        clip("sound", 1, 0, 90, { kind: "audio", link: "av" }),
+        clip("next", 0, 90, 30, { link: "next-av" }),
+        clip("next-sound", 1, 90, 30, { kind: "audio", link: "next-av" }),
+        clip("excluded", 2, 0, 150),
+      ],
+      [
+        { index: 0, autoSelect: false },
+        { index: 1, kind: "audio", autoSelect: false },
+        { index: 2, autoSelect: false },
+      ],
+    );
+    expect(positions(run(state, command))).toEqual({
+      ...expected,
+      excluded: [2, 0, 150],
+    });
+  });
+}
+
+test("Q on the first clip cuts a music bed at zero without pulling it before the timeline", () => {
+  const state = timeline([
+    clip("talk", 0, 0, 90, { mediaStart: 1 }),
+    clip("next", 0, 90, 30),
+    clip("bed", 1, 0, 150, { kind: "audio", mediaStart: 2 }),
   ]);
-  expect(refusal(spanning)).toEqual([
-    "unsupported",
-    expect.stringContaining("t1"),
+  const result = run(state, {
+    type: "trim",
+    clipId: "talk",
+    edge: "start",
+    to: 30,
+    ripple: true,
+  });
+  expect(positions(result)).toEqual({
+    talk: [0, 0, 60],
+    next: [0, 60, 30],
+    bed: [1, 0, 120],
+  });
+  expect(result.clips.map((item) => item.mediaStart)).toEqual([2, 0, 3]);
+});
+
+test("ripple delete cuts a linked L-cut tail under B-roll and preserves the earlier shot", () => {
+  const state = timeline([
+    clip("shot", 0, 0, 100, { link: "av", mediaStart: 2 }),
+    clip("broll", 0, 100, 50),
+    clip("next", 0, 150, 50, { link: "next-av", mediaStart: 6 }),
+    clip("tail", 1, 0, 120, { kind: "audio", link: "av", mediaStart: 2 }),
+    clip("next-sound", 1, 150, 50, {
+      kind: "audio",
+      link: "next-av",
+      mediaStart: 6,
+    }),
   ]);
-  // B's sound cannot pass the music before it, so B could not close the gap at all.
-  const blockedPartner = timeline([
-    clip("x", 0, 0, 30),
-    clip("b", 0, 50, 50, { link: "lb" }),
-    clip("y", 1, 0, 50, { kind: "audio" }),
-    clip("bb", 1, 50, 50, { kind: "audio", link: "lb" }),
-  ]);
-  expect(refusal(blockedPartner)).toEqual([
-    "unsupported",
-    expect.stringContaining("Clip y"),
-  ]);
-  const lockedPartner = timeline(
-    [
-      clip("x", 0, 0, 30),
-      clip("b", 0, 30, 60, { link: "lb" }),
-      clip("bb", 1, 30, 60, { kind: "audio", link: "lb" }),
-    ],
-    [{ index: 1, kind: "audio", locked: true }],
-  );
-  expect(refusal(lockedPartner)).toEqual([
-    "unsupported",
-    expect.stringContaining("bb"),
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["broll"],
+    ripple: true,
+  });
+  expect(positions(result)).toEqual({
+    shot: [0, 0, 100],
+    next: [0, 100, 50],
+    tail: [1, 0, 100],
+    "next-sound": [1, 100, 50],
+  });
+  expect(
+    result.clips
+      .filter((item) => item.link === "av")
+      .map((item) => [item.link, item.mediaStart]),
+  ).toEqual([
+    ["av", 2],
+    ["av", 2],
   ]);
 });
 
-test("ripple delete closes each linked group by its smallest gap, keeping sync", () => {
+test("ripple delete trims a J-cut head under B-roll and keeps its surviving source in sync", () => {
+  const state = timeline([
+    clip("broll", 0, 100, 50),
+    clip("shot", 0, 150, 50, { link: "av", mediaStart: 2 }),
+    clip("head", 1, 120, 80, { kind: "audio", link: "av", mediaStart: 1 }),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["broll"],
+    ripple: true,
+  });
+  expect(positions(result)).toEqual({
+    shot: [0, 100, 50],
+    head: [1, 100, 50],
+  });
+  expect(result.clips.map((item) => [item.link, item.mediaStart])).toEqual([
+    ["av", 2],
+    ["av", 2],
+  ]);
+});
+
+test("ripple cuts linked spanning clips into matching groups on either side", () => {
+  const state = timeline([
+    clip("edit", 0, 30, 30),
+    clip("picture", 1, 0, 90, { link: "av", mediaStart: 2 }),
+    clip("sound", 2, 0, 90, { kind: "audio", link: "av", mediaStart: 2 }),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["edit"],
+    ripple: true,
+  });
+  expect(
+    result.clips.map((item) => [
+      item.id,
+      item.start,
+      item.duration,
+      item.mediaStart,
+    ]),
+  ).toEqual([
+    ["picture", 0, 30, 2],
+    ["picture-2", 30, 30, 4],
+    ["sound", 0, 30, 2],
+    ["sound-2", 30, 30, 4],
+  ]);
+  expect(result.clips.map((item) => item.link)).toEqual([
+    "av",
+    "lk-1",
+    "av",
+    "lk-1",
+  ]);
+});
+
+test("ripple extensions cut overlapping clips and open exactly the added time", () => {
+  const state = timeline([
+    clip("edit", 0, 30, 30, { mediaStart: 1 }),
+    clip("next", 0, 60, 30),
+    clip("bed", 1, 0, 90, { kind: "audio", mediaStart: 2 }),
+  ]);
+  for (const [edge, to, boundary, mediaStart] of [
+    ["start", 15, 30, 3],
+    ["end", 75, 60, 4],
+  ] as const) {
+    const result = run(state, {
+      type: "trim",
+      clipId: "edit",
+      edge,
+      to,
+      ripple: true,
+    });
+    expect(positions(result)).toEqual({
+      edit: [0, 30, 45],
+      next: [0, 75, 30],
+      bed: [1, 0, boundary],
+      "bed-2": [1, boundary + 15, 90 - boundary],
+    });
+    expect(result.clips.find((item) => item.id === "bed-2")?.mediaStart).toBe(
+      mediaStart,
+    );
+  }
+});
+
+test("ripple delete removes the union of selected linked spans without a smallest-gap holdback", () => {
   const interview = timeline([
     clip("s1", 0, 0, 100, { link: "l1" }),
     clip("s1-sound", 1, 0, 90, { kind: "audio", link: "l1" }),
@@ -272,10 +500,10 @@ test("ripple delete closes each linked group by its smallest gap, keeping sync",
       run(interview, { type: "remove", clipIds: ["s1"], ripple: true }),
     ),
   ).toEqual({
-    s2: [0, 10, 100],
-    "s2-sound": [1, 0, 110],
-    broll: [0, 110, 50],
-    title: [2, 60, 30],
+    s2: [0, 0, 100],
+    "s2-sound": [1, 0, 100],
+    broll: [0, 100, 50],
+    title: [2, 50, 30],
   });
   const take = timeline([
     clip("take", 0, 0, 200, { link: "l1" }),
@@ -290,6 +518,142 @@ test("ripple delete closes each linked group by its smallest gap, keeping sync",
       ),
     ),
   ).toEqual({ "take-2": [0, 0, 100], "take-sound-2": [1, 0, 100] });
+});
+
+test("deleting a J-cut pair trims the preceding picture inside the selected union", () => {
+  const state = timeline([
+    clip("previous", 0, 0, 100, { link: "previous-av", mediaStart: 2 }),
+    clip("previous-sound", 1, 0, 90, {
+      kind: "audio",
+      link: "previous-av",
+      mediaStart: 2,
+    }),
+    clip("shot", 0, 100, 100, { link: "av", mediaStart: 10 }),
+    clip("head", 1, 90, 110, {
+      kind: "audio",
+      link: "av",
+      mediaStart: 9.666667,
+    }),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["shot"],
+    ripple: true,
+  });
+  expect(positions(result)).toEqual({
+    previous: [0, 0, 90],
+    "previous-sound": [1, 0, 90],
+  });
+  expect(result.clips.map((item) => [item.link, item.mediaStart])).toEqual([
+    ["previous-av", 2],
+    ["previous-av", 2],
+  ]);
+});
+
+test("separate ripple deletions preserve the unselected interval between them", () => {
+  const state = timeline([
+    clip("first", 0, 30, 30),
+    clip("second", 0, 90, 30),
+    clip("bed", 1, 0, 150, { kind: "audio" }),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["first", "second"],
+    ripple: true,
+  });
+  expect(
+    result.clips.map((item) => [item.start, item.duration, item.mediaStart]),
+  ).toEqual([
+    [0, 30, 0],
+    [30, 30, 2],
+    [60, 30, 4],
+  ]);
+});
+
+test("range trims unlink survivors when their only overlap was removed", () => {
+  const state = timeline([
+    clip("v", 0, 0, 40, { link: "av" }),
+    clip("a", 1, 30, 40, { kind: "audio", link: "av", mediaStart: 1 }),
+    clip("edit", 2, 30, 30),
+  ]);
+  const result = run(state, {
+    type: "remove",
+    clipIds: ["edit"],
+    ripple: true,
+  });
+  expect(
+    result.clips.map((item) => [
+      item.id,
+      item.start,
+      item.duration,
+      item.link,
+      item.mediaStart,
+    ]),
+  ).toEqual([
+    ["v", 0, 30, null, 0],
+    ["a", 30, 10, null, 2],
+  ]);
+  expect(positions(run(result, { type: "remove", clipIds: ["v"] }))).toEqual({
+    a: [1, 30, 10],
+  });
+});
+
+test("linked interval sweep lifts only surviving overlapping partners after Q, W, and delete", () => {
+  const intervals: [number, number][] = [];
+  for (let start = 0; start < 100; start += 10)
+    for (let end = start + 10; end <= 100; end += 10)
+      intervals.push([start, end]);
+  const edits: [Clip, CommandInput][] = [
+    [
+      clip("edit", 2, 30, 60),
+      { type: "trim", clipId: "edit", edge: "start", to: 60, ripple: true },
+    ],
+    [
+      clip("edit", 2, 0, 60),
+      { type: "trim", clipId: "edit", edge: "end", to: 30, ripple: true },
+    ],
+    [
+      clip("edit", 2, 30, 30),
+      { type: "remove", clipIds: ["edit"], ripple: true },
+    ],
+  ];
+  let cases = 0;
+  for (const [vStart, vEnd] of intervals)
+    for (const [aStart, aEnd] of intervals) {
+      if (Math.max(vStart, aStart) >= Math.min(vEnd, aEnd)) continue;
+      for (const [target, command] of edits) {
+        const result = run(
+          timeline([
+            clip("v", 0, vStart, vEnd - vStart, { link: "av" }),
+            clip("a", 1, aStart, aEnd - aStart, { kind: "audio", link: "av" }),
+            target,
+          ]),
+          command,
+        );
+        const survivors = result.clips.filter((item) => item.track !== 2);
+        for (const item of survivors) {
+          const partners = survivors.filter(
+            (other) =>
+              other !== item &&
+              Math.max(item.start, other.start) <
+                Math.min(
+                  item.start + item.duration,
+                  other.start + other.duration,
+                ),
+          );
+          expect(item.link === null).toBe(partners.length === 0);
+          const lifted = run(result, { type: "remove", clipIds: [item.id] });
+          expect(lifted.clips.map((other) => other.id).toSorted()).toEqual(
+            result.clips
+              .filter((other) => other !== item && !partners.includes(other))
+              .map((other) => other.id)
+              .toSorted(),
+          );
+        }
+        cases++;
+      }
+    }
+  expect(cases).toBe(6_105);
 });
 
 test("cuts keep a piece linked while it still overlaps its partner", () => {

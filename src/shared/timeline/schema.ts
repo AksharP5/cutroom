@@ -130,7 +130,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .boolean()
         .default(false)
         .describe(
-          "Keep the clip's start and shift later clips on affected tracks by the length change",
+          "Keep the clip's start; cut and ripple participating tracks by the exact length change",
         ),
     })
     .describe(
@@ -155,7 +155,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .boolean()
         .default(false)
         .describe(
-          "Close the gap on the clips' tracks and unlocked auto-select tracks",
+          "Remove the selected time ranges across edited and unlocked auto-select tracks, cutting overlapping clips and closing the full gap",
         ),
     })
     .describe("Lift or ripple delete clips and their linked partners."),
