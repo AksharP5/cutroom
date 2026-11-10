@@ -98,7 +98,7 @@ export async function createApp(
     "/api/cutroom",
     createWorkspaceRoutes({ projects, dataDir, projectsDir, mcpCommand }),
   );
-  app.route("/api/cutroom", createProjectRoutes(projects, transcripts, review));
+  app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api", editor);
   const mcp = createMcpHttpHandler({ baseUrl });

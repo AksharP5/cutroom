@@ -25,7 +25,6 @@ import type {
   StudioApiAdapter,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
-import { createReviewService } from "../projects/review";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
@@ -49,9 +48,10 @@ const ignored = new Set([
   "renders",
 ]);
 
+/** `reviews` must be the server's one review service, so editor undo shares its per-project queue. */
 export function createHyperframesApi(
   store: ProjectStore,
-  reviews: ReviewService = createReviewService(store),
+  reviews: ReviewService,
 ) {
   const api = new Hono();
   const subscribers = new Set<(change: FileChange) => void>();

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { Hono } from "hono";
 import { HttpError } from "../src/shared/errors";
 import { createProjectRoutes } from "../src/server/projects/routes";
+import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
 
 export async function projectFixture() {
@@ -12,7 +13,10 @@ export async function projectFixture() {
     dataDir: join(directory, "data"),
     projectsDir: join(directory, "projects"),
   });
-  const app = new Hono().route("/api/cutroom", createProjectRoutes(store));
+  const app = new Hono().route(
+    "/api/cutroom",
+    createProjectRoutes(store, createReviewService(store)),
+  );
   app.onError((error, c) =>
     c.json(
       { error: error.message },

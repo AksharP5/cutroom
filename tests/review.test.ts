@@ -188,7 +188,7 @@ async function setup(
   const review = createReviewService(store);
   const app = new Hono().route(
     "/api/cutroom",
-    createProjectRoutes(store, undefined, review),
+    createProjectRoutes(store, review),
   );
   app.onError((error, c) =>
     c.json(
@@ -759,8 +759,17 @@ describe("review round 2 regressions", () => {
       "DELETE",
     );
     await atWrite;
+    // Release the paused delete only once the message's submission has been queued behind it.
+    const beginTurn = queue.review.beginTurn;
+    const submitting = new Promise<void>((resolve) => {
+      queue.review.beginTurn = (...args) => {
+        const started = beginTurn(...args);
+        resolve();
+        return started;
+      };
+    });
     const sending = send(queue.agents, queue.project, "Go");
-    await Bun.sleep(50);
+    await submitting;
     release();
     await removing;
     await sending;

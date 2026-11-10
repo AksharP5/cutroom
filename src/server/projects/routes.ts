@@ -25,7 +25,7 @@ import { HttpError } from "../../shared/errors";
 import { createTranscriptService } from "../transcript/service";
 import type { TranscriptService } from "../transcript/service";
 import { listMedia } from "./media";
-import { ReviewFileError, addAnnotation, createReviewService } from "./review";
+import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { projectPath, readSource } from "./store";
 import type { ProjectStore } from "./store";
@@ -45,10 +45,11 @@ export function parseInput<T extends z.ZodType>(
   return parsed.data;
 }
 
+/** `reviews` must be the server's one review service, so every route shares its per-project queue. */
 export function createProjectRoutes(
   store: ProjectStore,
+  reviews: ReviewService,
   transcripts: TranscriptService = createTranscriptService(store),
-  reviews: ReviewService = createReviewService(store),
 ) {
   const api = new Hono();
   api.get("/projects", async (c) => c.json({ projects: await store.list() }));
