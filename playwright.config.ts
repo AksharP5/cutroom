@@ -30,6 +30,7 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,
     timeout: 30_000,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 15_000 },
     env: {
       CUTROOM_PORT: String(port),
       CUTROOM_DATA_DIR: resolve(testRoot, "data"),
