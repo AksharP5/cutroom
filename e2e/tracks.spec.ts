@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -67,13 +68,36 @@ async function makeMedia(directory: string) {
 }
 
 async function exportAudio(page: Page, path: string, notice?: string) {
-  const download = page.waitForEvent("download", { timeout: 60_000 });
-  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await page.locator(".edit-export").click();
+  const newExport = page.getByRole("button", {
+    name: "New export",
+    exact: true,
+  });
+  if (await newExport.count()) await newExport.click();
+  await page
+    .getByRole("textbox", { name: "File name", exact: true })
+    .fill(path.split("/").at(-1) ?? "Export.mp4");
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(page.getByRole("dialog")).toContainText("Export complete.", {
+    timeout: 45_000,
+  });
   if (notice) {
-    await expect(page.locator(".edit-export-notice")).toHaveText(notice);
+    await expect(page.getByRole("dialog")).toContainText(notice);
     await page.screenshot({ path: path.replace(/\.mp4$/, "-notice.png") });
   }
-  await (await download).saveAs(path);
+  const output = await page.request.get(
+    `/api/render/${encodeURIComponent(jobId)}/download`,
+  );
+  await writeFile(path, await output.body());
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   const { stdout } = await exec(
     "ffmpeg",
     [

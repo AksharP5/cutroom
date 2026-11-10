@@ -54,6 +54,10 @@ try {
     join(root, "dist-desktop", "main.cjs"),
     join(app, "desktop", "main.cjs"),
   );
+  await cp(
+    join(root, "dist-desktop", "preload.cjs"),
+    join(app, "desktop", "preload.cjs"),
+  );
   await cp(join(root, "dist"), join(app, "dist"), { recursive: true });
   await cp(join(root, "src", "server"), join(app, "src", "server"), {
     recursive: true,

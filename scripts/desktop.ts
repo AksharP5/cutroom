@@ -11,9 +11,12 @@ if (!existsSync(resolve(root, "dist/index.html"))) {
   if ((await built.exited) !== 0) throw new Error("The editor build failed.");
 }
 const result = await Bun.build({
-  entrypoints: [resolve(root, "src/desktop/main.ts")],
+  entrypoints: [
+    resolve(root, "src/desktop/main.ts"),
+    resolve(root, "src/desktop/preload.ts"),
+  ],
   outdir: resolve(root, "dist-desktop"),
-  naming: "main.cjs",
+  naming: "[name].cjs",
   target: "node",
   format: "cjs",
   external: ["electron"],

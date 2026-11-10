@@ -1,10 +1,13 @@
 import { AGENT_HEADER } from "../../shared/review";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { ExportOptionsSchema } from "../../shared/export";
+import type { ExportOptions } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
 import { watch } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -32,15 +35,22 @@ import type {
   StudioApiAdapter,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
-import { projectPath } from "../projects/store";
+import { projectPath, readSource } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
-import { createRenderWorkers } from "./jobs";
+import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { previewPolicy } from "./isolation";
 import { withPreviewBridge } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
-import { mixCompositionInstances } from "../timeline/composition";
+import {
+  mixCompositionInstances,
+  parseComposition,
+  mediaSources,
+} from "../timeline/composition";
+import { mediaFacts } from "../timeline/media";
+import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import { parseFps } from "@hyperframes/core";
 
 export interface FileChange {
   projectId: string;
@@ -89,6 +99,71 @@ export function createHyperframesApi(
         ),
       ),
   });
+  const exportRequest = new AsyncLocalStorage<ExportOptions>();
+  // Extend Studio's one job registry, progress stream and cancel route with Cutroom's output intent.
+  api.use("/projects/:id/render", async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    const body = await c.req.json<unknown>().catch(() => ({}));
+    const { cutroom } = z
+      .object({ cutroom: ExportOptionsSchema.optional() })
+      .parse(body);
+    if (!cutroom) return next();
+    if (
+      z.object({ format: z.literal("mp4") }).safeParse(body).success === false
+    )
+      throw new HttpError(400, "Named exports use MP4.");
+    if (!isAbsolute(cutroom.directory))
+      throw new HttpError(400, "Enter an absolute output folder.");
+    const project = await store.get(c.req.param("id"));
+    if (cutroom.range) {
+      const [source, document] = await Promise.all([
+        readSource(project, "index.html"),
+        store.document(project),
+      ]);
+      const { lengths } = await mediaFacts(
+        project,
+        "index.html",
+        mediaSources(source.content, "document"),
+      );
+      const { timeline } = parseComposition(
+        source.content,
+        document.timelines["index.html"] ?? emptyTimelineSettings(),
+        { mediaLengths: lengths },
+      );
+      const { fps } = z
+        .object({ fps: z.union([z.string(), z.number()]) })
+        .parse(body);
+      const rate = parseFps(fps);
+      if (
+        !rate.ok ||
+        rate.value.num * timeline.fps.den !== timeline.fps.num * rate.value.den
+      )
+        throw new HttpError(
+          400,
+          "A marked export must use the project's frame rate.",
+        );
+      if (cutroom.range.end > timeline.duration)
+        throw new HttpError(400, "In and Out must be inside the timeline.");
+    }
+    const defaultDirectory = await projectStatePath(
+      project,
+      ".cutroom/renders",
+      true,
+    );
+    if (cutroom.directory === defaultDirectory)
+      await mkdir(defaultDirectory, { recursive: true });
+    const directory = await realpath(cutroom.directory);
+    await exportRequest.run({ ...cutroom, directory }, next);
+    if (c.res.ok) {
+      const started = z
+        .object({ jobId: z.string(), status: z.string() })
+        .parse(await c.res.json());
+      c.res = c.json({
+        ...started,
+        outputPath: join(directory, cutroom.filename),
+      });
+    }
+  });
   const previewKeys = new Map<string, string>();
   const isolatedPreview = (projectId: string, previewUrl: string) => {
     let key = previewKeys.get(projectId);
@@ -119,7 +194,13 @@ export function createHyperframesApi(
         if (!filename) return;
         const path = filename.replaceAll("\\", "/");
         const parts = path.split("/");
-        if (parts.some((part) => ignored.has(part))) return;
+        // An export's staging folder churns thousands of files that never affect the preview.
+        if (
+          parts.some(
+            (part) => ignored.has(part) || part.startsWith(STAGING_PREFIX),
+          )
+        )
+          return;
         if (
           parts[0] === ".hyperframes" &&
           !STUDIO_SIGNATURE_MANIFEST_PATHS.some((manifest) => manifest === path)
@@ -273,7 +354,7 @@ export function createHyperframesApi(
         ...options,
         previewUrl: isolatedPreview(options.project.id, options.previewUrl),
       }),
-    startRender: (options) => renders.start(options),
+    startRender: (options) => renders.start(options, exportRequest.getStore()),
   };
 
   api.get("/projects/:id/isolated-preview", async (c) => {
@@ -432,6 +513,31 @@ export function createHyperframesApi(
       (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
     );
     c.header("Content-Disposition", `attachment; filename*=UTF-8''${encoded}`);
+  });
+  // Studio's stream serializes only its own fields. Keep its jobs and controls,
+  // and include the producer's stage counts while our worker is running.
+  api.get("/render/:jobId/progress", (c, next) => {
+    const job = renders.get(c.req.param("jobId"));
+    if (!job) return next();
+    return streamSSE(c, async (stream) => {
+      while (!stream.aborted) {
+        await stream.writeSSE({
+          event: "progress",
+          data: JSON.stringify({
+            progress: job.progress,
+            status: job.status,
+            stage: job.stage,
+            stageProgress: job.stageProgress,
+            error: job.error,
+            ...(job.status === "complete" && {
+              audioLoweredDb: job.audioLoweredDb,
+            }),
+          }),
+        });
+        if (job.status !== "rendering") break;
+        await stream.sleep(500);
+      }
+    });
   });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {

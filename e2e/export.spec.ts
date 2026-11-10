@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Download, Page } from "@playwright/test";
@@ -57,6 +58,9 @@ async function exportable(page: Page, request: APIRequestContext) {
 async function expectPlayable(download: Download, path: string, duration = 1) {
   expect(download.suggestedFilename()).toMatch(/\.mp4$/);
   await download.saveAs(path);
+}
+
+async function expectEncoded(path: string, duration = 1) {
   const bytes = await readFile(path);
   expect(bytes.subarray(4, 8).toString("ascii")).toBe("ftyp");
 
@@ -87,7 +91,7 @@ async function expectPlayable(download: Download, path: string, duration = 1) {
   expect(Number(encoded.format.duration)).toBeCloseTo(duration, 1);
 }
 
-test("Export in the tool row renders the composition and downloads a playable MP4", async ({
+test("Export waits for edits, continues when hidden and opens the completed MP4", async ({
   page,
   request,
 }, testInfo) => {
@@ -132,22 +136,45 @@ test("Export in the tool row renders the composition and downloads a playable MP
     if (sent.method() === "POST" && sent.url().endsWith("/render")) renders++;
   });
 
-  const pendingDownload = page.waitForEvent("download", { timeout: 45_000 });
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
   await page.getByRole("button", { name: "Export", exact: true }).click();
-  // The button and the status bar say so while it renders, and it cannot be started twice.
-  const exporting = page.getByRole("button", { name: /^Exporting \d+%$/ });
-  await expect(exporting).toBeDisabled();
+  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
+  await expect(
+    page.getByRole("progressbar", { name: "Export progress" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Cancel export" }),
+  ).toBeDisabled();
   await expect(page.locator(".status-bar")).toContainText("Exporting");
   await page.waitForTimeout(250);
   expect(renders).toBe(0);
   release();
 
-  const download = await pendingDownload;
-  expect(download.suggestedFilename()).toBe(`${project.name}.mp4`);
-  await expectPlayable(download, testInfo.outputPath("export.mp4"), 1.5);
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await page.getByRole("button", { name: "Hide", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Export", exact: true }),
-  ).toBeEnabled();
+    page.getByRole("button", { name: "Export complete", exact: true }),
+  ).toBeVisible({ timeout: 45_000 });
+  await page
+    .getByRole("button", { name: "Export complete", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("Export complete.");
+  const popup = page.waitForEvent("popup");
+  await page.getByRole("link", { name: "Open", exact: true }).click();
+  const video = await popup;
+  await expect(video.locator("video")).toBeVisible();
+  await video.close();
+  const path = testInfo.outputPath("export.mp4");
+  const exported = await request.get(`/api/render/${jobId}/download`);
+  await writeFile(path, await exported.body());
+  await expectEncoded(path, 1.5);
   expect(errors).toEqual([]);
 });
 
@@ -178,15 +205,49 @@ test("Export reports a refused pending edit instead of rendering the saved versi
     if (sent.method() === "POST" && sent.url().endsWith("/render")) renders++;
   });
   await page.getByRole("button", { name: "Export", exact: true }).click();
-  await expect(page.getByRole("button", { name: /^Exporting/ })).toBeDisabled();
+  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Cancel export" }),
+  ).toBeDisabled();
   release();
-  await expect(page.locator(".toast span")).toHaveText(
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
     "The pending edit was refused.",
   );
   await expect(
-    page.getByRole("button", { name: "Export", exact: true }),
+    page.getByRole("button", { name: "New export", exact: true }),
   ).toBeEnabled();
   expect(renders).toBe(0);
+});
+
+test("Location initializes before accepting edits and keeps the typed destination", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/api/cutroom/projects/${project.id}`, async (route) => {
+    const response = await route.fetch();
+    await gate;
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const location = page
+    .getByRole("dialog")
+    .getByLabel("Location", { exact: true });
+  await expect(location).toBeDisabled();
+  release();
+  await expect(location).toBeEnabled();
+  await location.fill("/tmp/my-export-folder");
+  await page
+    .getByRole("dialog")
+    .getByLabel("File name", { exact: true })
+    .fill("My cut.mp4");
+  await expect(location).toHaveValue("/tmp/my-export-folder");
 });
 
 test("the embedded editor exports a local composition and downloads a playable MP4", async ({
@@ -223,4 +284,73 @@ test("the embedded editor exports a local composition and downloads a playable M
     testInfo.outputPath("export.mp4"),
   );
   expect(errors).toEqual([]);
+});
+
+test("Shift+8 defaults to marked frames and exports their exact duration", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+ArrowRight");
+  // Park on frames 5 and 14, marking an inclusive ten-frame selection.
+  await page.keyboard.press("Home");
+  for (let frame = 0; frame < 5; frame++)
+    await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("i");
+  for (let frame = 5; frame < 14; frame++)
+    await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("o");
+  await page.keyboard.press("Shift+8");
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await expect(
+    dialog.getByRole("radio", { name: "In to Out", exact: true }),
+  ).toBeChecked();
+  await expect(dialog).toContainText("00:00:00:10");
+  await dialog.getByLabel("File name", { exact: true }).fill("Marked cut.mp4");
+  await dialog.getByLabel("Quality", { exact: true }).selectOption("high");
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await dialog.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+  const result = await request.get(`/api/render/${jobId}/download`);
+  const path = testInfo.outputPath("marked.mp4");
+  await writeFile(path, await result.body());
+  await expectEncoded(path, 10 / 30);
+});
+
+test("Cancel stops the real render and removes a named partial file", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await page.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId, outputPath } = z
+    .object({ jobId: z.string(), outputPath: z.string() })
+    .parse(await (await started).json());
+  await page.getByRole("button", { name: "Cancel export" }).click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "Export cancelled. Partial output removed.",
+  );
+  expect(existsSync(outputPath)).toBe(false);
+  expect((await request.get(`/api/render/${jobId}/download`)).status()).toBe(
+    404,
+  );
 });

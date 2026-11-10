@@ -8,6 +8,7 @@ type Binding = { label: string; keys: readonly string[]; repeat?: boolean };
  * button tooltips, and the table in `docs/keyboard.md`. Combos list modifiers as Ctrl, Alt, Shift.
  */
 export const keymap = {
+  workspacePrimaryWorkspaceDeliver: { label: "Export", keys: ["Shift+8"] },
   editPointer: { label: "Select", keys: ["A"] },
   editTrim: { label: "Trim", keys: ["T"] },
   editBlade: { label: "Blade", keys: ["B"] },
