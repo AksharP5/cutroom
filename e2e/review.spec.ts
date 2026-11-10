@@ -173,9 +173,6 @@ test("typing a note after a stroke never drives the editor, and another note kee
         await request.get(`/api/cutroom/projects/${project.id}/timeline`)
       ).json(),
     ).timeline.range;
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const preview = page.frameLocator("iframe[title='Composition preview']");
   await expect(preview.locator("#headline")).toHaveText("Note focus");

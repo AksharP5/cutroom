@@ -35,6 +35,8 @@ export const useTimeline = create(() => ({
   history: { canUndo: false, canRedo: false },
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
+  /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
+  snapping: true,
 }));
 
 /** An edit as the user made it: commands built once, from the view they saw. */
@@ -48,8 +50,9 @@ interface Edit {
   /** Ids of the pieces the commands make. */
   creates: ReadonlySet<string>;
   /**
-   * The clips a trim or razor names, as shown. Those commands cut at absolute frames, so they
-   * only mean the same cut while the clips sit where they were.
+   * The clips a trim, razor or move names, as shown. Trims and razors cut at absolute frames and
+   * a drag moves a clip to the place the user saw, so they only mean the same edit while the
+   * clips sit where they were.
    */
   anchors: Clip[];
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
@@ -315,7 +318,8 @@ export async function editTimeline(
         commands.some(
           (command) =>
             (command.type === "trim" && command.clipId === clip.id) ||
-            (command.type === "split" && command.clipIds?.includes(clip.id)),
+            ((command.type === "split" || command.type === "move") &&
+              command.clipIds?.includes(clip.id)),
         ),
       ),
       dropped: false,

@@ -25,6 +25,17 @@ type DirectoryState =
     }
   | { status: "failed"; path: string; message: string };
 
+const titles = {
+  file: "Attach a file",
+  directory: "Open a project folder",
+  project: "Project files",
+} as const;
+const actions = {
+  file: "Attach file",
+  directory: "Open this folder",
+  project: "Copy path",
+} as const;
+
 export function FileDialog({
   initialPath,
   kind,
@@ -32,7 +43,8 @@ export function FileDialog({
   onClose,
 }: {
   initialPath: string;
-  kind: "file" | "directory";
+  /** `project` browses a project's folder and copies the chosen file's path. */
+  kind: "file" | "directory" | "project";
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
@@ -72,11 +84,7 @@ export function FileDialog({
   }, [path]);
 
   return (
-    <Modal
-      title={kind === "directory" ? "Open a project folder" : "Attach a file"}
-      onClose={onClose}
-      wide
-    >
+    <Modal title={titles[kind]} onClose={onClose} wide>
       <form
         className="file-location"
         onSubmit={(event) => {
@@ -116,7 +124,7 @@ export function FileDialog({
           <p className="quiet-message">Reading folder…</p>
         )}
         {directory?.entries
-          .filter((entry) => kind === "file" || entry.directory)
+          .filter((entry) => kind !== "directory" || entry.directory)
           .map((entry) => (
             <button
               key={entry.path}
@@ -148,14 +156,16 @@ export function FileDialog({
         </button>
         <button
           className="primary-button"
-          disabled={loading || !directory || (kind === "file" && !selected)}
+          disabled={
+            loading || !directory || (kind !== "directory" && !selected)
+          }
           onClick={() => {
-            const value = kind === "file" ? selected : directory?.path;
+            const value = kind === "directory" ? directory?.path : selected;
             if (value) onSelect(value);
           }}
         >
           <FolderOpen />
-          {kind === "directory" ? "Open this folder" : "Attach file"}
+          {actions[kind]}
         </button>
       </footer>
     </Modal>

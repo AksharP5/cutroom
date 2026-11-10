@@ -1,4 +1,4 @@
-export type EditorMode = "select" | "draw" | "comment";
+export type EditorMode = "select" | "trim" | "blade" | "draw" | "comment";
 
 export interface EditorPoint {
   x: number;

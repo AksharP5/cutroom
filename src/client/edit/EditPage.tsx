@@ -6,7 +6,11 @@ import {
   CaretDown,
   ChatCircle,
   Cursor,
+  FolderOpen,
+  Knife,
+  Magnet,
   PencilSimple,
+  SplitHorizontal,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -22,6 +26,7 @@ import { api } from "../api";
 import { noteNumbers } from "../review";
 import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
+import { exportProject, useExport } from "./export";
 import {
   editTimeline,
   loadTimeline,
@@ -60,6 +65,8 @@ function edits({ clips, tracks }: Timeline) {
 
 const tools = [
   { mode: "select", action: "editPointer", icon: Cursor },
+  { mode: "trim", action: "editTrim", icon: SplitHorizontal },
+  { mode: "blade", action: "editBlade", icon: Knife },
   { mode: "draw", action: "cutroomDraw", icon: PencilSimple },
   { mode: "comment", action: "cutroomComment", icon: ChatCircle },
 ] as const;
@@ -71,6 +78,7 @@ export function EditPage({
   onContext,
   onSaveNote,
   onOpenNote,
+  onFiles,
 }: {
   projectId: string;
   /** Review notes, shown as pins on the picture and the timeline ruler. */
@@ -78,6 +86,8 @@ export function EditPage({
   onContext?: (context: EditorContext) => void;
   onSaveNote: SaveNote;
   onOpenNote(id: string): void;
+  /** Opens the project's folder in the file dialog. */
+  onFiles(): void;
 }) {
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
@@ -88,6 +98,8 @@ export function EditPage({
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
+  const snapping = useTimeline((state) => state.snapping);
+  const exporting = useExport((state) => state.progress);
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
@@ -208,6 +220,8 @@ export function EditPage({
 
   const handlers: Partial<Record<Action, () => void>> = {
     editPointer: () => setMode("select"),
+    editTrim: () => setMode("trim"),
+    editBlade: () => setMode("blade"),
     cutroomDraw: () => setMode("draw"),
     cutroomComment: () => setMode("comment"),
     controlPlayToggle: () => transport.dispatch({ type: "toggle" }),
@@ -297,6 +311,15 @@ export function EditPage({
         ))}
         <span className="edit-grow" />
         <button
+          className="edit-icon"
+          aria-label="Snapping"
+          aria-pressed={snapping}
+          title={hint("editSnapping")}
+          onClick={() => useTimeline.setState({ snapping: !snapping })}
+        >
+          <Magnet size={16} weight={snapping ? "fill" : "regular"} />
+        </button>
+        <button
           className="edit-zoom"
           popoverTarget="edit-zoom-menu"
           aria-label="Viewer zoom"
@@ -318,6 +341,14 @@ export function EditPage({
             </button>
           ))}
         </div>
+        <button
+          className="edit-icon"
+          aria-label="Project files"
+          title="Project files"
+          onClick={onFiles}
+        >
+          <FolderOpen size={16} />
+        </button>
         <span className="edit-separator" />
         <button
           className="edit-icon"
@@ -336,6 +367,17 @@ export function EditPage({
           onClick={() => step("redo")}
         >
           <ArrowClockwise size={16} />
+        </button>
+        <button
+          className="edit-export"
+          disabled={exporting !== null}
+          onClick={() =>
+            void exportProject(projectId, useTransport.getState().fps)
+          }
+        >
+          {exporting === null
+            ? "Export"
+            : `Exporting ${Math.round(exporting)}%`}
         </button>
       </div>
       <section ref={viewer} className="edit-viewer" aria-label="Viewer">
@@ -363,6 +405,7 @@ export function EditPage({
       <section className="edit-timeline" aria-label="Timeline">
         <ProjectTimeline
           projectId={projectId}
+          tool={mode === "trim" || mode === "blade" ? mode : "pointer"}
           notes={notes}
           onOpenNote={onOpenNote}
         />

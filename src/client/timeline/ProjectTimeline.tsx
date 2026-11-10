@@ -7,6 +7,8 @@ import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
+import { useWorkspace } from "../workspace";
+import type { Tool } from "./gesture";
 import { Timeline } from "./Timeline";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
@@ -50,15 +52,18 @@ const clock: TimelineClock = {
  */
 export function ProjectTimeline({
   projectId,
+  tool,
   notes,
   onOpenNote,
 }: {
   projectId: string;
+  tool: Tool;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
 }) {
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
+  const snapping = useTimeline((state) => state.snapping);
   const setSelection = (next: Selection) =>
     useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
@@ -92,6 +97,9 @@ export function ProjectTimeline({
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));
     },
     editDeselectAll: () => setSelection(emptySelection),
+    // Pressed during a drag, it turns snapping off or on for the rest of it, as in Resolve.
+    editSnapping: () =>
+      useTimeline.setState((state) => ({ snapping: !state.snapping })),
   });
 
   const pins = useMemo(() => {
@@ -142,6 +150,15 @@ export function ProjectTimeline({
       pins={pins}
       selection={selection}
       onSelect={setSelection}
+      tool={tool}
+      snapping={snapping}
+      onEdit={(label, commands) => {
+        // The editor shows an edit it takes before this returns.
+        const before = useTimeline.getState().view;
+        void editTimeline(projectId, label, () => commands);
+        return useTimeline.getState().view !== before;
+      }}
+      onGesture={(gesture) => useWorkspace.setState({ gesture })}
       onSeek={transport.seek}
       onScrub={transport.scrub}
       onScrubEnd={transport.release}

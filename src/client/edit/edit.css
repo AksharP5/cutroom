@@ -107,6 +107,27 @@
   width: var(--size-icon-button);
   height: var(--size-icon-button);
 }
+.edit-export {
+  height: var(--size-tool-button);
+  margin-left: var(--space-1);
+  padding: 0 9px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.edit-export:not(:disabled):active {
+  transform: scale(var(--press-scale));
+}
+.edit-export:disabled {
+  opacity: 1;
+  color: var(--text-secondary);
+}
 .edit-zoom {
   anchor-name: --edit-zoom;
   height: var(--size-tool-button);

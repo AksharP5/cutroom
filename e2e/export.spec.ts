@@ -2,13 +2,13 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
+import type { APIRequestContext, Download, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
+import { embeddedEditor } from "./embedded";
 
-test("exports a local composition through the editor and downloads a playable MP4", async ({
-  page,
-  request,
-}, testInfo) => {
+/** A one-second 320x240 composition with one picture clip, and the page's uncaught errors. */
+async function exportable(page: Page, request: APIRequestContext) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
@@ -50,32 +50,12 @@ test("exports a local composition through the editor and downloads a playable MP
     },
   );
   expect(written.ok()).toBeTruthy();
+  return { project, errors };
+}
 
-  await page.goto(`/#project/${project.id}?v=1&rc=1&tv=1`);
-  await expect(
-    page.frameLocator("hyperframes-player iframe").locator("#picture"),
-  ).toBeVisible();
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith(`/api/projects/${project.id}/render`),
-  );
-  await page.getByRole("button", { name: "Export", exact: true }).click();
-  const response = await started;
-  expect(response.ok(), await response.text()).toBeTruthy();
-  await expect(
-    page.getByRole("tab", { name: /^Renders(?: \(\d+\))?$/ }),
-  ).toBeVisible();
-
-  const downloadButton = page.getByRole("button", {
-    name: /^Download .+\.mp4$/,
-  });
-  await expect(downloadButton).toBeEnabled({ timeout: 45_000 });
-  const pendingDownload = page.waitForEvent("download");
-  await downloadButton.click();
-  const download = await pendingDownload;
+/** The download is an MP4 that plays: 320x240 and one second long. */
+async function expectPlayable(download: Download, path: string) {
   expect(download.suggestedFilename()).toMatch(/\.mp4$/);
-  const path = testInfo.outputPath("export.mp4");
   await download.saveAs(path);
   const bytes = await readFile(path);
   expect(bytes.subarray(4, 8).toString("ascii")).toBe("ftyp");
@@ -105,5 +85,69 @@ test("exports a local composition through the editor and downloads a playable MP
     encoded.streams.find((stream) => stream.codec_type === "video"),
   ).toMatchObject({ width: 320, height: 240 });
   expect(Number(encoded.format.duration)).toBeCloseTo(1, 1);
+}
+
+test("Export in the tool row renders the composition and downloads a playable MP4", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project, errors } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(
+    page
+      .getByRole("region", { name: "Timeline" })
+      .locator('[data-clip="picture"]'),
+  ).toBeVisible();
+
+  const pendingDownload = page.waitForEvent("download", { timeout: 45_000 });
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  // The button and the status bar say so while it renders, and it cannot be started twice.
+  const exporting = page.getByRole("button", { name: /^Exporting \d+%$/ });
+  await expect(exporting).toBeDisabled();
+  await expect(page.locator(".status-bar")).toContainText("Exporting");
+
+  await expectPlayable(
+    await pendingDownload,
+    testInfo.outputPath("export.mp4"),
+  );
+  await expect(
+    page.getByRole("button", { name: "Export", exact: true }),
+  ).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test("the embedded editor exports a local composition and downloads a playable MP4", async ({
+  page,
+  request,
+}, testInfo) => {
+  await embeddedEditor(page);
+  const { project, errors } = await exportable(page, request);
+
+  await page.goto(`/#project/${project.id}?v=1&rc=1&tv=1`);
+  await expect(
+    page.frameLocator("hyperframes-player iframe").locator("#picture"),
+  ).toBeVisible();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/api/projects/${project.id}/render`),
+  );
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const response = await started;
+  expect(response.ok(), await response.text()).toBeTruthy();
+  await expect(
+    page.getByRole("tab", { name: /^Renders(?: \(\d+\))?$/ }),
+  ).toBeVisible();
+
+  const downloadButton = page.getByRole("button", {
+    name: /^Download .+\.mp4$/,
+  });
+  await expect(downloadButton).toBeEnabled({ timeout: 45_000 });
+  const pendingDownload = page.waitForEvent("download");
+  await downloadButton.click();
+  await expectPlayable(
+    await pendingDownload,
+    testInfo.outputPath("export.mp4"),
+  );
   expect(errors).toEqual([]);
 });

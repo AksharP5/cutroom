@@ -284,7 +284,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   switch (command.type) {
     case "move": {
       const named = new Set(command.clipIds.map(find));
-      const moving = new Set(withPartners(clips, [...named]));
+      const moving = command.linked
+        ? new Set(withPartners(clips, [...named]))
+        : named;
       if (command.trackBy !== 0)
         for (const clip of named)
           assertTrackKind(

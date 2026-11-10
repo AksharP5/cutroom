@@ -30,9 +30,6 @@ async function open(
       `<main$1data-duration="${count * 3}"$2>\n${[...shots, ...extra].join("\n")}\n</main>`,
     ),
   );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const timeline = page.getByRole("region", { name: "Timeline" });
   await expect(timeline.locator("[data-clip]")).toHaveCount(

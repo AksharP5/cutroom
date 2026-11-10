@@ -1,10 +1,12 @@
 # Keyboard
 
-The new editor (Settings, New editor) uses DaVinci Resolve's Edit page keys, and each action keeps its Resolve action id. Shortcuts never fire while you type in a field or work in a dialog. Esc returns to Select.
+The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Resolve action id. Shortcuts never fire while you type in a field or work in a dialog. Esc returns to Select.
 
 | Action                                       | Keys                     | Action id                         |
 | -------------------------------------------- | ------------------------ | --------------------------------- |
 | Select                                       | `A`                      | `editPointer`                     |
+| Trim                                         | `T`                      | `editTrim`                        |
+| Blade                                        | `B`                      | `editBlade`                       |
 | Draw                                         | `Shift+N`                | `cutroomDraw`                     |
 | Comment                                      | `N`                      | `cutroomComment`                  |
 | Play or stop                                 | `Space`                  | `controlPlayToggle`               |
@@ -47,6 +49,7 @@ The new editor (Settings, New editor) uses DaVinci Resolve's Edit page keys, and
 | Ripple delete                                | `Shift+X`, `Delete`      | `editDelete`                      |
 | Turn clips on or off                         | `D`                      | `editClipEnabled`                 |
 | Add a marker                                 | `M`                      | `markMarkerAdd`                   |
+| Snapping                                     | `C`                      | `editSnapping`                    |
 
 While a note is open on the picture, its text takes every key: Enter adds it, Shift+Enter starts a new line, Esc discards it, and Ctrl+Z undoes text typed since the last stroke by word or after a one-second pause before taking back strokes. Ctrl+Shift+Z restores strokes and undone text. Ruler clicks return focus to the note.
 
@@ -59,3 +62,17 @@ Q, W, E and Ctrl+\ act on the selected clips under the playhead. When no selecte
 Each press is one undo step. The timeline shows the edit as soon as you press the key, and the clips it moves slide to their new place. A key acts on what was on screen when it was pressed: the same clips, never others an agent's edit moved under the playhead since. If an agent changed those clips first, the edit is taken back and the header says "An agent changed those clips first. Press it again." A key that leaves an agent's clips alone, such as M after an agent's marker, still lands. If the engine refuses an edit in the editor, the header says why, naming tracks, times, and clips as the timeline shows them. The next edit that lands clears the message.
 
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
+
+## Mouse
+
+A, T and B choose what a press on a clip does, as on Resolve's Edit page. A, T, B and C are the owner's Resolve bindings for `editPointer`, `editTrim`, `editBlade` and `editSnapping`.
+
+- **Select (A).** Drag a clip's body to move it, along its track or to another. Drag an edge to resize it; nothing else moves.
+- **Trim (T).** Drag an edge to ripple trim it. On a cut between two clips, drag to roll the cut. A press on a clip's body selects it.
+- **Blade (B).** Click a clip to razor it at that frame.
+
+A press becomes a drag after 3px. Esc cancels a drag and changes nothing else: the tool and the selection stay. Each drag is one undo step. Linked clips move together; hold Alt at the press to move one alone. Dragging to another track carries the clips of the grabbed clip's kind, and their linked partners follow in time on their own tracks. A move onto another clip, or picture onto an audio track, turns the outline red and is refused on release. A resized or rolled edge stops at its neighbour and at the end of its source.
+
+With snapping on, a dragged edge within 8px of a clip edge, the playhead, a marker, or in or out jumps to it, and a line marks where. C turns snapping off or on, also in the middle of a drag, as Resolve's snapping key does. Holding Ctrl while dragging turns it off until the key is let go; that hold is Cutroom's, not Resolve's.
+
+Drag a file from Media onto a track to add it, with its first frame under the pointer. In free space it is placed as it is. Over other clips it is inserted there, and every auto-select track opens to make room. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.

@@ -174,9 +174,6 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
         await request.get(`/api/cutroom/projects/${project.id}/timeline`)
       ).json(),
     ).timeline.range;
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
 
   const preview = page.frameLocator("iframe[title='Composition preview']");
@@ -261,9 +258,6 @@ test("a composition that cannot play keeps the last picture and says why", async
       })
     ).json(),
   );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
-  );
   await page.goto(`/#project/${project.id}`);
   const live = page.frameLocator("iframe[data-live]");
   await expect(live.locator("#headline")).toHaveText("Held picture");
@@ -295,9 +289,6 @@ test("a timeline the engine refuses stays reported after the picture reloads", a
         data: { name: "Refused timeline" },
       })
     ).json(),
-  );
-  await page.addInitScript(() =>
-    localStorage.setItem("cutroom.newEditor", "true"),
   );
   await page.goto(`/#project/${project.id}`);
   const live = page.frameLocator("iframe[data-live]");
