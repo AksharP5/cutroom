@@ -1,5 +1,37 @@
 import { z } from "zod";
 
+/** App, timeline and preview share one project connection per tab. */
+const projectStreams = new Map<
+  string,
+  { source: EventSource; listeners: number }
+>();
+
+export function subscribeProjectEvents(
+  projectId: string,
+  type: "message" | "file-change",
+  listener: (event: MessageEvent<string>) => void,
+) {
+  let stream = projectStreams.get(projectId);
+  if (!stream) {
+    stream = {
+      source: new EventSource(
+        `/api/cutroom/projects/${encodeURIComponent(projectId)}/events`,
+      ),
+      listeners: 0,
+    };
+    projectStreams.set(projectId, stream);
+  }
+  const shared = stream;
+  shared.listeners++;
+  shared.source.addEventListener(type, listener);
+  return () => {
+    shared.source.removeEventListener(type, listener);
+    if (--shared.listeners) return;
+    shared.source.close();
+    projectStreams.delete(projectId);
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,

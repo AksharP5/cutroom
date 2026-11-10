@@ -22,7 +22,7 @@ import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
-import { api } from "../api";
+import { api, subscribeProjectEvents } from "../api";
 import { noteNumbers } from "../review";
 import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
@@ -115,30 +115,36 @@ export function EditPage({
     };
     void loadTimeline(projectId).catch(fail);
     // Any project change can move the timeline or the undo history.
-    const projectEvents = new EventSource(`/api/cutroom${base}/events`);
-    projectEvents.onmessage = () => void loadTimeline(projectId).catch(fail);
+    const stopProject = subscribeProjectEvents(
+      projectId,
+      "message",
+      () => void loadTimeline(projectId).catch(fail),
+    );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
-    const previewEvents = new EventSource("/api/events");
-    previewEvents.addEventListener("file-change", (event) => {
-      const change = previewChangeSchema.safeParse(
-        JSON.parse(String(event.data)),
-      );
-      if (
-        change.success &&
-        change.data.projectId === projectId &&
-        change.data.affectsPreview &&
-        (change.data.affectedCompositions?.includes("index.html") ?? true)
-      )
-        setRevision((value) => value + 1);
-    });
+    const stopPreview = subscribeProjectEvents(
+      projectId,
+      "file-change",
+      (event) => {
+        const change = previewChangeSchema.safeParse(
+          JSON.parse(String(event.data)),
+        );
+        if (
+          change.success &&
+          change.data.projectId === projectId &&
+          change.data.affectsPreview &&
+          (change.data.affectedCompositions?.includes("index.html") ?? true)
+        )
+          setRevision((value) => value + 1);
+      },
+    );
     return () => {
       open = false;
       reportEditorError("timeline", null);
-      projectEvents.close();
-      previewEvents.close();
+      stopProject();
+      stopPreview();
       unsubscribe();
     };
-  }, [base, projectId]);
+  }, [projectId]);
 
   const contextReport = useRef(onContext);
   contextReport.current = onContext;

@@ -2,16 +2,22 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import type { CommandInput } from "../src/shared/timeline/schema";
 
 /**
  * A project with four 3-second shots on V1 and a title on V2 over the first, opened in the
  * editor a new install gets. `at` gives the screen point of a frame on a track's row.
  */
-async function open(page: Page, request: APIRequestContext, name: string) {
+async function open(
+  page: Page,
+  request: APIRequestContext,
+  name: string,
+  linked = false,
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", { data: { name } })
@@ -22,9 +28,14 @@ async function open(page: Page, request: APIRequestContext, name: string) {
     ...Array.from(
       { length: 4 },
       (_, n) =>
-        `<div id="shot-${n + 1}" class="clip" data-start="${n * 3}" data-duration="3" data-track-index="0">Shot ${n + 1}</div>`,
+        `<div id="shot-${n + 1}" class="clip" data-start="${n * 3}" data-duration="3" data-track-index="0"${linked && n === 3 ? ' data-link="pair"' : ""}>Shot ${n + 1}</div>`,
     ),
     '<div id="title" class="clip" data-start="0" data-duration="3" data-track-index="1">Title</div>',
+    ...(linked
+      ? [
+          '<audio id="partner" data-start="9" data-duration="3" data-track-index="2" data-link="pair"></audio>',
+        ]
+      : []),
   ];
   await writeFile(
     index,
@@ -35,7 +46,7 @@ async function open(page: Page, request: APIRequestContext, name: string) {
   );
   await page.goto(`/#project/${project.id}`);
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline.locator("[data-clip]")).toHaveCount(5);
+  await expect(timeline.locator("[data-clip]")).toHaveCount(clips.length);
   const api = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
     TimelineViewSchema.parse(
@@ -83,7 +94,16 @@ async function open(page: Page, request: APIRequestContext, name: string) {
     await page.mouse.move(to.x, to.y, { steps: 12 });
     if (release) await page.mouse.up();
   };
-  return { project, timeline, read, at, drag, initial: await read() };
+  const agent = async (commands: CommandInput[]) => {
+    const view = TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+    const response = await request.post(`${api}/commands`, {
+      data: { expectedRevision: view.revision, label: "Agent", commands },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  return { project, timeline, read, at, drag, agent, initial: await read() };
 }
 
 const shots = [
@@ -93,6 +113,142 @@ const shots = [
   ["shot-4", 0, 270, 90],
 ];
 const title = ["title", 1, 0, 90];
+
+for (const target of ["shot-4", "partner"]) {
+  test(`a held drag refuses an agent's change to ${target}`, async ({
+    page,
+    request,
+  }) => {
+    const { timeline, read, at, drag, agent } = await open(
+      page,
+      request,
+      "Concurrent drag",
+      true,
+    );
+    let sent = 0;
+    page.on("request", (request) => {
+      if (request.url().endsWith("/commands")) sent++;
+    });
+    await drag(await at(300), await at(330), false);
+    await agent([{ type: "move", clipIds: [target], by: 15, linked: false }]);
+    await expect
+      .poll(() =>
+        timeline
+          .locator(`[data-clip="${target}"]`)
+          .evaluate((clip) => clip.style.getPropertyValue("--s")),
+      )
+      .toBe("285");
+    const after = await read();
+    await page.mouse.up();
+    await expect(page.locator(".toast span")).toHaveText(
+      "An agent changed those clips first.",
+    );
+    expect(sent).toBe(0);
+    expect(await read()).toEqual(after);
+    await expect(timeline.locator(".tl-readout")).toBeHidden();
+  });
+}
+
+test("unrelated agent edits leave a held drag's original destination intact", async ({
+  page,
+  request,
+}) => {
+  const { timeline, read, at, drag, agent } = await open(
+    page,
+    request,
+    "Unrelated drag",
+  );
+  await drag(await at(300), await at(330), false);
+  await agent([{ type: "move", clipIds: ["title"], by: 15 }]);
+  await expect
+    .poll(() =>
+      timeline
+        .locator('[data-clip="title"]')
+        .evaluate((clip) => clip.style.getPropertyValue("--s")),
+    )
+    .toBe("15");
+  await page.mouse.up();
+  await expect
+    .poll(read)
+    .toEqual([
+      ...shots.slice(0, 3),
+      ["shot-4", 0, 300, 90],
+      ["title", 1, 15, 90],
+    ]);
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
+
+test("an agent changing a linked partner before send also refuses the released drag", async ({
+  page,
+  request,
+}) => {
+  const { timeline, read, at, drag, agent } = await open(
+    page,
+    request,
+    "Queued drag",
+    true,
+  );
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let first = true;
+  await page.route("**/commands", async (route) => {
+    if (first) {
+      first = false;
+      await gate;
+    }
+    await route.fulfill({ response: await route.fetch() });
+  });
+  await drag(await at(300), await at(330));
+  await expect
+    .poll(() =>
+      timeline
+        .locator('[data-clip="shot-4"]')
+        .evaluate((clip) => clip.style.getPropertyValue("--s")),
+    )
+    .toBe("300");
+  await agent([{ type: "move", clipIds: ["partner"], by: 15, linked: false }]);
+  const after = await read();
+  release();
+  await expect(page.locator(".toast span")).toHaveText(
+    "An agent changed those clips first.",
+  );
+  expect(await read()).toEqual(after);
+});
+
+for (const key of ["c", "Control", "Meta"]) {
+  test(`${key} changes a stationary drag's snap before release`, async ({
+    page,
+    request,
+  }) => {
+    const { timeline, read, at, drag, agent } = await open(
+      page,
+      request,
+      "Stationary snap",
+    );
+    await agent([{ type: "setMarker", frame: 480 }]);
+    await expect(timeline.locator(".tl-marker")).toHaveCount(1);
+    // The shot's end reaches 482, then snaps back to 480.
+    await drag(await at(300), await at(422), false);
+    const snap = timeline.locator(".tl-snap");
+    await expect(snap).toBeVisible();
+    if (key === "c") await page.keyboard.press(key);
+    else await page.keyboard.down(key);
+    await expect(snap).toBeHidden();
+    if (key === "Control") {
+      await page.keyboard.up(key);
+      await expect(snap).toBeVisible();
+      await page.keyboard.down(key);
+      await expect(snap).toBeHidden();
+    }
+    await page.mouse.up();
+    if (key !== "c") await page.keyboard.up(key);
+    await expect
+      .poll(read)
+      .toEqual([...shots.slice(0, 3), ["shot-4", 0, 392, 90], title]);
+  });
+}
 
 test("dragging a clip moves it along its track and onto another, one undo step each", async ({
   page,

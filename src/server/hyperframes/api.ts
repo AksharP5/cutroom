@@ -36,7 +36,7 @@ import { createRenderWorkers } from "./jobs";
 import { previewPolicy } from "./isolation";
 import { withPreviewBridge } from "./previewBridge";
 
-interface FileChange {
+export interface FileChange {
   projectId: string;
   path: string;
   version: string | null;
@@ -381,6 +381,13 @@ export function createHyperframesApi(
   });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
+    subscribe(projectId: string, listener: (change: FileChange) => void) {
+      const notify = (change: FileChange) => {
+        if (change.projectId === projectId) listener(change);
+      };
+      subscribers.add(notify);
+      return () => subscribers.delete(notify);
+    },
     async dispose() {
       for (const watcher of watchers.values()) watcher.close();
       for (const timer of timers.values()) clearTimeout(timer);

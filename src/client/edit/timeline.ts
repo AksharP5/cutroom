@@ -23,6 +23,7 @@ import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "./timecode";
+import { anchorsChanged, editAnchors } from "./anchors";
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 
@@ -55,6 +56,8 @@ interface Edit {
    * clips sit where they were.
    */
   anchors: Clip[];
+  gesture: boolean;
+  failure: string | null;
   /** Set when an edit that made a clip this one names was refused; it is taken back with that one. */
   dropped: boolean;
 }
@@ -82,10 +85,27 @@ export function openTimeline(projectId: string) {
  * left, so quick key presses never send a stale revision and a slow read never lands over a
  * newer view.
  */
-function enqueue(step: () => Promise<void>) {
+function enqueue<T>(step: () => Promise<T>) {
   const run = queue.then(step);
-  queue = run.catch(() => {});
+  queue = run.then(
+    () => {},
+    () => {},
+  );
   return run;
+}
+
+/** Starts an export in queue order, only after the edits shown before it have landed. */
+export function afterTimelineEdits<T>(
+  projectId: string,
+  start: () => Promise<T>,
+) {
+  const edits = pending.filter((edit) => edit.projectId === projectId);
+  return enqueue(async () => {
+    if (useTimeline.getState().projectId !== projectId)
+      throw new Error("The open project changed. Export it again.");
+    for (const edit of edits) if (edit.failure) throw new Error(edit.failure);
+    return start();
+  });
 }
 
 /**
@@ -169,7 +189,7 @@ export const loadTimeline = (projectId: string) =>
  */
 async function send(edit: Edit) {
   const changed = new Error(
-    "An agent changed those clips first. Press it again.",
+    `An agent changed those clips first.${edit.gesture ? "" : " Press it again."}`,
   );
   for (const retry of [false, true]) {
     const base =
@@ -178,20 +198,7 @@ async function send(edit: Edit) {
         : await read(edit.projectId);
     // A cut at absolute frames only means the same cut while the clips it names are where the
     // user saw them; an agent may have moved them since, whether or not the revision is stale.
-    if (
-      edit.anchors.some((seen) => {
-        const clip = base.timeline.clips.find((item) => item.id === seen.id);
-        return (
-          !clip ||
-          clip.start !== seen.start ||
-          clip.duration !== seen.duration ||
-          clip.track !== seen.track ||
-          // The server keeps source offsets to the microsecond; a shown piece may not be rounded yet.
-          Math.abs((clip.mediaStart ?? -1) - (seen.mediaStart ?? -1)) > 1e-6
-        );
-      })
-    )
-      throw changed;
+    if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
       await api(
         `${project(edit.projectId)}/commands`,
@@ -292,14 +299,25 @@ export async function editTimeline(
   projectId: string,
   label: string,
   build: (timeline: Timeline) => CommandInput[],
+  /** A mouse gesture keeps the timeline it was pressed on, even across server answers. */
+  basis?: Timeline,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return;
   let edit: Edit | null = null;
   try {
-    const input = z.array(CommandSchema).parse(build(view.timeline));
+    const from = basis ?? view.timeline;
+    const input = z.array(CommandSchema).parse(build(from));
     if (!input.length) return;
-    const { commands, creates, timeline } = name(input, view.timeline);
+    const named = name(input, from);
+    const { commands, creates } = named;
+    const anchors = editAnchors(from, named.timeline, commands);
+    if (anchorsChanged(anchors, view.timeline))
+      throw new Error("An agent changed those clips first.");
+    const timeline =
+      from === view.timeline
+        ? named.timeline
+        : applyAll(view.timeline, commands);
     edit = {
       projectId,
       label,
@@ -314,14 +332,9 @@ export async function editTimeline(
         ),
       ),
       creates,
-      anchors: view.timeline.clips.filter((clip) =>
-        commands.some(
-          (command) =>
-            (command.type === "trim" && command.clipId === clip.id) ||
-            ((command.type === "split" || command.type === "move") &&
-              command.clipIds?.includes(clip.id)),
-        ),
-      ),
+      anchors,
+      gesture: basis !== undefined,
+      failure: null,
       dropped: false,
     };
     const made = edit;
@@ -333,6 +346,10 @@ export async function editTimeline(
       try {
         await send(made);
       } catch (error) {
+        made.failure = humanReason(
+          error instanceof Error ? error.message : String(error),
+          from,
+        );
         // Before the next edit runs, the queue forgets this one and the edits that named its
         // pieces, and reads what the server holds.
         dropDependents(made);

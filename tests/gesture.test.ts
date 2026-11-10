@@ -14,6 +14,7 @@ import {
   step,
 } from "../src/client/timeline/gesture";
 import type { Drag, Gesture, Preview } from "../src/client/timeline/gesture";
+import { anchorsChanged, editAnchors } from "../src/client/edit/anchors";
 
 const clip = (
   id: string,
@@ -95,6 +96,54 @@ const drag = (
   timeline = sequence(),
   playhead = 0,
 ) => beginDrag(timeline, intent, new Set(selection), origin, playhead);
+
+test("frozen edit anchors include linked partners and ripple followers but ignore unrelated clips", () => {
+  const before = sequence();
+  const commands = [
+    CommandSchema.parse({
+      type: "trim",
+      clipId: "a",
+      edge: "end",
+      to: 90,
+      ripple: true,
+    }),
+  ];
+  const anchors = editAnchors(before, applyAll(before, commands), commands);
+  expect(anchors.map(({ id }) => id).sort()).toEqual([
+    "a",
+    "a-sound",
+    "b",
+    "c",
+  ]);
+  expect(anchorsChanged(anchors, { ...before, markers: [] })).toBe(false);
+  for (const id of ["a-sound", "c"]) {
+    expect(
+      anchorsChanged(anchors, {
+        ...before,
+        clips: before.clips.map((clip) =>
+          clip.id === id ? { ...clip, start: clip.start + 15 } : clip,
+        ),
+      }),
+    ).toBe(true);
+  }
+  const move = [CommandSchema.parse({ type: "move", clipIds: ["c"], by: 30 })];
+  const moved = editAnchors(before, applyAll(before, move), move);
+  expect(moved.map(({ id }) => id)).toEqual(["c"]);
+  expect(
+    anchorsChanged(moved, {
+      ...before,
+      clips: before.clips.map((clip) =>
+        clip.id === "a" ? { ...clip, label: "An agent's name" } : clip,
+      ),
+    }),
+  ).toBe(false);
+  expect(
+    anchorsChanged(moved, {
+      ...before,
+      clips: before.clips.filter(({ id }) => id !== "c"),
+    }),
+  ).toBe(true);
+});
 
 test("a press arms, three pixels of travel start the drag, and a release commits it", () => {
   const intent = { kind: "move", clipId: "a", alone: false } as const;

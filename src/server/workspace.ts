@@ -25,12 +25,17 @@ import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { projectPath } from "./projects/store";
 import { REVIEW_STATE_PATH } from "../shared/review";
+import type { FileChange } from "./hyperframes/api";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
   dataDir: string;
   projectsDir: string;
   mcpCommand: string;
+  subscribePreview?: (
+    projectId: string,
+    listener: (change: FileChange) => void,
+  ) => () => void;
 }) {
   const app = new Hono();
   app.get("/status", (c) =>
@@ -167,6 +172,11 @@ export function createWorkspaceRoutes(options: {
   app.get("/projects/:id/events", async (c) => {
     const project = await options.projects.get(c.req.param("id"));
     return streamSSE(c, async (stream) => {
+      const stopPreview = options.subscribePreview?.(project.id, (change) => {
+        void stream
+          .writeSSE({ event: "file-change", data: JSON.stringify(change) })
+          .catch(() => {});
+      });
       // One debounce per path, so a burst touching several files reports each of them.
       const timers = new Map<string, ReturnType<typeof setTimeout>>();
       const watcher = watch(
@@ -202,6 +212,7 @@ export function createWorkspaceRoutes(options: {
         if (!stream.aborted)
           await new Promise<void>((done) => stream.onAbort(done));
       } finally {
+        stopPreview?.();
         watcher.close();
         for (const timer of timers.values()) clearTimeout(timer);
         clearInterval(heartbeat);

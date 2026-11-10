@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
 import { formatTimecode } from "../edit/timecode";
+import { anchorsChanged, editAnchors } from "../edit/anchors";
 import type { Bodies } from "./bodies";
 import {
   SNAP_PX,
@@ -11,6 +12,7 @@ import {
   dropPreview,
   idle,
   intentAt,
+  previewCommands,
   snapTargets,
   step,
 } from "./gesture";
@@ -38,7 +40,7 @@ export interface LaneGestureOptions {
   playhead(): number;
   onSelect(selection: Selection): void;
   /** Makes one undo step; false when the editor refused it and nothing changed. */
-  onEdit(label: string, commands: CommandInput[]): boolean;
+  onEdit(label: string, commands: CommandInput[], basis?: Timeline): boolean;
   /** A press began or ended. While one is under way, Esc cancels it and does nothing else. */
   onGesture(active: boolean): void;
 }
@@ -204,7 +206,20 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** Draws what a drag or drop would do. */
   function render(base: Timeline, next: Preview) {
     preview.current = next;
-    place(base, next.shown, next.pieces);
+    const { timeline } = latest.current;
+    if (
+      timeline !== base &&
+      anchorsChanged(editAnchors(base, next.shown, next.commands), timeline)
+    ) {
+      // The queue reports the conflict without sending. Never redraw a relative move from a new start.
+      latest.current.onEdit(next.label, next.commands, base);
+      end("cancel");
+      return;
+    }
+    // Keep the commands frozen, but show unrelated agent edits underneath the held drag.
+    const over =
+      timeline !== base ? previewCommands(timeline, next.commands) : null;
+    place(timeline, over?.timeline ?? next.shown, over?.pieces ?? next.pieces);
     mark(snapLine.current, next.snap);
     latest.current.lanes.current?.toggleAttribute("data-refused", !next.valid);
   }
@@ -273,6 +288,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (current.intent.kind === "marquee") return drawMarquee();
     if (!active) return;
     const { x, y, bypass } = pointer.current;
+    // Measure before the preview writes hundreds of transforms; reading after forces layout.
+    const at = local(x, y);
     const input = {
       frame: frameAt(x),
       track: rowAt(y)?.track.index ?? null,
@@ -283,6 +300,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       drawn.current = key;
       const next = dragPreview(active, input);
       render(active.timeline, next);
+      if (!drag.current) return;
       const { intent } = active;
       if (intent.kind === "blade") {
         const clip = active.timeline.clips.find(
@@ -299,7 +317,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     }
     if (readout.current && !readout.current.hidden) {
-      const at = local(x, y);
       readout.current.style.transform = `translate(${at.x + 14}px, ${at.y + 18}px)`;
     }
   }
@@ -338,34 +355,33 @@ export function useLaneGestures(options: LaneGestureOptions) {
         );
       return;
     }
-    // The blade cuts where a click lands, so its edit is made here when no move made one.
+    // Release always uses the modifiers held now, even without a final pointer move.
     const result =
       outcome === "cancel"
         ? null
-        : (preview.current ??
-          dragPreview(active, {
+        : dragPreview(active, {
             frame: frameAt(pointer.current.x),
-            track: null,
+            track: rowAt(pointer.current.y)?.track.index ?? null,
             reach: reach(pointer.current.bypass),
-          }));
-    settle(result);
+          });
+    settle(result, active.timeline);
   }
 
   /** Ends a preview: with its edit when it has one the editor takes, otherwise by going back. */
-  function settle(result: Preview | null) {
+  function settle(result: Preview | null, basis?: Timeline) {
     const { lanes, bodies, onEdit } = latest.current;
     const offsets = clear();
     if (
       result?.valid !== false &&
       result?.commands.length &&
-      onEdit(result.label, result.commands)
+      onEdit(result.label, result.commands, basis)
     ) {
       // The clips are where the edit puts them already; `useClipMotion` slides only the rest.
       held.current = offsets;
       return;
     }
     // A refused move still asks the editor, which says why in the header.
-    if (result && !result.valid) onEdit(result.label, result.commands);
+    if (result && !result.valid) onEdit(result.label, result.commands, basis);
     if (lanes.current)
       slideClips(lanes.current, offsets, (slides) =>
         bodies.current?.slide(slides),
@@ -495,42 +511,32 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (next.outcome) finish(next.outcome);
   }
 
-  // Esc cancels a drag before any other shortcut hears it.
+  // Esc cancels before any other shortcut hears it. Modifier changes redraw a stationary drag.
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || gesture.current.phase === "idle") return;
-      event.preventDefault();
-      event.stopPropagation();
-      end("cancel");
+      if (gesture.current.phase === "idle") return;
+      if (event.key === "Escape" && event.type === "keydown") {
+        event.preventDefault();
+        event.stopPropagation();
+        end("cancel");
+        return;
+      }
+      pointer.current.bypass = event.ctrlKey || event.metaKey;
+      update();
     };
     document.addEventListener("keydown", key, true);
+    document.addEventListener("keyup", key, true);
     return () => {
       document.removeEventListener("keydown", key, true);
+      document.removeEventListener("keyup", key, true);
       end("cancel");
     };
   }, []);
-  // The timeline changed under a drag: the server answered an earlier edit, or an agent edited.
-  // The drag goes on from the new timeline when its clips are still there.
+  // Server answers may replace the timeline, but never the gesture's starting point or commands.
   useLayoutEffect(() => {
-    const active = drag.current;
-    if (!active || active.timeline === options.timeline) return;
-    const { intent } = active;
-    const ids =
-      intent.kind === "roll" ? [intent.left, intent.right] : [intent.clipId];
-    if (
-      !ids.every((id) => options.timeline.clips.some((clip) => clip.id === id))
-    )
-      return end("cancel");
-    drag.current = beginDrag(
-      options.timeline,
-      intent,
-      options.selection.ids,
-      active.origin,
-      options.playhead(),
-    );
     drawn.current = "";
     update();
-  }, [options.timeline]);
+  }, [options.timeline, options.snapping]);
 
   /** Media over the lanes, as `dropPreview` reads it; null when the drag is not project media. */
   function dropAt(event: DragEvent) {
@@ -608,7 +614,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
     handlers: {
       onPointerDown,
       onPointerMove,
-      onPointerUp: () => end("release"),
+      onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
+        pointer.current = {
+          x: event.clientX,
+          y: event.clientY,
+          bypass: event.ctrlKey || event.metaKey,
+        };
+        end("release");
+      },
       onPointerCancel: () => end("cancel"),
       onPointerLeave: () => {
         if (gesture.current.phase === "idle") {

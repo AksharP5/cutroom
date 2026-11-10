@@ -54,7 +54,7 @@ async function exportable(page: Page, request: APIRequestContext) {
 }
 
 /** The download is an MP4 that plays: 320x240 and one second long. */
-async function expectPlayable(download: Download, path: string) {
+async function expectPlayable(download: Download, path: string, duration = 1) {
   expect(download.suggestedFilename()).toMatch(/\.mp4$/);
   await download.saveAs(path);
   const bytes = await readFile(path);
@@ -84,7 +84,7 @@ async function expectPlayable(download: Download, path: string) {
   expect(
     encoded.streams.find((stream) => stream.codec_type === "video"),
   ).toMatchObject({ width: 320, height: 240 });
-  expect(Number(encoded.format.duration)).toBeCloseTo(1, 1);
+  expect(Number(encoded.format.duration)).toBeCloseTo(duration, 1);
 }
 
 test("Export in the tool row renders the composition and downloads a playable MP4", async ({
@@ -99,21 +99,96 @@ test("Export in the tool row renders the composition and downloads a playable MP
       .locator('[data-clip="picture"]'),
   ).toBeVisible();
 
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/commands", async (route) => {
+    await gate;
+    await route.fulfill({ response: await route.fetch() });
+  });
+  // Hold a resize at the network boundary: the picture shows 1.5s, disk still holds 1s.
+  const clip = page.locator('[data-clip="picture"]');
+  const box = await clip.boundingBox();
+  if (!box) throw new Error("The picture has no bounds.");
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((grid) => Number(grid.style.getPropertyValue("--ppf")));
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    box.x + box.width - 2 + 15 * ppf,
+    box.y + box.height / 2,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      clip.evaluate((element) => element.style.getPropertyValue("--d")),
+    )
+    .toBe("45");
+  let renders = 0;
+  page.on("request", (sent) => {
+    if (sent.method() === "POST" && sent.url().endsWith("/render")) renders++;
+  });
+
   const pendingDownload = page.waitForEvent("download", { timeout: 45_000 });
   await page.getByRole("button", { name: "Export", exact: true }).click();
   // The button and the status bar say so while it renders, and it cannot be started twice.
   const exporting = page.getByRole("button", { name: /^Exporting \d+%$/ });
   await expect(exporting).toBeDisabled();
   await expect(page.locator(".status-bar")).toContainText("Exporting");
+  await page.waitForTimeout(250);
+  expect(renders).toBe(0);
+  release();
 
   await expectPlayable(
     await pendingDownload,
     testInfo.outputPath("export.mp4"),
+    1.5,
   );
   await expect(
     page.getByRole("button", { name: "Export", exact: true }),
   ).toBeEnabled();
   expect(errors).toEqual([]);
+});
+
+test("Export reports a refused pending edit instead of rendering the saved version", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/commands", async (route) => {
+    await gate;
+    await route.fulfill({
+      status: 422,
+      json: { error: "The pending edit was refused." },
+    });
+  });
+  // A range edit is optimistic too, and uses the same queue as a gesture.
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("i");
+  await expect(page.getByText(/In\s*00:00:00:00/)).toBeVisible();
+  let renders = 0;
+  page.on("request", (sent) => {
+    if (sent.method() === "POST" && sent.url().endsWith("/render")) renders++;
+  });
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Exporting/ })).toBeDisabled();
+  release();
+  await expect(page.locator(".toast span")).toHaveText(
+    "The pending edit was refused.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Export", exact: true }),
+  ).toBeEnabled();
+  expect(renders).toBe(0);
 });
 
 test("the embedded editor exports a local composition and downloads a playable MP4", async ({

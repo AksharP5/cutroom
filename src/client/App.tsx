@@ -30,7 +30,7 @@ import type {
   EditorMode,
   EditorReviewDraft,
 } from "../shared/editor";
-import { api, json } from "./api";
+import { api, json, subscribeProjectEvents } from "./api";
 import { toFrames } from "../shared/timeline/apply";
 import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
@@ -235,8 +235,7 @@ export function App() {
       showToast(error instanceof Error ? error.message : String(error)),
     );
     if (!projectId) return;
-    const events = new EventSource(`/api/cutroom/projects/${projectId}/events`);
-    events.onmessage = (event) => {
+    return subscribeProjectEvents(projectId, "message", (event) => {
       try {
         const payload = z
           .object({ changed: z.string() })
@@ -260,8 +259,7 @@ export function App() {
         return;
       }
       void refreshDocument().catch(() => {});
-    };
-    return () => events.close();
+    });
   }, [projectId, refreshDocument]);
 
   useEffect(() => {

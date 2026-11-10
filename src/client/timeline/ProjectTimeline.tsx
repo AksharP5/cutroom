@@ -152,10 +152,10 @@ export function ProjectTimeline({
       onSelect={setSelection}
       tool={tool}
       snapping={snapping}
-      onEdit={(label, commands) => {
+      onEdit={(label, commands, basis) => {
         // The editor shows an edit it takes before this returns.
         const before = useTimeline.getState().view;
-        void editTimeline(projectId, label, () => commands);
+        void editTimeline(projectId, label, () => commands, basis);
         return useTimeline.getState().view !== before;
       }}
       onGesture={(gesture) => useWorkspace.setState({ gesture })}

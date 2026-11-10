@@ -224,7 +224,7 @@ export interface Preview {
 }
 
 /** The timeline the commands make and the pieces they cut, or null when the engine refuses. */
-function applied(timeline: Timeline, commands: CommandInput[]) {
+export function previewCommands(timeline: Timeline, commands: CommandInput[]) {
   const pieces = new Map<string, string>();
   try {
     return {
@@ -350,7 +350,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
     snapped: number | null,
   ): Preview => {
     if (!commands.length) return still(label);
-    const result = applied(timeline, commands);
+    const result = previewCommands(timeline, commands);
     return {
       label,
       commands,
@@ -420,7 +420,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
               : clip,
           ),
         }),
-        valid: applied(timeline, commands) !== null,
+        valid: previewCommands(timeline, commands) !== null,
         snap: hit && by === travel + hit.by ? hit.at : null,
         delta: by,
       };
@@ -439,7 +439,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
       const to = furthest(
         from,
         Math.max(0, from + travel + (hit?.by ?? 0)),
-        (frame) => applied(timeline, [command(frame)]) !== null,
+        (frame) => previewCommands(timeline, [command(frame)]) !== null,
       );
       return edit(
         intent.ripple ? "Ripple trim" : "Resize",
@@ -471,7 +471,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
       const to = furthest(
         from,
         Math.max(0, from + travel + (hit?.by ?? 0)),
-        (frame) => applied(timeline, commands(frame)) !== null,
+        (frame) => previewCommands(timeline, commands(frame)) !== null,
       );
       return edit(
         "Roll",
@@ -560,7 +560,7 @@ export function dropPreview(
     },
   ];
   const fits = (track.kind === "audio") === (media.kind === "audio");
-  const result = fits ? applied(timeline, commands) : null;
+  const result = fits ? previewCommands(timeline, commands) : null;
   return {
     label: "Add media",
     commands,

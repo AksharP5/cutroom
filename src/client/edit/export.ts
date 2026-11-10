@@ -2,6 +2,7 @@ import { z } from "zod";
 import { create } from "zustand";
 import type { Fps } from "../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../workspace";
+import { afterTimelineEdits } from "./timeline";
 
 const FfmpegSchema = z.object({
   ok: z.boolean(),
@@ -47,29 +48,31 @@ export async function exportProject(projectId: string, fps: Fps) {
   useExport.setState({ progress: 0 });
   useWorkspace.setState({ exporting: true });
   try {
-    const ffmpeg = FfmpegSchema.parse(
-      await (await fetch("/api/environment/ffmpeg")).json(),
-    );
-    if (!ffmpeg.ok)
-      throw new Error(
-        [ffmpeg.title, ffmpeg.hint].filter(Boolean).join(". ") ||
-          "FFmpeg is missing.",
+    const jobId = await afterTimelineEdits(projectId, async () => {
+      const ffmpeg = FfmpegSchema.parse(
+        await (await fetch("/api/environment/ffmpeg")).json(),
       );
-    const response = await fetch(
-      `/api/projects/${encodeURIComponent(projectId)}/render`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          format: "mp4",
-          quality: "standard",
-          fps: `${fps.num}/${fps.den}`,
-        }),
-      },
-    );
-    if (!response.ok)
-      throw new Error(`The export did not start (${response.status}).`);
-    const { jobId } = StartedSchema.parse(await response.json());
+      if (!ffmpeg.ok)
+        throw new Error(
+          [ffmpeg.title, ffmpeg.hint].filter(Boolean).join(". ") ||
+            "FFmpeg is missing.",
+        );
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/render`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            format: "mp4",
+            quality: "standard",
+            fps: `${fps.num}/${fps.den}`,
+          }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(`The export did not start (${response.status}).`);
+      return StartedSchema.parse(await response.json()).jobId;
+    });
     const end = await finished(jobId);
     if (end.status !== "complete")
       throw new Error(end.error || `The export ${end.status}.`);

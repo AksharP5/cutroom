@@ -88,17 +88,19 @@ At 32 px per frame every filmstrip tile is its own frame from the server. Frames
 
 ### Dragging
 
-A drag must follow the pointer at the display rate. On November 10, 2026 the same 500-clip composition over real media (a twelve-minute 720p H.264 file with sound) was opened in Chromium 1720x1050, headless with hardware GL, and each gesture was dragged out and back in 300 pointer moves, about one every other animation frame. The table shows the page's animation-frame intervals; a late frame is an interval over 20 ms. Load average was 6 to 9.
+500 clips referencing a generated 15-second 320x180 H.264/AAC file, reused across the linked picture and sound pieces, fit view at 0.06776 px/frame, 415 clips following a ripple trim, Chromium 1720x1050. Hardware renderer verified as ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2. Each run sent native pointer moves from an independent 60 Hz source for ten seconds, with the CPU profiler running. Callback gaps use `performance.now()` at actual callback entry, not RAF's supplied timestamp. The final build includes the preview-isolation rebase onto `3287a9d`.
 
-| Drag                                                       | Page frames |     p95 | Late frames | Worst frame |
-| ---------------------------------------------------------- | ----------: | ------: | ----------: | ----------: |
-| Fit, move a linked picture and sound pair along its track  |     59.6 /s | 16.7 ms |    3 of 612 |     49.9 ms |
-| Fit, move a title along its track                          |       60 /s | 16.7 ms |    0 of 604 |     16.8 ms |
-| Fit, ripple trim a quarter of the way in: 400 clips follow |     59.7 /s | 16.7 ms |    1 of 604 |     66.7 ms |
-| Fit, roll a cut                                            |       60 /s | 16.7 ms |    0 of 599 |     16.8 ms |
-| 2.6 px per frame, move a pair with filmstrip and waveform  |       60 /s | 16.7 ms |    0 of 600 |     16.8 ms |
-| 2.6 px per frame, ripple trim                              |       60 /s | 16.7 ms |    0 of 599 |     16.8 ms |
+| Measurement                        |   00d1c00 | Rebased fix |
+| ---------------------------------- | --------: | ----------: |
+| Pointer moves handled              | 562 / 600 |   571 / 601 |
+| Pointer updates handled per second |      56.2 |        57.0 |
+| Pointer handler median             |   14.1 ms |      3.7 ms |
+| Pointer handler p95                |   16.1 ms |      4.6 ms |
+| Actual animation callback gap p95  |   30.0 ms |     27.4 ms |
+| Input age at handler entry p95     |   16.8 ms |     17.1 ms |
 
-While the pointer is down React renders nothing and no request is sent. A pointer move that stays on the same frame and track writes only the readout's transform. One that reaches a new frame runs the shared engine once for a move (to learn whether it would be refused) and up to about ten times for a trim held against its limit, writes a transform to each mounted clip the preview moves, and redraws the canvas from the previewed timeline. At fit one frame is 0.08 px wide, so most pointer moves reach a new frame.
+The profile found a bounds read for the drag readout after hundreds of transform writes. Moving that read before the writes removes forced layout from the pointer handler. Synchronous input work falls, but sustained throughput stays around 56 to 57 updates per second, and animation callback p95 is still 27.4 ms. This does not establish 60 fps. Full-page rendering still needs work.
+
+Pointer movement renders no React components and sends no edit request while the pointer is down. A pointer move that stays on the same frame and track writes only the readout's transform. One that reaches a new frame runs the shared engine for the preview, writes transforms to the mounted clips that move, and redraws the canvas. Bounds for the readout are measured before those writes.
 
 Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.

@@ -102,7 +102,13 @@ export async function createApp(
     .join(" ");
   app.route(
     "/api/cutroom",
-    createWorkspaceRoutes({ projects, dataDir, projectsDir, mcpCommand }),
+    createWorkspaceRoutes({
+      projects,
+      dataDir,
+      projectsDir,
+      mcpCommand,
+      subscribePreview: editor.subscribe,
+    }),
   );
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
   app.route("/api/cutroom", createTimelineRoutes(projects));
