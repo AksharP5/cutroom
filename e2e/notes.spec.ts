@@ -630,7 +630,9 @@ test("drafts and a two-stroke failed save recover in their project after switchi
     release();
     await switchTo(project.id);
     await expect(field).toHaveValue("Recover both strokes");
-    await expect(page.getByRole("alert")).toContainText("Held save failed");
+    await expect(page.locator(".edit-note-error[role=alert]")).toContainText(
+      "Held save failed",
+    );
     await expect(
       page.locator(".edit-note-pencil path[d]:not([data-live])"),
     ).toHaveCount(2);
