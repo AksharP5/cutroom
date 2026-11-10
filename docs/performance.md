@@ -37,3 +37,17 @@ The editor bundle contains one CodeMirror View instance instead of eight. The ed
 | Lift 1,000 of 2,000 clips: generate edits   |  20 ms |            5.4 ms |
 
 The request includes reading the source and settings, checking media files for lengths, two parses (before the edit and to verify the written result), and the history write. These figures were taken on a shared machine (load average about 4). Parsing builds the HTML spec tree with parse5. Generating edits scans the opening tags once to find attribute offsets. The ownership check visits only the clip's subtree and the owned bytes that can reach its range, found by binary search on a running maximum of their ends (text fostered out of a table can span later tags, so the ends alone are not sorted); scanning every node per removal took 121 ms for the 1,000-clip lift.
+
+## New editor playback
+
+Playback must hold the display rate with no React work per frame. On November 10, 2026, headless Chromium played a 12-second, 30 fps composition with two 1080p H.264 clips, a title, and music in the new editor at 1720x1050. The page counted animation-frame intervals, React commits through the devtools hook, and DOM changes outside the timecode.
+
+| Mode        | Page frames | Frames over 25 ms | React commits | Other DOM changes |
+| ----------- | ----------: | ----------------: | ------------: | ----------------: |
+| Stopped, 3s |     60.3 /s |                 0 |             0 |                 0 |
+| Play 1x, 4s |     60.3 /s |                 0 |             1 |                 3 |
+| Shuttle 2x  |     60.3 /s |                 0 |             2 |                 4 |
+| Shuttle 8x  |     60.0 /s |                 0 |             4 |                 6 |
+| Reverse 2x  |     60.3 /s |                 0 |             2 |                 5 |
+
+The commits and DOM changes are the transport buttons and shuttle readout changing state once per key press. The timecode is written directly, twice per composition frame.

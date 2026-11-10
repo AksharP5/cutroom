@@ -1,12 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import type { PointerEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   StudioApp,
   liveTime,
@@ -18,9 +10,9 @@ import {
 import type {
   EditorContext,
   EditorMode,
-  EditorPoint,
   EditorReviewDraft,
 } from "../../shared/editor";
+import { ReviewCanvas } from "../components/ReviewCanvas";
 import { compositionFps, useWorkspace } from "../workspace";
 
 const NativeStudio = memo(StudioApp);
@@ -73,15 +65,8 @@ function ReviewOverlay({
   onReview,
 }: Pick<CutroomEditorProps, "projectId" | "mode" | "onReview">) {
   const host = useRef<HTMLDivElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const points = useRef<EditorPoint[]>([]);
-  const drawnPoints = useRef(0);
-  const paintFrame = useRef<number | null>(null);
-  const pointer = useRef<number | null>(null);
-  const reviewTime = useRef(0);
   const iframe = usePreviewIframeStore((state) => state.iframe);
   const rect = usePreviewCompositionRect(host, iframe);
-  const enabled = mode === "draw" || mode === "comment";
 
   useEffect(() => {
     const doc = iframe?.contentDocument;
@@ -90,103 +75,6 @@ function ReviewOverlay({
       element.muted = true;
     });
   }, [iframe]);
-
-  const draw = useCallback(() => {
-    const element = canvas.current;
-    if (!element) return;
-    const ctx = element.getContext("2d");
-    if (!ctx) return;
-    const width = element.clientWidth;
-    const height = element.clientHeight;
-    const pixelWidth = Math.round(width * devicePixelRatio);
-    const pixelHeight = Math.round(height * devicePixelRatio);
-    if (element.width !== pixelWidth || element.height !== pixelHeight) {
-      element.width = pixelWidth;
-      element.height = pixelHeight;
-      drawnPoints.current = 0;
-    }
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    if (!points.current.length) {
-      ctx.clearRect(0, 0, width, height);
-      drawnPoints.current = 0;
-      return;
-    }
-    if (drawnPoints.current === points.current.length) return;
-    if (!drawnPoints.current) ctx.clearRect(0, 0, width, height);
-    const tokens = getComputedStyle(element);
-    ctx.lineWidth = parseFloat(tokens.getPropertyValue("--stroke-pencil"));
-    ctx.strokeStyle = tokens.getPropertyValue("--human");
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    for (
-      let index = Math.max(0, drawnPoints.current - 1);
-      index < points.current.length;
-      index++
-    ) {
-      const point = points.current[index];
-      if (!point) continue;
-      const x = point.x * width;
-      const y = point.y * height;
-      if (index === Math.max(0, drawnPoints.current - 1)) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    drawnPoints.current = points.current.length;
-  }, []);
-  const scheduleDraw = useCallback(() => {
-    if (paintFrame.current !== null) return;
-    paintFrame.current = requestAnimationFrame(() => {
-      paintFrame.current = null;
-      draw();
-    });
-  }, [draw]);
-  const clearDrawing = useCallback(() => {
-    if (paintFrame.current !== null) cancelAnimationFrame(paintFrame.current);
-    paintFrame.current = null;
-    pointer.current = null;
-    points.current = [];
-    drawnPoints.current = 0;
-    draw();
-  }, [draw]);
-  useEffect(
-    () => () => {
-      if (paintFrame.current !== null) cancelAnimationFrame(paintFrame.current);
-    },
-    [],
-  );
-
-  const pointFor = (event: PointerEvent<HTMLCanvasElement>): EditorPoint => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return {
-      x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)),
-    };
-  };
-
-  const finish = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (pointer.current !== event.pointerId) return;
-    pointer.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId))
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    const current = context();
-    if (points.current.length > 0) {
-      const params = new URLSearchParams({
-        t: reviewTime.current.toFixed(3),
-        format: "png",
-        output: "source",
-      });
-      onReview?.({
-        kind: mode === "draw" ? "draw" : "comment",
-        time: reviewTime.current,
-        compositionPath: current.compositionPath,
-        points: [...points.current],
-        elementIds: current.selectedElementIds,
-        frameUrl: `/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(current.compositionPath)}?${params}`,
-      });
-    }
-    clearDrawing();
-  };
 
   return (
     <div
@@ -199,42 +87,31 @@ function ReviewOverlay({
         zIndex: 60,
       }}
     >
-      {enabled && rect.width > 0 && (
-        <canvas
-          ref={canvas}
-          className="editor-review-canvas"
-          aria-label={
-            mode === "draw"
-              ? "Draw on the composition"
-              : "Pin a comment on the composition"
-          }
+      {(mode === "draw" || mode === "comment") && rect.width > 0 && (
+        <div
           style={{
             position: "absolute",
             left: rect.left,
             top: rect.top,
             width: rect.width,
             height: rect.height,
-            pointerEvents: "auto",
-            touchAction: "none",
-            cursor: mode === "draw" ? "crosshair" : "cell",
           }}
-          onPointerDown={(event) => {
-            reviewTime.current = context().currentTime;
-            usePlayerStore.getState().requestPlayback(false);
-            pointer.current = event.pointerId;
-            points.current = [pointFor(event)];
-            drawnPoints.current = 0;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            scheduleDraw();
-          }}
-          onPointerMove={(event) => {
-            if (pointer.current !== event.pointerId || mode !== "draw") return;
-            points.current.push(pointFor(event));
-            scheduleDraw();
-          }}
-          onPointerUp={finish}
-          onPointerCancel={clearDrawing}
-        />
+        >
+          <ReviewCanvas
+            projectId={projectId}
+            mode={mode}
+            begin={() => {
+              usePlayerStore.getState().requestPlayback(false);
+              const current = context();
+              return {
+                time: current.currentTime,
+                compositionPath: current.compositionPath,
+                elementIds: current.selectedElementIds,
+              };
+            }}
+            onReview={onReview}
+          />
+        </div>
       )}
     </div>
   );

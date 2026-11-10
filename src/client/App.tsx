@@ -31,6 +31,7 @@ import type {
   EditorReviewDraft,
 } from "../shared/editor";
 import { api, json } from "./api";
+import { toFrames } from "../shared/timeline/apply";
 import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
@@ -49,6 +50,9 @@ const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({
     default: module.CutroomEditor,
   })),
+);
+const EditPage = lazy(() =>
+  import("./edit/EditPage").then((module) => ({ default: module.EditPage })),
 );
 const projectsSchema = z.object({ projects: z.array(ProjectSchema) });
 const statusSchema = z.object({
@@ -123,6 +127,7 @@ export function App() {
   );
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
+  const newEditor = useWorkspace((state) => state.newEditor);
   const newNotes = projectDocument.items.filter(
     (item) => item.review.status === "open",
   );
@@ -258,16 +263,18 @@ export function App() {
       )
         return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Escape") {
+        setMode("select");
+        setReviewState(null);
+      }
+      // Cutroom's own editor binds its tools in its keymap.
+      if (useWorkspace.getState().newEditor) return;
       const modes = { v: "select", d: "draw", c: "comment" } as const;
       const pressed = event.key.toLowerCase();
       if (pressed === "v" || pressed === "d" || pressed === "c") {
         event.preventDefault();
         event.stopImmediatePropagation();
         setMode(modes[pressed]);
-      }
-      if (event.key === "Escape") {
-        setMode("select");
-        setReviewState(null);
       }
     }
     window.addEventListener("keydown", key, true);
@@ -312,13 +319,24 @@ export function App() {
   );
   const seek = useCallback(async (time: number, compositionPath?: string) => {
     const expectedProject = activeProjectId.current;
+    if (useWorkspace.getState().newEditor) {
+      const { transport, useTransport } = await import("./edit/transport");
+      if (activeProjectId.current === expectedProject)
+        transport.seek(toFrames(time, useTransport.getState().fps));
+      return;
+    }
     const { seekEditor } = await import("./editor/CutroomEditor");
     if (activeProjectId.current === expectedProject)
       seekEditor(time, compositionPath);
   }, []);
   const changed = useCallback(async () => {
     await refreshDocument();
-    if (activeProjectId.current !== projectId) return;
+    // Cutroom's own editor reloads from the project's change events.
+    if (
+      activeProjectId.current !== projectId ||
+      useWorkspace.getState().newEditor
+    )
+      return;
     const { refreshEditor } = await import("./editor/CutroomEditor");
     refreshEditor();
   }, [projectId, refreshDocument]);
@@ -564,13 +582,21 @@ export function App() {
                     </div>
                   }
                 >
-                  <Editor
-                    projectId={project.id}
-                    mode={mode}
-                    onContext={onContext}
-                    onReview={onReview}
-                    onAskAgent={ask}
-                  />
+                  {newEditor ? (
+                    <EditPage
+                      projectId={project.id}
+                      onContext={onContext}
+                      onReview={onReview}
+                    />
+                  ) : (
+                    <Editor
+                      projectId={project.id}
+                      mode={mode}
+                      onContext={onContext}
+                      onReview={onReview}
+                      onAskAgent={ask}
+                    />
+                  )}
                 </Suspense>
               </EditorBoundary>
             </EditorToolsContext.Provider>
@@ -714,6 +740,20 @@ export function App() {
               >
                 Copy command
               </button>
+            </section>
+            <section>
+              <h3>Editor</h3>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={newEditor}
+                  onChange={(event) =>
+                    useWorkspace.setState({ newEditor: event.target.checked })
+                  }
+                />
+                New editor
+              </label>
+              <p>Cutroom's own viewer and transport, in progress.</p>
             </section>
             <section>
               <h3>Your native agents</h3>

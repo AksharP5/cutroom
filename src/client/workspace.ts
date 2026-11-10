@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+const NEW_EDITOR_KEY = "cutroom.newEditor";
+
 /**
  * The composition's frame rate from its root `data-fps`, read as HyperFrames reads it:
  * an integer or `num/den`, and 30 when absent. Core's parser is not browser-safe to import.
@@ -32,7 +34,38 @@ export const useWorkspace = create(() => ({
   } | null,
   /** The chat panel's selected native agent, once its configuration is read. */
   agent: null as { name: string; available: boolean } | null,
+  /** Cutroom's own editor in place of the embedded one, from Settings. */
+  newEditor: localStorage.getItem(NEW_EDITOR_KEY) === "true",
+  /**
+   * The new editor's failures, shown in the status bar. Each side sets and clears only its own,
+   * so a preview that loads fine never hides a timeline the engine refused.
+   */
+  editorErrors: { viewer: null, timeline: null } as Record<
+    EditorErrorSide,
+    string | null
+  >,
 }));
+
+type EditorErrorSide = "viewer" | "timeline";
+
+/** Shows a failure from one side of the new editor, or clears that side with null. */
+export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
+  useWorkspace.setState((state) => ({
+    editorErrors: {
+      ...state.editorErrors,
+      [side]:
+        error === null
+          ? null
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    },
+  }));
+
+useWorkspace.subscribe(({ newEditor }, previous) => {
+  if (newEditor !== previous.newEditor)
+    localStorage.setItem(NEW_EDITOR_KEY, String(newEditor));
+});
 
 /** Frame rate for timecode: the open composition's, or the default before it loads. */
 export function useFps() {

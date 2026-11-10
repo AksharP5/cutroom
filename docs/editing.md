@@ -2,6 +2,18 @@
 
 Canvas and timeline controls come from the pinned public HyperFrames editor. Cutroom adds review notes and word-based edits to the same project history.
 
+## New editor
+
+Settings has a New editor switch, off by default. It replaces the embedded editor's centre with Cutroom's own tool row, viewer, and transport, with room for a timeline below a draggable split. The timeline, inspector, file panels, and export are not there yet; switch back for those.
+
+The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. Draw and Comment work as in the embedded editor, and the picture outline turns yellow while one is armed.
+
+The transport follows DaVinci Resolve: L and J play, faster on each press up to 8x; K stops; arrows step frames, seconds, and edits. [Every key](keyboard.md). Timecode is `HH:MM:SS:FF` at the nominal rate, without drop frames. Click it to type a time: digits fill from the right, Enter seeks, and Esc cancels. Playback at 1x is audible, and Mute silences it. Faster speeds and reverse step through frames silently.
+
+I and O set the timeline's in and out points through the same `setRange` command MCP clients use, so each mark is one undo step and agents see it. With loop on, playback repeats the range, or the whole timeline when no range is set.
+
+When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
+
 ## Review
 
 Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the note content remains in `cutroom.json` so undo restores it. Captured frames can be reopened from the notebook and are attached when new notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.

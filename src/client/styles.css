@@ -563,6 +563,12 @@ option {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.status-bar .status-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--danger);
+}
 .status-space {
   flex: 1;
 }
@@ -2069,6 +2075,18 @@ option {
   margin: 8px 0 2px;
   color: var(--text-tertiary);
   font-size: var(--type-xs);
+}
+.settings-content .settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+}
+.settings-content .settings-toggle input {
+  margin: 0;
+  accent-color: var(--selection);
 }
 .settings-content code,
 .settings-content pre {
