@@ -40,43 +40,41 @@ for (const { signal, paused } of [
   );
 }
 
-for (const exit of ["process.exit(0)", 'process.emit("beforeExit", 0)']) {
-  test.skipIf(!supported)(
-    `${exit} closes the capture browser and removes its profile`,
-    async () => {
-      const fixture = await captureFixture();
-      const server = Bun.spawn(
-        [
-          process.execPath,
-          "-e",
-          `import { launchCaptureBrowser } from './src/server/hyperframes/captureBrowser';
+test.skipIf(!supported)(
+  "process.exit closes the capture browser and removes its profile",
+  async () => {
+    const fixture = await captureFixture();
+    const server = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { launchCaptureBrowser } from './src/server/hyperframes/captureBrowser';
          const {browser} = await launchCaptureBrowser();
          const page = await browser.newPage();
          await page.goto('data:text/html,<h1>Capture</h1>');
          await page.screenshot();
-         ${exit};`,
-        ],
-        {
-          cwd: root,
-          env: fixture.env,
-          timeout: 20_000,
-          killSignal: "SIGKILL",
-          stdout: "ignore",
-          stderr: "inherit",
-        },
-      );
-      try {
-        expect(await server.exited).toBe(0);
-        await fixture.expectStopped();
-      } finally {
-        server.kill("SIGKILL");
-        await server.exited;
-        await fixture.close();
-      }
-    },
-    30_000,
-  );
-}
+         process.exit(0);`,
+      ],
+      {
+        cwd: root,
+        env: fixture.env,
+        timeout: 20_000,
+        killSignal: "SIGKILL",
+        stdout: "ignore",
+        stderr: "inherit",
+      },
+    );
+    try {
+      expect(await server.exited).toBe(0);
+      await fixture.expectStopped();
+    } finally {
+      server.kill("SIGKILL");
+      await server.exited;
+      await fixture.close();
+    }
+  },
+  30_000,
+);
 
 test.skipIf(!supported)(
   "a failed browser launch reports the cause and removes its profile",

@@ -21,10 +21,7 @@ export async function launchCaptureBrowser() {
     },
   );
   const stop = () => worker.disconnect();
-  const events = ["SIGTERM", "SIGINT", "beforeExit", "exit"] as const;
-  for (const event of events) process.once(event, stop);
   const closed = worker.exited.then((code) => {
-    for (const event of events) process.off(event, stop);
     ready.reject(
       new Error(`The capture browser owner exited with code ${code}.`),
     );
