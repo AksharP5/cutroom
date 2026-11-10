@@ -75,7 +75,7 @@ try {
     "-f",
     "lavfi",
     "-i",
-    "testsrc2=size=1920x1080:rate=30:duration=60",
+    "testsrc2=size=1920x1080:rate=30000/1001:duration=60",
     "-f",
     "lavfi",
     "-i",
@@ -105,6 +105,31 @@ try {
     source,
   ];
   await ffmpeg(command);
+  const probe = Bun.spawn(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=duration",
+      "-of",
+      "json",
+      source,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const probeOutput: unknown = await new Response(probe.stdout).json();
+  const probeError = await new Response(probe.stderr).text();
+  if ((await probe.exited) !== 0) throw new Error(probeError);
+  const videoDuration = z
+    .object({
+      streams: z
+        .array(z.object({ duration: z.coerce.number().positive() }))
+        .min(1),
+    })
+    .parse(probeOutput).streams[0]!.duration;
   const base = `${origin}/api/cutroom/projects/${project.id}/media`;
   for (const kind of ["peaks", "filmstrip", "frame"] as const) {
     const url = `${base}/${kind}?path=sample.mp4${kind === "frame" ? "&time=1" : ""}`;
@@ -166,6 +191,13 @@ try {
       FilmstripSchema.shape.sheets.element.extend({ spriteUrl: z.string() }),
     ),
   }).parse(await Bun.file(join(output, "filmstrip.json")).json());
+  const expectedTiles = Math.ceil(
+    videoDuration / mediaSettings.filmstripInterval,
+  );
+  if (metadata.count !== expectedTiles)
+    throw new Error(
+      `Expected ${expectedTiles} NTSC tiles, received ${metadata.count}.`,
+    );
   for (const sheet of metadata.sheets)
     await Bun.write(
       join(output, `sprite-${sheet.index}.jpg`),
@@ -221,8 +253,13 @@ try {
     runtime: `Bun ${Bun.version}`,
     cpu: cpus()[0]?.model,
     sample:
-      "60s 1920x1080 30fps H.264 + AAC, two-second GOP, blue shot at 0.8–1.2s",
+      "60s 1920x1080 29.97fps H.264 + AAC, 60-frame GOP, blue shot at 0.8–1.2s",
     source,
+    frameRate: "30000/1001",
+    gopFrames: 60,
+    videoDuration,
+    filmstripTiles: metadata.count,
+    expectedTiles,
     command: ["ffmpeg", "-nostdin", "-v", "error", ...command],
     warmRuns: 30,
     results,
@@ -244,7 +281,7 @@ try {
       .then((bytes) => Buffer.from(bytes).toString("base64"));
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   body{margin:0;background:#0e0e10;color:#e8e8ea;font:16px sans-serif}main{padding:32px}h1{font-size:26px;margin:0 0 8px}p{color:#9a9aa2;margin:0 0 16px}h2{font-size:16px;margin:20px 0 10px}canvas{display:block;background:#151517}#overview{width:100%;height:150px}.row{display:flex;gap:28px;align-items:flex-start}.detail{width:576px}.detail p{font-size:13px;margin-top:8px}.frame img{height:180px;image-rendering:auto}#sprite{width:100%;height:auto}.time{display:flex;justify-content:space-between;color:#9a9aa2;font:12px monospace;margin-top:6px}#chart{width:100%;height:160px}
-  </style></head><body><main><h1>Cutroom media detail</h1><p>60 seconds · 1920×1080 · 30 fps · 48 kHz peaks across channels · native-frame seeking</p>
+  </style></head><body><main><h1>Cutroom media detail</h1><p>60 seconds · 1920×1080 · 29.97 fps · 48 kHz peaks across channels · native-frame seeking</p>
   <h2>Overview · 32 ms buckets · ${overview.length.toLocaleString()} bytes downloaded · display gain ×7.1</h2><canvas id="overview" width="1600" height="150"></canvas><div class="time"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span><span>01:00</span></div>
   <div class="row"><div class="detail"><h2>Maximum zoom · 32 px/frame at 60 fps</h2><canvas id="detail" width="576" height="140"></canvas><div class="time"><span>0.400 s</span><span>0.500 s</span><span>0.600 s</span><span>0.700 s</span></div><p>2 ms buckets. Two lossless impulses, 8 ms apart. Unity gain.</p></div><div class="frame"><h2>On-demand frame · 1.000 s</h2><img src="data:image/jpeg;base64,${await image("frame.jpg")}"><p>The blue shot at 0.8–1.2 s falls inside overview tile 0.</p></div></div>
   <h2>Overview filmstrip · keyframes · ${metadata.count} tiles · ${metadata.tileWidth}×${mediaSettings.tileHeight}</h2><img id="sprite" src="data:image/jpeg;base64,${await image("sprite-0.jpg")}">

@@ -201,6 +201,13 @@ test.skipIf(!Bun.which("ffmpeg"))(
         (await f.media.request(f.project, "frame.mp4", "frame", 10)).state
           .status,
       ).toBe("queued");
+      const revisited = await f.media.request(
+        f.project,
+        "frame.mp4",
+        "frame",
+        3,
+      );
+      expect(revisited.state.status).toBe("queued");
       await writeFile(f.release, "release workers");
       await until(
         () => f.media.request(f.project, "frame.mp4", "frame", 10),
@@ -213,6 +220,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
           .map((line) => JSON.parse(line)),
       );
       expect(events.slice(2, 4).map((event) => event.time)).toContain(10);
+      expect(events.slice(2, 4).map((event) => event.time)).toContain(3);
     } finally {
       await f.close();
     }

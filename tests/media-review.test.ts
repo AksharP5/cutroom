@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  chmod,
   mkdtemp,
   open,
   readFile,
@@ -14,6 +15,7 @@ import { peakRange } from "../src/server/media/range";
 import { join } from "node:path";
 import { z } from "zod";
 import { encodePeaks } from "../src/server/media/peaks";
+import { createMediaService } from "../src/server/media/service";
 import { createMediaRoutes } from "../src/server/media/routes";
 import { projectFixture } from "./project-fixture";
 
@@ -498,6 +500,112 @@ test.skipIf(!Bun.which("ffmpeg"))(
         expect(pixels[x * 3]).toBeLessThan(20);
       }
     } finally {
+      await f.close();
+    }
+  },
+);
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "NTSC overviews retain keyframe tiles and seek only the missing final slot",
+  async () => {
+    const f = await fixture();
+    const log = join(f.directory, "ffmpeg.jsonl");
+    const executable = join(f.directory, "ffmpeg-spy");
+    const proxy = join(f.directory, "worker-proxy.ts");
+    await writeFile(
+      executable,
+      `#!/usr/bin/env bun
+import {appendFile} from "node:fs/promises";
+const args=process.argv.slice(2);
+await appendFile(${JSON.stringify(log)},JSON.stringify(args)+"\\n");
+const child=Bun.spawn([${JSON.stringify(Bun.which("ffmpeg"))},...args],{stdin:"ignore",stdout:"inherit",stderr:"inherit"});
+process.exitCode=await child.exited;
+`,
+    );
+    await chmod(executable, 0o755);
+    await writeFile(
+      proxy,
+      `const task=await Bun.stdin.json();
+const child=Bun.spawn([process.execPath,${JSON.stringify(new URL("../src/server/media/worker.ts", import.meta.url).pathname)}],{stdin:"pipe",stdout:"inherit",stderr:"inherit"});
+child.stdin.write(JSON.stringify({...task,ffmpeg:${JSON.stringify(executable)}}));
+child.stdin.end();
+process.exitCode=await child.exited;
+`,
+    );
+    const media = createMediaService({ workerUrl: new URL(`file://${proxy}`) });
+    try {
+      for (const gop of [60, 30]) {
+        const name = `ntsc-${gop}.mp4`;
+        await ffmpeg([
+          "-f",
+          "lavfi",
+          "-i",
+          "color=red:size=160x90:rate=30000/1001:duration=20",
+          "-vf",
+          "drawbox=c=blue:t=fill:enable='between(t,1.9,2.1)+gte(t,19.9)'",
+          "-c:v",
+          "libx264",
+          "-g",
+          String(gop),
+          "-keyint_min",
+          String(gop),
+          "-sc_threshold",
+          "0",
+          "-threads",
+          "1",
+          join(f.project.path, name),
+        ]);
+        await writeFile(log, "");
+        let result = await media.request(f.project, name, "filmstrip");
+        const deadline = Date.now() + 10000;
+        while (!result.artifact) {
+          if (result.state.status === "failed")
+            throw new Error(result.state.error);
+          if (Date.now() > deadline)
+            throw new Error("NTSC overview did not finish.");
+          await Bun.sleep(10);
+          result = await media.request(f.project, name, "filmstrip");
+        }
+        expect(result.metadata?.count).toBe(11);
+        const calls = z.array(z.array(z.string())).parse(
+          (await readFile(log, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        );
+        expect(
+          calls.filter((args) => args.includes("-skip_frame")),
+        ).toHaveLength(1);
+        expect(calls.filter((args) => args.includes("-ss"))).toHaveLength(1);
+        const sprite = await media.sprite(f.project, result.key);
+        const decoder = Bun.spawn(
+          [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-i",
+            sprite,
+            "-vf",
+            "format=rgb24",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+          ],
+          { stdout: "pipe", stderr: "ignore" },
+        );
+        const pixels = new Uint8Array(
+          await new Response(decoder.stdout).arrayBuffer(),
+        );
+        expect(await decoder.exited).toBe(0);
+        for (const offset of [160 * 3, 90 * 1600 * 3]) {
+          expect(pixels[offset + 2]).toBeGreaterThan(230);
+          expect(pixels[offset]).toBeLessThan(20);
+        }
+      }
+    } finally {
+      await media.dispose();
       await f.close();
     }
   },

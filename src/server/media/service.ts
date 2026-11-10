@@ -112,7 +112,7 @@ export function createMediaService(
       }
     }
     const key = createHash("sha256")
-      .update(`media-v4\0${kind}\0${identity}\0${frame ?? ""}`)
+      .update(`media-v5\0${kind}\0${identity}\0${frame ?? ""}`)
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
@@ -143,7 +143,11 @@ export function createMediaService(
       if (job.retryAt !== undefined && job.retryAt <= Date.now())
         jobs.delete(key);
     const existing = jobs.get(directory);
-    if (existing) return { key, state: existing.machine.state };
+    if (existing) {
+      if (kind === "frame" && existing.machine.state.status === "queued")
+        existing.sequence = Math.max(existing.sequence, requestSequence);
+      return { key, state: existing.machine.state };
+    }
     const ffmpeg = Bun.which("ffmpeg");
     const ffprobe = Bun.which("ffprobe");
     if (!ffmpeg || !ffprobe)

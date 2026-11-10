@@ -194,6 +194,7 @@ try {
       await mkdir(join(task.directory, "frames"));
       let lastKey = 0;
       let maxGap = 0;
+      // Map a 2.002 s NTSC keyframe to its 2 s slot, while retaining the last keyframe at EOF.
       await run(
         [
           ...ffmpeg,
@@ -208,7 +209,7 @@ try {
           "0:v:0",
           "-an",
           "-vf",
-          `showinfo,fps=1/${mediaSettings.filmstripInterval}:start_time=0:round=up,${scaleFilter(video)}`,
+          `showinfo,fps=1/${mediaSettings.filmstripInterval}:start_time=0:round=near:eof_action=pass,${scaleFilter(video)}`,
           "-threads",
           "1",
           "frames/frame-%06d.png",
@@ -225,42 +226,41 @@ try {
       );
       let count = (await readdir(join(task.directory, "frames"))).length;
       maxGap = Math.max(maxGap, video.duration - lastKey);
-      if (
-        maxGap > mediaSettings.filmstripInterval ||
-        count < Math.ceil(video.duration / mediaSettings.filmstripInterval)
-      ) {
+      if (maxGap > mediaSettings.filmstripInterval + 1 / video.fps) {
         await rm(join(task.directory, "frames"), { recursive: true });
         await mkdir(join(task.directory, "frames"));
         count = 0;
-        for (
-          let time = 0;
-          time < video.duration;
-          time += mediaSettings.filmstripInterval
-        ) {
-          const name = `frames/frame-${String(count + 1).padStart(6, "0")}.png`;
-          await run([
-            ...ffmpeg,
-            ...inputOptions,
-            "-ss",
-            String(time),
-            "-i",
-            task.source,
-            "-map",
-            "0:v:0",
-            "-an",
-            "-vf",
-            scaleFilter(video),
-            "-frames:v",
-            "1",
-            "-threads",
-            "1",
-            "-update",
-            "1",
-            name,
-          ]);
-          if (!(await Bun.file(join(task.directory, name)).exists())) break;
-          count++;
-        }
+      }
+      // Keep the keyframe overview and decode only slots beyond its last tile.
+      for (
+        let time = count * mediaSettings.filmstripInterval;
+        time < video.duration;
+        time += mediaSettings.filmstripInterval
+      ) {
+        const seekTime = Math.floor(time * video.fps + 1e-7) / video.fps;
+        const name = `frames/frame-${String(count + 1).padStart(6, "0")}.png`;
+        await run([
+          ...ffmpeg,
+          ...inputOptions,
+          "-ss",
+          String(seekTime),
+          "-i",
+          task.source,
+          "-map",
+          "0:v:0",
+          "-an",
+          "-vf",
+          scaleFilter(video),
+          "-frames:v",
+          "1",
+          "-threads",
+          "1",
+          "-update",
+          "1",
+          name,
+        ]);
+        if (!(await Bun.file(join(task.directory, name)).exists())) break;
+        count++;
       }
       if (!count) throw new Error("The media has no decoded video frames.");
       const sheets: z.infer<typeof FilmstripSchema>["sheets"] = [];
