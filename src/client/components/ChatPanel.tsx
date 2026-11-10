@@ -4,11 +4,12 @@ import {
   ArrowClockwise,
   ArrowUp,
   CaretDown,
+  CaretRight,
   Check,
   Paperclip,
   Plus,
   Square,
-  TerminalWindow,
+  Wrench,
   X,
 } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
@@ -108,13 +109,17 @@ const Message = memo(function Message({
   if (message.role === "tool")
     return (
       <details className="chat-tool">
-        <summary>{message.tool ?? "Tool"}</summary>
+        <summary>
+          <CaretRight size={10} weight="bold" />
+          <Wrench size={12} />
+          {message.tool ?? "Tool"}
+        </summary>
         <pre>{message.text}</pre>
       </details>
     );
   return (
     <article className={`chat-message message-${message.role}`}>
-      <div className="message-byline">
+      <div className="sr-only">
         {message.role === "user"
           ? "You"
           : message.role === "assistant"
@@ -275,9 +280,6 @@ const ConversationMessages = memo(function ConversationMessages({
     >
       {!session?.messages.length && (
         <div className="chat-empty">
-          <div className="empty-agent-mark">
-            <TerminalWindow size={26} weight="light" />
-          </div>
           <h2>What should we change?</h2>
           <p>Describe an edit, or draw on the preview to show your agent.</p>
           <p className="native-note">
@@ -673,150 +675,81 @@ export function ChatPanel({
 
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
-      <header className="panel-heading">
-        <span className="panel-title">
-          <TerminalWindow />
-          Agent
-        </span>
-        <div className="heading-actions">
-          <span className="quiet-label">
-            {operation?.kind === "stop"
-              ? "Stopping"
-              : busy
-                ? session?.status === "waiting"
-                  ? "Needs you"
-                  : "Working"
-                : opening
-                  ? "Opening"
-                  : operation?.kind === "model"
-                    ? "Saving model"
-                    : submitting
-                      ? "Sending"
-                      : "Ready"}
-          </span>
-          <button
-            className="icon-button"
-            aria-label="Refresh agent configuration"
-            disabled={controlsLocked || discovering}
-            onClick={() => {
-              setError("");
-              setConfigurationRevision((value) => value + 1);
-            }}
-          >
-            <ArrowClockwise />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="New conversation"
-            disabled={controlsLocked}
-            onClick={() => {
-              setConversation({ phase: "new" });
-              setError("");
-              textarea.current?.focus();
-            }}
-          >
-            <Plus />
-          </button>
-        </div>
-      </header>
-      <div className="chat-controls">
-        <label className="select-label">
-          <span className="sr-only">Agent provider</span>
-          <select
-            aria-label="Agent provider"
-            value={provider}
-            disabled={controlsLocked}
-            onChange={(event) => {
-              setProvider(event.target.value === "claude" ? "claude" : "codex");
-              setModel("");
-              setConversation({ phase: "new" });
-              setError("");
-            }}
-          >
-            <option value="codex">Codex</option>
-            <option value="claude">Claude Code</option>
-          </select>
-          <CaretDown size={12} />
-        </label>
-        <label className="select-label model-select">
-          <span className="sr-only">Model</span>
-          <select
-            aria-label="Model"
-            value={model}
-            disabled={controlsLocked || discovering}
-            onChange={(event) => {
-              const selected = event.target.value;
-              if (!session) {
-                setModel(selected);
-                return;
-              }
-              const changing: ChatOperation = { kind: "model" };
-              setOperation(changing);
-              void api(
-                `/agents/sessions/${session.id}`,
-                agentSessionSchema,
-                json("PATCH", { model: selected || null }),
-              )
-                .then((result) => {
-                  setConversation((current) =>
-                    current.phase === "ready" &&
-                    current.session.id === result.id
-                      ? { phase: "ready", session: result }
-                      : current,
-                  );
-                  setModel(result.model ?? "");
-                })
-                .catch((error: unknown) =>
-                  setError(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                )
-                .finally(() =>
-                  setOperation((current) =>
-                    current === changing ? null : current,
-                  ),
+      <div className="chat-toolbar">
+        {sessions.length === 0 && (
+          <span className="chat-toolbar-title">New conversation</span>
+        )}
+        {sessions.length > 0 && (
+          <label className="select-label conversation-picker">
+            <select
+              title={sessions.find((item) => item.id === sessionId)?.title}
+              aria-label="Conversation"
+              value={sessionId ?? ""}
+              disabled={controlsLocked}
+              onChange={(event) => {
+                setConversation(
+                  event.target.value
+                    ? { phase: "loading", id: event.target.value }
+                    : { phase: "new" },
                 );
-            }}
-          >
-            <option value="">Default model</option>
-            {capabilities?.models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <CaretDown size={12} />
-        </label>
-      </div>
-      {sessions.length > 0 && (
-        <select
-          className="conversation-picker"
-          aria-label="Conversation"
-          value={sessionId ?? ""}
-          disabled={controlsLocked}
-          onChange={(event) => {
-            setConversation(
-              event.target.value
-                ? { phase: "loading", id: event.target.value }
-                : { phase: "new" },
-            );
-            const next = sessions.find(
-              (item) => item.id === event.target.value,
-            );
-            if (next) {
-              setProvider(next.provider);
-              setModel(next.model ?? "");
-            }
+                const next = sessions.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (next) {
+                  setProvider(next.provider);
+                  setModel(next.model ?? "");
+                }
+              }}
+            >
+              <option value="">New conversation</option>
+              {sessions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title}
+                </option>
+              ))}
+            </select>
+            <CaretDown size={10} weight="bold" />
+          </label>
+        )}
+        <span className="quiet-label">
+          {operation?.kind === "stop"
+            ? "Stopping"
+            : busy
+              ? session?.status === "waiting"
+                ? "Needs you"
+                : "Working"
+              : opening
+                ? "Opening"
+                : operation?.kind === "model"
+                  ? "Saving model"
+                  : submitting
+                    ? "Sending"
+                    : "Ready"}
+        </span>
+        <button
+          className="icon-button"
+          aria-label="Refresh agent configuration"
+          disabled={controlsLocked || discovering}
+          onClick={() => {
+            setError("");
+            setConfigurationRevision((value) => value + 1);
           }}
         >
-          <option value="">New conversation</option>
-          {sessions.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.title}
-            </option>
-          ))}
-        </select>
-      )}
+          <ArrowClockwise />
+        </button>
+        <button
+          className="icon-button"
+          aria-label="New conversation"
+          disabled={controlsLocked}
+          onClick={() => {
+            setConversation({ phase: "new" });
+            setError("");
+            textarea.current?.focus();
+          }}
+        >
+          <Plus />
+        </button>
+      </div>
       <ConversationMessages
         session={session}
         capabilities={capabilities}
@@ -878,7 +811,7 @@ export function ChatPanel({
           <textarea
             ref={textarea}
             aria-label="Message your agent"
-            placeholder="Describe the next edit…"
+            placeholder="Describe the next edit"
             value={draft}
             rows={3}
             onChange={(event) => {
@@ -929,6 +862,7 @@ export function ChatPanel({
               <button
                 className="icon-button"
                 aria-label="Attach a file"
+                title="Attach a file"
                 onClick={() =>
                   void pickAttachment()
                     .then((path) => {
@@ -946,9 +880,78 @@ export function ChatPanel({
               >
                 <Paperclip />
               </button>
-              <span className="composer-hint">
-                <kbd>$</kbd> skills
-              </span>
+              <label className="select-label">
+                <span className="sr-only">Agent provider</span>
+                <select
+                  aria-label="Agent provider"
+                  title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
+                  value={provider}
+                  disabled={controlsLocked}
+                  onChange={(event) => {
+                    setProvider(
+                      event.target.value === "claude" ? "claude" : "codex",
+                    );
+                    setModel("");
+                    setConversation({ phase: "new" });
+                    setError("");
+                  }}
+                >
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                </select>
+                <CaretDown size={10} weight="bold" />
+              </label>
+              <label className="select-label model-select">
+                <span className="sr-only">Model</span>
+                <select
+                  aria-label="Model"
+                  value={model}
+                  disabled={controlsLocked || discovering}
+                  onChange={(event) => {
+                    const selected = event.target.value;
+                    if (!session) {
+                      setModel(selected);
+                      return;
+                    }
+                    const changing: ChatOperation = { kind: "model" };
+                    setOperation(changing);
+                    void api(
+                      `/agents/sessions/${session.id}`,
+                      agentSessionSchema,
+                      json("PATCH", { model: selected || null }),
+                    )
+                      .then((result) => {
+                        setConversation((current) =>
+                          current.phase === "ready" &&
+                          current.session.id === result.id
+                            ? { phase: "ready", session: result }
+                            : current,
+                        );
+                        setModel(result.model ?? "");
+                      })
+                      .catch((error: unknown) =>
+                        setError(
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                        ),
+                      )
+                      .finally(() =>
+                        setOperation((current) =>
+                          current === changing ? null : current,
+                        ),
+                      );
+                  }}
+                >
+                  <option value="">Default model</option>
+                  {capabilities?.models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <CaretDown size={10} weight="bold" />
+              </label>
             </div>
             {busy ||
             operation?.kind === "turn" ||
@@ -977,11 +980,6 @@ export function ChatPanel({
               </button>
             )}
           </div>
-        </div>
-        <div className="agent-footnote">
-          {provider === "codex" ? "Codex" : "Claude Code"}
-          {capabilities?.version ? ` ${capabilities.version}` : ""}
-          <span>Shift Enter for a new line</span>
         </div>
       </div>
     </aside>

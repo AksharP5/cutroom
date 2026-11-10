@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
@@ -225,4 +226,50 @@ test("visual review, native skill selection, and script edits survive real works
     /Framey|Learn HyperFrames|Discord|Reddit|Feedback|HeyGen|Catalog/,
   );
   expect(errors).toEqual([]);
+});
+
+test("media panel follows project media and imports files into assets", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Media shelf" },
+      })
+    ).json(),
+  );
+  const tone = (path: string) =>
+    promisify(execFile)("ffmpeg", [
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440",
+      "-t",
+      "1",
+      "-y",
+      path,
+    ]);
+  await page.goto(`/#project/${project.id}`);
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  await expect(media.getByText("No media yet")).toBeVisible();
+
+  await mkdir(join(project.path, "sound"), { recursive: true });
+  await tone(join(project.path, "sound", "room-tone.wav"));
+  await expect(
+    media.getByRole("listitem").filter({ hasText: "room-tone" }),
+  ).toHaveAttribute("data-kind", "audio");
+
+  const outside = await mkdtemp(join(tmpdir(), "cutroom-media-"));
+  await tone(join(outside, "narration.mp3"));
+  await media
+    .locator('input[type="file"]')
+    .setInputFiles(join(outside, "narration.mp3"));
+  await expect(
+    media.getByRole("listitem").filter({ hasText: "narration" }),
+  ).toBeVisible();
+  await stat(join(project.path, "assets", "narration.mp3"));
+  await rm(outside, { recursive: true, force: true });
 });
