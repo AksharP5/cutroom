@@ -1,0 +1,59 @@
+{
+  "frequenciesHz": [
+    440,
+    660,
+    880
+  ],
+  "expectedNormalPeak": 0.125,
+  "description": "Real UI exports with forced browser probing; embedded-solo includes a Music audio clip appended directly to HTML while Voice is soloed.",
+  "exports": [
+    {
+      "file": "all.mp4",
+      "linearPeak": [
+        0.12486411985833426,
+        0.12495199399410886,
+        0.12492072426774746
+      ]
+    },
+    {
+      "file": "embedded-muted.mp4",
+      "linearPeak": [
+        7.097974215087473e-8,
+        0.12495356360825471,
+        0.12492911302256912
+      ]
+    },
+    {
+      "file": "embedded-normal.mp4",
+      "linearPeak": [
+        0.12486411985833426,
+        0.12495199399410886,
+        0.12492072426774746
+      ]
+    },
+    {
+      "file": "embedded-solo.mp4",
+      "linearPeak": [
+        7.394170256739303e-8,
+        0.1249551983444174,
+        9.189357225278985e-8
+      ]
+    },
+    {
+      "file": "music-muted.mp4",
+      "linearPeak": [
+        0.12486082884309324,
+        0.12495458549836663,
+        9.708869276595066e-7
+      ]
+    },
+    {
+      "file": "voice-solo.mp4",
+      "linearPeak": [
+        7.394170256739303e-8,
+        0.1249551983444174,
+        9.189357225278985e-8
+      ]
+    }
+  ]
+}
