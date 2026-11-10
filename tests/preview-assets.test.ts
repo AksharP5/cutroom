@@ -216,6 +216,34 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   async () => {
     const fixture = await assetFixture();
     try {
+      // Images, unlike fetched data, are inputs the renderer waits for before it captures.
+      const dir = fixture.project.path;
+      const png = (color: string, path: string) =>
+        Bun.spawn([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          `color=c=${color}:s=320x240`,
+          "-frames:v",
+          "1",
+          path,
+        ]).exited;
+      await png("0x00ff00", join(dir, "green.png"));
+      await png("0xff0000", join(dir, "linked-dir", "red.png"));
+      await symlink(join(dir, "green.png"), join(dir, "inside.png"));
+      await symlink(
+        join(dir, "linked-dir", "red.png"),
+        join(dir, "linked.png"),
+      );
+      // A readable cross-project image would paint red over the internal green one.
+      const layer = "position:absolute;inset:0;width:100%;height:100%";
+      await writeFile(
+        join(dir, "index.html"),
+        `<!doctype html><html><head><style>body{margin:0}</style></head><body><main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="1" style="position:relative;width:320px;height:240px;background:blue"><img src="inside.png" alt="" style="${layer}"><img src="linked.png" alt="" style="${layer}" onerror="this.remove()"><img src="linked-dir/red.png" alt="" style="${layer}" onerror="this.remove()"></main></body></html>`,
+      );
       const started = await fixture.request(
         `/api/projects/${fixture.project.id}/render`,
         { fps: 2, quality: "draft", format: "mp4", telemetryOptOut: true },
