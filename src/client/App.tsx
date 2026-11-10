@@ -10,7 +10,6 @@ import {
 } from "react";
 import {
   CaretDown,
-  ChatTeardropText,
   Check,
   FilmSlate,
   FolderOpen,
@@ -19,9 +18,6 @@ import {
   Plus,
   SidebarSimple,
   TerminalWindow,
-  TextAlignLeft,
-  Moon,
-  Sun,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
@@ -41,11 +37,13 @@ import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
 import { FileDialog } from "./components/FileDialog";
+import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
+import { useWorkspace } from "./workspace";
 
 const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({
@@ -128,17 +126,10 @@ export function App() {
   );
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
-  const [theme, setTheme] = useState(() =>
-    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
-  );
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem("cutroom:theme", theme);
-    } catch {
-      // Theme changes still work when browser storage is unavailable.
-    }
-  }, [theme]);
+  const exporting = useWorkspace((state) => state.exporting);
+  const openNotes = projectDocument.annotations.filter(
+    (item) => item.status === "open",
+  ).length;
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | null
   >(null);
@@ -212,6 +203,12 @@ export function App() {
           .parse(JSON.parse(event.data));
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
+        else if (payload.changed !== "cutroom.json") {
+          useWorkspace.setState((state) => ({
+            mediaRevision: state.mediaRevision + 1,
+          }));
+          return;
+        }
       } catch {
         return;
       }
@@ -332,7 +329,7 @@ export function App() {
           aria-label="Cutroom projects"
           onClick={() => setDialog("projects")}
         >
-          <FilmSlate size={23} weight="light" />
+          <FilmSlate size={16} />
           <span>cutroom</span>
         </button>
         <span className="header-divider" />
@@ -340,14 +337,10 @@ export function App() {
           className="project-switcher"
           onClick={() => setDialog("projects")}
         >
-          <span>{project?.name ?? "Workspace"}</span>
-          <CaretDown size={12} />
+          <span>{project?.name ?? "Projects"}</span>
+          <CaretDown size={10} weight="bold" />
         </button>
         <div className="header-space" />
-        <span className="local-indicator">
-          <span />
-          Local workspace
-        </span>
         {project && (
           <>
             <button
@@ -375,15 +368,6 @@ export function App() {
           </>
         )}
         <button
-          className="icon-button theme-toggle"
-          aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
-          onClick={() =>
-            setTheme((value) => (value === "light" ? "dark" : "light"))
-          }
-        >
-          {theme === "light" ? <Moon /> : <Sun />}
-        </button>
-        <button
           className="icon-button"
           aria-label="Settings"
           onClick={() => setDialog("settings")}
@@ -404,6 +388,11 @@ export function App() {
         />
       ) : (
         <main className={`workspace ${workPanel ? "with-work-panel" : ""}`}>
+          <MediaPanel
+            key={project.id}
+            projectId={project.id}
+            hidden={!workPanel}
+          />
           <section
             className="work-panel"
             aria-label="Project workspace"
@@ -415,7 +404,6 @@ export function App() {
                 aria-pressed={chatVisible}
                 onClick={() => setWorkPanel("agent")}
               >
-                <TerminalWindow size={16} />
                 Agent
               </button>
               <button
@@ -429,18 +417,9 @@ export function App() {
                   setWorkPanel("notebook");
                 }}
               >
-                <ChatTeardropText size={16} />
                 Review
-                {projectDocument.annotations.some(
-                  (item) => item.status === "open",
-                ) && (
-                  <span className="note-count">
-                    {
-                      projectDocument.annotations.filter(
-                        (item) => item.status === "open",
-                      ).length
-                    }
-                  </span>
+                {openNotes > 0 && (
+                  <span className="note-count">{openNotes}</span>
                 )}
               </button>
               <button
@@ -453,7 +432,6 @@ export function App() {
                   setWorkPanel("notebook");
                 }}
               >
-                <TextAlignLeft size={16} />
                 Script
               </button>
             </nav>
@@ -525,14 +503,6 @@ export function App() {
                   />
                 </div>
               </div>
-              <button
-                className="project-location"
-                title={project.path}
-                onClick={() => void navigator.clipboard.writeText(project.path)}
-              >
-                <FolderOpen size={14} />
-                <span>{project.path.replace(/^\/home\/[^/]+/, "~")}</span>
-              </button>
             </aside>
             <ChatPanel
               key={project.id}
@@ -588,6 +558,28 @@ export function App() {
               </EditorBoundary>
             </EditorToolsContext.Provider>
           </section>
+          <footer className="status-bar">
+            <button
+              className="status-path"
+              title={`Copy ${project.path}`}
+              onClick={() => void navigator.clipboard.writeText(project.path)}
+            >
+              {project.path.replace(/^\/home\/[^/]+/, "~")}
+            </button>
+            {openNotes > 0 && (
+              <button
+                onClick={() => {
+                  setPanel("review");
+                  setWorkPanel("notebook");
+                }}
+              >
+                {openNotes} open {openNotes === 1 ? "note" : "notes"}
+              </button>
+            )}
+            {exporting && <span className="status-job">Exporting</span>}
+            <span className="status-space" />
+            <span>Cutroom {status?.version ?? version}</span>
+          </footer>
         </main>
       )}
       {dialog === "projects" && (

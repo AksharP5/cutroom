@@ -10,7 +10,7 @@ export function EmptyState({
   return (
     <section className="welcome">
       <div className="welcome-wordmark">
-        <FilmSlate size={34} weight="light" />
+        <FilmSlate />
         <span>cutroom</span>
       </div>
       <h1>Make the next cut.</h1>

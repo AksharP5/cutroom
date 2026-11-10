@@ -14,7 +14,9 @@ External changes are watched and sent to the editor through server-sent events. 
 
 The public `@hyperframes/studio` application supplies the timeline, canvas editing, preview, inspector, and source editor. Cutroom supplies the surrounding workspace, review tools, agent panel, and original visual theme.
 
-Agent, Review, and Script share one work panel beside the editor. Their components stay mounted while switching tabs so drafts and native sessions survive navigation. Transcript reads run only while Script is visible. The document applies the saved theme before React starts to avoid a theme flash.
+The shell is a fixed, dark-only layout: Media above one work panel on the left, the editor beside them, and a status bar below. Agent, Review, and Script share the work panel. Their components stay mounted while switching tabs so drafts and native sessions survive navigation. Transcript reads run only while Script is visible. Colours, type, and spacing are tokens in `src/client/styles.css`; the same tokens theme the embedded editor.
+
+Shell controls read and write `src/client/workspace.ts`, a Cutroom-owned store for editor panel visibility and export state. `CutroomEditor` is the only code that mirrors it onto the upstream dock, so the shell does not depend on the embedded editor's layout internals.
 
 `build/studioPlugin.ts` applies explicit, version-checked changes to the published source. It replaces branded chrome, removes hosted catalog and feedback, disables telemetry, and connects agent handoffs. The source package remains an upstream dependency rather than a copied editor fork.
 

@@ -9,9 +9,10 @@ import {
   FolderOpen,
   SlidersHorizontal,
 } from "@phosphor-icons/react";
-import { useDockLayoutStore, usePreviewIframeStore } from "@hyperframes/studio";
+import { usePreviewIframeStore } from "@hyperframes/studio";
 import { seekEditor } from "./CutroomEditor";
 import { EditorTools } from "./EditorTools";
+import { useWorkspace } from "../workspace";
 
 const reviewSeekSchema = z.object({
   time: z.number().finite().nonnegative(),
@@ -79,23 +80,11 @@ export function EditorHeader(props: EditorHeaderProps) {
     seekEditor(reviewSeek.time);
     setReviewSeek(null);
   }, [iframe, props.activeCompPath, props.compositionLoading, reviewSeek]);
-  const filesVisible = useDockLayoutStore(
-    (state) =>
-      state.visiblePanels.has("compositions") ||
-      state.visiblePanels.has("assets") ||
-      state.visiblePanels.has("code"),
-  );
-  const toggleFiles = () => {
-    const state = useDockLayoutStore.getState();
-    if (filesVisible) {
-      state.setZoneVisible("left", false);
-      return;
-    }
-    for (const id of ["compositions", "assets", "code"] as const)
-      state.controller?.open(id);
-    state.setZoneVisible("left", true);
-    state.activatePanel("compositions");
-  };
+  const filesVisible = useWorkspace((state) => state.files);
+  useEffect(() => {
+    useWorkspace.setState({ exporting: props.isRendering });
+    return () => useWorkspace.setState({ exporting: false });
+  }, [props.isRendering]);
   return (
     <div className="editor-header" aria-label="Composition controls">
       <EditorTools />
@@ -103,13 +92,7 @@ export function EditorHeader(props: EditorHeaderProps) {
         <button
           type="button"
           className="editor-files-button"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "4px 8px",
-          }}
-          onClick={toggleFiles}
+          onClick={() => useWorkspace.setState({ files: !filesVisible })}
           aria-pressed={filesVisible}
           aria-label="Toggle project files"
           title="Compositions, assets, and source"
@@ -165,10 +148,7 @@ export function EditorHeader(props: EditorHeaderProps) {
           type="button"
           className="editor-export-button"
           onClick={() => {
-            const state = useDockLayoutStore.getState();
-            state.controller?.open("renders");
-            state.setZoneVisible("right", true);
-            state.activatePanel("renders");
+            useWorkspace.setState({ exports: true });
             if (!props.ffmpegMissing) props.onExport?.();
           }}
           disabled={props.isRendering}

@@ -111,6 +111,7 @@ for (const viewport of viewports) {
       page.getByRole("button", { name: "Toggle project files", exact: true }),
       page.getByRole("button", { name: "Toggle inspector", exact: true }),
       page.getByRole("button", { name: "Export", exact: true }),
+      page.getByRole("button", { name: "Import media", exact: true }),
       page.getByRole("button", { name: "Play", exact: true }),
       page.getByLabel("Agent provider", { exact: true }),
       page.getByLabel("Message your agent", { exact: true }),
@@ -151,24 +152,19 @@ for (const viewport of viewports) {
       );
     await expect.poll(ongoingAnimations).toEqual([]);
     const composer = page.getByLabel("Message your agent", { exact: true });
-    for (const theme of ["light", "dark"] as const) {
-      if (theme === "dark")
-        await page
-          .getByRole("button", { name: "Switch to dark theme", exact: true })
-          .click();
-      await composer.fill("A clear message in either theme.");
-      await expectReadable(composer);
-      await expectReadable(
-        page.getByRole("button", { name: "Play", exact: true }),
-      );
-      await expectReadable(
-        page.getByRole("button", { name: "Playback speed", exact: true }),
-      );
-      await page.screenshot({
-        path: testInfo.outputPath(`workspace-${viewport.width}-${theme}.png`),
-        fullPage: true,
-      });
-    }
+    await composer.fill("A clear message on the dark workspace.");
+    await expectReadable(composer);
+    await expectReadable(
+      page.getByRole("button", { name: "Play", exact: true }),
+    );
+    await expectReadable(
+      page.getByRole("button", { name: "Playback speed", exact: true }),
+    );
+    await expect(page.getByRole("button", { name: /theme/i })).toHaveCount(0);
+    await page.screenshot({
+      path: testInfo.outputPath(`workspace-${viewport.width}.png`),
+      fullPage: true,
+    });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const dialog = page.getByRole("dialog", {
       name: "Workspace settings",

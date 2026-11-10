@@ -11,6 +11,8 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   port,
   idleTimeout: 120,
+  // The upload route accepts 500 MB of media per request; leave room for multipart framing.
+  maxRequestBodySize: 512 * 1024 * 1024,
   fetch: runtime.app.fetch,
 });
 console.log(`Cutroom is ready at ${server.url}`);

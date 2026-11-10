@@ -21,6 +21,7 @@ import type {
   EditorPoint,
   EditorReviewDraft,
 } from "../../shared/editor";
+import { useWorkspace } from "../workspace";
 
 const NativeStudio = memo(StudioApp);
 
@@ -238,6 +239,56 @@ function ReviewOverlay({
   );
 }
 
+const filePanels = ["compositions", "assets", "code"] as const;
+
+function shownPanels() {
+  const { visiblePanels } = useDockLayoutStore.getState();
+  return {
+    files: filePanels.some((id) => visiblePanels.has(id)),
+    exports: visiblePanels.has("renders"),
+  };
+}
+
+/** Keeps the shell's panel flags and the embedded editor's dock in agreement. */
+function mirrorWorkspacePanels() {
+  let applying = false;
+  const pull = () => {
+    if (applying) return;
+    const shown = shownPanels();
+    const wanted = useWorkspace.getState();
+    if (shown.files !== wanted.files || shown.exports !== wanted.exports)
+      useWorkspace.setState(shown);
+  };
+  const push = ({ files, exports }: ReturnType<typeof shownPanels>) => {
+    const shown = shownPanels();
+    const dock = useDockLayoutStore.getState();
+    applying = true;
+    try {
+      if (files !== shown.files) {
+        if (files) {
+          for (const id of filePanels) dock.controller?.open(id);
+          dock.setZoneVisible("left", true);
+          dock.activatePanel("compositions");
+        } else dock.setZoneVisible("left", false);
+      }
+      if (exports && !shown.exports) {
+        dock.controller?.open("renders");
+        dock.setZoneVisible("right", true);
+        dock.activatePanel("renders");
+      }
+    } finally {
+      applying = false;
+    }
+    pull();
+  };
+  const stopPull = useDockLayoutStore.subscribe(pull);
+  const stopPush = useWorkspace.subscribe(push);
+  return () => {
+    stopPull();
+    stopPush();
+  };
+}
+
 export function CutroomEditor({
   projectId,
   mode = "select",
@@ -252,9 +303,11 @@ export function CutroomEditor({
 
   useEffect(() => {
     if (!controller) return;
-    const layout = useDockLayoutStore.getState();
-    layout.setZoneVisible("right", false);
-    layout.setZoneVisible("left", false);
+    const dock = useDockLayoutStore.getState();
+    dock.setZoneVisible("right", false);
+    dock.setZoneVisible("left", false);
+    useWorkspace.setState({ files: false, exports: false });
+    return mirrorWorkspacePanels();
   }, [controller, projectId]);
 
   useLayoutEffect(() => {

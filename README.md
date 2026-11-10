@@ -41,7 +41,7 @@ Choose Codex or Claude Code in the agent panel. Type `$` to select one of that p
 
 If your agent is signed out, authenticate through its own CLI with `codex login` or `claude auth login`, then refresh the agent configuration in Cutroom.
 
-Switch between **Agent**, **Review**, and **Script** in the left panel. Drafts stay in place when you change tabs. The theme button switches between light and dark and remembers your choice.
+**Media** at the top left lists the project's video, audio, and images. Import files with **+** or drop them on the panel; they are copied into `assets/`. Switch between **Agent**, **Review**, and **Script** below it. Drafts stay in place when you change tabs.
 
 Use **D** to draw, **C** to comment, and **V** to select. In Script, select a word and Shift-click another to select a passage. Cuts ripple the selected media lane; other tracks keep their authored timing. Complex scripted or linked edits can be handed to the agent.
 
