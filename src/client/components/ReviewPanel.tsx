@@ -18,7 +18,7 @@ import type {
 import { FpsSchema } from "../../shared/timeline/schema";
 import { api, frameTimecode } from "../api";
 import { strokePath } from "../edit/notes";
-import { frameCaptureUrl, noteNumbers } from "../review";
+import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
 import { useFps } from "../workspace";
 import { Modal } from "./Modal";
 
@@ -27,7 +27,7 @@ type HumanAction = z.input<typeof HumanReviewActionSchema>;
 const groups = [
   ["New", ["open"]],
   ["In progress", ["working"]],
-  ["To review", ["blocked", "done"]],
+  ["To review", toReviewStatuses],
   ["Queued", ["queued"]],
   ["Accepted", ["accepted"]],
   ["Withdrawn", ["withdrawn"]],
