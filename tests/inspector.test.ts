@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { applyAll } from "../src/shared/timeline/apply";
 import {
@@ -16,6 +16,64 @@ import {
 import { projectFixture } from "./project-fixture";
 
 const fps = { num: 30000, den: 1001 };
+
+test("an unaccepted mark written by #30 survives the new opacity projection and can be accepted", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Legacy" });
+  const path = `/projects/${project.id}`;
+  try {
+    const source =
+      '<main data-composition-id="main" data-fps="30" data-duration="1"><div id="title" data-start="0" data-duration="1" data-track-index="0">Hello</div></main>';
+    await writeFile(join(project.path, "index.html"), source);
+    await mkdir(join(project.path, ".cutroom"), { recursive: true });
+    await writeFile(
+      join(project.path, ".cutroom/review.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        items: [],
+        changes: [
+          {
+            composition: "index.html",
+            clipId: "title",
+            noteIds: [],
+            // Captured with main 35eb9fd's projection and clipVersions for the source above.
+            signature:
+              "51000bfd544b6823c290264faa7d4bdfa09bbd642e80b75fc51491d2d30dea73",
+          },
+        ],
+      }),
+    );
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (await fixture.request(`${path}/timeline`)).json(),
+      );
+    const view = await read();
+    expect(view.agentChanges).toEqual(["title"]);
+    expect(view.clipEdits).toHaveLength(1);
+    expect(view.clipEdits![0]).toMatchObject({
+      by: "agent",
+      accepted: false,
+      clipId: "title",
+    });
+    expect(
+      (
+        await fixture.request(`${path}/review/changes/accept`, "POST", {
+          editId: view.clipEdits![0]!.id,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await read()).agentChanges).toEqual([]);
+    expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+      source,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("inspector fields parse timecode, frames, seconds and percentages without accepting trailing junk", () => {
   expect(parseField("00:01:02:03", "timecode", fps)).toBe(1863);
