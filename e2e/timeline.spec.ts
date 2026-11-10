@@ -101,7 +101,9 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
 
   // The template's three elements, one per video track, named and stacked upward.
   await expect(timeline.locator("[data-clip]")).toHaveCount(3);
-  await expect(timeline.getByText("headline", { exact: true })).toBeVisible();
+  await expect(
+    timeline.getByText("Project title", { exact: true }),
+  ).toBeVisible();
   await expect(timeline.getByText("V3", { exact: true })).toBeVisible();
 
   // A press on the ruler seeks to that frame, and a drag scrubs.

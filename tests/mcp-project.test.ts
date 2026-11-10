@@ -51,7 +51,7 @@ test("an external MCP client edits the same project and undo history as the UI",
       .object({ structuredContent: z.object({ result: SourceSchema }) })
       .parse(read).structuredContent.result;
     const content = original.content.replace(
-      "A new composition.",
+      "Drop media in, or ask your agent to start.",
       "Changed through MCP.",
     );
     const saved = await client.callTool({

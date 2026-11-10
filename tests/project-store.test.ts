@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { lintProject } from "@hyperframes/core/lint";
 import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -8,6 +9,39 @@ import {
   SourceSchema,
 } from "../src/shared/project";
 import { projectFixture } from "./project-fixture";
+
+test("new projects ship a valid, self-contained Instrument Sans composition", async () => {
+  const fixture = await projectFixture();
+  try {
+    const project = await fixture.store.create({ name: "A & B <cut>" });
+    const source = await readFile(join(project.path, "index.html"), "utf8");
+    expect(source).toContain("A &amp; B &lt;cut&gt;");
+    expect(source).toContain("Drop media in, or ask your agent to start.");
+    expect(
+      await readFile(
+        join(project.path, "assets/fonts/InstrumentSans-var.woff2"),
+      ),
+    ).toEqual(
+      await readFile(
+        new URL(
+          "../src/client/fonts/InstrumentSans-var.woff2",
+          import.meta.url,
+        ),
+      ),
+    );
+    expect(
+      await readFile(join(project.path, "assets/fonts/LICENSE.txt"), "utf8"),
+    ).toContain("SIL OPEN FONT LICENSE");
+    const lint = await lintProject(project.path);
+    expect(lint.results.flatMap(({ result }) => result.findings)).toEqual([]);
+    await fixture.store.importProject({ path: project.path });
+    expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+      source,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("source writes require the exact version and remain undoable", async () => {
   const fixture = await projectFixture();
@@ -21,7 +55,7 @@ test("source writes require the exact version and remain undoable", async () => 
       await (await fixture.request(`/projects/${project.id}/source`)).json(),
     );
     const content = original.content.replace(
-      "A new composition.",
+      "Drop media in, or ask your agent to start.",
       "A revised composition.",
     );
     const saved = await fixture.request(

@@ -105,7 +105,10 @@ test("unreadable review metadata does not block timeline reads or source repairs
     const response = await request(`${path}/source`, "PUT", {
       path: "index.html",
       expectedVersion: source.version,
-      content: source.content.replace("A new composition.", "Repaired"),
+      content: source.content.replace(
+        "Drop media in, or ask your agent to start.",
+        "Repaired",
+      ),
     });
     expect(response.status).toBe(200);
   } finally {

@@ -259,7 +259,7 @@ test("composition source types, nested source creation, and media file managemen
           path: "index.html",
           expectedVersion: before.version,
           content: before.content.replace(
-            "A new composition.",
+            "Drop media in, or ask your agent to start.",
             "Edited composition",
           ),
         })
