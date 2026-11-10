@@ -22,6 +22,7 @@ import "./edit.css";
 import {
   editTimeline,
   loadTimeline,
+  openTimeline,
   stepHistory,
   useTimeline,
 } from "./timeline";
@@ -86,7 +87,7 @@ export function EditPage({
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
-    useTimeline.setState({ projectId, view: null });
+    openTimeline(projectId);
     transport.seek(0);
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);

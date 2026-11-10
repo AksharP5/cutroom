@@ -68,7 +68,8 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
   await expect(
     page.getByText(/In\s*00:00:01:02\s*Out\s*00:00:02:02/),
   ).toBeVisible();
-  expect(await range()).toEqual({ in: 32, out: 63 });
+  // The marks show before the server answers, so its copy is read until it catches up.
+  await expect.poll(range).toEqual({ in: 32, out: 63 });
 
   await page.keyboard.press("Shift+i");
   await expect(now).toHaveText("00:00:01:02");
