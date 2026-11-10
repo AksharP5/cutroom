@@ -22,6 +22,7 @@ import type {
   RuntimeOptions,
 } from "../src/server/agents/runtime";
 import { createProjectStore } from "../src/server/projects/store";
+import { createReviewService } from "../src/server/projects/review";
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
@@ -39,6 +40,7 @@ async function setup(runtimeFactory: RuntimeFactory) {
   const dataDir = join(directory, "chat");
   const service = await createAgentService({
     projects,
+    review: createReviewService(projects),
     dataDir,
     runtimeFactory,
   });
@@ -135,6 +137,7 @@ describe("agent conversations", () => {
     let resumedModel: string | undefined;
     const restored = await createAgentService({
       projects,
+      review: createReviewService(projects),
       dataDir,
       runtimeFactory: factory(async (options) => {
         resumed = options.nativeSessionId;

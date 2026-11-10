@@ -4,9 +4,9 @@ Cutroom has one local server and a React workspace. The Electron application is 
 
 ## Project ownership
 
-Projects remain ordinary HyperFrames folders. The application registry records their paths, while `cutroom.json` stores annotations and original word-timed transcripts. Source media is never rewritten by script cuts.
+Projects remain ordinary HyperFrames folders. The application registry records their paths, while `cutroom.json` stores annotations and original word-timed transcripts. Review status and order live in `.cutroom/review.json`, outside project history; `src/shared/review.ts` defines the one transition table that the UI routes, MCP tools, and agent turn lifecycle all pass through. Source media is never rewritten by script cuts.
 
-`src/server/projects/store.ts` owns the project registry, serialized Cutroom mutations, and one upstream `ProjectHistory` per folder. The native editor, transcript service, and MCP tools use that same history. Source writes require the exact content version they read. Metadata writes also refuse concurrent replacement. Shutdown rejects new edits and drains admitted mutations before closing history. The notebook reads compact annotations and a transcript revision; full words load when Script is opened.
+`src/server/projects/store.ts` owns the project registry, serialized Cutroom mutations, and one upstream `ProjectHistory` per folder. The native editor, transcript service, and MCP tools use that same history. Source writes require the exact content version they read. Metadata writes also refuse concurrent replacement. Shutdown rejects new edits and drains admitted mutations before closing history. The notebook reads review items and a transcript revision; full words load when Script is opened.
 
 External changes are watched and sent to the editor through server-sent events. The editor preserves its own file-write receipts, selection, playhead, and conflict handling.
 

@@ -4,9 +4,25 @@ Canvas and timeline controls come from the pinned public HyperFrames editor. Cut
 
 ## Review
 
-Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the metadata remains in `cutroom.json` so undo restores the note. Captured frames can be reopened from the notebook and are attached when pending notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.
+Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the note content remains in `cutroom.json` so undo restores it. Captured frames can be reopened from the notebook and are attached when new notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.
 
-Resolving, deleting, and sending notes preserve their other fields. Pending text stays in place when switching notebook tabs or hiding panels. Agent drafts also survive project switches and reloads. Review frames and transcription controls stay with their owning project; returning to a running transcription resumes its status updates.
+Each note stays in the queue until an explicit step finishes it:
+
+| Status            | Meaning                               | Next                                                          |
+| ----------------- | ------------------------------------- | ------------------------------------------------------------- |
+| New               | Saved, not yet sent                   | Sending any message queues it. Only new notes can be deleted. |
+| Queued            | Waiting for the agent                 | The agent claims, completes, blocks, or withdraws it.         |
+| Working           | Claimed by the running agent          | Returns to Queued if the run ends first.                      |
+| Needs your answer | The agent asked a question            | Answer in Review, or in a chat message the agent acts on.     |
+| Done              | The agent finished, with a short note | Accept it, or send it back to Queued with what to change.     |
+| Withdrawn         | Cancelled, with the reason and actor  | Restore returns it to Queued.                                 |
+| Accepted          | You approved the result               | Final.                                                        |
+
+You can withdraw any unfinished note; once sent, a note can only be withdrawn, so its reason is always recorded. The agent can withdraw a queued, working, blocked, or done note when your message asks for it, and an outside MCP client can too (recorded as an outside agent). An automatic follow-up turn can never withdraw a note or resume one blocked on your answer. Accept, send back, and restore are yours alone. Your answers and send-back notes stay on the note through every later status and are repeated to the agent.
+
+Status, order, and your added instructions live in `.cutroom/review.json`, outside undo history, so undoing an edit never reopens or loses a request. If that file becomes unreadable, Review shows the error and statuses stop changing until it is repaired; transcripts and chat keep working. Notes from earlier versions keep their meaning: sent notes become Queued and resolved notes become Accepted. The first status change moves those old statuses out of `cutroom.json`, which adds one history entry.
+
+Editing a note's text preserves its other fields. Pending text stays in place when switching notebook tabs or hiding panels. Agent drafts also survive project switches and reloads. Review frames and transcription controls stay with their owning project; returning to a running transcription resumes its status updates.
 
 ## Script
 

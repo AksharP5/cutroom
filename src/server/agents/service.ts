@@ -18,6 +18,7 @@ import type {
 import { HttpError } from "../../shared/errors";
 import { projectPath } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
+import type { ReviewService } from "../projects/review";
 import { createNativeRuntimeFactory } from "./factory";
 import { completeMessage } from "./runtime";
 import type { AgentRuntime, RuntimeFactory } from "./runtime";
@@ -35,10 +36,13 @@ type TurnOperation = {
   kind: "turn";
   phase: "preparing" | "running";
   controller: AbortController;
+  /** Returns this run's claimed review notes to the queue. Safe to call more than once. */
+  endReview?: () => void;
 };
 type SessionOperation = TurnOperation | { kind: "configure" };
 export type AgentServiceOptions = {
   projects: ProjectStore;
+  review: ReviewService;
   dataDir: string;
   studioUrl?: string;
   runtimeFactory?: RuntimeFactory;
@@ -216,6 +220,16 @@ export class AgentService {
         409,
         "This agent is working. Stop it before sending another request.",
       );
+    // Review claims and withdrawals belong to the one run working on the project.
+    for (const [other, running] of this.operations)
+      if (
+        running.kind === "turn" &&
+        this.sessions.get(other)?.projectId === session.projectId
+      )
+        throw new HttpError(
+          409,
+          "A conversation in this project is already working. Stop it or wait for it to finish.",
+        );
     const operation: TurnOperation = {
       kind: "turn",
       phase: "preparing",
@@ -225,6 +239,7 @@ export class AgentService {
     try {
       return await this.startTurn(session, turn, operation);
     } catch (error) {
+      operation.endReview?.();
       if (this.admissionCancelled(id, operation)) return this.get(id);
       if (this.operations.get(id) === operation) this.operations.delete(id);
       if (!this.disposed && this.requireSession(id).status === "running")
@@ -332,13 +347,31 @@ export class AgentService {
     const nativeTurn = { ...turn, skills, attachments };
     if (!session.messages.some((message) => message.role === "user"))
       session.title = turn.text.trim().slice(0, 90) || "Attached media";
-    this.apply(id, {
-      type: "message",
-      message: completeMessage(turn.text || "Attached media", "user"),
-    });
+    const message = completeMessage(turn.text || "Attached media", "user");
+    this.apply(id, { type: "message", message });
     this.apply(id, { type: "status", status: "running" });
     await this.persist();
     if (this.admissionCancelled(id, operation)) {
+      if (!this.disposed) await this.persist();
+      return this.get(id);
+    }
+    const review = await this.options.review.beginTurn(project, {
+      id: message.id,
+      kind: "message",
+    });
+    const endReview = (operation.endReview = () => {
+      if (!this.disposed)
+        void review
+          .end()
+          .catch((error: unknown) =>
+            console.error(
+              "Review notes could not be returned to the queue:",
+              error,
+            ),
+          );
+    });
+    if (this.admissionCancelled(id, operation)) {
+      endReview();
       if (!this.disposed) await this.persist();
       return this.get(id);
     }
@@ -369,7 +402,12 @@ export class AgentService {
     }
     const native = runtime;
     void native
-      .send(nativeTurn)
+      .send({
+        ...nativeTurn,
+        context:
+          [review.digest, turn.context].filter(Boolean).join("\n\n") ||
+          undefined,
+      })
       .then(() => {
         if (this.disposed || this.operations.get(id) !== operation) return;
         this.finishStreaming(id, "complete");
@@ -393,7 +431,8 @@ export class AgentService {
             message: error instanceof Error ? error.message : String(error),
           });
         void this.persist().catch((failure) => this.storageFailed(failure));
-      });
+      })
+      .finally(endReview);
     return this.get(id);
   }
 
