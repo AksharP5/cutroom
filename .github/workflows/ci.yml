@@ -20,8 +20,24 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: bunx playwright install --with-deps chromium
+      # Static FFmpeg from GitHub instead of apt: Ubuntu mirrors can stall apt-get until the job times out.
+      - name: Install FFmpeg
+        timeout-minutes: 3
+        run: |
+          mkdir -p ~/ffmpeg && cd ~/ffmpeg
+          release=https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1
+          curl -fsSL --retry 3 --max-time 60 -o ffmpeg.gz "$release/ffmpeg-linux-x64.gz" -o ffprobe.gz "$release/ffprobe-linux-x64.gz"
+          sha256sum -c <<'EOF'
+          bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa  ffmpeg.gz
+          25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067  ffprobe.gz
+          EOF
+          gunzip ffmpeg.gz ffprobe.gz
+          chmod +x ffmpeg ffprobe
+          ./ffmpeg -version | head -1
+          echo "$PWD" >> "$GITHUB_PATH"
+      # The runner image already ships Chromium's system libraries, so skip --with-deps and its apt-get.
+      - run: bunx playwright install chromium
+        timeout-minutes: 5
       - name: Set browser paths
         run: |
           browser=$(bun -e 'import { chromium } from "@playwright/test"; process.stdout.write(chromium.executablePath())')
