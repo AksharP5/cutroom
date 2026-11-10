@@ -10,6 +10,8 @@ Projects remain ordinary HyperFrames folders. The application registry records t
 
 External changes are watched and sent to the editor through server-sent events. The editor preserves its own file-write receipts, selection, playhead, and conflict handling.
 
+Dot folders such as `.cutroom/` hold app state, including review captures and renders. They are left out of the project file list that Media, Assets, and the code tree read, and their changes do not refresh Media.
+
 ## Editor integration
 
 The public `@hyperframes/studio` application supplies the timeline, canvas editing, preview, inspector, and source editor. Cutroom supplies the surrounding workspace, review tools, agent panel, and original visual theme.
