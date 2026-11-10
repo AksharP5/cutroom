@@ -13,12 +13,12 @@ import {
   patchComposition,
   settingsOf,
 } from "../src/server/timeline/composition";
+import type { CompositionScope } from "../src/server/timeline/composition";
 
 const talk = `<video id="talk" src="talk.mp4" muted data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="0"></video>`;
 const voice = `<audio id="voice" src="talk.mp4" data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="2"></audio>`;
 const title = `<DIV id='title' class=clip data-start=6 data-duration="4" data-track-index="1" data-hf-id="hf-9"><b data-hf-id="hf-10">Hi</b></DIV>`;
 const after = `<div id="after" class="clip" data-start="title" data-duration="2" data-track-index="1">Next</div>`;
-const track0Stacking = `<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}}</style>`;
 const source = `<!doctype html>
 <html><head><style>.clip{position:absolute}</style>
 <script>const markup = "<div data-start='1'></div>";</script></head>
@@ -34,8 +34,12 @@ const source = `<!doctype html>
 const composition = (body: string, fps: number | string = 30) =>
   `<main data-composition-id="main" data-duration="10" data-fps="${fps}">\n${body}\n</main>\n`;
 
-const edit = (html: string, commands: CommandInput[]) => {
-  const parsed = parseComposition(html, emptyTimelineSettings());
+const edit = (
+  html: string,
+  commands: CommandInput[],
+  scope: CompositionScope = "document",
+) => {
+  const parsed = parseComposition(html, emptyTimelineSettings(), { scope });
   const origins = new Map<string, ClipOrigin>();
   const timeline = canonicalTimeline(
     applyAll(
@@ -45,11 +49,22 @@ const edit = (html: string, commands: CommandInput[]) => {
     ),
   );
   const output = patchComposition(parsed, timeline, origins);
-  expect(parseComposition(output, settingsOf(timeline)).timeline).toEqual(
-    timeline,
-  );
+  expect(
+    parseComposition(output, settingsOf(timeline), { scope }).timeline,
+  ).toEqual(timeline);
   return output;
 };
+
+const withoutStacking = (html: string) =>
+  html
+    .replace(
+      /<head><style data-cutroom-track-stacking[^>]*>[\s\S]*?<\/style><\/head>\n/g,
+      "",
+    )
+    .replace(
+      /<style data-cutroom-track-stacking[^>]*>[\s\S]*?<\/style>\n?/g,
+      "",
+    );
 
 test("the projection reads clips, references, and fps from HTML", () => {
   const { timeline } = parseComposition(source, emptyTimelineSettings());
@@ -82,25 +97,17 @@ test("edits change only the attributes they need and keep references", () => {
     { type: "remove", clipIds: ["voice"] },
     { type: "trim", clipId: "title", edge: "end", to: 270, ripple: true },
   ]);
-  expect(output).toBe(
+  expect(withoutStacking(output)).toBe(
     source
       .replace(`\n  ${talk}\n  ${voice}`, "")
       .replace(`data-duration="4"`, `data-duration="3"`)
-      .replace(`data-duration="12"`, `data-duration="11"`)
-      .replace(
-        `data-fps="30">`,
-        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
-      ),
+      .replace(`data-duration="12"`, `data-duration="11"`),
   );
   const moved = edit(source, [{ type: "move", clipIds: ["after"], by: 15 }]);
-  expect(moved).toBe(
+  expect(withoutStacking(moved)).toBe(
     source
       .replace(`data-start="title"`, `data-start="10.5"`)
-      .replace(`data-duration="12"`, `data-duration="12.5"`)
-      .replace(
-        `data-fps="30">`,
-        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
-      ),
+      .replace(`data-duration="12"`, `data-duration="12.5"`),
   );
 });
 
@@ -116,7 +123,7 @@ test("split, ripple delete, and insert round-trip without touching other markup"
       clip: { kind: "audio", src: "music/bed & theme.wav", duration: 90 },
     },
   ]);
-  expect(output).toBe(
+  expect(withoutStacking(output)).toBe(
     source
       .replace(
         `\n  ${talk}\n  ${voice}`,
@@ -143,11 +150,7 @@ test("split, ripple delete, and insert round-trip without touching other markup"
         `${after}\n`,
         `${after.replace(`data-start="title"`, `data-start="8"`)}\n  <audio id="bed-theme" src="music/bed &amp; theme.wav" data-start="0" data-duration="3" data-track-index="3"></audio>\n`,
       )
-      .replace(`data-duration="12"`, `data-duration="10"`)
-      .replace(
-        `data-fps="30">`,
-        `data-fps="30">\n<style data-cutroom-track-stacking>@layer cutroom-tracks{:where([data-track-index="0"]:not(audio),[data-layer="0"]:not([data-track-index]):not(audio)){z-index:0}:where([data-track-index="1"]:not(audio),[data-layer="1"]:not([data-track-index]):not(audio)){z-index:1}}</style>`,
-      ),
+      .replace(`data-duration="12"`, `data-duration="10"`),
   );
 });
 
@@ -174,7 +177,7 @@ test("visual placements maintain track stacking without rewriting authored style
   expect(moved).toContain(`[data-track-index="3"]:not(audio)`);
   expect(moved).toContain(`{z-index:3}`);
   expect(moved).toContain(`style="color:red;z-index:50!important"`);
-  expect(moved.match(/<style data-cutroom-track-stacking>/g)).toHaveLength(1);
+  expect(moved.match(/<style data-cutroom-track-stacking=/g)).toHaveLength(1);
   expect(edit(moved, [{ type: "move", clipIds: ["title"], by: 30 }])).toBe(
     moved
       .replace(`data-duration="10"`, `data-duration="11"`)
@@ -202,6 +205,92 @@ test("audio placement leaves stacking and authored markup alone", () => {
   ]);
   expect(inserted).not.toContain("data-cutroom-track-stacking");
   expect(inserted).toContain(`style="z-index:90"`);
+});
+
+test("track defaults precede authored cascade layers and leave first-child selectors intact", () => {
+  const html = `<!doctype html><html><head><style>@layer utilities{.z-50{z-index:50}}.box:first-child{background:blue}</style></head><body><main data-composition-id="main" data-duration="2"><div id="box" class="clip box z-50" data-start="0" data-duration="1" data-track-index="1">Box</div></main></body></html>`;
+  const output = edit(html, [{ type: "move", clipIds: ["box"], by: 1 }]);
+  expect(output).toContain(`<head><style data-cutroom-track-stacking="main">`);
+  expect(output.indexOf("@layer cutroom-tracks")).toBeLessThan(
+    output.indexOf("@layer utilities"),
+  );
+  expect(output).toContain(
+    `<main data-composition-id="main" data-duration="2.033333"><div id="box"`,
+  );
+  expect(output).toContain(`.box:first-child{background:blue}`);
+});
+
+test("a scene's defaults survive template loading without entering its clip children", () => {
+  const html = `<template><style>@layer utilities{.z-50{z-index:50}}</style><div data-composition-id="scene" data-duration="2"><div id="box" class="clip box z-50" data-start="0" data-duration="1" data-track-index="1">Box</div></div></template>`;
+  const output = edit(
+    html,
+    [{ type: "move", clipIds: ["box"], by: 1 }],
+    "sub-composition",
+  );
+  expect(output).toContain(
+    `<template><style data-cutroom-track-stacking="scene">`,
+  );
+  expect(output.indexOf("@layer cutroom-tracks")).toBeLessThan(
+    output.indexOf("@layer utilities"),
+  );
+  expect(output).toContain(
+    `<div data-composition-id="scene" data-duration="2.033333"><div id="box"`,
+  );
+});
+
+test("duration edits establish stacking, while label edits do not", () => {
+  const html = composition(
+    `<div id="box" class="clip" data-start="0" data-duration="1" data-track-index="1">Box</div>`,
+  );
+  expect(
+    edit(html, [{ type: "setClip", clipId: "box", label: "Box" }]),
+  ).not.toContain("data-cutroom-track-stacking");
+  expect(
+    edit(html, [{ type: "trim", clipId: "box", edge: "end", to: 60 }]),
+  ).toContain(`data-cutroom-track-stacking="main"`);
+});
+
+test("a managed stylesheet moved by hand is relocated rather than duplicated", () => {
+  const html = `<!doctype html><html><head></head><body>${composition(`<div id="box" class="clip" data-start="0" data-duration="1" data-track-index="1">Box</div>`)}</body></html>`;
+  const first = edit(html, [{ type: "move", clipIds: ["box"], by: 1 }]);
+  const block = first.match(
+    /<style data-cutroom-track-stacking[^>]*>[\s\S]*?<\/style>/,
+  )![0];
+  const moved = first
+    .replace(block, "")
+    .replace("</body>", `<aside>${block}</aside></body>`);
+  const output = edit(moved, [{ type: "move", clipIds: ["box"], trackBy: 1 }]);
+  expect(output.match(/<style data-cutroom-track-stacking/g)).toHaveLength(1);
+  expect(output).toContain(`<head><style data-cutroom-track-stacking="main">`);
+  expect(output).toContain(`<aside></aside>`);
+});
+
+test("noncanonical and legacy track values are normalized when defaults are written", () => {
+  for (const attribute of [`data-track-index="02"`, `data-layer="02"`]) {
+    const html = composition(
+      `<div id="box" class="clip" data-start="0" data-duration="1" ${attribute}>Box</div>`,
+    );
+    const output = edit(html, [{ type: "move", clipIds: ["box"], by: 1 }]);
+    expect(output).toContain(`data-track-index="2"`);
+    expect(output).not.toContain(attribute);
+    expect(
+      parseComposition(output, emptyTimelineSettings()).timeline.clips[0]
+        ?.track,
+    ).toBe(2);
+  }
+});
+
+test("managed CSS never makes a numeric clip id look like an authored reference", () => {
+  const html = composition(
+    `<div id="1" class="clip" data-start="0" data-duration="2" data-track-index="1">Box</div>`,
+  );
+  const moved = edit(html, [{ type: "move", clipIds: ["1"], by: 1 }]);
+  const split = edit(moved, [{ type: "split", clipIds: ["1"], at: 30 }]);
+  expect(
+    parseComposition(split, emptyTimelineSettings()).timeline.clips.map(
+      (clip) => clip.id,
+    ),
+  ).toEqual(["1", "1-2"]);
 });
 
 test("compositions that cannot be edited exactly are refused", () => {
@@ -302,13 +391,14 @@ test("inert template content never becomes the root or answers an id", () => {
   const { timeline } = parseComposition(html, emptyTimelineSettings());
   expect(timeline.fps).toEqual({ num: 30, den: 1 });
   expect(timeline.clips.map((clip) => clip.id)).toEqual(["title"]);
-  expect(edit(html, [{ type: "move", clipIds: ["title"], by: 30 }])).toBe(
+  expect(
+    withoutStacking(edit(html, [{ type: "move", clipIds: ["title"], by: 30 }])),
+  ).toBe(
     html
       .replace(`data-duration="10"`, `data-duration="11"`)
-      .replace(`data-fps="30">`, `data-fps="30">\n${track0Stacking}`)
       .replace(
         `data-start="0" data-duration="2">Title`,
-        `data-start="1" data-duration="2">Title`,
+        `data-start="1" data-duration="2" data-track-index="0">Title`,
       ),
   );
   // A template's lead must not shadow the live lead that a reference names.
@@ -357,15 +447,16 @@ test("a sub-composition edits its first template even when a later one is named 
       CommandSchema.parse({ type: "move", clipIds: ["helper-text"], by: 30 }),
     ]),
   );
-  expect(patchComposition(parsed, timeline, new Map())).toBe(
+  expect(withoutStacking(patchComposition(parsed, timeline, new Map()))).toBe(
     `${first
       .replace(
         `data-start="0" data-duration="1" data-track-index="0">Helper`,
         `data-start="1" data-duration="1" data-track-index="0">Helper`,
       )
+      .replace(`data-duration="4">`, `data-duration="5">`)
       .replace(
-        `data-duration="4">`,
-        `data-duration="5">\n${track0Stacking}`,
+        `id="h" src="h.mp4" data-start="0" data-duration="1"`,
+        `id="h" src="h.mp4" data-start="0" data-duration="1" data-track-index="0"`,
       )}\n${named}\n`,
   );
 });
@@ -419,10 +510,11 @@ test("frames are the ones the runtime shows, and moves keep the source in sync",
     shown[0]!,
     shown.at(-1)! + 1,
   ]);
-  expect(edit(html, [{ type: "move", clipIds: ["v"], by: 24 }])).toBe(
+  expect(
+    withoutStacking(edit(html, [{ type: "move", clipIds: ["v"], by: 24 }])),
+  ).toBe(
     html
       .replace(`data-duration="10"`, `data-duration="11"`)
-      .replace(`data-fps="24">`, `data-fps="24">\n${track0Stacking}`)
       .replace(
         `data-start="0.1" data-duration="1" data-media-start="2"`,
         `data-start="1.125" data-duration="1" data-media-start="2.025"`,

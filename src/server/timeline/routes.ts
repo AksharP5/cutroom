@@ -25,6 +25,7 @@ import { projectPath, readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
+  declareTrackLayer,
   mediaSources,
   parseComposition,
   patchComposition,
@@ -137,6 +138,22 @@ export function createTimelineRoutes(store: ProjectStore) {
               expectedVersion: current.source.version,
             },
           ];
+    if (
+      files.length &&
+      composition !== "index.html" &&
+      html.includes("<style data-cutroom-track-stacking=")
+    ) {
+      const entry = await readSource(project, "index.html");
+      const declared = declareTrackLayer(entry.content);
+      if (declared !== entry.content)
+        files.push({
+          sourceFile: "index.html",
+          absPath: await projectPath(project, "index.html"),
+          before: entry.content,
+          after: declared,
+          expectedVersion: entry.version,
+        });
+    }
     const { timelines } = current.document;
     if (!Bun.deepEquals(settings, settingsOf(current.parsed.timeline))) {
       if (Bun.deepEquals(settings, emptyTimelineSettings()))
