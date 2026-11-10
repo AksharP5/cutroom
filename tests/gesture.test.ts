@@ -304,15 +304,16 @@ test("dragging a clip moves it and its linked partner; Alt moves it alone", () =
   );
   expect(together).toMatchObject({ label: "Move", valid: true, delta: 50 });
   expect(together.commands).toEqual([
-    { type: "move", clipIds: ["c"], by: 50, trackBy: 0 },
+    { type: "move", clipIds: ["c"], by: 50, trackBy: 0, mode: "overwrite" },
   ]);
 
-  // Held over b, the move is one the engine refuses, and the clip is still drawn under the pointer.
+  // Held over b, c replaces it in the preview as well as on release.
   const over = dragPreview(
     drag({ kind: "move", clipId: "c", alone: false }, ["c"], 320),
     { frame: 120, track: 0, reach: 0 },
   );
-  expect(over.valid).toBe(false);
+  expect(over.valid).toBe(true);
+  expect(places(over.shown).b).toBeUndefined();
   expect(places(over.shown).c).toEqual([0, 100, 100]);
 
   const alone = dragPreview(
@@ -325,6 +326,7 @@ test("dragging a clip moves it and its linked partner; Alt moves it alone", () =
       clipIds: ["a-sound"],
       by: 400,
       trackBy: 0,
+      mode: "overwrite",
       linked: false,
     },
   ]);
@@ -363,7 +365,14 @@ test("a move snaps, stops at the timeline's start, and carries only its own kind
     { frame: 550, track: 1, reach: 0 },
   );
   expect(lifted.commands).toEqual([
-    { type: "move", clipIds: ["a"], by: 500, trackBy: 1 },
+    {
+      type: "move",
+      clipIds: ["a", "a-sound"],
+      by: 500,
+      trackBy: 1,
+      trackClipIds: ["a"],
+      mode: "overwrite",
+    },
   ]);
   expect(committed(timeline, lifted)).toMatchObject({
     a: [1, 500, 100],
@@ -378,6 +387,42 @@ test("a move snaps, stops at the timeline's start, and carries only its own kind
   );
   expect(wrong.valid).toBe(false);
   expect(places(wrong.shown).c).toEqual([2, 300, 100]);
+});
+
+test("an overwrite drag previews both surviving pieces and anchors the covered clip", () => {
+  const timeline = sequence();
+  const preview = dragPreview(
+    drag({ kind: "move", clipId: "b", alone: false }, ["b"], 150),
+    { frame: 400, track: 0, reach: 0 },
+  );
+  // b lands [350,450), trimming c to [300,350).
+  expect(places(preview.shown)).toMatchObject({
+    b: [0, 350, 100],
+    c: [0, 300, 50],
+  });
+  expect(
+    editAnchors(timeline, preview.shown, preview.commands).map(
+      (clip) => clip.id,
+    ),
+  ).toEqual(["b", "c"]);
+
+  const shorter = {
+    ...timeline,
+    clips: timeline.clips.map((clip) =>
+      clip.id === "b" ? { ...clip, duration: 30 } : clip,
+    ),
+  };
+  const split = dragPreview(
+    drag({ kind: "move", clipId: "b", alone: false }, ["b"], 110, shorter),
+    { frame: 330, track: 0, reach: 0 },
+  );
+  const tailId = [...split.pieces!.keys()][0]!;
+  expect(split.pieces?.get(tailId)).toBe("c");
+  expect(places(split.shown)).toMatchObject({
+    b: [0, 320, 30],
+    c: [0, 300, 20],
+    [tailId]: [0, 350, 50],
+  });
 });
 
 test("Select resizes an edge up to its neighbour and its source; Trim ripples it", () => {

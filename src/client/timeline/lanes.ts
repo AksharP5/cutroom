@@ -131,6 +131,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (!root || !ppf) return;
     const top = new Map(rows.map((row) => [row.track.index, row.top]));
     const before = new Map(base.clips.map((clip) => [clip.id, clip]));
+    const surviving = new Set(shown.clips.map((clip) => clip.id));
     const next = new Map<string, Offset & { scale: number }>();
     if (shown !== base)
       for (const clip of shown.clips) {
@@ -149,12 +150,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
           scale: clip.duration / old.duration,
         });
       }
-    if (next.size || placed.current.size)
+    if (shown !== base || next.size || placed.current.size || preview.current)
       for (const element of root.querySelectorAll<HTMLElement>(
         "[data-clip], [data-clip-label], [data-clip-outline]",
       )) {
         const { clip, clipLabel, clipOutline } = element.dataset;
-        const at = next.get(clip ?? clipLabel ?? clipOutline ?? "");
+        const id = clip ?? clipLabel ?? clipOutline ?? "";
+        element.hidden = !surviving.has(id);
+        const at = next.get(id);
         const move = at ? `translate(${at.x}px, ${at.y}px)` : "";
         const held = at ? `${move} scaleX(${at.scale})` : "";
         if ((written.current.get(element) ?? "") === held) continue;

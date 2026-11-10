@@ -116,12 +116,13 @@ function name(commands: Command[], timeline: Timeline) {
   let current = timeline;
   const creates = new Set<string>();
   const named = commands.map((command): Command => {
-    // Razors, inserts, and ripple trims and deletes through a spanning clip cut pieces.
+    // Positional edits can cut new pieces, including moves that overwrite a spanning clip.
     if (
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
-      command.type !== "remove"
+      command.type !== "remove" &&
+      command.type !== "move"
     ) {
       current = apply(current, command);
       return command;
