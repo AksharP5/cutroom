@@ -1,0 +1,34 @@
+{
+  "whole": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_type": "video",
+        "width": 640,
+        "height": 360,
+        "r_frame_rate": "30/1",
+        "nb_read_frames": "180"
+      }
+    ],
+    "format": {
+      "duration": "6.000000"
+    }
+  },
+  "range": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_type": "video",
+        "width": 640,
+        "height": 360,
+        "r_frame_rate": "30/1",
+        "nb_read_frames": "60"
+      }
+    ],
+    "format": {
+      "duration": "2.000000"
+    }
+  }
+}
