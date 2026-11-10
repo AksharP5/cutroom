@@ -51,3 +51,22 @@ Playback must hold the display rate with no React work per frame. On November 10
 | Reverse 2x  |     60.3 /s |                 0 |             2 |                 5 |
 
 The commits and DOM changes are the transport buttons and shuttle readout changing state once per key press. The timecode is written directly, twice per composition frame.
+
+## New editor timeline
+
+The timeline must stay at the display rate with 500 clips. On November 10, 2026, Chromium 1720x1050 (headless, hardware GL) opened the timeline benchmark's composition in the new editor: 240 linked picture and sound pieces cut from one 720p H.264 file plus 20 titles, ten minutes at 30 fps. Each gesture was driven at one input event per frame under a Chromium trace. A late frame is an animation-frame interval over 20 ms. The machine was shared (load average 3 to 11), and three runs are summarised.
+
+| Gesture                                          |     Page frames |    Late frames |  Worst frame | Main thread per frame |
+| ------------------------------------------------ | --------------: | -------------: | -----------: | --------------------: |
+| Ctrl+wheel zoom, fit to 32 px per frame and back | 59.1 to 59.4 /s | 9 to 11 of 910 |  33 to 67 ms |        9.3 to 11.7 ms |
+| Zoom buttons, four in and four out, eased        |   58.4 to 60 /s |  0 to 3 of 185 |  17 to 67 ms |         3.9 to 4.3 ms |
+| Scroll through time at 2 px per frame            |           60 /s |       0 of 920 |      16.8 ms |         0.9 to 1.3 ms |
+| Marquee across three tracks                      |           60 /s |       0 of 265 |      16.8 ms |         1.3 to 1.6 ms |
+| Play 1x, 5 s                                     |   58.8 to 60 /s |  0 to 2 of 340 |  17 to 83 ms |         3.6 to 5.1 ms |
+| Shuttle 8x, 6 s, paging                          |     43 to 47 /s |       78 to 93 |        67 ms |           31 to 33 ms |
+| Shuttle 8x with the timeline hidden              |           44 /s |             69 |        83 ms |                 33 ms |
+| Scrub the ruler                                  |     47 to 59 /s |       9 to 133 | 33 to 117 ms |           19 to 26 ms |
+
+At fit, all 500 clips are on screen as one element each. A zoom step writes `--ppf` and one scroll offset; the style pass for 500 clips is about 3 ms of the main-thread time above. The late zoom frames are the steps where React mounts or unmounts clips and labels as the view crosses a mounted range. Scrolling runs on the compositor: 40 clips are mounted at 2 px per frame and a render happens every half view.
+
+Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.

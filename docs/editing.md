@@ -4,7 +4,7 @@ Canvas and timeline controls come from the pinned public HyperFrames editor. Cut
 
 ## New editor
 
-Settings has a New editor switch, off by default. It replaces the embedded editor's centre with Cutroom's own tool row, viewer, and transport, with room for a timeline below a draggable split. The timeline, inspector, file panels, and export are not there yet; switch back for those.
+Settings has a New editor switch, off by default. It replaces the embedded editor's centre with Cutroom's own tool row, viewer, transport, and a timeline below a draggable split. The timeline shows and selects clips; editing them, the inspector, file panels, and export are not there yet, so switch back for those.
 
 The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. Draw and Comment work as in the embedded editor, and the picture outline turns yellow while one is armed.
 
@@ -13,6 +13,16 @@ The transport follows DaVinci Resolve: L and J play, faster on each press up to 
 I and O set the timeline's in and out points through the same `setRange` command MCP clients use, so each mark is one undo step and agents see it. With loop on, playback repeats the range, or the whole timeline when no range is set.
 
 When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
+
+### Timeline
+
+The timeline reads the same projection MCP clients get from `timeline_read`, so an agent's edit or an undo shows up as soon as the file changes. Video tracks stack upward from the divider and audio tracks downward; each header has the track's id and name, a lock, and auto-select, both saved through `setTrack` as undoable edits. Clips on a locked track dim and cannot be selected.
+
+The ruler is the scrub surface: press or drag it to move the playhead. Its step is the smallest of 1, 2, 5 and 10 frames, 1, 2, 5, 10 and 30 seconds, and 1, 5, 10, 30 and 60 minutes that keeps labels 96px apart. The in and out points show as brackets with a lighter band between them and a line down through the tracks. Markers sit on the ruler's lower edge with their names; clicking one moves the playhead there. Review notes sit on its upper edge as dots: yellow while a note waits on the agent, hatched blue while the agent works on it, solid blue when the work is ready to review, and a hollow ring once accepted. Clicking a dot moves the playhead to the note and shows it in Review.
+
+A clip's name stays at the left edge of the view while any of the clip is on screen. Names show on clips at least 28px wide and durations at 200px. Clip bodies are flat colour by kind until waveforms and filmstrips arrive.
+
+Zoom runs from the whole timeline to 32px per frame. The slider in the ruler's corner is logarithmic; double-click it to fit. Zooming with the wheel or a pinch follows the input and holds the frame under the cursor still. The buttons, the slider's track, and the keys ease to the new zoom around the playhead. During playback the view pages when the playhead reaches 90% of the width. [Keys and gestures](keyboard.md).
 
 ## Review
 

@@ -4,7 +4,7 @@ import type { Fps } from "../../shared/timeline/schema";
  * Timecode counts whole frames at the nominal rate (24 for 23.976, 30 for 29.97), as Resolve's
  * non-drop-frame timecode does, so every frame has exactly one label.
  */
-const nominal = (fps: Fps) => Math.round(fps.num / fps.den);
+export const nominal = (fps: Fps) => Math.round(fps.num / fps.den);
 const pad = (value: number) => String(value).padStart(2, "0");
 
 /** `HH:MM:SS:FF` for a frame number. */

@@ -308,6 +308,16 @@ export function App() {
     },
     [projectId],
   );
+  /** Shows a note in the Review panel, as a click on its timeline pin does. */
+  const openReview = useCallback((id: string) => {
+    setPanel("review");
+    setWorkPanel("notebook");
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`review-note-${id}`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }, []);
   const consumePrompt = useCallback(() => setPromptState(null), []);
   const ask = useCallback(
     (value: string) => {
@@ -585,8 +595,10 @@ export function App() {
                   {newEditor ? (
                     <EditPage
                       projectId={project.id}
+                      notes={projectDocument.items}
                       onContext={onContext}
                       onReview={onReview}
+                      onOpenNote={openReview}
                     />
                   ) : (
                     <Editor

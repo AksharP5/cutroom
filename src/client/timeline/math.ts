@@ -1,0 +1,251 @@
+import { clipEnd } from "../../shared/timeline/apply";
+import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
+import { nominal } from "../edit/timecode";
+
+/** The closest zoom: one frame is this many pixels wide. */
+export const MAX_PPF = 32;
+/** Ruler labels never sit closer than this many pixels. */
+const LABEL_SPACING = 96;
+/** Room kept after the last frame when the whole timeline is fitted. */
+const FIT_TAIL = 32;
+
+/** Frames the timeline spans: its duration, or the end of a clip that runs past it. */
+export const timelineFrames = (timeline: Timeline) =>
+  timeline.clips.reduce(
+    (end, clip) => Math.max(end, clipEnd(clip)),
+    timeline.duration,
+  );
+
+/** The widest zoom: every frame visible. An empty timeline shows ten seconds. */
+export const fitPpf = (frames: number, width: number, fps: Fps) =>
+  Math.min(
+    MAX_PPF,
+    Math.max(1, width - FIT_TAIL) / (frames || nominal(fps) * 10),
+  );
+
+export const clampPpf = (ppf: number, fit: number) =>
+  Math.min(MAX_PPF, Math.max(fit, ppf));
+
+/** Zoom slider position, 0 at fit and 1 at the closest zoom, logarithmic between. */
+export const zoomToSlider = (ppf: number, fit: number) =>
+  fit >= MAX_PPF ? 1 : Math.log(ppf / fit) / Math.log(MAX_PPF / fit);
+export const sliderToZoom = (position: number, fit: number) =>
+  fit * (MAX_PPF / fit) ** Math.min(1, Math.max(0, position));
+
+/** The frame under a pixel offset from the left edge of the visible lanes. */
+export const frameAt = (x: number, scroll: number, ppf: number) =>
+  Math.max(0, Math.round((x + scroll) / ppf));
+
+/** The scroll offset that keeps `frame` (fractional) under pixel `x` at a zoom. */
+export const scrollForAnchor = (frame: number, x: number, ppf: number) =>
+  Math.max(0, frame * ppf - x);
+
+/**
+ * The scroll offset the next zoom step starts from. A scroller keeps whole pixels, and at a wide
+ * zoom one pixel is many frames, so reading its offset back would move the anchor a little on
+ * every step. The exact offset last asked for is kept while the scroller still sits on it; once
+ * the scroller is somewhere else (the person scrolled, or it hit its bounds), its offset wins.
+ */
+export const settledScroll = (exact: number, native: number) =>
+  Math.abs(native - exact) < 1 ? exact : native;
+
+/** Playback pages when the playhead is past PAGE_AT of the view and lands it at PAGE_TO. */
+const PAGE_AT = 0.9;
+const PAGE_TO = 0.1;
+
+/**
+ * Where paging should put the playhead, in pixels from the left of the view, or null to leave the
+ * view alone. `x` is the playhead's offset in a view `width` wide and `direction` the way
+ * playback runs: 1 forward, -1 in reverse. Forward playback pages once the playhead is 90% across
+ * and when it is left of the view, as after a loop wraps to the in point; reverse mirrors that.
+ * The direction is the transport's, not the last frame change, so a wrap is not read as a turn.
+ */
+export function pageTarget(
+  x: number,
+  width: number,
+  direction: 1 | -1,
+): number | null {
+  if (direction > 0)
+    return x >= width * PAGE_AT || x < 0 ? width * PAGE_TO : null;
+  return x <= width * PAGE_TO || x > width ? width * PAGE_AT : null;
+}
+
+export interface TickStep {
+  /** Frames between labelled ticks. */
+  major: number;
+  /** Frames between unlabelled ticks, or null when the major step has no even division. */
+  minor: number | null;
+}
+
+/**
+ * The smallest of 1f, 2f, 5f, 10f, 1s, 2s, 5s, 10s, 30s, 1m, 5m, 10m, 30m, 1h that keeps ruler
+ * labels 96px apart. Minor ticks use the largest earlier step that splits it into 4 to 12 parts,
+ * or failing that into any whole number of parts.
+ */
+export function tickStep(ppf: number, fps: Fps): TickStep {
+  const base = nominal(fps);
+  const steps = [
+    1,
+    2,
+    5,
+    10,
+    ...[1, 2, 5, 10, 30, 60, 300, 600, 1800, 3600].map(
+      (seconds) => seconds * base,
+    ),
+  ].filter((step, index, all) => index === 0 || step > all[index - 1]!);
+  const major =
+    steps.find((step) => step * ppf >= LABEL_SPACING) ?? steps.at(-1)!;
+  const divisors = steps.filter((step) => step < major && major % step === 0);
+  const minor =
+    divisors.findLast((step) => major / step >= 4 && major / step <= 12) ??
+    divisors.at(-1);
+  return { major, minor: minor ?? null };
+}
+
+export interface Row {
+  track: Track;
+  /** `V1`, `A2`: numbered away from the divider. */
+  id: string;
+  top: number;
+  height: number;
+}
+export interface RowSizes {
+  video: number;
+  audio: number;
+  /** Seam under every lane. */
+  seam: number;
+  divider: number;
+}
+export interface RowLayout {
+  rows: Row[];
+  dividerTop: number;
+  height: number;
+}
+
+const placeholder = (index: number, kind: Track["kind"]): Track => ({
+  index,
+  kind,
+  name: null,
+  locked: false,
+  autoSelect: true,
+});
+
+/**
+ * Video tracks stack upward from the divider and audio tracks downward. There is always at least
+ * one of each: a kind with no track yet shows an empty one on the first free index, so an empty
+ * timeline is V1 over A1.
+ */
+export function trackRows(
+  tracks: readonly Track[],
+  sizes: RowSizes,
+): RowLayout {
+  const all = [...tracks];
+  for (const kind of ["video", "audio"] as const) {
+    if (all.some((track) => track.kind === kind)) continue;
+    let index = 0;
+    while (all.some((track) => track.index === index)) index++;
+    all.push(placeholder(index, kind));
+  }
+  const video = all.filter((track) => track.kind === "video");
+  const audio = all.filter((track) => track.kind === "audio");
+  const rows: Row[] = [];
+  let top = 0;
+  for (const [index, track] of video.toReversed().entries()) {
+    rows.push({
+      track,
+      id: `V${video.length - index}`,
+      top,
+      height: sizes.video,
+    });
+    top += sizes.video + sizes.seam;
+  }
+  const dividerTop = top;
+  top += sizes.divider;
+  for (const [index, track] of audio.entries()) {
+    rows.push({ track, id: `A${index + 1}`, top, height: sizes.audio });
+    top += sizes.audio + sizes.seam;
+  }
+  return { rows, dividerTop, height: top };
+}
+
+/** Rows that touch a vertical span. */
+export const rowsBetween = (
+  rows: readonly Row[],
+  top: number,
+  bottom: number,
+) => rows.filter((row) => row.top < bottom && row.top + row.height > top);
+
+export interface FrameRange {
+  from: number;
+  to: number;
+}
+
+/**
+ * The frame range to keep mounted. The mounted range is kept while it covers what is visible and
+ * is at most four times as long, so scrolling and zooming re-render only when they leave it.
+ */
+export function mountedRange(
+  mounted: FrameRange | null,
+  visible: FrameRange,
+): FrameRange {
+  const span = visible.to - visible.from;
+  if (
+    mounted &&
+    mounted.from <= visible.from &&
+    mounted.to >= visible.to &&
+    mounted.to - mounted.from <= span * 4
+  )
+    return mounted;
+  return {
+    from: Math.max(0, Math.floor(visible.from - span / 2)),
+    to: Math.ceil(visible.to + span / 2),
+  };
+}
+
+export interface TrackClips {
+  clips: readonly Clip[];
+  /** `ends[i]` is the latest end among `clips[0..i]`, so overlapping clips are still found. */
+  ends: readonly number[];
+}
+
+/** Each track's clips in start order, as the timeline projection already sorts them. */
+export function clipsByTrack(clips: readonly Clip[]): Map<number, TrackClips> {
+  const tracks = new Map<number, { clips: Clip[]; ends: number[] }>();
+  for (const clip of clips) {
+    const track = tracks.get(clip.track) ?? { clips: [], ends: [] };
+    tracks.set(clip.track, track);
+    track.clips.push(clip);
+    track.ends.push(Math.max(track.ends.at(-1) ?? 0, clipEnd(clip)));
+  }
+  return tracks;
+}
+
+function firstIndex(length: number, passes: (index: number) => boolean) {
+  let low = 0;
+  let high = length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (passes(middle)) high = middle;
+    else low = middle + 1;
+  }
+  return low;
+}
+
+/** The clips of one track that touch `[from, to)`. */
+export function clipsInRange(
+  { clips, ends }: TrackClips,
+  { from, to }: FrameRange,
+): Clip[] {
+  const first = firstIndex(clips.length, (index) => ends[index]! > from);
+  const last = firstIndex(clips.length, (index) => clips[index]!.start >= to);
+  return clips.slice(first, last).filter((clip) => clipEnd(clip) > from);
+}
+
+/** Frames of the labelled ruler ticks that fall in a range. */
+export function majorTicks({ from, to }: FrameRange, major: number): number[] {
+  const first = Math.floor(from / major) * major;
+  return Array.from(
+    { length: Math.max(0, Math.ceil((to - first) / major)) },
+    (_, index) => first + index * major,
+  );
+}
