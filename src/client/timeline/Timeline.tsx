@@ -23,6 +23,7 @@ import type {
   Track,
 } from "../../shared/timeline/schema";
 import {
+  LABEL_SPACING,
   MAX_PPF,
   clipName,
   clipsByTrack,
@@ -474,6 +475,10 @@ export function Timeline({
         tickLabels.current?.style.setProperty(
           "--cut",
           String(state.frames.from - 4 / state.ppf),
+        );
+        tickLabels.current?.style.setProperty(
+          "--cut-end",
+          String(state.frames.to - LABEL_SPACING / state.ppf),
         );
         const position = zoomToSlider(state.ppf, state.fit);
         slider.current?.style.setProperty("--zoom", String(position));

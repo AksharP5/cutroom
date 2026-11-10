@@ -143,12 +143,12 @@ export function createViewport(
 
   function zoom(target: number, anchor: number, animate: boolean) {
     const next = clampPpf(target, fit);
-    if (next === ppf) return;
+    if (next === ppf && (next !== fit || scroll === 0)) return;
     const from = animate ? shown() : null;
     stop();
     const frame = (exact + anchor) / ppf;
     write(next);
-    scrollTo(scrollForAnchor(frame, anchor, next));
+    scrollTo(next === fit ? 0 : scrollForAnchor(frame, anchor, next));
     onChange(animate);
     if (from) ease(from);
   }

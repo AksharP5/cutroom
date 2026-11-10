@@ -1,6 +1,71 @@
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+test("Fit returns a scrolled timeline to frame zero with whole ruler labels", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fit the whole timeline" },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      'data-duration="12"',
+      'data-duration="120"',
+    ),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const slider = timeline.getByRole("slider", { name: "Zoom" });
+  await expect(slider).toBeVisible();
+  await page.getByRole("region", { name: "Viewer" }).click();
+  for (let step = 0; step < 5; step++) await page.keyboard.press("Control+=");
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("013000");
+  await page.keyboard.press("Enter");
+  await page.getByRole("region", { name: "Viewer" }).click();
+  const scroller = timeline.locator(".tl-scroll");
+  await expect
+    .poll(() => scroller.evaluate((element) => element.scrollLeft))
+    .toBeGreaterThan(0);
+  const zoom = await slider.getAttribute("aria-valuenow");
+  await page.keyboard.press("Shift+Z");
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  await expect
+    .poll(() => scroller.evaluate((element) => element.scrollLeft))
+    .toBe(0);
+  await expect
+    .poll(() =>
+      timeline
+        .locator(".tl-tick-label")
+        .evaluateAll((labels) =>
+          labels
+            .filter((label) => Number(getComputedStyle(label).opacity) > 0)
+            .every(
+              (label) =>
+                label.getBoundingClientRect().right <=
+                document.documentElement.clientWidth,
+            ),
+        ),
+    )
+    .toBe(true);
+  await page.keyboard.press("Shift+Z");
+  await expect(slider).toHaveAttribute("aria-valuenow", zoom!);
+  await slider.dblclick();
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  await expect
+    .poll(() => scroller.evaluate((element) => element.scrollLeft))
+    .toBe(0);
+});
 
 test("the new editor's timeline scrubs, selects clips, and zooms at the cursor", async ({
   page,

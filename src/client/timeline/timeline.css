@@ -183,9 +183,13 @@
   /*
     A timecode cut off by the track headers reads as another time, so a label is gone once its
     left edge reaches them. --cut is the last frame whose label would be cut, written on
-    .tl-tick-labels alone so a scroll restyles only the labels.
+    .tl-tick-labels alone so a scroll restyles only the labels. The right edge also leaves
+    room for a whole label instead of showing a misleading partial timecode.
   */
-  opacity: clamp(0, (var(--f) - var(--cut, -1)) * 1000, 1);
+  opacity: min(
+    clamp(0, (var(--f) - var(--cut, -1)) * 1000, 1),
+    clamp(0, (var(--cut-end) - var(--f)) * 1000, 1)
+  );
 }
 .tl-range {
   position: absolute;

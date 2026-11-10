@@ -43,7 +43,7 @@ export const clipName = (clip: Clip) =>
 /** The closest zoom: one frame is this many pixels wide. */
 export const MAX_PPF = 32;
 /** Ruler labels never sit closer than this many pixels. */
-const LABEL_SPACING = 96;
+export const LABEL_SPACING = 96;
 /** Room kept after the last frame when the whole timeline is fitted. */
 const FIT_TAIL = 32;
 
