@@ -184,8 +184,6 @@ export class ClaudeRuntime implements AgentRuntime {
   }
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
-    if (claudeToolPermissions.allowedTools.includes(tool))
-      return { behavior: "allow", updatedInput: input };
     // "Write index.html?" rather than the tool's internal name.
     const target = toolTarget(input, this.options.cwd);
     const { verb, object } = describeTool({ tool, target }, "ask");

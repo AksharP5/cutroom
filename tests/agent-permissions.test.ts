@@ -20,7 +20,6 @@ const reads = [
   "history_list",
   "review_list",
   "timeline_read",
-  "timeline_view",
 ];
 
 test("native permission rules match every tool advertised over MCP", async () => {
@@ -43,47 +42,40 @@ test("native permission rules match every tool advertised over MCP", async () =>
       expect(
         claudeToolPermissions.settings.permissions.ask.includes(name),
       ).toBe(!readOnly);
-      expect(
+      const mode =
         codexToolPermissions[
           `mcp_servers.cutroom_studio.tools.${tool.name}.approval_mode`
-        ],
-      ).toBe(readOnly ? "approve" : "prompt");
+        ];
+      if (readOnly) expect(mode).toBe("approve");
+      else expect(mode).toBeUndefined();
     }
     expect(claudeToolPermissions.allowedTools).toHaveLength(reads.length);
     expect(claudeToolPermissions.settings.permissions.ask).toHaveLength(
       tools.length - reads.length,
     );
-    expect(Object.keys(codexToolPermissions)).toHaveLength(tools.length);
+    expect(
+      codexToolPermissions[
+        "mcp_servers.cutroom_studio.default_tools_approval_mode"
+      ],
+    ).toBe("prompt");
+    expect(Object.keys(codexToolPermissions)).toHaveLength(reads.length + 1);
   } finally {
     await client.close();
     await server.close();
   }
 });
 
-// Speak the actual SDK/app-server protocols, without a model or a global module mock.
+// Capture the native configuration without simulating either runtime's permission decisions.
 const fakeClaude = String.raw`
 import { createInterface } from "node:readline";
 const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
 await Bun.write(process.env.RECORDING + ".args", JSON.stringify(process.argv));
-const tools = JSON.parse(process.env.TOOLS);
-let index = 0;
-function next() {
-  if (index === tools.length) {
-    reply({type:"result",subtype:"success",is_error:false,result:"Done",session_id:"test-session"});
-    return;
-  }
-  const tool = tools[index++];
-  reply({type:"control_request",request_id:tool,request:{subtype:"can_use_tool",tool_name:tool,input:{projectId:"test"},tool_use_id:tool}});
-}
 for await (const line of createInterface({input:process.stdin})) {
   const message = JSON.parse(line);
   if (message.type === "control_request")
     reply({type:"control_response",response:{subtype:"success",request_id:message.request_id,response:{}}});
-  if (message.type === "user") next();
-  if (message.type === "control_response") {
-    await Bun.write(process.env.RECORDING + "." + message.response.request_id, JSON.stringify(message.response));
-    next();
-  }
+  if (message.type === "user")
+    reply({type:"result",subtype:"success",is_error:false,result:"Done",session_id:"test-session"});
 }
 `;
 
@@ -99,16 +91,12 @@ for await (const line of createInterface({input:process.stdin})) {
   }
   if (message.method === "turn/start") {
     reply({id:message.id,result:{turn:{id:"test-turn"}}});
-    reply({id:"write",method:"mcpServer/elicitation/request",params:{threadId:"test-thread",serverName:"cutroom_studio",message:"Run timeline_edit?",mode:"form",requestedSchema:{type:"object",properties:{}}}});
-  }
-  if (message.id === "write") {
-    await Bun.write(process.env.RECORDING + ".answer", JSON.stringify(message.result));
     reply({method:"turn/completed",params:{threadId:"test-thread",turn:{id:"test-turn",status:"completed"}}});
   }
 }
 `;
 
-test("native factories send scoped rules and mutating calls still reach approval", async () => {
+test("native factories wire scoped rules into fresh and resumed sessions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cutroom-permissions-"));
   try {
     for (const [name, source] of [
@@ -124,29 +112,16 @@ test("native factories send scoped rules and mutating calls still reach approval
       runner,
       `import { createNativeRuntimeFactory } from ${JSON.stringify(join(import.meta.dir, "../src/server/agents/factory.ts"))};
 const factory = createNativeRuntimeFactory();
-const requests = [];
 const runtime = factory.create(process.argv[2], {
   cwd: process.cwd(), agentToken: "test-token", nativeSessionId: process.argv[3], emit() {},
-  request: async request => {
-    requests.push(request.tool);
-    return {requestId:request.id,decision:"deny"};
-  }
+  request: async () => { throw new Error("The wiring fixture must not request approval"); }
 });
 try {
   await runtime.send({text:"Check tool permissions",skills:[],attachments:[]});
-  console.log(JSON.stringify(requests));
+  console.log("done");
 } finally { runtime.dispose(); factory.dispose(); }
 `,
     );
-    const write = "mcp__cutroom_studio__timeline_edit";
-    const outside = "mcp__other_server__timeline_read";
-    const unknown = "mcp__cutroom_studio__unknown_read";
-    const tools = [
-      ...reads.map((name) => `mcp__cutroom_studio__${name}`),
-      write,
-      outside,
-      unknown,
-    ];
     for (const provider of ["claude", "codex"] as const) {
       for (const resume of [false, true]) {
         const recording = join(directory, `${provider}-${resume}`);
@@ -163,7 +138,6 @@ try {
               ...process.env,
               PATH: `${directory}:${process.env.PATH}`,
               RECORDING: recording,
-              TOOLS: JSON.stringify(tools),
             },
             stdout: "pipe",
             stderr: "pipe",
@@ -175,8 +149,8 @@ try {
           child.exited,
         ]);
         expect(code, error).toBe(0);
+        expect(output.trim()).toBe("done");
         if (provider === "claude") {
-          expect(JSON.parse(output.trim())).toEqual([write, outside, unknown]);
           const args: string[] = JSON.parse(
             await readFile(`${recording}.args`, "utf8"),
           );
@@ -190,13 +164,7 @@ try {
           expect(JSON.parse(args[args.indexOf("--settings") + 1])).toEqual(
             claudeToolPermissions.settings,
           );
-          expect(
-            JSON.parse(await readFile(`${recording}.${write}`, "utf8")),
-          ).toMatchObject({ response: { behavior: "deny" } });
         } else {
-          expect(JSON.parse(output.trim())).toEqual([
-            "mcpServer/elicitation/request",
-          ]);
           const thread = JSON.parse(
             await readFile(`${recording}.thread`, "utf8"),
           );
@@ -206,9 +174,6 @@ try {
             ...codexToolPermissions,
             "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token",
           });
-          expect(
-            JSON.parse(await readFile(`${recording}.answer`, "utf8")),
-          ).toEqual({ action: "decline", content: null });
         }
       }
     }

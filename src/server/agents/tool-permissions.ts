@@ -20,9 +20,14 @@ export const claudeToolPermissions = {
   },
 } satisfies Pick<Options, "allowedTools" | "settings">;
 
-export const codexToolPermissions = Object.fromEntries(
-  tools.map(({ name, readOnly }) => [
-    `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
-    readOnly ? "approve" : "prompt",
-  ]),
-);
+export const codexToolPermissions: Record<string, string> = {
+  "mcp_servers.cutroom_studio.default_tools_approval_mode": "prompt",
+  ...Object.fromEntries(
+    tools
+      .filter((tool) => tool.readOnly)
+      .map(({ name }) => [
+        `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
+        "approve",
+      ]),
+  ),
+};

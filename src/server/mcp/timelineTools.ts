@@ -67,7 +67,8 @@ export function registerTimelineTools(
     {
       description: "Render one timeline frame as an image.",
       inputSchema: { ...input, frame: z.number().int().nonnegative() },
-      annotations: readOnly,
+      // Rendering executes composition JavaScript on Cutroom's origin.
+      annotations: { ...readOnly, readOnlyHint: false },
     },
     async ({ projectId, composition, frame }): Promise<CallToolResult> => {
       const failed = (text: string): CallToolResult => ({

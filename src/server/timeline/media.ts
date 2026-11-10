@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Project } from "../../shared/project";
 import { localMediaPath } from "../../shared/media";
 import { projectPath } from "../projects/store";
+import { localMediaInputOptions } from "../media/input";
 
 const ProbeSchema = z.object({
   streams: z.array(z.object({ codec_type: z.string().optional() })).default([]),
@@ -29,6 +30,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       ffprobe,
       "-v",
       "error",
+      ...localMediaInputOptions,
       "-show_entries",
       "format=duration:stream=codec_type",
       "-of",
