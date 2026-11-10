@@ -14,6 +14,7 @@ import {
   settingsOf,
 } from "../src/server/timeline/composition";
 import type { CompositionScope } from "../src/server/timeline/composition";
+import { countingIds } from "./clip-ids";
 
 const talk = `<video id="talk" src="talk.mp4" muted data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="0"></video>`;
 const voice = `<audio id="voice" src="talk.mp4" data-link="lk-1" data-sync-origin="lk-1" data-start="0" data-duration="6" data-media-start="1" data-track-index="2"></audio>`;
@@ -45,7 +46,10 @@ const edit = (
     applyAll(
       parsed.timeline,
       commands.map((command) => CommandSchema.parse(command)),
-      { onCreate: (id, origin) => origins.set(id, origin) },
+      {
+        onCreate: (id, origin) => origins.set(id, origin),
+        newId: countingIds,
+      },
     ),
   );
   const output = patchComposition(parsed, timeline, origins);

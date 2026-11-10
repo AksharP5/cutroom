@@ -86,7 +86,9 @@ export const TimelineSchema = z.object({
 export const InsertClipSchema = z.object({
   id: clipId
     .optional()
-    .describe("Element id; derived from the file name when omitted"),
+    .describe(
+      "Element id, never used before in this project; when omitted, the file name and a random suffix",
+    ),
   kind: z.enum(["video", "audio", "image"]),
   src: z.string().min(1).max(2_000).describe("Project-relative media path"),
   duration: frames.describe("Length on the timeline in frames"),
@@ -104,6 +106,13 @@ export const InsertClipSchema = z.object({
 });
 
 const clipIds = z.array(clipId).min(1).max(10_000);
+/** Ids for the pieces a command cuts off, so a caller knows a new clip's id before it exists. */
+const pieceIds = z
+  .record(clipId, z.array(clipId).min(1).max(10_000))
+  .optional()
+  .describe(
+    "Ids for the pieces this command cuts off, keyed by the id of the clip they are cut from, in the order the command cuts them. A ripple through several ranges cuts a spanning clip once per range, last range first. Each id must never have been used in this project, even by a clip that was deleted or undone; any other id is refused with duplicate_id. Pieces without one get a new random id.",
+  );
 
 export const CommandSchema = z.discriminatedUnion("type", [
   z
@@ -134,6 +143,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Keep the clip's start; cut and ripple participating tracks by the exact length change",
         ),
+      ids: pieceIds,
     })
     .describe(
       "Trim one edge of a clip. Every linked partner's same edge moves by the same number of frames.",
@@ -147,6 +157,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Clips to cut; defaults to every clip under `at` on unlocked auto-select tracks",
         ),
+      ids: pieceIds,
     })
     .describe("Razor clips and their linked partners at a frame."),
   z
@@ -159,6 +170,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Remove the selected time ranges across edited and unlocked auto-select tracks, cutting overlapping clips and closing the full gap",
         ),
+      ids: pieceIds,
     })
     .describe("Lift or ripple delete clips and their linked partners."),
   z
@@ -173,6 +185,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       track: frame,
       at: frame,
       clip: InsertClipSchema,
+      ids: pieceIds,
     })
     .describe("Add a media clip."),
   z

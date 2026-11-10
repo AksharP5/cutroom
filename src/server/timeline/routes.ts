@@ -20,6 +20,7 @@ import type {
   TimelineSettings,
   TimelineView,
 } from "../../shared/timeline/schema";
+import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
 import { projectPath, readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
@@ -107,6 +108,8 @@ export function createTimelineRoutes(store: ProjectStore) {
         onCreate: (id, origin) => origins.set(id, origin),
         mediaLengths: lengths,
         silentMedia: inserted.silent,
+        // No new clip takes an id the project used before, even one undone since.
+        retired: await usedClipIds(project),
       }),
     );
     const html = patchComposition(current.parsed, timeline, origins);
@@ -125,6 +128,13 @@ export function createTimelineRoutes(store: ProjectStore) {
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
+    // Recorded before the write, so an id is spent even if the write fails.
+    await recordClipIds(
+      project,
+      [current.parsed.timeline, timeline].flatMap(({ clips }) =>
+        clips.map((clip) => clip.id),
+      ),
+    );
     const files =
       html === current.source.content
         ? []

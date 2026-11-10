@@ -26,6 +26,8 @@ import {
   parseSourceDocument,
   patchElementInHtml,
 } from "@hyperframes/studio-server";
+import { randomClipId } from "../../shared/timeline/apply";
+import { recordClipIds, usedClipIds } from "../projects/ids";
 import { projectPath, readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
 import { localMediaPath } from "../../shared/media";
@@ -310,7 +312,27 @@ export function createTranscriptService(
             transcript,
             parseSourceDocument(source.content).document,
           );
-        const after = applyTranscriptCuts(source.content, transcript, nextIds);
+        // Pieces take ids no clip in the project has had, as timeline edits do.
+        const used = new Set([
+          ...(await usedClipIds(project)),
+          ...[
+            ...parseSourceDocument(source.content).document.querySelectorAll(
+              "[id]",
+            ),
+          ].map((element) => element.id),
+        ]);
+        const after = applyTranscriptCuts(
+          source.content,
+          transcript,
+          nextIds,
+          (base) => {
+            const id = randomClipId(base, null, used);
+            used.add(id);
+            return id;
+          },
+        );
+        // The original piece and every old piece leave the file, so their ids are spent too.
+        await recordClipIds(project, used);
         transcript.cutWordIds = nextIds;
         await store.writeDocument(project, document, [
           {

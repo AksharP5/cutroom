@@ -6,6 +6,8 @@ import { ProjectDocumentSchema, TranscriptSchema } from "../src/shared/project";
 import { NotebookSchema } from "../src/shared/review";
 import { createTranscriptService } from "../src/server/transcript/service";
 import { listMedia } from "../src/server/projects/media";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
 
 const source = `<!doctype html><html><head><style>#footage{position:absolute;width:100%;height:100%;object-fit:cover}</style></head><body><main data-composition-id="main" data-width="1920" data-height="1080" data-duration="14"><video id="footage" class="clip" src="footage.mp4" data-start="0" data-duration="10" data-track-index="0" data-media-start="2"></video><video id="following" class="clip" src="footage.mp4" data-start="10" data-duration="4" data-track-index="0"></video><div id="other-track" class="clip" data-start="8" data-duration="2" data-track-index="1">Overlay</div></main></body></html>`;
@@ -69,6 +71,13 @@ test("script cuts alter real media offsets, ripple one lane, restore, and share 
     expect(document.querySelector("style")?.textContent).toContain(
       `#${clips[1]!.id}`,
     );
+    // The new piece's id is one no clip has had, and the project's id list keeps it spent.
+    expect(clips[1]!.id).toMatch(/-cut-[a-z0-9]{6}$/);
+    expect(
+      JSON.parse(
+        await readFile(join(project.path, ".cutroom/ids.json"), "utf8"),
+      ).ids,
+    ).toContain(clips[1]!.id);
     expect(await readFile(join(project.path, "footage.mp4"), "utf8")).toBe(
       "source bytes stay unchanged",
     );
@@ -126,6 +135,62 @@ test("script cuts alter real media offsets, ripple one lane, restore, and share 
         .querySelector("[data-composition-id]")
         ?.getAttribute("data-duration"),
     ).toBe("14");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a script cut that removes the original piece spends its id, so restoring the word never duplicates it", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route("/api/cutroom", createTimelineRoutes(fixture.store));
+  try {
+    const project = await fixture.store.create({ name: "Spent ids" });
+    await writeFile(join(project.path, "index.html"), source);
+    await writeFile(join(project.path, "footage.mp4"), "bytes");
+    const transcript = TranscriptSchema.parse(
+      await (
+        await fixture.request(
+          `/projects/${project.id}/transcripts/import`,
+          "POST",
+          { mediaPath: "footage.mp4", elementId: "footage", words },
+        )
+      ).json(),
+    );
+    const edit = (wordIds: string[], action: "cut" | "restore") =>
+      fixture.request(
+        `/projects/${project.id}/transcripts/${transcript.id}/cuts`,
+        "POST",
+        { wordIds, action },
+      );
+    // Cutting the first word removes the piece that carries the id `footage`.
+    expect((await edit(["one"], "cut")).status).toBe(200);
+    const html = () => readFile(join(project.path, "index.html"), "utf8");
+    expect(await html()).not.toContain('id="footage"');
+
+    // A timeline cut cannot give that id to another clip.
+    const { revision } = TimelineViewSchema.parse(
+      await (await fixture.request(`/projects/${project.id}/timeline`)).json(),
+    );
+    const named = await fixture.request(
+      `/projects/${project.id}/commands`,
+      "POST",
+      {
+        expectedRevision: revision,
+        commands: [
+          {
+            type: "split",
+            at: 360,
+            clipIds: ["following"],
+            ids: { following: ["footage"] },
+          },
+        ],
+      },
+    );
+    expect(named.status).toBe(422);
+
+    // Restoring the word brings `footage` back, and it is the only clip with that id.
+    expect((await edit(["one"], "restore")).status).toBe(200);
+    expect((await html()).match(/id="footage"/g)).toHaveLength(1);
   } finally {
     await fixture.close();
   }
