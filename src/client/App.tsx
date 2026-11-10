@@ -16,8 +16,6 @@ import {
   Folders,
   GearSix,
   Plus,
-  SidebarSimple,
-  TerminalWindow,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import { ProjectSchema, type Project } from "../shared/project";
@@ -128,10 +126,15 @@ export function App() {
   const newNotes = projectDocument.items.filter(
     (item) => item.review.status === "open",
   );
+  // The Review badge counts notes that wait on you: unsent, done, or asking.
+  const waiting = projectDocument.items.filter((item) =>
+    ["open", "done", "blocked"].includes(item.review.status),
+  ).length;
   const workingIndex = projectDocument.items.findIndex(
     (item) => item.review.status === "working",
   );
   const tabs = useRef<HTMLElement>(null);
+  const lastPanel = useRef<"agent" | "notebook">("agent");
   const indicator = useRef<HTMLSpanElement>(null);
   const activeTab = chatVisible ? 0 : panel === "review" ? 1 : 2;
   const [dialog, setDialog] = useState<
@@ -141,6 +144,8 @@ export function App() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [toastLeaving, setToastLeaving] = useState(false);
+  useEffect(() => setToastLeaving(false), [error]);
   const attachmentResolve = useRef<{
     projectId: string;
     resolve: (path: string | null) => void;
@@ -160,14 +165,16 @@ export function App() {
     if (!nav || !bar || !workPanel) return;
     const place = () => {
       const tab = nav.querySelectorAll("button")[activeTab];
-      if (tab)
-        bar.style.transform = `translateX(${tab.offsetLeft}px) scaleX(${tab.offsetWidth / 100})`;
+      if (!tab) return;
+      // The bar spans the label, inside the padding that keeps the focus ring clear.
+      const inset = parseFloat(getComputedStyle(tab).paddingLeft);
+      bar.style.transform = `translateX(${tab.offsetLeft + inset}px) scaleX(${(tab.offsetWidth - inset * 2) / 100})`;
     };
     place();
     const ready = requestAnimationFrame(() => (bar.dataset.ready = ""));
     void document.fonts.ready.then(place);
     return () => cancelAnimationFrame(ready);
-  }, [activeTab, workPanel, project?.id, newNotes.length]);
+  }, [activeTab, workPanel, project?.id, waiting]);
 
   const loadProjects = useCallback(async () => {
     const request = ++projectListRequest.current;
@@ -226,6 +233,10 @@ export function App() {
         ) {
           useWorkspace.setState((state) => ({
             mediaRevision: state.mediaRevision + 1,
+            fileChanges: {
+              ...state.fileChanges,
+              [payload.changed]: Date.now(),
+            },
           }));
           return;
         }
@@ -345,39 +356,24 @@ export function App() {
         </div>
         <div className="toast-slot">
           {error && (
-            <div className="toast" data-tone="error" role="alert">
+            <div
+              className="toast"
+              data-tone="error"
+              data-leaving={toastLeaving || undefined}
+              role="alert"
+              onTransitionEnd={(event) => {
+                if (toastLeaving && event.propertyName === "opacity") {
+                  setToastLeaving(false);
+                  setError("");
+                }
+              }}
+            >
               <span title={error}>{error}</span>
-              <button onClick={() => setError("")}>Dismiss</button>
+              <button onClick={() => setToastLeaving(true)}>Dismiss</button>
             </div>
           )}
         </div>
         <div className="header-end">
-          {project && (
-            <>
-              <button
-                className={`icon-button ${notebookVisible ? "active" : ""}`}
-                aria-label="Toggle notebook"
-                aria-pressed={notebookVisible}
-                onClick={() =>
-                  setWorkPanel((value) =>
-                    value === "notebook" ? null : "notebook",
-                  )
-                }
-              >
-                <SidebarSimple />
-              </button>
-              <button
-                className={`icon-button ${chatVisible ? "active" : ""}`}
-                aria-label="Toggle agent chat"
-                aria-pressed={chatVisible}
-                onClick={() =>
-                  setWorkPanel((value) => (value === "agent" ? null : "agent"))
-                }
-              >
-                <TerminalWindow />
-              </button>
-            </>
-          )}
           <button
             className="icon-button"
             aria-label="Settings"
@@ -428,9 +424,7 @@ export function App() {
                 }}
               >
                 Review
-                {newNotes.length > 0 && (
-                  <span className="note-count">{newNotes.length}</span>
-                )}
+                {waiting > 0 && <span className="note-count">{waiting}</span>}
               </button>
               <button
                 className={
@@ -540,7 +534,9 @@ export function App() {
                   ? null
                   : {
                       number: workingIndex + 1,
-                      total: projectDocument.items.length,
+                      total: projectDocument.items.filter(
+                        (item) => item.review.status !== "withdrawn",
+                      ).length,
                     }
               }
               pickAttachment={() =>
@@ -556,7 +552,16 @@ export function App() {
           </section>
           <section className="editor-workspace" aria-label="Video editor">
             <EditorToolsContext.Provider
-              value={{ mode, setMode, focusEditor: () => setWorkPanel(null) }}
+              value={{
+                mode,
+                setMode,
+                focused: !workPanel,
+                focusEditor: () =>
+                  setWorkPanel((value) => {
+                    if (value) lastPanel.current = value;
+                    return value ? null : lastPanel.current;
+                  }),
+              }}
             >
               <EditorBoundary key={project.id}>
                 <Suspense

@@ -56,13 +56,24 @@ const targetKeys = [
   "description",
 ] as const;
 
-/** The first line of the input field that names what a tool call acts on. */
-export function toolTarget(input: unknown): string | undefined {
+/**
+ * The first line of the input field that names what a tool call acts on, with paths inside
+ * the project written relative to it: `/home/me/cut/index.html` reads as `index.html`.
+ */
+export function toolTarget(
+  input: unknown,
+  project: string,
+): string | undefined {
   if (!input || typeof input !== "object") return undefined;
+  const root = project.replace(/\/+$/, "");
   for (const key of targetKeys) {
     const value: unknown = Reflect.get(input, key);
-    if (typeof value === "string" && value.trim())
-      return value.trim().split("\n", 1)[0]?.slice(0, 240);
+    if (typeof value !== "string" || !value.trim()) continue;
+    const line = value.trim().split("\n", 1)[0] ?? "";
+    return (line === root ? "." : line.replaceAll(`${root}/`, "")).slice(
+      0,
+      240,
+    );
   }
   return undefined;
 }

@@ -26,7 +26,7 @@ import {
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
-import { describeTool } from "../toolRow";
+import { describeTool, hiddenTools } from "../../shared/toolRow";
 import { useWorkspace } from "../workspace";
 
 const sessionListSchema = z.object({
@@ -100,7 +100,10 @@ function applyConversationEvents(
 }
 
 const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
-  const { verb, object } = describeTool(message);
+  const { verb, object } = describeTool(
+    message,
+    message.status === "streaming" ? "active" : "done",
+  );
   return (
     <details className="chat-tool" data-status={message.status}>
       <summary title={message.tool}>
@@ -110,7 +113,13 @@ const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
           <CaretRight className="chat-tool-caret" size={10} weight="bold" />
         )}
         <span className="chat-tool-verb">{verb}</span>
-        <span className="chat-tool-target">{object}</span>
+        {/* Long paths lose their start, so the file name stays visible. */}
+        <span
+          className="chat-tool-target"
+          data-path={object.includes("/") || undefined}
+        >
+          <bdi>{object}</bdi>
+        </span>
         {message.status === "failed" && (
           <span className="chat-tool-note">Failed</span>
         )}
@@ -158,6 +167,7 @@ function RequestCard({
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [showInput, setShowInput] = useState(false);
   async function respond(decision: "allow" | "deny") {
     setSending(true);
     setError("");
@@ -194,19 +204,24 @@ function RequestCard({
         request.kind === "question" ? "Agent question" : "Permission request"
       }
     >
-      <div className="agent-request-line">
-        {request.kind === "approval" ? (
-          <details>
-            <summary className="agent-request-title" title={request.tool}>
+      {request.kind === "approval" ? (
+        <>
+          <div className="agent-request-line">
+            <button
+              className="agent-request-title"
+              title={request.title}
+              aria-expanded={showInput}
+              onClick={() => setShowInput((value) => !value)}
+            >
               {request.title}
-            </summary>
-            <pre>{JSON.stringify(request.input, null, 2)}</pre>
-          </details>
-        ) : (
-          <span className="agent-request-title">{request.title}</span>
-        )}
-        {request.kind === "approval" && actions}
-      </div>
+            </button>
+            {actions}
+          </div>
+          {showInput && <pre>{JSON.stringify(request.input, null, 2)}</pre>}
+        </>
+      ) : (
+        <strong className="agent-question-title">{request.title}</strong>
+      )}
       {request.questions?.map((question) => (
         <fieldset key={question.id}>
           <legend>{question.question}</legend>
@@ -257,10 +272,7 @@ function RequestCard({
         </fieldset>
       ))}
       {request.kind === "question" && (
-        <div className="agent-request-line">
-          <span className="chat-toolbar-space" />
-          {actions}
-        </div>
+        <div className="agent-question-actions">{actions}</div>
       )}
       {error && (
         <p className="inline-error" role="alert">
@@ -277,16 +289,25 @@ const ConversationMessages = memo(function ConversationMessages({
   discovering,
   messagesRef,
   followRef,
+  onRespond,
 }: {
   session: AgentSession | null;
   capabilities: AgentCapabilities | null;
   discovering: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   followRef: RefObject<boolean>;
+  onRespond: (
+    decision: "allow" | "deny",
+    answers?: Record<string, string | string[]>,
+  ) => Promise<void>;
 }) {
-  // Consecutive tool calls read as one block of verb rows.
+  // Consecutive tool calls read as one block of verb rows. Empty replies and tool
+  // lookups say nothing, so they neither show nor split a block.
   const blocks: AgentMessage[][] = [];
   for (const message of session?.messages ?? []) {
+    if (message.role === "tool" && hiddenTools.has(message.tool ?? ""))
+      continue;
+    if (message.role !== "tool" && !message.text.trim()) continue;
     const last = blocks.at(-1);
     if (message.role === "tool" && last?.[0]?.role === "tool")
       last.push(message);
@@ -336,6 +357,13 @@ const ConversationMessages = memo(function ConversationMessages({
             ))
           ),
         )}
+      {session?.pendingRequest?.kind === "question" && (
+        <RequestCard
+          key={session.pendingRequest.id}
+          request={session.pendingRequest}
+          onRespond={onRespond}
+        />
+      )}
     </div>
   );
 });
@@ -577,6 +605,14 @@ export function ChatPanel({
     };
   }, [sessionId, loadSessions]);
 
+  // A new question always comes into view; it is waiting on you.
+  const pendingQuestion =
+    session?.pendingRequest?.kind === "question"
+      ? session.pendingRequest.id
+      : null;
+  useEffect(() => {
+    if (pendingQuestion) follow.current = true;
+  }, [pendingQuestion]);
   useEffect(() => {
     if (follow.current && messages.current)
       messages.current.scrollTop = messages.current.scrollHeight;
@@ -842,8 +878,9 @@ export function ChatPanel({
         discovering={discovering}
         messagesRef={messages}
         followRef={follow}
+        onRespond={respondToRequest}
       />
-      {session?.pendingRequest && (
+      {session?.pendingRequest?.kind === "approval" && (
         <RequestCard
           key={session.pendingRequest.id}
           request={session.pendingRequest}

@@ -211,25 +211,17 @@ test("review and agent drafts survive workspace tabs, panels, and resizing", asy
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await expect(note).toHaveValue(reviewDraft);
 
-  await page
-    .getByRole("button", { name: "Toggle notebook", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await page.setViewportSize({ width: 956, height: 1050 });
-  await page
-    .getByRole("button", { name: "Toggle notebook", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await expect(note).toHaveValue(reviewDraft);
   await expectOnScreen(note, page);
   await page.getByRole("button", { name: "Agent", exact: true }).click();
   await expect(composer).toHaveValue(agentDraft);
   await expectOnScreen(composer, page);
-  await page
-    .getByRole("button", { name: "Toggle agent chat", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await page.setViewportSize({ width: 1720, height: 1050 });
-  await page
-    .getByRole("button", { name: "Toggle agent chat", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Focus editor", exact: true }).click();
   await page
     .getByRole("button", { name: "Toggle project files", exact: true })
     .click();

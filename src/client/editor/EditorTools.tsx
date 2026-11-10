@@ -10,6 +10,8 @@ import type { EditorMode } from "../../shared/editor";
 export const EditorToolsContext = createContext<{
   mode: EditorMode;
   setMode: (mode: EditorMode) => void;
+  /** The work panels are hidden so the editor has the whole window. */
+  focused: boolean;
   focusEditor: () => void;
 } | null>(null);
 
@@ -52,6 +54,7 @@ export function EditorTools() {
         className="icon-button focus-editor"
         aria-label="Focus editor"
         title="Focus editor"
+        aria-pressed={tools.focused}
         onClick={tools.focusEditor}
       >
         <ArrowsOutSimple />

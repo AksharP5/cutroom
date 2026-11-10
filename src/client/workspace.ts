@@ -22,6 +22,8 @@ export const useWorkspace = create(() => ({
   exporting: false,
   /** Bumped when files other than compositions or `cutroom.json` change on disk. */
   mediaRevision: 0,
+  /** When each project file last changed on disk, so a replaced file loads afresh. */
+  fileChanges: {} as Record<string, number>,
   /** Read from the open composition's root once its preview loads. */
   composition: null as {
     fps: number;

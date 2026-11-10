@@ -12,8 +12,9 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
+import { describeTool } from "../../shared/toolRow";
 import { InputQueue } from "./input-queue";
-import { agentPrompt, completeMessage } from "./runtime";
+import { agentPrompt, completeMessage, toolCalls } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const authStatusSchema = z.object({
@@ -139,10 +140,7 @@ export class ClaudeRuntime implements AgentRuntime {
   private active?: { resolve: () => void; reject: (error: Error) => void };
   private currentMessageId?: string;
   private readonly text = new Map<string, string>();
-  private readonly tools = new Map<
-    string,
-    { name: string; target: string | undefined }
-  >();
+  private readonly tools: ReturnType<typeof toolCalls>;
   private nativeSessionId?: string;
   private hasAssistantText = false;
   private disposed = false;
@@ -153,6 +151,7 @@ export class ClaudeRuntime implements AgentRuntime {
     private readonly studioMcp: StudioMcp,
   ) {
     this.nativeSessionId = options.nativeSessionId;
+    this.tools = toolCalls(options.cwd);
   }
 
   private ensureQuery() {
@@ -183,6 +182,14 @@ export class ClaudeRuntime implements AgentRuntime {
   }
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
+    // "Write index.html?" rather than the tool's internal name.
+    const ask = (name: string, value: unknown) => {
+      const { verb, object } = describeTool(
+        { tool: name, target: toolTarget(value, this.options.cwd) },
+        "ask",
+      );
+      return `${[verb, object].filter(Boolean).join(" ")}?`;
+    };
     const questions =
       tool === "AskUserQuestion"
         ? questionInputSchema.safeParse(input)
@@ -195,7 +202,7 @@ export class ClaudeRuntime implements AgentRuntime {
         context.decisionReason ??
         (tool === "AskUserQuestion"
           ? "Claude has a question"
-          : `Allow ${tool}?`),
+          : ask(tool, input)),
       input,
       ...(questions?.success
         ? {
@@ -356,20 +363,9 @@ export class ClaudeRuntime implements AgentRuntime {
       }
       for (const block of message.message.content) {
         if (block.type !== "tool_use") continue;
-        const target = toolTarget(block.input);
-        this.tools.set(block.id, { name: block.name, target });
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              JSON.stringify(block.input, null, 2).slice(-32_000),
-              "tool",
-              block.id,
-              block.name,
-              target,
-            ),
-            status: "streaming",
-          },
+          message: this.tools.start(block.id, block.name, block.input),
         });
       }
       return;
@@ -384,20 +380,13 @@ export class ClaudeRuntime implements AgentRuntime {
           typeof block.content === "string"
             ? block.content
             : JSON.stringify(block.content ?? "", null, 2);
-        const tool = this.tools.get(block.tool_use_id);
-        this.tools.delete(block.tool_use_id);
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              text.slice(-32_000),
-              "tool",
-              block.tool_use_id,
-              tool?.name ?? "Tool",
-              tool?.target,
-            ),
-            status: block.is_error ? "failed" : "complete",
-          },
+          message: this.tools.finish(
+            block.tool_use_id,
+            text,
+            block.is_error === true,
+          ),
         });
       }
       return;

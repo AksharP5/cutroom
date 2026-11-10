@@ -15,7 +15,8 @@ export function StatusBar({
   const composition = useWorkspace((state) => state.composition);
   const exporting = useWorkspace((state) => state.exporting);
   const agent = useWorkspace((state) => state.agent);
-  const accepted = items.filter((item) => item.review.status === "accepted");
+  const queue = items.filter((item) => item.review.status !== "withdrawn");
+  const accepted = queue.filter((item) => item.review.status === "accepted");
   const folder = project.path.split(/[\\/]/).filter(Boolean).at(-1);
   return (
     <footer className="status-bar">
@@ -35,9 +36,12 @@ export function StatusBar({
           {composition.width} x {composition.height}
         </span>
       )}
-      {items.length > 0 && (
-        <button onClick={onReview} title="Accepted notes of all notes">
-          Queue {accepted.length}/{items.length}
+      {queue.length > 0 && (
+        <button
+          onClick={onReview}
+          title="Accepted notes of all notes not withdrawn"
+        >
+          Queue {accepted.length}/{queue.length}
         </button>
       )}
       {exporting && <span>Exporting</span>}

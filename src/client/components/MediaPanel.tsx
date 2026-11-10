@@ -68,14 +68,28 @@ function MediaRow({
 }) {
   const fps = useFps();
   const [duration, setDuration] = useState<number | null>(null);
-  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}`;
+  // Decoders start only for rows that have been on screen.
+  const row = useRef<HTMLLIElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const element = row.current;
+    if (!element || seen) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) setSeen(true);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [seen]);
+  const changed = useWorkspace((state) => state.fileChanges[path]);
+  useEffect(() => setDuration(null), [changed]);
+  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${changed}` : ""}`;
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
   };
   return (
-    <li className="media-row" title={path} data-kind={kind}>
+    <li className="media-row" title={path} data-kind={kind} ref={row}>
       <span className="media-thumb" aria-hidden="true">
-        {kind === "video" && (
+        {seen && kind === "video" && (
           <video
             src={`${src}#t=0.1`}
             preload="metadata"
@@ -87,11 +101,13 @@ function MediaRow({
         {kind === "audio" && (
           <>
             <Waveform size={14} />
-            <audio
-              src={src}
-              preload="metadata"
-              onLoadedMetadata={(event) => measure(event.currentTarget)}
-            />
+            {seen && (
+              <audio
+                src={src}
+                preload="metadata"
+                onLoadedMetadata={(event) => measure(event.currentTarget)}
+              />
+            )}
           </>
         )}
         {kind === "image" && <img src={src} alt="" loading="lazy" />}

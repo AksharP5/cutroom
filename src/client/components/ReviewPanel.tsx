@@ -8,28 +8,33 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
-import type { z } from "zod";
+import { z } from "zod";
 import type { EditorReviewDraft } from "../../shared/editor";
 import type {
   HumanReviewActionSchema,
   ReviewItem,
   ReviewStatus,
 } from "../../shared/review";
-import { frameTimecode } from "../api";
+import { FpsSchema } from "../../shared/timeline/schema";
+import { api, frameTimecode } from "../api";
 import { useFps } from "../workspace";
 import { Modal } from "./Modal";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
+/** A question stalls the agent, so blocked notes lead To review. */
 const groups = [
   ["New", ["open"]],
   ["In progress", ["working"]],
-  ["To review", ["done", "blocked"]],
+  ["To review", ["blocked", "done"]],
   ["Queued", ["queued"]],
   ["Accepted", ["accepted"]],
   ["Withdrawn", ["withdrawn"]],
 ] as const satisfies ReadonlyArray<
   readonly [string, ReadonlyArray<ReviewStatus>]
 >;
+const timelineFpsSchema = z.object({
+  timeline: z.object({ fps: FpsSchema }),
+});
 
 /** `index.html#title-card` reads as "Title card". */
 function elementName(id: string) {
@@ -37,20 +42,7 @@ function elementName(id: string) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function outcome(item: ReviewItem) {
-  const review = item.review;
-  if (review.status === "blocked") return `Agent asks: ${review.question}`;
-  if (review.status === "done") return review.note;
-  if (review.status === "withdrawn")
-    return `${
-      {
-        human: "You withdrew it: ",
-        agent: "Agent withdrew it: ",
-        external: "An outside agent withdrew it: ",
-      }[review.by]
-    }${review.reason}`;
-  const instruction = item.instructions.at(-1);
-  if (!instruction) return null;
+function instructionText(instruction: ReviewItem["instructions"][number]) {
   return `${
     instruction.source === "chat"
       ? "You answered in chat: "
@@ -58,6 +50,56 @@ function outcome(item: ReviewItem) {
         ? "An outside agent added for you: "
         : "You added: "
   }${instruction.text}`;
+}
+
+/** The agent's answer, question, or withdrawal, when the note has one. */
+function agentWord({ review }: ReviewItem) {
+  if (review.status === "blocked") return `Agent asks: ${review.question}`;
+  if (review.status === "done") return review.note;
+  if (review.status !== "withdrawn") return null;
+  return `${
+    {
+      human: "You withdrew it: ",
+      agent: "Agent withdrew it: ",
+      external: "An outside agent withdrew it: ",
+    }[review.by]
+  }${review.reason}`;
+}
+
+/** A row's last line: the agent's latest word, or else your latest instruction. */
+function outcome(item: ReviewItem) {
+  const instruction = item.instructions.at(-1);
+  return agentWord(item) ?? (instruction ? instructionText(instruction) : null);
+}
+
+/**
+ * Each note's timecode uses its own composition's frame rate, so opening another
+ * composition never changes it. Unknown rates show no timecode rather than a guess.
+ */
+function useNoteFps(projectId: string, items: ReviewItem[]) {
+  const [rates, setRates] = useState(new Map<string, number>());
+  const paths = [...new Set(items.map((item) => item.compositionPath))];
+  const missing = paths.filter((path) => !rates.has(path)).join("\n");
+  useEffect(() => {
+    if (!missing) return;
+    let cancelled = false;
+    for (const path of missing.split("\n"))
+      void api(
+        `/projects/${projectId}/timeline?composition=${encodeURIComponent(path)}`,
+        timelineFpsSchema,
+      )
+        .then(({ timeline: { fps } }) => fps.num / fps.den)
+        // A composition that no longer parses still needs a readable timecode.
+        .catch(() => 30)
+        .then((rate) => {
+          if (!cancelled)
+            setRates((current) => new Map(current).set(path, rate));
+        });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, missing]);
+  return (item: ReviewItem) => rates.get(item.compositionPath);
 }
 
 export function ReviewPanel({
@@ -83,7 +125,8 @@ export function ReviewPanel({
   onDelete: (item: ReviewItem) => Promise<void>;
   onSend: () => void;
 }) {
-  const fps = useFps();
+  const draftFps = useFps();
+  const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
   const [savingDraft, setSavingDraft] = useState<EditorReviewDraft | null>(
     null,
@@ -92,18 +135,25 @@ export function ReviewPanel({
   const activeDraft = useRef(draft);
   activeDraft.current = draft;
   const [error, setError] = useState("");
-  const [frame, setFrame] = useState<ReviewItem | null>(null);
+  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const details = items.find((item) => item.id === detailsId);
   const [answer, setAnswer] = useState<{
     id: string;
     type: "reject" | "reply";
     note: string;
   } | null>(null);
+  const answerOpener = useRef<HTMLButtonElement | null>(null);
   useEffect(() => setBody(""), [draft]);
   const fresh = items.filter((item) => item.review.status === "open");
+  const current = items.filter((item) => item.review.status !== "withdrawn");
   const accepted = items.filter((item) => item.review.status === "accepted");
   const number = new Map(items.map((item, index) => [item.id, index + 1]));
   const frameUrl = (path: string) =>
     `/api/cutroom/projects/${projectId}/attachments/${encodeURIComponent(path.split("/").at(-1) ?? "")}`;
+  const timecode = (item: ReviewItem) => {
+    const fps = noteFps(item);
+    return fps === undefined ? "" : frameTimecode(item.time, fps);
+  };
 
   async function run(action: () => Promise<void>) {
     setError("");
@@ -113,12 +163,21 @@ export function ReviewPanel({
       setError(error instanceof Error ? error.message : String(error));
     }
   }
+  function closeAnswer() {
+    setAnswer(null);
+    answerOpener.current?.focus();
+  }
 
   function row(item: ReviewItem) {
     const status = item.review.status;
     const answering = answer?.id === item.id ? answer : null;
     const result = outcome(item);
-    const time = frameTimecode(item.time, fps);
+    const open =
+      (type: "reject" | "reply") =>
+      (event: { currentTarget: HTMLButtonElement }) => {
+        answerOpener.current = event.currentTarget;
+        setAnswer({ id: item.id, type, note: "" });
+      };
     return (
       <article className="review-row" data-status={status} key={item.id}>
         <span className="note-pin" data-status={status}>
@@ -131,7 +190,7 @@ export function ReviewPanel({
               title="Go to this moment"
               onClick={() => onSeek(item)}
             >
-              {time}
+              {timecode(item)}
             </button>
             <span className="note-element">
               {item.elementId
@@ -199,104 +258,103 @@ export function ReviewPanel({
           <p className="review-row-body" title={item.body}>
             {item.body}
           </p>
-          {(result || status === "done") && (
-            <div className="review-row-outcome">
-              {status === "done" && (
-                <>
-                  <button
-                    className="text-button"
-                    onClick={() =>
-                      void run(() => onAct(item, { type: "accept" }))
-                    }
-                  >
-                    Accept
-                  </button>
-                  <button
-                    className="text-button quiet"
-                    onClick={() =>
-                      setAnswer({ id: item.id, type: "reject", note: "" })
-                    }
-                  >
-                    Reject
-                  </button>
-                </>
-              )}
-              {status === "blocked" && (
-                <button
-                  className="text-button"
-                  onClick={() =>
-                    setAnswer({ id: item.id, type: "reply", note: "" })
-                  }
-                >
-                  Answer
-                </button>
-              )}
-              <span title={result ?? undefined}>{result}</span>
+          {status === "done" && (
+            <div className="review-row-decide">
+              <button
+                className="text-button"
+                onClick={() => void run(() => onAct(item, { type: "accept" }))}
+              >
+                Accept
+              </button>
+              <button className="text-button quiet" onClick={open("reject")}>
+                Reject
+              </button>
             </div>
           )}
-          {answering && (
-            <form
-              className="review-answer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!answering.note.trim()) return;
-                void run(async () => {
-                  await onAct(item, {
-                    type: answering.type,
-                    note: answering.note,
-                  });
-                  setAnswer(null);
-                });
-              }}
-            >
-              <textarea
-                autoFocus
-                aria-label={
-                  answering.type === "reply"
-                    ? "Answer the agent"
-                    : "What still needs to change?"
-                }
-                placeholder={
-                  answering.type === "reply"
-                    ? "Your answer"
-                    : "What still needs to change?"
-                }
-                value={answering.note}
-                onChange={(event) =>
-                  setAnswer({ ...answering, note: event.target.value })
-                }
-                rows={2}
-              />
-              <div>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => setAnswer(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={!answering.note.trim()}
-                >
-                  {answering.type === "reply" ? "Reply" : "Send back"}
-                </button>
-              </div>
-            </form>
+          {status === "blocked" && (
+            <div className="review-row-decide">
+              <button className="text-button" onClick={open("reply")}>
+                Answer
+              </button>
+            </div>
           )}
         </div>
-        {item.framePath && (
-          <button
-            className="note-thumb"
-            aria-label="View annotated frame"
-            onClick={() => setFrame(item)}
-          >
+        <button
+          className="note-thumb"
+          aria-label={item.framePath ? "View annotated frame" : "View note"}
+          title="Note details"
+          onClick={() => setDetailsId(item.id)}
+        >
+          {item.framePath ? (
             <img
               loading="lazy"
               src={frameUrl(item.framePath)}
-              alt={`Annotated frame at ${time}`}
+              alt={`Annotated frame at ${timecode(item)}`}
             />
-          </button>
+          ) : (
+            <ChatTeardropText size={14} />
+          )}
+        </button>
+        {result && (
+          <p className="review-row-outcome" title={result}>
+            {result}
+          </p>
+        )}
+        {answering && (
+          <form
+            className="review-answer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!answering.note.trim()) return;
+              void run(async () => {
+                await onAct(item, {
+                  type: answering.type,
+                  note: answering.note,
+                });
+                setAnswer(null);
+              });
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              closeAnswer();
+            }}
+          >
+            <textarea
+              autoFocus
+              aria-label={
+                answering.type === "reply"
+                  ? "Answer the agent"
+                  : "What still needs to change?"
+              }
+              placeholder={
+                answering.type === "reply"
+                  ? "Your answer"
+                  : "What still needs to change?"
+              }
+              value={answering.note}
+              onChange={(event) =>
+                setAnswer({ ...answering, note: event.target.value })
+              }
+              rows={2}
+            />
+            <div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeAnswer}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                disabled={!answering.note.trim()}
+              >
+                {answering.type === "reply" ? "Reply" : "Send back"}
+              </button>
+            </div>
+          </form>
         )}
       </article>
     );
@@ -304,9 +362,9 @@ export function ReviewPanel({
 
   return (
     <section className="review-panel" aria-label="Review notes">
-      {items.length > 0 && (
+      {current.length > 0 && (
         <div className="review-summary">
-          {items.length} {items.length === 1 ? "note" : "notes"},{" "}
+          {current.length} {current.length === 1 ? "note" : "notes"},{" "}
           {accepted.length} accepted
         </div>
       )}
@@ -332,7 +390,9 @@ export function ReviewPanel({
             <span>
               {draft.kind === "draw" ? <PencilSimple /> : <ChatTeardropText />}
               Note at{" "}
-              <span className="mono">{frameTimecode(draft.time, fps)}</span>
+              <span className="mono">
+                {frameTimecode(draft.time, draftFps)}
+              </span>
             </span>
             <button
               className="icon-button"
@@ -392,8 +452,8 @@ export function ReviewPanel({
         </div>
       )}
       {groups.map(([title, statuses]) => {
-        const members = items.filter((item) =>
-          statuses.some((status) => status === item.review.status),
+        const members = statuses.flatMap((status) =>
+          items.filter((item) => item.review.status === status),
         );
         if (!members.length) return null;
         return (
@@ -402,10 +462,7 @@ export function ReviewPanel({
             key={title}
             aria-label={`${title} notes`}
           >
-            <h3>
-              {title}
-              <span>{members.length}</span>
-            </h3>
+            <h3>{title}</h3>
             {members.map(row)}
             {title === "New" && (
               <div className="review-send">
@@ -419,20 +476,35 @@ export function ReviewPanel({
           </section>
         );
       })}
-      {frame?.framePath && (
+      {details && (
         <Modal
-          title={`Review at ${frameTimecode(frame.time, fps)}`}
-          onClose={() => setFrame(null)}
-          wide
+          title={
+            <>
+              Review at <span className="mono">{timecode(details)}</span>
+            </>
+          }
+          onClose={() => setDetailsId(null)}
+          wide={Boolean(details.framePath)}
         >
-          <img
-            className="review-full-frame"
-            src={frameUrl(frame.framePath)}
-            alt={frame.body}
-          />
+          {details.framePath && (
+            <img
+              className="review-full-frame"
+              src={frameUrl(details.framePath)}
+              alt={details.body}
+            />
+          )}
           <div className="review-full-note">
-            <p>{frame.body}</p>
-            {outcome(frame) && <p>{outcome(frame)}</p>}
+            <p>{details.body}</p>
+            {details.instructions.length > 0 && (
+              <ol className="review-history" aria-label="Your instructions">
+                {details.instructions.map((instruction) => (
+                  <li key={instruction.at}>{instructionText(instruction)}</li>
+                ))}
+              </ol>
+            )}
+            {agentWord(details) && (
+              <p className="review-full-outcome">{agentWord(details)}</p>
+            )}
           </div>
         </Modal>
       )}
