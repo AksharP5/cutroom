@@ -519,6 +519,7 @@ export interface DraggedMedia {
   /** The project-relative path, which is also its `src` in the root composition. */
   src: string;
   frames: number;
+  hasAudio?: boolean;
 }
 
 /**
@@ -533,6 +534,7 @@ export function dropPreview(
   frame: number,
   playhead: number,
   reach: number,
+  create: readonly Track[] = [],
 ): Preview {
   const hit = snap(
     [frame, frame + media.frames],
@@ -546,9 +548,15 @@ export function dropPreview(
       clip.track === track.index && clip.start < end && clipEnd(clip) > at,
   );
   const commands: CommandInput[] = [
-    ...(timeline.tracks.some((existing) => existing.index === track.index)
-      ? []
-      : [{ type: "setTrack" as const, index: track.index, kind: track.kind }]),
+    ...create.map((track): CommandInput => ({
+      type: "setTrack",
+      index: track.index,
+      kind: track.kind,
+    })),
+    ...(!timeline.tracks.some((item) => item.index === track.index) &&
+    !create.some((item) => item.index === track.index)
+      ? [{ type: "setTrack" as const, index: track.index, kind: track.kind }]
+      : []),
     {
       type: "insert",
       mode: taken ? "insert" : "place",
@@ -559,6 +567,7 @@ export function dropPreview(
         src: media.src,
         duration: media.frames,
       },
+      ...(media.kind === "video" && media.hasAudio && { linkedAudio: {} }),
     },
   ];
   const fits = (track.kind === "audio") === (media.kind === "audio");

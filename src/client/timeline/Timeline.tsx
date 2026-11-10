@@ -10,6 +10,8 @@ import type { KeyboardEvent, PointerEvent, RefObject } from "react";
 import { flushSync } from "react-dom";
 import {
   CursorClick,
+  Eye,
+  EyeSlash,
   LockSimple,
   LockSimpleOpen,
   Minus,
@@ -22,6 +24,7 @@ import type {
   Timeline as TimelineData,
   Track,
 } from "../../shared/timeline/schema";
+import { clipVisible, suppressedTracks } from "../../shared/timeline/tracks";
 import {
   MAX_PPF,
   clipName,
@@ -96,7 +99,12 @@ export interface TimelineProps {
    * A track button was pressed. The track may be an empty one the timeline does not hold yet;
    * its index and kind are what it is shown as.
    */
-  onToggleTrack(track: Track, setting: "locked" | "autoSelect"): void;
+  onToggleTrack(
+    track: Track,
+    setting: "locked" | "autoSelect" | "enabled" | "muted" | "solo",
+  ): void;
+  onRenameTrack(track: Track, name: string): void;
+  onAddTrack(kind: Track["kind"]): void;
   /** A pin was clicked; the playhead has already been sent to its frame. */
   onOpenPin(id: string): void;
 }
@@ -137,6 +145,7 @@ function readSizes(): { rows: RowSizes; head: number } {
       audio: px("--size-track-audio"),
       seam: px("--stroke-hair"),
       divider: px("--stroke-rail"),
+      padding: 16,
     },
     head: px("--size-track-head"),
   };
@@ -338,15 +347,36 @@ const Ruler = memo(function Ruler({
 const TrackHeads = memo(function TrackHeads({
   rows,
   onToggleTrack,
+  onRenameTrack,
 }: {
   rows: readonly Row[];
   onToggleTrack: TimelineProps["onToggleTrack"];
+  onRenameTrack: TimelineProps["onRenameTrack"];
 }) {
   return rows.map(({ track, id, top }) => (
     <div key={track.index} className={`tl-head ${track.kind}`} style={{ top }}>
       <div className="tl-head-title">
         <span className="tl-head-id">{id}</span>
-        <span className="tl-head-name">{track.name}</span>
+        <input
+          key={`${track.index}:${track.name}`}
+          className="tl-head-name"
+          aria-label={`Name ${id}`}
+          title="Rename track"
+          maxLength={200}
+          defaultValue={track.name ?? ""}
+          placeholder={`${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`}
+          onFocus={(event) => event.currentTarget.select()}
+          onBlur={(event) => {
+            const name = event.currentTarget.value.trim();
+            if (name !== (track.name ?? "")) onRenameTrack(track, name);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape")
+              event.currentTarget.value = track.name ?? "";
+            if (event.key === "Enter" || event.key === "Escape")
+              event.currentTarget.blur();
+          }}
+        />
       </div>
       <div className="tl-head-buttons">
         <button
@@ -376,6 +406,42 @@ const TrackHeads = memo(function TrackHeads({
             weight={track.autoSelect ? "fill" : "regular"}
           />
         </button>
+        {track.kind === "video" ? (
+          <button
+            className={`tl-track-button${track.enabled ? "" : " exception"}`}
+            aria-label={`Enable ${id}`}
+            aria-pressed={track.enabled}
+            title={track.enabled ? "Disable video track" : "Enable video track"}
+            onClick={() => onToggleTrack(track, "enabled")}
+          >
+            {track.enabled ? (
+              <Eye size={13} />
+            ) : (
+              <EyeSlash size={13} weight="fill" />
+            )}
+          </button>
+        ) : (
+          <>
+            <button
+              className={`tl-track-button${track.muted ? " exception" : ""}`}
+              aria-label={`Mute ${id}`}
+              aria-pressed={track.muted}
+              title="Mute track"
+              onClick={() => onToggleTrack(track, "muted")}
+            >
+              M
+            </button>
+            <button
+              className={`tl-track-button${track.solo ? " exception" : ""}`}
+              aria-label={`Solo ${id}`}
+              aria-pressed={track.solo}
+              title="Solo track (also in export)"
+              onClick={() => onToggleTrack(track, "solo")}
+            >
+              S
+            </button>
+          </>
+        )}
       </div>
     </div>
   ));
@@ -401,10 +467,25 @@ export function Timeline({
   onScrub,
   onScrubEnd,
   onToggleTrack,
+  onRenameTrack,
+  onAddTrack,
   onOpenPin,
 }: TimelineProps) {
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
+  const [trackMenu, setTrackMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!trackMenu) return;
+    const close = () => setTrackMenu(null);
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [trackMenu]);
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
@@ -590,11 +671,21 @@ export function Timeline({
   const rows = mounted
     ? rowsBetween(layout.rows, mounted.rows.from, mounted.rows.to)
     : [];
+  const suppressed = useMemo(
+    () => suppressedTracks(timeline.tracks),
+    [timeline.tracks],
+  );
   const clips = mounted
     ? rows.flatMap((row) => {
         const track = tracks.get(row.track.index);
         return track
-          ? clipsInRange(track, mounted.frames).map((clip) => ({ clip, row }))
+          ? clipsInRange(track, mounted.frames).map((clip) => ({
+              clip:
+                clipVisible(clip, suppressed) === clip.enabled
+                  ? clip
+                  : { ...clip, enabled: false },
+              row,
+            }))
           : [];
       })
     : [];
@@ -683,13 +774,54 @@ export function Timeline({
             )}
             <i className="tl-playhead-head" ref={playheadHead} data-unscaled />
           </div>
-          <div className="tl-heads" style={{ height: layout.height }}>
-            <TrackHeads rows={rows} onToggleTrack={onToggleTrack} />
+          <div
+            className="tl-heads"
+            style={{ minHeight: layout.height }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setTrackMenu({
+                x: Math.min(event.clientX, window.innerWidth - 180),
+                y: Math.min(event.clientY, window.innerHeight - 70),
+              });
+            }}
+          >
+            <TrackHeads
+              rows={rows}
+              onToggleTrack={onToggleTrack}
+              onRenameTrack={onRenameTrack}
+            />
+            {trackMenu && (
+              <div
+                className="tl-track-menu"
+                role="menu"
+                aria-label="Add track"
+                style={{ left: trackMenu.x, top: trackMenu.y }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") event.stopPropagation();
+                }}
+              >
+                {(["video", "audio"] as const).map((kind, index) => (
+                  <button
+                    key={kind}
+                    role="menuitem"
+                    autoFocus={index === 0}
+                    onClick={() => {
+                      onAddTrack(kind);
+                      setTrackMenu(null);
+                    }}
+                  >
+                    Add {kind} track
+                  </button>
+                ))}
+              </div>
+            )}
             <i className="tl-divider" style={{ top: layout.dividerTop }} />
           </div>
           <div
             className="tl-lanes"
             ref={lanes}
+            style={{ minHeight: layout.height }}
             data-tool={tool}
             {...gestures.handlers}
           >

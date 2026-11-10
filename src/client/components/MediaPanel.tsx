@@ -73,6 +73,7 @@ function MediaRow({
 }) {
   const fps = useFps();
   const [duration, setDuration] = useState<number | null>(null);
+  const [hasAudio, setHasAudio] = useState<boolean | null>(null);
   // Decoders start only for rows that have been on screen.
   const row = useRef<HTMLLIElement>(null);
   const [seen, setSeen] = useState(false);
@@ -87,6 +88,35 @@ function MediaRow({
   }, [seen]);
   const changed = useWorkspace((state) => state.fileChanges[path]);
   useEffect(() => setDuration(null), [changed]);
+  useEffect(() => {
+    if (!seen || kind !== "video") return;
+    const closing = new AbortController();
+    setHasAudio(null);
+    const probe = async () => {
+      for (;;) {
+        const response = await fetch(
+          `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/probe?path=${encodeURIComponent(path)}`,
+          { signal: closing.signal },
+        );
+        if (response.status !== 202) {
+          if (!response.ok)
+            throw new Error(`Cannot probe ${path} (${response.status}).`);
+          const info = z
+            .object({ channels: z.number().positive().optional() })
+            .parse(await response.json());
+          if (!closing.signal.aborted) setHasAudio(info.channels !== undefined);
+          return;
+        }
+        await response.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        closing.signal.throwIfAborted();
+      }
+    };
+    void probe().catch((error: unknown) => {
+      if (!closing.signal.aborted) console.warn("Media probe failed", error);
+    });
+    return () => closing.abort();
+  }, [seen, kind, projectId, path, changed]);
   const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${changed}` : ""}`;
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
@@ -98,11 +128,19 @@ function MediaRow({
       data-kind={kind}
       ref={row}
       // A row drags onto a timeline track once its length is known.
-      draggable={kind === "image" || duration !== null}
+      draggable={
+        kind === "image" ||
+        (duration !== null && (kind !== "video" || hasAudio !== null))
+      }
       onDragStart={(event) => {
         event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
         event.dataTransfer.effectAllowed = "copy";
-        setMediaDrag({ kind, path, seconds: duration ?? STILL_SECONDS });
+        setMediaDrag({
+          kind,
+          path,
+          seconds: duration ?? STILL_SECONDS,
+          hasAudio: hasAudio ?? kind === "audio",
+        });
       }}
       onDragEnd={() => setMediaDrag(null)}
     >

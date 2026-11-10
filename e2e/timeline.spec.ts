@@ -135,7 +135,7 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
   await expect
     .poll(async () => (await tracks()).map((track) => track.autoSelect))
     .toEqual([false, false, true, true]);
-  await page.getByRole("button", { name: "Mute" }).click();
+  await page.getByRole("button", { name: "Mute", exact: true }).click();
   expect(await scroller.evaluate((element) => element.scrollLeft)).toBe(0);
 
   await slider.focus();

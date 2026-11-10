@@ -81,7 +81,7 @@ async function open(
     );
     // Rows are 56px video tracks over 44px audio tracks, with a hairline under each.
     const y = { V2: 28, V1: 57 + 28, A1: 57 * 2 + 2 + 22 }[row];
-    return { x: box.x + frame * ppf, y: box.y + y };
+    return { x: box.x + frame * ppf, y: box.y + 16 + y };
   };
   /** Presses at one frame and releases at another, moving through the frames between. */
   const drag = async (

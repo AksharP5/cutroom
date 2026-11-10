@@ -345,6 +345,8 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
       (tool) => tool.name === "timeline_edit",
     );
     expect(JSON.stringify(edit?.inputSchema)).toContain("insert");
+    expect(JSON.stringify(edit?.inputSchema)).toContain("linkedAudio");
+    expect(JSON.stringify(edit?.inputSchema)).toContain("solo");
     expect(JSON.stringify(edit?.inputSchema)).not.toContain("sourceDuration");
     const read = result.parse(
       await client.callTool({
@@ -373,6 +375,54 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
     const stale = await client.callTool(editCall);
     expect(stale.isError).toBe(true);
     expect(JSON.stringify(stale.content)).toContain("409");
+    const mixed = result.parse(
+      await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: fixture.project.id,
+          expectedRevision: edited.revision,
+          label: "Set up the mix",
+          commands: [
+            {
+              type: "setTrack",
+              index: 3,
+              kind: "audio",
+              name: "Music",
+              muted: true,
+              solo: true,
+            },
+            { type: "setTrack", index: 0, enabled: false },
+          ],
+        },
+      }),
+    ).structuredContent.result;
+    expect(mixed.timeline.tracks.at(-1)).toMatchObject({
+      index: 3,
+      kind: "audio",
+      name: "Music",
+      muted: true,
+      solo: true,
+    });
+    expect(
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: fixture.project.id },
+        }),
+      ).structuredContent.result,
+    ).toEqual(mixed);
+    await fixture.request(
+      `/projects/${fixture.project.id}/history/undo`,
+      "POST",
+    );
+    expect(
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: fixture.project.id },
+        }),
+      ).structuredContent.result.timeline,
+    ).toEqual(edited.timeline);
     const view = await client.callTool({
       name: "timeline_view",
       arguments: { projectId: fixture.project.id, frame: 1 },

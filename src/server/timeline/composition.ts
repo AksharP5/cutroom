@@ -22,6 +22,7 @@ import {
   toSeconds,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
+import { suppressedTracks } from "../../shared/timeline/tracks";
 import type {
   Clip,
   ClipKind,
@@ -423,7 +424,9 @@ export function parseComposition(
         element.attrs["data-label"] ??
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
-      enabled: element.attrs["data-hidden"] === undefined,
+      enabled:
+        element.attrs["data-hidden"] === undefined ||
+        element.attrs["data-cutroom-track-hidden"] !== undefined,
       startRef:
         referenced && typeof referencedEnd === "number"
           ? {
@@ -643,6 +646,7 @@ function clipChanges(
   element: SourceElement,
   fps: Fps,
   normalizeTracks = false,
+  suppressed: ReadonlySet<number> = new Set(),
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
@@ -699,8 +703,12 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
-  if (before.enabled !== after.enabled)
-    changes.push(["data-hidden", after.enabled ? null : ""]);
+  const hidden = !after.enabled || suppressed.has(after.track);
+  const trackHidden = after.enabled && suppressed.has(after.track);
+  if (has("data-hidden") !== hidden)
+    changes.push(["data-hidden", hidden ? "" : null]);
+  if (has("data-cutroom-track-hidden") !== trackHidden)
+    changes.push(["data-cutroom-track-hidden", trackHidden ? "" : null]);
   return changes;
 }
 
@@ -715,6 +723,7 @@ function copyMarkup(
   template: Clip,
   clip: Clip,
   normalizeTracks: boolean,
+  suppressed: ReadonlySet<number>,
 ): string {
   const element = parsed.elements.get(template.id)!;
   const authoredId = element.attrs.id;
@@ -747,6 +756,7 @@ function copyMarkup(
         element,
         parsed.timeline.fps,
         normalizeTracks,
+        suppressed,
       ),
       ...(origin !== undefined &&
       clip.link !== null &&
@@ -760,7 +770,12 @@ function copyMarkup(
   ]);
 }
 
-function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
+function insertMarkup(
+  clip: Clip,
+  input: InsertClip,
+  fps: Fps,
+  suppressed: ReadonlySet<number>,
+): string {
   const attributes: AttributeChange[] = [
     ["id", clip.id],
     ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
@@ -776,6 +791,13 @@ function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
+    ...(clip.link ? [["data-link", clip.link] as const] : []),
+    ...(!clip.enabled || suppressed.has(clip.track)
+      ? [["data-hidden", ""] as const]
+      : []),
+    ...(clip.enabled && suppressed.has(clip.track)
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
     ...(clip.mediaStart
       ? [
           [
@@ -950,13 +972,21 @@ export function patchComposition(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   const stacking = stackingEdits(parsed, after, previous);
+  const suppressed = suppressedTracks(after.tracks);
   const edits: Edit[] = stacking ?? [];
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
     const next = current.get(clip.id);
     if (next) {
-      const changes = clipChanges(clip, next, element, fps, stacking !== null);
+      const changes = clipChanges(
+        clip,
+        next,
+        element,
+        fps,
+        stacking !== null,
+        suppressed,
+      );
       if (
         parsed.anonymous.has(clip.id) &&
         (changes.length ||
@@ -1013,7 +1043,7 @@ export function patchComposition(
       const indent = lastClip ? indentOf(html, lastClip[1].start) : "";
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${indent}${insertMarkup(clip, origin.insert, fps)}`,
+        `\n${indent}${insertMarkup(clip, origin.insert, fps, suppressed)}`,
       ]);
       continue;
     }
@@ -1022,7 +1052,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null)}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, suppressed)}`,
     ]);
   }
   for (const [at, texts] of inserts)

@@ -49,6 +49,9 @@ export const TrackSchema = z.object({
   name: z.string().nullable(),
   locked: z.boolean(),
   autoSelect: z.boolean(),
+  enabled: z.boolean().default(true),
+  muted: z.boolean().default(false),
+  solo: z.boolean().default(false),
 });
 
 export const MarkerColorSchema = z.enum([
@@ -205,6 +208,12 @@ export const CommandSchema = z.discriminatedUnion("type", [
       track: frame,
       at: frame,
       clip: InsertClipSchema,
+      linkedAudio: z
+        .object({ id: clipId.optional() })
+        .optional()
+        .describe(
+          "Video only: place its sound on the first unlocked audio track with room, creating one if needed. The video is muted. Silent sources stay video-only.",
+        ),
       ids: pieceIds,
     })
     .describe("Add a media clip."),
@@ -228,8 +237,13 @@ export const CommandSchema = z.discriminatedUnion("type", [
       locked: z.boolean().optional(),
       autoSelect: z.boolean().optional(),
       kind: z.enum(["video", "audio"]).optional(),
+      enabled: z.boolean().optional(),
+      muted: z.boolean().optional(),
+      solo: z.boolean().optional(),
     })
-    .describe("Name, lock, set auto-select, or set the kind of a track."),
+    .describe(
+      "Create a track or change its name, lock, auto-select, enable, mute or solo. Mute and solo apply to audio tracks; solo also affects export.",
+    ),
   z
     .object({
       type: z.literal("setMarker"),

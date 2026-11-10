@@ -55,6 +55,9 @@ const sequence = (tracks: Partial<Track>[] = []): Timeline =>
       name: null,
       locked: false,
       autoSelect: true,
+      enabled: true,
+      muted: false,
+      solo: false,
       ...tracks.find((track) => track.index === index),
     })),
     clips: [

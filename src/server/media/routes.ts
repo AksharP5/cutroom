@@ -27,7 +27,7 @@ function headers(etag: string, type: string) {
 export function createMediaRoutes(store: ProjectStore) {
   const api = new Hono();
   const media = createMediaService();
-  for (const kind of ["peaks", "filmstrip", "frame"] as const)
+  for (const kind of ["probe", "peaks", "filmstrip", "frame"] as const)
     api.get(`/projects/:id/media/${kind}`, async (c) => {
       c.header("cache-control", "no-store");
       const project = await store.get(c.req.param("id"));

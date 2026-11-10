@@ -10,6 +10,7 @@ export interface MediaDrag {
   /** The file's project-relative path. */
   path: string;
   seconds: number;
+  hasAudio: boolean;
 }
 
 /**

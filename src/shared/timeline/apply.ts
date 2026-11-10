@@ -1,4 +1,5 @@
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
+import { newTrack, nextTrackIndex } from "./tracks";
 
 export type TimelineErrorCode =
   | "not_found"
@@ -123,13 +124,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
         (audioOnly.get(clip.track) ?? true) && clip.kind === "audio",
       );
   for (const [index, audio] of audioOnly)
-    tracks.set(index, {
-      index,
-      kind: audio ? "audio" : "video",
-      name: null,
-      locked: false,
-      autoSelect: true,
-    });
+    tracks.set(index, newTrack(index, audio ? "audio" : "video"));
   return {
     ...timeline,
     tracks: [...tracks.values()].sort((a, b) => a.index - b.index),
@@ -426,6 +421,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "insert": {
       const { clip: input, track, at, mode } = command;
+      if (command.linkedAudio && input.kind !== "video")
+        throw new TimelineError(
+          "track_kind",
+          "Only video can have linked audio.",
+        );
       assertTrackKind(input.kind, trackAt(track), input.id ?? input.src);
       const id =
         input.id === undefined
@@ -450,36 +450,76 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         );
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
-      onCreate(id, { insert: input });
+      const separate =
+        command.linkedAudio &&
+        !input.muted &&
+        !batch.silentMedia.has(input.src);
+      const video = separate ? { ...input, muted: true } : input;
+      onCreate(id, { insert: video });
+      const added: Clip = {
+        id,
+        track,
+        kind: input.kind,
+        start: at,
+        duration: input.duration,
+        mediaStart: input.kind === "image" ? null : input.mediaStart,
+        playbackRate: 1,
+        src: input.src,
+        sourceDuration:
+          input.kind === "image"
+            ? null
+            : (batch.mediaLengths.get(input.src) ?? null),
+        hasAudio:
+          input.kind === "audio" ||
+          (input.kind === "video" &&
+            !video.muted &&
+            !batch.silentMedia.has(input.src)),
+        link: separate ? id : null,
+        label: input.label ?? null,
+        volume: input.volume ?? null,
+        enabled: true,
+        startRef: null,
+      };
+      let tracks = timeline.tracks;
+      let audio: Clip[] = [];
+      if (separate) {
+        const audioId =
+          command.linkedAudio?.id === undefined
+            ? mint.name(`${slug(input.src, "audio")}-audio`, null)
+            : claim(command.linkedAudio.id);
+        let destination = tracks.find(
+          (candidate) =>
+            candidate.kind === "audio" &&
+            !candidate.locked &&
+            !next.some(
+              (clip) =>
+                clip.track === candidate.index &&
+                clip.start < end &&
+                clipEnd(clip) > at,
+            ),
+        );
+        if (!destination) {
+          destination = newTrack(
+            Math.max(track + 1, nextTrackIndex(tracks)),
+            "audio",
+          );
+          tracks = [...tracks, destination];
+        }
+        onCreate(audioId, { insert: { ...input, kind: "audio", id: audioId } });
+        audio = [
+          {
+            ...added,
+            id: audioId,
+            kind: "audio",
+            track: destination.index,
+            hasAudio: true,
+          },
+        ];
+      }
       return {
         ...timeline,
-        clips: [
-          ...next,
-          {
-            id,
-            track,
-            kind: input.kind,
-            start: at,
-            duration: input.duration,
-            mediaStart: input.kind === "image" ? null : input.mediaStart,
-            playbackRate: 1,
-            src: input.src,
-            sourceDuration:
-              input.kind === "image"
-                ? null
-                : (batch.mediaLengths.get(input.src) ?? null),
-            hasAudio:
-              input.kind === "audio" ||
-              (input.kind === "video" &&
-                !input.muted &&
-                !batch.silentMedia.has(input.src)),
-            link: null,
-            label: input.label ?? null,
-            volume: input.volume ?? null,
-            enabled: true,
-            startRef: null,
-          },
-        ],
+        tracks,
+        clips: [...next, added, ...audio],
       };
     }
     case "setClip": {
@@ -509,15 +549,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               { index: command.index, kind: command.kind },
               clip.id,
             );
-      const current = timeline.tracks.find(
-        (track) => track.index === command.index,
-      ) ?? {
-        index: command.index,
-        kind: command.kind ?? "video",
-        name: null,
-        locked: false,
-        autoSelect: true,
-      };
+      const current =
+        timeline.tracks.find((track) => track.index === command.index) ??
+        newTrack(command.index, command.kind ?? "video");
+      const kind = command.kind ?? current.kind;
+      if (kind !== "audio" && (command.muted || command.solo))
+        throw new TimelineError(
+          "track_kind",
+          "Mute and solo require an audio track.",
+        );
       return {
         ...timeline,
         tracks: [
@@ -530,6 +570,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             ...(command.autoSelect !== undefined && {
               autoSelect: command.autoSelect,
             }),
+            ...(command.enabled !== undefined && { enabled: command.enabled }),
+            ...(command.muted !== undefined && { muted: command.muted }),
+            ...(command.solo !== undefined && { solo: command.solo }),
           },
         ],
       };
