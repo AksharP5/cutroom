@@ -35,6 +35,8 @@ import { createThumbnailRenderer } from "./thumbnails";
 import { createRenderWorkers } from "./jobs";
 import { previewPolicy } from "./isolation";
 import { withPreviewBridge } from "./previewBridge";
+import { readTrackMix } from "../timeline/mix";
+import { mixCompositionInstances } from "../timeline/composition";
 
 export interface FileChange {
   projectId: string;
@@ -65,7 +67,14 @@ export function createHyperframesApi(
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
-  const renders = createRenderWorkers();
+  const renders = createRenderWorkers({
+    sourceOverrides: async (id) =>
+      Object.fromEntries(
+        (await readTrackMix(store, await store.get(id))).map(
+          ({ path, html }) => [path, html],
+        ),
+      ),
+  });
   const previewKeys = new Map<string, string>();
   const isolatedPreview = (projectId: string, previewUrl: string) => {
     let key = previewKeys.get(projectId);
@@ -204,7 +213,20 @@ export function createHyperframesApi(
         'data-hyperframes-preview-runtime="1" src="/api/runtime.js"',
       );
     },
-    transformPreviewHtml: ({ html }) => injectDeterministicFontFaces(html),
+    transformPreviewHtml: async ({ html, project, activeCompositionPath }) => {
+      for (const source of await readTrackMix(
+        store,
+        await store.get(project.id),
+      ))
+        html = mixCompositionInstances(
+          html,
+          source.settings,
+          source.composition,
+          activeCompositionPath,
+          source.lengths,
+        );
+      return injectDeterministicFontFaces(html);
+    },
     async getProjectSignature(dir) {
       let signature = signatures.get(dir);
       if (!signature) {

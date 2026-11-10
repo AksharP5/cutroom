@@ -7,8 +7,10 @@ import {
   emptyTimelineSettings,
 } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
+import { newTrack } from "../src/shared/timeline/tracks";
 import {
   parseComposition,
+  mixCompositionInstances,
   patchComposition,
   settingsOf,
 } from "../src/server/timeline/composition";
@@ -19,6 +21,46 @@ const source = `<main id="main" data-composition-id="main" data-duration="10" da
 <audio id="music" src="music.wav" data-start="0" data-duration="6.006" data-track-index="2"></audio>
 <audio id="off" src="voice.wav" data-start="7.007" data-duration="1.001" data-track-index="1" data-hidden></audio>
 </main>`;
+
+test("preview readback applies each scene's mix to every bundled instance", () => {
+  const settings = emptyTimelineSettings();
+  settings.tracks = [
+    { ...newTrack(0, "audio"), name: "Voice", solo: true },
+    { ...newTrack(1, "audio"), name: "Music" },
+  ];
+  const html = `<main data-composition-id="main" data-duration="4">
+  <audio id="parent-sound" src="parent.wav" data-start="0" data-duration="4" data-track-index="1"></audio>
+  ${["scene-1", "scene-2"]
+    .map(
+      (
+        id,
+      ) => `<div data-composition-id="${id}" data-hf-original-composition-id="main" data-composition-file="./scene.html" data-start="0" data-duration="2">
+  <audio id="${id}-voice" src="voice.wav" data-start="0" data-duration="2" data-track-index="0"></audio>
+  <audio id="${id}-music" src="music.wav" data-start="0" data-duration="2" data-track-index="1"></audio></div>`,
+    )
+    .join("")}</main>`;
+  const mixed = mixCompositionInstances(
+    html,
+    settings,
+    "scene.html",
+    "index.html",
+    new Map(),
+  );
+  expect(parseAudioElements(mixed).map(({ id }) => id)).toEqual([
+    "parent-sound",
+    "scene-1-voice",
+    "scene-2-voice",
+  ]);
+  expect(
+    mixCompositionInstances(
+      mixed,
+      settings,
+      "scene.html",
+      "index.html",
+      new Map(),
+    ),
+  ).toBe(mixed);
+});
 
 test("track enable, mute and multiple solos persist exactly without changing clip gain or enable", () => {
   let parsed = parseComposition(source, emptyTimelineSettings());
@@ -76,8 +118,14 @@ test("track enable, mute and multiple solos persist exactly without changing cli
   expect(parseAudioElements(html).map((audio) => audio.id)).toEqual(["music"]);
 });
 
-test("a linked insert uses the first free unlocked audio track, or creates one, and exports sound once", () => {
-  const parsed = parseComposition(source, emptyTimelineSettings());
+test("a linked insert reuses free picture-sound tracks, or creates one, and exports sound once", () => {
+  const parsed = parseComposition(
+    source
+      .replace('id="picture"', 'id="picture" data-link="original"')
+      .replace('id="voice"', 'id="voice" data-link="original"')
+      .replace(/\n<audio id="off"[^>]*><\/audio>/, ""),
+    emptyTimelineSettings(),
+  );
   const insert = CommandSchema.parse({
     type: "insert",
     track: 0,
@@ -128,6 +176,43 @@ test("a linked insert uses the first free unlocked audio track, or creates one, 
   expect(silent.clips.find((clip) => clip.id === "new-picture")?.hasAudio).toBe(
     false,
   );
+});
+
+test("picture sound never fills gaps on Music or VO tracks", () => {
+  const parsed = parseComposition(
+    `<main id="main" data-composition-id="main" data-duration="12">
+    <video id="interview" src="interview.mp4" muted data-link="interview" data-start="0" data-duration="3" data-track-index="0"></video>
+    <audio id="location" src="interview.mp4" data-link="interview" data-start="0" data-duration="10" data-track-index="1"></audio>
+    <audio id="music" src="music.wav" data-start="0" data-duration="3" data-track-index="2"></audio>
+    <audio id="vo" src="voice.wav" data-link="audio-only" data-start="0" data-duration="3" data-track-index="3"></audio>
+    </main>`,
+    emptyTimelineSettings(),
+  );
+  const named = applyAll(parsed.timeline, [
+    CommandSchema.parse({ type: "setTrack", index: 2, name: "Music" }),
+    CommandSchema.parse({ type: "setTrack", index: 3, name: "VO" }),
+  ]);
+  const insert = CommandSchema.parse({
+    type: "insert",
+    track: 0,
+    at: 180,
+    mode: "overwrite",
+    clip: { id: "second", kind: "video", src: "second.mp4", duration: 60 },
+  });
+  const added = applyAll(named, [insert]);
+  expect(
+    added.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
+      ?.track,
+  ).toBe(4);
+  expect(added.tracks.at(-1)).toMatchObject({ index: 4, kind: "audio" });
+  const empty = applyAll(named, [
+    CommandSchema.parse({ type: "setTrack", index: 5, kind: "audio" }),
+    insert,
+  ]);
+  expect(
+    empty.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
+      ?.track,
+  ).toBe(5);
 });
 
 test("adding an empty track and a clip on it is an exact command batch, including a muted destination", () => {

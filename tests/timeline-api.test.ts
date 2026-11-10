@@ -7,6 +7,7 @@ import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
+import { readTrackMix } from "../src/server/timeline/mix";
 import { projectFixture } from "./project-fixture";
 
 const timelineFixture = async () => {
@@ -21,6 +22,78 @@ const timelineFixture = async () => {
     );
   return { ...fixture, project, files };
 };
+
+test("outside HTML uses persisted mute and solo on read without a history write or undo loop", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const endpoint = `/projects/${project.id}/timeline`;
+  const read = async () =>
+    TimelineViewSchema.parse(await (await fixture.request(endpoint)).json());
+  try {
+    const view = await read();
+    const response = await fixture.request(
+      `/projects/${project.id}/commands`,
+      "POST",
+      {
+        expectedRevision: view.revision,
+        commands: [
+          {
+            type: "setTrack",
+            index: 3,
+            kind: "audio",
+            name: "Voice",
+            solo: true,
+          },
+          {
+            type: "setTrack",
+            index: 4,
+            kind: "audio",
+            name: "Music",
+            muted: true,
+          },
+        ],
+      },
+    );
+    expect(response.status).toBe(200);
+    const index = join(project.path, "index.html");
+    await writeFile(
+      index,
+      (await readFile(index, "utf8")).replace(
+        "</main>",
+        `
+      <audio id="music" src="music.wav" data-start="0" data-duration="2" data-track-index="4"></audio>
+      <audio id="new-track" src="music.wav" data-start="0" data-duration="2" data-track-index="5"></audio>
+      <video id="embedded" src="picture.mp4" data-start="0" data-duration="2" data-track-index="6"></video>
+    </main>`,
+      ),
+    );
+    const mixed = await read();
+    expect(
+      mixed.timeline.clips
+        .filter((clip) => ["music", "new-track", "embedded"].includes(clip.id))
+        .every((clip) => clip.enabled),
+    ).toBe(true);
+    const raw = await readFile(index, "utf8");
+    const [prepared] = await readTrackMix(fixture.store, project);
+    const written = prepared!.html;
+    expect(written).toMatch(
+      /id="music"[^>]*data-hidden="" data-cutroom-track-hidden=""/,
+    );
+    expect(written).toMatch(
+      /id="new-track"[^>]*data-hidden="" data-cutroom-track-hidden=""/,
+    );
+    expect(written).toMatch(/id="embedded"[^>]*muted="" data-cutroom-muted=""/);
+    expect(await read()).toEqual(mixed);
+    expect(await readFile(index, "utf8")).toBe(raw);
+    expect((await readTrackMix(fixture.store, project))[0]!.html).toBe(written);
+    await fixture.request(`/projects/${project.id}/history/undo`, "POST", {});
+    expect(
+      (await read()).timeline.clips.some((clip) => clip.id === "music"),
+    ).toBe(false);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("a command batch is atomic, one undo step, and refuses stale revisions", async () => {
   const fixture = await timelineFixture();

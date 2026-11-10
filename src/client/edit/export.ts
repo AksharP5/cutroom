@@ -2,7 +2,8 @@ import { z } from "zod";
 import { create } from "zustand";
 import type { Fps } from "../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../workspace";
-import { afterTimelineEdits } from "./timeline";
+import { trackRows } from "../timeline/math";
+import { afterTimelineEdits, useTimeline } from "./timeline";
 
 const FfmpegSchema = z.object({
   ok: z.boolean(),
@@ -17,7 +18,10 @@ const ProgressSchema = z.object({
 });
 
 /** The export under way, as a share from 0 to 100; null when none is. */
-export const useExport = create(() => ({ progress: null as number | null }));
+export const useExport = create(() => ({
+  progress: null as number | null,
+  notice: "",
+}));
 
 /** Follows a render job to its end and resolves with how it ended. */
 function finished(jobId: string) {
@@ -45,10 +49,29 @@ function finished(jobId: string) {
  */
 export async function exportProject(projectId: string, name: string, fps: Fps) {
   if (useExport.getState().progress !== null) return;
-  useExport.setState({ progress: 0 });
+  useExport.setState({ progress: 0, notice: "" });
   useWorkspace.setState({ exporting: true });
   try {
     const jobId = await afterTimelineEdits(projectId, async () => {
+      const tracks = useTimeline.getState().view?.timeline.tracks ?? [];
+      const { rows } = trackRows(tracks, {
+        video: 0,
+        audio: 0,
+        seam: 0,
+        divider: 0,
+      });
+      const solo = rows.filter(({ track }) => track.solo).map(({ id }) => id);
+      const muted = rows.filter(({ track }) => track.muted).map(({ id }) => id);
+      useExport.setState({
+        notice: [
+          solo.length
+            ? `${solo.join(", ")} soloed, other audio tracks are silent.`
+            : "",
+          muted.length ? `${muted.join(", ")} muted.` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
       const ffmpeg = FfmpegSchema.parse(
         await (await fetch("/api/environment/ffmpeg")).json(),
       );
@@ -84,7 +107,7 @@ export async function exportProject(projectId: string, name: string, fps: Fps) {
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error));
   } finally {
-    useExport.setState({ progress: null });
+    useExport.setState({ progress: null, notice: "" });
     useWorkspace.setState({ exporting: false });
   }
 }

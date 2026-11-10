@@ -16,7 +16,7 @@ function replaceOnce(
 }
 
 /** Version-checked host changes, like studioPlugin. No dependency files are modified. */
-export function registerRenderIsolation() {
+export function registerRenderIsolation(sources: Record<string, string> = {}) {
   for (const name of ["producer", "engine"]) {
     const manifest: unknown = JSON.parse(
       readFileSync(
@@ -55,7 +55,19 @@ export function registerRenderIsolation() {
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
+          "rebaseDirectEntryAssetPaths(cutroomSources[htmlPath] ?? readTextFile(htmlPath), projectDir, htmlPath)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "const rawSubHtml = normalizeCompositionSrcs(read.text, projectDir);",
+          "const rawSubHtml = normalizeCompositionSrcs(cutroomSources[filePath] ?? read.text, projectDir);",
+          url,
+        );
         source = replaceOnce(
           source,
           "function createFileServer(options) {",

@@ -145,7 +145,10 @@ function readSizes(): { rows: RowSizes; head: number } {
       audio: px("--size-track-audio"),
       seam: px("--stroke-hair"),
       divider: px("--stroke-rail"),
-      padding: 16,
+      // A new-track preview must fit entirely inside the drop target.
+      padding:
+        Math.max(px("--size-track-video"), px("--size-track-audio")) +
+        px("--stroke-hair"),
     },
     head: px("--size-track-head"),
   };

@@ -483,6 +483,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
       if (separate) {
+        const pictureLinks = new Set(
+          next
+            .filter((clip) => clip.kind === "video" && clip.link !== null)
+            .map((clip) => clip.link),
+        );
         const audioId =
           command.linkedAudio?.id === undefined
             ? mint.name(`${slug(input.src, "audio")}-audio`, null)
@@ -491,6 +496,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           (candidate) =>
             candidate.kind === "audio" &&
             !candidate.locked &&
+            next.every(
+              (clip) =>
+                clip.track !== candidate.index ||
+                (clip.link !== null && pictureLinks.has(clip.link)),
+            ) &&
             !next.some(
               (clip) =>
                 clip.track === candidate.index &&

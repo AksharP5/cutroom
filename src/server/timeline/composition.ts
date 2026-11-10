@@ -1,4 +1,5 @@
 import { parseFpsWithDefault } from "@hyperframes/core";
+import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
   isSubCompositionHost,
@@ -260,8 +261,11 @@ export function parseComposition(
   {
     scope = "document",
     mediaLengths = new Map(),
+    rootId,
   }: {
     scope?: CompositionScope;
+    /** A bundled scene instance whose tracks are mixed independently of its parent. */
+    rootId?: string;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
@@ -277,7 +281,10 @@ export function parseComposition(
       (element) => element.attrs["data-composition-id"] !== undefined,
     );
   const all = scopeElements(roots, scope);
-  const root = rootOf(all);
+  const root =
+    rootId === undefined
+      ? rootOf(all)
+      : all.find((element) => element.attrs["data-composition-id"] === rootId);
   if (!root)
     throw new TimelineError(
       "unsupported",
@@ -725,6 +732,63 @@ function clipChanges(
       soundOff && !authoredMuted ? "" : null,
     ]);
   return changes;
+}
+
+/** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */
+export function applyTrackMix(parsed: ParsedComposition): string {
+  const { html, timeline } = parsed;
+  const spans = new Map(
+    scanHtmlOpeningTags(html).map((span) => [span.start, span]),
+  );
+  const mix = trackMix(timeline.tracks);
+  return applyEdits(
+    html,
+    timeline.clips.flatMap((clip) => {
+      const element = parsed.elements.get(clip.id)!;
+      return attributeEdits(
+        openingTag(spans, element, clip.id),
+        html,
+        clipChanges(clip, clip, element, timeline.fps, false, mix),
+      );
+    }),
+  );
+}
+
+/** Sidecar settings belong to a file, including every instance of that file in a preview bundle. */
+export function mixCompositionInstances(
+  html: string,
+  settings: TimelineSettings,
+  composition: string,
+  activeComposition: string,
+  mediaLengths: ReadonlyMap<string, number>,
+) {
+  const canonical = (path: string) =>
+    posix.normalize(path.replaceAll("\\", "/")).replace(/^\/+/, "");
+  const elements = scopeElements(parseElements(html).roots, "document");
+  const root =
+    elements.find(
+      ({ attrs }) =>
+        attrs["data-root"] === "true" &&
+        attrs["data-composition-id"] !== undefined,
+    ) ??
+    elements.find(({ attrs }) => attrs["data-composition-id"] !== undefined);
+  const ids = elements.flatMap((element) => {
+    const { attrs } = element;
+    const id = attrs["data-composition-id"];
+    const file = attrs["data-composition-file"];
+    return id &&
+      (file
+        ? canonical(file) === canonical(composition)
+        : element === root &&
+          canonical(activeComposition) === canonical(composition))
+      ? [id]
+      : [];
+  });
+  for (const rootId of ids)
+    html = applyTrackMix(
+      parseComposition(html, settings, { rootId, mediaLengths }),
+    );
+  return html;
 }
 
 function indentOf(html: string, at: number): string {

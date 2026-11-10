@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
@@ -66,9 +66,13 @@ async function makeMedia(directory: string) {
     ]);
 }
 
-async function exportAudio(page: Page, path: string) {
+async function exportAudio(page: Page, path: string, notice?: string) {
   const download = page.waitForEvent("download", { timeout: 60_000 });
   await page.getByRole("button", { name: "Export", exact: true }).click();
+  if (notice) {
+    await expect(page.locator(".edit-export-notice")).toHaveText(notice);
+    await page.screenshot({ path: path.replace(/\.mp4$/, "-notice.png") });
+  }
   await (await download).saveAs(path);
   const { stdout } = await exec(
     "ffmpeg",
@@ -109,6 +113,80 @@ async function exportAudio(page: Page, path: string) {
   });
   return { path, levels };
 }
+
+test("starter layout keeps new-track drops inside the lanes at 1440 by 900", async ({
+  page,
+  request,
+}, info) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Starter track drops",
+          width: 320,
+          height: 240,
+          duration: 2,
+        },
+      })
+    ).json(),
+  );
+  await makeMedia(project.path);
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await expect(page.locator(".tl-lane.video")).toHaveCount(3);
+  // Add picture above the starter's V1–V3. The old layout then left only 17px below A1.
+  await drop(page, "Picture.mp4", async () => {
+    const box = (await page.locator(".tl-lanes").boundingBox())!;
+    return { x: box.x + 2, y: box.y + 7 };
+  });
+  await expect.poll(async () => (await read()).clips.length).toBe(5);
+  const scroll = page.locator(".tl-scroll");
+  await scroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const lanes = page.locator(".tl-lanes");
+  const last = (await page.locator(".tl-lane.audio").last().boundingBox())!;
+  const row = page
+    .getByRole("region", { name: "Media", exact: true })
+    .getByRole("listitem")
+    .filter({ hasText: "Voice.wav" });
+  await expect(row).toHaveAttribute("draggable", "true");
+  await row.hover();
+  await page.mouse.down();
+  await page.mouse.move(last.x + 2, last.y + last.height + 7, { steps: 12 });
+  const ghost = page.locator(".tl-ghost");
+  await expect(ghost).toContainText("New audio track");
+  await page.screenshot({ path: info.outputPath("starter-drop-preview.png") });
+  const bounds = (await lanes.boundingBox())!;
+  const preview = (await ghost.boundingBox())!;
+  expect(preview.y + preview.height).toBeLessThanOrEqual(
+    bounds.y + bounds.height,
+  );
+  expect(
+    await scroll.evaluate(
+      (element) =>
+        element.scrollHeight - element.scrollTop - element.clientHeight,
+    ),
+  ).toBeLessThanOrEqual(1);
+  await page.mouse.up();
+  await expect.poll(async () => (await read()).clips.length).toBe(6);
+  const voice = (await read()).clips.find((clip) => clip.src === "Voice.wav")!;
+  expect(voice.kind).toBe("audio");
+  expect(voice.track).not.toBe(
+    (await read()).clips.find((clip) => clip.link && clip.kind === "audio")!
+      .track,
+  );
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await read()).clips.length).toBe(5);
+  await expect(page.locator(".tl-lane.audio")).toHaveCount(1);
+});
 
 test("build and mix picture, voice and music with track drops, then export exactly what is audible", async ({
   page,
@@ -212,7 +290,11 @@ test("build and mix picture, voice and music with track drops, then export exact
     )
     .toBe(0);
   await page.keyboard.press("k");
-  const muted = await exportAudio(page, info.outputPath("music-muted.mp4"));
+  const muted = await exportAudio(
+    page,
+    info.outputPath("music-muted.mp4"),
+    "A3 muted.",
+  );
   expect(muted.levels[0]).toBeCloseTo(all.levels[0], 2);
   expect(muted.levels[1]).toBeCloseTo(all.levels[1], 2);
   expect(muted.levels[2]).toBeLessThan(0.001);
@@ -246,7 +328,11 @@ test("build and mix picture, voice and music with track drops, then export exact
     .toBe(1);
   await page.keyboard.press("k");
   await page.getByRole("button", { name: "Enable V2", exact: true }).click();
-  const solo = await exportAudio(page, info.outputPath("voice-solo.mp4"));
+  const solo = await exportAudio(
+    page,
+    info.outputPath("voice-solo.mp4"),
+    "A2 soloed, other audio tracks are silent. A3 muted.",
+  );
   expect(solo.levels[0]).toBeLessThan(0.001);
   expect(solo.levels[1]).toBeCloseTo(all.levels[1], 2);
   expect(solo.levels[2]).toBeLessThan(0.001);
@@ -335,7 +421,11 @@ test("browser-probed exports honor mute and solo for authored video sound while 
   await expect(
     page.frameLocator("iframe[data-live]").locator("#picture"),
   ).not.toHaveAttribute("data-hidden");
-  const muted = await exportAudio(page, info.outputPath("embedded-muted.mp4"));
+  const muted = await exportAudio(
+    page,
+    info.outputPath("embedded-muted.mp4"),
+    "V1 muted.",
+  );
   expect(muted.levels[0]).toBeLessThan(0.001);
   expect(muted.levels[1]).toBeCloseTo(normal.levels[1], 2);
   expect(muted.levels[2]).toBeCloseTo(normal.levels[2], 2);
@@ -365,7 +455,23 @@ test("browser-probed exports honor mute and solo for authored video sound while 
     { type: "setTrack", index: 0, muted: false },
     { type: "setTrack", index: 1, solo: true },
   ]);
-  const solo = await exportAudio(page, info.outputPath("embedded-solo.mp4"));
+  // An agent writing HTML adds no UI command to apply the already-soloed voice mix.
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "</main>",
+      '<audio id="outside-music" src="Music.wav" data-start="0" data-duration="2" data-track-index="2"></audio></main>',
+    ),
+  );
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#outside-music"),
+  ).toHaveAttribute("data-hidden", "");
+  const solo = await exportAudio(
+    page,
+    info.outputPath("embedded-solo.mp4"),
+    "A1 soloed, other audio tracks are silent.",
+  );
   expect(solo.levels[0]).toBeLessThan(0.001);
   expect(solo.levels[1]).toBeCloseTo(normal.levels[1], 2);
   expect(solo.levels[2]).toBeLessThan(0.001);

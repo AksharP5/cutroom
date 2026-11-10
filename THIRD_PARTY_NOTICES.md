@@ -10,7 +10,7 @@ The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version
 
 Cutroom does not include code or assets extracted from the proprietary HyperFrames desktop application. HyperFrames and HeyGen names describe dependency provenance, not affiliation or endorsement.
 
-Cutroom also applies a version-checked loading transform to HyperFrames producer 0.9.26 browser media discovery in `src/server/hyperframes/renderIsolation.ts`, excluding media under `data-hidden` so browser probing preserves the static renderer's visibility and audio exclusions. Dependency files remain unchanged.
+Cutroom also applies version-checked loading transforms to HyperFrames producer 0.9.26 in `src/server/hyperframes/renderIsolation.ts`. Browser discovery excludes media under `data-hidden`, preserving static parsing's visibility and audio exclusions. Entry and sub-composition compilation accept effective source supplied by Cutroom's render worker, so persisted track mixing also covers outside HTML edits without rewriting project files. Dependency files remain unchanged.
 
 ## GSAP
 

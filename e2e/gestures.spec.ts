@@ -79,9 +79,12 @@ async function open(
         .locator(".tl-grid")
         .evaluate((grid) => grid.style.getPropertyValue("--ppf")),
     );
-    // Rows are 56px video tracks over 44px audio tracks, with a hairline under each.
-    const y = { V2: 28, V1: 57 + 28, A1: 57 * 2 + 2 + 22 }[row];
-    return { x: box.x + frame * ppf, y: box.y + 16 + y };
+    const lane = await lanes
+      .locator(".tl-lane")
+      .nth({ V2: 0, V1: 1, A1: 2 }[row])
+      .boundingBox();
+    if (!lane) throw new Error(`No bounds for ${row}`);
+    return { x: box.x + frame * ppf, y: lane.y + lane.height / 2 };
   };
   /** Presses at one frame and releases at another, moving through the frames between. */
   const drag = async (

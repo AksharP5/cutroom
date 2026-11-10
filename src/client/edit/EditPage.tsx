@@ -102,6 +102,7 @@ export function EditPage({
   const history = useTimeline((state) => state.history);
   const snapping = useTimeline((state) => state.snapping);
   const exporting = useExport((state) => state.progress);
+  const exportNotice = useExport((state) => state.notice);
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
@@ -377,6 +378,15 @@ export function EditPage({
           <ArrowClockwise size={16} />
         </button>
         <span className="edit-separator" />
+        {exportNotice && (
+          <span
+            className="edit-export-notice"
+            role="status"
+            title={exportNotice}
+          >
+            {exportNotice}
+          </span>
+        )}
         <button
           className="edit-export"
           disabled={exporting !== null}
