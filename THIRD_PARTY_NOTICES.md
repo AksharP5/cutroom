@@ -30,6 +30,8 @@ The Cutroom logo, mark, favicons, and application icon are original Cutroom asse
 
 Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, and other dependencies retain the license files in their installed packages.
 
+Lightning CSS 1.33.0 parses and rewrites the inspector's inline opacity styles. Its MPL-2.0 license is retained in `node_modules/lightningcss/LICENSE`, including in the production package. The dependency source is unchanged.
+
 ## Packaged runtimes
 
 Electron's distribution retains `LICENSE` and `LICENSES.chromium.html`. Packaged Node.js retains its runtime license, including bundled third-party notices. Bun's license and runtime dependency information are preserved in [licenses/BUN.txt](licenses/BUN.txt); corresponding source is available at [oven-sh/bun, tag bun-v1.4.4](https://github.com/oven-sh/bun/tree/bun-v1.4.4).
