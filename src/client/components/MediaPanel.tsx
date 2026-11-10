@@ -35,6 +35,8 @@ const mediaKinds = [
 const acceptedFiles = mediaKinds
   .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
   .join(",");
+const STILL_IMPORTING =
+  "Still importing. Drop the next files when it finishes.";
 const UPLOAD_LIMIT =
   "Imports are limited to 500 MB at a time. Copy larger files into the project folder and they will appear here.";
 
@@ -53,6 +55,12 @@ const mediaKind = (path: string) => {
     item.extensions.some((candidate) => candidate === extension),
   );
 };
+
+/** True for media files and for folders, whose moves report only the folder path. */
+export function affectsMediaList(path: string) {
+  const name = path.split(/[\\/]/).at(-1) ?? path;
+  return !name.includes(".") || mediaKind(name) !== undefined;
+}
 
 export function MediaPanel({
   projectId,
@@ -78,6 +86,7 @@ export function MediaPanel({
   const load = useCallback(async () => {
     const id = ++latestLoad.current;
     const response = await fetch(projectUrl);
+    if (id !== latestLoad.current) return;
     if (!response.ok)
       throw new Error(`The project media could not load (${response.status}).`);
     const { files } = projectFilesSchema.parse(await response.json());
@@ -107,7 +116,7 @@ export function MediaPanel({
   async function importFiles(files: FileList | null) {
     if (!files?.length) return;
     if (importing) {
-      setMessage("Still importing. Drop the next files when it finishes.");
+      setMessage(STILL_IMPORTING);
       return;
     }
     const body = new FormData();
@@ -133,6 +142,7 @@ export function MediaPanel({
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setImporting(false);
+      setMessage((current) => (current === STILL_IMPORTING ? "" : current));
     }
   }
 

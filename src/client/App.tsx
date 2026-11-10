@@ -37,7 +37,7 @@ import { version } from "../shared/version";
 import { ChatPanel } from "./components/ChatPanel";
 import { EmptyState } from "./components/EmptyState";
 import { FileDialog } from "./components/FileDialog";
-import { MediaPanel } from "./components/MediaPanel";
+import { affectsMediaList, MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
@@ -205,7 +205,8 @@ export function App() {
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
         else if (payload.changed !== "cutroom.json") {
-          setMediaRevision((value) => value + 1);
+          if (affectsMediaList(payload.changed))
+            setMediaRevision((value) => value + 1);
           return;
         }
       } catch {
