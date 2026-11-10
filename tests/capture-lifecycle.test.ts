@@ -6,6 +6,91 @@ import { captureFixture } from "./capture-fixture";
 const supported = process.platform === "linux" && Boolean(browserExecutable());
 const root = join(import.meta.dir, "..");
 
+for (const target of ["server process group", "owner"] as const) {
+  test.skipIf(!supported)(
+    `SIGKILL of the ${target} stops Chromium and the next capture reclaims its profile`,
+    async () => {
+      const fixture = await captureFixture();
+      const start = () =>
+        Bun.spawn([process.execPath, "src/server/index.ts"], {
+          cwd: root,
+          env: fixture.env,
+          detached: true,
+          stdout: "ignore",
+          stderr: "inherit",
+        });
+      let server = start();
+      try {
+        await fixture.capture();
+        const profiles = await fixture.profiles();
+        if (target === "owner")
+          process.kill(await fixture.ownerPid(), "SIGKILL");
+        else {
+          process.kill(-server.pid, "SIGKILL");
+          await server.exited;
+        }
+        await fixture.expectBrowserStopped();
+        expect(await fixture.profiles()).toEqual(profiles);
+        if (target === "server process group") server = start();
+        await fixture.capture();
+        expect(await fixture.profiles()).not.toEqual(profiles);
+        server.kill("SIGTERM");
+        await server.exited;
+        await fixture.expectStopped();
+      } finally {
+        server.kill("SIGKILL");
+        await server.exited;
+        await fixture.close();
+      }
+    },
+    30_000,
+  );
+}
+
+test.skipIf(!supported)(
+  "starting another capture owner preserves a live owner's profile and browser",
+  async () => {
+    const fixture = await captureFixture();
+    const server = Bun.spawn([process.execPath, "src/server/index.ts"], {
+      cwd: root,
+      env: fixture.env,
+      stdout: "ignore",
+      stderr: "inherit",
+    });
+    try {
+      await fixture.capture();
+      const profiles = await fixture.profiles();
+      const other = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `import { launchCaptureBrowser } from './src/server/hyperframes/captureBrowser';
+           const capture = await launchCaptureBrowser();
+           await capture.close();`,
+        ],
+        {
+          cwd: root,
+          env: fixture.env,
+          stdout: "ignore",
+          stderr: "inherit",
+          timeout: 20_000,
+        },
+      );
+      expect(await other.exited).toBe(0);
+      expect(await fixture.profiles()).toEqual(profiles);
+      await fixture.capture();
+      server.kill("SIGTERM");
+      await server.exited;
+      await fixture.expectStopped();
+    } finally {
+      server.kill("SIGKILL");
+      await server.exited;
+      await fixture.close();
+    }
+  },
+  30_000,
+);
+
 for (const { signal, paused } of [
   { signal: "SIGTERM", paused: false },
   { signal: "SIGINT", paused: false },

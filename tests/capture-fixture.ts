@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 
-async function waitForCaptureState(check: () => Promise<boolean>) {
-  const deadline = Date.now() + 10_000;
+async function waitForCaptureState(
+  check: () => Promise<boolean>,
+  timeout = 10_000,
+) {
+  const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (await check()) return;
     await Bun.sleep(25);
@@ -41,6 +44,7 @@ export async function captureFixture() {
   return {
     root,
     baseUrl,
+    profiles,
     env: {
       ...process.env,
       TMPDIR: root,
@@ -86,6 +90,21 @@ export async function captureFixture() {
       );
       expect(await processes()).toEqual([]);
       expect(await profiles()).toEqual([]);
+    },
+    async expectBrowserStopped() {
+      await waitForCaptureState(
+        async () => (await processes()).length === 0,
+        3000,
+      );
+      expect(await processes()).toEqual([]);
+    },
+    async ownerPid() {
+      const [profile] = await profiles();
+      return z.coerce
+        .number()
+        .int()
+        .positive()
+        .parse(profile?.match(/^cutroom-capture-(\d+)-/)?.[1]);
     },
     async pauseBrowser() {
       for (const pid of await processes()) {

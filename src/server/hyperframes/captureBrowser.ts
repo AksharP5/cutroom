@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 
-/** IPC closes in the kernel even when the server receives SIGKILL. */
+/** IPC ties the owner to this server; its DevTools pipe ties Chromium to the owner. */
 export async function launchCaptureBrowser() {
   const ready = Promise.withResolvers<string>();
   const worker = Bun.spawn(
