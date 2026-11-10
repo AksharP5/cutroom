@@ -91,7 +91,7 @@ function starter(input: z.infer<typeof CreateProjectSchema>): string {
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-body { color: #ededed; font-family: "Instrument Sans", system-ui, sans-serif; }
+body { color: #ededed; background: #111111; font-family: "Instrument Sans", system-ui, sans-serif; }
 .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
 .background { position: absolute; inset: 0; background: #111111; }
 .title {
@@ -102,7 +102,7 @@ body { color: #ededed; font-family: "Instrument Sans", system-ui, sans-serif; }
 }
 .caption {
   position: absolute; left: 12%; right: 12%; top: 61%; margin: 0;
-  font-size: ${Math.round(Math.min(input.width / 64, input.height / 30))}px;
+  font-size: ${Math.round(Math.min(input.width, input.height) / 36)}px;
   font-weight: 400; line-height: 1.5; color: #a8a8a8;
 }
 </style></head>
