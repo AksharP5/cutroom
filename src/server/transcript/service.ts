@@ -29,6 +29,7 @@ import {
 import { randomClipId } from "../../shared/timeline/apply";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { projectPath, readSource } from "../projects/store";
+import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import { localMediaPath } from "../../shared/media";
 import {
@@ -337,7 +338,7 @@ export function createTranscriptService(
         await store.writeDocument(project, document, [
           {
             sourceFile: transcript.sourceFile,
-            absPath: await projectPath(project, transcript.sourceFile),
+            absPath: await projectWritePath(project, transcript.sourceFile),
             before: source.content,
             after,
             expectedVersion: source.version,

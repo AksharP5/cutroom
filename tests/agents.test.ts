@@ -941,3 +941,66 @@ for await(const line of createInterface({input:process.stdin})) {
     }
   }
 });
+
+test("revoke disposes every project session even if one native interrupt fails", async () => {
+  const sessions: Array<{
+    sends: number;
+    disposed: boolean;
+    release?: () => void;
+  }> = [];
+  const runtime: RuntimeFactory = {
+    ...factory(async () => {}),
+    create: () => {
+      const state: (typeof sessions)[number] = { sends: 0, disposed: false };
+      sessions.push(state);
+      return {
+        send: async () => {
+          if (++state.sends === 1) return;
+          await new Promise<void>((resolve) => {
+            state.release = resolve;
+          });
+        },
+        interrupt: async () => {
+          throw new Error("Native interrupt failed");
+        },
+        dispose: () => {
+          state.disposed = true;
+          state.release?.();
+        },
+      };
+    },
+  };
+  const { service, project, dataDir } = await setup(runtime);
+  await service.setPermissions(project.id, true);
+  const first = await service.create({
+    projectId: project.id,
+    provider: "codex",
+  });
+  const second = await service.create({
+    projectId: project.id,
+    provider: "claude",
+  });
+  for (const session of [first, second]) {
+    await service.send(session.id, {
+      text: "Prepare",
+      skills: [],
+      attachments: [],
+    });
+    await idle(service, session.id);
+  }
+  await service.send(first.id, {
+    text: "Keep working",
+    skills: [],
+    attachments: [],
+  });
+  await idle(service, first.id, "running");
+  expect(await service.setPermissions(project.id, false)).toEqual({
+    alwaysAllowCutroomEdits: false,
+  });
+  expect(sessions.map((session) => session.disposed)).toEqual([true, true]);
+  expect(service.get(first.id).status).toBe("idle");
+  expect(
+    JSON.parse(await readFile(join(dataDir, "agents.json"), "utf8"))
+      .cutroomEdits[project.id],
+  ).toBe(false);
+});

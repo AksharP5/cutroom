@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ProjectHistory } from "@hyperframes/studio-server";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   AnnotationInputSchema,
@@ -30,6 +30,9 @@ import { HttpError } from "../../shared/errors";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
 import { clipVersions } from "./changes";
+import { projectStatePath, projectWritePath } from "./path";
+import { posix, relative, sep } from "node:path";
+import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
@@ -131,7 +134,7 @@ export function createReviewService(store: ProjectStore) {
 
   const readState = async (project: Project): Promise<ReviewFile> => {
     // A missing `.cutroom` folder means no review state has been saved yet.
-    const raw = await projectPath(project, REVIEW_STATE_PATH, true)
+    const raw = await projectStatePath(project, REVIEW_STATE_PATH, true)
       .then((path) => readFile(path, "utf8"))
       .catch((error: unknown) => {
         if (isMissing(error)) return null;
@@ -150,10 +153,10 @@ export function createReviewService(store: ProjectStore) {
   };
 
   const writeState = async (project: Project, state: ReviewFile) => {
-    await mkdir(await projectPath(project, ".cutroom", true), {
+    await mkdir(await projectStatePath(project, ".cutroom", true), {
       recursive: true,
     });
-    const path = await projectPath(project, REVIEW_STATE_PATH, true);
+    const path = await projectStatePath(project, REVIEW_STATE_PATH, true);
     const temporary = `${path}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
       mode: 0o600,
@@ -347,6 +350,8 @@ export function createReviewService(store: ProjectStore) {
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
+        await projectWritePath(project, composition);
+        composition = posix.normalize(composition.replaceAll("\\", "/"));
         if (!composition.endsWith(".html")) return work();
         let items: ReviewItem[];
         let before: Map<string, string>;
@@ -412,6 +417,7 @@ export function createReviewService(store: ProjectStore) {
       }),
     changedClips: (project: Project, composition: string) =>
       serialize(project, async () => {
+        composition = posix.normalize(composition.replaceAll("\\", "/"));
         try {
           await reconcile(project);
         } catch (error) {
@@ -573,22 +579,78 @@ export function createReviewService(store: ProjectStore) {
       const unlessUnreadable = (error: unknown) => {
         if (!(error instanceof ProjectDocumentError)) throw error;
       };
-      const guarded = <T>(how: string, change: () => Promise<T>) =>
+      const guarded = <T>(
+        how: string,
+        paths: () => string[],
+        change: () => Promise<T>,
+      ) =>
         serialize(project, async () => {
           await reconcile(project).catch(unlessUnreadable);
+          await history.checkpoint();
+          for (const path of paths()) {
+            // History also owns these fixed app sidecars, never native agent configuration.
+            if (
+              [
+                ...STUDIO_SIGNATURE_MANIFEST_PATHS,
+                ".media/manifest.jsonl",
+              ].includes(path)
+            ) {
+              const absolute = await projectPath(project, path, true);
+              if (
+                relative(await realpath(project.path), absolute)
+                  .split(sep)
+                  .join("/") === path
+              )
+                continue;
+            }
+            await projectWritePath(project, path, {
+              sourceOnly: false,
+              allowMissing: true,
+            });
+          }
           const result = await change();
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });
       const overrides: Partial<ProjectHistory> = {
-        step: (direction, ...rest) =>
-          guarded(direction === "back" ? "by undo" : "by redo", () =>
-            history.step(direction, ...rest),
+        step: (direction, who, options) =>
+          guarded(
+            direction === "back" ? "by undo" : "by redo",
+            () =>
+              history.next(direction, who)?.files.map((file) => file.path) ??
+              [],
+            () => history.step(direction, who, options),
           ),
-        undo: (...args) => guarded("by undo", () => history.undo(...args)),
-        restore: (...args) =>
-          guarded("by restoring an earlier version", () =>
-            history.restore(...args),
+        undo: (id, options) =>
+          guarded(
+            "by undo",
+            () => {
+              const entries = history.list();
+              const index = entries.findIndex((entry) => entry.id === id);
+              if (index < 0) return [];
+              const selected =
+                options.mode === "back-to-before"
+                  ? entries.slice(index)
+                  : [entries[index]!];
+              return selected.flatMap((entry) =>
+                entry.files.map((file) => file.path),
+              );
+            },
+            () => history.undo(id, options),
+          ),
+        restore: (point, who, options) =>
+          guarded(
+            "by restoring an earlier version",
+            () => {
+              const target = history.peek(point);
+              if (!target) return [];
+              const current =
+                history.peek(history.list().at(-1)?.id ?? "start") ?? {};
+              return [
+                ...new Set([...Object.keys(target), ...Object.keys(current)]),
+              ].filter((path) => target[path] !== current[path]);
+            },
+            () => history.restore(point, who, options),
           ),
       };
       return new Proxy(history, {

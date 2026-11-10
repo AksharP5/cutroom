@@ -12,6 +12,8 @@ External changes are watched and sent to the editor through server-sent events. 
 
 Dot folders such as `.cutroom/` hold app state, including review captures and renders. They are left out of the project file list that Media, Assets, and the code tree read, and their changes do not refresh Media.
 
+`projectWritePath` is the server boundary for user-directed source writes. It allows HyperFrames' authored text types and the editor's `.htm` alias, refuses hidden segments and instruction/tooling configuration, and checks both the requested path and the canonical symlink target. Source saves, timeline/script mutations, and the embedded editor use it for agents and owners, independent of approval. Media management keeps its asset types but cannot target protected files. Embedded renames are refused when the upstream reference writer's project-wide text scan could touch protected content. History validates the files an undo, redo, or restore would change; its fixed app sidecars remain available, without allowing links from them to native settings. App-owned hidden sidecars use `projectStatePath` to refuse redirected write targets; public `cutroom.json` follows the source-write boundary too. This prevents a metadata symlink from redirecting an annotation or review write onto native permissions.
+
 ## Editor integration
 
 The public `@hyperframes/studio` application supplies the timeline, canvas editing, preview, inspector, and source editor. Cutroom supplies the surrounding workspace, review tools, agent panel, and original visual theme.

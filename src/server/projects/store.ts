@@ -29,7 +29,7 @@ import type {
   ProjectDocument,
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
-import { isMissing, projectPath } from "./path";
+import { isMissing, projectPath, projectWritePath } from "./path";
 
 export { isMissing, projectPath } from "./path";
 
@@ -179,7 +179,7 @@ export async function createProjectStore(options: {
     });
   const document = async (project: Project): Promise<ProjectDocument> => {
     const raw = await readFile(
-      await projectPath(project, DOCUMENT_PATH, true),
+      await projectWritePath(project, DOCUMENT_PATH, { allowMissing: true }),
       "utf8",
     ).catch((error: unknown) => {
       if (isMissing(error)) return null;
@@ -205,7 +205,9 @@ export async function createProjectStore(options: {
     project: Project,
     value: ProjectDocument,
   ): Promise<FileMutationInput> => {
-    const absolute = await projectPath(project, DOCUMENT_PATH, true);
+    const absolute = await projectWritePath(project, DOCUMENT_PATH, {
+      allowMissing: true,
+    });
     let before = documentReads.get(value);
     if (before === undefined)
       throw new Error("Read the project document before changing it.");

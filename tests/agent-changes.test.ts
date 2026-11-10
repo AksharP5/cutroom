@@ -64,7 +64,7 @@ test("agent clip marks survive reload, clear on Accept or human edits, and inclu
         [AGENT_HEADER]: "external",
       },
       body: JSON.stringify({
-        path: "index.html",
+        path: "./index.html",
         expectedVersion: source.version,
         content: source.content.replace(
           'class="clip title"',
@@ -74,6 +74,9 @@ test("agent clip marks survive reload, clear on Accept or human edits, and inclu
     });
     expect(saved.status).toBe(200);
     expect((await read()).agentChanges).toEqual(["headline"]);
+    expect(
+      await createReviewService(store).changedClips(project, "./index.html"),
+    ).toEqual(["headline"]);
     const refused = await app.request(
       `/api/cutroom${path}/review/changes/accept`,
       { method: "POST", headers: { [AGENT_HEADER]: "external" } },

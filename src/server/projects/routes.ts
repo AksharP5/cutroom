@@ -30,7 +30,8 @@ import type { TranscriptService } from "../transcript/service";
 import { listMedia } from "./media";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
-import { projectPath, readSource } from "./store";
+import { readSource } from "./store";
+import { projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 
 export function parseInput<T extends z.ZodType>(
@@ -135,7 +136,7 @@ export function createProjectRoutes(
             applyFileMutations(project.path, [
               {
                 sourceFile: body.path,
-                absPath: await projectPath(project, body.path),
+                absPath: await projectWritePath(project, body.path),
                 before: source.content,
                 after: body.content,
                 expectedVersion: body.expectedVersion,

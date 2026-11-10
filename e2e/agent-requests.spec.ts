@@ -146,6 +146,10 @@ test("an approval shows the full target and scoped Always allow in a short windo
     approval.getByRole("button", { name: "Always allow Cutroom edits" }),
     page,
   );
+  const scope = approval.locator(".agent-request-scope");
+  await expect(scope).toContainText("every conversation, until you revoke");
+  await expect(scope).toContainText("Shell and native file changes still ask");
+  await expectInWindow(scope, page);
   await expectInWindow(page.getByLabel("Message your agent"), page);
   await page.setViewportSize({ width: 1720, height: 1050 });
   await page.frameLocator("iframe[data-live]").locator("#headline").waitFor();

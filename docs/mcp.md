@@ -24,6 +24,8 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 
 Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
+`source_write` only edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
+
 ## Timeline
 
 Timeline edits use frames at the composition's fps. Pass the `revision` from `timeline_read` to `timeline_edit`; each successful edit returns the next revision. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.

@@ -1053,6 +1053,13 @@ option {
 .agent-request-title:hover {
   color: var(--text-primary);
 }
+.agent-request-scope {
+  flex: 1 0 100%;
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-micro);
+  line-height: var(--leading-body);
+}
 .chat-tool pre {
   margin: 2px 0 6px 20px;
 }

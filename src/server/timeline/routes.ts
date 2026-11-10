@@ -25,7 +25,8 @@ import type {
 } from "../../shared/timeline/schema";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
-import { projectPath, readSource } from "../projects/store";
+import { readSource } from "../projects/store";
+import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
@@ -147,7 +148,7 @@ export function createTimelineRoutes(
         : [
             {
               sourceFile: composition,
-              absPath: await projectPath(project, composition),
+              absPath: await projectWritePath(project, composition),
               before: current.source.content,
               after: html,
               expectedVersion: current.source.version,
@@ -163,7 +164,7 @@ export function createTimelineRoutes(
       if (declared !== entry.content)
         files.push({
           sourceFile: "index.html",
-          absPath: await projectPath(project, "index.html"),
+          absPath: await projectWritePath(project, "index.html"),
           before: entry.content,
           after: declared,
           expectedVersion: entry.version,

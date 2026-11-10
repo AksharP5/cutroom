@@ -29,6 +29,8 @@ If a native run needs approval or an answer, the chat shows that request. Stoppi
 
 `timeline_view` and other Cutroom reads run without approval unless your native settings ask. On an edit approval, choose **Always allow Cutroom edits** to allow Cutroom's own edit tools for this project. Shell commands and other MCP servers keep their own permissions. Project creation and import always prompt separately. Your native ask rules still apply. The Agent panel shows the saved choice and **Revoke**; revoking stops any active run too.
 
+Source editing is limited to composition HTML, CSS, JavaScript, TypeScript, SVG, and JSON. Hidden paths, agent instructions, and native tooling configuration are protected for everyone, even after a one-time approval. Change those files outside Cutroom through your native editor's permissions. The embedded editor also refuses renames when its automatic reference updates could rewrite protected text files.
+
 Clips changed through Cutroom's timeline, script, or HTML source tools have a blue underline. Accept their completed review note to clear it, or use **Accept agent changes** in Review for edits made directly from chat. Editing a clip yourself also clears its underline. When several notes are claimed, the agent passes `noteId` on each edit so accepting a note clears only its own clips.
 
 ## Review queue

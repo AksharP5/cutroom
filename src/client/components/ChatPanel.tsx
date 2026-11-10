@@ -230,6 +230,12 @@ function RequestCard({
             </button>
             <code className="agent-request-tool">{request.tool}</code>
             {actions}
+            {request.canAllowCutroomEdits && (
+              <p className="agent-request-scope">
+                This project's Cutroom edits, every conversation, until you
+                revoke. Shell and native file changes still ask.
+              </p>
+            )}
           </div>
           {showInput && <pre>{JSON.stringify(request.input, null, 2)}</pre>}
         </>

@@ -146,7 +146,13 @@ export class AgentService {
     if (!always)
       for (const session of this.sessions.values()) {
         if (session.projectId !== projectId) continue;
-        await this.interrupt(session.id);
+        await this.interrupt(session.id).catch((error: unknown) => {
+          // Dispose below still closes the native process and its session allow entries.
+          console.error(
+            `Failed to interrupt agent session ${session.id}; closing it.`,
+            error,
+          );
+        });
         this.runtimes.get(session.id)?.dispose();
         this.runtimes.delete(session.id);
         const operation = this.operations.get(session.id);
