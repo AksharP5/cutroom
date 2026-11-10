@@ -5,9 +5,10 @@ import {
   thumbnailDeviceScaleFactor,
 } from "@hyperframes/studio-server";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
-import type { Browser, Page } from "puppeteer-core";
-import { browserExecutable, studioRenderScripts } from "./render";
+import type { Page } from "puppeteer-core";
+import { studioRenderScripts } from "./render";
 import { isolateCapturePage } from "./isolation";
+import { launchCaptureBrowser } from "./captureBrowser";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
@@ -24,32 +25,18 @@ interface PreviewWindow extends Window {
 
 /** One browser is reused; individual captures own isolated, cancellable pages. */
 export function createThumbnailRenderer() {
-  let browser: Promise<Browser> | undefined;
+  let browser: ReturnType<typeof launchCaptureBrowser> | undefined;
   let closing: Promise<void> | undefined;
   const getBrowser = () =>
     (browser ??= (async () => {
-      const executablePath = browserExecutable();
-      if (!executablePath)
-        throw new Error(
-          "Chromium is required for frame captures. Install Chromium or set HYPERFRAMES_BROWSER_PATH.",
+      const instance = await launchCaptureBrowser();
+      void instance.closed
+        .finally(() => {
+          browser = undefined;
+        })
+        .catch((error: unknown) =>
+          console.error("Capture cleanup failed:", error),
         );
-      const { default: puppeteer } = await import("puppeteer-core");
-      const instance = await puppeteer.launch({
-        headless: true,
-        executablePath,
-        args: [
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--mute-audio",
-          "--autoplay-policy=no-user-gesture-required",
-          "--use-gl=angle",
-          "--use-angle=swiftshader",
-          "--enable-unsafe-swiftshader",
-        ],
-      });
-      instance.on("disconnected", () => {
-        browser = undefined;
-      });
       return instance;
     })().catch((error: unknown) => {
       browser = undefined;
@@ -65,7 +52,7 @@ export function createThumbnailRenderer() {
       };
       options.signal.addEventListener("abort", abort, { once: true });
       try {
-        const instance = await getBrowser();
+        const { browser: instance } = await getBrowser();
         if (closing || options.signal.aborted) return null;
         page = await instance.newPage();
         const assets = new URL(options.previewUrl);
