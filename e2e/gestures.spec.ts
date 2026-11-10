@@ -217,6 +217,118 @@ test("an agent changing a linked partner before send also refuses the released d
   expect(await read()).toEqual(after);
 });
 
+for (const arrival of ["move", "insert"] as const) {
+  for (const timing of ["held", "retry"] as const) {
+    test(`an agent's ${arrival} into an empty overwrite destination refuses the ${timing} drag`, async ({
+      page,
+      request,
+    }, testInfo) => {
+      const { project, timeline, read, at, drag, agent } = await open(
+        page,
+        request,
+        "Occupied destination",
+      );
+      await agent([
+        { type: "trim", clipId: "shot-4", edge: "end", to: 300 },
+        { type: "trim", clipId: "title", edge: "end", to: 30 },
+      ]);
+      await expect
+        .poll(() =>
+          timeline
+            .locator('[data-clip="shot-4"]')
+            .evaluate((clip) => clip.style.getPropertyValue("--d")),
+        )
+        .toBe("30");
+      await expect
+        .poll(() =>
+          timeline
+            .locator('[data-clip="title"]')
+            .evaluate((clip) => clip.style.getPropertyValue("--d")),
+        )
+        .toBe("30");
+      await timeline
+        .getByRole("button", { name: "Zoom in", exact: true })
+        .click();
+      if (arrival === "insert")
+        await writeFile(
+          join(project.path, "incoming.svg"),
+          '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="blue"/></svg>',
+        );
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let sent = 0;
+      const statuses: number[] = [];
+      if (timing === "retry")
+        await page.route("**/commands", async (route) => {
+          sent++;
+          if (sent === 1) await gate;
+          const response = await route.fetch();
+          statuses.push(response.status());
+          await route.fulfill({ response });
+        });
+      else
+        page.on("request", (request) => {
+          if (request.url().endsWith("/commands")) sent++;
+        });
+      try {
+        // shot-4 [270,300) is held over the initially empty [330,360).
+        await drag(await at(285), await at(345), timing === "retry");
+        if (timing === "retry") await expect.poll(() => sent).toBe(1);
+        await agent(
+          arrival === "move"
+            ? [{ type: "move", clipIds: ["title"], by: 330, trackBy: -1 }]
+            : [
+                {
+                  type: "insert",
+                  track: 0,
+                  at: 330,
+                  clip: {
+                    id: "incoming",
+                    kind: "image",
+                    src: "incoming.svg",
+                    duration: 30,
+                  },
+                },
+              ],
+        );
+        const after = await read();
+        release();
+        await expect(page.locator(".toast span")).toHaveText(
+          "An agent changed those clips first.",
+        );
+        if (timing === "held") {
+          await expect(timeline.locator(".tl-readout")).toBeHidden();
+          await page.mouse.up();
+        } else {
+          await expect.poll(() => statuses).toEqual([409]);
+        }
+        await expect.poll(read).toEqual(after);
+        await expect
+          .poll(() =>
+            timeline
+              .locator('[data-clip="shot-4"]')
+              .evaluate((clip) => clip.style.getPropertyValue("--s")),
+          )
+          .toBe("270");
+        await expect(
+          timeline.locator(
+            `[data-clip="${arrival === "move" ? "title" : "incoming"}"]`,
+          ),
+        ).toBeVisible();
+        expect(sent).toBe(timing === "held" ? 0 : 1);
+        await at(345);
+        await page.screenshot({
+          path: testInfo.outputPath("destination-refused.png"),
+        });
+      } finally {
+        release();
+      }
+    });
+  }
+}
+
 for (const key of ["c", "Control", "Meta"]) {
   test(`${key} changes a stationary drag's snap before release`, async ({
     page,

@@ -206,19 +206,27 @@ export function useLaneGestures(options: LaneGestureOptions) {
     });
   }
 
+  /** Reports conflicts against the held destination before pointer geometry can change it. */
+  function refuseChanged(base: Timeline, next: Preview) {
+    const { timeline } = latest.current;
+    if (
+      timeline === base ||
+      !anchorsChanged(editAnchors(base, next.shown, next.commands), timeline)
+    )
+      return false;
+    // The queue reports the conflict without sending.
+    latest.current.onEdit(next.label, next.commands, base);
+    return true;
+  }
+
   /** Draws what a drag or drop would do. */
   function render(base: Timeline, next: Preview) {
     preview.current = next;
-    const { timeline } = latest.current;
-    if (
-      timeline !== base &&
-      anchorsChanged(editAnchors(base, next.shown, next.commands), timeline)
-    ) {
-      // The queue reports the conflict without sending. Never redraw a relative move from a new start.
-      latest.current.onEdit(next.label, next.commands, base);
+    if (refuseChanged(base, next)) {
       end("cancel");
       return;
     }
+    const { timeline } = latest.current;
     // Keep the commands frozen, but show unrelated agent edits underneath the held drag.
     const over =
       timeline !== base ? previewCommands(timeline, next.commands) : null;
@@ -290,6 +298,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (current.phase !== "dragging" || !ppf) return;
     if (current.intent.kind === "marquee") return drawMarquee();
     if (!active) return;
+    if (preview.current && refuseChanged(active.timeline, preview.current)) {
+      end("cancel");
+      return;
+    }
     const { x, y, bypass } = pointer.current;
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
@@ -359,8 +371,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
       return;
     }
     // Release always uses the modifiers held now, even without a final pointer move.
+    const conflict =
+      outcome === "commit" &&
+      preview.current !== null &&
+      refuseChanged(active.timeline, preview.current);
     const result =
-      outcome === "cancel"
+      outcome === "cancel" || conflict
         ? null
         : dragPreview(active, {
             frame: frameAt(pointer.current.x),

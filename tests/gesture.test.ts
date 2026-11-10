@@ -109,7 +109,7 @@ test("frozen edit anchors include linked partners and ripple followers but ignor
     }),
   ];
   const anchors = editAnchors(before, applyAll(before, commands), commands);
-  expect(anchors.map(({ id }) => id).sort()).toEqual([
+  expect(anchors.clips.map(({ id }) => id).sort()).toEqual([
     "a",
     "a-sound",
     "b",
@@ -128,7 +128,7 @@ test("frozen edit anchors include linked partners and ripple followers but ignor
   }
   const move = [CommandSchema.parse({ type: "move", clipIds: ["c"], by: 30 })];
   const moved = editAnchors(before, applyAll(before, move), move);
-  expect(moved.map(({ id }) => id)).toEqual(["c"]);
+  expect(moved.clips.map(({ id }) => id)).toEqual(["c"]);
   expect(
     anchorsChanged(moved, {
       ...before,
@@ -143,6 +143,58 @@ test("frozen edit anchors include linked partners and ripple followers but ignor
       clips: before.clips.filter(({ id }) => id !== "c"),
     }),
   ).toBe(true);
+});
+
+test("an overwrite freezes empty destination occupancy against both moved and inserted clips", () => {
+  const before = sequence();
+  const commands = [
+    CommandSchema.parse({ type: "move", clipIds: ["c"], by: 100 }),
+  ];
+  const anchors = editAnchors(before, applyAll(before, commands), commands);
+  expect(anchorsChanged(anchors, before)).toBe(false);
+  for (const incoming of [
+    { type: "move", clipIds: ["b"], by: 300 },
+    {
+      type: "insert",
+      track: 0,
+      at: 450,
+      clip: { id: "incoming", kind: "image", src: "new.png", duration: 10 },
+    },
+  ]) {
+    const current = applyAll(before, [CommandSchema.parse(incoming)]);
+    expect(anchorsChanged(anchors, current)).toBe(true);
+  }
+});
+
+test("destination snapshots include linked tracks, preserve selection gaps, and use exclusive ends", () => {
+  const before = sequence();
+  const commands = [
+    CommandSchema.parse({ type: "move", clipIds: ["a", "c"], by: 500 }),
+  ];
+  const anchors = editAnchors(before, applyAll(before, commands), commands);
+  const arriving = (track: number, at: number, duration: number) =>
+    normalizeTimeline({
+      ...before,
+      clips: [...before.clips, clip("incoming", track, at, duration)],
+    });
+  expect(anchorsChanged(anchors, arriving(2, 550, 10))).toBe(true);
+  expect(anchorsChanged(anchors, arriving(0, 600, 200))).toBe(false);
+  expect(anchorsChanged(anchors, arriving(0, 599, 1))).toBe(true);
+  expect(anchorsChanged(anchors, arriving(0, 800, 1))).toBe(true);
+  const alone = [
+    CommandSchema.parse({
+      type: "move",
+      clipIds: ["a"],
+      by: 500,
+      linked: false,
+    }),
+  ];
+  expect(
+    anchorsChanged(
+      editAnchors(before, applyAll(before, alone), alone),
+      arriving(2, 550, 10),
+    ),
+  ).toBe(false);
 });
 
 test("a press arms, three pixels of travel start the drag, and a release commits it", () => {
@@ -401,7 +453,7 @@ test("an overwrite drag previews both surviving pieces and anchors the covered c
     c: [0, 300, 50],
   });
   expect(
-    editAnchors(timeline, preview.shown, preview.commands).map(
+    editAnchors(timeline, preview.shown, preview.commands).clips.map(
       (clip) => clip.id,
     ),
   ).toEqual(["b", "c"]);
