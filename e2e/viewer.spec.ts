@@ -1,8 +1,74 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
-import { ProjectSchema } from "../src/shared/project";
+import { expect, test } from "./fixtures";
+import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+test("the new viewer refuses composition API calls and parent access while remaining playable", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Untrusted preview" },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  const source = await readFile(index, "utf8");
+  const script = `<script>
+    (async () => {
+      const results = {};
+      const post = body => ({method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      const attempts = {
+        annotation: () => fetch("/api/cutroom/projects/${project.id}/annotations", post({kind:"comment",body:"untrusted",time:0})),
+        approval: () => fetch("/api/cutroom/agents/sessions/forbidden/responses", post({requestId:"approval",decision:"allow"})),
+        projects: () => fetch("/api/cutroom/projects"),
+        parent: () => parent.document.body,
+        external: () => fetch("https://outside.invalid/collect")
+      };
+      for (const [name, attempt] of Object.entries(attempts)) {
+        try { await attempt(); results[name] = "allowed"; } catch { results[name] = "blocked"; }
+      }
+      document.querySelector("main").setAttribute("data-attacks", JSON.stringify(results));
+    })();
+  </script>`;
+  await writeFile(index, source.replace("</body>", `${script}</body>`));
+  await page.addInitScript(() =>
+    localStorage.setItem("cutroom.newEditor", "true"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("main")).toHaveAttribute(
+    "data-attacks",
+    JSON.stringify({
+      annotation: "blocked",
+      approval: "blocked",
+      projects: "blocked",
+      parent: "blocked",
+      external: "blocked",
+    }),
+  );
+  await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+    "sandbox",
+    "allow-scripts",
+  );
+  const document = ProjectDocumentSchema.parse(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/document`)
+    ).json(),
+  );
+  expect(document.annotations).toEqual([]);
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("l");
+  await expect(
+    page.getByRole("button", { name: /^Current time/ }),
+  ).not.toHaveText("00:00:00:00");
+  await page.keyboard.press("k");
+  await expect(page.locator(".status-error")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("isolated-viewer.png") });
+});
 
 test("the new editor plays, steps, and marks in and out as undoable timeline edits", async ({
   page,

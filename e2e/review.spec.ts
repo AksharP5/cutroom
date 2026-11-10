@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -76,7 +76,9 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     note: "Moved the title up 40px.",
   });
   await expect(group("To review")).toContainText("Moved the title up 40px.");
-  await page.screenshot({ path: "artifacts/review-queue.png" });
+  await page.screenshot({
+    path: `${process.env.CUTROOM_E2E_DIR ?? "artifacts"}/review-queue.png`,
+  });
 
   await expect(
     group("To review").getByRole("button", { name: "Reject", exact: true }),

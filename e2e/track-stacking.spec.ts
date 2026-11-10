@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import type { APIRequestContext, TestInfo } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";

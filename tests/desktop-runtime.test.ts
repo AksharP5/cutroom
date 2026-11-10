@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -171,6 +171,70 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
         ),
       ).toBe("denied");
       expect((await fetch(`http://127.0.0.1:${port}/health`)).ok).toBe(true);
+      const origin = `http://127.0.0.1:${port}`;
+      const isolatedProject = z
+        .object({ id: z.string(), path: z.string() })
+        .parse(
+          await (
+            await fetch(`${origin}/api/cutroom/projects`, {
+              method: "POST",
+              headers: { origin, "content-type": "application/json" },
+              body: JSON.stringify({
+                name: "Desktop isolation",
+                width: 320,
+                height: 240,
+                duration: 1,
+              }),
+            })
+          ).json(),
+        );
+      const sourcePath = join(isolatedProject.path, "index.html");
+      const source = await readFile(sourcePath, "utf8");
+      await writeFile(
+        sourcePath,
+        source.replace(
+          "</body>",
+          `<script>
+        fetch("/api/cutroom/projects/${isolatedProject.id}/annotations", {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({kind:"comment",body:"desktop attack",time:0})})
+          .then(()=>document.querySelector("main").dataset.attack="allowed")
+          .catch(()=>document.querySelector("main").dataset.attack="blocked");
+      </script></body>`,
+        ),
+      );
+      await page.evaluate(() =>
+        localStorage.setItem("cutroom.newEditor", "true"),
+      );
+      await page.goto(`${origin}/#project/${isolatedProject.id}`);
+      await page.reload();
+      const preview = page.frameLocator("iframe[data-live]");
+      await preview.locator('main[data-attack="blocked"]').waitFor();
+      expect(
+        await page.locator("iframe[data-live]").getAttribute("sandbox"),
+      ).toBe("allow-scripts");
+      expect(
+        await page.evaluate(
+          'document.querySelector("iframe[data-live]").contentDocument',
+        ),
+      ).toBeNull();
+      await page.getByRole("region", { name: "Viewer" }).click();
+      await page.keyboard.press("ArrowRight");
+      expect(
+        (
+          await page
+            .getByRole("button", { name: /^Current time/ })
+            .textContent()
+        )?.replace(/\s/g, ""),
+      ).toBe("00:00:00:01");
+      const document = z
+        .object({ annotations: z.array(z.unknown()) })
+        .parse(
+          await (
+            await fetch(
+              `${origin}/api/cutroom/projects/${isolatedProject.id}/document`,
+            )
+          ).json(),
+        );
+      expect(document.annotations).toEqual([]);
       if (packaged) {
         const status = z
           .object({ mcpCommand: z.string() })
@@ -186,7 +250,10 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
           await (
             await fetch(`http://127.0.0.1:${port}/api/cutroom/projects`, {
               method: "POST",
-              headers: { "content-type": "application/json" },
+              headers: {
+                "content-type": "application/json",
+                origin: `http://127.0.0.1:${port}`,
+              },
               body: JSON.stringify({
                 name: "Portable render",
                 width: 320,
@@ -200,7 +267,10 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
           `http://127.0.0.1:${port}/api/projects/${project.id}/render`,
           {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              origin: `http://127.0.0.1:${port}`,
+            },
             body: JSON.stringify({
               fps: 2,
               quality: "draft",

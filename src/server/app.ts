@@ -16,6 +16,7 @@ import { createTimelineRoutes } from "./timeline/routes";
 import { createWorkspaceRoutes } from "./workspace";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
+import { allowsLocalRequest } from "./localAccess";
 
 export async function createApp(
   options: {
@@ -60,20 +61,22 @@ export async function createApp(
         { error: "Cutroom is closing. Reopen the app to continue." },
         503,
       );
-    const url = new URL(c.req.url);
-    if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))
-      return c.json({ error: "Cutroom accepts local connections only." }, 403);
-    const origin = c.req.header("origin");
-    const allowed = [baseUrl, `http://localhost:${port}`];
-    if (options.allowDevOrigin)
-      allowed.push("http://127.0.0.1:5173", "http://localhost:5173");
-    if (origin && !allowed.includes(origin))
+    if (!allowsLocalRequest(c.req.raw, baseUrl, options.allowDevOrigin))
       return c.json(
-        { error: "This origin cannot access your local workspace." },
+        {
+          error:
+            "This request cannot access your local workspace. Mutations require Cutroom's Origin header.",
+        },
         403,
       );
     c.header("x-content-type-options", "nosniff");
     c.header("referrer-policy", "no-referrer");
+    // Restricts self-navigation by sandboxed preview frames as well as their initial load.
+    if (!new URL(c.req.url).pathname.startsWith("/api/"))
+      c.header(
+        "content-security-policy",
+        "frame-src 'self'; object-src 'none'",
+      );
     await next();
   });
   app.onError((error, c) => {

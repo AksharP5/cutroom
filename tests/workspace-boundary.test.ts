@@ -45,6 +45,53 @@ test("foreign browser origins and rebinding hosts cannot access local projects",
   ).toBe(200);
 });
 
+test("every mutation requires an explicit workspace Origin, including approval, upstream, and MCP routes", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "cutroom-mutation-origin-"));
+  cleanup.push(() => rm(dataDir, { recursive: true, force: true }));
+  const runtime = await createApp({
+    dataDir,
+    projectsDir: join(dataDir, "projects"),
+  });
+  cleanup.push(() => runtime.dispose());
+  for (const path of [
+    "/api/cutroom/projects",
+    "/api/cutroom/agents/sessions/test/responses",
+    "/api/projects/test/files/index.html",
+    "/api/telemetry",
+    "/mcp",
+  ]) {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      for (const origin of [
+        undefined,
+        "null",
+        "http://127.0.0.1:4318",
+        "https://outside.example",
+      ]) {
+        const response = await runtime.app.request(
+          `http://127.0.0.1:4317${path}`,
+          {
+            method,
+            headers: origin ? { origin } : {},
+          },
+        );
+        expect(response.status).toBe(403);
+      }
+    }
+  }
+  const response = await runtime.app.request(
+    "http://127.0.0.1:4317/api/cutroom/projects",
+    {
+      method: "POST",
+      headers: {
+        origin: "http://127.0.0.1:4317",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: "Authorized project" }),
+    },
+  );
+  expect(response.status).toBe(201);
+});
+
 test("annotation captures cannot write through a project symlink", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom-attachment-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
@@ -63,7 +110,10 @@ test("annotation captures cannot write through a project symlink", async () => {
   app.onError((error, c) => c.json({ error: error.message }, 403));
   const response = await app.request(`/projects/${project.id}/attachments`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      origin: "http://127.0.0.1:4317",
+    },
     body: JSON.stringify({ image: "data:image/png;base64,iVBORw0KGgo=" }),
   });
   expect(response.status).toBe(403);
@@ -87,7 +137,10 @@ test("user-selected attachments are copied into the project and project files ar
   const importFile = (path: string) =>
     app.request(`/projects/${project.id}/attachments/import`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        origin: "http://127.0.0.1:4317",
+      },
       body: JSON.stringify({ path }),
     });
   const response = await importFile(source);
@@ -117,14 +170,20 @@ test("review captures stay out of the project file list", async () => {
     await (
       await request("/cutroom/projects", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          origin: "http://127.0.0.1:4317",
+        },
         body: JSON.stringify({ name: "Review captures" }),
       })
     ).json(),
   );
   const capture = await request(`/cutroom/projects/${project.id}/attachments`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      origin: "http://127.0.0.1:4317",
+    },
     body: JSON.stringify({ image: "data:image/png;base64,iVBORw0KGgo=" }),
   });
   expect(capture.status).toBe(201);

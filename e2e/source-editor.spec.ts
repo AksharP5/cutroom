@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 
 test("source editing saves, updates the preview, and supports native editor undo", async ({

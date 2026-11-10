@@ -30,6 +30,8 @@ import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
 import { createRenderWorkers } from "./jobs";
+import { previewPolicy } from "./isolation";
+import { withPreviewBridge } from "./previewBridge";
 
 interface FileChange {
   projectId: string;
@@ -61,6 +63,26 @@ export function createHyperframesApi(
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers();
+  const previewKeys = new Map<string, string>();
+  const isolatedPreview = (projectId: string, previewUrl: string) => {
+    let key = previewKeys.get(projectId);
+    if (!key) {
+      key = crypto.randomUUID();
+      previewKeys.set(projectId, key);
+    }
+    const url = new URL(previewUrl);
+    const previewPath = `/api/projects/${encodeURIComponent(projectId)}/preview`;
+    if (
+      url.pathname !== previewPath &&
+      !url.pathname.startsWith(`${previewPath}/`)
+    )
+      throw new Error("Frame capture requires the project's preview URL.");
+    url.pathname = url.pathname.replace(
+      previewPath,
+      `/api/isolated/${key}/preview`,
+    );
+    return url.href;
+  };
 
   const watchProject = (project: ResolvedProject) => {
     if (watchers.has(project.dir)) return;
@@ -200,9 +222,66 @@ export function createHyperframesApi(
     runtimeUrl: "/api/runtime.js",
     gsapLocalRoot: "/api/vendor/npm",
     rendersDir: (project) => join(project.dir, ".cutroom", "renders"),
-    generateThumbnail: (options) => thumbnails.capture(options),
+    generateThumbnail: (options) =>
+      thumbnails.capture({
+        ...options,
+        previewUrl: isolatedPreview(options.project.id, options.previewUrl),
+      }),
     startRender: (options) => renders.start(options),
   };
+
+  api.get("/projects/:id/isolated-preview", async (c) => {
+    const id = c.req.param("id");
+    if (!(await resolveProject(id))) return c.notFound();
+    const url = new URL(c.req.url);
+    url.pathname = `/api/projects/${encodeURIComponent(id)}/preview`;
+    return c.redirect(isolatedPreview(id, url.href));
+  });
+  api.get("/isolated/:key/*", async (c) => {
+    const key = c.req.param("key");
+    const projectId = [...previewKeys].find(([, value]) => value === key)?.[0];
+    if (!projectId) return c.notFound();
+    const prefix = `/api/isolated/${key}/`;
+    const url = new URL(c.req.url);
+    const path = url.pathname.slice(prefix.length);
+    const target =
+      path === "runtime.js" || path.startsWith("vendor/npm/")
+        ? `/${path}`
+        : path === "preview" || path.startsWith("preview/")
+          ? `/projects/${encodeURIComponent(projectId)}/${path}`
+          : null;
+    if (!target) return c.notFound();
+    const response = await api.request(`${url.origin}${target}${url.search}`, {
+      headers: c.req.raw.headers,
+    });
+    const headers = new Headers(response.headers);
+    headers.set(
+      "Content-Security-Policy",
+      previewPolicy(`${url.origin}${prefix}`),
+    );
+    headers.set(
+      "Connection-Allowlist",
+      `(${JSON.stringify(`${url.origin}${prefix}*`)})`,
+    );
+    headers.set("X-DNS-Prefetch-Control", "off");
+    headers.set("Access-Control-Allow-Origin", "null");
+    headers.set("X-Content-Type-Options", "nosniff");
+    headers.set("Referrer-Policy", "no-referrer");
+    if (!headers.get("content-type")?.includes("text/html"))
+      return new Response(response.body, { status: response.status, headers });
+    const html = (await response.text())
+      .replaceAll(
+        `/api/projects/${encodeURIComponent(projectId)}/preview/`,
+        `${prefix}preview/`,
+      )
+      .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
+      .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
+    // The HTTP CSP applies before any authored markup, including malformed documents.
+    return new Response(withPreviewBridge(html), {
+      status: response.status,
+      headers,
+    });
+  });
 
   api.get("/runtime.js", (c) =>
     c.body(getHyperframeRuntimeScript(), 200, {

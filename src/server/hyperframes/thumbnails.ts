@@ -7,6 +7,7 @@ import {
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { Browser, Page } from "puppeteer-core";
 import { browserExecutable, studioRenderScripts } from "./render";
+import { isolateCapturePage } from "./isolation";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
@@ -67,6 +68,12 @@ export function createThumbnailRenderer() {
         const instance = await getBrowser();
         if (closing || options.signal.aborted) return null;
         page = await instance.newPage();
+        const assets = new URL(options.previewUrl);
+        const prefix = assets.pathname.match(/^\/api\/isolated\/[\w-]+\//)?.[0];
+        if (!prefix)
+          throw new Error("Frame capture requires an isolated preview URL.");
+        assets.pathname = prefix;
+        await isolateCapturePage(page, assets.href);
         await page.setViewport({
           width: options.width,
           height: options.height,
