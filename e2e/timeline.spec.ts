@@ -146,8 +146,33 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
   await expect(slider).toHaveAttribute("aria-valuenow", "0");
   await expect(now).toHaveText("00:00:08:00");
 
-  // Playback started past the paging threshold still brings the playhead back into view.
+  // A zoom key eases visibly. The built CSS is minified, so this also checks `.2s` reads as 200ms.
+  const eased = timeline
+    .locator(".tl-scaled")
+    .first()
+    .evaluate(
+      (layer) =>
+        new Promise<number>((resolve) => {
+          const deadline = performance.now() + 2000;
+          const look = () => {
+            const [animation] = layer.getAnimations();
+            if (animation)
+              return void animation.finished.then(() =>
+                resolve(
+                  Number(document.timeline.currentTime) -
+                    Number(animation.startTime),
+                ),
+              );
+            if (performance.now() > deadline) return resolve(0);
+            requestAnimationFrame(look);
+          };
+          look();
+        }),
+    );
   await page.keyboard.press("Control+=");
+  expect(await eased).toBeGreaterThan(100);
+
+  // Playback started past the paging threshold still brings the playhead back into view.
   await page.keyboard.press("Control+=");
   await page.keyboard.press("Control+=");
   await scroller.evaluate((element) => (element.scrollLeft = 0));

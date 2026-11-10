@@ -2,6 +2,10 @@ import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
 import { nominal } from "../edit/timecode";
 
+/** A CSS time in milliseconds. Built CSS is minified, which writes `220ms` as `.22s`. */
+export const cssMilliseconds = (time: string) =>
+  parseFloat(time) * (time.trim().endsWith("ms") ? 1 : 1000);
+
 /** The closest zoom: one frame is this many pixels wide. */
 export const MAX_PPF = 32;
 /** Ruler labels never sit closer than this many pixels. */

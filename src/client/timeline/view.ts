@@ -1,6 +1,7 @@
 import type { Fps } from "../../shared/timeline/schema";
 import {
   clampPpf,
+  cssMilliseconds,
   fitPpf,
   frameAt,
   pageTarget,
@@ -74,7 +75,7 @@ export function createViewport(
   const motion = (duration: string) => {
     const style = getComputedStyle(grid);
     return {
-      duration: parseFloat(style.getPropertyValue(duration)),
+      duration: cssMilliseconds(style.getPropertyValue(duration)),
       easing: style.getPropertyValue("--ease-out").trim(),
       composite: "add",
     } as const;
