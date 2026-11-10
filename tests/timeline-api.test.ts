@@ -215,12 +215,26 @@ test("the entry document reads its live tree and a scene file its template", asy
       },
     );
     expect(moved.status).toBe(200);
+    const written = await readFile(
+      join(project.path, "scenes", "intro.html"),
+      "utf8",
+    );
+    expect(written).toContain(
+      `<template id="intro-template"><style data-cutroom-track-stacking="intro">`,
+    );
     expect(
-      await readFile(join(project.path, "scenes", "intro.html"), "utf8"),
+      written.replace(
+        /<style data-cutroom-track-stacking[^>]*>[\s\S]*?<\/style>\n/g,
+        "",
+      ),
     ).toBe(
       scene
         .replace(`data-start="0"`, `data-start="1"`)
-        .replace(`data-duration="4"`, `data-duration="5"`),
+        .replace(
+          `data-duration="1">Card`,
+          `data-duration="1" data-track-index="0">Card`,
+        )
+        .replace(`data-duration="4">`, `data-duration="5">`),
     );
   } finally {
     await fixture.close();
@@ -349,3 +363,48 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     }
   },
 );
+
+test("a scene edit declares the entry layer in the same undo step", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  try {
+    const entry = await readFile(join(project.path, "index.html"), "utf8");
+    const scene = `<template><div data-composition-id="scene" data-duration="2"><div id="box" class="clip" data-start="0" data-duration="1" data-track-index="1">Box</div></div></template>`;
+    await writeFile(join(project.path, "scene.html"), scene);
+    const read = TimelineViewSchema.parse(
+      await (
+        await fixture.request(
+          `/projects/${project.id}/timeline?composition=scene.html`,
+        )
+      ).json(),
+    );
+    const edited = await fixture.request(
+      `/projects/${project.id}/commands`,
+      "POST",
+      {
+        composition: "scene.html",
+        expectedRevision: read.revision,
+        commands: [{ type: "trim", clipId: "box", edge: "end", to: 60 }],
+      },
+    );
+    expect(edited.status).toBe(200);
+    expect(await readFile(join(project.path, "index.html"), "utf8")).toContain(
+      `<head><style data-cutroom-track-layer>@layer cutroom-tracks;</style>`,
+    );
+    expect(await readFile(join(project.path, "scene.html"), "utf8")).toContain(
+      `<template><style data-cutroom-track-stacking="scene">`,
+    );
+    expect(
+      (await fixture.request(`/projects/${project.id}/history/undo`, "POST"))
+        .status,
+    ).toBe(200);
+    expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+      entry,
+    );
+    expect(await readFile(join(project.path, "scene.html"), "utf8")).toBe(
+      scene,
+    );
+  } finally {
+    await fixture.close();
+  }
+});

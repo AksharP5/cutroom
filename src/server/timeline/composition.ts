@@ -66,6 +66,8 @@ interface SourceElement {
 export interface ParsedComposition {
   html: string;
   timeline: Timeline;
+  roots: SourceElement[];
+  scope: CompositionScope;
   root: SourceElement;
   rootDurationAuthored: boolean;
   elements: Map<string, SourceElement>;
@@ -151,10 +153,14 @@ function parseElements(html: string) {
   return { roots, nodes, owned };
 }
 
-function* descendants(elements: SourceElement[]): Generator<SourceElement> {
+function* descendants(
+  elements: SourceElement[],
+  includeTemplates = false,
+): Generator<SourceElement> {
   for (const element of elements) {
     yield element;
-    yield* descendants(element.children);
+    yield* descendants(element.children, includeTemplates);
+    if (includeTemplates) yield* descendants(element.content, true);
   }
 }
 
@@ -448,6 +454,8 @@ export function parseComposition(
   return {
     html,
     timeline,
+    roots,
+    scope,
     root,
     rootDurationAuthored,
     elements: new Map(rows.map(({ id, element }) => [id, element])),
@@ -456,7 +464,12 @@ export function parseComposition(
     nodes,
     owned,
     scriptsAndStyles: all
-      .filter((element) => element.tag === "script" || element.tag === "style")
+      .filter(
+        (element) =>
+          element.tag === "script" ||
+          (element.tag === "style" &&
+            element.attrs["data-cutroom-track-stacking"] === undefined),
+      )
       .map((element) => html.slice(element.openEnd, element.end)),
   };
 }
@@ -623,6 +636,7 @@ function clipChanges(
   after: Clip,
   element: SourceElement,
   fps: Fps,
+  normalizeTracks = false,
 ): AttributeChange[] {
   const has = (name: string) => element.attrs[name] !== undefined;
   const changes: AttributeChange[] = [];
@@ -636,7 +650,12 @@ function clipChanges(
     changes.push(["data-duration", String(toSeconds(after.duration, fps))]);
     if (has("data-end")) changes.push(["data-end", null]);
   }
-  if (before.track !== after.track) {
+  if (
+    before.track !== after.track ||
+    (normalizeTracks &&
+      after.kind !== "audio" &&
+      element.attrs["data-track-index"] !== String(after.track))
+  ) {
     changes.push(["data-track-index", String(after.track)]);
     if (has("data-layer")) changes.push(["data-layer", null]);
   }
@@ -687,6 +706,7 @@ function copyMarkup(
   parsed: ParsedComposition,
   template: Clip,
   clip: Clip,
+  normalizeTracks: boolean,
 ): string {
   const element = parsed.elements.get(template.id)!;
   const authoredId = element.attrs.id;
@@ -713,7 +733,13 @@ function copyMarkup(
     ...attributeEdits(first!, source, [
       ["id", clip.id],
       ["data-hf-id", null],
-      ...clipChanges(template, clip, element, parsed.timeline.fps),
+      ...clipChanges(
+        template,
+        clip,
+        element,
+        parsed.timeline.fps,
+        normalizeTracks,
+      ),
       ...(origin !== undefined &&
       clip.link !== null &&
       clip.link !== template.link
@@ -765,6 +791,121 @@ function insertMarkup(clip: Clip, input: InsertClip, fps: Fps): string {
   return tag === "img" ? `<img${text}>` : `<${tag}${text}></${tag}>`;
 }
 
+/** CSS strings must also keep a composition id from closing the HTML style element. */
+function cssString(value: string): string {
+  return `"${value.replace(/[\0-\x1f\x7f"\\<]/g, (character) => `\\${character.charCodeAt(0).toString(16)} `)}"`;
+}
+
+function stylesheetLocation(roots: SourceElement[], scope: CompositionScope) {
+  const live = [...descendants(roots)];
+  const template =
+    scope === "sub-composition"
+      ? live.find((element) => element.tag === "template")
+      : undefined;
+  const head = template
+    ? undefined
+    : live.find((element) => element.tag === "head");
+  return {
+    at:
+      template?.openEnd ??
+      head?.openEnd ??
+      live.find((element) => element.tag === "html")?.openEnd ??
+      roots[0]?.start ??
+      0,
+    needsHead: !template && !head && scope === "document",
+  };
+}
+
+/** Scene styles are hoisted after entry styles, so their shared layer must be declared first. */
+export function declareTrackLayer(html: string): string {
+  const { roots } = parseElements(html);
+  const { at, needsHead } = stylesheetLocation(roots, "document");
+  const elements = [...descendants(roots, true)];
+  const first = elements.find(
+    (element) => element.start === at && element.tag === "style",
+  );
+  if (
+    first &&
+    (first.attrs["data-cutroom-track-layer"] !== undefined ||
+      first.attrs["data-cutroom-track-stacking"] !== undefined)
+  )
+    return html;
+  const text = `<style data-cutroom-track-layer>@layer cutroom-tracks;</style>`;
+  return applyEdits(html, [
+    ...elements
+      .filter(
+        (element) =>
+          element.tag === "style" &&
+          element.attrs["data-cutroom-track-layer"] !== undefined,
+      )
+      .map((element) => ({ start: element.start, end: element.end, text: "" })),
+    {
+      start: at,
+      end: at,
+      text: needsHead ? `<head>${text}</head>\n` : `${text}\n`,
+    },
+  ]);
+}
+
+/** Owns the defaults' scope and cascade order. */
+function stackingEdits(
+  parsed: ParsedComposition,
+  after: Timeline,
+  previous: ReadonlyMap<string, Clip>,
+): Edit[] | null {
+  const { html, root } = parsed;
+  const compositionId = root.attrs["data-composition-id"]!;
+  const blocks = [...descendants(parsed.roots, true)].filter(
+    (element) =>
+      element.tag === "style" &&
+      element.attrs["data-cutroom-track-stacking"] === compositionId,
+  );
+  const placed = after.clips.some((clip) => {
+    if (clip.kind === "audio") return false;
+    const prior = previous.get(clip.id);
+    return (
+      prior === undefined ||
+      prior.track !== clip.track ||
+      prior.start !== clip.start ||
+      prior.duration !== clip.duration
+    );
+  });
+  if (!blocks.length && !placed) return null;
+
+  const scope = `[data-composition-id=${cssString(compositionId)}]`;
+  const nested = `${scope} :is([data-start],[data-composition-id],[data-composition-src]) *`;
+  const tracks = new Set(
+    after.clips
+      .filter((clip) => clip.kind !== "audio")
+      .map((clip) => clip.track),
+  );
+  const rules = [...tracks]
+    .sort((a, b) => a - b)
+    .map(
+      (index) =>
+        `:where(${scope} [data-start][data-track-index="${index}"]:not(audio):not(${nested})){z-index:${index}}`,
+    )
+    .join("");
+  const text = `<style data-cutroom-track-stacking="${escapeAttribute(compositionId)}">@layer cutroom-tracks{${rules}}</style>`;
+  const { at, needsHead } = stylesheetLocation(parsed.roots, parsed.scope);
+  if (blocks.length === 1 && blocks[0]!.start === at && !needsHead)
+    return html.slice(at, blocks[0]!.end) === text
+      ? []
+      : [{ start: at, end: blocks[0]!.end, text }];
+  return [
+    ...blocks.map((block) => ({
+      start: block.start,
+      end: block.end,
+      text: "",
+    })),
+    {
+      start: at,
+      end: at,
+      text: needsHead ? `<head>${text}</head>\n` : `${text}\n`,
+    },
+  ];
+}
+
 /**
  * Turns an applied timeline into minimal source edits: changed attributes, removed elements, and
  * new clips. Anonymous clips the edit touches or renumbers get their stand-in id written, so the
@@ -792,13 +933,14 @@ export function patchComposition(
   const spans = new Map(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
-  const edits: Edit[] = [];
+  const stacking = stackingEdits(parsed, after, previous);
+  const edits: Edit[] = stacking ?? [];
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
     const next = current.get(clip.id);
     if (next) {
-      const changes = clipChanges(clip, next, element, fps);
+      const changes = clipChanges(clip, next, element, fps, stacking !== null);
       if (
         parsed.anonymous.has(clip.id) &&
         (changes.length ||
@@ -864,7 +1006,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip)}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null)}`,
     ]);
   }
   for (const [at, texts] of inserts)
