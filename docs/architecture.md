@@ -46,7 +46,7 @@ Filmstrips and waveforms are drawn by `bodies.ts` on one canvas that lies over t
 
 `src/client/keymap.ts` is the single key table, keyed by Resolve action id. It drives the handlers, button tooltips, and `docs/keyboard.md`; a test keeps the docs in step.
 
-Draft notes and pending saves live in `edit/noteStore.ts`, keyed by project outside the editor's lifetime. A save failure returns the original draft, including every stroke, even if another project is open. The client creates a UUID before saving and sends it to the annotation endpoint, which validates it and rejects duplicates. Pending and durable notes reconcile by that id before numbering. Saved notes show at their exact frame when parked; during playback a crossed note stays for at least one second and fades over 200ms. Accepted and withdrawn notes leave the picture.
+Draft notes and pending saves live in `edit/noteStore.ts`, keyed by project outside the editor's lifetime. A save failure returns the original draft, including every stroke, even if another project is open. The client creates a UUID before saving and sends it to the annotation endpoint, which validates it and rejects duplicates. Pending and durable notes reconcile by that id before numbering. Frame captures start immediately and run in parallel; `noteStore.ts` queues annotation posts per project in commit order so capture completion cannot reorder their numbers. A failed post still lets the next queued note save. Saved notes show at their exact frame when parked; during playback a crossed note stays for at least one second and fades over 200ms. Accepted and withdrawn notes leave the picture.
 
 ## Timeline engine
 

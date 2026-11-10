@@ -267,7 +267,9 @@ export function App() {
       const target = event.target;
       if (
         target instanceof HTMLElement &&
-        (target.closest("input,textarea,select,[contenteditable=true]") ||
+        (target.closest(
+          "input,textarea,select,[contenteditable=true],.edit-note-popover",
+        ) ||
           target.closest("dialog"))
       )
         return;

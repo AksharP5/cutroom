@@ -3,6 +3,7 @@ import type { EditorPoint } from "../../shared/editor";
 /** A note being made on the picture: one pin, any number of strokes, and optional words and end. */
 export interface Draft {
   id: string;
+  typing: { at: number; caret: number } | null;
   textUndo: string[];
   textRedo: string[];
   redoStrokes: EditorPoint[][];
@@ -36,7 +37,7 @@ export type NoteEvent =
   | { type: "undo" }
   | { type: "removeStroke" }
   | { type: "redo" }
-  | { type: "write"; body: string }
+  | { type: "write"; body: string; at: number; caret: number }
   | { type: "end"; frame: number | null }
   | { type: "cancel" }
   | { type: "commit" }
@@ -73,6 +74,7 @@ function open(notes: Notes, frame: number, at: EditorPoint): Notes {
       at,
       strokes: [],
       body: "",
+      typing: null,
       textUndo: [],
       textRedo: [],
       redoStrokes: [],
@@ -105,6 +107,7 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
         draft: {
           ...current,
           strokes: [...current.strokes, event.points],
+          typing: null,
           textUndo: [],
           textRedo: [],
           redoStrokes: [],
@@ -121,6 +124,7 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
           draft: {
             ...draft,
             body,
+            typing: null,
             textUndo: draft.textUndo.slice(0, -1),
             textRedo: [...draft.textRedo, draft.body],
           },
@@ -131,6 +135,7 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
             ...notes,
             draft: {
               ...draft,
+              typing: null,
               strokes: draft.strokes.slice(0, -1),
               redoStrokes: [...draft.redoStrokes, stroke],
             },
@@ -156,25 +161,40 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
             draft: {
               ...draft,
               body,
+              typing: null,
               textRedo: draft.textRedo.slice(0, -1),
               textUndo: [...draft.textUndo, draft.body],
             },
           }
         : notes;
     }
-    case "write":
-      return draft && draft.body !== event.body
-        ? {
-            ...notes,
-            draft: {
-              ...draft,
-              body: event.body,
-              textUndo: [...draft.textUndo, draft.body],
-              textRedo: [],
-              redoStrokes: [],
-            },
-          }
-        : notes;
+    case "write": {
+      if (!draft || draft.body === event.body) return notes;
+      const { body, at, caret } = event;
+      const inserting =
+        body.length === draft.body.length + 1 &&
+        body.slice(0, caret - 1) === draft.body.slice(0, caret - 1) &&
+        body.slice(caret) === draft.body.slice(caret - 1);
+      const continuing =
+        inserting &&
+        draft.typing !== null &&
+        at - draft.typing.at < 1000 &&
+        caret === draft.typing.caret + 1 &&
+        !/\s/.test(draft.body[caret - 2] ?? "");
+      return {
+        ...notes,
+        draft: {
+          ...draft,
+          body,
+          typing: inserting ? { at, caret } : null,
+          textUndo: continuing
+            ? draft.textUndo
+            : [...draft.textUndo, draft.body],
+          textRedo: [],
+          redoStrokes: [],
+        },
+      };
+    }
     case "end":
       return draft && (event.frame === null || event.frame > draft.frame)
         ? { ...notes, draft: { ...draft, end: event.frame } }

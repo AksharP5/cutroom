@@ -173,7 +173,7 @@ export function NoteLayer({
   // Each new mark puts the cursor in the note, so typing never reaches the editor's shortcuts.
   useEffect(() => {
     field.current?.focus({ preventScroll: true });
-  }, [draft?.key, draft?.at, draft?.strokes.length]);
+  }, [draft?.key, draft?.at, draft?.strokes.length, draft?.end]);
 
   // Capture before the editor's window listeners, even if a ruler drag moved focus.
   useEffect(() => {
@@ -203,7 +203,12 @@ export function NoteLayer({
         const start = input.selectionStart;
         const end = input.selectionEnd;
         input.setRangeText(event.key, start, end, "end");
-        dispatchNote(projectId, { type: "write", body: input.value });
+        dispatchNote(projectId, {
+          type: "write",
+          body: input.value,
+          at: performance.now(),
+          caret: input.selectionStart,
+        });
       } else if (actionFor(event)) {
         field.current?.focus({ preventScroll: true });
       } else return;
@@ -416,7 +421,12 @@ export function NoteLayer({
               }
               value={draft.body}
               onChange={(event) =>
-                dispatch({ type: "write", body: event.target.value })
+                dispatch({
+                  type: "write",
+                  body: event.target.value,
+                  at: performance.now(),
+                  caret: event.target.selectionStart,
+                })
               }
               onKeyDown={(event) => {
                 if (

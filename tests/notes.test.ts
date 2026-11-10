@@ -53,7 +53,7 @@ test("a comment needs words, Esc discards it, and marking again moves the pin an
 
   const moved = run(
     { type: "pin", at: { x: 0.5, y: 0.5 }, frame: 10 },
-    { type: "write", body: "look in" },
+    { type: "write", body: "look in", at: 0, caret: 7 },
     { type: "pin", at: { x: 0.1, y: 0.2 }, frame: 12 },
   );
   expect(moved.draft).toMatchObject({
@@ -78,12 +78,12 @@ test("an end before the note's frame is refused", () => {
 test("several notes save at once, and a failed save reopens once no other note is open", () => {
   const two = run(
     { type: "pin", at: { x: 0.1, y: 0.1 }, frame: 0 },
-    { type: "write", body: "first" },
+    { type: "write", body: "first", at: 0, caret: 5 },
     { type: "commit" },
     { type: "stroke", points: circle, frame: 5 },
     { type: "commit" },
     { type: "pin", at: { x: 0.9, y: 0.9 }, frame: 9 },
-    { type: "write", body: "third, still open" },
+    { type: "write", body: "third, still open", at: 0, caret: 17 },
   );
   const [first, second] = two.saving;
   if (!first || !second) throw new Error("Both notes should be saving.");
@@ -185,7 +185,7 @@ test("popover flips keep a 4px gap from the pin", () => {
 test("text since the last stroke undoes before strokes; redo restores the stroke and text", () => {
   let notes = run(
     { type: "stroke", points: circle, frame: 0 },
-    { type: "write", body: "keep this" },
+    { type: "write", body: "keep this", at: 0, caret: 9 },
   );
   const buttonUndo = notesReducer(notes, { type: "removeStroke" });
   expect(buttonUndo.draft?.body).toBe("keep this");
@@ -235,4 +235,57 @@ test("a slow 400px stroke stores fewer than 80 points and keeps its ends", () =>
       { x: 0.4, y: 0.4 },
     ]),
   ).toEqual({ x: 0.25, y: 0.25 });
+});
+
+test("typing undoes by word or pause before strokes, and redo restores each step", () => {
+  let notes = run({ type: "stroke", points: circle, frame: 0 });
+  const sentence = "Keep this mark";
+  for (let caret = 1; caret <= sentence.length; caret++)
+    notes = notesReducer(notes, {
+      type: "write",
+      body: sentence.slice(0, caret),
+      at: caret * 50,
+      caret,
+    });
+  // A pause within the last word starts another undo step.
+  notes = notesReducer(notes, {
+    type: "write",
+    body: "Keep this marks",
+    at: 2000,
+    caret: 15,
+  });
+  for (const body of ["Keep this mark", "Keep this ", "Keep ", ""]) {
+    notes = notesReducer(notes, { type: "undo" });
+    expect(notes.draft?.body).toBe(body);
+    expect(notes.draft?.strokes).toEqual([circle]);
+  }
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.strokes).toEqual([]);
+  notes = notesReducer(notes, { type: "redo" });
+  expect(notes.draft?.strokes).toEqual([circle]);
+  for (const body of [
+    "Keep ",
+    "Keep this ",
+    "Keep this mark",
+    "Keep this marks",
+  ]) {
+    notes = notesReducer(notes, { type: "redo" });
+    expect(notes.draft?.body).toBe(body);
+  }
+});
+
+test("typing in a word groups together, but moving the caret starts a separate undo step", () => {
+  let notes = run(
+    { type: "pin", at: { x: 0.2, y: 0.2 }, frame: 0 },
+    { type: "write", body: "word", at: 0, caret: 4 },
+    { type: "write", body: "woxrd", at: 100, caret: 3 },
+    { type: "write", body: "woxyrd", at: 150, caret: 4 },
+    { type: "write", body: "Zwoxyrd", at: 200, caret: 1 },
+  );
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.body).toBe("woxyrd");
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.body).toBe("word");
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.body).toBe("");
 });

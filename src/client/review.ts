@@ -4,6 +4,7 @@ import type { EditorReviewDraft } from "../shared/editor";
 import type { ReviewItem } from "../shared/review";
 import { api, json } from "./api";
 import { strokePath } from "./edit/notes";
+import { saveNoteInOrder } from "./edit/noteStore";
 
 /** Notes are numbered in the owner's order, the same in Review, on the ruler, and on the picture. */
 export const noteNumbers = (items: readonly ReviewItem[]) =>
@@ -25,12 +26,36 @@ export function frameCaptureUrl(
   return `/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(compositionPath)}?${params}`;
 }
 
-/** Saves a note with a capture of its frame and strokes, and says why the capture failed, if it did. */
-export async function saveReviewNote(
+/** Capture immediately; post in commit order so a late frame never changes a note's number. */
+export function saveReviewNote(
   projectId: string,
   draft: EditorReviewDraft,
   body: string,
 ) {
+  const capture = captureReviewFrame(projectId, draft);
+  return saveNoteInOrder(projectId, async () => {
+    const { pencil, framePath, captureError } = await capture;
+    const { id } = await api(
+      `/projects/${projectId}/annotations`,
+      AnnotationSchema,
+      json("POST", {
+        id: draft.id,
+        kind: draft.strokes.length ? "drawing" : "comment",
+        body,
+        time: draft.time,
+        endTime: draft.endTime,
+        compositionPath: draft.compositionPath,
+        elementId: draft.elementIds[0],
+        point: draft.point,
+        strokes: draft.strokes.map((points) => ({ points, color: pencil })),
+        framePath,
+      }),
+    );
+    return { id, captureError };
+  });
+}
+
+async function captureReviewFrame(projectId: string, draft: EditorReviewDraft) {
   // Marks are the human's yellow pencil on a dark casing, read from the tokens.
   const tokens = getComputedStyle(document.documentElement);
   const pencil = tokens.getPropertyValue("--human").trim();
@@ -71,21 +96,5 @@ export async function saveReviewNote(
   } finally {
     image?.close();
   }
-  const { id } = await api(
-    `/projects/${projectId}/annotations`,
-    AnnotationSchema,
-    json("POST", {
-      id: draft.id,
-      kind: draft.strokes.length ? "drawing" : "comment",
-      body,
-      time: draft.time,
-      endTime: draft.endTime,
-      compositionPath: draft.compositionPath,
-      elementId: draft.elementIds[0],
-      point: draft.point,
-      strokes: draft.strokes.map((points) => ({ points, color: pencil })),
-      framePath,
-    }),
-  );
-  return { id, captureError };
+  return { pencil, framePath, captureError };
 }

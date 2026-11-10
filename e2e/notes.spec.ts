@@ -285,14 +285,17 @@ test("ruler scrubbing returns focus to an open note and exit io never edits the 
 });
 
 async function quickCapture(page: Page, projectId: string) {
+  const image = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 2;
+    canvas.height = 2;
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  });
   await page.route(`**/api/projects/${projectId}/thumbnail/**`, (route) => {
     if (route.request().resourceType() !== "fetch") return route.fallback();
     return route.fulfill({
       contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-        "base64",
-      ),
+      body: Buffer.from(image, "base64"),
     });
   });
 }
@@ -500,10 +503,12 @@ test("text undo precedes stroke undo, stroke redo returns it, and saved-note und
   await page.mouse.up();
   const field = page.getByLabel("What should change?");
   const strokes = page.locator(".edit-note-pencil path[d]:not([data-live])");
-  await field.fill("Words after ink");
-  await field.press("Control+z");
-  await expect(field).toHaveValue("");
-  await expect(strokes).toHaveCount(1);
+  await field.pressSequentially("Words after ink");
+  for (const body of ["Words after ", "Words ", ""]) {
+    await field.press("Control+z");
+    await expect(field).toHaveValue(body);
+    await expect(strokes).toHaveCount(1);
+  }
   await field.press("Control+z");
   await expect(strokes).toHaveCount(0);
   await field.press("Control+Shift+z");
@@ -678,4 +683,116 @@ test("ink spanning the whole picture gets space beside the picture", async ({
       }),
     )
     .toBe(true);
+});
+
+test("six alternating notes on one frame keep their drafted numbers when the first capture is late", async ({
+  page,
+}, testInfo) => {
+  const project = await openProject(page, "One-frame review pass");
+  await quickCapture(page, project.id);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let captures = 0;
+  await page.route(
+    `**/api/projects/${project.id}/thumbnail/**`,
+    async (route) => {
+      if (route.request().resourceType() !== "fetch") return route.fallback();
+      captures++;
+      if (captures === 1) await held;
+      await route.fallback();
+    },
+  );
+  const notes = [
+    { body: "Drawing 1", x: 0.12, y: 0.25, draw: true },
+    { body: "Comment 2", x: 0.35, y: 0.25, draw: false },
+    { body: "Drawing 3", x: 0.55, y: 0.25, draw: true },
+    { body: "Comment 4", x: 0.2, y: 0.65, draw: false },
+    { body: "Drawing 5", x: 0.45, y: 0.65, draw: true },
+    { body: "Comment 6", x: 0.75, y: 0.65, draw: false },
+  ];
+  try {
+    for (const [index, note] of notes.entries()) {
+      await page
+        .getByRole("button", { name: note.draw ? /^Draw/ : /^Comment/ })
+        .click();
+      const start = await project.at(note.x, note.y);
+      if (note.draw) {
+        const end = await project.at(note.x + 0.08, note.y);
+        await page.mouse.move(start.x, start.y);
+        await page.mouse.down();
+        await page.mouse.move(end.x, end.y, { steps: 8 });
+        await page.mouse.up();
+      } else await page.mouse.click(start.x, start.y);
+      await expect(
+        page.getByRole("form", { name: `Note ${index + 1}`, exact: true }),
+      ).toBeVisible();
+      const field = page.getByLabel("What should change?");
+      await field.fill(note.body);
+      await field.press("Enter");
+    }
+    // Captures can run together, but their completion order must not choose the note numbers.
+    await expect.poll(() => captures).toBe(6);
+    release();
+    await expect.poll(async () => (await project.notes()).length).toBe(6);
+    await page.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.locator(".review-row")).toHaveCount(6);
+    await expect(page.locator(".notebook-content > div:visible")).toHaveCSS(
+      "opacity",
+      "1",
+    );
+    await expect(page.locator(".toast")).toHaveCount(0);
+    await page.screenshot({
+      path: testInfo.outputPath("same-frame-notes.png"),
+    });
+    const saved = await project.notes();
+    expect(saved.every((note) => note.framePath)).toBe(true);
+    expect(saved.map((note) => note.body)).toEqual(
+      notes.map((note) => note.body),
+    );
+    for (const [index, note] of notes.entries()) {
+      const number = index + 1;
+      await expect(
+        page.getByRole("button", { name: `Note ${number}`, exact: true }),
+      ).toHaveAttribute("title", note.body);
+      await expect(
+        page.locator(`#review-note-${saved[index]!.id} .note-pin`),
+      ).toHaveText(String(number));
+    }
+  } finally {
+    release();
+  }
+});
+
+test("Esc after setting or clearing a note end discards the note and keeps its tool armed", async ({
+  page,
+}) => {
+  const project = await openProject(page, "End then escape");
+  const field = page.getByLabel("What should change?");
+  for (const clearEnd of [false, true]) {
+    await page
+      .getByRole("button", { name: "First frame", exact: true })
+      .click();
+    await page.getByRole("button", { name: /^Comment/ }).click();
+    const point = await project.at(0.3, 0.5);
+    await page.mouse.click(point.x, point.y);
+    if (clearEnd) await page.getByRole("button", { name: /^Draw/ }).click();
+    await field.fill("Discard this note");
+    await page.locator(".tl-ruler").click({ position: { x: 180, y: 15 } });
+    await page.getByRole("button", { name: "Set end", exact: true }).click();
+    await expect(field).toBeFocused();
+    if (clearEnd) {
+      await page.getByTitle("Clear the end", { exact: true }).click();
+      await expect(field).toBeFocused();
+    }
+    // Keep focus on the end control to exercise App's earlier window listener as well.
+    await page.locator(".edit-note-end").focus();
+    await page.keyboard.press("Escape");
+    await expect(field).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: clearEnd ? /^Draw/ : /^Comment/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+  }
+  expect(await project.notes()).toHaveLength(0);
 });

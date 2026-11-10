@@ -34,7 +34,9 @@ Zoom runs from the whole timeline to 32px per frame. The slider in the ruler's c
 
 Drawings and comments carry a composition path, frame time, selected element, normalized geometry, and note text. Frame captures are saved under `.cutroom/attachments/`; the note content remains in `cutroom.json` so undo restores it. Captured frames can be reopened from the notebook and are attached when new notes are sent to an agent. Clicking a note opens its composition before seeking to its frame.
 
-A stroke or a comment click opens the note and puts the cursor in its text, so typing never reaches the editor's shortcuts. Marking again before saving replaces the mark and keeps the words already typed; only closing the note clears them. In the new editor the note opens on the picture, and its frame is captured in the background after you add it, so nothing waits on the capture.
+A stroke or a comment click opens the note and puts the cursor in its text, so typing never reaches the editor's shortcuts. In the new editor, scrubbing with a note open moves the playhead without changing the note's start frame. Draw adds strokes to that open note at its original frame. Comment moves its pin and start frame to the new click, keeping its words and strokes. Set end uses the playhead as the note's last frame; setting or clearing it returns focus to the text. Esc discards the note and keeps the chosen tool armed.
+
+Ctrl+Z undoes typed words, with a new undo step after a pause of a second, before undoing strokes. Ctrl+Shift+Z restores them. Adding a note closes its popover immediately. Frame captures run in parallel in the background, while each project's notes post in the order they were added, so a slower drawing capture cannot swap its number with a later comment.
 
 Each note stays in the queue until an explicit step finishes it:
 
