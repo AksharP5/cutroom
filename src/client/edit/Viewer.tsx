@@ -3,6 +3,8 @@ import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
 import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
+import { useProjectNotes } from "./noteStore";
+import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
@@ -45,6 +47,14 @@ export function Viewer({
   const connections = useRef(
     new Map<number, ReturnType<typeof connectPreview>>(),
   );
+  const draftId = useProjectNotes(
+    (state) => state.projects[projectId]?.draft?.id,
+  );
+  const drawing = useProjectNotes(
+    (state) => !!state.projects[projectId]?.draft?.strokes.length,
+  );
+  const [roomFor, setRoomFor] = useState<string | null>(null);
+  const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [live, setLive] = useState<Slot | null>(null);
@@ -130,10 +140,11 @@ export function Viewer({
 
   const fit = live ?? { width: 1920, height: 1080 };
   const scale =
-    zoom === "actual"
+    zoom === "actual" && !reserveNote
       ? 1
       : Math.min(
-          (stageSize.width - 24) / fit.width,
+          (stageSize.width - (reserveNote ? POPOVER_WIDTH + 48 : 24)) /
+            fit.width,
           (stageSize.height - 24) / fit.height,
         );
   const width = Math.max(0, Math.floor(fit.width * scale));
@@ -141,7 +152,7 @@ export function Viewer({
   const box = {
     width,
     height,
-    left: Math.floor((stageSize.width - width) / 2),
+    left: reserveNote ? 12 : Math.floor((stageSize.width - width) / 2),
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
@@ -187,6 +198,11 @@ export function Viewer({
         })}
       </div>
       <NoteLayer
+        projectId={projectId}
+        stageSize={stageSize}
+        onNeedsRoom={() => {
+          if (draftId) setRoomFor(draftId);
+        }}
         box={box}
         mode={mode}
         notes={notes}

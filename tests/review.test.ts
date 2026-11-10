@@ -1191,3 +1191,18 @@ test("history changes nothing while review.json is unreadable, even if cutroom.j
     expect(await Bun.file(state).text()).toBe("{broken review");
   }
 });
+
+test("annotations accept one validated client id and reject duplicates", async () => {
+  const queue = await setup();
+  const path = `/projects/${queue.project.id}/annotations`;
+  const id = crypto.randomUUID();
+  const body = { id, kind: "comment", body: "Keep this identity", time: 0 };
+  const added = await queue.fetchRaw(path, "POST", body);
+  expect(added.status).toBe(201);
+  expect(AnnotationSchema.parse(await added.json()).id).toBe(id);
+  const duplicate = await queue.fetchRaw(path, "POST", body);
+  expect(duplicate.status).toBe(409);
+  expect(await queue.items()).toHaveLength(1);
+  const invalid = await queue.fetchRaw(path, "POST", { ...body, id: "../bad" });
+  expect(invalid.status).toBe(400);
+});

@@ -46,6 +46,8 @@ Filmstrips and waveforms are drawn by `bodies.ts` on one canvas that lies over t
 
 `src/client/keymap.ts` is the single key table, keyed by Resolve action id. It drives the handlers, button tooltips, and `docs/keyboard.md`; a test keeps the docs in step.
 
+Draft notes and pending saves live in `edit/noteStore.ts`, keyed by project outside the editor's lifetime. A save failure returns the original draft, including every stroke, even if another project is open. The client creates a UUID before saving and sends it to the annotation endpoint, which validates it and rejects duplicates. Pending and durable notes reconcile by that id before numbering. Saved notes show at their exact frame when parked; during playback a crossed note stays for at least one second and fades over 200ms. Accepted and withdrawn notes leave the picture.
+
 ## Timeline engine
 
 `src/shared/timeline/` defines the timeline projection and command union as zod schemas, and a pure `apply(timeline, command)` that the browser and server share. Frames are integers at the root's `data-fps` (30 when absent). A value HyperFrames ignores, including decimals such as `29.97`, is refused instead of being read as 30, and NTSC spellings name their exact rate (`30000/1001`); HTML and `cutroom.json` keep seconds rounded to six decimals.

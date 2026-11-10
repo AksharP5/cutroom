@@ -46,10 +46,13 @@ export const useWorkspace = create(() => ({
   >,
   /** The header toast's message, empty when none shows. */
   toast: "",
+  toastAction: null as { label: string; run(): void } | null,
 }));
 
-export const showToast = (message: string) =>
-  useWorkspace.setState({ toast: message });
+export const showToast = (
+  message: string,
+  action: { label: string; run(): void } | null = null,
+) => useWorkspace.setState({ toast: message, toastAction: action });
 
 type EditorErrorSide = "viewer" | "timeline";
 

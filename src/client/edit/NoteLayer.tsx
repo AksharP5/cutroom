@@ -1,4 +1,4 @@
-import { memo, useEffect, useReducer, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { ArrowCounterClockwise, Trash, X } from "@phosphor-icons/react";
 import type {
@@ -9,19 +9,22 @@ import type {
 import type { ReviewItem } from "../../shared/review";
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
-import { actionFor, comboOf, isTyping } from "../keymap";
+import { comboOf } from "../keymap";
 import { noteNumbers } from "../review";
 import { formatTimecode } from "./timecode";
 import {
   committable,
   noNotes,
-  notesReducer,
+  appendPoint,
+  simplifyStroke,
   POPOVER_WIDTH,
-  popoverSide,
-  showsAt,
+  placePopover,
   strokePath,
+  strokePin,
 } from "./notes";
 import type { Draft, NoteEvent } from "./notes";
+import { dispatchNote, useProjectNotes } from "./noteStore";
+import { useNoteVisibility } from "./noteVisibility";
 import { transport, useTransport } from "./transport";
 
 /**
@@ -74,19 +77,28 @@ const layers = ["casing", "pencil"] as const;
  * pin opens its note in Review. Lies over the picture at `box`, in the stage's coordinates.
  */
 export function NoteLayer({
+  projectId,
+  stageSize,
+  onNeedsRoom,
   box,
   mode,
   notes,
   onOpenNote,
   onSave,
 }: {
+  projectId: string;
+  stageSize: { width: number; height: number };
+  onNeedsRoom(): void;
   box: Box;
   mode: EditorMode;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
   onSave: SaveNote;
 }) {
-  const [{ draft, saving }, dispatch] = useReducer(notesReducer, noNotes);
+  const { draft, saving } = useProjectNotes(
+    (state) => state.projects[projectId] ?? noNotes,
+  );
+  const dispatch = (event: NoteEvent) => dispatchNote(projectId, event);
   const fps = useTransport((state) => state.fps);
   const live = useRef<{
     pointer: number;
@@ -97,10 +109,42 @@ export function NoteLayer({
   const paint = useRef<number | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const popover = useRef<HTMLFormElement>(null);
+  const [popoverSize, setPopoverSize] = useState({
+    width: POPOVER_WIDTH,
+    height: 112,
+  });
+  useLayoutEffect(() => {
+    const element = popover.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      setPopoverSize({
+        width: POPOVER_WIDTH,
+        height: element.offsetHeight,
+      });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [draft?.key]);
+
+  const placement = draft
+    ? placePopover(draft.at, draft.strokes, box, stageSize, popoverSize)
+    : null;
+  useLayoutEffect(() => {
+    // If ink fills the picture, make room beside it instead of covering any of it.
+    if (
+      stageSize.width > 0 &&
+      stageSize.height > 0 &&
+      placement &&
+      !placement.clear
+    )
+      onNeedsRoom();
+  }, [placement?.clear, onNeedsRoom]);
 
   const numbers = noteNumbers(notes);
   const marks = notes.flatMap((item): Mark[] =>
-    item.compositionPath === COMPOSITION && item.review.status !== "withdrawn"
+    item.compositionPath === COMPOSITION &&
+    item.review.status !== "withdrawn" &&
+    item.review.status !== "accepted"
       ? [
           {
             item,
@@ -114,49 +158,66 @@ export function NoteLayer({
       : [],
   );
   // A committed note shows as saving until the server's notes hold it, then as itself.
-  const unsaved = saving.filter((note) => !note.id || !numbers.has(note.id));
+  const unsaved = saving.filter((note) => !numbers.has(note.id));
   useEffect(() => {
     if (unsaved.length < saving.length)
       dispatch({ type: "landed", ids: new Set(numbers.keys()) });
   });
-  // Re-renders when the notes at the playhead change, not on every frame of playback.
-  const shown = useTransport((state) =>
-    [...marks, ...unsaved]
-      .filter((note) => showsAt(note, state.frame))
-      .map((note) => ("item" in note ? note.item.id : note.key))
-      .join(" "),
-  ).split(" ");
-  const visible = marks.filter((mark) => shown.includes(mark.item.id));
-  const pending = unsaved.filter((note) => shown.includes(String(note.key)));
+  const shown = useNoteVisibility([
+    ...marks.map((mark) => ({ ...mark, id: mark.item.id })),
+    ...unsaved,
+  ]);
+  const visible = marks.filter((mark) => shown.has(mark.item.id));
+  const pending = unsaved.filter((note) => shown.has(note.id));
 
   // Each new mark puts the cursor in the note, so typing never reaches the editor's shortcuts.
   useEffect(() => {
     field.current?.focus({ preventScroll: true });
   }, [draft?.key, draft?.at, draft?.strokes.length]);
 
-  // While a note is open, Esc discards it and undo takes back its last stroke.
-  const open = draft !== null;
-  const strokes = draft?.strokes.length ?? 0;
+  // Capture before the editor's window listeners, even if a ruler drag moved focus.
   useEffect(() => {
-    if (!open) return;
+    if (!draft) return;
+    const focus = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest(".tl-ruler"))
+        field.current?.focus({ preventScroll: true });
+    };
     const key = (event: KeyboardEvent) => {
-      const inside =
-        event.target instanceof Node &&
-        !!popover.current?.contains(event.target);
-      if (!inside && isTyping(event.target)) return;
+      if (event.target instanceof Element && event.target.closest("dialog"))
+        return;
       const combo = comboOf(event);
-      const undo = inside
-        ? combo === "Ctrl+Z"
-        : actionFor(event) === "editUndo";
-      if (combo === "Esc") dispatch({ type: "cancel" });
-      else if (undo && strokes > 0) dispatch({ type: "undo" });
-      else return;
+      const inside = event.target === field.current;
+      if (combo === "Esc") dispatchNote(projectId, { type: "cancel" });
+      else if (combo === "Ctrl+Z" || combo === "Ctrl+Shift+Z")
+        dispatchNote(projectId, { type: combo === "Ctrl+Z" ? "undo" : "redo" });
+      else if (inside) return;
+      else if (
+        event.key.length === 1 &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        const input = field.current;
+        if (!input) return;
+        input.focus({ preventScroll: true });
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        input.setRangeText(event.key, start, end, "end");
+        dispatchNote(projectId, { type: "write", body: input.value });
+      } else if (event.key === "Enter") {
+        field.current?.focus({ preventScroll: true });
+        return;
+      } else return;
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
     };
     window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, [open, strokes]);
+    window.addEventListener("pointerup", focus);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerup", focus);
+    };
+  }, [projectId, draft !== null]);
 
   useEffect(
     () => () => {
@@ -193,19 +254,21 @@ export function NoteLayer({
 
   const armed = mode === "draw" || mode === "comment";
   const next = notes.length + unsaved.length + 1;
-  // Accepted notes are finished; only their pins stay.
+  // Finished notes leave the picture; open notes keep their pin and ink.
   const lines = [
     ...visible
       .filter(({ item }) => item.review.status !== "accepted")
       .flatMap(({ item }) =>
         item.strokes.map(({ points }, index) => ({
           key: `${item.id}-${index}`,
+          fading: shown.get(item.id) === "fading",
           points,
         })),
       ),
     ...[...pending, ...(draft ? [draft] : [])].flatMap((note) =>
       note.strokes.map((points, index) => ({
         key: `${note.key}-${index}`,
+        fading: shown.get(note.id) === "fading",
         points,
       })),
     ),
@@ -241,7 +304,11 @@ export function NoteLayer({
             if (stroke?.pointer !== event.pointerId) return;
             const moves = event.nativeEvent.getCoalescedEvents();
             for (const move of moves.length ? moves : [event.nativeEvent])
-              stroke.points.push(pointIn(event.currentTarget, move));
+              appendPoint(
+                stroke.points,
+                pointIn(event.currentTarget, move),
+                box,
+              );
             paint.current ??= requestAnimationFrame(drawLive);
           }}
           onPointerUp={(event) => {
@@ -249,7 +316,8 @@ export function NoteLayer({
             if (stroke?.pointer !== event.pointerId) return;
             dispatch({
               type: "stroke",
-              points: stroke.points,
+              points: simplifyStroke(stroke.points, box),
+              at: strokePin(stroke.points, box),
               frame: stroke.frame,
             });
             endLive();
@@ -267,7 +335,13 @@ export function NoteLayer({
         {layers.map((layer) => (
           <g key={layer} className={`edit-note-${layer}`}>
             {lines.map((line) => (
-              <Stroke key={line.key} points={line.points} />
+              <g
+                key={line.key}
+                className="edit-note-mark"
+                data-fading={line.fading || undefined}
+              >
+                <Stroke points={line.points} />
+              </g>
             ))}
             <path data-live />
           </g>
@@ -281,6 +355,7 @@ export function NoteLayer({
                 type="button"
                 className="note-pin edit-note-pin"
                 data-status={item.review.status}
+                data-fading={shown.get(item.id) === "fading" || undefined}
                 style={pinStyle(at)}
                 aria-label={`Note ${number}`}
                 title={item.body || "Drawing"}
@@ -296,6 +371,7 @@ export function NoteLayer({
           key={note.key}
           className="note-pin edit-note-pin"
           data-status="open"
+          data-fading={shown.get(note.id) === "fading" || undefined}
           style={pinStyle(note.at)}
           title={note.error ?? "Saving"}
         >
@@ -316,7 +392,16 @@ export function NoteLayer({
             ref={popover}
             className="edit-note-popover"
             aria-label={`Note ${next}`}
-            style={popoverStyle(draft.at, box)}
+            style={
+              placement
+                ? {
+                    width: placement.width,
+                    maxHeight: placement.maxHeight,
+                    left: placement.left - box.left,
+                    top: placement.top - box.top,
+                  }
+                : undefined
+            }
             onSubmit={(event) => {
               event.preventDefault();
               commit();
@@ -350,9 +435,14 @@ export function NoteLayer({
                 Not saved. {draft.error}
               </p>
             )}
-            <div className="edit-note-foot">
-              <span className="mono">{formatTimecode(draft.frame, fps)}</span>
-              <NoteEnd draft={draft} fps={fps} dispatch={dispatch} />
+            <div
+              className="edit-note-foot"
+              data-ranged={draft.end !== null || undefined}
+            >
+              <span className="edit-note-time">
+                <span className="mono">{formatTimecode(draft.frame, fps)}</span>
+                <NoteEnd draft={draft} fps={fps} dispatch={dispatch} />
+              </span>
               <span className="edit-grow" />
               {draft.strokes.length > 0 && (
                 <button
@@ -438,25 +528,9 @@ function pointIn(
   };
 }
 
-/** Opens beside the pin, on the side with room, and grows from the pin's corner. */
-function popoverStyle(at: EditorPoint, size: Box): CSSProperties {
-  const { inline, block } = popoverSide(at, size);
-  return {
-    width: POPOVER_WIDTH,
-    ...(inline === "right"
-      ? { left: `${at.x * 100}%` }
-      : { right: `${(1 - at.x) * 100}%` }),
-    ...(block === "below"
-      ? { top: `calc(${at.y * 100}% + var(--space-1))` }
-      : {
-          bottom: `calc(${(1 - at.y) * 100}% + var(--size-pin-viewer) + var(--space-1))`,
-        }),
-    transformOrigin: `${inline === "right" ? "left" : "right"} ${block === "below" ? "top" : "bottom"}`,
-  };
-}
-
 function reviewDraft(draft: Draft, fps: Fps): EditorReviewDraft {
   return {
+    id: draft.id,
     time: toSeconds(draft.frame, fps),
     ...(draft.end !== null && { endTime: toSeconds(draft.end, fps) }),
     compositionPath: COMPOSITION,

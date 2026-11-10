@@ -2,7 +2,11 @@ import type { EditorPoint } from "../../shared/editor";
 
 /** A note being made on the picture: one pin, any number of strokes, and optional words and end. */
 export interface Draft {
-  /** Names the note on this page until the server saves it. */
+  id: string;
+  textUndo: string[];
+  textRedo: string[];
+  redoStrokes: EditorPoint[][];
+  /** Names this draft within its project. */
   key: number;
   frame: number;
   /** The last frame the note covers, inclusive; null for a single frame. */
@@ -13,8 +17,6 @@ export interface Draft {
   body: string;
   /** Why the last save failed, shown when the note reopens. */
   error?: string;
-  /** The saved note's id, once the server has it. */
-  id?: string;
 }
 
 /**
@@ -30,8 +32,9 @@ export interface Notes {
 
 export type NoteEvent =
   | { type: "pin"; at: EditorPoint; frame: number }
-  | { type: "stroke"; points: EditorPoint[]; frame: number }
+  | { type: "stroke"; points: EditorPoint[]; frame: number; at?: EditorPoint }
   | { type: "undo" }
+  | { type: "redo" }
   | { type: "write"; body: string }
   | { type: "end"; frame: number | null }
   | { type: "cancel" }
@@ -61,7 +64,18 @@ function open(notes: Notes, frame: number, at: EditorPoint): Notes {
   return {
     ...notes,
     next: notes.next + 1,
-    draft: { key: notes.next, frame, end: null, at, strokes: [], body: "" },
+    draft: {
+      id: crypto.randomUUID(),
+      key: notes.next,
+      frame,
+      end: null,
+      at,
+      strokes: [],
+      body: "",
+      textUndo: [],
+      textRedo: [],
+      redoStrokes: [],
+    },
   };
 }
 
@@ -81,25 +95,83 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
     case "stroke": {
       if (!event.points.length) return notes;
       // A drawing's pin sits at its first stroke's top-right corner, clear of what it marks.
-      const corner = {
-        x: Math.max(...event.points.map((point) => point.x)),
-        y: Math.min(...event.points.map((point) => point.y)),
-      };
+      const corner = event.at ?? strokePin(event.points);
       const opened = draft ? notes : open(notes, event.frame, corner);
       const current = opened.draft;
       if (!current) return notes;
       return {
         ...opened,
-        draft: { ...current, strokes: [...current.strokes, event.points] },
+        draft: {
+          ...current,
+          strokes: [...current.strokes, event.points],
+          textUndo: [],
+          textRedo: [],
+          redoStrokes: [],
+        },
       };
     }
-    case "undo":
-      return draft?.strokes.length
-        ? { ...notes, draft: { ...draft, strokes: draft.strokes.slice(0, -1) } }
+    case "undo": {
+      if (!draft) return notes;
+      const body = draft.textUndo.at(-1);
+      if (body !== undefined)
+        return {
+          ...notes,
+          draft: {
+            ...draft,
+            body,
+            textUndo: draft.textUndo.slice(0, -1),
+            textRedo: [...draft.textRedo, draft.body],
+          },
+        };
+      const stroke = draft.strokes.at(-1);
+      return stroke
+        ? {
+            ...notes,
+            draft: {
+              ...draft,
+              strokes: draft.strokes.slice(0, -1),
+              redoStrokes: [...draft.redoStrokes, stroke],
+            },
+          }
         : notes;
+    }
+    case "redo": {
+      if (!draft) return notes;
+      const stroke = draft.redoStrokes.at(-1);
+      if (stroke)
+        return {
+          ...notes,
+          draft: {
+            ...draft,
+            strokes: [...draft.strokes, stroke],
+            redoStrokes: draft.redoStrokes.slice(0, -1),
+          },
+        };
+      const body = draft.textRedo.at(-1);
+      return body !== undefined
+        ? {
+            ...notes,
+            draft: {
+              ...draft,
+              body,
+              textRedo: draft.textRedo.slice(0, -1),
+              textUndo: [...draft.textUndo, draft.body],
+            },
+          }
+        : notes;
+    }
     case "write":
-      return draft
-        ? { ...notes, draft: { ...draft, body: event.body } }
+      return draft && draft.body !== event.body
+        ? {
+            ...notes,
+            draft: {
+              ...draft,
+              body: event.body,
+              textUndo: [...draft.textUndo, draft.body],
+              textRedo: [],
+              redoStrokes: [],
+            },
+          }
         : notes;
     case "end":
       return draft && (event.frame === null || event.frame > draft.frame)
@@ -120,9 +192,7 @@ export function notesReducer(notes: Notes, event: NoteEvent): Notes {
         ),
       };
     case "landed": {
-      const saving = notes.saving.filter(
-        (note) => note.id === undefined || !event.ids.has(note.id),
-      );
+      const saving = notes.saving.filter((note) => !event.ids.has(note.id));
       return saving.length === notes.saving.length
         ? notes
         : { ...notes, saving };
@@ -169,31 +239,189 @@ export function strokePath(
   return [`M${first}`, ...curves, `L${xy.at(-1)}`].join(" ");
 }
 
-/** The note popover's width, which its side of the pin is chosen from. */
-export const POPOVER_WIDTH = 280;
-/** Room the popover needs below its pin before it opens above instead. */
-const POPOVER_ROOM = 140;
-
-/**
- * Which side of its pin the note popover opens on, inside a picture of `size` pixels. It prefers
- * below and to the right, and flips when the picture edge is nearer than the popover is big.
- */
-export function popoverSide(
-  at: EditorPoint,
+/** Keep only points at least 3 screen pixels apart before fitting the curve. */
+export function appendPoint(
+  points: EditorPoint[],
+  point: EditorPoint,
   size: { width: number; height: number },
 ) {
-  const x = at.x * size.width;
-  const y = at.y * size.height;
-  const right = size.width - x;
-  const below = size.height - y;
-  return {
-    inline:
-      right >= POPOVER_WIDTH || right >= x
-        ? ("right" as const)
-        : ("left" as const),
-    block:
-      below >= POPOVER_ROOM || below >= y
-        ? ("below" as const)
-        : ("above" as const),
+  const last = points.at(-1);
+  if (
+    !last ||
+    Math.hypot(
+      (point.x - last.x) * size.width,
+      (point.y - last.y) * size.height,
+    ) >= 3
+  )
+    points.push(point);
+}
+
+/** Snap the first stroke's top-right bounds corner to the closest actual ink. */
+export function strokePin(
+  points: readonly EditorPoint[],
+  size = { width: 1, height: 1 },
+): EditorPoint {
+  const x = Math.max(...points.map((point) => point.x));
+  const y = Math.min(...points.map((point) => point.y));
+  let nearest = points[0] ?? { x, y };
+  let distance = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const start = points[i]!;
+    const end = points[i + 1] ?? start;
+    const dx = (end.x - start.x) * size.width;
+    const dy = (end.y - start.y) * size.height;
+    const length = dx * dx + dy * dy;
+    const along = length
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            ((x - start.x) * size.width * dx +
+              (y - start.y) * size.height * dy) /
+              length,
+          ),
+        )
+      : 0;
+    const point = {
+      x: start.x + along * (end.x - start.x),
+      y: start.y + along * (end.y - start.y),
+    };
+    const next = Math.hypot(
+      (point.x - x) * size.width,
+      (point.y - y) * size.height,
+    );
+    if (next < distance) {
+      nearest = point;
+      distance = next;
+    }
+  }
+  return nearest;
+}
+
+export const POPOVER_WIDTH = 280;
+
+/** Place the measured popover inside the stage, with 24px around the draft's ink. */
+export function placePopover(
+  at: EditorPoint,
+  strokes: readonly (readonly EditorPoint[])[],
+  picture: { left: number; top: number; width: number; height: number },
+  stage: { width: number; height: number },
+  popover: { width: number; height: number },
+) {
+  const margin = 8;
+  const gap = 4;
+  const width = Math.min(popover.width, stage.width - margin * 2);
+  const height = Math.min(popover.height, stage.height - margin * 2);
+  const pin = {
+    left: Math.min(
+      picture.left + at.x * picture.width,
+      picture.left + picture.width - 16,
+    ),
+    top: Math.max(picture.top + at.y * picture.height - 16, picture.top),
   };
+  const clearance = 24 + 7 / 2;
+  const points = strokes.flat();
+  const ink = points.length
+    ? {
+        left:
+          picture.left +
+          Math.min(...points.map((p) => p.x)) * picture.width -
+          clearance,
+        right:
+          picture.left +
+          Math.max(...points.map((p) => p.x)) * picture.width +
+          clearance,
+        top:
+          picture.top +
+          Math.min(...points.map((p) => p.y)) * picture.height -
+          clearance,
+        bottom:
+          picture.top +
+          Math.max(...points.map((p) => p.y)) * picture.height +
+          clearance,
+      }
+    : null;
+  const xs = [
+    pin.left,
+    pin.left + 16 + gap,
+    pin.left - width - gap,
+    margin,
+    stage.width - width - margin,
+  ];
+  const ys = [
+    pin.top + 16 + gap,
+    pin.top - height - gap,
+    margin,
+    stage.height - height - margin,
+  ];
+  if (ink) {
+    xs.push(ink.right, ink.left - width);
+    ys.push(ink.bottom, ink.top - height);
+  }
+  const candidates = xs.flatMap((x) =>
+    ys.map((y) => ({
+      left: Math.max(margin, Math.min(x, stage.width - width - margin)),
+      top: Math.max(margin, Math.min(y, stage.height - height - margin)),
+    })),
+  );
+  const overlap = ({ left, top }: { left: number; top: number }) =>
+    ink
+      ? Math.max(
+          0,
+          Math.min(left + width, ink.right) - Math.max(left, ink.left),
+        ) *
+        Math.max(0, Math.min(top + height, ink.bottom) - Math.max(top, ink.top))
+      : 0;
+  const distance = ({ left, top }: { left: number; top: number }) =>
+    Math.hypot(
+      Math.max(left - pin.left - 16, pin.left - left - width, 0),
+      Math.max(top - pin.top - 16, pin.top - top - height, 0),
+    );
+  candidates.sort(
+    (a, b) =>
+      overlap(a) - overlap(b) ||
+      Math.abs(distance(a) - gap) - Math.abs(distance(b) - gap) ||
+      Math.hypot(a.left - pin.left, a.top - pin.top) -
+        Math.hypot(b.left - pin.left, b.top - pin.top),
+  );
+  const position = candidates[0]!;
+  return {
+    ...position,
+    width,
+    maxHeight: stage.height - margin * 2,
+    clear: overlap(position) === 0,
+  };
+}
+
+/** Remove subpixel bends after sampling so slow straight strokes do not store hundreds of points. */
+export function simplifyStroke(
+  points: readonly EditorPoint[],
+  size: { width: number; height: number },
+): EditorPoint[] {
+  if (points.length < 3) return [...points];
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  const dx = (last.x - first.x) * size.width;
+  const dy = (last.y - first.y) * size.height;
+  const length = dx * dx + dy * dy;
+  let farthest = 0;
+  let split = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const point = points[i]!;
+    const x = (point.x - first.x) * size.width;
+    const y = (point.y - first.y) * size.height;
+    const along = length
+      ? Math.max(0, Math.min(1, (x * dx + y * dy) / length))
+      : 0;
+    const distance = Math.hypot(x - along * dx, y - along * dy);
+    if (distance > farthest) {
+      farthest = distance;
+      split = i;
+    }
+  }
+  if (farthest <= 0.75) return [first, last];
+  return [
+    ...simplifyStroke(points.slice(0, split + 1), size).slice(0, -1),
+    ...simplifyStroke(points.slice(split), size),
+  ];
 }

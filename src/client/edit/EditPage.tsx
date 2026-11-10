@@ -10,6 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
+import { ReviewItemSchema } from "../../shared/review";
 import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
@@ -17,7 +18,9 @@ import { EditorToolsContext } from "../editor/EditorTools";
 import { hint, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
-import { reportEditorError } from "../workspace";
+import { api } from "../api";
+import { noteNumbers } from "../review";
+import { reportEditorError, showToast } from "../workspace";
 import "./edit.css";
 import {
   editTimeline,
@@ -159,8 +162,29 @@ export function EditPage({
         .catch((error: unknown) => reportEditorError("viewer", error));
   };
 
-  const step = (direction: "undo" | "redo") =>
-    void stepHistory(projectId, direction).catch(report);
+  const step = (direction: "undo" | "redo") => {
+    const before = notes;
+    void stepHistory(projectId, direction)
+      .then(async () => {
+        if (direction !== "undo" || !before.length) return;
+        const after = await api(
+          `${base}/review`,
+          z.object({ items: z.array(ReviewItemSchema) }),
+        );
+        const removed = before.find(
+          (note) => !after.items.some((item) => item.id === note.id),
+        );
+        if (removed && useTimeline.getState().projectId === projectId)
+          showToast(`Note ${noteNumbers(before).get(removed.id)} removed ·`, {
+            label: "Redo",
+            run: () => {
+              showToast("");
+              void stepHistory(projectId, "redo").catch(report);
+            },
+          });
+      })
+      .catch(report);
+  };
   const mark = (
     label: string,
     range: (frame: number, current: Timeline["range"]) => Timeline["range"],

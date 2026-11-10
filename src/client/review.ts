@@ -52,7 +52,7 @@ export async function saveReviewNote(
     paint.lineCap = "round";
     paint.lineJoin = "round";
     for (const [style, lineWidth] of [
-      [tokens.getPropertyValue("--pencil-casing").trim(), (width * 5) / 3],
+      [tokens.getPropertyValue("--pencil-casing").trim(), (width * 7) / 3],
       [pencil, width],
     ] as const) {
       paint.strokeStyle = style;
@@ -75,6 +75,7 @@ export async function saveReviewNote(
     `/projects/${projectId}/annotations`,
     AnnotationSchema,
     json("POST", {
+      id: draft.id,
       kind: draft.strokes.length ? "drawing" : "comment",
       body,
       time: draft.time,

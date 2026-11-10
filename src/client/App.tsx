@@ -149,6 +149,7 @@ export function App() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const error = useWorkspace((state) => state.toast);
+  const toastAction = useWorkspace((state) => state.toastAction);
   const [toastLeaving, setToastLeaving] = useState(false);
   useEffect(() => setToastLeaving(false), [error]);
   const attachmentResolve = useRef<{
@@ -326,15 +327,10 @@ export function App() {
         ?.scrollIntoView({ block: "nearest" }),
     );
   }, []);
-  /**
-   * Saves a note made on the new editor's picture. Review comes forward in the left column if
-   * that column is showing, so each note is seen joining the queue.
-   */
+  /** Saves a note on the picture without changing the current work panel. */
   const saveNote = useCallback(
     async (draft: EditorReviewDraft, body: string) => {
       if (!projectId) throw new Error("No project is open.");
-      setPanel("review");
-      setWorkPanel((current) => current && "notebook");
       const { id, captureError } = await saveReviewNote(projectId, draft, body);
       if (captureError && activeProjectId.current === projectId)
         showToast(`Note saved without a frame image. ${captureError}`);
@@ -425,6 +421,9 @@ export function App() {
               }}
             >
               <span title={error}>{error}</span>
+              {toastAction && (
+                <button onClick={toastAction.run}>{toastAction.label}</button>
+              )}
               <button onClick={() => setToastLeaving(true)}>Dismiss</button>
             </div>
           )}

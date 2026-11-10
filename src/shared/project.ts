@@ -24,6 +24,7 @@ const annotationFields = {
   strokes: z.array(StrokeSchema).max(100),
 };
 export const AnnotationInputSchema = z.object({
+  id: z.uuid().optional(),
   ...annotationFields,
   compositionPath: annotationFields.compositionPath.default("index.html"),
   body: annotationFields.body.default(""),

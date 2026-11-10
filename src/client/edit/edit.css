@@ -258,7 +258,8 @@ button.edit-note-pin {
 .edit-note-popover {
   position: absolute;
   z-index: var(--z-popover);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-float);
@@ -276,6 +277,9 @@ button.edit-note-pin {
   }
 }
 .edit-note-popover textarea {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   field-sizing: content;
   min-height: calc(2 * var(--leading-chat) + 14px);
   max-height: calc(6 * var(--leading-chat) + 14px);
@@ -292,13 +296,24 @@ button.edit-note-pin {
   font-size: var(--type-xs);
 }
 .edit-note-foot {
+  flex: none;
   display: flex;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
   align-items: center;
   gap: 2px;
   color: var(--text-secondary);
   font-size: var(--type-xs);
 }
-.edit-note-foot > .mono {
+.edit-note-time {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.edit-note-foot[data-ranged] .edit-note-time {
+  flex-basis: 100%;
+}
+.edit-note-time > .mono {
   padding-right: var(--space-1);
 }
 .edit-note-foot .icon-button {
@@ -450,4 +465,17 @@ input.edit-now {
   min-height: 0;
   overflow: hidden;
   background: var(--surface-panel);
+}
+
+.edit-note-popover {
+  overflow: auto;
+}
+.edit-note-mark,
+.edit-note-pin {
+  opacity: 1;
+  transition: opacity var(--duration-note-fade) linear;
+}
+.edit-note-mark[data-fading],
+.edit-note-pin[data-fading] {
+  opacity: 0;
 }

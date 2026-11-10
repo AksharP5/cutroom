@@ -318,6 +318,7 @@ const Ruler = memo(function Ruler({
             className={`tl-pin ${pin.state}`}
             data-unscaled
             style={{ "--f": pin.frame }}
+            title={`Note ${pin.number}`}
             aria-label={`Review note ${pin.number} at ${formatTimecode(pin.frame, fps)}, ${pinLabels[pin.state]}`}
             onClick={() => {
               onSeek(pin.frame);

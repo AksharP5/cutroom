@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import {
   noNotes,
   notesReducer,
-  popoverSide,
+  placePopover,
+  appendPoint,
+  simplifyStroke,
+  strokePin,
   showsAt,
 } from "../src/client/edit/notes";
 import type { NoteEvent, Notes } from "../src/client/edit/notes";
@@ -108,26 +111,125 @@ test("several notes save at once, and a failed save reopens once no other note i
   const saved = notesReducer(reopened, {
     type: "saved",
     key: second.key,
-    id: "a",
+    id: second.id,
   });
   expect(saved.saving).toHaveLength(2);
   expect(
-    notesReducer(saved, { type: "landed", ids: new Set(["a"]) }).saving,
+    notesReducer(saved, { type: "landed", ids: new Set([second.id]) }).saving,
   ).toHaveLength(1);
 });
 
-test("the popover opens on the side of its pin that has room, at any picture size", () => {
-  const nearRight = { x: 0.85, y: 0.2 };
-  expect(popoverSide(nearRight, { width: 1920, height: 1080 })).toEqual({
-    inline: "right",
-    block: "below",
+test("measured popovers stay in the stage at corners and clear ink by 24 pixels", () => {
+  for (const size of [
+    { width: 959, height: 337 },
+    { width: 703, height: 256 },
+  ]) {
+    const picture = { ...size, left: 0, top: 0 };
+    for (const at of [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+    ]) {
+      const placed = placePopover(at, [], picture, size, {
+        width: 280,
+        height: 184,
+      });
+      expect(placed.left).toBeGreaterThanOrEqual(8);
+      expect(placed.top).toBeGreaterThanOrEqual(8);
+      expect(placed.left! + placed.width).toBeLessThanOrEqual(size.width - 8);
+      expect(placed.top! + 184).toBeLessThanOrEqual(size.height - 8);
+    }
+    const strokes = [
+      [
+        { x: 0.1, y: 0.5 },
+        { x: 0.35, y: 0.5 },
+      ],
+    ];
+    const placed = placePopover({ x: 0.35, y: 0.5 }, strokes, picture, size, {
+      width: 280,
+      height: 112,
+    });
+    expect(
+      placed.left! >= size.width * 0.35 + 24 ||
+        placed.top! + 112 <= size.height * 0.5 - 24 ||
+        placed.top! >= size.height * 0.5 + 24,
+    ).toBe(true);
+  }
+});
+
+test("popover flips keep a 4px gap from the pin", () => {
+  const picture = { left: 0, top: 0, width: 1000, height: 600 };
+  for (const at of [
+    { x: 0.2, y: 0.2 },
+    { x: 0.9, y: 0.9 },
+  ]) {
+    const placed = placePopover(at, [], picture, picture, {
+      width: 280,
+      height: 112,
+    });
+    const x = Math.max(
+      placed.left! - (at.x * 1000 + 16),
+      at.x * 1000 - (placed.left! + 280),
+      0,
+    );
+    const y = Math.max(
+      placed.top! - at.y * 600,
+      at.y * 600 - 16 - (placed.top! + 112),
+      0,
+    );
+    expect(Math.hypot(x, y)).toBe(4);
+  }
+});
+
+test("text since the last stroke undoes before strokes; redo restores the stroke and text", () => {
+  let notes = run(
+    { type: "stroke", points: circle, frame: 0 },
+    { type: "write", body: "keep this" },
+  );
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.body).toBe("");
+  expect(notes.draft?.strokes).toEqual([circle]);
+  notes = notesReducer(notes, { type: "undo" });
+  expect(notes.draft?.strokes).toEqual([]);
+  notes = notesReducer(notes, { type: "redo" });
+  expect(notes.draft?.strokes).toEqual([circle]);
+  notes = notesReducer(notes, { type: "redo" });
+  expect(notes.draft?.body).toBe("keep this");
+});
+
+test("the client id reconciles a notebook update even before the POST resolves", () => {
+  const notes = run(
+    { type: "stroke", points: circle, frame: 0 },
+    { type: "commit" },
+  );
+  const saved = notes.saving[0]!;
+  expect(saved.id).toMatch(/^[a-f0-9-]{36}$/);
+  const landed = notesReducer(notes, {
+    type: "landed",
+    ids: new Set([saved.id]),
   });
-  expect(popoverSide(nearRight, { width: 980, height: 551 })).toEqual({
-    inline: "left",
-    block: "below",
-  });
-  expect(popoverSide({ x: 0.1, y: 0.9 }, { width: 980, height: 551 })).toEqual({
-    inline: "right",
-    block: "above",
-  });
+  expect(landed.saving).toEqual([]);
+  expect(
+    notesReducer(landed, { type: "saved", key: saved.key, id: saved.id })
+      .saving,
+  ).toEqual([]);
+});
+
+test("a slow 400px stroke stores fewer than 80 points and keeps its ends", () => {
+  const points: { x: number; y: number }[] = [];
+  for (let x = 0; x <= 400; x++)
+    appendPoint(points, { x: x / 800, y: 0.5 }, { width: 800, height: 450 });
+  expect(points.length).toBeLessThan(140);
+  const smooth = simplifyStroke(points, { width: 800, height: 450 });
+  expect(smooth.length).toBeLessThan(80);
+  expect(smooth[0]).toEqual(points[0]);
+  expect(smooth.at(-1)).toEqual(points.at(-1));
+  // The bounds corner is not necessarily ink. The pin is an actual stroke point.
+  expect(
+    strokePin([
+      { x: 0.1, y: 0.1 },
+      { x: 0.4, y: 0.4 },
+    ]),
+  ).toEqual({ x: 0.25, y: 0.25 });
 });

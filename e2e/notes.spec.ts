@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { z } from "zod";
-import { ProjectSchema } from "../src/shared/project";
+import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
@@ -23,6 +23,8 @@ async function openProject(page: Page, name: string) {
   const base = `/api/cutroom/projects/${project.id}`;
   const picture = page.locator(".edit-picture");
   return {
+    id: project.id,
+    base,
     picture,
     /** A point on the picture, in its 0 to 1 coordinates. */
     async at(x: number, y: number) {
@@ -192,6 +194,20 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("Shift+ArrowRight");
   await page.getByRole("button", { name: "Set end" }).click();
+  expect(
+    await page.locator(".edit-note-popover").evaluate((element) => {
+      const form = element.getBoundingClientRect();
+      return [...element.querySelectorAll("button")].every((button) => {
+        const bounds = button.getBoundingClientRect();
+        return (
+          bounds.left >= form.left &&
+          bounds.right <= form.right &&
+          bounds.top >= form.top &&
+          bounds.bottom <= form.bottom
+        );
+      });
+    }),
+  ).toBe(true);
   await page.getByLabel("What should change?").press("Enter");
   await expect(
     page.getByRole("button", { name: "Note 2", exact: true }),
@@ -221,4 +237,429 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   await expect.poll(() => shownAt("00:00:02:00")).toEqual([false, true]);
   await expect.poll(() => shownAt("00:00:03:01")).toEqual([false, false]);
   await expect.poll(() => shownAt("00:00:00:00")).toEqual([true, false]);
+});
+
+test("ruler scrubbing returns focus to an open note and exit io never edits the timeline", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Ruler focus");
+  const before = await (
+    await page.request.get(`${project.base}/timeline`)
+  ).json();
+  await page.keyboard.press("n");
+  const at = await project.at(0.3, 0.4);
+  await page.mouse.click(at.x, at.y);
+  const field = page.getByLabel("What should change?");
+  await field.fill("Keep ");
+  await page.locator(".tl-ruler").click({ position: { x: 180, y: 15 } });
+  await expect(field).toBeFocused();
+  await page.keyboard.type("exit io");
+  await expect(field).toHaveValue("Keep exit io");
+  await expect(
+    page.getByRole("button", { name: "Stop", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  expect(
+    await (await page.request.get(`${project.base}/timeline`)).json(),
+  ).toEqual(before);
+  await page.getByRole("button", { name: "Set end", exact: true }).click();
+  // Even a focusable editor button cannot send subsequent printable keys to shortcuts.
+  await page.getByRole("button", { name: /^Select/ }).click();
+  await page.keyboard.type(" x i o");
+  await expect(field).toHaveValue("Keep exit io x i o");
+});
+
+async function quickCapture(page: Page, projectId: string) {
+  await page.route(`**/api/projects/${projectId}/thumbnail/**`, (route) => {
+    if (route.request().resourceType() !== "fetch") return route.fallback();
+    return route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+  });
+}
+
+test("drafts and a two-stroke failed save recover in their project after switching away", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Draft owner A");
+  await quickCapture(page, project.id);
+  const second = ProjectSchema.parse(
+    await (
+      await page.request.post("/api/cutroom/projects", {
+        data: { name: "Draft owner B" },
+      })
+    ).json(),
+  );
+  const switchTo = async (id: string) => {
+    await page.evaluate((id) => {
+      location.hash = `project/${id}`;
+    }, id);
+    await expect(page.locator(".project-switcher")).toHaveText(
+      id === project.id ? "Draft owner A" : "Draft owner B",
+    );
+    await expect(page.locator(".edit-picture iframe")).toHaveCount(1);
+  };
+  await page.keyboard.press("n");
+  const at = await project.at(0.3, 0.4);
+  await page.mouse.click(at.x, at.y);
+  const field = page.getByLabel("What should change?");
+  await field.fill("Do not lose this comment");
+  await switchTo(second.id);
+  await expect(field).toBeHidden();
+  await switchTo(project.id);
+  await expect(field).toHaveValue("Do not lose this comment");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Shift+n");
+  for (const y of [0.35, 0.7]) {
+    const start = await project.at(0.1, y);
+    const end = await project.at(0.3, y);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 20 });
+    await page.mouse.up();
+  }
+  await field.fill("Recover both strokes");
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = () => {};
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  await page.route(`**${project.base}/annotations`, async (route) => {
+    entered();
+    await held;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Held save failed" }),
+    });
+  });
+  try {
+    await field.press("Enter");
+    await started;
+    await switchTo(second.id);
+    release();
+    await switchTo(project.id);
+    await expect(field).toHaveValue("Recover both strokes");
+    await expect(page.getByRole("alert")).toContainText("Held save failed");
+    await expect(
+      page.locator(".edit-note-pencil path[d]:not([data-live])"),
+    ).toHaveCount(2);
+    await page.unroute(`**${project.base}/annotations`);
+    await field.press("Enter");
+    await expect.poll(async () => (await project.notes()).length).toBe(1);
+    expect((await project.notes())[0]?.strokes).toHaveLength(2);
+  } finally {
+    release();
+  }
+});
+
+test("a notebook arriving before its POST response never duplicates a note or advances its next number", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Stable identity");
+  await quickCapture(page, project.id);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = () => {};
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  await page.route(`**${project.base}/annotations`, async (route) => {
+    const response = await route.fetch();
+    entered();
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.keyboard.press("n");
+    const at = await project.at(0.3, 0.4);
+    await page.mouse.click(at.x, at.y);
+    const field = page.getByLabel("What should change?");
+    await field.fill("One identity");
+    await field.press("Enter");
+    await started;
+    await expect.poll(async () => (await project.notes()).length).toBe(1);
+    await expect(
+      page.getByRole("button", { name: /^Review note 1/ }),
+    ).toHaveAttribute("title", "Note 1");
+    await expect(page.locator(".edit-note-pin")).toHaveCount(1);
+    await expect(page.locator(".edit-note-pin")).toHaveText("1");
+    await expect(
+      page.getByRole("button", { name: "Agent", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const next = await project.at(0.1, 0.8);
+    await page.mouse.click(next.x, next.y);
+    await expect(
+      page.getByRole("form", { name: "Note 2", exact: true }),
+    ).toBeVisible();
+    release();
+    await expect(page.locator(".edit-note-pin")).toHaveCount(2);
+    await expect(
+      page.getByRole("form", { name: "Note 2", exact: true }),
+    ).toBeVisible();
+  } finally {
+    release();
+  }
+});
+
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 1024, height: 640 },
+]) {
+  test(`popover stays fully visible with 8px clearance at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    const project = await openProject(page, "Popover edges");
+    await page.setViewportSize(viewport);
+    await page.keyboard.press("n");
+    for (const [x, y] of [
+      [0.01, 0.01],
+      [0.99, 0.01],
+      [0.99, 0.99],
+      [0.01, 0.99],
+    ]) {
+      await page
+        .getByRole("button", { name: "First frame", exact: true })
+        .click();
+      const spot = await project.at(x!, y!);
+      await page.mouse.click(spot.x, spot.y);
+      const field = page.getByLabel("What should change?");
+      await field.fill(
+        "A long comment\nwith several lines\nthat changes the height\nand stays readable",
+      );
+      await page.locator(".tl-ruler").click({ position: { x: 200, y: 15 } });
+      await page.getByRole("button", { name: "Set end", exact: true }).click();
+      await expect
+        .poll(() =>
+          page.locator(".edit-note-popover").evaluate((element) => {
+            const popover = element.getBoundingClientRect();
+            const stage = document
+              .querySelector(".edit-stage")!
+              .getBoundingClientRect();
+            const actionsVisible = [
+              ...element.querySelectorAll("button"),
+            ].every((button) => {
+              const action = button.getBoundingClientRect();
+              return (
+                action.left >= popover.left &&
+                action.right <= popover.right &&
+                action.top >= popover.top &&
+                action.bottom <= popover.bottom
+              );
+            });
+            return (
+              actionsVisible &&
+              popover.left >= stage.left + 7.5 &&
+              popover.top >= stage.top + 7.5 &&
+              popover.right <= stage.right - 7.5 &&
+              popover.bottom <= stage.bottom - 7.5
+            );
+          }),
+        )
+        .toBe(true);
+      await field.press("Escape");
+    }
+  });
+}
+
+test("text undo precedes stroke undo, stroke redo returns it, and saved-note undo offers Redo", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Undo notes");
+  await quickCapture(page, project.id);
+  await page.keyboard.press("Shift+n");
+  const a = await project.at(0.1, 0.5);
+  const b = await project.at(0.35, 0.5);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 40 });
+  await page.mouse.up();
+  const field = page.getByLabel("What should change?");
+  const strokes = page.locator(".edit-note-pencil path[d]:not([data-live])");
+  await field.fill("Words after ink");
+  await field.press("Control+z");
+  await expect(field).toHaveValue("");
+  await expect(strokes).toHaveCount(1);
+  await field.press("Control+z");
+  await expect(strokes).toHaveCount(0);
+  await field.press("Control+Shift+z");
+  await expect(strokes).toHaveCount(1);
+  await field.press("Enter");
+  await expect.poll(async () => (await project.notes()).length).toBe(1);
+  await page.getByRole("button", { name: /^Select/ }).click();
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(".toast")).toHaveText(
+    "Note 1 removed ·RedoDismiss",
+  );
+  await expect(strokes).toHaveCount(0);
+  await page
+    .locator(".toast")
+    .getByRole("button", { name: "Redo", exact: true })
+    .click();
+  await expect.poll(async () => (await project.notes()).length).toBe(1);
+  await expect(strokes).toHaveCount(1);
+});
+
+test("single-frame notes stay readable in playback and acceptance removes both pin and strokes", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Readable playback");
+  const item = AnnotationSchema.parse(
+    await (
+      await page.request.post(`${project.base}/annotations`, {
+        data: {
+          kind: "drawing",
+          body: "Check this frame",
+          time: 0.5,
+          point: { x: 0.3, y: 0.5 },
+          strokes: [
+            {
+              points: [
+                { x: 0.2, y: 0.5 },
+                { x: 0.3, y: 0.5 },
+              ],
+              color: "#F1CF5A",
+            },
+          ],
+        },
+      })
+    ).json(),
+  );
+  const pin = page.getByRole("button", { name: "Note 1", exact: true });
+  await expect(
+    page.getByRole("button", { name: /^Review note 1/ }),
+  ).toBeVisible();
+  await expect(pin).toBeHidden();
+  const playback = page.evaluate(async () => {
+    const started = performance.now();
+    let appeared: number | null = null;
+    let held = false;
+    while (performance.now() - started < 6000) {
+      await new Promise(requestAnimationFrame);
+      const pin = document.querySelector('.edit-note-pin[aria-label="Note 1"]');
+      const now = performance.now();
+      if (pin) {
+        appeared ??= now;
+        if (now - appeared >= 750 && now - appeared < 950)
+          held = getComputedStyle(pin).opacity === "1";
+      } else if (appeared !== null) {
+        return { held, visibleFor: now - appeared };
+      }
+    }
+    throw new Error("The playback note did not appear and fade.");
+  });
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  const observed = await playback;
+  expect(observed.held).toBe(true);
+  expect(observed.visibleFor).toBeGreaterThanOrEqual(1000);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await page.getByRole("button", { name: /^Review note 1/ }).click();
+  await expect(pin).toBeVisible();
+  await expect(
+    page.locator(".edit-note-pencil path[d]:not([data-live])"),
+  ).toHaveCount(1);
+  const completed = await page.request.post(
+    `${project.base}/review/${item.id}/agent`,
+    { data: { type: "complete", note: "Checked" } },
+  );
+  expect(completed.ok()).toBe(true);
+  await page.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(pin).toHaveCount(0);
+  await expect(
+    page.locator(".edit-note-pencil path[d]:not([data-live])"),
+  ).toHaveCount(0);
+});
+
+test("finishing another stroke moves the popover clear of all ink and a slow 400px line stores under 80 points", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Clear ink");
+  await quickCapture(page, project.id);
+  await page.keyboard.press("Shift+n");
+  const start = await project.at(0.1, 0.6);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 400, start.y, { steps: 400 });
+  await page.mouse.up();
+  const firstPin = await page
+    .locator(".edit-note-pin[data-status=draft]")
+    .boundingBox();
+  const second = await project.at(0.4, 0.8);
+  const end = await project.at(0.7, 0.8);
+  await page.mouse.move(second.x, second.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 60 });
+  await page.mouse.up();
+  expect(
+    await page.locator(".edit-note-pin[data-status=draft]").boundingBox(),
+  ).toEqual(firstPin);
+  const clear = await page.locator(".edit-note-popover").evaluate((element) => {
+    const form = element.getBoundingClientRect();
+    const ink = document
+      .querySelector(".edit-note-pencil")!
+      .getBoundingClientRect();
+    return (
+      form.left >= ink.right + 23.5 ||
+      form.right <= ink.left - 23.5 ||
+      form.top >= ink.bottom + 23.5 ||
+      form.bottom <= ink.top - 23.5
+    );
+  });
+  expect(clear).toBe(true);
+  await page.getByRole("button", { name: "Add note", exact: true }).click();
+  await expect.poll(async () => (await project.notes()).length).toBe(1);
+  expect((await project.notes())[0]!.strokes[0]!.points.length).toBeLessThan(
+    80,
+  );
+  await expect(
+    page.locator(".edit-note-casing path[d]:not([data-live])").first(),
+  ).toHaveCSS("stroke-width", "7px");
+  await expect(
+    page.locator(".edit-note-casing path[d]:not([data-live])").first(),
+  ).toHaveCSS("stroke", "rgba(0, 0, 0, 0.7)");
+});
+
+test("ink spanning the whole picture gets space beside the picture", async ({
+  page,
+}) => {
+  const project = await openProject(page, "Full-picture drawing");
+  await page.keyboard.press("Shift+n");
+  const corners = await Promise.all(
+    [
+      [0.03, 0.03],
+      [0.97, 0.03],
+      [0.97, 0.97],
+      [0.03, 0.97],
+      [0.03, 0.03],
+    ].map(([x, y]) => project.at(x!, y!)),
+  );
+  await page.mouse.move(corners[0]!.x, corners[0]!.y);
+  await page.mouse.down();
+  for (const point of corners.slice(1))
+    await page.mouse.move(point.x, point.y, { steps: 40 });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page.locator(".edit-note-popover").evaluate((element) => {
+        const form = element.getBoundingClientRect();
+        const ink = document
+          .querySelector(".edit-note-pencil")!
+          .getBoundingClientRect();
+        return (
+          form.left >= ink.right + 23.5 ||
+          form.right <= ink.left - 23.5 ||
+          form.top >= ink.bottom + 23.5 ||
+          form.bottom <= ink.top - 23.5
+        );
+      }),
+    )
+    .toBe(true);
 });
