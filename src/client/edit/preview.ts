@@ -1,6 +1,9 @@
+import { create } from "zustand";
 import { reportEditorError } from "../workspace";
 import { audioLevels } from "./levels";
 import {
+  PositionWarningSchema,
+  PositionFoldSchema,
   PreviewLevelsSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
@@ -8,6 +11,45 @@ import {
 } from "../../shared/preview";
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
+
+export const usePositionWarning = create<{
+  warning: { clipId: string; time: number } | null;
+}>(() => ({ warning: null }));
+let observedClip: string | null = null;
+let warningSource: HTMLIFrameElement | null = null;
+const observers = new Set<(clipId: string | null) => void>();
+export function observePosition(clipId: string | null) {
+  observedClip = clipId;
+  usePositionWarning.setState({ warning: null });
+  for (const observe of observers) observe(clipId);
+}
+
+type PositionDraft = { clipId: string; x: number | null; y: number | null };
+const positionTargets = new Set<(draft: PositionDraft) => void>();
+let positionDraft: PositionDraft | null = null;
+/** Drafts go only to preview documents, never through timeline state or the server. */
+export function previewPosition(
+  clipId: string,
+  x: number | null,
+  y: number | null,
+) {
+  positionDraft = { clipId, x, y };
+  for (const target of positionTargets) target(positionDraft);
+}
+
+export function cancelPositionPreview(clipId: string, x: number, y: number) {
+  previewPosition(clipId, x, y);
+  positionDraft = null;
+}
+
+export async function commitPositionPreview(commit: () => Promise<boolean>) {
+  const draft = positionDraft;
+  const accepted = await commit();
+  // An earlier commit must never clear a subsequent gesture's draft.
+  if (positionDraft !== draft) return;
+  if (!accepted && draft) previewPosition(draft.clipId, null, null);
+  positionDraft = null;
+}
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement) {
@@ -39,6 +81,20 @@ export function connectPreview(frame: HTMLIFrameElement) {
       const levels = PreviewLevelsSchema.safeParse(event.data);
       if (levels.success) {
         audioLevels.publish(levels.data);
+        return;
+      }
+      const warning = PositionWarningSchema.safeParse(event.data);
+      if (warning.success) {
+        const { clipId, time, overridden } = warning.data;
+        if (frame === warningSource && clipId === observedClip)
+          usePositionWarning.setState({
+            warning: overridden ? { clipId, time } : null,
+          });
+        return;
+      }
+      const fold = PositionFoldSchema.safeParse(event.data);
+      if (fold.success && frame === warningSource) {
+        send("position-fold", { hfId: fold.data.properties.hfId });
         return;
       }
     }
@@ -104,11 +160,29 @@ export function connectPreview(frame: HTMLIFrameElement) {
       send("mute", { muted });
     },
   };
+  const position = (draft: PositionDraft) => {
+    send("position", draft);
+  };
+  const observe = (clipId: string | null) =>
+    send("observe-position", { clipId });
   return {
     player,
     signal: closing.signal,
-    activate() {
+    async activate() {
+      positionTargets.add(position);
+      // Keep both documents following the gesture until the new one has painted its latest
+      // draft. Promotion runs immediately after this resolves, before another event can edit it.
+      let shown: PositionDraft | null;
+      do {
+        shown = positionDraft;
+        if (shown) position(shown);
+        await request("paint");
+        closing.signal.throwIfAborted();
+      } while (shown !== positionDraft);
       active = true;
+      warningSource = frame;
+      observers.add(observe);
+      observe(observedClip);
       send("meter", { enabled: true });
     },
     get state() {
@@ -117,6 +191,13 @@ export function connectPreview(frame: HTMLIFrameElement) {
     inspect: () => request("inspect"),
     painted: () => request("paint"),
     dispose() {
+      if (positionTargets.delete(position) && !positionTargets.size)
+        positionDraft = null;
+      observers.delete(observe);
+      if (warningSource === frame) {
+        warningSource = null;
+        usePositionWarning.setState({ warning: null });
+      }
       closing.abort();
       send("meter", { enabled: false });
       if (active) audioLevels.publish({ l: 0, r: 0, playing: false });

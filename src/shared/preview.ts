@@ -42,3 +42,18 @@ export const PreviewLevelsSchema = z.object({
   l: z.number().nonnegative().finite(),
   r: z.number().nonnegative().finite(),
 });
+
+export const PositionWarningSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("position-warning"),
+  clipId: z.string(),
+  time: z.number().nonnegative().finite(),
+  overridden: z.boolean(),
+});
+
+export const PositionFoldSchema = z.object({
+  source: z.literal("hf-preview"),
+  type: z.literal("analytics"),
+  event: z.literal("position_edit_fold_skipped"),
+  properties: z.object({ hfId: z.string().nullable() }),
+});

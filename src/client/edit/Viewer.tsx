@@ -14,6 +14,7 @@ export type Zoom = "fit" | "actual";
 
 interface Slot {
   gen: number;
+  revision: number;
   width: number;
   height: number;
 }
@@ -140,10 +141,13 @@ export function Viewer({
         if (gen !== latest.current) return;
         if (useTransport.getState().state.kind !== "stopped") break;
       }
+      await preview.activate();
+      preview.signal.throwIfAborted();
+      if (gen !== latest.current) return;
       const { width, height, fps } = preview.state;
       const size = { width, height };
       setHeld(live);
-      setLive({ gen, ...size });
+      setLive({ gen, revision, ...size });
       setPending(null);
       // The status bar shows the open composition's rate and size, as with the embedded editor.
       useWorkspace.setState({
@@ -152,7 +156,6 @@ export function Viewer({
           ...size,
         },
       });
-      preview.activate();
       transport.attach(player, shown);
       reportEditorError("viewer", null);
     } catch (error) {
@@ -187,7 +190,15 @@ export function Viewer({
   );
 
   return (
-    <div ref={stage} className="edit-stage">
+    <div
+      ref={stage}
+      className="edit-stage"
+      data-preview-ready={
+        pending === null && live?.revision === revision && held === null
+          ? live.revision
+          : undefined
+      }
+    >
       <div
         className="edit-picture"
         data-armed={armed || undefined}

@@ -18,6 +18,19 @@ const opacity = z
   .max(1)
   .overwrite((value) => Math.round(value * 1e6) / 1e6);
 
+/** Native position edits are additive offsets, canonical to six decimal pixels. */
+const position = z
+  .number()
+  .nullable()
+  .overwrite((value) => {
+    if (value === null) return null;
+    const offset = Number(value.toFixed(6));
+    return offset === 0 ? null : offset;
+  })
+  .describe(
+    "Additive offset in composition CSS pixels, not an absolute coordinate. A composition's own animation can override Position. Verify with timeline_view frames. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
+  );
+
 export const FpsSchema = z.object({
   num: z.number().int().positive(),
   den: z.number().int().positive(),
@@ -55,6 +68,8 @@ export const ClipSchema = z.object({
     .describe("Linear clip gain, 1 = 0 dB, null = unity"),
   /** Static inline opacity; null leaves the authored stylesheet in control. */
   opacity: opacity.nullable(),
+  x: position.default(null),
+  y: position.default(null),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
     .default(0)
@@ -282,6 +297,8 @@ export const CommandSchema = z.discriminatedUnion("type", [
           "Authored fade-out length in frames; 0 clears it. Playback proportionally scales fades to fit the clip.",
         ),
       opacity: opacity.nullable().optional(),
+      x: position.optional(),
+      y: position.optional(),
       enabled: z
         .boolean()
         .optional()

@@ -30,6 +30,8 @@ export function sourceClipVersions(source: string, composition: string) {
             sourceDuration: _,
             hasAudio: _audio,
             opacity: _opacity,
+            x: _x,
+            y: _y,
             fadeIn: _fadeIn,
             fadeOut: _fadeOut,
             automation: _automation,

@@ -19,6 +19,13 @@ import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { pendingEdit, shownChanges } from "./changes";
+import {
+  previewPosition,
+  observePosition,
+  usePositionWarning,
+  cancelPositionPreview,
+  commitPositionPreview,
+} from "../preview";
 
 export function InspectorToggle() {
   const open = useWorkspace((state) => state.inspector);
@@ -43,6 +50,15 @@ export function Inspector({ projectId }: { projectId: string }) {
   const root = useRef<HTMLElement>(null);
   const [changesOpen, setChangesOpen] = useState(true);
   const [audioOpen, setAudioOpen] = useState(true);
+  const [transformOpen, setTransformOpen] = useState(
+    () =>
+      window.innerHeight >=
+      Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--breakpoint-short",
+        ),
+      ),
+  );
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
@@ -87,6 +103,12 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  const warning = usePositionWarning((state) => state.warning);
+  useEffect(() => {
+    observePosition(clip && !isAudioKind(clip.kind) ? clip.id : null);
+    return () => observePosition(null);
+  }, [projectId, clip?.id]);
+  const positionWarning = warning?.clipId === clip?.id ? warning : null;
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -235,6 +257,74 @@ export function Inspector({ projectId }: { projectId: string }) {
               <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
+          {!isAudioKind(clip.kind) && (
+            <details
+              open={transformOpen}
+              onToggle={(event) => setTransformOpen(event.currentTarget.open)}
+              className="inspector-section"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Transform
+              </summary>
+              {(["x", "y"] as const).map((axis) => (
+                <ValueField
+                  key={`${clip.id}:${axis}`}
+                  label={`Position ${axis.toUpperCase()}`}
+                  value={clip[axis] ?? 0}
+                  unit="pixels"
+                  min={-Infinity}
+                  fps={timeline.fps}
+                  disabled={track?.track.locked}
+                  onPreview={(value) =>
+                    previewPosition(
+                      clip.id,
+                      axis === "x" ? value : (clip.x ?? 0),
+                      axis === "y" ? value : (clip.y ?? 0),
+                    )
+                  }
+                  onCancel={() =>
+                    cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
+                  }
+                  onCommit={async (value) => {
+                    await commitPositionPreview(() =>
+                      editTimeline(projectId, "Edit position", () => [
+                        { type: "setClip", clipId: clip.id, [axis]: value },
+                      ]),
+                    );
+                  }}
+                />
+              ))}
+              {positionWarning && (
+                <p className="inspector-empty" role="status">
+                  This clip's animation overrides Position at{" "}
+                  {formatTimecode(
+                    Math.floor(
+                      (positionWarning.time * timeline.fps.num) /
+                        timeline.fps.den +
+                        1e-6,
+                    ),
+                    timeline.fps,
+                  )}
+                  .
+                </p>
+              )}
+              <button
+                type="button"
+                aria-label="Reset position"
+                disabled={
+                  (clip.x === null && clip.y === null) || track?.track.locked
+                }
+                onClick={() => {
+                  void editTimeline(projectId, "Reset position", () => [
+                    { type: "setClip", clipId: clip.id, x: null, y: null },
+                  ]);
+                }}
+              >
+                Reset
+              </button>
+            </details>
+          )}
           {subject?.audio.map((audio) => {
             const fades = clipFades(audio);
             const locked = timeline.tracks.find(

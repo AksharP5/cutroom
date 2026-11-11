@@ -2,11 +2,13 @@
 
 Cutroom's own editor is the default: a tool row, the viewer, the transport, and a timeline below a draggable split. Review notes and word-based edits share its project history.
 
-Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the inspector, the composition and source panels, frame capture, and export settings with a cancel button. The switch goes away when those arrive.
+Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: scale and rotation controls, the composition and source panels, frame capture, and export settings with a cancel button. The switch goes away when those arrive.
 
 ## Editor
 
 The tool row holds Select, Trim, Blade, Draw and Comment on the left. On the right are snapping, the viewer zoom, Files, undo and redo, and Export. Files opens the project's folder in the file dialog; choosing a file copies its path, for an agent or another editor. Export renders the root composition to MP4 at the timeline's frame rate and standard quality, shows its progress on the button and in the status bar, and downloads it as the project name followed by `.mp4` when it is done. A failure, such as FFmpeg missing, shows in the header.
+
+The inspector's Transform section moves a visual clip with Position X/Y offsets in composition pixels. Label dragging follows live; release saves one undo step and Escape restores the picture. Position adds to ordinary GSAP x/y motion. A composition's own translate animation, scale, rotation or zoom can override the offset. Transform warns at the observed timecode for the selected clip and keeps the fields usable. Reset clears both axes.
 
 The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. The picture outline turns yellow while Draw or Comment is armed.
 
@@ -92,6 +94,7 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 - `insert` places a clip, overwrites the range on its own track and its newly linked audio destination when the inserted video has sound, or splits and pushes auto-select tracks. Inserted video and images fill the composition with their aspect ratio preserved and unused space letterboxed. They are positioned so higher video tracks layer above lower ones. An inserted video is written with `data-has-audio` from its file: `true` when ffprobe finds an audio stream, `false` when it finds none. Each clip in the projection carries `hasAudio`: audio clips, and video that is not `muted` and not marked `data-has-audio="false"`.
 - `setClip` with `enabled: false` writes `data-hidden`, which HyperFrames leaves out of preview and render. The clip keeps its place on the timeline.
 - `setClip.opacity` sets static inline opacity from 0 to 1, at six-decimal precision. `null` removes the override. Source styles and animations otherwise remain in control.
+- `setClip.x` and `setClip.y` set additive offsets in composition pixels, with positive X moving right and positive Y moving down. Null or zero clears an axis. These edit only the named visual clip, leaving linked audio in place. Preview and export use the same captured native baselines. [Position semantics and runtime limits](mcp.md#timeline).
 - `setTiming` changes media `playbackRate` or `mediaStart` in seconds, together with linked partners. Duration stays fixed. Source-in shifts partners by the same source offset; speed preserves source sync at the selected clip's start, including split edits. Locked tracks, non-media clips, and insufficient source media are refused.
 
 These cuts follow Resolve's sync-preserving Edit-page ripple model introduced in [DaVinci Resolve 20.2, New Features Guide, pages 7-8](https://documents.blackmagicdesign.com/SupportNotes/DaVinci_Resolve_20.2_New_Features_Guide.pdf#page=7). Earlier Resolve versions mainly moved clips starting after the edit, leaving spanning music or titles uncut. Resolve 20.2 also added independent Sync Lock controls, explained on page 12. Cutroom currently uses auto-select for ripple participation and refuses linked edits across excluded tracks; it does not expose Resolve's separate Sync Lock toggle or its preference to restore the older ripple behavior.

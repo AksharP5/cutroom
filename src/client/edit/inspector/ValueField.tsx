@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../../workspace";
 import { formatField, parseField, stepField } from "./fields";
@@ -16,6 +16,8 @@ export function ValueField({
   max = Infinity,
   hint,
   onCommit,
+  onPreview,
+  onCancel,
 }: {
   label: string;
   value: number | null;
@@ -27,6 +29,8 @@ export function ValueField({
   max?: number;
   hint?: string;
   onCommit(value: number | null): void;
+  onPreview?(value: number): void;
+  onCancel?(): void;
 }) {
   const id = useId();
   const [draft, setDraft] = useState<string | null>(null);
@@ -38,8 +42,9 @@ export function ValueField({
     moved: boolean;
     release(): void;
   } | null>(null);
-  const endDrag = () => {
+  const endDrag = (cancel = true) => {
     if (!drag.current) return;
+    if (cancel) onCancel?.();
     drag.current.release();
     drag.current = null;
     setDraft(null);
@@ -47,6 +52,17 @@ export function ValueField({
   };
   const input = useRef<HTMLInputElement>(null);
   const cancelled = useRef(false);
+  const stepping = useRef(false);
+  const cancelPreview = useRef(onCancel);
+  cancelPreview.current = onCancel;
+  useEffect(
+    () => () => {
+      if (drag.current) useWorkspace.setState({ gesture: false });
+      drag.current?.release();
+      if (drag.current || stepping.current) cancelPreview.current?.();
+    },
+    [],
+  );
   const commit = () => {
     if (draft === null) return;
     try {
@@ -59,10 +75,13 @@ export function ValueField({
           `${label} must be between ${formatField(min, unit, fps)} and ${formatField(max, unit, fps)}.`,
         );
       if (next !== value) onCommit(next);
+      else onCancel?.();
     } catch (error) {
+      onCancel?.();
       showToast(error instanceof Error ? error.message : String(error));
     }
     setDraft(null);
+    stepping.current = false;
   };
   return (
     <div className="inspector-field">
@@ -102,23 +121,29 @@ export function ValueField({
           current.x = event.clientX;
           current.distance +=
             delta *
-            ((unit === "gain" ? event.altKey : event.shiftKey) ? 0.1 : 1);
+            ((unit === "gain" ? event.altKey : event.shiftKey)
+              ? unit === "pixels"
+                ? 10
+                : 0.1
+              : 1);
           current.moved = true;
           current.next = Math.min(
             max,
             Math.max(min, stepField(current.value, current.distance, unit)),
           );
           setDraft(formatField(current.next, unit, fps));
+          onPreview?.(current.next);
         }}
         onPointerUp={() => {
           const current = drag.current;
-          endDrag();
+          endDrag(false);
           if (!current) return;
           if (!current.moved) input.current?.focus();
           else if (current.next !== current.value) onCommit(current.next);
+          else onCancel?.();
         }}
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
+        onPointerCancel={() => endDrag()}
+        onLostPointerCapture={() => endDrag()}
       >
         {label}
       </label>
@@ -127,11 +152,13 @@ export function ValueField({
           ref={input}
           id={id}
           title={
-            allowAuto
-              ? "Auto uses source styles. Type a percentage to set static inline opacity."
-              : unit === "gain"
-                ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
-                : undefined
+            unit === "pixels"
+              ? "Offset in composition pixels. Drag the label or use Up/Down. Shift for 10 pixels."
+              : allowAuto
+                ? "Auto uses source styles. Type a percentage to set static inline opacity."
+                : unit === "gain"
+                  ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
+                  : undefined
           }
           aria-describedby={hint ? `${id}-hint` : undefined}
           type="text"
@@ -141,8 +168,11 @@ export function ValueField({
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => {
-            if (cancelled.current) setDraft(null);
-            else commit();
+            if (cancelled.current) {
+              onCancel?.();
+              stepping.current = false;
+              setDraft(null);
+            } else commit();
             cancelled.current = false;
           }}
           onKeyDown={(event) => {
@@ -158,16 +188,15 @@ export function ValueField({
                   (event.shiftKey ? 10 : 1) *
                   (unit === "gain" && event.altKey ? 0.1 : 1) *
                   (event.key === "ArrowUp" ? 1 : -1);
-                setDraft(
-                  formatField(
-                    Math.min(
-                      max,
-                      Math.max(min, stepField(current, step, unit)),
-                    ),
-                    unit,
-                    fps,
-                  ),
+                const next = Math.min(
+                  max,
+                  Math.max(min, stepField(current, step, unit)),
                 );
+                setDraft(formatField(next, unit, fps));
+                if (onPreview) {
+                  stepping.current = true;
+                  onPreview(next);
+                }
               } catch (error) {
                 showToast(
                   error instanceof Error ? error.message : String(error),
@@ -180,6 +209,13 @@ export function ValueField({
               cancelled.current = event.key === "Escape";
               event.currentTarget.blur();
             }
+          }}
+          onKeyUp={(event) => {
+            if (
+              stepping.current &&
+              (event.key === "ArrowUp" || event.key === "ArrowDown")
+            )
+              commit();
           }}
         />
         {allowAuto && (

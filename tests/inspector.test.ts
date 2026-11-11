@@ -611,3 +611,87 @@ test("gain fields round-trip linear gain through signed dB, including silence an
   for (const input of ["NaN", "+Infinity", "6dBjunk", "1e5", "", "9999"])
     expect(() => parseField(input, "gain", fps)).toThrow();
 });
+
+test("position fields accept signed pixels and step at composition scale", () => {
+  expect(parseField("-40.125 px", "pixels", fps)).toBe(-40.125);
+  expect(parseField("+12", "pixels", fps)).toBe(12);
+  expect(formatField(-40.125, "pixels", fps)).toBe("-40.125 px");
+  expect(stepField(-40.125, 10, "pixels")).toBe(-30.125);
+  for (const input of ["", "NaN", "Infinity", "40%", "4pxjunk"])
+    expect(() => parseField(input, "pixels", fps)).toThrow();
+});
+
+test("position round-trips native baselines, preserves CSS and linked audio, and undoes as one step", async () => {
+  const fixture = await projectFixture();
+  const routes = createTimelineRoutes(fixture.store, fixture.review);
+  fixture.app.route("/api/cutroom", routes);
+  const project = await fixture.store.create({ name: "Position" });
+  const path = `/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.request(`${path}/timeline`)).json(),
+    );
+  const edit = async (commands: unknown[]) =>
+    fixture.request(`${path}/commands`, "POST", {
+      expectedRevision: (await read()).revision,
+      commands,
+    });
+  try {
+    const file = join(project.path, "index.html");
+    const source =
+      '<main data-composition-id="main" data-fps="30" data-duration="2"><video id="picture" src="missing.mp4" muted data-link="pair" data-start="0" data-duration="2" data-track-index="0" data-x="12.25" style="left:30px;transform:rotate(5deg)"></video><audio id="sound" src="missing.mp4" data-link="pair" data-start="0" data-duration="2" data-track-index="1"></audio></main>';
+    await writeFile(file, source);
+    const before = await read();
+    const response = await edit([
+      { type: "setClip", clipId: "picture", x: 40.123456, y: -12.5 },
+    ]);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const moved = TimelineViewSchema.parse(await response.json());
+    expect((await read()).timeline).toEqual(moved.timeline);
+    expect(
+      moved.timeline.clips.find((clip) => clip.id === "picture"),
+    ).toMatchObject({ x: 40.123456, y: -12.5 });
+    expect(moved.timeline.clips.find((clip) => clip.id === "sound")).toEqual(
+      before.timeline.clips.find((clip) => clip.id === "sound"),
+    );
+    const html = await readFile(file, "utf8");
+    expect(html).toContain('data-x="52.373456"');
+    expect(html).toContain('data-hf-edit-base-x="12.25"');
+    expect(html).toContain('data-hf-edit-base-y="0"');
+    expect(html).toContain('style="left:30px;transform:rotate(5deg)"');
+    await edit([{ type: "setClip", clipId: "picture", x: null, y: null }]);
+    expect(await readFile(file, "utf8")).toBe(source);
+    await fixture.request(`${path}/history/undo`, "POST");
+    expect((await read()).timeline).toEqual(moved.timeline);
+    await fixture.request(`${path}/history/undo`, "POST");
+    expect((await read()).timeline).toEqual(before.timeline);
+    expect(
+      (await edit([{ type: "setClip", clipId: "sound", x: 40 }])).status,
+    ).toBe(422);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("position edits name the distance moved rather than an absolute coordinate", () => {
+  const timeline = parseComposition(
+    '<main data-composition-id="main" data-duration="2"><div id="title" data-start="0" data-duration="2" data-x="20" data-hf-edit-base-x="10"></div></main>',
+    emptyTimelineSettings(),
+  ).timeline;
+  const label = (x: number | null, y?: number | null) =>
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "setClip",
+          clipId: "title",
+          x,
+          ...(y !== undefined && { y }),
+        }),
+      ],
+      timeline,
+      "Position",
+    );
+  expect(label(50)).toBe("Moved 40 px right");
+  expect(label(-30, -10)).toBe("Moved 40 px left; Moved 10 px up");
+  expect(label(null, null)).toBe("Reset position");
+});

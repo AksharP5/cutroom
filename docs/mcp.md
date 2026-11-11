@@ -37,6 +37,12 @@ Video with sound becomes a muted picture and a linked audio clip. Overwrite rout
 
 `setClip.opacity` sets static inline opacity from 0 to 1, canonical to six decimals; `null` removes the inline override. `setTiming` sets `playbackRate` or `mediaStart` in source seconds while keeping timeline duration and linked source sync. Both use the same commands and undo history as the inspector. Timeline reads also include `clipEdits`, the recent owner/agent ledger, and `agentChanges`, the clips still underlined for review.
 
+`setClip.x` and `setClip.y` are additive offsets in composition pixels, canonical to six decimals, not absolute canvas coordinates. Positive X moves right and positive Y moves down. Null or zero clears that axis; reads return null when an axis has no offset. `{type:"setClip", clipId:"title", x:null, y:null}` resets both in one undo step. Only the named visual clip moves; linked audio has no position and rejects position edits.
+
+The pinned HyperFrames 0.9.26 runtime composes `data-x`/`data-y` minus captured `data-hf-edit-base-x`/`data-hf-edit-base-y` with authored CSS position, transforms and GSAP animation. Cutroom captures both existing baselines on the first edit. The runtime reapplies offsets after seeks in preview and render.
+
+A composition's own animation can override Position. Commands still save the offset. Use `timeline_view` frames to verify the result. In the editor, Transform warns at the displayed timecode when the selected clip's translate differs from the runtime's composed value, or scale, rotation or zoom changes the offset's composition-pixel size. The warning clears when Position holds again and never blocks editing.
+
 `label` is the past-tense summary the owner sees in history and in the inspector's Changes list. Omit it and the edit is named from its commands, the same way the editor names its own edits (for example "Moved 15 frames right" or "Set gain to -6.0 dB").
 
 For example, this razors every unlocked auto-select track at frame 90 and ripple deletes the first half of a linked clip:
