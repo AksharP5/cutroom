@@ -328,6 +328,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
         );
       }
     }
+    await seek(45, 40);
     await page.screenshot({ path: info.outputPath("after-position.png") });
     await page.getByRole("button", { name: "Export", exact: true }).click();
     const started = page.waitForResponse(

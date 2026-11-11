@@ -35,6 +35,21 @@ function installPreviewBridge() {
     x: number | null;
     y: number | null;
   } | null = null;
+  const splitTranslate = (value: string) => {
+    const parts: string[] = [];
+    let depth = 0;
+    let part = "";
+    for (const char of value) {
+      if (char === "(") depth++;
+      if (char === ")") depth--;
+      if (/\s/.test(char) && depth === 0) {
+        if (part) parts.push(part);
+        part = "";
+      } else part += char;
+    }
+    if (part) parts.push(part);
+    return parts;
+  };
   const writePosition = () => {
     positionFrame = 0;
     const draft = positionDraft;
@@ -62,19 +77,9 @@ function installPreviewBridge() {
     }
     let translate = original.translate;
     if (draft.x !== null && draft.y !== null) {
-      // Split computed translate only at top-level spaces, preserving calc() and a third axis.
-      const parts: string[] = [];
-      let depth = 0;
-      let part = "";
-      for (const char of original.base === "none" ? "" : original.base) {
-        if (char === "(") depth++;
-        if (char === ")") depth--;
-        if (/\s/.test(char) && depth === 0) {
-          if (part) parts.push(part);
-          part = "";
-        } else part += char;
-      }
-      if (part) parts.push(part);
+      const parts = splitTranslate(
+        original.base === "none" ? "" : original.base,
+      );
       translate = `calc(${parts[0] ?? "0px"} + ${draft.x - original.x}px) calc(${parts[1] ?? "0px"} + ${draft.y - original.y}px)${parts[2] ? ` ${parts[2]}` : ""}`;
     }
     // The parked video is represented by its held canvas. Both share the same style.
@@ -84,6 +89,118 @@ function installPreviewBridge() {
         .get(element)
         ?.canvas.style.setProperty("translate", translate, original.priority);
     if (draft.x === null) positions.delete(element);
+    clearTimeout(observationTimer);
+    observationTimer = window.setTimeout(() => {
+      checkPosition();
+      observePlaying();
+    }, 350);
+  };
+  let observedClip: string | null = null;
+  let observationTimer = 0;
+  let observingPosition = false;
+  const expected = document.createElement("span");
+  expected.style.cssText = "all:initial;display:none!important";
+  const checkPosition = (foldedId?: string | null) => {
+    observingPosition = false;
+    if (!observedClip) return;
+    const element = document.querySelector(`#${CSS.escape(observedClip)}`);
+    if (!(element instanceof HTMLElement || element instanceof SVGElement))
+      return;
+    const number = (name: string) =>
+      Number.parseFloat(element.getAttribute(name) ?? "0") || 0;
+    const draft = positionDraft?.clipId === observedClip ? positionDraft : null;
+    const edited =
+      element.hasAttribute("data-hf-edit-base-x") ||
+      element.hasAttribute("data-hf-edit-base-y");
+    const x =
+      draft?.x ??
+      (edited ? number("data-x") - number("data-hf-edit-base-x") : 0);
+    const y =
+      draft?.y ??
+      (edited ? number("data-y") - number("data-hf-edit-base-y") : 0);
+    observingPosition = Boolean(x || y);
+    let overridden = false;
+    if ((x || y) && element.checkVisibility({ checkVisibilityCSS: true })) {
+      const style = getComputedStyle(element);
+      const saved = positions.get(element);
+      const original =
+        saved?.base ??
+        element.getAttribute("data-hf-edit-original-translate") ??
+        "none";
+      const parts = splitTranslate(original === "none" ? "" : original);
+      const dx = saved ? x - saved.x : x;
+      const dy = saved ? y - saved.y : y;
+      // Let CSS resolve the same calc/percentage values the runtime composes, without
+      // touching the subject's animation or forcing geometry reads on every clip.
+      expected.style.fontSize = style.fontSize;
+      expected.style.translate = `calc(${parts[0] ?? "0px"} + ${dx}px) calc(${parts[1] ?? "0px"} + ${dy}px)${parts[2] ? ` ${parts[2]}` : ""}`;
+      element.append(expected);
+      overridden = style.translate !== getComputedStyle(expected).translate;
+      expected.remove();
+      if (foldedId && element.getAttribute("data-hf-id") === foldedId)
+        overridden = true;
+      for (
+        let ancestor: Element | null = element;
+        ancestor && !overridden;
+        ancestor = ancestor.parentElement
+      ) {
+        const css = ancestor === element ? style : getComputedStyle(ancestor);
+        const matrix = new DOMMatrixReadOnly(
+          css.transform === "none" ? undefined : css.transform,
+        );
+        const linear = [
+          matrix.m11 - 1,
+          matrix.m12,
+          matrix.m13,
+          matrix.m14,
+          matrix.m21,
+          matrix.m22 - 1,
+          matrix.m23,
+          matrix.m24,
+          matrix.m31,
+          matrix.m32,
+          matrix.m33 - 1,
+          matrix.m34,
+          matrix.m44 - 1,
+        ];
+        overridden =
+          linear.some((value) => Math.abs(value) > 0.000001) ||
+          (css.zoom !== "normal" &&
+            Math.abs(Number.parseFloat(css.zoom) - 1) > 0.000001) ||
+          (css.scale !== "none" &&
+            css.scale
+              .split(/\s+/)
+              .some(
+                (value) =>
+                  Math.abs(
+                    Number.parseFloat(value) / (value.endsWith("%") ? 100 : 1) -
+                      1,
+                  ) > 0.000001,
+              )) ||
+          (css.rotate !== "none" &&
+            Math.abs(Number.parseFloat(css.rotate.split(/\s+/).at(-1)!) % 360) >
+              0.000001);
+      }
+    }
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "position-warning",
+        clipId: observedClip,
+        time: win.__player?.getTime() ?? 0,
+        overridden,
+      },
+      "*",
+    );
+  };
+  const observePlaying = () => {
+    clearTimeout(observationTimer);
+    if (!observedClip || !observingPosition || !win.__player?.isPlaying())
+      return;
+    observationTimer = window.setTimeout(() => {
+      checkPosition();
+      observePlaying();
+    }, 350);
   };
   let metering = false;
   let animation = 0;
@@ -340,6 +457,7 @@ function installPreviewBridge() {
   );
   addEventListener("pagehide", () => {
     pictureVersion += 1;
+    clearTimeout(observationTimer);
     for (const video of holds.keys()) removeHold(video);
   });
   addEventListener("message", (event: MessageEvent<unknown>) => {
@@ -361,6 +479,23 @@ function installPreviewBridge() {
     const id = data.id;
     void (async () => {
       switch (data.action) {
+        case "observe-position":
+          if (
+            !("clipId" in data) ||
+            !(data.clipId === null || typeof data.clipId === "string")
+          )
+            return;
+          observedClip = data.clipId;
+          checkPosition();
+          observePlaying();
+          break;
+        case "position-fold":
+          if (
+            "hfId" in data &&
+            (data.hfId === null || typeof data.hfId === "string")
+          )
+            checkPosition(data.hfId);
+          return;
         case "position":
           if (
             !("clipId" in data) ||
@@ -395,6 +530,7 @@ function installPreviewBridge() {
           pictureVersion += 1;
           for (const video of holds.keys()) releasePlaying(video);
           win.__player?.play();
+          observePlaying();
           if (metering && !animation) levels();
           break;
         case "pause":
@@ -403,6 +539,8 @@ function installPreviewBridge() {
           animation = 0;
           if (metering) levels();
           await refreshPicture();
+          clearTimeout(observationTimer);
+          checkPosition();
           break;
         case "seek":
           if (
@@ -414,6 +552,8 @@ function installPreviewBridge() {
             return;
           win.__player?.seek(data.time);
           if (!win.__player?.isPlaying()) await refreshPicture();
+          checkPosition();
+          observePlaying();
           break;
         case "mute":
           if (!("muted" in data) || typeof data.muted !== "boolean") return;
@@ -430,6 +570,7 @@ function installPreviewBridge() {
         case "paint":
           await picture;
           await paint();
+          checkPosition();
           break;
         default:
           return;

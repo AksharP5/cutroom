@@ -113,10 +113,7 @@ export async function createApp(
     }),
   );
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
-  app.route(
-    "/api/cutroom",
-    createTimelineRoutes(projects, review, editor.positions),
-  );
+  app.route("/api/cutroom", createTimelineRoutes(projects, review));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);

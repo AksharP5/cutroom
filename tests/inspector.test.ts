@@ -669,7 +669,6 @@ test("position round-trips native baselines, preserves CSS and linked audio, and
       (await edit([{ type: "setClip", clipId: "sound", x: 40 }])).status,
     ).toBe(422);
   } finally {
-    await routes.dispose();
     await fixture.close();
   }
 });

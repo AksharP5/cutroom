@@ -28,7 +28,7 @@ const position = z
     return offset === 0 ? null : offset;
   })
   .describe(
-    "Additive offset in composition CSS pixels, not an absolute coordinate. A runtime check must confirm that the clip moves exactly as asked on the checked frames before saving. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
+    "Additive offset in composition CSS pixels, not an absolute coordinate. A composition's own animation can override Position. Verify with timeline_view frames. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
   );
 
 export const FpsSchema = z.object({
@@ -405,7 +405,6 @@ export const ClipEditSchema = z.object({
 });
 
 export const TimelineViewSchema = z.object({
-  positionUnsupported: z.record(z.string(), z.string()).optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
   composition: z.string(),

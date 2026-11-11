@@ -164,21 +164,17 @@ On the same host, main passed the old one-run gate both before and after all 158
 
 [Raw timings, matching worst-frame trace excerpts and compressed traces](https://github.com/AksharP5/cutroom/tree/pr-assets/timeline-frame-rate) include browser, renderer and viewport metadata. The separate profiled 400-clip pass had a worst frame of 104.7 ms before and 84.8 ms after. Those screenshots plot the actual Chromium events and source-map locations; the tables use untraced runs.
 
-## Position support checks
+## Position preview
 
-Position checks compile two fresh export documents, with and without a 37/23 px offset, and compare the clip's bounding box after render seeks. The producer and existing capture browser stay warm. Clips up to 150 frames use every frame; longer clips use 150 evenly spaced interior frames plus both endpoints. A conflict entirely between samples can be missed. Checks superseded by a newer revision are cancelled, including queued work. Live scrubs use the preview bridge and do not run checks per move.
+The preview observes only the selected clip with a non-zero Position, on seek/pause and at most three times per second during playback. With nothing selected it does not inspect clip styles or run an observation timer. Position commits do not compile or render a test document.
 
-Measurements use a 1920×1080, 30 fps project with real H264 video, an SVG image and a GSAP x/y animated title. The large project repeats those media over five tracks. Each scenario starts a fresh browser and compiler, then runs three warm checks on distinct revision keys to avoid result-cache hits. Timings include compilation, document startup, seeks, comparison and cleanup. They exclude API timeline projection and project-signature reads.
+A 500-clip real-media project, including a selected title with Position X = 40 px, played for 2.5 seconds per run. Three runs per condition compared production builds of `71bccbb` and this change in installed Chromium 155 at 1720×1050. Values below are medians of each run's frame-gap percentiles, in milliseconds.
 
-| Project   | Target span |    Cold | Warm median |       Warm range |
-| --------- | ----------- | ------: | ----------: | ---------------: |
-| 3 clips   | 2 s         | 1.751 s |     0.700 s | 0.691 to 0.798 s |
-| 3 clips   | 30 s        | 2.792 s |     1.336 s | 1.269 to 1.571 s |
-| 500 clips | 2 s         | 3.034 s |     1.966 s | 1.893 to 2.219 s |
-| 500 clips | 30 s        | 3.536 s |     2.388 s | 2.143 to 2.686 s |
+| Selection        | Before p50 | After p50 | Before p95 | After p95 |
+| ---------------- | ---------: | --------: | ---------: | --------: |
+| None             |       16.7 |      16.7 |       16.7 |      16.7 |
+| Positioned title |       16.7 |      16.7 |       16.8 |      16.8 |
 
-The 500-clip checks exceed the roughly one-second target. The final run observed a one-minute host load of 22.63 on 16 logical CPUs. The frame coverage remains at the agreed limit. Results are cached per revision and clip, and selection starts the same check that a release commit or MCP Position edit awaits.
+No playback timing increase was measured in these runs. The unselected condition emitted zero observations in every run; the selected title was checked at the capped rate. The browser test compares selected and unselected median p50/p95 with a 1 ms allowance. [Paired measurements](evidence/position-playback.json) retain the build, browser and observation counts. This checks the observed playback cost on this host, rather than promising a universal zero-cost guarantee.
 
-The full-suite 500-clip live scrub measured 16.7 ms median and p95 frame gaps, zero API requests, zero iframe additions and zero timeline mutations during 60 pointer moves. Across ten repeats, every median remained 16.7 ms and p95 ranged from 16.7 to 33.4 ms, with zero API requests or iframe additions in every run. Three matching runs at the original `b0946c9` head measured 16.7 ms median and p95. These measurements do not establish unchanged p95.
-
-A GSAP x/y slide-in with Position 40 px right and 10 px up was exported to MP4. FFmpeg decoded frames 3, 15 and 45; the video's and title's bounds matched the preview within one pixel. [Raw check timings, scrub counts and decoded positions](evidence/position-runtime.json) retain the concrete before/after values.
+A GSAP x/y slide-in title with Position 40 px right and 10 px up retained its offset during playback and repeated seeks. FFmpeg-decoded MP4 frames 3, 15 and 45 matched the preview's video and title bounds within one pixel. [Decoded positions](evidence/position.json) retain the baseline, preview and export bounds. A separate hands-on drag/play/export check matched all four title edges exactly at frames 0, 30 and 90.

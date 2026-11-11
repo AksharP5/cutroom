@@ -1,6 +1,9 @@
+import { create } from "zustand";
 import { reportEditorError } from "../workspace";
 import { audioLevels } from "./levels";
 import {
+  PositionWarningSchema,
+  PositionFoldSchema,
   PreviewLevelsSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
@@ -8,6 +11,18 @@ import {
 } from "../../shared/preview";
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
+
+export const usePositionWarning = create<{
+  warning: { clipId: string; time: number } | null;
+}>(() => ({ warning: null }));
+let observedClip: string | null = null;
+let warningSource: HTMLIFrameElement | null = null;
+const observers = new Set<(clipId: string | null) => void>();
+export function observePosition(clipId: string | null) {
+  observedClip = clipId;
+  usePositionWarning.setState({ warning: null });
+  for (const observe of observers) observe(clipId);
+}
 
 type PositionDraft = { clipId: string; x: number | null; y: number | null };
 const positionTargets = new Set<(draft: PositionDraft) => void>();
@@ -66,6 +81,20 @@ export function connectPreview(frame: HTMLIFrameElement) {
       const levels = PreviewLevelsSchema.safeParse(event.data);
       if (levels.success) {
         audioLevels.publish(levels.data);
+        return;
+      }
+      const warning = PositionWarningSchema.safeParse(event.data);
+      if (warning.success) {
+        const { clipId, time, overridden } = warning.data;
+        if (frame === warningSource && clipId === observedClip)
+          usePositionWarning.setState({
+            warning: overridden ? { clipId, time } : null,
+          });
+        return;
+      }
+      const fold = PositionFoldSchema.safeParse(event.data);
+      if (fold.success && frame === warningSource) {
+        send("position-fold", { hfId: fold.data.properties.hfId });
         return;
       }
     }
@@ -134,6 +163,8 @@ export function connectPreview(frame: HTMLIFrameElement) {
   const position = (draft: PositionDraft) => {
     send("position", draft);
   };
+  const observe = (clipId: string | null) =>
+    send("observe-position", { clipId });
   return {
     player,
     signal: closing.signal,
@@ -149,6 +180,9 @@ export function connectPreview(frame: HTMLIFrameElement) {
         closing.signal.throwIfAborted();
       } while (shown !== positionDraft);
       active = true;
+      warningSource = frame;
+      observers.add(observe);
+      observe(observedClip);
       send("meter", { enabled: true });
     },
     get state() {
@@ -159,6 +193,11 @@ export function connectPreview(frame: HTMLIFrameElement) {
     dispose() {
       if (positionTargets.delete(position) && !positionTargets.size)
         positionDraft = null;
+      observers.delete(observe);
+      if (warningSource === frame) {
+        warningSource = null;
+        usePositionWarning.setState({ warning: null });
+      }
       closing.abort();
       send("meter", { enabled: false });
       if (active) audioLevels.publish({ l: 0, r: 0, playing: false });

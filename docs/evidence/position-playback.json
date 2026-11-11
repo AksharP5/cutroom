@@ -1,0 +1,39 @@
+{
+  "beforeHead": "71bccbb97fc5c648bde4b36d065196b8ec7e66a2",
+  "browser": "155.0.8059.84",
+  "before": [
+    {
+      "selected": false,
+      "p50": 16.699999999999818,
+      "p95": 16.700000000000273
+    },
+    {
+      "selected": true,
+      "p50": 16.699999999999818,
+      "p95": 16.799999999999727
+    }
+  ],
+  "after": [
+    {
+      "selected": false,
+      "p50": 16.699999999999818,
+      "p95": 16.700000000000273
+    },
+    {
+      "selected": true,
+      "p50": 16.699999999999818,
+      "p95": 16.799999999999727
+    }
+  ],
+  "runs": 3,
+  "sampleSeconds": 2.5,
+  "clips": 500,
+  "selectedPosition": {
+    "x": 40,
+    "y": 0
+  },
+  "observations": {
+    "unselected": [0, 0, 0],
+    "selected": [9, 9, 9]
+  }
+}

@@ -1,4 +1,3 @@
-import { PositionSupportSchema } from "../../../shared/timeline/positionCheck";
 import { isAudioKind } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, X } from "@phosphor-icons/react";
@@ -10,7 +9,7 @@ import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
-import { ApiError, api, json } from "../../api";
+import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
@@ -22,6 +21,8 @@ import { ValueField } from "./ValueField";
 import { pendingEdit, shownChanges } from "./changes";
 import {
   previewPosition,
+  observePosition,
+  usePositionWarning,
   cancelPositionPreview,
   commitPositionPreview,
 } from "../preview";
@@ -102,39 +103,12 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
-  const [positionCheck, setPositionCheck] = useState<{
-    key: string;
-    reason: string | null;
-  } | null>(null);
-  const positionKey = `${projectId}:${view?.composition}:${view?.revision}:${clip?.id}`;
+  const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
-    if (!clip || !view || isAudioKind(clip.kind)) return;
-    const abort = new AbortController();
-    setPositionCheck(null);
-    const query = new URLSearchParams({
-      composition: view.composition,
-      revision: view.revision,
-      clipId: clip.id,
-    });
-    void api(
-      `/projects/${projectId}/position-support?${query}`,
-      PositionSupportSchema,
-      { signal: abort.signal },
-    )
-      .then(({ reason }) => setPositionCheck({ key: positionKey, reason }))
-      .catch((error: unknown) => {
-        // Optimistic pieces and newer revisions will be checked after the queue reads back.
-        if (
-          abort.signal.aborted ||
-          (error instanceof ApiError && error.status === 409)
-        )
-          return;
-        showToast(error instanceof Error ? error.message : String(error));
-      });
-    return () => abort.abort();
-  }, [projectId, view, clip?.id]);
-  const positionReason =
-    positionCheck?.key === positionKey ? positionCheck.reason : null;
+    observePosition(clip && !isAudioKind(clip.kind) ? clip.id : null);
+    return () => observePosition(null);
+  }, [projectId, clip?.id]);
+  const positionWarning = warning?.clipId === clip?.id ? warning : null;
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -301,7 +275,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                   unit="pixels"
                   min={-Infinity}
                   fps={timeline.fps}
-                  disabled={track?.track.locked || !!positionReason}
+                  disabled={track?.track.locked}
                   onPreview={(value) =>
                     previewPosition(
                       clip.id,
@@ -321,16 +295,25 @@ export function Inspector({ projectId }: { projectId: string }) {
                   }}
                 />
               ))}
-              {positionReason && (
-                <p className="inspector-empty">{positionReason}</p>
+              {positionWarning && (
+                <p className="inspector-empty" role="status">
+                  This clip's animation overrides Position at{" "}
+                  {formatTimecode(
+                    Math.floor(
+                      (positionWarning.time * timeline.fps.num) /
+                        timeline.fps.den +
+                        1e-6,
+                    ),
+                    timeline.fps,
+                  )}
+                  .
+                </p>
               )}
               <button
                 type="button"
                 aria-label="Reset position"
                 disabled={
-                  (clip.x === null && clip.y === null) ||
-                  track?.track.locked ||
-                  !!positionReason
+                  (clip.x === null && clip.y === null) || track?.track.locked
                 }
                 onClick={() => {
                   void editTimeline(projectId, "Reset position", () => [

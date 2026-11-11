@@ -44,7 +44,6 @@ import type { ProjectStore } from "../projects/store";
 import { projectPath, readSource } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
-import { createPositionSupport } from "../timeline/positionSupport";
 import { createThumbnailRenderer } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
@@ -105,7 +104,6 @@ export function createHyperframesApi(
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
-  const positions = createPositionSupport(thumbnails);
   const renders = createRenderWorkers({
     sourceOverrides: async (id) =>
       Object.fromEntries(
@@ -271,8 +269,6 @@ export function createHyperframesApi(
           return;
         if (affectsProjectSignature(project.dir, join(project.dir, path)))
           signatures.delete(project.dir);
-        if (affectsPreview(project.dir, join(project.dir, path)))
-          positions.invalidate(project.id);
         const key = `${project.id}\0${path}`;
         clearTimeout(timers.get(key));
         timers.set(
@@ -669,7 +665,6 @@ export function createHyperframesApi(
         stop();
       };
     },
-    positions,
     subscribe(projectId: string, listener: (change: FileChange) => void) {
       const notify = (change: FileChange) => {
         if (change.projectId === projectId) listener(change);
@@ -683,7 +678,7 @@ export function createHyperframesApi(
       watchers.clear();
       timers.clear();
       await renders.cancelAll();
-      await positions.close();
+      await thumbnails.close();
     },
   });
 }
