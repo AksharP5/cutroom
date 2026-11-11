@@ -564,7 +564,10 @@ export function Timeline({
     playhead: clock.frame,
     onSelect,
     onEdit,
-    onGesture,
+    onGesture: (active) => {
+      viewport.current?.gesture(active);
+      onGesture(active);
+    },
     onTrackDrag: setTrackDrag,
   });
   const refreshDrag = useRef(gestures.refresh);
@@ -637,7 +640,10 @@ export function Timeline({
       },
     );
     viewport.current = created;
-    return () => created.destroy();
+    return () => {
+      created.destroy();
+      viewport.current = null;
+    };
   }, [sizes]);
 
   useClipMotion(

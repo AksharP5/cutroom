@@ -193,6 +193,8 @@ test("fit shows the whole timeline and the slider runs from fit to the closest z
   expect(fitPpf(0, 1_232, fps30)).toBe(4);
   expect(fitPpf(10, 1_232, fps30)).toBe(MAX_PPF);
   expect(zoomToSlider(fit, fit)).toBe(0);
+  // A ripple holds the earlier scale until its gap closes, even when the new Fit is closer.
+  expect(zoomToSlider(fit / 2, fit)).toBe(0);
   expect(zoomToSlider(MAX_PPF, fit)).toBe(1);
   expect(sliderToZoom(0.5, fit)).toBeCloseTo(Math.sqrt(fit * MAX_PPF));
   expect(zoomToSlider(sliderToZoom(0.3, fit), fit)).toBeCloseTo(0.3);

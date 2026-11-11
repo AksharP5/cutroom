@@ -115,3 +115,41 @@ The profile found a bounds read for the drag readout after hundreds of transform
 Pointer movement renders no React components and sends no edit request while the pointer is down. A pointer move that stays on the same frame and track writes only the readout's transform. One that reaches a new frame runs the shared engine for the preview, writes transforms to the mounted clips that move, and redraws the canvas. Bounds for the readout are measured before those writes.
 
 Shuttle and scrubbing are slow on this composition because of the preview, not the timeline. With 480 media elements in the page the HyperFrames runtime does heavy work on every frame it is asked to show: main-thread script is about 30 ms per frame at 8x and 20 to 25 ms while scrubbing. The `seek()` call itself is the smaller part, about 4 to 5 ms at the median in review and about 14 ms while scrubbing; the rest is the runtime's own per-frame work. The timeline's script is 0.1 to 0.2 ms per frame in those rows, and hiding it changes nothing. At 1x the runtime plays its media itself, so playback holds the display rate.
+
+### Zoom and ripple edits
+
+The November 11, 2026 comparison used production builds on `81ba7b5`, before and after the timeline changes, Bun 1.4.4 and Chromium 155.0.8059.84 with SwiftShader, at 1720x1050 in dark mode. The workload has 190 or 240 linked picture/sound pairs and 20 titles. They reference a generated 60-second 640x360 H.264/AAC file, with actual filmstrips and waveform peaks loaded through the media service. Each project waits for the viewer's first confirmed paint and a 4.5-second warm-up.
+
+There are three runs per build and size. Key zoom sends twelve inputs 100 ms apart and samples at least 300 ms after the last one. Wheel zoom sends sixteen inputs, one per displayed frame. Ripple delete removes the fourth linked pair in Fit, followed by undo, redo and restoration; Fit is measured after twelve zoom steps. Edit windows last one second. Frame gaps use `performance.now()` at animation callback entry. Long tasks come from `PerformanceObserver`.
+
+All frame times are milliseconds. Long tasks are count/longest milliseconds, across the three runs. The machine was shared, so the maxima include scheduling noise.
+
+#### 400 clips
+
+| Interaction   | Before p50 |  p95 |   max | After p50 |  p95 |  max | Long tasks before → after |
+| ------------- | ---------: | ---: | ----: | --------: | ---: | ---: | ------------------------- |
+| Key zoom      |       18.5 | 50.7 | 121.0 |      16.7 | 23.7 | 66.9 | 7/119 → 4/66              |
+| Wheel zoom    |       17.2 | 48.0 |  88.4 |      16.7 | 27.1 | 64.1 | 3/122 → 3/77              |
+| Ripple delete |       16.8 | 77.0 | 171.4 |      16.7 | 44.6 | 78.2 | 3/161 → 3/76              |
+| Undo          |       16.8 | 60.0 | 111.9 |      16.7 | 40.9 | 70.0 | 4/64 → 0/0                |
+| Redo          |       16.8 | 49.1 | 113.1 |      16.7 | 47.0 | 80.4 | 3/70 → 0/0                |
+| Fit           |       16.7 | 20.1 |  63.1 |      16.7 | 16.8 | 27.8 | 3/62 → 0/0                |
+
+#### 500 clips
+
+| Interaction   | Before p50 |  p95 |   max | After p50 |  p95 |   max | Long tasks before → after |
+| ------------- | ---------: | ---: | ----: | --------: | ---: | ----: | ------------------------- |
+| Key zoom      |       16.6 | 30.3 | 102.2 |      16.7 | 25.5 |  75.5 | 4/101 → 4/74              |
+| Wheel zoom    |       16.7 | 29.0 |  67.8 |      16.7 | 27.9 |  65.1 | 3/86 → 3/88               |
+| Ripple delete |       16.7 | 53.7 | 116.5 |      16.7 | 60.7 | 126.8 | 3/114 → 3/118             |
+| Undo          |       16.7 | 45.0 | 101.9 |      16.7 | 46.0 |  75.8 | 0/0 → 0/0                 |
+| Redo          |       16.7 | 49.6 | 136.8 |      16.7 | 57.3 |  69.6 | 1/82 → 0/0                |
+| Fit           |       16.7 | 17.0 |  43.9 |      16.7 | 16.8 |  34.7 | 0/0 → 0/0                 |
+
+The 400-clip maximum key-zoom frame fell from 121.0 to 66.9 ms, and ripple from 171.4 to 78.2 ms. At 500 clips, ripple p95 rose from 53.7 to 60.7 ms and maximum from 116.5 to 126.8 ms. Fit now has a separate finite rescale after the gap closes. These measurements do not establish a steady 60 fps during edits.
+
+Tracing found synchronous style/layout under viewport geometry reads and repeated whole-lane selector scans in edit motion. The viewport now reads size and offsets on resize/scroll, reads animation tokens before writes, and skips an unchanged scroll write. Motion finds moved clip nodes in one pass. Clip bodies were already memoized, canvas drawing was a smaller part of these stalls, and the 500-clip engine batch still applies in about 2 ms; neither the canvas representation nor engine normalization changed.
+
+`CUTROOM_PERF_DIR=artifacts/timeline-performance bun run bench:timeline-ui` reproduces the three-run production workload. `bun run test:perf` runs the same cases once per size, with maximum key-zoom and ripple frames below 150 ms. CI runs it after `bun run test:e2e`, with a fresh backend. A single long-lived functional-suite backend produced 169 ms ripple and 181 ms key-zoom outliers during the longer functional run; restarting that backend against the same project files brought the maxima back to 89/93 ms for ripple and 67/64 ms for key zoom. This keeps the CI measurement controlled without relaxing the ceiling; the long-session outliers remain a limitation. The before build failed that ripple ceiling at 400 clips; the patched three-run build passed both sizes. Set `CUTROOM_PERF_TRACE=1` for compressed Chromium traces. Profiled runs retain timings and check behavior; budgets run without the profiler's overhead.
+
+[Raw timings, matching worst-frame trace excerpts and compressed traces](https://github.com/AksharP5/cutroom/tree/pr-assets/timeline-frame-rate) include browser, renderer and viewport metadata. The separate profiled 400-clip pass had a worst frame of 104.7 ms before and 84.8 ms after. Those screenshots plot the actual Chromium events and source-map locations; the tables use untraced runs.

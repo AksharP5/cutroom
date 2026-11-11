@@ -80,7 +80,9 @@ export const clampPpf = (ppf: number, fit: number) =>
 
 /** Zoom slider position, 0 at fit and 1 at the closest zoom, logarithmic between. */
 export const zoomToSlider = (ppf: number, fit: number) =>
-  fit >= MAX_PPF ? 1 : Math.log(ppf / fit) / Math.log(MAX_PPF / fit);
+  fit >= MAX_PPF
+    ? 1
+    : Math.max(0, Math.min(1, Math.log(ppf / fit) / Math.log(MAX_PPF / fit)));
 export const sliderToZoom = (position: number, fit: number) =>
   fit * (MAX_PPF / fit) ** Math.min(1, Math.max(0, position));
 

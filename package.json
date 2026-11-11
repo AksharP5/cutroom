@@ -14,7 +14,8 @@
     "build": "vite build",
     "check": "tsc --noEmit",
     "test": "bun test tests --timeout 30000",
-    "test:e2e": "bun run build && playwright test",
+    "test:e2e": "bun run build && playwright test --grep-invert @performance",
+    "test:perf": "bun run build && playwright test --grep @performance",
     "desktop": "bun scripts/desktop.ts",
     "package": "bun scripts/package.ts",
     "mcp": "bun src/server/mcp/stdio.ts",
@@ -24,7 +25,8 @@
     "bench:ui": "bun scripts/bench-ui.ts",
     "bench:transcripts": "bun scripts/bench-transcripts.ts",
     "bench:timeline": "bun scripts/bench-timeline.ts",
-    "bench:media": "bun scripts/bench-media.ts"
+    "bench:media": "bun scripts/bench-media.ts",
+    "bench:timeline-ui": "bun run build && CUTROOM_PERF_RUNS=3 playwright test e2e/timeline-performance.spec.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.321",

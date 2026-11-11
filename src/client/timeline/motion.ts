@@ -33,19 +33,26 @@ export function slideClips(
       ? [{ id, x, y, duration, ease }]
       : [],
   );
-  for (const { id, x, y } of slides) {
+  if (!slides.length) return;
+  const byId = new Map(slides.map((slide) => [slide.id, slide]));
+  for (const element of root.querySelectorAll<HTMLElement>(
+    "[data-clip], [data-clip-label], [data-clip-outline], [data-agent-change], [data-clip-mix]",
+  )) {
+    const { clip, clipLabel, clipOutline, agentChange, clipMix } =
+      element.dataset;
+    const slide = byId.get(
+      clip ?? clipLabel ?? clipOutline ?? agentChange ?? clipMix ?? "",
+    );
+    if (!slide) continue;
+    const { x, y } = slide;
     const transform = `translate(${x}px, ${y}px)`;
-    const selector = CSS.escape(id);
-    for (const element of root.querySelectorAll(
-      `[data-clip="${selector}"], [data-clip-label="${selector}"], [data-clip-outline="${selector}"], [data-agent-change="${selector}"], [data-clip-mix="${selector}"]`,
-    ))
-      element.animate([{ transform }, { transform: "none" }], {
-        duration,
-        easing,
-        composite: "add",
-      });
+    element.animate([{ transform }, { transform: "none" }], {
+      duration,
+      easing,
+      composite: "add",
+    });
   }
-  if (slides.length) slideBodies(slides);
+  slideBodies(slides);
 }
 
 /**
@@ -53,9 +60,8 @@ export function slideClips(
  * were drawn, so the change reads as motion. A drag that held clips away from their layout leaves
  * those offsets in `held`; a clip the drag already put where the edit puts it does not slide.
  *
- * Call it before the timeline measures its new length. Its layout effect then reads the zoom the
- * clips were drawn at, and a fitted timeline that refits for the new length has the new zoom by
- * the microtask, which still runs before the frame is painted.
+ * Call it before the timeline measures its new length. A fitted viewport holds this scale until
+ * the slide ends. The microtask starts the motion after the edit's layout effects have run.
  */
 export function useClipMotion(
   lanes: RefObject<HTMLElement | null>,
