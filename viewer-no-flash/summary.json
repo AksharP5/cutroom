@@ -1,0 +1,100 @@
+{
+  "browser": "Chromium 155.0.8059.84",
+  "viewport": {
+    "width": 1720,
+    "height": 1050
+  },
+  "load": "taskset -c 0",
+  "fix": "8b59637ebdc67df262ff53ff42add12e74b35a1b",
+  "ordering": {
+    "before": [
+      {
+        "trial": 1,
+        "firstRevealedFrame": 44,
+        "oldSurfacePresent": false,
+        "frames": "ordering-before-1.json"
+      },
+      {
+        "trial": 2,
+        "firstRevealedFrame": 48,
+        "oldSurfacePresent": false,
+        "frames": "ordering-before-2.json"
+      },
+      {
+        "trial": 3,
+        "firstRevealedFrame": 49,
+        "oldSurfacePresent": false,
+        "frames": "ordering-before-3.json"
+      }
+    ],
+    "after": [
+      {
+        "trial": 1,
+        "firstRevealedFrame": 50,
+        "oldSurfacePresent": true,
+        "frames": "ordering-after-1.json"
+      },
+      {
+        "trial": 2,
+        "firstRevealedFrame": 37,
+        "oldSurfacePresent": true,
+        "frames": "ordering-after-2.json"
+      },
+      {
+        "trial": 3,
+        "firstRevealedFrame": 40,
+        "oldSurfacePresent": true,
+        "frames": "ordering-after-3.json"
+      },
+      {
+        "trial": 1,
+        "firstRevealedFrame": 44,
+        "oldSurfacePresent": true,
+        "frames": "ordering-stress-1.json"
+      },
+      {
+        "trial": 2,
+        "firstRevealedFrame": 41,
+        "oldSurfacePresent": true,
+        "frames": "ordering-stress-2.json"
+      },
+      {
+        "trial": 3,
+        "firstRevealedFrame": 40,
+        "oldSurfacePresent": true,
+        "frames": "ordering-stress-3.json"
+      },
+      {
+        "trial": 4,
+        "firstRevealedFrame": 49,
+        "oldSurfacePresent": true,
+        "frames": "ordering-stress-4.json"
+      },
+      {
+        "trial": 5,
+        "firstRevealedFrame": 38,
+        "oldSurfacePresent": true,
+        "frames": "ordering-stress-5.json"
+      }
+    ]
+  },
+  "pixels": {
+    "before": {
+      "edits": 45,
+      "blankedEdits": 2,
+      "sampledFrames": 857,
+      "blankFrames": 5
+    },
+    "after": {
+      "edits": 45,
+      "blankedEdits": 2,
+      "sampledFrames": 923,
+      "blankFrames": 7
+    }
+  },
+  "ciReplay": {
+    "browser": "Chromium 158.0.8127.18, Playwright revision 1254",
+    "performed": false,
+    "reason": "Matching browser not installed; downloading it was explicitly not authorized."
+  }
+}
