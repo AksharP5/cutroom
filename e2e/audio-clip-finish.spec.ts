@@ -143,6 +143,6 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
     .poll(
       async () => (await read()).clips.find((c) => c.id === "music")!.volume,
     )
-    .toBe(0);
+    .toBe(10 ** (-8.75 / 20));
   expect((await read()).clips.find((c) => c.id === "music")!.start).toBe(0);
 });

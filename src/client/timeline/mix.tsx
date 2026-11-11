@@ -1,7 +1,6 @@
 import { memo } from "react";
 import {
   audioGainToFaderPosition,
-  audioFaderPositionToGain,
   audioGainToDb,
   audioDbToGain,
   MAX_AUDIO_GAIN,
@@ -44,31 +43,18 @@ export function envelopeHeight(
   return 100 - (100 - level) * fadeGain(time, clip.duration, clip);
 }
 
-/** Invert the drawn envelope at the grabbed frame, including its fades and volume lane. */
-export function gainFromDrag(
-  clip: Clip,
-  fps: Fps,
-  frame: number,
-  dy: number,
-  height: number,
-) {
-  const time = Math.max(0, Math.min(clip.duration, frame - clip.start));
-  const lane = volumeLane(clip);
-  const value = lane
-    ? sampleAutomationLane(lane, (time * fps.den) / fps.num)
-    : 1;
-  const fade = fadeGain(time, clip.duration, clip);
-  const position =
-    envelopeHeight(clip, fps, time, lane ?? null) + (dy / height) * 100;
-  const level = fade > 0 ? 100 - (100 - position) / fade : position;
-  const drawn = audioFaderPositionToGain(100 - level * 2);
-  const volume = Math.min(
-    MAX_AUDIO_GAIN,
-    value > 0 && fade > 0 ? drawn / value : drawn,
+/** Vertical travel stays predictable at every track height, independent of the drawn envelope. */
+export function gainFromDrag(clip: Clip, dy: number) {
+  const db = Math.max(
+    -60,
+    Math.min(
+      12,
+      (clip.volume === 0 ? -60 : audioGainToDb(clip.volume ?? 1)) - dy * 0.25,
+    ),
   );
-  return volume > 0
-    ? audioDbToGain(Math.round(audioGainToDb(volume) * 10) / 10)
-    : 0;
+  return db <= -60
+    ? 0
+    : Math.min(MAX_AUDIO_GAIN, audioDbToGain(Math.round(db * 100) / 100));
 }
 
 /** Draw native automation and fades at the clip's gain level. */
@@ -112,7 +98,7 @@ export const ClipMix = memo(function ClipMix({
     <div
       className={`tl-mix on-${row.track.kind}${row.track.locked ? " locked" : ""}${selected ? " selected" : ""}`}
       data-clip-mix={clip.id}
-      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+      style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     >
       <svg
         className="tl-fade-curve"
@@ -123,7 +109,7 @@ export const ClipMix = memo(function ClipMix({
         <path d={path} />
         <path className="tl-gain" data-mix="gain" d={path}>
           <title>
-            {`Gain ${audioGainToText(clip.volume ?? 1)}. Alt for fine adjustment.${
+            {`Gain ${audioGainToText(clip.volume ?? 1)}. Shift for fine adjustment.${
               clip.automation
                 ? " Volume automation present: clear it in Inspector > Audio."
                 : ""

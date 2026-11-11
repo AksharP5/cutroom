@@ -1756,3 +1756,127 @@ test("clipboard copy refuses id-styled clips and stale revisions without changin
     await fixture.close();
   }
 });
+
+test("track view settings stay outside history and survive real-edit undo and redo", async () => {
+  const fixture = await timelineFixture();
+  const { project, store } = fixture;
+  const ledger = await store.history(project);
+  const endpoint = `/projects/${project.id}`;
+  const settings = { density: "compact", heights: { "0": 120 } };
+  const save = (view: unknown, composition = "index.html") =>
+    fixture.request(
+      `${endpoint}/timeline-view?composition=${composition}`,
+      "PUT",
+      view,
+    );
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.request(`${endpoint}/timeline`)).json(),
+    );
+  try {
+    const original = await fixture.files();
+    await ledger.checkpoint();
+    const initial = ledger.list().length;
+    expect((await save(settings)).status).toBe(200);
+    await ledger.checkpoint();
+    expect(ledger.list()).toHaveLength(initial);
+    expect(await fixture.files()).toEqual(original);
+    const before = await read();
+    expect(
+      (
+        await fixture.request(`${endpoint}/commands`, "POST", {
+          expectedRevision: before.revision,
+          commands: [{ type: "setTrack", index: 0, name: "Picture" }],
+        })
+      ).status,
+    ).toBe(200);
+    expect(ledger.list()).toHaveLength(initial + 1);
+    const tall = { density: "tall", heights: {} };
+    expect((await save(tall)).status).toBe(200);
+    await ledger.checkpoint();
+    expect(ledger.list()).toHaveLength(initial + 1);
+    expect(
+      (await fixture.request(`${endpoint}/history/undo`, "POST", {})).status,
+    ).toBe(200);
+    expect((await read()).timeline.tracks[0]?.name).not.toBe("Picture");
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(tall);
+    expect(
+      (await fixture.request(`${endpoint}/history/redo`, "POST", {})).status,
+    ).toBe(200);
+    expect((await read()).timeline.tracks[0]?.name).toBe("Picture");
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(tall);
+    // A second composition has its own preferences; concurrent saves retain both entries.
+    await writeFile(join(project.path, "second.html"), original[0]!);
+    const responses = await Promise.all([
+      save(settings, "./index.html"),
+      save({ density: "normal", heights: { "1": 80 } }, "second.html"),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(
+      JSON.parse(
+        await readFile(join(project.path, ".cutroom/view.json"), "utf8"),
+      ),
+    ).toEqual({
+      timelines: {
+        "index.html": settings,
+        "second.html": { density: "normal", heights: { "1": 80 } },
+      },
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("missing or malformed view preferences use defaults and do not block timeline edits", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const endpoint = `/projects/${project.id}`;
+  const defaults = { density: "normal", heights: {} };
+  try {
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(defaults);
+    await mkdir(join(project.path, ".cutroom"), { recursive: true });
+    for (const corrupt of [
+      "{broken",
+      JSON.stringify({
+        timelines: {
+          "index.html": { density: "giant", heights: { "0": 500 } },
+        },
+      }),
+    ]) {
+      await writeFile(join(project.path, ".cutroom/view.json"), corrupt);
+      expect(
+        await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+      ).toEqual(defaults);
+      const view = TimelineViewSchema.parse(
+        await (await fixture.request(`${endpoint}/timeline`)).json(),
+      );
+      expect(
+        (
+          await fixture.request(`${endpoint}/commands`, "POST", {
+            expectedRevision: view.revision,
+            commands: [{ type: "setTrack", index: 0, name: corrupt }],
+          })
+        ).status,
+      ).toBe(200);
+    }
+    expect(
+      (
+        await fixture.request(`${endpoint}/timeline-view`, "PUT", {
+          density: "compact",
+          heights: {},
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual({ density: "compact", heights: {} });
+  } finally {
+    await fixture.close();
+  }
+});

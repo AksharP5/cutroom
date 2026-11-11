@@ -224,3 +224,23 @@ A GSAP x/y slide-in title with Position 40 px right and 10 px up retained its of
 The performance test now collects `cutroom:position-observation` measures from the isolated preview and requires every observation to finish within 5 ms. Nothing selected must produce zero measures. Three runs per condition also count callback-entry gaps above 1.5 times the measured display interval during playback and ruler scrubbing, with and without the Position-edited title. The selected condition's median late-frame rate may rise by less than five percentage points. The direct observer budget catches isolated costly checks that a frame percentile can hide. `position-observation.json` records each duration and callback gap, and `CUTROOM_POSITION_TIMING_OUT` saves that attachment locally.
 
 On November 11, 2026, installed Chromium 155 on the same 500-clip workload measured a maximum observer duration of 0.9 ms in both playback and scrubbing. All six unselected runs produced zero observations. Playback had two late callbacks in each run, with either selection; scrubbing had 2/4/2 without selection and 1/2/2 with the positioned title. A temporary local change stalled alternate observations for 30 ms. The new per-observation gate failed at 30.4 ms; the injected change was removed. These local results establish that the gate catches that regression, not that every host has the same timings.
+
+### Track heights
+
+On November 11, 2026 the production build resized the top title track from 56 to 146 px and back on the same 400-clip real-media workload, at Fit, 1720x1050 and DPR 1. Bun 1.4.4 drove system Chromium 155.0.8059.84 with SwiftShader, muted. The pointer source requested 180 native moves at 60 Hz. Frames use callback-entry `performance.now()`, and a late interval exceeds 20 ms. The machine was shared.
+
+| Height drag                    | Frame p50 |     p95 |   Worst | Late intervals | Long tasks | Individual clip style writes | Canvas reallocations |
+| ------------------------------ | --------: | ------: | ------: | -------------: | ---------: | ---------------------------: | -------------------: |
+| Without tracing, separate pass |   16.7 ms | 16.8 ms | 16.9 ms |        0 / 179 |          0 |                            0 |     Not instrumented |
+| With a Chromium timeline trace |   18.3 ms | 20.4 ms | 23.3 ms |       25 / 226 |          0 |                            0 |                    0 |
+
+The untraced pass delivered all 180 moves in 3.002 seconds. In the traced run, each of 180 style passes touched 35 elements, rather than the 400 clips. Total style work was 69.7 ms, about 0.39 ms per pass. Pointer moves update the row containers and redraw the shared media canvas once per animation frame. Exact filmstrip requests wait until resizing rests. Browser tests check actual filmstrip and waveform pixels at DPR 1 and 2, including Compact and manually enlarged filmstrips.
+
+The same `bun run test:perf` invocation passed all five performance tests, including the existing three-run 400/500-clip zoom and ripple budgets. Frame times across the three runs were:
+
+| Clips | Key zoom p95 |   Worst | Ripple delete p95 |   Worst |
+| ----: | -----------: | ------: | ----------------: | ------: |
+|   400 |      23.0 ms | 71.8 ms |           32.5 ms | 60.9 ms |
+|   500 |      20.5 ms | 72.7 ms |           42.4 ms | 64.9 ms |
+
+The screenshot and raw timing evidence is on the `pr-assets` branch under `track-heights/`.

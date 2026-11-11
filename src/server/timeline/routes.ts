@@ -1,3 +1,5 @@
+import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
+import { createTimelineViewStore } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
 import { AGENT_HEADER } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
@@ -79,6 +81,7 @@ export function createTimelineRoutes(
       parsed: ParsedComposition;
     }
   >();
+  const views = createTimelineViewStore();
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -305,6 +308,20 @@ export function createTimelineRoutes(
     } catch (error) {
       return refused(c, error);
     }
+  });
+  api.get("/projects/:id/timeline-view", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    await readSource(project, composition);
+    return c.json(await views.read(project, composition));
+  });
+  api.put("/projects/:id/timeline-view", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    await readSource(project, composition);
+    const settings = parseInput(TimelineViewSettingsSchema, await c.req.json());
+    await views.save(project, composition, settings);
+    return c.json(settings);
   });
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));

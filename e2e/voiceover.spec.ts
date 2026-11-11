@@ -1324,10 +1324,14 @@ test("occupied takes preview their destination and reuse A2 until the growing ra
     );
     expect(takes).toHaveLength(i + 1);
     expect(takes.map((clip) => clip.track)).toEqual(Array(i + 1).fill(2));
-    await expect(page.locator(`[data-clip="${takes.at(-1)!.id}"]`)).toHaveCSS(
-      "top",
-      `${top - (await page.locator(".tl-lanes").boundingBox())!.y}px`,
-    );
+    await expect
+      .poll(
+        async () =>
+          (await page
+            .locator(`[data-clip="${takes.at(-1)!.id}"]`)
+            .boundingBox())!.y,
+      )
+      .toBeCloseTo(top + 1, 0);
   }
   const before = await read();
   expect(
@@ -1432,4 +1436,63 @@ test("recording clears its resolved error and a clean save preserves an unrelate
   expect(
     view.timeline.clips.filter((clip) => clip.kind === "voiceover"),
   ).toHaveLength(2);
+});
+
+test("recording region follows live row resizing at 28 and 200px before release", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Live recording row geometry" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    '<main data-composition-id="main" data-duration="60"><div class="clip" data-start="0" data-duration="60" data-track-index="0">Title</div></main>',
+  );
+  await request.put(`/api/cutroom/projects/${project.id}/timeline-view`, {
+    data: { density: "normal", heights: { "0": 28, "1": 28 } },
+  });
+  await page.goto(`/#project/${project.id}`);
+  await expect(
+    page.getByRole("separator", { name: "Height V1" }),
+  ).toHaveAttribute("aria-valuenow", "28");
+  await page.getByRole("button", { name: "Arm A1", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Record voiceover", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Record voiceover", exact: true })
+    .click();
+  const region = page.getByLabel("Recording voiceover take");
+  await expect(region).toBeVisible();
+  for (const name of ["V1", "A1"]) {
+    for (const height of [200, 28]) {
+      const separator = page.getByRole("separator", { name: `Height ${name}` });
+      await separator.scrollIntoViewIfNeeded();
+      const current = Number(await separator.getAttribute("aria-valuenow"));
+      const box = (await separator.boundingBox())!;
+      await page.mouse.move(box.x + 60, box.y + 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 60, box.y + 2 + height - current, {
+        steps: 16,
+      });
+      await expect(separator).toHaveAttribute("aria-valuenow", String(height));
+      const lane = (await page.locator(".tl-lane.audio").boundingBox())!;
+      const take = (await region.boundingBox())!;
+      expect(take.y).toBe(lane.y);
+      expect(take.height).toBe(lane.height - 1);
+      await page.screenshot({
+        path: info.outputPath(`recording-${name}-${height}.png`),
+      });
+      await page.mouse.up();
+    }
+  }
+  await page
+    .getByRole("button", { name: "Stop voiceover", exact: true })
+    .click();
+  await expect(region).toHaveCount(0);
 });

@@ -19,6 +19,7 @@
 }
 .vo-take-region {
   position: absolute;
+  height: 100%;
   left: calc(var(--s) / var(--span) * 100%);
   width: calc(var(--d) / var(--span) * 100%);
   background: var(--clip-vo-body);

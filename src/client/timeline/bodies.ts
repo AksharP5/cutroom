@@ -61,7 +61,6 @@ export function createBodies(
   const token = (name: string) => style.getPropertyValue(name).trim();
   const tokens = {
     name: parseFloat(token("--size-clip-name")),
-    film: parseFloat(token("--size-filmstrip")),
     locked: Number(token("--track-locked-opacity")),
     seam: token("--clip-filmstrip-seam"),
     scrim: token("--clip-video-body"),
@@ -121,10 +120,9 @@ export function createBodies(
   }
 
   /**
-   * The canvas a view needs: two views wide and tall, or as tall as the tracks if that is less.
-   * One size at every zoom and scroll offset, because resizing a canvas reallocates it.
+   * Two viewports in each direction. Keep the allocation while track heights change.
    */
-  function fit({ ppf, frames, rows }: ViewState, tracks: number) {
+  function fit({ ppf, frames, rows }: ViewState) {
     const dpr = devicePixelRatio;
     const visible = {
       x: { from: frames.from * ppf, to: frames.to * ppf },
@@ -137,7 +135,7 @@ export function createBodies(
       dpr,
       visible,
       width: Math.ceil(wide * 2 * dpr),
-      height: Math.ceil(Math.min(tall * 2, tracks) * dpr),
+      height: Math.ceil(tall * 2 * dpr),
     };
   }
   /** Whether the canvas as drawn still shows everything in a view. */
@@ -169,7 +167,7 @@ export function createBodies(
     const { fps } = scene;
     const last = scene.rows.at(-1);
     const tracks = last ? last.top + last.height : 0;
-    const needed = fit(view, tracks);
+    const needed = fit(view);
     const { dpr, visible, width, height } = needed;
     // The canvas stays where it is while it still covers the view.
     const kept = covers(view, needed) ? area : null;
@@ -323,7 +321,9 @@ export function createBodies(
       if (clip.kind === "image") {
         const picture = media.still(src);
         if (!picture) return;
-        const tile = Math.round((tokens.film * picture.width) / picture.height);
+        const tile = Math.round(
+          (((y1 - y0) / dpr) * picture.width) / picture.height,
+        );
         for (
           let x = Math.max(0, Math.floor(from / tile)) * tile;
           x < to;
@@ -335,7 +335,7 @@ export function createBodies(
       const strip = media.film(src);
       if (!strip) return;
       const tile = Math.round(
-        (tokens.film * strip.tileWidth) / strip.tileHeight,
+        (((y1 - y0) / dpr) * strip.tileWidth) / strip.tileHeight,
       );
       const perPixel = sourceSecondsPerPixel(ppf, fps, clip.playbackRate);
       const step = frameStep(tile * perPixel);
@@ -486,11 +486,7 @@ export function createBodies(
      * a scroll never works through the queue of a view it has left.
      */
     view(next: ViewState) {
-      const last = scene?.rows.at(-1);
-      const covered = covers(
-        next,
-        fit(next, last ? last.top + last.height : 0),
-      );
+      const covered = covers(next, fit(next));
       view = next;
       if (!covered) paint();
       settled = false;

@@ -1,3 +1,10 @@
+import { useTrackResize } from "./heights";
+import {
+  MIN_TRACK_HEIGHT,
+  MAX_TRACK_HEIGHT,
+  trackDensities,
+} from "../../shared/timeline/view";
+import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { useWorkspace } from "../workspace";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix } from "./mix";
@@ -21,6 +28,7 @@ import {
   LockSimpleOpen,
   Minus,
   Plus,
+  Rows,
 } from "@phosphor-icons/react";
 import type {
   Clip,
@@ -83,6 +91,8 @@ export interface TimelinePin {
 }
 export interface TimelineProps {
   timeline: TimelineData;
+  viewSettings: TimelineViewSettings;
+  onViewSettings(settings: TimelineViewSettings): void;
   /** Where the clips' media is read from: filmstrips and waveforms come from this project's cache. */
   source: { projectId: string; composition: string };
   clock: TimelineClock;
@@ -151,7 +161,12 @@ interface Mounted {
   labelPpf: number;
 }
 
-function readSizes(): { rows: RowSizes; head: number } {
+function readSizes(): {
+  rows: RowSizes;
+  head: number;
+  compact: number;
+  tall: { video: number; audio: number };
+} {
   const style = getComputedStyle(document.documentElement);
   const px = (token: string) => parseFloat(style.getPropertyValue(token));
   return {
@@ -162,6 +177,11 @@ function readSizes(): { rows: RowSizes; head: number } {
       divider: px("--stroke-rail"),
     },
     head: px("--size-track-head"),
+    compact: px("--size-track-compact"),
+    tall: {
+      video: px("--size-track-video-tall"),
+      audio: px("--size-track-audio-tall"),
+    },
   };
 }
 
@@ -178,7 +198,7 @@ const ClipBody = memo(function ClipBody({
     <div
       className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip={clip.id}
-      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+      style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     />
   );
 });
@@ -195,7 +215,7 @@ const ClipOutline = memo(function ClipOutline({
     <i
       className={`tl-selected on-${row.track.kind}`}
       data-clip-outline={clip.id}
-      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+      style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     />
   );
 });
@@ -218,7 +238,7 @@ const ClipLabel = memo(function ClipLabel({
       className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}`}
       data-clip-label={clip.id}
       data-kind={clip.kind}
-      style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
+      style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     >
       <span
         className="tl-name"
@@ -377,106 +397,155 @@ const TrackHeads = memo(function TrackHeads({
   onToggleTrack,
   onRenameTrack,
   audioControls,
+  resize,
+  onHeight,
 }: {
   rows: readonly Row[];
   onToggleTrack: TimelineProps["onToggleTrack"];
   onRenameTrack: TimelineProps["onRenameTrack"];
   audioControls: TimelineProps["audioControls"];
+  resize: ReturnType<typeof useTrackResize>;
+  onHeight(row: Row, height: number): void;
 }) {
-  return rows.map(({ track, id, top }) => (
-    <div key={track.index} className={`tl-head ${track.kind}`} style={{ top }}>
-      <div className="tl-head-title">
-        <span className="tl-head-id">{id}</span>
-        <input
-          key={`${track.index}:${track.name}`}
-          className="tl-head-name"
-          aria-label={`Name ${id}`}
-          title="Rename track"
-          maxLength={200}
-          defaultValue={track.name ?? ""}
-          placeholder={`${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`}
-          onFocus={(event) => event.currentTarget.select()}
-          onBlur={(event) => {
-            const name = event.currentTarget.value.trim();
-            if (name !== (track.name ?? "")) onRenameTrack(track, name);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape")
-              event.currentTarget.value = track.name ?? "";
-            if (event.key === "Enter" || event.key === "Escape")
-              event.currentTarget.blur();
-          }}
-        />
-        {track.kind === "audio" && audioControls?.(track, id, "title")}
-      </div>
-      <div className="tl-head-buttons">
-        <button
-          className={`tl-track-button${track.locked ? " exception" : ""}`}
-          aria-label={`Lock ${id}`}
-          aria-pressed={track.locked}
-          title={track.locked ? "Unlock track" : "Lock track"}
-          onClick={() => onToggleTrack(track, "locked")}
-        >
-          {track.locked ? (
-            <LockSimple size={13} weight="fill" />
-          ) : (
-            <LockSimpleOpen size={13} />
-          )}
-        </button>
-        <button
-          className={`tl-track-button${track.autoSelect ? "" : " exception"}`}
-          aria-label={`Auto-select ${id}`}
-          aria-pressed={track.autoSelect}
-          title={
-            track.autoSelect ? "Turn auto-select off" : "Turn auto-select on"
-          }
-          onClick={() => onToggleTrack(track, "autoSelect")}
-        >
-          <CursorClick
-            size={13}
-            weight={track.autoSelect ? "fill" : "regular"}
+  return rows.map((row) => {
+    const { track, id, top, height } = row;
+    return (
+      <div
+        key={track.index}
+        className={`tl-head ${track.kind}`}
+        data-row={track.index}
+        data-compact={height < 40 ? "" : undefined}
+        style={{ top, height: height + 1 }}
+      >
+        <div className="tl-head-title">
+          <span className="tl-head-id">{id}</span>
+          <input
+            key={`${track.index}:${track.name}`}
+            className="tl-head-name"
+            aria-label={`Name ${id}`}
+            title="Rename track"
+            maxLength={200}
+            defaultValue={track.name ?? ""}
+            placeholder={`${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`}
+            onFocus={(event) => event.currentTarget.select()}
+            onBlur={(event) => {
+              const name = event.currentTarget.value.trim();
+              if (name !== (track.name ?? "")) onRenameTrack(track, name);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape")
+                event.currentTarget.value = track.name ?? "";
+              if (event.key === "Enter" || event.key === "Escape")
+                event.currentTarget.blur();
+            }}
           />
-        </button>
-        {track.kind === "video" ? (
+          {track.kind === "audio" && audioControls?.(track, id, "title")}
+        </div>
+        <div className="tl-head-buttons">
           <button
-            className={`tl-track-button${track.enabled ? "" : " exception"}`}
-            aria-label={`Enable ${id}`}
-            aria-pressed={track.enabled}
-            title={track.enabled ? "Disable video track" : "Enable video track"}
-            onClick={() => onToggleTrack(track, "enabled")}
+            className={`tl-track-button${track.locked ? " exception" : ""}`}
+            aria-label={`Lock ${id}`}
+            aria-pressed={track.locked}
+            title={track.locked ? "Unlock track" : "Lock track"}
+            onClick={() => onToggleTrack(track, "locked")}
           >
-            {track.enabled ? (
-              <Eye size={13} />
+            {track.locked ? (
+              <LockSimple size={13} weight="fill" />
             ) : (
-              <EyeSlash size={13} weight="fill" />
+              <LockSimpleOpen size={13} />
             )}
           </button>
-        ) : (
-          <>
+          <button
+            className={`tl-track-button${track.autoSelect ? "" : " exception"}`}
+            aria-label={`Auto-select ${id}`}
+            aria-pressed={track.autoSelect}
+            title={
+              track.autoSelect ? "Turn auto-select off" : "Turn auto-select on"
+            }
+            onClick={() => onToggleTrack(track, "autoSelect")}
+          >
+            <CursorClick
+              size={13}
+              weight={track.autoSelect ? "fill" : "regular"}
+            />
+          </button>
+          {track.kind === "video" ? (
             <button
-              className={`tl-track-button${track.muted ? " exception" : ""}`}
-              aria-label={`Mute ${id}`}
-              aria-pressed={track.muted}
-              title="Mute track"
-              onClick={() => onToggleTrack(track, "muted")}
+              className={`tl-track-button${track.enabled ? "" : " exception"}`}
+              aria-label={`Enable ${id}`}
+              aria-pressed={track.enabled}
+              title={
+                track.enabled ? "Disable video track" : "Enable video track"
+              }
+              onClick={() => onToggleTrack(track, "enabled")}
             >
-              M
+              {track.enabled ? (
+                <Eye size={13} />
+              ) : (
+                <EyeSlash size={13} weight="fill" />
+              )}
             </button>
-            <button
-              className={`tl-track-button${track.solo ? " exception" : ""}`}
-              aria-label={`Solo ${id}`}
-              aria-pressed={track.solo}
-              title="Solo track (also in export)"
-              onClick={() => onToggleTrack(track, "solo")}
-            >
-              S
-            </button>
-            {audioControls?.(track, id, "buttons")}
-          </>
-        )}
+          ) : (
+            <>
+              <button
+                className={`tl-track-button${track.muted ? " exception" : ""}`}
+                aria-label={`Mute ${id}`}
+                aria-pressed={track.muted}
+                title="Mute track"
+                onClick={() => onToggleTrack(track, "muted")}
+              >
+                M
+              </button>
+              <button
+                className={`tl-track-button${track.solo ? " exception" : ""}`}
+                aria-label={`Solo ${id}`}
+                aria-pressed={track.solo}
+                title="Solo track (also in export)"
+                onClick={() => onToggleTrack(track, "solo")}
+              >
+                S
+              </button>
+              {audioControls?.(track, id, "buttons")}
+            </>
+          )}
+        </div>
+        <div
+          className="tl-track-resize"
+          role="separator"
+          aria-label={`Height ${id}`}
+          aria-orientation="horizontal"
+          aria-valuemin={MIN_TRACK_HEIGHT}
+          aria-valuemax={MAX_TRACK_HEIGHT}
+          aria-valuenow={height}
+          tabIndex={0}
+          title="Drag to resize track. Arrow keys adjust height."
+          onPointerDown={(event) => resize.start(event, row)}
+          onPointerMove={resize.move}
+          onPointerUp={() => resize.finish(true)}
+          onPointerCancel={() => resize.finish(false)}
+          onLostPointerCapture={() => resize.finish(false)}
+          onKeyDown={(event) => {
+            const change =
+              event.key === "ArrowUp" ? -4 : event.key === "ArrowDown" ? 4 : 0;
+            if (!change && event.key !== "Home" && event.key !== "End") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onHeight(
+              row,
+              event.key === "Home"
+                ? MIN_TRACK_HEIGHT
+                : event.key === "End"
+                  ? MAX_TRACK_HEIGHT
+                  : Math.max(
+                      MIN_TRACK_HEIGHT,
+                      Math.min(MAX_TRACK_HEIGHT, height + change),
+                    ),
+            );
+          }}
+        />
       </div>
-    </div>
-  ));
+    );
+  });
 });
 
 /**
@@ -486,6 +555,8 @@ const TrackHeads = memo(function TrackHeads({
  */
 export function Timeline({
   timeline,
+  viewSettings,
+  onViewSettings,
   source,
   clock,
   pins,
@@ -577,22 +648,42 @@ export function Timeline({
   const [trackDrag, setTrackDrag] = useState(false);
   const draggingMedia =
     useSyncExternalStore(subscribeMediaDrag, mediaDrag) !== null;
+  const rowSizes = useMemo(
+    () => ({
+      ...sizes.rows,
+      ...(viewSettings.density === "compact"
+        ? { video: sizes.compact, audio: sizes.compact }
+        : viewSettings.density === "tall"
+          ? sizes.tall
+          : {}),
+      heights: viewSettings.heights,
+      // Clip moves reveal the bands when the pointer reaches an edge.
+      dropZones: draggingMedia || trackDrag,
+    }),
+    [sizes, viewSettings, draggingMedia, trackDrag],
+  );
   const layout = useMemo(
-    () =>
-      trackRows(shownTracks, {
-        ...sizes.rows,
-        // Clip moves reveal the bands when the pointer reaches an edge.
-        padding:
-          draggingMedia || trackDrag
-            ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
-            : 0,
-      }),
-    [shownTracks, sizes, draggingMedia, trackDrag],
+    () => trackRows(shownTracks, rowSizes),
+    [shownTracks, rowSizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+  const resize = useTrackResize({
+    root: grid,
+    tracks: shownTracks,
+    sizes: rowSizes,
+    layout,
+    settings: viewSettings,
+    save: onViewSettings,
+    draw: (next) => {
+      const view = viewport.current?.state();
+      if (view) bodies.current?.view(view);
+      bodies.current?.scene({ rows: next.rows, tracks, fps });
+    },
+  });
   const gestures = useLaneGestures({
     timeline,
     rows: layout.rows,
+    newRows: layout.newRows,
     tracks,
     selection,
     tool,
@@ -848,6 +939,39 @@ export function Timeline({
             >
               <Plus size={12} />
             </button>
+            <label
+              className="tl-density-control"
+              title={`Track density: ${Object.keys(viewSettings.heights).length ? "Custom" : viewSettings.density}`}
+            >
+              <Rows size={14} aria-hidden="true" />
+              <select
+                className="tl-density"
+                aria-label="Track density"
+                title="Set all track heights"
+                value={
+                  Object.keys(viewSettings.heights).length
+                    ? "custom"
+                    : viewSettings.density
+                }
+                onChange={(event) => {
+                  const density = trackDensities.find(
+                    (value) => value === event.target.value,
+                  );
+                  if (density) onViewSettings({ density, heights: {} });
+                }}
+              >
+                {Object.keys(viewSettings.heights).length > 0 && (
+                  <option value="custom" disabled>
+                    Custom
+                  </option>
+                )}
+                {trackDensities.map((density) => (
+                  <option key={density} value={density}>
+                    {density[0]!.toUpperCase() + density.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <div
             className="tl-ruler"
@@ -901,6 +1025,16 @@ export function Timeline({
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
               audioControls={audioControls}
+              resize={resize}
+              onHeight={(row, height) =>
+                onViewSettings({
+                  ...viewSettings,
+                  heights: {
+                    ...viewSettings.heights,
+                    [row.track.index]: height,
+                  },
+                })
+              }
             />
             {rows
               .filter((row) => row.track.index === ghost)
@@ -908,7 +1042,8 @@ export function Timeline({
                 <div
                   key={row.track.index}
                   className="tl-head audio vo-ghost-head"
-                  style={{ top: row.top }}
+                  data-row={row.track.index}
+                  style={{ top: row.top, height: row.height + 1 }}
                   aria-label={`New audio lane ${row.id}`}
                 >
                   <div className="tl-head-title">
@@ -956,94 +1091,132 @@ export function Timeline({
               <i
                 key={row.track.index}
                 className={`tl-lane ${row.track.kind}`}
-                style={{ top: row.top }}
+                data-row={row.track.index}
+                style={{ top: row.top, height: row.height + 1 }}
               />
             ))}
             <i className="tl-divider" style={{ top: layout.dividerTop }} />
             <div className="tl-time">
               <div className="tl-scaled">
-                {clips.map(({ clip, row }) => (
-                  <ClipBody
-                    key={clip.id}
-                    clip={clip}
-                    row={row}
-                    selected={selection.ids.has(clip.id)}
-                  />
+                {rows.map((row) => (
+                  <div
+                    className="tl-row"
+                    key={row.track.index}
+                    data-row={row.track.index}
+                    style={{ top: row.top, height: row.height }}
+                  >
+                    {clips
+                      .filter((item) => item.row === row)
+                      .map(({ clip }) => (
+                        <ClipBody
+                          key={clip.id}
+                          clip={clip}
+                          row={row}
+                          selected={selection.ids.has(clip.id)}
+                        />
+                      ))}
+                  </div>
                 ))}
                 <canvas className="tl-bodies" ref={canvas} />
                 {recording &&
                   layout.rows
                     .filter((row) => row.track.index === takeTrack?.index)
                     .map((row) => (
-                      <i
+                      <div
                         key={row.track.index}
-                        className="vo-take-region"
-                        ref={takeRegion}
-                        aria-label="Recording voiceover take"
-                        style={{
-                          "--s": recording.start,
-                          "--d": Math.max(1, frames),
-                          top: row.top,
-                          height: row.height,
-                        }}
-                      />
+                        className="tl-row"
+                        data-row={row.track.index}
+                        style={{ top: row.top, height: row.height }}
+                      >
+                        <i
+                          className="vo-take-region"
+                          ref={takeRegion}
+                          aria-label="Recording voiceover take"
+                          style={{
+                            "--s": recording.start,
+                            "--d": Math.max(1, frames),
+                          }}
+                        />
+                      </div>
                     ))}
-                {clips
-                  .filter(({ clip }) => agentChanges?.has(clip.id))
-                  .map(({ clip, row }) => (
-                    <i
-                      key={clip.id}
-                      className={`tl-agent-change on-${row.track.kind}`}
-                      data-agent-change={clip.id}
-                      title="Agent change awaiting acceptance"
-                      style={{
-                        "--s": clip.start,
-                        "--d": clip.duration,
-                        top: row.top,
-                      }}
-                    />
-                  ))}
-                {clips
-                  .filter(
-                    ({ clip }) =>
-                      clip.hasAudio &&
-                      mounted &&
-                      clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
-                  )
-                  .map(({ clip, row }) => (
-                    <ClipMix
-                      key={clip.id}
-                      clip={clip}
-                      row={row}
-                      fps={timeline.fps}
-                      selected={selection.ids.has(clip.id)}
-                    />
-                  ))}
-                {clips.map(
-                  ({ clip, row }) =>
-                    selection.ids.has(clip.id) && (
-                      <ClipOutline key={clip.id} clip={clip} row={row} />
-                    ),
-                )}
+                {rows.map((row) => {
+                  const rowClips = clips.filter((item) => item.row === row);
+                  return (
+                    <div
+                      className="tl-row"
+                      key={row.track.index}
+                      data-row={row.track.index}
+                      style={{ top: row.top, height: row.height }}
+                    >
+                      {rowClips
+                        .filter(({ clip }) => agentChanges?.has(clip.id))
+                        .map(({ clip, row }) => (
+                          <i
+                            key={clip.id}
+                            className={`tl-agent-change on-${row.track.kind}`}
+                            data-agent-change={clip.id}
+                            title="Agent change awaiting acceptance"
+                            style={{
+                              "--s": clip.start,
+                              "--d": clip.duration,
+                            }}
+                          />
+                        ))}
+                      {rowClips
+                        .filter(
+                          ({ clip }) =>
+                            clip.hasAudio &&
+                            mounted &&
+                            clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                        )
+                        .map(({ clip, row }) => (
+                          <ClipMix
+                            key={clip.id}
+                            clip={clip}
+                            row={row}
+                            fps={timeline.fps}
+                            selected={selection.ids.has(clip.id)}
+                          />
+                        ))}
+                      {rowClips.map(
+                        ({ clip, row }) =>
+                          selection.ids.has(clip.id) && (
+                            <ClipOutline key={clip.id} clip={clip} row={row} />
+                          ),
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <div className="tl-names">
-                {mounted &&
-                  clips
-                    .filter(
-                      ({ clip }) =>
-                        clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
-                    )
-                    .map(({ clip, row }) => (
-                      <ClipLabel
-                        key={clip.id}
-                        clip={clip}
-                        row={row}
-                        fps={fps}
-                        timed={
-                          clip.duration * mounted.labelPpf >= LENGTH_MIN_WIDTH
-                        }
-                      />
-                    ))}
+                {rows.map((row) => (
+                  <div
+                    className="tl-row"
+                    key={row.track.index}
+                    data-row={row.track.index}
+                    style={{ top: row.top, height: row.height }}
+                  >
+                    {mounted &&
+                      clips
+                        .filter((item) => item.row === row)
+                        .filter(
+                          ({ clip }) =>
+                            clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                        )
+                        .map(({ clip, row }) => (
+                          <ClipLabel
+                            key={clip.id}
+                            clip={clip}
+                            row={row}
+                            fps={fps}
+                            timed={
+                              clip.duration * mounted.labelPpf >=
+                              LENGTH_MIN_WIDTH
+                            }
+                          />
+                        ))}
+                  </div>
+                ))}
               </div>
             </div>
             {timeline.clips.length === 0 && (

@@ -366,12 +366,8 @@
   padding: 0;
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
 }
-.tl-head.video {
-  height: calc(var(--size-track-video) + var(--stroke-hair));
-}
 .tl-head.audio {
   gap: 2px;
-  height: calc(var(--size-track-audio) + var(--stroke-hair));
 }
 .tl-head-title {
   display: flex;
@@ -488,11 +484,9 @@
   border-bottom: var(--stroke-hair) solid var(--line-lane);
 }
 .tl-lane.video {
-  height: calc(var(--size-track-video) + var(--stroke-hair));
   background: var(--surface-lane-video);
 }
 .tl-lane.audio {
-  height: calc(var(--size-track-audio) + var(--stroke-hair));
 }
 
 /* Clip: a 2px kind rail on a tinted name strip over a flat body. Filmstrips and waveforms are drawn over the bodies on .tl-bodies. */
@@ -540,13 +534,9 @@
   --head: var(--clip-audio-head);
   --body: var(--clip-audio-body);
 }
-.tl-clip.on-video,
-.tl-selected.on-video {
-  height: calc(var(--size-track-video) - 2px);
-}
-.tl-clip.on-audio,
-.tl-selected.on-audio {
-  height: calc(var(--size-track-audio) - 2px);
+.tl-clip,
+.tl-selected {
+  height: calc(100% - 2px);
 }
 .tl-clip.locked,
 .tl-label.locked {
@@ -833,12 +823,9 @@
   left: calc(var(--s) / var(--span) * 100%);
   width: calc(var(--d) / var(--span) * 100% - 1px);
   height: var(--stroke-rail);
-  margin-top: calc(var(--size-track-video) - var(--stroke-rail));
+  top: calc(100% - var(--stroke-rail));
   background: var(--agent);
   pointer-events: none;
-}
-.tl-agent-change.on-audio {
-  margin-top: calc(var(--size-track-audio) - var(--stroke-rail));
 }
 
 /* Clip gain and edge fades sit above the shared media canvas. */
@@ -854,13 +841,10 @@
   z-index: calc(var(--z-clip-selected) + 1);
   left: calc(var(--s) / var(--span) * 100%);
   width: calc(var(--d) / var(--span) * 100% - 1px);
-  height: calc(var(--size-track-audio) - 2px);
+  height: calc(100% - 2px);
   margin-top: 1px;
   pointer-events: none;
   transform-origin: 0 0;
-}
-.tl-mix.on-video {
-  height: calc(var(--size-track-video) - 2px);
 }
 .tl-mix.locked {
   opacity: var(--track-locked-opacity);
@@ -1080,4 +1064,68 @@
   height: var(--icon-lg);
   background: transparent;
   z-index: var(--z-clip);
+}
+
+.tl-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.tl-density-control {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--size-track-button);
+  height: var(--size-track-button);
+  color: var(--text-secondary);
+  border-radius: var(--radius-control);
+}
+.tl-density-control:hover {
+  background: var(--surface-active);
+}
+.tl-density-control:has(:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+}
+.tl-density {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+}
+.tl-density option {
+  color: var(--text-primary);
+  background: var(--surface-panel);
+}
+.tl-track-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 5px;
+  z-index: 1;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.tl-track-resize:hover,
+.tl-track-resize:focus-visible {
+  background: var(--line-strong);
+}
+.tl-head[data-compact] {
+  gap: 0;
+}
+.tl-head[data-compact] .tl-head-title {
+  height: 14px;
+}
+.tl-head[data-compact] .tl-track-button {
+  height: 14px;
+}
+.tl-grid[data-resizing] {
+  cursor: ns-resize;
+  user-select: none;
 }
