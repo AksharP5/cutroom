@@ -13,6 +13,12 @@ import {
   seekFrame,
 } from "./position-helpers";
 
+declare global {
+  interface Window {
+    positionVerdicts: Record<string, boolean>;
+  }
+}
+
 test("translate animation warns only at frames where it overrides Position", async ({
   page,
   request,
@@ -97,7 +103,7 @@ test("translate animation warns only at frames where it overrides Position", asy
   }
 });
 
-test("scale, rotation and zoom warn without blocking edits, and reset clears the warning", async ({
+test("ancestor scale, rotation and clip zoom warn without blocking edits; the clip's own scale and rotation do not", async ({
   page,
   request,
 }) => {
@@ -110,12 +116,17 @@ test("scale, rotation and zoom warn without blocking edits, and reset clears the
   const fixtures = [
     { id: "matrix", ancestor: "transform:scale(.5)", clip: "" },
     { id: "zoom", ancestor: "zoom:1.5", clip: "" },
-    { id: "scale", ancestor: "", clip: "scale:.5" },
     { id: "rotate", ancestor: "rotate:15deg", clip: "" },
+    { id: "clipzoom", ancestor: "", clip: "zoom:.5" },
+  ];
+  // Position's translate sits outside the clip's own scale and rotation, so these hold.
+  const holding = [
+    { id: "ownscale", ancestor: "", clip: "scale:.5" },
+    { id: "ownturn", ancestor: "", clip: "transform:scale(.5) rotate(20deg)" },
   ];
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="2">${fixtures.map(({ id, ancestor, clip }, track) => `<section style="${ancestor}"><div id="${id}" class="clip" data-start="0" data-duration="2" data-track-index="${track}" style="position:absolute;width:40px;height:30px;background:lime;${clip}">${id}</div></section>`).join("")}</main></body></html>`,
+    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="2">${[...fixtures, ...holding].map(({ id, ancestor, clip }, track) => `<section style="${ancestor}"><div id="${id}" class="clip" data-start="0" data-duration="2" data-track-index="${track}" style="position:absolute;width:40px;height:30px;background:lime;${clip}">${id}</div></section>`).join("")}</main></body></html>`,
   );
   await page.goto(`/#project/${project.id}`);
   const path = `/api/cutroom/projects/${project.id}`;
@@ -125,7 +136,7 @@ test("scale, rotation and zoom warn without blocking edits, and reset clears the
   const response = await request.post(`${path}/commands`, {
     data: {
       expectedRevision: view.revision,
-      commands: fixtures.map(({ id }) => ({
+      commands: [...fixtures, ...holding].map(({ id }) => ({
         type: "setClip",
         clipId: id,
         x: 40,
@@ -143,6 +154,30 @@ test("scale, rotation and zoom warn without blocking edits, and reset clears the
     await expect(positionField(page)).toBeEnabled();
     await inspector.getByRole("button", { name: "Reset position" }).click();
     await expect(positionField(page)).toHaveValue("0 px");
+    await expect(inspector.getByRole("status")).toHaveCount(0);
+  }
+  // Wait for the preview's own verdict on each clip, so "no warning" means it looked.
+  await page.evaluate(() => {
+    const verdicts: Record<string, boolean> = {};
+    Object.assign(window, { positionVerdicts: verdicts });
+    addEventListener("message", ({ data }: MessageEvent<unknown>) => {
+      if (
+        data &&
+        typeof data === "object" &&
+        "type" in data &&
+        data.type === "position-warning" &&
+        "clipId" in data &&
+        "overridden" in data
+      )
+        verdicts[String(data.clipId)] = Boolean(data.overridden);
+    });
+  });
+  for (const { id } of holding) {
+    await page.locator(`[data-clip="${id}"]`).click();
+    await expect(positionField(page)).toHaveValue("40 px");
+    await expect
+      .poll(() => page.evaluate((clip) => window.positionVerdicts[clip], id))
+      .toBe(false);
     await expect(inspector.getByRole("status")).toHaveCount(0);
   }
 });

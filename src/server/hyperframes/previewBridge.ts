@@ -192,12 +192,17 @@ function installPreviewBridge() {
         );
         if (foldedId && element.getAttribute("data-hf-id") === foldedId)
           overridden = true;
+        // `translate` composes outside the clip's own scale, rotate and transform, so only
+        // zoom on the clip itself changes the offset; any ancestor transform does too.
+        overridden ||=
+          style.zoom !== "normal" &&
+          Math.abs(Number.parseFloat(style.zoom) - 1) > 0.000001;
         for (
-          let ancestor: Element | null = picture;
+          let ancestor = picture.parentElement;
           ancestor && !overridden;
           ancestor = ancestor.parentElement
         ) {
-          const css = ancestor === picture ? style : getComputedStyle(ancestor);
+          const css = getComputedStyle(ancestor);
           const matrix = new DOMMatrixReadOnly(
             css.transform === "none" ? undefined : css.transform,
           );
