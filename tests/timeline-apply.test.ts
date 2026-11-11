@@ -179,6 +179,53 @@ test("Q and W trim to the playhead and ripple the rest of the edit", () => {
   ).toEqual({ talk: [0, 30, 60], next: [0, 90, 60], title: [1, 45, 30] });
 });
 
+test("a trim past an overwritten sound partner names the sound, not the picture", () => {
+  const overwritten = run(
+    timeline([
+      clip("picture", 0, 0, 90, { link: "pair" }),
+      clip("sound", 2, 0, 90, { kind: "audio", link: "pair" }),
+    ]),
+    {
+      type: "insert",
+      track: 2,
+      at: 30,
+      mode: "overwrite",
+      clip: { src: "tone.wav", kind: "audio", duration: 60 },
+    },
+  );
+  expect(() =>
+    run(overwritten, {
+      type: "trim",
+      clipId: "picture",
+      edge: "start",
+      to: 60,
+      ripple: true,
+    }),
+  ).toThrow("Command 1 (trim): Clip sound would be shorter than one frame.");
+});
+
+test("a refused move names the locked destination track", () => {
+  const locked = timeline(
+    [clip("picture", 0, 0, 90)],
+    [{ index: 1, locked: true }],
+  );
+  expect(() =>
+    run(locked, { type: "move", clipIds: ["picture"], trackBy: 1 }),
+  ).toThrow("Command 1 (move): Track 1 is locked.");
+});
+
+test("a picture refused on an audio track uses the right article", () => {
+  const edit = timeline(
+    [clip("picture", 0, 0, 90)],
+    [{ index: 1, kind: "audio" }],
+  );
+  expect(() =>
+    run(edit, { type: "move", clipIds: ["picture"], trackBy: 1 }),
+  ).toThrow(
+    "Command 1 (move): Clip picture is picture and track 1 is an audio track.",
+  );
+});
+
 test("a linked group is one unit: trims move every partner's same edge", () => {
   // An interview cut: S2's sound leads its picture by 10 frames (a J-cut).
   const interview = timeline([

@@ -74,6 +74,18 @@ const trimToPlayhead =
       : [];
   };
 
+/** Q and W park on the new edit point, showing the first frame after the cut. */
+export function trimmedPlayhead(
+  timeline: Timeline,
+  commands: readonly CommandInput[],
+) {
+  const [command] = commands;
+  if (command?.type !== "trim" || !command.ripple) return null;
+  const clip = timeline.clips.find((clip) => clip.id === command.clipId);
+  if (!clip) return null;
+  return command.edge === "start" ? clip.start : clipEnd(clip);
+}
+
 /**
  * Razors the clips under the playhead as shown when the key is pressed, named one by one, so a
  * later agent edit can never widen the cut. With none, the engine refuses the unscoped razor in

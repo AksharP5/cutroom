@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
-import { editKeys } from "../src/client/edit/keys";
+import { editKeys, trimmedPlayhead } from "../src/client/edit/keys";
 import { countingIds } from "./clip-ids";
 
 const clip = (
@@ -121,6 +121,23 @@ test("a selected clip under the playhead is trimmed even on a track with auto-se
   expect(press("trimRippleStartToPlayhead", timeline, 60, ["b"])).toEqual([
     { type: "trim", clipId: "a", edge: "start", to: 60, ripple: true },
   ]);
+});
+
+test("Q parks at the surviving start and W at the new end, including a later clip", () => {
+  const timeline = sequence(musicOff);
+  for (const [key, frame, expected] of [
+    ["trimRippleStartToPlayhead", 60, 0],
+    ["trimRippleStartToPlayhead", 150, 100],
+    ["trimRippleEndToPlayhead", 60, 60],
+    ["trimRippleEndToPlayhead", 150, 150],
+  ] as const) {
+    const commands = press(key, timeline, frame);
+    expect(trimmedPlayhead(apply(timeline, commands), commands)).toBe(expected);
+  }
+  expect(trimmedPlayhead(timeline, [])).toBeNull();
+  expect(
+    trimmedPlayhead(timeline, press("editBladeRazor", timeline, 60)),
+  ).toBeNull();
 });
 
 test("E and Ctrl+\\ razor the selected clips under the playhead, or every unlocked auto-select track", () => {

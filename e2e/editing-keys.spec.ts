@@ -112,6 +112,10 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
     "60",
     { timeout: 300 },
   );
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:00:00",
+    { timeout: 300 },
+  );
   await expect.poll(clips).toEqual([
     ["shot-1", 0, 60],
     ["shot-2", 60, 90],
@@ -119,6 +123,9 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
     ["shot-4", 240, 90],
   ]);
   states.push(await clips());
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:00:00",
+  );
   await page.unroute("**/api/cutroom/projects/*/commands");
 
   await seek("0400");
@@ -128,6 +135,9 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
     ["shot-3", 120, 90],
     ["shot-4", 210, 90],
   ]);
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:04:00",
+  );
   await seek("0500");
   await press("e", [
     ["shot-1", 0, 60],
@@ -149,6 +159,90 @@ test("Q, W, E and Shift+X cut a sequence, each one undo step", async ({
     await page.keyboard.press("Control+z");
     await expect.poll(clips).toEqual(state);
   }
+});
+
+test("Q on a later shot parks at its start before the server answers and preserves a later seek", async ({
+  page,
+  request,
+}) => {
+  const { clips, seek, hold } = await open(page, request, "Q playhead");
+  const release = await hold();
+  await seek("0415");
+  await page.keyboard.press("q");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:03:00",
+  );
+  await seek("0600");
+  release();
+  await expect.poll(clips).toEqual([
+    ["shot-1", 0, 90],
+    ["shot-2", 90, 45],
+    ["shot-3", 135, 90],
+    ["shot-4", 225, 90],
+  ]);
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:06:00",
+  );
+});
+
+for (const seekAgain of [false, true]) {
+  test(`a server-refused Q ${seekAgain ? "preserves a later seek" : "restores the playhead"}`, async ({
+    page,
+    request,
+  }) => {
+    const { clips, seek } = await open(page, request, "Refused Q playhead");
+    const initial = await clips();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/cutroom/projects/*/commands", async (route) => {
+      await gate;
+      await route.fulfill({
+        status: 422,
+        json: { error: "Track 0 is locked.", code: "locked" },
+      });
+    });
+    await seek("0415");
+    await page.keyboard.press("q");
+    await expect(
+      page.getByRole("button", { name: /^Current time/ }),
+    ).toHaveText("00:00:03:00");
+    if (seekAgain) await seek("0600");
+    release();
+    await expect(page.locator(".toast")).toContainText("V1 is locked.");
+    await expect(
+      page.getByRole("button", { name: /^Current time/ }),
+    ).toHaveText(seekAgain ? "00:00:06:00" : "00:00:04:15");
+    expect(await clips()).toEqual(initial);
+  });
+}
+
+test("a server-refused W on the last clip puts the playhead back where it was", async ({
+  page,
+  request,
+}) => {
+  const { clips, seek } = await open(page, request, "Refused W at the end");
+  const initial = await clips();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/cutroom/projects/*/commands", async (route) => {
+    await gate;
+    await route.fulfill({
+      status: 422,
+      json: { error: "Track 0 is locked.", code: "locked" },
+    });
+  });
+  await seek("1015");
+  await page.keyboard.press("w");
+  // The shortened timeline ends at the cut, so the playhead parks on its last frame.
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:10:14",
+  );
+  release();
+  await expect(page.locator(".toast")).toContainText("V1 is locked.");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:10:15",
+  );
+  expect(await clips()).toEqual(initial);
 });
 
 test("a refused edit is taken back and the header shows the engine's reason", async ({
@@ -452,6 +546,8 @@ test("Q and E pressed on a selected shot act on that shot only, even after an ag
   await seek("0400");
   await timeline.locator('[data-clip="shot-2"]').click();
   await page.keyboard.press("q");
+  // Q parks on the cut; seek inside the surviving shot before queuing its razor.
+  await seek("0400");
   await page.keyboard.press("e");
   // The agent ripple deletes shot 2, so shot 3 slides under the playhead.
   const after = await agent([
@@ -539,6 +635,7 @@ for (const [name, change] of [
     // At 4s both keys act on shot 2, which the view shows at 3s to 6s.
     await seek("0400");
     await page.keyboard.press("q");
+    await seek("0400");
     await page.keyboard.press("e");
     const after = await agent([change]);
     release();

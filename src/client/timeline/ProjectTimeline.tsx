@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
 import { nextTrackIndex } from "../../shared/timeline/tracks";
-import { editKeys } from "../edit/keys";
+import { editKeys, trimmedPlayhead } from "../edit/keys";
 import { editTimeline, loadTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
@@ -93,9 +93,28 @@ export function ProjectTimeline({
           selection: useTimeline.getState().selection.ids,
           frame: clock.frame(),
         };
-        void editTimeline(projectId, label, (current) =>
-          commands(current, target),
-        );
+        let parked: number | null = null;
+        void editTimeline(
+          projectId,
+          label,
+          (current) => commands(current, target),
+          undefined,
+          (next, built) => {
+            const frame = trimmedPlayhead(next, built);
+            if (frame === null) return;
+            transport.seek(frame);
+            // A trim at the end shortens the timeline, and the transport parks on its last frame.
+            parked = Math.min(frame, next.duration - 1);
+          },
+        ).then((accepted) => {
+          if (
+            !accepted &&
+            parked !== null &&
+            useTimeline.getState().projectId === projectId &&
+            clock.frame() === parked
+          )
+            transport.seek(target.frame);
+        });
       },
     ],
   );
