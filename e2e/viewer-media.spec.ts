@@ -94,7 +94,8 @@ async function keepPicture(page: Page, change: () => Promise<unknown>) {
   let settled = false;
   const sampling = (async () => {
     const started = Date.now();
-    while (!settled || Date.now() - started < 1000) {
+    // Screenshots take about 200 ms on CI, so a second alone can yield too few samples.
+    while (!settled || Date.now() - started < 1000 || colors.length < 6) {
       const png = await page.screenshot({
         clip: {
           x: Math.floor(box.x + box.width / 2),
