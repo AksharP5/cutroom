@@ -1,3 +1,8 @@
+import { api } from "../api";
+import {
+  TimelineViewSettingsSchema,
+  emptyTimelineViewSettings,
+} from "../../shared/timeline/view";
 import { useStore } from "zustand";
 import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
@@ -82,6 +87,23 @@ export function ProjectTimeline({
     marker: Marker;
     anchor: { x: number; y: number };
   } | null>(null);
+  const [viewSettings, setViewSettings] = useState(emptyTimelineViewSettings);
+  const composition = view?.composition;
+  useEffect(() => {
+    if (!composition) return;
+    const closing = new AbortController();
+    setViewSettings(emptyTimelineViewSettings());
+    void api(
+      `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(composition)}`,
+      TimelineViewSettingsSchema,
+      { signal: closing.signal },
+    )
+      .then(setViewSettings)
+      .catch((error: unknown) => {
+        if (!closing.signal.aborted) reportEditorError("timeline", error);
+      });
+    return () => closing.abort();
+  }, [projectId, composition]);
   const selection = useTimeline((state) => state.selection);
   const snapping = useTimeline((state) => state.snapping);
   const setSelection = (next: Selection) =>
@@ -212,6 +234,15 @@ export function ProjectTimeline({
             part={part}
           />
         )}
+        viewSettings={viewSettings}
+        onViewSettings={(settings) => {
+          setViewSettings(settings);
+          void api(
+            `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(view.composition)}`,
+            TimelineViewSettingsSchema,
+            { method: "PUT", body: JSON.stringify(settings) },
+          ).catch((error: unknown) => reportEditorError("timeline", error));
+        }}
         timeline={view.timeline}
         source={{ projectId, composition: view.composition }}
         clock={clock}

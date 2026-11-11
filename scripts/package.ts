@@ -82,6 +82,7 @@ try {
     `${JSON.stringify({ ...manifest, main: "desktop/main.cjs" }, null, 2)}\n`,
   );
   await cp(join(root, "bun.lock"), join(app, "bun.lock"));
+  await cp(join(root, "bunfig.toml"), join(app, "bunfig.toml"));
   await run(
     [
       process.execPath,

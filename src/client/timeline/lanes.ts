@@ -1,4 +1,3 @@
-import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { envelopeHeight, fadePath } from "./mix";
 import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
@@ -70,7 +69,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
   latest.current = options;
   const gesture = useRef<Gesture>(idle);
   const drag = useRef<Drag | null>(null);
-  const gainHeight = useRef(0);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
   const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0 });
@@ -167,7 +165,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
       create: target?.create,
       reach: reach(bypass),
       dy: intent.kind === "gain" ? pointer.current.dy : 0,
-      gainHeight: gainHeight.current,
     };
   }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
@@ -183,7 +180,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (frame === null) return;
     const x = Math.round(frame * (view()?.ppf ?? 0));
     element.style.transform = `translate(${x}px, ${row?.top ?? 0}px)`;
-    if (row) element.dataset.track = row.track.kind;
+    if (row) {
+      element.dataset.track = row.track.kind;
+      element.style.height = `${row.height - 2}px`;
+    }
   }
 
   /**
@@ -204,9 +204,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
       ? [...rows, destinationRow.current].toSorted((a, b) => a.top - b.top)
       : rows;
     const top = new Map(shownRows.map((row) => [row.track.index, row.top]));
+    const heights = new Map(
+      shownRows.map((row) => [row.track.index, row.height]),
+    );
     const before = new Map(base.clips.map((clip) => [clip.id, clip]));
     const surviving = new Set(shown.clips.map((clip) => clip.id));
-    const next = new Map<string, Offset & { scale: number }>();
+    const next = new Map<string, Offset & { scale: number; height: number }>();
     if (shown !== base)
       for (const clip of shown.clips) {
         const old = before.get(clip.id);
@@ -222,6 +225,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
           x: (clip.start - old.start) * ppf,
           y: (top.get(clip.track) ?? from) - from,
           scale: clip.duration / old.duration,
+          height: heights.get(clip.track) ?? 0,
         });
       }
     if (shown !== base || next.size || placed.current.size || preview.current)
@@ -239,6 +243,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
         if ((written.current.get(element) ?? "") === held) continue;
         written.current.set(element, held);
         element.style.transform = clipLabel === undefined ? held : move;
+        if (clipLabel === undefined && agentChange === undefined)
+          element.style.height = at ? `${at.height - 2}px` : "";
+        if (agentChange !== undefined) {
+          const original = heights.get(before.get(id)?.track ?? -1) ?? 0;
+          element.style.marginTop = at ? `${at.height - original}px` : "";
+        }
         element.toggleAttribute("data-held", at !== undefined);
         // Brackets and an edit's translation follow the held clip's scale.
         if (clipLabel === undefined)
@@ -474,10 +484,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
       } else if (readout.current) {
         readout.current.textContent =
           intent.kind === "gain"
-            ? audioGainToText(
-                next.shown.clips.find((clip) => clip.id === intent.clipId)
-                  ?.volume ?? 1,
-              )
+            ? next.delta <= -60
+              ? "-∞ dB"
+              : `${next.delta.toFixed(2)} dB`
             : `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
         readout.current.hidden = false;
       }
@@ -623,7 +632,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       hit !== null &&
       (intent?.kind === "move" || intent?.kind === "gain") &&
       !toggle &&
-      !event.shiftKey &&
+      (!event.shiftKey || intent?.kind === "gain") &&
       !event.altKey &&
       selection.ids.has(hit.clip.id);
     let selected = selection;
@@ -639,12 +648,21 @@ export function useLaneGestures(options: LaneGestureOptions) {
           rows.map((row) => row.track.index),
           selection,
           hit.clip.id,
-          { toggle, range: event.shiftKey, alone: event.altKey },
+          {
+            toggle,
+            range: event.shiftKey && intent?.kind !== "gain",
+            alone: event.altKey,
+          },
         );
       if (selected !== selection) onSelect(selected);
     }
-    // Ctrl and Shift presses edit the selection; they never start a drag of it.
-    if (!intent || (hit && tool !== "blade" && (toggle || event.shiftKey)))
+    // Shift on a gain line is fine adjustment; other modified presses edit the selection.
+    if (
+      !intent ||
+      (hit &&
+        tool !== "blade" &&
+        (toggle || (event.shiftKey && intent.kind !== "gain")))
+    )
       return;
     event.currentTarget.setPointerCapture(event.pointerId);
     pointer.current = {
@@ -658,10 +676,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
       intent,
       point: local(event.clientX, event.clientY),
     }).gesture;
-    gainHeight.current =
-      event.target instanceof Element
-        ? (event.target.closest("svg")?.getBoundingClientRect().height ?? 0)
-        : 0;
     onGesture(true);
     if (intent.kind === "marquee") {
       marqueeBase.current =
@@ -696,7 +710,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       bypass: event.ctrlKey || event.metaKey,
       dy:
         pointer.current.dy +
-        (event.clientY - pointer.current.y) * (event.altKey ? 0.1 : 1),
+        (event.clientY - pointer.current.y) * (event.shiftKey ? 0.2 : 1),
     };
   }
 

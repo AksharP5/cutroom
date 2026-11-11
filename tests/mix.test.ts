@@ -60,32 +60,25 @@ test("clearing a split's automation removes its baked ramp with exact HTML readb
   ).toBe(false);
 });
 
-test("gain drag inverts the rendered scale below and above unity at each track height", () => {
-  const { timeline } = parseComposition(html, emptyTimelineSettings());
-  const clip = timeline.clips[0]!;
-  for (const height of [25, 61]) {
-    for (const [start, dy] of [
-      [0, 3],
-      [-24, -3],
-      [-6, -5],
-      [6, 3],
-      [0, 9],
-    ] as const) {
-      const volume = audioDbToGain(start);
-      const next = gainFromDrag(
-        { ...clip, volume },
-        timeline.fps,
-        30,
-        dy,
-        height,
-      );
-      const drawnTravel =
-        ((gainHeight(next) - gainHeight(volume)) / 100) * height;
-      expect(drawnTravel).toBeCloseTo(dy, 0);
-    }
+test("gain uses a fixed quarter dB per pixel, with a recoverable silence floor and +12 dB ceiling", () => {
+  const clip = parseComposition(html, emptyTimelineSettings()).timeline
+    .clips[0]!;
+  for (const [start, pixels, expected] of [
+    [0, 9, -2.25],
+    [-24, -20, -19],
+    [6, 20, 1],
+    [0, 4 * 0.2, -0.2],
+  ] as const) {
+    expect(
+      gainFromDrag({ ...clip, volume: audioDbToGain(start) }, pixels),
+    ).toBeCloseTo(audioDbToGain(expected), 10);
   }
-  expect(gainFromDrag(clip, timeline.fps, 30, 100, 25)).toBe(0);
-  expect(gainFromDrag(clip, timeline.fps, 30, -100, 25)).toBe(MAX_AUDIO_GAIN);
+  expect(gainFromDrag(clip, 240)).toBe(0);
+  expect(gainFromDrag(clip, -100)).toBe(MAX_AUDIO_GAIN);
+  expect(gainFromDrag({ ...clip, volume: 0 }, -4)).toBeCloseTo(
+    audioDbToGain(-59),
+    10,
+  );
 });
 
 test("meters latch clipping through silence and stop, reset peaks on stop and clear on restart", () => {
@@ -603,14 +596,5 @@ test("the drawn fade follows core's linear amplitude ramp and reaches its knee a
       (100 + gainHeight(volume)) / 2,
       6,
     );
-    const faded = gainFromDrag(clip, timeline.fps, clip.start + 255, 1, 25);
-    const actual = envelopeHeight(
-      { ...clip, volume: faded },
-      timeline.fps,
-      255,
-    );
-    expect(
-      ((actual - envelopeHeight(clip, timeline.fps, 255)) / 100) * 25,
-    ).toBeCloseTo(1, 1);
   }
 });

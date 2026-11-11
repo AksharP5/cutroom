@@ -196,6 +196,9 @@
   --size-track-head: 132px;
   --size-track-video: 56px;
   --size-track-audio: 44px;
+  --size-track-compact: 32px;
+  --size-track-video-tall: 96px;
+  --size-track-audio-tall: 80px;
   --size-track-button: 20px;
   --size-clip-name: 14px;
   --size-filmstrip: 40px;
@@ -207,7 +210,7 @@
   --size-pin-ruler: 6px;
   --size-playhead-head-w: 11px;
   --size-playhead-head-h: 9px; /* the 19-28 band; the stem starts at its tip */
-  --size-zoom-slider: 72px;
+  --size-zoom-slider: 48px;
   --stage-margin: 12px;
 
   /* Panel widths (integers) and collapse thresholds (see direction.md) */

@@ -149,13 +149,13 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   await drag(page, gain, 0, 3);
   await expect
     .poll(async () => (await music()).volume)
-    .toBe(10 ** (-14.4 / 20));
+    .toBe(10 ** (-0.75 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(initial);
   await page.keyboard.press("Control+Shift+z");
   await expect
     .poll(async () => (await music()).volume)
-    .toBe(10 ** (-14.4 / 20));
+    .toBe(10 ** (-0.75 / 20));
   const gainOnly = (await read()).timeline;
   const ppf = await settledPpf(page);
   await drag(
@@ -388,7 +388,7 @@ test("pressing the curved envelope changes gain without moving the clip, in one 
   await page.screenshot({ path: info.outputPath("curve-after.png") });
   expect(actual.clips[0]).toEqual({
     ...initial.clips[0],
-    volume: 10 ** (12 / 20),
+    volume: 10 ** (3.13 / 20),
   });
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(initial);
@@ -603,7 +603,7 @@ test("a fade drag that returns to its start redraws the fade it began with", asy
   expect(await readFile(index, "utf8")).toBe(source);
 });
 
-test("gain follows the pointer, Alt adjusts finely, horizontal presses move clips, and baked ramps clear explicitly in one undo step", async ({
+test("gain uses fixed dB travel, Shift adjusts finely, horizontal presses move clips, and baked ramps clear explicitly in one undo step", async ({
   page,
   request,
 }, info) => {
@@ -652,7 +652,9 @@ test("gain follows the pointer, Alt adjusts finely, horizontal presses move clip
   for (const dy of [3, 6, 9]) {
     await page.mouse.move(origin.x, origin.y + dy, { steps: 6 });
     const actual = await point();
-    expect(Math.abs(actual.y - origin.y - dy)).toBeLessThan(0.2);
+    await expect(page.locator(".tl-readout")).toHaveText(
+      `${(-dy * 0.25).toFixed(2)} dB`,
+    );
     measurements.push({ pointerY: origin.y + dy, lineY: actual.y });
     await expect(page.locator(".tl-readout")).toBeVisible();
   }
@@ -664,10 +666,12 @@ test("gain follows the pointer, Alt adjusts finely, horizontal presses move clip
   await page.keyboard.press("Escape");
   await page.mouse.up();
   expect(await read()).toEqual(initial);
-  await page.keyboard.down("Alt");
+  await page.keyboard.down("Shift");
   await drag(page, '[data-clip-mix="music"] [data-mix="gain"]', 0, 25);
-  await page.keyboard.up("Alt");
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-12 / 20));
+  await page.keyboard.up("Shift");
+  await expect
+    .poll(async () => (await music()).volume)
+    .toBe(10 ** (-1.25 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(initial);
   await drag(page, '[data-clip-mix="music"] [data-mix="gain"]', 50, 1);

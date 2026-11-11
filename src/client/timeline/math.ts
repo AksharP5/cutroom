@@ -168,6 +168,7 @@ export interface RowSizes {
   seam: number;
   divider: number;
   padding?: number;
+  heights?: Readonly<Record<string, number>>;
 }
 export interface RowLayout {
   rows: Row[];
@@ -200,15 +201,20 @@ export function trackRows(
       track,
       id: `V${video.length - index}`,
       top,
-      height: sizes.video,
+      height: sizes.heights?.[track.index] ?? sizes.video,
     });
-    top += sizes.video + sizes.seam;
+    top += rows.at(-1)!.height + sizes.seam;
   }
   const dividerTop = top;
   top += sizes.divider;
   for (const [index, track] of audio.entries()) {
-    rows.push({ track, id: `A${index + 1}`, top, height: sizes.audio });
-    top += sizes.audio + sizes.seam;
+    rows.push({
+      track,
+      id: `A${index + 1}`,
+      top,
+      height: sizes.heights?.[track.index] ?? sizes.audio,
+    });
+    top += rows.at(-1)!.height + sizes.seam;
   }
   return { rows, dividerTop, height: top + (sizes.padding ?? 0) };
 }

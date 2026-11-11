@@ -1324,10 +1324,14 @@ test("occupied takes preview their destination and reuse A2 until the growing ra
     );
     expect(takes).toHaveLength(i + 1);
     expect(takes.map((clip) => clip.track)).toEqual(Array(i + 1).fill(2));
-    await expect(page.locator(`[data-clip="${takes.at(-1)!.id}"]`)).toHaveCSS(
-      "top",
-      `${top - (await page.locator(".tl-lanes").boundingBox())!.y}px`,
-    );
+    await expect
+      .poll(
+        async () =>
+          (await page
+            .locator(`[data-clip="${takes.at(-1)!.id}"]`)
+            .boundingBox())!.y,
+      )
+      .toBeCloseTo(top + 1, 0);
   }
   const before = await read();
   expect(

@@ -341,8 +341,6 @@ export interface DragInput {
   create?: readonly Track[];
   /** Vertical pointer travel in pixels, for gain. */
   dy?: number;
-  /** Actual drawable SVG height, in screen pixels. */
-  gainHeight?: number;
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -389,15 +387,9 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
 
   switch (intent.kind) {
     case "gain": {
-      if (!input.dy || !input.gainHeight) return still("Clip gain");
+      if (!input.dy) return still("Clip gain");
       const clip = find(intent.clipId);
-      const volume = gainFromDrag(
-        clip,
-        timeline.fps,
-        drag.origin,
-        input.dy,
-        input.gainHeight,
-      );
+      const volume = gainFromDrag(clip, input.dy);
       return edit(
         "Clip gain",
         volume === (clip.volume ?? 1)

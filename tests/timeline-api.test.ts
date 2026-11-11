@@ -8,6 +8,8 @@ import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
   ClipboardSchema,
+
+  emptyTimelineSettings,
   TimelineViewSchema,
 } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
@@ -1752,6 +1754,73 @@ test("clipboard copy refuses id-styled clips and stale revisions without changin
     });
     expect(stale.status).toBe(409);
     expect(await fixture.files()).toEqual(files);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("track view settings persist without history entries and survive mix undo and redo", async () => {
+  const fixture = await timelineFixture();
+  const { project, store } = fixture;
+  const ledger = await store.history(project);
+  const view = { density: "compact" as const, heights: { "0": 120 } };
+  try {
+    await ledger.checkpoint();
+    const initial = ledger.list().length;
+    await store.setTimelineView(project, "index.html", view);
+    await ledger.checkpoint();
+    expect(ledger.list()).toHaveLength(initial);
+    const current = await store.document(project);
+    await store.mutate(project, "Rename a track", async () => {
+      current.timelines["index.html"] = {
+        ...emptyTimelineSettings(),
+        tracks: [
+          {
+            index: 0,
+            kind: "video",
+            name: "Picture",
+            enabled: true,
+            muted: false,
+            solo: false,
+            locked: false,
+            autoSelect: true,
+          },
+        ],
+      };
+      await store.writeDocument(project, current);
+    });
+    expect(ledger.list()).toHaveLength(initial + 1);
+    await store.setTimelineView(project, "index.html", {
+      density: "tall",
+      heights: {},
+    });
+    await ledger.checkpoint();
+    expect(ledger.list()).toHaveLength(initial + 1);
+    expect(
+      (await ledger.step("back", { kind: "person", name: "You" })).ok,
+    ).toBe(true);
+    expect(
+      (await store.document(project)).view?.timelines["index.html"],
+    ).toEqual({ density: "tall", heights: {} });
+    expect(
+      (await store.document(project)).timelines["index.html"],
+    ).toBeUndefined();
+    expect(
+      (await ledger.step("forward", { kind: "person", name: "You" })).ok,
+    ).toBe(true);
+    expect(
+      (await store.document(project)).view?.timelines["index.html"],
+    ).toEqual({ density: "tall", heights: {} });
+    expect(
+      (await store.document(project)).timelines["index.html"]?.tracks[0]?.name,
+    ).toBe("Picture");
+    const snapshot = ledger
+      .list()
+      .at(-1)!
+      .files.find((file) => file.path === "cutroom.json")!;
+    expect(
+      JSON.parse((await ledger.readBlob(snapshot.after!)).toString()).view,
+    ).toBeUndefined();
   } finally {
     await fixture.close();
   }

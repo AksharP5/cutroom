@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TimelineViewSettingsSchema } from "./timeline/view";
 import { TimelineSettingsSchema } from "./timeline/schema";
 
 export const PointSchema = z.object({
@@ -88,6 +89,11 @@ export const ProjectDocumentSchema = z.preprocess(
     annotations: z.array(AnnotationSchema),
     transcripts: z.array(TranscriptSchema),
     timelines: z.record(z.string(), TimelineSettingsSchema),
+    view: z
+      .object({
+        timelines: z.record(z.string(), TimelineViewSettingsSchema).default({}),
+      })
+      .optional(),
   }),
 );
 export const ProjectSchema = z.object({
