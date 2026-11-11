@@ -3,7 +3,6 @@ import type { PointerEvent } from "react";
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
-  CaretDown,
   ChatCircle,
   Cursor,
   Folder,
@@ -28,6 +27,7 @@ import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import "./edit.css";
 import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { ExportControl } from "./ExportDialog";
+import { SelectMenu } from "../components/SelectMenu";
 import {
   editTimeline,
   loadTimeline,
@@ -353,28 +353,16 @@ export function EditPage({
         >
           <Magnet size={16} weight={snapping ? "fill" : "regular"} />
         </button>
-        <button
+        <SelectMenu<Zoom>
           className="edit-zoom"
-          popoverTarget="edit-zoom-menu"
-          aria-label="Viewer zoom"
-        >
-          {zoom === "fit" ? "Fit" : "100%"}
-          <CaretDown size={10} />
-        </button>
-        <div id="edit-zoom-menu" className="edit-menu" popover="auto">
-          {(["fit", "actual"] as const).map((option) => (
-            <button
-              key={option}
-              role="menuitemradio"
-              aria-checked={zoom === option}
-              popoverTarget="edit-zoom-menu"
-              popoverTargetAction="hide"
-              onClick={() => setZoom(option)}
-            >
-              {option === "fit" ? "Fit" : "100%"}
-            </button>
-          ))}
-        </div>
+          label="Viewer zoom"
+          value={zoom}
+          options={[
+            { value: "fit", label: "Fit" },
+            { value: "actual", label: "100%" },
+          ]}
+          onChange={setZoom}
+        />
         <button
           className="edit-icon"
           aria-label="Project files"

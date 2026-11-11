@@ -21,6 +21,13 @@ export const ExportOptionsSchema = z.object({
 });
 export type ExportOptions = z.infer<typeof ExportOptionsSchema>;
 
+export const ExportDestinationSchema = ExportOptionsSchema.pick({
+  filename: true,
+  directory: true,
+});
+
+export type ExportDestination = z.infer<typeof ExportDestinationSchema>;
+
 export const exportQualities = ["draft", "standard", "high"] as const;
 export const ExportQualitySchema = z.enum(exportQualities);
 export type ExportQuality = z.infer<typeof ExportQualitySchema>;

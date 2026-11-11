@@ -1,5 +1,13 @@
 import { existsSync } from "node:fs";
-import { link, mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -16,6 +24,7 @@ import { ExportStageSchema } from "../../shared/export";
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
 type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   stageProgress?: z.infer<typeof ExportStageSchema>;
+  sizeBytes?: number;
   cancel: () => Promise<void>;
 };
 const WorkerEvent = z.discriminatedUnion("type", [
@@ -282,6 +291,8 @@ export function createRenderWorkers(
               : `This folder can't receive the export (${code || String(error)}). Choose another folder.`,
           );
         });
+        state.sizeBytes = (await stat(outputPath)).size;
+        state.stage = "Finished";
         await writeFile(
           options.outputPath.replace(/\.(mp4|webm|mov|gif)$/, ".meta.json"),
           JSON.stringify({

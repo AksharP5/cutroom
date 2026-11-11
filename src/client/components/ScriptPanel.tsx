@@ -18,6 +18,7 @@ import {
   type TranscriptJob,
   type TranscriptView,
 } from "../../shared/project";
+import { SelectMenu } from "./SelectMenu";
 import { ApiError, api, json, timecode } from "../api";
 
 const viewsSchema = z.object({ transcripts: z.array(TranscriptViewSchema) });
@@ -346,23 +347,25 @@ export const ScriptPanel = memo(function ScriptPanel({
         <label className="field-label" htmlFor="script-media">
           Footage
         </label>
-        <select
+        <SelectMenu
           id="script-media"
+          label="Footage"
           value={selectedClip ? clipKey(selectedClip) : ""}
-          disabled={busy}
-          onChange={(event) => {
-            setSelectedClipKey(event.target.value);
+          disabled={busy || !clips.length}
+          onChange={(selected) => {
+            setSelectedClipKey(selected);
             setSelected([]);
             setError("");
           }}
-        >
-          {!clips.length && <option value="">No audio or video clips</option>}
-          {clips.map((clip) => (
-            <option value={clipKey(clip)} key={clipKey(clip)}>
-              {clip.label}
-            </option>
-          ))}
-        </select>
+          options={
+            clips.length
+              ? clips.map((clip) => ({
+                  value: clipKey(clip),
+                  label: clip.label,
+                }))
+              : [{ value: "", label: "No audio or video clips" }]
+          }
+        />
         {!active && (
           <button
             className="primary-button"

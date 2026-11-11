@@ -16,6 +16,7 @@ const ProgressSchema = z.object({
   stageProgress: ExportStageSchema.optional(),
   error: z.string().nullish(),
   audioLoweredDb: z.number().optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
 });
 export interface ExportJob {
   projectId: string;
@@ -40,6 +41,7 @@ export interface ExportJob {
   startedAt: number;
   finishedAt: number | null;
   notice: string;
+  sizeBytes: number | null;
 }
 
 export const useExport = create(() => ({
@@ -100,6 +102,7 @@ function follow(jobId: string) {
         ),
         error: state.error ?? "",
         finishedAt: state.status === "rendering" ? null : Date.now(),
+        sizeBytes: state.sizeBytes ?? null,
         ...(state.audioLoweredDb === undefined
           ? {}
           : {
@@ -160,6 +163,7 @@ export async function exportProject(
       startedAt: Date.now(),
       finishedAt: null,
       notice: "",
+      sizeBytes: null,
     },
   });
   useWorkspace.setState({ exporting: true });

@@ -531,6 +531,7 @@ export function createHyperframesApi(
             error: job.error,
             ...(job.status === "complete" && {
               audioLoweredDb: job.audioLoweredDb,
+              sizeBytes: job.sizeBytes,
             }),
           }),
         });

@@ -145,9 +145,10 @@ export function comboOf(
 /** Shortcuts never fire while the person types in a field or works in a dialog. */
 export const isTyping = (target: EventTarget | null) =>
   target instanceof Element &&
-  !!target.closest(
-    "input, textarea, select, [contenteditable]:not([contenteditable=false]), dialog",
-  );
+  (!!target.ownerDocument.querySelector("dialog[open]") ||
+    !!target.closest(
+      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
+    ));
 
 export function actionFor(event: KeyboardEvent): Action | null {
   if (isTyping(event.target)) return null;

@@ -346,7 +346,8 @@ test("an anonymous second media clip keeps its script selected through a full cu
   await page.goto(`/#project/${project.id}`);
   await page.getByRole("button", { name: "Script", exact: true }).click();
   const footage = page.getByLabel("Footage", { exact: true });
-  await footage.selectOption(`${second.sourceFile}:${second.elementId}`);
+  await footage.click();
+  await page.getByRole("option", { name: second.label, exact: true }).click();
   await page.locator('.script-panel input[type="file"]').setInputFiles({
     name: "transcript.json",
     mimeType: "application/json",
@@ -370,7 +371,8 @@ test("an anonymous second media clip keeps its script selected through a full cu
   );
   if (!canonical) throw new Error("The imported clip is missing.");
   expect(canonical.elementId).not.toBe(second.elementId);
-  await expect(footage).toHaveValue(
+  await expect(footage).toHaveAttribute(
+    "value",
     `${canonical.sourceFile}:${canonical.elementId}`,
   );
   await page.getByRole("button", { name: "keep", exact: true }).click();
@@ -379,7 +381,8 @@ test("an anonymous second media clip keeps its script selected through a full cu
     .click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "Cut", exact: true }).click();
   await expect(page.locator(".word-cut")).toHaveCount(2);
-  await expect(footage).toHaveValue(
+  await expect(footage).toHaveAttribute(
+    "value",
     `${canonical.sourceFile}:${canonical.elementId}`,
   );
   const afterCut = MediaListSchema.parse(
@@ -397,7 +400,8 @@ test("an anonymous second media clip keeps its script selected through a full cu
     .click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "Restore", exact: true }).click();
   await expect(page.locator(".word-cut")).toHaveCount(0);
-  await expect(footage).toHaveValue(
+  await expect(footage).toHaveAttribute(
+    "value",
     `${canonical.sourceFile}:${canonical.elementId}`,
   );
   const restored = MediaListSchema.parse(

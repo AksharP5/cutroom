@@ -85,6 +85,8 @@ test("a finished export moves into place and leaves no scratch beside it", async
     );
     await until(() => state.status !== "rendering");
     expect(state.status).toBe("complete");
+    expect(state.sizeBytes).toBe(5);
+    expect(state.stage).toBe("Finished");
     expect(await readFile(join(root, "My cut.mp4"), "utf8")).toBe("video");
     expect((await readdir(root)).sort()).toEqual([
       "My cut.mp4",

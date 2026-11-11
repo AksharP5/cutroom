@@ -29,6 +29,7 @@ import {
 import { api, json } from "../api";
 import { describeTool, hiddenTools, targetsFile } from "../../shared/toolRow";
 import { useWorkspace } from "../workspace";
+import { SelectMenu } from "./SelectMenu";
 import { waitForNoteCaptures } from "../edit/noteStore";
 
 const sessionListSchema = z.object({
@@ -852,36 +853,32 @@ export function ChatPanel({
             <span className="chat-toolbar-title">New conversation</span>
           )}
           {sessions.length > 0 && (
-            <label className="select-label conversation-picker">
-              <select
-                title={sessions.find((item) => item.id === sessionId)?.title}
-                aria-label="Conversation"
-                value={sessionId ?? ""}
-                disabled={controlsLocked}
-                onChange={(event) => {
-                  setConversation(
-                    event.target.value
-                      ? { phase: "loading", id: event.target.value }
-                      : { phase: "new" },
-                  );
-                  const next = sessions.find(
-                    (item) => item.id === event.target.value,
-                  );
-                  if (next) {
-                    setProvider(next.provider);
-                    setModel(next.model ?? "");
-                  }
-                }}
-              >
-                <option value="">New conversation</option>
-                {sessions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.title}
-                  </option>
-                ))}
-              </select>
-              <CaretDown size={10} weight="bold" />
-            </label>
+            <SelectMenu
+              className="select-label conversation-picker"
+              title={sessions.find((item) => item.id === sessionId)?.title}
+              label="Conversation"
+              value={sessionId ?? ""}
+              disabled={controlsLocked}
+              options={[
+                { value: "", label: "New conversation" },
+                ...sessions.map((item) => ({
+                  value: item.id,
+                  label: item.title,
+                })),
+              ]}
+              onChange={(selected) => {
+                setConversation(
+                  selected
+                    ? { phase: "loading", id: selected }
+                    : { phase: "new" },
+                );
+                const next = sessions.find((item) => item.id === selected);
+                if (next) {
+                  setProvider(next.provider);
+                  setModel(next.model ?? "");
+                }
+              }}
+            />
           )}
           <span className="quiet-label">
             {opening
@@ -1072,78 +1069,68 @@ export function ChatPanel({
               >
                 <Paperclip />
               </button>
-              <label className="select-label">
-                <span className="sr-only">Agent provider</span>
-                <select
-                  aria-label="Agent provider"
-                  title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
-                  value={provider}
-                  disabled={controlsLocked}
-                  onChange={(event) => {
-                    setProvider(
-                      event.target.value === "claude" ? "claude" : "codex",
-                    );
-                    setModel("");
-                    setConversation({ phase: "new" });
-                    setError("");
-                  }}
-                >
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                </select>
-                <CaretDown size={10} weight="bold" />
-              </label>
-              <label className="select-label model-select">
-                <span className="sr-only">Model</span>
-                <select
-                  aria-label="Model"
-                  value={model}
-                  disabled={controlsLocked || discovering}
-                  onChange={(event) => {
-                    const selected = event.target.value;
-                    if (!session) {
-                      setModel(selected);
-                      return;
-                    }
-                    const changing: ChatOperation = { kind: "model" };
-                    setOperation(changing);
-                    void api(
-                      `/agents/sessions/${session.id}`,
-                      agentSessionSchema,
-                      json("PATCH", { model: selected || null }),
-                    )
-                      .then((result) => {
-                        setConversation((current) =>
-                          current.phase === "ready" &&
-                          current.session.id === result.id
-                            ? { phase: "ready", session: result }
-                            : current,
-                        );
-                        setModel(result.model ?? "");
-                      })
-                      .catch((error: unknown) =>
-                        setError(
-                          error instanceof Error
-                            ? error.message
-                            : String(error),
-                        ),
-                      )
-                      .finally(() =>
-                        setOperation((current) =>
-                          current === changing ? null : current,
-                        ),
+              <SelectMenu
+                className="select-label"
+                label="Agent provider"
+                title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
+                value={provider}
+                disabled={controlsLocked}
+                options={[
+                  { value: "codex", label: "Codex" },
+                  { value: "claude", label: "Claude Code" },
+                ]}
+                onChange={(selected) => {
+                  setProvider(selected);
+                  setModel("");
+                  setConversation({ phase: "new" });
+                  setError("");
+                }}
+              />
+              <SelectMenu
+                className="select-label model-select"
+                label="Model"
+                value={model}
+                disabled={controlsLocked || discovering}
+                options={[
+                  { value: "", label: "Default model" },
+                  ...(capabilities?.models.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  })) ?? []),
+                ]}
+                onChange={(selected) => {
+                  if (!session) {
+                    setModel(selected);
+                    return;
+                  }
+                  const changing: ChatOperation = { kind: "model" };
+                  setOperation(changing);
+                  void api(
+                    `/agents/sessions/${session.id}`,
+                    agentSessionSchema,
+                    json("PATCH", { model: selected || null }),
+                  )
+                    .then((result) => {
+                      setConversation((current) =>
+                        current.phase === "ready" &&
+                        current.session.id === result.id
+                          ? { phase: "ready", session: result }
+                          : current,
                       );
-                  }}
-                >
-                  <option value="">Default model</option>
-                  {capabilities?.models.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-                <CaretDown size={10} weight="bold" />
-              </label>
+                      setModel(result.model ?? "");
+                    })
+                    .catch((error: unknown) =>
+                      setError(
+                        error instanceof Error ? error.message : String(error),
+                      ),
+                    )
+                    .finally(() =>
+                      setOperation((current) =>
+                        current === changing ? null : current,
+                      ),
+                    );
+                }}
+              />
             </div>
             <button
               className="send-button"

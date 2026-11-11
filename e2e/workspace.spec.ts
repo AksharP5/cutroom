@@ -175,12 +175,16 @@ test("visual review, native skill selection, and script edits survive real works
   await page
     .getByRole("button", { name: "Refresh media clips", exact: true })
     .click();
+  await page.getByLabel("Footage", { exact: true }).click();
   await expect(
-    page.getByLabel("Footage", { exact: true }).locator("option"),
+    page
+      .getByRole("listbox", { name: "Footage options", exact: true })
+      .getByRole("option"),
   ).toHaveCount(2);
   await page
-    .getByLabel("Footage", { exact: true })
-    .selectOption("index.html:footage");
+    .getByRole("option", { name: "footage.mp4", exact: true })
+    .first()
+    .click();
   await page.locator('.script-panel input[type="file"]').setInputFiles({
     name: "transcript.json",
     mimeType: "application/json",
@@ -206,9 +210,11 @@ test("visual review, native skill selection, and script edits survive real works
     .click({ modifiers: ["Shift"] });
   await page.getByRole("button", { name: "Restore", exact: true }).click();
   await expect(page.locator(".word-cut")).toHaveCount(0);
+  await page.getByLabel("Footage", { exact: true }).click();
   await page
-    .getByLabel("Footage", { exact: true })
-    .selectOption("index.html:second");
+    .getByRole("option", { name: "footage.mp4", exact: true })
+    .last()
+    .click();
   await expect(
     page.getByRole("button", { name: "Transcribe locally", exact: true }),
   ).toBeVisible();

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Download, Page } from "@playwright/test";
@@ -175,7 +176,95 @@ test("Export waits for edits, continues when hidden and opens the completed MP4"
   const exported = await request.get(`/api/render/${jobId}/download`);
   await writeFile(path, await exported.body());
   await expectEncoded(path, 1.5);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Export", exact: true }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("two default exports choose distinct names, show size and keep the tool row still", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project, errors } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  const tools = page.getByRole("toolbar", { name: "Tools", exact: true });
+  const positions = () =>
+    tools.locator(":scope > button").evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        x: button.getBoundingClientRect().x,
+        width: button.getBoundingClientRect().width,
+      })),
+    );
+  const before = await positions();
+  const paths: string[] = [];
+  for (const filename of ["Export proof.mp4", "Export proof 2.mp4"]) {
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+    await expect(dialog.getByLabel("File name", { exact: true })).toHaveValue(
+      filename,
+    );
+    const started = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/render"),
+    );
+    await dialog
+      .getByRole("button", { name: "Export MP4", exact: true })
+      .click();
+    const { jobId, outputPath } = z
+      .object({ jobId: z.string(), outputPath: z.string() })
+      .parse(await (await started).json());
+    paths.push(outputPath);
+    await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+    await expect(dialog).toContainText("Finished");
+    await expect(dialog).not.toContainText(/Encoding frame/);
+    const size = (await stat(outputPath)).size;
+    expect(size).toBeGreaterThan(0);
+    await expect(dialog).toContainText(
+      new Intl.NumberFormat(undefined, {
+        style: "unit",
+        unit: "kilobyte",
+        maximumFractionDigits: 1,
+      }).format(size / 1000),
+    );
+    expect(await positions()).toEqual(before);
+    const result = await request.get(`/api/render/${jobId}/download`);
+    const saved = testInfo.outputPath(filename);
+    await writeFile(saved, await result.body());
+    await expectEncoded(saved);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Export", exact: true }),
+    ).toBeFocused();
+    expect(await positions()).toEqual(before);
+  }
+  expect(new Set(paths).size).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test("changing the export folder refreshes the suggested name and preserves a typed name", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  const chosen = join(project.path, "chosen");
+  await mkdir(chosen);
+  await writeFile(join(chosen, "Export proof.mp4"), "previous export");
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const filename = page.getByLabel("File name", { exact: true });
+  await expect(page.getByRole("button", { name: "Export MP4" })).toBeEnabled();
+  await page.getByLabel("Location", { exact: true }).fill(chosen);
+  await expect(filename).toHaveValue("Export proof 2.mp4");
+  await filename.fill("My name.mp4");
+  await page.getByLabel("Location", { exact: true }).fill(project.path);
+  await expect(page.getByRole("button", { name: "Export MP4" })).toBeEnabled();
+  await expect(filename).toHaveValue("My name.mp4");
 });
 
 test("Export reports a refused pending edit instead of rendering the saved version", async ({
@@ -230,11 +319,14 @@ test("Location initializes before accepting edits and keeps the typed destinatio
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route(`**/api/cutroom/projects/${project.id}`, async (route) => {
-    const response = await route.fetch();
-    await gate;
-    await route.fulfill({ response });
-  });
+  await page.route(
+    `**/api/cutroom/projects/${project.id}/export-defaults?*`,
+    async (route) => {
+      const response = await route.fetch();
+      await gate;
+      await route.fulfill({ response });
+    },
+  );
   await page.getByRole("button", { name: "Export", exact: true }).click();
   const location = page
     .getByRole("dialog")
@@ -242,12 +334,12 @@ test("Location initializes before accepting edits and keeps the typed destinatio
   await expect(location).toBeDisabled();
   release();
   await expect(location).toBeEnabled();
-  await location.fill("/tmp/my-export-folder");
+  await location.fill(project.path);
   await page
     .getByRole("dialog")
     .getByLabel("File name", { exact: true })
     .fill("My cut.mp4");
-  await expect(location).toHaveValue("/tmp/my-export-folder");
+  await expect(location).toHaveValue(project.path);
 });
 
 test("the embedded editor exports a local composition and downloads a playable MP4", async ({
@@ -311,7 +403,8 @@ test("Shift+8 defaults to marked frames and exports their exact duration", async
   ).toBeChecked();
   await expect(dialog).toContainText("00:00:00:10");
   await dialog.getByLabel("File name", { exact: true }).fill("Marked cut.mp4");
-  await dialog.getByLabel("Quality", { exact: true }).selectOption("high");
+  await dialog.getByLabel("Quality", { exact: true }).click();
+  await dialog.getByRole("option", { name: "High", exact: true }).click();
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&

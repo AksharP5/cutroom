@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
-import { ProjectSchema } from "../../shared/project";
 import {
   defaultExportRange,
   exportQualities,
   ExportOptionsSchema,
-  ExportQualitySchema,
+  ExportDestinationSchema,
   exportRange,
 } from "../../shared/export";
-import type { ExportQuality } from "../../shared/export";
+import type { ExportDestination, ExportQuality } from "../../shared/export";
 import { api } from "../api";
 import { Modal } from "../components/Modal";
+import { SelectMenu } from "../components/SelectMenu";
 import { hint, useKeymap } from "../keymap";
 import { useWorkspace } from "../workspace";
 import { cancelExport, exportActive, exportProject, useExport } from "./export";
@@ -41,7 +41,9 @@ function JobProgress({ job }: { job: ExportJob }) {
         <span>
           {job.status === "cancelling"
             ? "Stopping and removing partial output"
-            : job.stage}
+            : job.status === "complete"
+              ? "Finished"
+              : job.stage}
         </span>
         <span className="mono">{Math.floor(job.progress)}%</span>
       </div>
@@ -116,7 +118,11 @@ export function ExportControl({
           projectId={projectId}
           projectName={projectName}
           onSetup={() => useExport.setState({ job: null, controlError: "" })}
-          onClose={() => setOpen(false)}
+          onClose={() => {
+            setOpen(false);
+            if (useExport.getState().job?.status === "complete")
+              useExport.setState({ job: null, controlError: "" });
+          }}
         />
       )}
     </>
@@ -142,22 +148,41 @@ function ExportDialog({
     timeline ? defaultExportRange(timeline) : "timeline",
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
-  const [filename, setFilename] = useState(
-    `${projectName.replace(/[/\\\x00-\x1f]/g, "-")}.mp4`,
+  const baseFilename = `${
+    projectName
+      .replace(/[/\\\x00-\x1f]/g, "-")
+      .trim()
+      .slice(0, 196) || "Cut"
+  }.mp4`;
+  const [filename, setFilename] = useState<string | null>(null);
+  const [directory, setDirectory] = useState<string | null>(null);
+  const [destination, setDestination] = useState<ExportDestination | null>(
+    null,
   );
-  const [directory, setDirectory] = useState("");
+  const [destinationError, setDestinationError] = useState("");
   const [error, setError] = useState("");
   const [fileError, setFileError] = useState("");
   const [loading, setLoading] = useState(true);
+  const hasJob = job !== null;
   useEffect(() => {
+    if (hasJob) return;
     let current = true;
-    void api(`/projects/${encodeURIComponent(projectId)}`, ProjectSchema)
-      .then((project) => {
-        if (current) setDirectory(`${project.path}/.cutroom/renders`);
+    setLoading(true);
+    setDestinationError("");
+    const query = new URLSearchParams({ filename: baseFilename });
+    if (directory !== null) query.set("directory", directory);
+    void api(
+      `/projects/${encodeURIComponent(projectId)}/export-defaults?${query}`,
+      ExportDestinationSchema,
+    )
+      .then((destination) => {
+        if (current) setDestination(destination);
       })
       .catch((error: unknown) => {
         if (current)
-          setError(error instanceof Error ? error.message : String(error));
+          setDestinationError(
+            error instanceof Error ? error.message : String(error),
+          );
       })
       .finally(() => {
         if (current) setLoading(false);
@@ -165,7 +190,7 @@ function ExportDialog({
     return () => {
       current = false;
     };
-  }, [projectId]);
+  }, [projectId, baseFilename, directory, hasJob]);
   const active = exportActive(job);
   const fps = job ? job.fps : timeline?.fps;
   const size = job ? job.size : composition;
@@ -188,8 +213,8 @@ function ExportDialog({
   const frames = range.frames;
   const submit = () => {
     const parsed = ExportOptionsSchema.safeParse({
-      filename,
-      directory,
+      filename: filename ?? destination?.filename,
+      directory: directory ?? destination?.directory,
       range: null,
     });
     if (!parsed.success) {
@@ -280,24 +305,20 @@ function ExportDialog({
           <>
             <label className="export-field">
               Quality
-              <select
-                aria-label="Quality"
+              <SelectMenu<ExportQuality>
+                label="Quality"
                 value={quality}
-                onChange={(event) =>
-                  setQuality(ExportQualitySchema.parse(event.target.value))
-                }
-              >
-                {exportQualities.map((value) => (
-                  <option key={value} value={value}>
-                    {value[0].toUpperCase() + value.slice(1)}
-                  </option>
-                ))}
-              </select>
+                onChange={setQuality}
+                options={exportQualities.map((value) => ({
+                  value,
+                  label: value[0].toUpperCase() + value.slice(1),
+                }))}
+              />
             </label>
             <label className="export-field">
               File name
               <input
-                value={filename}
+                value={filename ?? destination?.filename ?? baseFilename}
                 onChange={(event) => setFilename(event.target.value)}
                 required
               />
@@ -305,22 +326,43 @@ function ExportDialog({
             <label className="export-field">
               Location
               <input
-                value={directory}
-                disabled={loading}
+                value={directory ?? destination?.directory ?? ""}
+                disabled={!destination}
                 onChange={(event) => setDirectory(event.target.value)}
                 placeholder="Absolute folder path"
                 required
               />
             </label>
             <p className="export-hint">
-              Existing files are kept. Choose a new name for each export.
+              Existing files are kept. A free name is suggested for this folder.
             </p>
+            {destinationError && (
+              <p className="export-error" role="alert">
+                {destinationError}
+              </p>
+            )}
           </>
         ) : (
           <>
             <dl className="export-summary">
               <dt>Quality</dt>
               <dd className="export-quality">{job.quality}</dd>
+              {job.status === "complete" && job.sizeBytes !== null && (
+                <>
+                  <dt>File size</dt>
+                  <dd className="mono">
+                    {new Intl.NumberFormat(undefined, {
+                      style: "unit",
+                      unit:
+                        job.sizeBytes >= 1_000_000 ? "megabyte" : "kilobyte",
+                      maximumFractionDigits: 1,
+                    }).format(
+                      job.sizeBytes /
+                        (job.sizeBytes >= 1_000_000 ? 1_000_000 : 1_000),
+                    )}
+                  </dd>
+                </>
+              )}
             </dl>
             <p className="export-path">{job.outputPath}</p>
             {active || job.status === "complete" ? (
@@ -422,7 +464,7 @@ function ExportDialog({
             </button>
             <button
               className="primary-button"
-              disabled={loading || !timeline || !frames}
+              disabled={loading || !!destinationError || !timeline || !frames}
               onClick={submit}
             >
               Export MP4
