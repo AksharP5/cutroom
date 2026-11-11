@@ -1,4 +1,4 @@
-import type { ExportStage } from "../../shared/export";
+import type { ExportStage } from "./export";
 
 export interface ExportRate {
   code: ExportStage["code"];

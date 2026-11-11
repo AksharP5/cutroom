@@ -16,7 +16,11 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
   return {
     name,
     readOnly: tool.annotations?.readOnlyHint === true,
-    projectScoped: projectId !== undefined && !isSchemaOptional(projectId),
+    // Export writes a chosen output folder, beyond the project's editable files.
+    projectScoped:
+      name !== "export_start" &&
+      projectId !== undefined &&
+      !isSchemaOptional(projectId),
   };
 });
 const editTools = new Set(

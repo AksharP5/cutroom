@@ -12,7 +12,12 @@ import {
   claudeEditPermission,
 } from "../src/server/agents/tool-permissions";
 
-const unscoped = ["project_create", "project_import"];
+const unscoped = [
+  "project_create",
+  "project_import",
+  "export_start",
+  "export_cancel",
+];
 const reads = [
   "projects_list",
   "project_read",
@@ -22,6 +27,7 @@ const reads = [
   "transcription_status",
   "history_list",
   "review_list",
+  "export_status",
   "timeline_read",
   "timeline_view",
 ];
@@ -76,6 +82,8 @@ test("native permission rules match every tool advertised over MCP", async () =>
     expect(claudeToolPermissions(true).settings.permissions.ask).toEqual([
       "mcp__cutroom_studio__project_create",
       "mcp__cutroom_studio__project_import",
+      "mcp__cutroom_studio__export_start",
+      "mcp__cutroom_studio__export_cancel",
     ]);
     if ("rules" in claudeEditPermission)
       expect(

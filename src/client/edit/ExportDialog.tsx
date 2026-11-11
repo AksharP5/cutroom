@@ -5,6 +5,7 @@ import {
   ExportOptionsSchema,
   ExportDestinationSchema,
   exportRange,
+  exportFilename,
 } from "../../shared/export";
 import type { ExportDestination, ExportQuality } from "../../shared/export";
 import { api } from "../api";
@@ -12,9 +13,14 @@ import { Modal } from "../components/Modal";
 import { SelectMenu } from "../components/SelectMenu";
 import { hint, useKeymap } from "../keymap";
 import { useWorkspace } from "../workspace";
-import { cancelExport, exportActive, exportProject, useExport } from "./export";
+import {
+  cancelExport,
+  exportActive,
+  exportProject,
+  observeExports,
+  useExport,
+} from "./export";
 import type { ExportJob } from "./export";
-import { estimateExportStage } from "./exportEstimate";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { useTimeline } from "./timeline";
 import "./export.css";
@@ -33,8 +39,7 @@ function JobProgress({ job }: { job: ExportJob }) {
     return () => window.clearInterval(timer);
   }, [active]);
   const elapsed = (job.finishedAt ?? now) - job.startedAt;
-  const remaining =
-    job.status === "rendering" ? estimateExportStage(job.rate, now) : null;
+  const remaining = job.status === "rendering" ? job.estimate : null;
   return (
     <div className="export-progress">
       <div className="export-progress-label">
@@ -88,6 +93,12 @@ export function ExportControl({
   projectName: string;
 }) {
   const [open, setOpen] = useState(false);
+  const ready = useTimeline(
+    (state) => state.projectId === projectId && state.view !== null,
+  );
+  useEffect(() => {
+    if (ready) return observeExports(projectId);
+  }, [projectId, ready]);
   const job = useExport((state) => state.job);
   const active = exportActive(job);
   const show = () => setOpen(true);
@@ -148,12 +159,7 @@ function ExportDialog({
     timeline ? defaultExportRange(timeline) : "timeline",
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
-  const baseFilename = `${
-    projectName
-      .replace(/[/\\\x00-\x1f]/g, "-")
-      .trim()
-      .slice(0, 196) || "Cut"
-  }.mp4`;
+  const baseFilename = exportFilename(projectName);
   const [filename, setFilename] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
   const [destination, setDestination] = useState<ExportDestination | null>(
