@@ -708,6 +708,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   // Esc cancels before any other shortcut hears it. Modifier changes redraw a stationary drag.
   useEffect(() => {
+    const cancel = () => end("cancel");
     const key = (event: KeyboardEvent) => {
       if (gesture.current.phase === "idle") return;
       if (event.key === "Escape" && event.type === "keydown") {
@@ -721,9 +722,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     };
     document.addEventListener("keydown", key, true);
     document.addEventListener("keyup", key, true);
+    window.addEventListener("blur", cancel);
     return () => {
       document.removeEventListener("keydown", key, true);
       document.removeEventListener("keyup", key, true);
+      window.removeEventListener("blur", cancel);
       end("cancel");
     };
   }, []);
@@ -844,6 +847,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         end("release");
       },
       onPointerCancel: () => end("cancel"),
+      onLostPointerCapture: () => end("cancel"),
       onPointerLeave: () => {
         if (gesture.current.phase === "idle") {
           hoveredMix.current?.removeAttribute("data-hover");

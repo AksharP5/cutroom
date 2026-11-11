@@ -52,8 +52,8 @@ export function Viewer({
       if (!element) return;
       const labels = editPicture()?.labels ?? [];
       element.hidden = labels.length !== 2;
-      Array.from(element.children).forEach((child, index) => {
-        child.textContent = labels[index] ?? "";
+      element.querySelectorAll("span").forEach((child, index) => {
+        child.textContent = (labels[index] ?? "").replace(" ", "\n");
       });
     };
     show();
@@ -312,8 +312,12 @@ export function Viewer({
           );
         })}
         <div ref={editLabels} className="edit-edge-labels" hidden>
-          <span />
-          <span />
+          <div>
+            <span />
+          </div>
+          <div>
+            <span />
+          </div>
         </div>
       </div>
       <NoteLayer
