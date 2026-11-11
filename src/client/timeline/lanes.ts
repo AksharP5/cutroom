@@ -239,8 +239,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
         written.current.set(element, held);
         element.style.transform = clipLabel === undefined ? held : move;
         element.toggleAttribute("data-held", at !== undefined);
-        // The outline's brackets keep their width while the outline stretches.
-        if (clipOutline !== undefined)
+        // Brackets and an edit's translation follow the held clip's scale.
+        if (clipLabel === undefined)
           element.style.setProperty("--k", String(at?.scale ?? 1));
         // A name is not stretched; a shortened clip shows as much of it as still fits.
         if (clipLabel !== undefined)

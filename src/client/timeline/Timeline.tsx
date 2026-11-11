@@ -801,11 +801,7 @@ export function Timeline({
   return (
     <div className="tl">
       <div className="tl-scroll" ref={scroller}>
-        <div
-          className="tl-grid"
-          ref={grid}
-          style={{ "--frames": frames, "--span": Math.max(1, frames) }}
-        >
+        <div className="tl-grid" ref={grid} style={{ "--frames": frames }}>
           <div className="tl-corner">
             <button
               className="tl-zoom-step"
@@ -980,6 +976,7 @@ export function Timeline({
                         aria-label="Recording voiceover take"
                         style={{
                           "--s": recording.start,
+                          "--d": Math.max(1, frames),
                           top: row.top,
                           height: row.height,
                         }}

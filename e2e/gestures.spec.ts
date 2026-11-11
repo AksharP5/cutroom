@@ -65,6 +65,7 @@ async function open(
       "settled",
     );
     // Clips still sliding after the last edit are not yet where a frame is.
+    await expect(lanes).not.toHaveAttribute("data-sliding");
     await expect
       .poll(() =>
         lanes.evaluate(
@@ -871,13 +872,10 @@ test("a Media-panel drag during a pending Fit keeps its scale and aimed drop fra
     "--s",
     "390",
   );
-  await expect
-    .poll(() =>
-      timeline
-        .locator('[data-clip="shot-4"]')
-        .evaluate((element) => element.getAnimations().length),
-    )
-    .toBeGreaterThan(0);
+  await expect(timeline.locator(".tl-lanes")).toHaveAttribute(
+    "data-sliding",
+    "",
+  );
   await expect(grid).toHaveAttribute("data-refit", "pending");
   await startMediaDrag(page, row);
   await expect(grid).toHaveAttribute("data-gesturing", "");
@@ -892,6 +890,9 @@ test("a Media-panel drag during a pending Fit keeps its scale and aimed drop fra
   await page.mouse.move(target.x, target.y, { steps: 10 });
   await expect(timeline.locator(".tl-ghost")).toBeVisible();
   // Cross the edit's actual animation boundary with the native drag still held.
+  await expect(timeline.locator(".tl-lanes")).not.toHaveAttribute(
+    "data-sliding",
+  );
   await expect
     .poll(() =>
       grid.evaluate(
@@ -941,6 +942,9 @@ test("a ruler scrub holds a pending Fit until pointer release", async ({
   await page.mouse.move(target.x, target.y);
   await page.mouse.down();
   await expect(grid).toHaveAttribute("data-gesturing", "");
+  await expect(timeline.locator(".tl-lanes")).not.toHaveAttribute(
+    "data-sliding",
+  );
   await expect
     .poll(() =>
       grid.evaluate(
@@ -1004,6 +1008,7 @@ test("an external file drag freezes Fit while over the timeline and releases on 
   });
   await lanes.dispatchEvent("dragenter", { dataTransfer });
   await expect(grid).toHaveAttribute("data-gesturing", "");
+  await expect(lanes).not.toHaveAttribute("data-sliding");
   await expect
     .poll(() =>
       grid.evaluate(

@@ -20,7 +20,7 @@
 .vo-take-region {
   position: absolute;
   left: calc(var(--s) / var(--span) * 100%);
-  width: 100%;
+  width: calc(var(--d) / var(--span) * 100%);
   background: var(--clip-vo-body);
   border-top: var(--stroke-rail) solid var(--danger);
   transform-origin: left;

@@ -11,6 +11,7 @@ import { expect, test } from "./fixtures";
 const exec = promisify(execFile);
 
 async function settledPpf(page: Page) {
+  await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
   await expect(page.locator(".tl-grid")).toHaveAttribute(
     "data-refit",
     "settled",
@@ -445,6 +446,7 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
     edge: "start" | "end",
   ) => {
     const clip = page.locator(`[data-clip="${clipId}"]`);
+    await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
     await expect
       .poll(() => clip.evaluate((element) => element.getAnimations().length))
       .toBe(0);

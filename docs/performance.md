@@ -164,6 +164,29 @@ On the same host, main passed the old one-run gate both before and after all 158
 
 [Raw timings, matching worst-frame trace excerpts and compressed traces](https://github.com/AksharP5/cutroom/tree/pr-assets/timeline-frame-rate) include browser, renderer and viewport metadata. The separate profiled 400-clip pass had a worst frame of 104.7 ms before and 84.8 ms after. Those screenshots plot the actual Chromium events and source-map locations; the tables use untraced runs.
 
+### First ripple after loading
+
+On November 11, 2026, production builds of `6e6094c` and the first-ripple fix ran on the same host, Bun 1.4.4, installed Chromium 155.0.8059.84 with SwiftShader, at 1720x1050. Each build had three fresh browser/backend sessions, with three interaction runs per size in each session. The table shows the median of the three session medians of per-run maximum frame gaps, in milliseconds.
+
+| Gesture | 400 clips, before / after | 500 clips, before / after |
+| ------- | ------------------------: | ------------------------: |
+| key     |               62.1 / 64.4 |               57.4 / 61.8 |
+| wheel   |               46.2 / 48.3 |               58.1 / 55.1 |
+| ripple  |               67.2 / 59.1 |               87.2 / 62.4 |
+| undo    |               55.4 / 50.1 |               67.7 / 54.9 |
+| redo    |               58.1 / 56.6 |               72.1 / 55.1 |
+| fit     |               26.5 / 22.2 |               32.1 / 29.7 |
+
+The 500-clip ripple median fell from 87.2 to 62.4 ms. The three after-session ripple medians were 60.1/49.1/59.1 ms at 400 clips and 62.4/50.7/77.4 ms at 500. First-ripple maxima were 57.4/43.7/77.2 and 62.6/67.3/77.4 ms respectively. The key-zoom results do not show a speedup. The 150 ms budget and the workload are unchanged.
+
+Separate one-run traces found the first 400/500-clip ripple frame fell from 82.2/97.3 to 50.0/60.3 ms. Its largest style pass still covered 782/982 elements, since this edit moves almost every clip, but fell from 31.0/35.3 to 9.2/13.2 ms. Layout in that frame fell from 14.6/17.3 to 10.9/14.0 ms. The worst remaining ripple gaps were later, at 317/402 ms after input: 61.0/65.8 ms, with a largest style pass of 2/41 elements taking 0.126/0.265 ms and total layout of 0.803/0 ms. Traced frame times include profiling overhead.
+
+Clip positions now divide by a fixed coordinate span, while only the grid uses the changing project length. Layout containment keeps that coordinate box out of the scroll extent. Edit motion writes moved clips' translations in one finite animation-frame callback instead of starting a Web Animation per element. It calculates easing once per edit, adds overlapping slides, and uses the document animation clock shared with Fit. The recording indicator keeps its own project-length width.
+
+Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture the settled Fit. The sampled clip bounds match exactly at both points. The mean RGB channel difference is 0.109/255 mid-slide and 0.021/255 after Fit, with small rasterization differences visible in the raw comparison. Existing browser checks also cover interrupted Fit, overlapping undo, held trims, and recording against the playhead.
+
+[Every session's median maximum and p95, raw frame samples, traces, capture method, and matching images](https://github.com/AksharP5/cutroom/tree/pr-assets/ripple-first-edit) are retained separately from the source branch. Reproduce with `CUTROOM_PERF_DIR=... bun run test:perf`; set `CUTROOM_PERF_TRACE=1 CUTROOM_PERF_RUNS=1` for the separate profiling pass.
+
 ## Position preview
 
 The preview observes only the selected clip with a non-zero Position, after seek/pause and at most three times per second during playback. Seek observations coalesce to one per animation frame after the latest picture settles. A paused video is observed through its displayed canvas, since the bridge hides its native surface. The observer reads styles without inserting a DOM probe. With nothing selected it does not inspect clip styles or run an observation timer. Position commits do not compile or render a test document.
