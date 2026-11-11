@@ -1,0 +1,56 @@
+{
+  "label": "final",
+  "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)",
+  "viewport": {
+    "width": 1720,
+    "height": 1050
+  },
+  "fitPpf": 0.06661111111111111,
+  "clips": 500,
+  "results": [
+    {
+      "run": 0,
+      "kind": "zoom",
+      "frames": 909,
+      "fps": 59.47940795416713,
+      "p95Ms": 18.700000002980232,
+      "lateFrames": 32,
+      "worstMs": 64.8999999910593,
+      "rafP95Ms": 16.799999999999272,
+      "ppf": 0.06661111111111111
+    },
+    {
+      "run": 0,
+      "kind": "scroll",
+      "frames": 899,
+      "fps": 59.5372124134212,
+      "p95Ms": 17.80000001192093,
+      "lateFrames": 15,
+      "worstMs": 47.5,
+      "rafP95Ms": 16.700000000004366,
+      "ppf": 1.9999999999999978
+    },
+    {
+      "run": 1,
+      "kind": "zoom",
+      "frames": 909,
+      "fps": 59.667594391616625,
+      "p95Ms": 18.80000001192093,
+      "lateFrames": 32,
+      "worstMs": 57.20000000298023,
+      "rafP95Ms": 16.799999999995634,
+      "ppf": 0.06661111111111111
+    },
+    {
+      "run": 1,
+      "kind": "scroll",
+      "frames": 899,
+      "fps": 59.99813131516563,
+      "p95Ms": 17.100000008940697,
+      "lateFrames": 1,
+      "worstMs": 21,
+      "rafP95Ms": 16.70000000001164,
+      "ppf": 1.9999999999999978
+    }
+  ]
+}
