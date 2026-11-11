@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
-import { localMediaPath } from "../../shared/media";
+import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { isMissing, projectPath, readSource } from "./store";
@@ -149,11 +149,10 @@ export async function compositionVersions(
           const absolute = await projectPath(project, path);
           const info = await stat(absolute);
           return {
-            fingerprint: JSON.stringify([
+            fingerprint: fileFingerprint(
               relative(project.path, absolute).replaceAll("\\", "/"),
-              info.size,
-              info.mtimeMs,
-            ]),
+              info,
+            ),
             ...(/\.(?:css|[cm]?[jt]sx?)$/i.test(path) &&
             info.isFile() &&
             info.size <= 10 * 1024 * 1024

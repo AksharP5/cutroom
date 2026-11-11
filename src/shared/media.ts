@@ -1,3 +1,11 @@
+/** Stat identity shared by review marks, media caches, and browser URLs. No media bytes are read. */
+export function fileFingerprint(
+  path: string,
+  info: { size: number; mtimeMs: number },
+) {
+  return JSON.stringify([path, info.size, info.mtimeMs]);
+}
+
 /**
  * The project file a `src` in `sourceFile` names, relative to the project root; null for remote
  * media and malformed escapes. A `src` is always taken relative to its file's folder, leading

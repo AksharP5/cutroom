@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import type { Project } from "../../shared/project";
-import { localMediaPath } from "../../shared/media";
+import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { projectPath } from "../projects/store";
 import { localMediaInputOptions } from "../media/input";
 
@@ -22,7 +22,7 @@ interface Probe {
  * including files ffprobe cannot read (null). Nothing is kept while ffprobe is missing, so those
  * files are measured once it is available.
  */
-const probes = new Map<string, Probe | null>();
+const probes = new Map<string, { version: string; result: Probe | null }>();
 
 async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   const child = Bun.spawn(
@@ -78,12 +78,16 @@ export async function mediaFacts(
       if (path === null) return;
       const info = await stat(path).catch(() => null);
       if (!info?.isFile()) return;
-      const key = `${path}\0${info.mtimeMs}\0${info.size}`;
-      if (!probes.has(key)) {
+      const version = fileFingerprint(path, info);
+      let cached = probes.get(path);
+      if (cached?.version !== version) {
         if (!ffprobe) return;
-        probes.set(key, await probe(ffprobe, path));
+        cached = { version, result: await probe(ffprobe, path) };
+        probes.delete(path);
+        probes.set(path, cached);
+        if (probes.size > 256) probes.delete(probes.keys().next().value!);
       }
-      const result = probes.get(key);
+      const result = cached.result;
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);

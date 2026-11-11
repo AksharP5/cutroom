@@ -75,7 +75,7 @@ export function createBodies(
       opacity: Number(token("--clip-disabled-opacity")),
     },
   };
-  const media = createTimelineMedia(projectId, composition, schedule);
+  let media = createTimelineMedia(projectId, composition, schedule);
 
   let scene: BodyScene | null = null;
   let view: ViewState | null = null;
@@ -457,6 +457,13 @@ export function createBodies(
   }
 
   return {
+    versions(next: Readonly<Record<string, string | null>>) {
+      if (!media.updateVersions(next)) return;
+      media.dispose();
+      media = createTimelineMedia(projectId, composition, schedule, next);
+      paint();
+      if (settled) media.wantFrames(wanted);
+    },
     /**
      * Clips an edit moved slide from where they were drawn, `x` and `y` CSS pixels away, as their
      * boxes do. Slides that overlap add up, as the boxes' animations do.
