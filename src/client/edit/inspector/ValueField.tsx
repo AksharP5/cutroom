@@ -102,7 +102,11 @@ export function ValueField({
           current.x = event.clientX;
           current.distance +=
             delta *
-            ((unit === "gain" ? event.altKey : event.shiftKey) ? 0.1 : 1);
+            ((unit === "gain" ? event.altKey : event.shiftKey)
+              ? unit === "pixels"
+                ? 10
+                : 0.1
+              : 1);
           current.moved = true;
           current.next = Math.min(
             max,
@@ -127,11 +131,13 @@ export function ValueField({
           ref={input}
           id={id}
           title={
-            allowAuto
-              ? "Auto uses source styles. Type a percentage to set static inline opacity."
-              : unit === "gain"
-                ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
-                : undefined
+            unit === "pixels"
+              ? "Offset in composition pixels. Drag the label or use Up/Down. Shift for 10 pixels."
+              : allowAuto
+                ? "Auto uses source styles. Type a percentage to set static inline opacity."
+                : unit === "gain"
+                  ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
+                  : undefined
           }
           aria-describedby={hint ? `${id}-hint` : undefined}
           type="text"

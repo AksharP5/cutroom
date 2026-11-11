@@ -786,3 +786,34 @@ test("media without data-duration takes its length from the measured source", ()
     ]),
   ).toThrow("past the end of its source");
 });
+
+test("position captures both native baselines and clearing one axis keeps the other offset exact", () => {
+  const html = composition(
+    '<div id="title" data-start="0" data-duration="2" data-x="12.25" data-y="-7.5">Title</div>',
+  );
+  const horizontal = edit(html, [{ type: "setClip", clipId: "title", x: 40 }]);
+  expect(horizontal).toContain('data-x="52.25"');
+  expect(horizontal).toContain('data-y="-7.5"');
+  expect(horizontal).toContain('data-hf-edit-base-x="12.25"');
+  expect(horizontal).toContain('data-hf-edit-base-y="-7.5"');
+  const both = edit(horizontal, [{ type: "setClip", clipId: "title", y: -10 }]);
+  const vertical = edit(both, [{ type: "setClip", clipId: "title", x: null }]);
+  expect(vertical).toContain('data-x="12.25"');
+  expect(vertical).toContain('data-y="-17.5"');
+  expect(vertical).toContain('data-hf-edit-base-x="12.25"');
+  expect(
+    parseComposition(vertical, emptyTimelineSettings()).timeline.clips[0],
+  ).toMatchObject({ x: null, y: -10 });
+  expect(edit(vertical, [{ type: "setClip", clipId: "title", y: 0 }])).toBe(
+    html,
+  );
+  // Upstream documents may carry just one marker; the runtime still applies data-x on the other axis.
+  expect(
+    parseComposition(
+      composition(
+        '<div id="title" data-start="0" data-duration="2" data-x="12.25" data-y="-17.5" data-hf-edit-base-y="-7.5"></div>',
+      ),
+      emptyTimelineSettings(),
+    ).timeline.clips[0],
+  ).toMatchObject({ x: 12.25, y: -10 });
+});

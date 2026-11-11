@@ -467,6 +467,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         label: input.label ?? null,
         volume: input.volume ?? null,
         opacity: null,
+        x: null,
+        y: null,
         fadeIn: 0,
         fadeOut: 0,
         automation: null,
@@ -597,6 +599,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "setClip": {
       const target = find(command.clipId);
+      if (
+        isAudioKind(target.kind) &&
+        (command.x !== undefined || command.y !== undefined)
+      )
+        throw new TimelineError("unsupported", "Audio clips have no position.");
       const fadeIn = command.fadeIn ?? target.fadeIn;
       const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
@@ -612,6 +619,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...(command.automation !== undefined && {
                   automation: command.automation,
                 }),
+                ...(command.x !== undefined && { x: command.x }),
+                ...(command.y !== undefined && { y: command.y }),
                 ...(command.opacity !== undefined && {
                   opacity: command.opacity,
                 }),

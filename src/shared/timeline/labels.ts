@@ -46,6 +46,26 @@ export function editLabel(
         return `Added ${command.clip.kind} at ${time(command.at)}`;
       case "setClip": {
         const parts: string[] = [];
+        if (command.x === null && command.y === null)
+          parts.push("Reset position");
+        else
+          for (const axis of ["x", "y"] as const) {
+            const value = command[axis];
+            if (value === undefined) continue;
+            if (value === null) {
+              parts.push(`Reset position ${axis.toUpperCase()}`);
+              continue;
+            }
+            const before =
+              timeline.clips.find((clip) => clip.id === command.clipId)?.[
+                axis
+              ] ?? 0;
+            const delta = Number((value - before).toFixed(6));
+            if (delta)
+              parts.push(
+                `Moved ${Math.abs(delta)} px ${axis === "x" ? (delta > 0 ? "right" : "left") : delta > 0 ? "down" : "up"}`,
+              );
+          }
         if (command.opacity !== undefined)
           parts.push(
             `Set opacity to ${command.opacity === null ? "Auto" : formatPercent(command.opacity)}`,

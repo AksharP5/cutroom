@@ -6,6 +6,7 @@ import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
+import { readPosition, positionAttributes } from "./position";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -445,6 +446,8 @@ export function parseComposition(
         null,
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
+      x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
+      y: isAudioKind(kind) ? null : readPosition(element.attrs, "y"),
       fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
       fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
@@ -714,6 +717,8 @@ function clipChanges(
     ]);
   if (before.playbackRate !== after.playbackRate)
     changes.push(["data-playback-rate", String(after.playbackRate)]);
+  if (before.x !== after.x || before.y !== after.y)
+    changes.push(...positionAttributes(element.attrs, after));
   if (before.opacity !== after.opacity)
     changes.push(["style", writeOpacity(element.attrs.style, after.opacity)]);
   if (before.volume !== after.volume)

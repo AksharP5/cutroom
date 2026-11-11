@@ -43,6 +43,15 @@ export function Inspector({ projectId }: { projectId: string }) {
   const root = useRef<HTMLElement>(null);
   const [changesOpen, setChangesOpen] = useState(true);
   const [audioOpen, setAudioOpen] = useState(true);
+  const [transformOpen, setTransformOpen] = useState(
+    () =>
+      window.innerHeight >=
+      Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--breakpoint-short",
+        ),
+      ),
+  );
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
@@ -235,6 +244,48 @@ export function Inspector({ projectId }: { projectId: string }) {
               <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
+          {!isAudioKind(clip.kind) && (
+            <details
+              open={transformOpen}
+              onToggle={(event) => setTransformOpen(event.currentTarget.open)}
+              className="inspector-section"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Transform
+              </summary>
+              {(["x", "y"] as const).map((axis) => (
+                <ValueField
+                  key={`${clip.id}:${axis}`}
+                  label={`Position ${axis.toUpperCase()}`}
+                  value={clip[axis] ?? 0}
+                  unit="pixels"
+                  min={-Infinity}
+                  fps={timeline.fps}
+                  disabled={track?.track.locked}
+                  onCommit={(value) => {
+                    void editTimeline(projectId, "Edit position", () => [
+                      { type: "setClip", clipId: clip.id, [axis]: value },
+                    ]);
+                  }}
+                />
+              ))}
+              <button
+                type="button"
+                aria-label="Reset position"
+                disabled={
+                  (clip.x === null && clip.y === null) || track?.track.locked
+                }
+                onClick={() => {
+                  void editTimeline(projectId, "Reset position", () => [
+                    { type: "setClip", clipId: clip.id, x: null, y: null },
+                  ]);
+                }}
+              >
+                Reset
+              </button>
+            </details>
+          )}
           {subject?.audio.map((audio) => {
             const fades = clipFades(audio);
             const locked = timeline.tracks.find(
