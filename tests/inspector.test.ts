@@ -15,7 +15,7 @@ import {
   timingCommands,
 } from "../src/client/edit/inspector/fields";
 import { shownChanges } from "../src/client/edit/inspector/changes";
-import { editLabel } from "../src/client/edit/labels";
+import { editLabel } from "../src/shared/timeline/labels";
 import { projectFixture } from "./project-fixture";
 
 const fps = { num: 30000, den: 1001 };

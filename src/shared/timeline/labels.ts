@@ -1,9 +1,13 @@
-import { toFrames } from "../../shared/timeline/apply";
-import type { Command, Timeline } from "../../shared/timeline/schema";
+import { audioGainToDb } from "@hyperframes/core/audio-gain";
+import { toFrames } from "./apply";
+import type { Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
-import { formatField } from "./inspector/fields";
 
-/** Name the commands once, when an edit is made, for both history and the inspector. */
+/** Percentages keep every digit the engine stores (six decimals of the fraction). */
+export const formatPercent = (value: number) =>
+  `${Number((value * 100).toFixed(4))}%`;
+
+/** Name the commands once, when an edit is made, for history, the inspector and agent edits. */
 export function editLabel(
   commands: Command[],
   timeline: Timeline,
@@ -41,7 +45,7 @@ export function editLabel(
         const parts: string[] = [];
         if (command.opacity !== undefined)
           parts.push(
-            `Set opacity to ${formatField(command.opacity, "percent", timeline.fps)}`,
+            `Set opacity to ${command.opacity === null ? "Auto" : formatPercent(command.opacity)}`,
           );
         if (command.label !== undefined)
           parts.push(
@@ -49,10 +53,18 @@ export function editLabel(
               ? "Cleared clip name"
               : `Renamed to ${command.label}`,
           );
-        if (command.volume !== undefined)
+        if (command.volume !== undefined) {
+          const db = audioGainToDb(command.volume ?? 1);
           parts.push(
-            `Set volume to ${formatField(command.volume, "percent", timeline.fps)}`,
+            command.volume === 0
+              ? "Silenced clip"
+              : `Set gain to ${db > 0 ? "+" : ""}${db.toFixed(1)} dB`,
           );
+        }
+        if (command.fadeIn !== undefined)
+          parts.push(`Set fade in to ${time(command.fadeIn)}`);
+        if (command.fadeOut !== undefined)
+          parts.push(`Set fade out to ${time(command.fadeOut)}`);
         if (command.enabled !== undefined)
           parts.push(command.enabled ? "Enabled clip" : "Disabled clip");
         return parts.join("; ");
@@ -60,9 +72,7 @@ export function editLabel(
       case "setTiming": {
         const parts: string[] = [];
         if (command.playbackRate !== undefined)
-          parts.push(
-            `Set speed to ${formatField(command.playbackRate, "percent", timeline.fps)}`,
-          );
+          parts.push(`Set speed to ${formatPercent(command.playbackRate)}`);
         if (command.mediaStart !== undefined)
           parts.push(
             `Set source in to ${time(toFrames(command.mediaStart, timeline.fps))}`,

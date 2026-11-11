@@ -13,7 +13,11 @@ import {
 } from "@phosphor-icons/react";
 import { useShallow } from "zustand/react/shallow";
 import { hint } from "../keymap";
-import { formatTimecode, parseTimecode, timecodeDigits } from "./timecode";
+import {
+  formatTimecode,
+  parseTimecode,
+  timecodeDigits,
+} from "../../shared/timeline/timecode";
 import { transport, useTransport, velocity } from "./transport";
 
 /** Writes the frame-driven parts of the bar straight to the DOM on every frame, without React. */

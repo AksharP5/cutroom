@@ -333,7 +333,15 @@ export const CommandBatchSchema = z.object({
     .describe(
       "Revision from the last timeline read; stale revisions are refused",
     ),
-  label: z.string().trim().min(1).max(120).default("Edit timeline"),
+  label: z
+    .string()
+    .trim()
+    .min(1)
+    .max(120)
+    .optional()
+    .describe(
+      "Past-tense summary the owner sees in history and the inspector, e.g. 'Moved the title 15 frames left'. Omit it to name the edit from its commands.",
+    ),
 });
 
 export const ClipEditSchema = z.object({

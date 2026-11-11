@@ -555,7 +555,15 @@ export function createReviewService(store: ProjectStore) {
               accepted: !actor,
             })),
         );
-        state.clipEdits = state.clipEdits.slice(-200);
+        // Unreviewed agent work never ages out of the ledger; only settled rows are trimmed.
+        const pending = (edit: (typeof state.clipEdits)[number]) =>
+          edit.by === "agent" && !edit.accepted;
+        const kept = new Set(
+          state.clipEdits.filter((edit) => !pending(edit)).slice(-200),
+        );
+        state.clipEdits = state.clipEdits.filter(
+          (edit) => pending(edit) || kept.has(edit),
+        );
         await writeState(project, state);
         return result;
       }),

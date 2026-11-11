@@ -11,7 +11,7 @@ import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
-import { formatTimecode } from "../timecode";
+import { formatTimecode } from "../../../shared/timeline/timecode";
 import { timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";

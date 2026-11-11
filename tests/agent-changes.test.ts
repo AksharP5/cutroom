@@ -215,3 +215,62 @@ test("two claimed notes own their individual edits, and accepting either clears 
     await fixture.close();
   }
 });
+
+test("an unlabelled agent edit is named from its commands, and unaccepted agent work outlives the ledger cap", async () => {
+  const fixture = await projectFixture();
+  const { store, review, app, request } = fixture;
+  app.route("/api/cutroom", createTimelineRoutes(store, review));
+  const project = await store.create({ name: "Ledger cap" });
+  const path = `/projects/${project.id}`;
+  // One agent-edited clip and 210 others, so a single owner batch writes more rows than the cap.
+  const clips = Array.from(
+    { length: 210 },
+    (_, index) =>
+      `<div id="c${index}" class="clip" data-start="0" data-duration="1" data-track-index="${index + 1}"></div>`,
+  ).join("");
+  await writeFile(
+    `${project.path}/index.html`,
+    `<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="1"><div id="title" class="clip" data-start="0" data-duration="1" data-track-index="0"></div>${clips}</main></body></html>`,
+  );
+  const read = async () =>
+    TimelineViewSchema.parse(await (await request(`${path}/timeline`)).json());
+  const send = async (commands: unknown[], agent: boolean) => {
+    const response = await app.request(`/api/cutroom${path}/commands`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(agent && { [AGENT_HEADER]: "external" }),
+      },
+      body: JSON.stringify({
+        expectedRevision: (await read()).revision,
+        ...(!agent && { label: "Renamed every clip" }),
+        commands,
+      }),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+  };
+  try {
+    await send([{ type: "setClip", clipId: "title", opacity: 0.5 }], true);
+    const named = (await read()).clipEdits?.find(
+      (edit) => edit.clipId === "title",
+    );
+    expect(named?.label).toBe("Set opacity to 50%");
+    await send(
+      Array.from({ length: 210 }, (_, index) => ({
+        type: "setClip",
+        clipId: `c${index}`,
+        label: `Clip ${index}`,
+      })),
+      false,
+    );
+    const view = await read();
+    expect(view.agentChanges).toEqual(["title"]);
+    expect(
+      view.clipEdits?.some(
+        (edit) => edit.clipId === "title" && edit.by === "agent",
+      ),
+    ).toBe(true);
+  } finally {
+    await fixture.close();
+  }
+});

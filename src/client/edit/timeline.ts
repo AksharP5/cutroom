@@ -21,9 +21,9 @@ import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
-import { formatTimecode } from "./timecode";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
-import { editLabel } from "./labels";
+import { editLabel } from "../../shared/timeline/labels";
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 

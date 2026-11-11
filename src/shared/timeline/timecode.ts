@@ -1,4 +1,4 @@
-import type { Fps } from "../../shared/timeline/schema";
+import type { Fps } from "./schema";
 
 /**
  * Timecode counts whole frames at the nominal rate (24 for 23.976, 30 for 29.97), as Resolve's

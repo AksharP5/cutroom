@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatTimecode, parseTimecode } from "../src/client/edit/timecode";
+import { formatTimecode, parseTimecode } from "../src/shared/timeline/timecode";
 
 const ntsc24 = { num: 24000, den: 1001 };
 const ntsc30 = { num: 30000, den: 1001 };

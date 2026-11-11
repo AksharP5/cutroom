@@ -11,7 +11,7 @@ import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
 import { actionFor, comboOf, keymap } from "../keymap";
 import { noteNumbers } from "../review";
-import { formatTimecode } from "./timecode";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import {
   committable,
   noNotes,
