@@ -1,5 +1,6 @@
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
+import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 
 interface PreviewWindow extends Window {
   __hf?: Window["__hf"] & {
@@ -139,6 +140,30 @@ function installPreviewBridge() {
               "The preview cannot confirm that it drew the frame.",
             );
           await win.__hfWaitForSeekCompletion();
+          // Seek completion can omit an unprepared video. Keep the live iframe until
+          // every visible native video has a decoded frame, including a new split piece.
+          for (;;) {
+            const videos = Array.from(
+              document.querySelectorAll("video"),
+            ).filter((video) =>
+              video.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+              }),
+            );
+            const failed = videos.find((video) => video.error);
+            if (failed)
+              throw new Error(
+                `The preview could not load ${failed.getAttribute("src")}.`,
+              );
+            if (
+              videos.every((video) => video.readyState >= 2 && !video.seeking)
+            )
+              break;
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+          }
           await paint();
           break;
         default:
@@ -162,12 +187,49 @@ export function withPreviewBridge(html: string) {
       : undefined;
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
-  const edits = [{ offset, text: `<script>${previewBridgeScript}</script>` }];
+  const edits = [
+    { offset, end: offset, text: `<script>${previewBridgeScript}</script>` },
+  ];
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
-  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
+      const rate = node.attrs.find(({ name }) => name === "data-fps");
+      const parsed = rate && parseFpsWithDefault(rate.value);
+      const nodeFps = parsed?.ok ? parsed.value.num / parsed.value.den : fps;
+      // The runtime snaps visibility to frames, but seeks media using raw seconds.
+      // Align those windows in served documents so rounded edit times cannot show
+      // a piece that the seek still considers to be in the future.
+      const timing = new Map(
+        node.attrs.map(({ name, value }) => [name, value]),
+      );
+      const start = Number(timing.get("data-start"));
+      const duration = Number(timing.get("data-duration"));
+      const end = timing.has("data-duration")
+        ? start + duration
+        : Number(timing.get("data-end"));
+      if (Number.isFinite(start)) {
+        const window = exportClipWindow(start, end, nodeFps);
+        for (const [name, value] of [
+          ["data-start", window.start],
+          ["data-duration", window.end - window.start],
+          ["data-end", window.end],
+        ] as const) {
+          const location = node.sourceCodeLocation?.attrs?.[name];
+          if (
+            location &&
+            Number.isFinite(value) &&
+            (window.start !== start || window.end !== end) &&
+            Number(timing.get(name)) !== value
+          )
+            edits.push({
+              offset: location.startOffset,
+              end: location.endOffset,
+              text: `${name}="${value}"`,
+            });
+        }
+      }
       if (
         (node.tagName === "audio" || node.tagName === "video") &&
         !node.attrs.some(({ name }) => name === "crossorigin")
@@ -176,11 +238,12 @@ export function withPreviewBridge(html: string) {
         if (start !== undefined)
           edits.push({
             offset: start + node.tagName.length + 1,
+            end: start + node.tagName.length + 1,
             text: ' crossorigin="anonymous"',
           });
       }
-      visit(node.childNodes);
-      if ("content" in node) visit(node.content.childNodes);
+      visit(node.childNodes, nodeFps);
+      if ("content" in node) visit(node.content.childNodes, nodeFps);
     }
   };
   visit(document.childNodes);
@@ -188,7 +251,7 @@ export function withPreviewBridge(html: string) {
     .sort((a, b) => b.offset - a.offset)
     .reduce(
       (source, edit) =>
-        source.slice(0, edit.offset) + edit.text + source.slice(edit.offset),
+        source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
       html,
     );
 }
