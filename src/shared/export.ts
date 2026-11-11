@@ -40,18 +40,21 @@ export const ExportStageSchema = z.object({
 });
 export type ExportStage = z.infer<typeof ExportStageSchema>;
 
-/** Marks are half-open in the engine. A lone mark never silently shortens the export. */
+/**
+ * Marks are half-open in the engine. A lone mark never silently shortens the export.
+ * Out past the end (left there by a ripple delete) stops at the end, as playback does.
+ */
 export function exportRange(
   timeline: Pick<Timeline, "range" | "duration">,
   choice: "timeline" | "marks",
 ) {
   if (timeline.duration <= 0) throw new Error("The timeline is empty.");
   if (choice === "timeline") return { start: 0, end: timeline.duration };
-  const { in: start, out: end } = timeline.range;
-  if (start === null || end === null)
+  const { in: start, out } = timeline.range;
+  if (start === null || out === null)
     throw new Error("Set both In and Out first.");
-  if (start >= end || end > timeline.duration)
-    throw new Error("In and Out must be inside the timeline.");
+  const end = Math.min(out, timeline.duration);
+  if (start >= end) throw new Error("In and Out must be inside the timeline.");
   return { start, end };
 }
 

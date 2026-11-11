@@ -15,7 +15,7 @@ import { useWorkspace } from "../workspace";
 import { cancelExport, exportActive, exportProject, useExport } from "./export";
 import type { ExportJob } from "./export";
 import { estimateExportStage } from "./exportEstimate";
-import { formatTimecode } from "./timecode";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { useTimeline } from "./timeline";
 import "./export.css";
 
@@ -166,17 +166,26 @@ function ExportDialog({
       current = false;
     };
   }, [projectId]);
-  const showingJob = job;
   const active = exportActive(job);
-  const fps = showingJob ? job.fps : timeline?.fps;
-  const size = showingJob ? job.size : composition;
-  const frames = showingJob
-    ? job.frames
-    : timeline &&
-        (choice === "timeline" ||
-          (timeline.range.in !== null && timeline.range.out !== null))
-      ? exportRange(timeline, choice)
-      : null;
+  const fps = job ? job.fps : timeline?.fps;
+  const size = job ? job.size : composition;
+  // A range that can't export is shown in the dialog, never thrown during render.
+  const range = ((): {
+    frames: { start: number; end: number } | null;
+    problem: string;
+  } => {
+    if (job) return { frames: job.frames, problem: "" };
+    if (!timeline) return { frames: null, problem: "" };
+    try {
+      return { frames: exportRange(timeline, choice), problem: "" };
+    } catch (problem) {
+      return {
+        frames: null,
+        problem: problem instanceof Error ? problem.message : String(problem),
+      };
+    }
+  })();
+  const frames = range.frames;
   const submit = () => {
     const parsed = ExportOptionsSchema.safeParse({
       filename,
@@ -211,10 +220,10 @@ function ExportDialog({
     <Modal title="Export" onClose={onClose}>
       <div className="export-body">
         <div className="export-title">
-          {showingJob ? job.name : projectName}
+          {job ? job.name : projectName}
           <span>MP4 · H.264 / AAC</span>
         </div>
-        {!showingJob && (
+        {!job && (
           <>
             <fieldset className="export-range">
               <legend>Range</legend>
@@ -244,7 +253,7 @@ function ExportDialog({
         )}
         {fps && frames && (
           <dl className="export-summary">
-            <dt>{showingJob ? "Range" : "Frames"}</dt>
+            <dt>{job ? "Range" : "Frames"}</dt>
             <dd className="mono">
               {formatTimecode(frames.start, fps)} →{" "}
               {formatTimecode(frames.end - 1, fps)}
@@ -253,18 +262,21 @@ function ExportDialog({
             <dd className="mono">
               {formatTimecode(frames.end - frames.start, fps)}
             </dd>
-            <>
-              <dt>Project</dt>
-              <dd className="mono">
-                {size?.width && size.height
-                  ? `${size.width} × ${size.height} · `
-                  : ""}
-                {Number((fps.num / fps.den).toFixed(3))} fps
-              </dd>
-            </>
+            <dt>Project</dt>
+            <dd className="mono">
+              {size?.width && size.height
+                ? `${size.width} × ${size.height} · `
+                : ""}
+              {Number((fps.num / fps.den).toFixed(3))} fps
+            </dd>
           </dl>
         )}
-        {!showingJob ? (
+        {range.problem && (
+          <p className="export-error" role="alert">
+            {range.problem}
+          </p>
+        )}
+        {!job ? (
           <>
             <label className="export-field">
               Quality
@@ -353,7 +365,7 @@ function ExportDialog({
         )}
       </div>
       <div className="modal-actions">
-        {showingJob ? (
+        {job ? (
           active ? (
             <>
               <button

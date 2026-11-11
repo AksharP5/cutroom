@@ -354,3 +354,36 @@ test("Cancel stops the real render and removes a named partial file", async ({
     404,
   );
 });
+
+test("Export explains a range it can't render instead of blanking the editor", async ({
+  page,
+  request,
+}) => {
+  const { project, errors } = await exportable(page, request);
+  const api = `/api/cutroom/projects/${project.id}`;
+  const source = SourceSchema.parse(
+    await (await request.get(`${api}/source`)).json(),
+  );
+  // Nothing on the timeline: there is no range to export.
+  const emptied = await request.put(`${api}/source`, {
+    data: {
+      path: "index.html",
+      expectedVersion: source.version,
+      content:
+        '<!doctype html><html><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-duration="0"></main></body></html>',
+    },
+  });
+  expect(emptied.ok()).toBeTruthy();
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("Shift+8");
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await expect(dialog.getByRole("alert")).toContainText(
+    "The timeline is empty.",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Export MP4" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("region", { name: "Viewer" })).toBeVisible();
+  expect(errors).toEqual([]);
+});

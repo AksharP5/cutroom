@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { z } from "zod";
 import { expect, test } from "./fixtures";
 
 const exec = promisify(execFile);
@@ -170,10 +171,23 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   await expect(
     page.frameLocator("iframe[data-live]").locator("#voice"),
   ).toHaveAttribute("data-volume", String(10 ** (6 / 20)));
-  const download = page.waitForEvent("download", { timeout: 90_000 });
   await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await dialog.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 90_000 });
   const output = info.outputPath("mix.mp4");
-  await (await download).saveAs(output);
+  const exported = await request.get(`/api/render/${jobId}/download`);
+  expect(exported.ok()).toBeTruthy();
+  await writeFile(output, await exported.body());
+  await dialog.getByRole("button", { name: "Close dialog" }).click();
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
   const frame = page

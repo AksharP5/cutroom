@@ -32,11 +32,17 @@ test("empty, reversed and out-of-bounds ranges cannot start an export", () => {
   for (const range of [
     { in: 90, out: 30 },
     { in: 30, out: 30 },
-    { in: 30, out: 301 },
+    { in: 300, out: 400 },
   ])
     expect(() => exportRange({ duration: 300, range }, "marks")).toThrow(
       "inside",
     );
+});
+
+test("an Out left past the end by a ripple delete stops at the end, as playback does", () => {
+  expect(
+    exportRange({ duration: 300, range: { in: 30, out: 450 } }, "marks"),
+  ).toEqual({ start: 30, end: 300 });
 });
 
 test("export names cannot direct writes to other files", () => {

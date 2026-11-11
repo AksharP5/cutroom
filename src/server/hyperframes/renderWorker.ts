@@ -60,8 +60,9 @@ try {
     await renderSpan(
       request.projectDir,
       {
-        // The version-checked local adapter supplies the exact request fps to
-        // the native planner, whose public distributed type is integer-only.
+        // Placeholders the public type requires. The planner takes the size from
+        // the composition, and the version-checked local adapter supplies the
+        // exact request fps, which the public type can only express as an integer.
         fps: 30,
         width: 1920,
         height: 1080,

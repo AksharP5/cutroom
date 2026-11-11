@@ -87,6 +87,8 @@ export function createRenderWorkers(
         : options.outputPath;
       let temporary: string | undefined;
       let staging: string | undefined;
+      /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
+      let publishing = false;
       const isCancelling = () => job.state.status === "cancelling";
       const signalWorker = (signal: NodeJS.Signals) => {
         if (!worker) return;
@@ -110,7 +112,7 @@ export function createRenderWorkers(
         }, configuration.stopTimeoutMs ?? 6000);
       };
       const cancel = () => {
-        if (job.state.status === "running") {
+        if (job.state.status === "running" && !publishing) {
           job.transition({
             status: "cancelling",
             progress: job.state.progress,
@@ -266,9 +268,11 @@ export function createRenderWorkers(
         if (!completed || exitCode !== 0)
           throw new Error(
             failure ||
-              stderr.trim() ||
+              // The tail names the cause; the full log is far too long for a dialog.
+              stderr.trim().split("\n").slice(-2).join("\n") ||
               `Renderer exited with code ${exitCode}.`,
           );
+        publishing = true;
         await link(rendered, outputPath).catch((error: unknown) => {
           const code =
             error instanceof Error && "code" in error ? String(error.code) : "";
@@ -285,7 +289,6 @@ export function createRenderWorkers(
             durationMs: Math.round(performance.now() - started),
           }),
         );
-        if (isCancelling()) return;
       })()
         .catch((error: unknown) => {
           failure = error instanceof Error ? error.message : String(error);
@@ -317,7 +320,7 @@ export function createRenderWorkers(
                   ? remove(staging)
                   : Promise.reject(
                       new Error(
-                        `The export folder moved during the export, so its hidden ${basename(staging)} folder could not be removed.`,
+                        `The export folder moved during the export, so its hidden ${basename(staging)} folder, which may hold the render, could not be removed.`,
                       ),
                     ),
               );
@@ -330,7 +333,13 @@ export function createRenderWorkers(
               );
             if (failures.length) throw new Error(failures.join("\n"));
           } catch (error) {
-            cleanupFailure = `Render cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+            // Keep the render's own cause first; the cleanup problem follows it.
+            cleanupFailure = [
+              failure,
+              error instanceof Error ? error.message : String(error),
+            ]
+              .filter(Boolean)
+              .join(" ");
           } finally {
             clearTimeout(stopTimeout);
             if (cleanupFailure)

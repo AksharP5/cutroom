@@ -173,6 +173,44 @@ test("cancelling after the export folder moved reports that its partial render r
   }
 });
 
+test("a cancel that arrives once the file is published leaves the export complete", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-export-late-cancel-"));
+  const workerPath = join(root, "worker.mjs");
+  await writeFile(
+    workerPath,
+    `import {writeFile} from 'node:fs/promises';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'video');console.log('CUTROOM_RENDER:'+JSON.stringify({type:'complete'}));`,
+  );
+  // Slow cleanup holds the job open after the file is linked into place.
+  const workers = createRenderWorkers({
+    workerPath,
+    removeScratch: async (path) => {
+      await Bun.sleep(300);
+      await rm(path, { recursive: true, force: true });
+    },
+  });
+  const destination = join(root, "Cut.mp4");
+  try {
+    const state = workers.start(
+      {
+        project: { id: "test", dir: root },
+        outputPath: join(root, "internal.mp4"),
+        format: "mp4",
+        fps: { num: 30, den: 1 },
+        quality: "standard",
+        jobId: "test",
+      },
+      { filename: "Cut.mp4", directory: root, range: null },
+    );
+    await until(() => existsSync(destination));
+    await state.cancel?.();
+    expect(state.status).toBe("complete");
+    expect(await readFile(destination, "utf8")).toBe("video");
+  } finally {
+    await workers.cancelAll();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a colliding output file is kept and the real error reaches the job", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom-export-existing-"));
   const outputPath = join(root, "Keep.mp4");
