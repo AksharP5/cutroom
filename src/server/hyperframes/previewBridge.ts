@@ -3,6 +3,7 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 
 interface PreviewWindow extends Window {
+  gsap?: { getProperty(element: Element, property: string): unknown };
   __hf?: Window["__hf"] & {
     audioMeter?: {
       start(): void;
@@ -24,6 +25,66 @@ interface PreviewWindow extends Window {
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge() {
   const win = window as PreviewWindow;
+  const positions = new Map<
+    HTMLElement | SVGElement,
+    { translate: string; priority: string; base: string; x: number; y: number }
+  >();
+  let positionFrame = 0;
+  let positionDraft: {
+    clipId: string;
+    x: number | null;
+    y: number | null;
+  } | null = null;
+  const writePosition = () => {
+    positionFrame = 0;
+    const draft = positionDraft;
+    if (!draft) return;
+    const element = document.querySelector(`#${CSS.escape(draft.clipId)}`);
+    if (!(element instanceof HTMLElement || element instanceof SVGElement))
+      return;
+    let original = positions.get(element);
+    if (!original) {
+      win.gsap?.getProperty(element, "x");
+      const number = (name: string) =>
+        Number.parseFloat(element.getAttribute(name) ?? "0") || 0;
+      original = {
+        translate: element.style.getPropertyValue("translate"),
+        priority: element.style.getPropertyPriority("translate"),
+        base: getComputedStyle(element).translate,
+        x: element.hasAttribute("data-hf-edit-base-x")
+          ? number("data-x") - number("data-hf-edit-base-x")
+          : 0,
+        y: element.hasAttribute("data-hf-edit-base-y")
+          ? number("data-y") - number("data-hf-edit-base-y")
+          : 0,
+      };
+      positions.set(element, original);
+    }
+    let translate = original.translate;
+    if (draft.x !== null && draft.y !== null) {
+      // Split computed translate only at top-level spaces, preserving calc() and a third axis.
+      const parts: string[] = [];
+      let depth = 0;
+      let part = "";
+      for (const char of original.base === "none" ? "" : original.base) {
+        if (char === "(") depth++;
+        if (char === ")") depth--;
+        if (/\s/.test(char) && depth === 0) {
+          if (part) parts.push(part);
+          part = "";
+        } else part += char;
+      }
+      if (part) parts.push(part);
+      translate = `calc(${parts[0] ?? "0px"} + ${draft.x - original.x}px) calc(${parts[1] ?? "0px"} + ${draft.y - original.y}px)${parts[2] ? ` ${parts[2]}` : ""}`;
+    }
+    // The parked video is represented by its held canvas. Both share the same style.
+    element.style.setProperty("translate", translate, original.priority);
+    if (element instanceof HTMLVideoElement)
+      holds
+        .get(element)
+        ?.canvas.style.setProperty("translate", translate, original.priority);
+    if (draft.x === null) positions.delete(element);
+  };
   let metering = false;
   let animation = 0;
   const levels = () => {
@@ -300,6 +361,26 @@ function installPreviewBridge() {
     const id = data.id;
     void (async () => {
       switch (data.action) {
+        case "position":
+          if (
+            !("clipId" in data) ||
+            typeof data.clipId !== "string" ||
+            !("x" in data) ||
+            !("y" in data) ||
+            !(
+              data.x === null ||
+              (typeof data.x === "number" && Number.isFinite(data.x))
+            ) ||
+            !(
+              data.y === null ||
+              (typeof data.y === "number" && Number.isFinite(data.y))
+            )
+          )
+            return;
+          positionDraft = { clipId: data.clipId, x: data.x, y: data.y };
+          if (!positionFrame)
+            positionFrame = requestAnimationFrame(writePosition);
+          return;
         case "inspect":
           break;
         case "meter":

@@ -28,7 +28,7 @@ const position = z
     return offset === 0 ? null : offset;
   })
   .describe(
-    "Additive position offset in composition pixels from authored CSS and GSAP animation, not an absolute coordinate. Positive x moves right; positive y moves down. Null or zero clears the offset; reads return null for no offset. Uses data-x/data-y minus captured data-hf-edit-base-x/y; linked audio is unchanged.",
+    "Additive offset in composition CSS pixels, not an absolute coordinate. Refused when positionUnsupported names this clip, including transformed ancestors and unsupported scripts or styles. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
   );
 
 export const FpsSchema = z.object({
@@ -405,6 +405,7 @@ export const ClipEditSchema = z.object({
 });
 
 export const TimelineViewSchema = z.object({
+  positionUnsupported: z.record(z.string(), z.string()).optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
   composition: z.string(),

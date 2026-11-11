@@ -19,6 +19,7 @@ import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { pendingEdit, shownChanges } from "./changes";
+import { previewPosition } from "../preview";
 
 export function InspectorToggle() {
   const open = useWorkspace((state) => state.inspector);
@@ -262,19 +263,44 @@ export function Inspector({ projectId }: { projectId: string }) {
                   unit="pixels"
                   min={-Infinity}
                   fps={timeline.fps}
-                  disabled={track?.track.locked}
-                  onCommit={(value) => {
-                    void editTimeline(projectId, "Edit position", () => [
-                      { type: "setClip", clipId: clip.id, [axis]: value },
-                    ]);
+                  disabled={
+                    track?.track.locked ||
+                    !!view?.positionUnsupported?.[clip.id]
+                  }
+                  onPreview={(value) =>
+                    previewPosition(
+                      clip.id,
+                      axis === "x" ? value : (clip.x ?? 0),
+                      axis === "y" ? value : (clip.y ?? 0),
+                    )
+                  }
+                  onCancel={() =>
+                    previewPosition(clip.id, clip.x ?? 0, clip.y ?? 0)
+                  }
+                  onCommit={async (value) => {
+                    const accepted = await editTimeline(
+                      projectId,
+                      "Edit position",
+                      () => [
+                        { type: "setClip", clipId: clip.id, [axis]: value },
+                      ],
+                    );
+                    if (!accepted) previewPosition(clip.id, null, null);
                   }}
                 />
               ))}
+              {view?.positionUnsupported?.[clip.id] && (
+                <p className="inspector-empty">
+                  {view.positionUnsupported[clip.id]}
+                </p>
+              )}
               <button
                 type="button"
                 aria-label="Reset position"
                 disabled={
-                  (clip.x === null && clip.y === null) || track?.track.locked
+                  (clip.x === null && clip.y === null) ||
+                  track?.track.locked ||
+                  !!view?.positionUnsupported?.[clip.id]
                 }
                 onClick={() => {
                   void editTimeline(projectId, "Reset position", () => [

@@ -38,6 +38,7 @@ import {
   settingsOf,
 } from "./composition";
 import { mediaFacts } from "./media";
+import { unsupportedPositions } from "./positionSupport";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -122,16 +123,27 @@ export function createTimelineRoutes(
     );
     const html = patchComposition(current.parsed, timeline, origins);
     const settings = settingsOf(timeline);
-    // The written source must read back as exactly the timeline that was applied.
-    if (
-      !Bun.deepEquals(
-        parseComposition(html, settings, {
-          scope: current.scope,
-          mediaLengths: lengths,
-        }).timeline,
-        timeline,
+    const written = parseComposition(html, settings, {
+      scope: current.scope,
+      mediaLengths: lengths,
+    });
+    // A position command can name a piece made earlier in this batch. Validate its written
+    // ancestry too, before any file or history change, rather than trusting the old clip map.
+    const positionUnsupported = unsupportedPositions(written);
+    const originalUnsupported = unsupportedPositions(current.parsed);
+    for (const [index, command] of batch.commands.entries()) {
+      if (
+        command.type !== "setClip" ||
+        (command.x === undefined && command.y === undefined)
       )
-    )
+        continue;
+      const reason =
+        originalUnsupported[command.clipId] ??
+        positionUnsupported[command.clipId];
+      if (reason) throw new TimelineError("unsupported", reason, index);
+    }
+    // The written source must read back as exactly the timeline that was applied.
+    if (!Bun.deepEquals(written.timeline, timeline))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
@@ -185,6 +197,7 @@ export function createTimelineRoutes(
         timelines[composition] ?? emptyTimelineSettings(),
       ),
       timeline,
+      positionUnsupported,
     };
   };
 
@@ -199,6 +212,7 @@ export function createTimelineRoutes(
         composition,
         revision,
         timeline: parsed.timeline,
+        positionUnsupported: unsupportedPositions(parsed),
         ...(await reviews.clipChanges(project, composition)),
       } satisfies TimelineView);
     } catch (error) {

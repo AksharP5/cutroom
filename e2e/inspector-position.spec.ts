@@ -92,9 +92,22 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   const field = (name: string) =>
     inspector.getByRole("textbox", { name, exact: true });
+  const painted = async <T>(action: () => Promise<T>): Promise<T> => {
+    const stage = page.locator(".edit-stage[data-preview-ready]");
+    await expect(stage).toBeVisible();
+    const before = await stage.getAttribute("data-preview-ready");
+    const result = await action();
+    await expect(stage).not.toHaveAttribute("data-preview-ready", before!);
+    await expect(stage).toBeVisible();
+    return result;
+  };
+  const undo = () =>
+    painted(() =>
+      page.getByRole("button", { name: "Undo", exact: true }).click(),
+    );
   const set = async (name: string, value: string) => {
     await field(name).fill(value);
-    await field(name).press("Enter");
+    await painted(() => field(name).press("Enter"));
   };
   await expect(field("Position X")).toHaveValue("0 px");
   await set("Position X", "-12.5 px");
@@ -104,11 +117,15 @@ test("position fields and MCP preserve animated offsets through playback, repeat
         (await read()).timeline.clips.find((c) => c.id === "picture")?.x,
     )
     .toBe(-12.5);
-  await field("Position X").press("ArrowUp");
-  await field("Position X").press("Shift+ArrowUp");
+  await field("Position X").focus();
+  await page.keyboard.down("ArrowUp");
+  await page.keyboard.down("Shift");
+  await page.keyboard.down("ArrowUp");
+  await page.keyboard.up("Shift");
+  await painted(() => page.keyboard.up("ArrowUp"));
   await field("Position X").press("Enter");
   await expect(field("Position X")).toHaveValue("-1.5 px");
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await undo();
   await expect(field("Position X")).toHaveValue("-12.5 px");
   const revision = (await read()).revision;
   await field("Position X").fill("99");
@@ -121,12 +138,26 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   await page.mouse.down();
   await page.keyboard.down("Shift");
   await page.mouse.move(bounds.x + 15, bounds.y + 5);
+  await expect
+    .poll(() =>
+      page
+        .frameLocator("iframe[data-live]")
+        .locator("canvas[data-cutroom-video-hold]")
+        .evaluate((el) => el.getBoundingClientRect().left),
+    )
+    .toBe(65.5);
+  await page.screenshot({
+    path: info.outputPath("live-video-scrub.png"),
+    caret: "initial",
+  });
   await page.keyboard.up("Shift");
-  await page.mouse.up();
+  await painted(() => page.mouse.up());
   await expect(field("Position X")).toHaveValue("37.5 px");
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await undo();
   await expect(field("Position X")).toHaveValue("-12.5 px");
-  await inspector.getByRole("button", { name: "Reset position" }).click();
+  await painted(() =>
+    inspector.getByRole("button", { name: "Reset position" }).click(),
+  );
   await expect(field("Position X")).toHaveValue("0 px");
   await expect
     .poll(
@@ -150,6 +181,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
     await page
       .getByRole("textbox", { name: "Go to time", exact: true })
       .press("Enter");
+    await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
     await expect(page.locator("iframe[data-live]")).toBeVisible();
     await expect
       .poll(async () =>
@@ -163,6 +195,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   // Capture the authored CSS plus entrance animation before adding offsets.
   const baseline = new Map<number, ReturnType<typeof subjects>>();
   const screenshot = async (name: string) => {
+    await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
     const file = info.outputPath(name);
     await page.locator("iframe[data-live]").screenshot({ path: file });
     const { stdout } = await exec(
@@ -206,19 +239,22 @@ test("position fields and MCP preserve animated offsets through playback, repeat
         arguments: { projectId: project.id },
       }),
     ).structuredContent.result;
-    const moved = resultSchema.parse(
-      await client.callTool({
-        name: "timeline_edit",
-        arguments: {
-          projectId: project.id,
-          expectedRevision: view.revision,
-          commands: [
-            { type: "setClip", clipId: "picture", x: 40, y: -10 },
-            { type: "setClip", clipId: "title", x: 40, y: -10 },
-          ],
-        },
-      }),
-    ).structuredContent.result;
+    const moved = await painted(
+      async () =>
+        resultSchema.parse(
+          await client.callTool({
+            name: "timeline_edit",
+            arguments: {
+              projectId: project.id,
+              expectedRevision: view.revision,
+              commands: [
+                { type: "setClip", clipId: "picture", x: 40, y: -10 },
+                { type: "setClip", clipId: "title", x: 40, y: -10 },
+              ],
+            },
+          }),
+        ).structuredContent.result,
+    );
     expect(moved.timeline.clips.find((c) => c.id === "sound")).toMatchObject({
       x: null,
       y: null,
@@ -250,7 +286,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
           .catch(() => NaN),
       )
       .toBe(24);
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await undo();
     await expect(field("Position X")).toHaveValue("40 px");
     await page.locator('[data-clip="sound"]').click({ modifiers: ["Alt"] });
     await expect(inspector.getByText("Transform", { exact: true })).toHaveCount(

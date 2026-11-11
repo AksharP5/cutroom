@@ -9,6 +9,17 @@ import {
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
 
+let positionTarget:
+  ((clipId: string, x: number | null, y: number | null) => void) | null = null;
+/** Drafts go only to the live document, never through timeline state or the server. */
+export function previewPosition(
+  clipId: string,
+  x: number | null,
+  y: number | null,
+) {
+  positionTarget?.(clipId, x, y);
+}
+
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement) {
   let state: PreviewState = {
@@ -104,11 +115,15 @@ export function connectPreview(frame: HTMLIFrameElement) {
       send("mute", { muted });
     },
   };
+  const position = (clipId: string, x: number | null, y: number | null) => {
+    send("position", { clipId, x, y });
+  };
   return {
     player,
     signal: closing.signal,
     activate() {
       active = true;
+      positionTarget = position;
       send("meter", { enabled: true });
     },
     get state() {
@@ -117,6 +132,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
     inspect: () => request("inspect"),
     painted: () => request("paint"),
     dispose() {
+      if (positionTarget === position) positionTarget = null;
       closing.abort();
       send("meter", { enabled: false });
       if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
