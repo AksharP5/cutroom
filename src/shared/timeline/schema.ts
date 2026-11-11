@@ -404,7 +404,7 @@ export const CommandBatchSchema = z.object({
 
 export const ClipEditSchema = z.object({
   id: z.string(),
-  clipId: z.string(),
+  clipId: z.string().nullable(),
   composition: z.string(),
   label: z.string(),
   by: z.enum(["human", "agent"]),

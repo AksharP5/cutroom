@@ -6,7 +6,7 @@ import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
 
-test("agent clip marks survive reload, clear on Accept or human edits, and include source changes", async () => {
+test("agent clip marks survive reload, clear on Accept or return to accepted source, and include source changes", async () => {
   const fixture = await projectFixture();
   const { store, review, app, request } = fixture;
   app.route("/api/cutroom", createTimelineRoutes(store, review));
@@ -55,7 +55,7 @@ test("agent clip marks survive reload, clear on Accept or human edits, and inclu
     expect((await read()).agentChanges).toEqual([]);
     await edit("caption", "Agent caption");
     expect(
-      (await edit("caption", "Owner caption", false)).agentChanges,
+      (await edit("caption", "Getting started", false)).agentChanges,
     ).toEqual([]);
     const source = await (await request(`${path}/source`)).json();
     const saved = await app.request(`/api/cutroom${path}/source`, {
@@ -270,6 +270,74 @@ test("an unlabelled agent edit is named from its commands, and unaccepted agent 
         (edit) => edit.clipId === "title" && edit.by === "agent",
       ),
     ).toBe(true);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("shared script edits make one composition row that accepts, undoes, and redoes without clip marks", async () => {
+  const fixture = await projectFixture();
+  const { store, review, app, request } = fixture;
+  app.route("/api/cutroom", createTimelineRoutes(store, review));
+  const project = await store.create({ name: "Shared script review" });
+  const path = `/projects/${project.id}`;
+  const read = () => review.clipChanges(project, "index.html");
+  const save = async (content: string) => {
+    const source = await (await request(`${path}/source`)).json();
+    const response = await app.request(`/api/cutroom${path}/source`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        [AGENT_HEADER]: "external",
+      },
+      body: JSON.stringify({
+        path: "index.html",
+        expectedVersion: source.version,
+        content,
+      }),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+  };
+  try {
+    const source = await (await request(`${path}/source`)).json();
+    await save(
+      source.content.replace(
+        "</body>",
+        "<script>window.setting = 1;</script></body>",
+      ),
+    );
+    const view = await read();
+    expect(view.agentChanges).toEqual([]);
+    const rows = view.clipEdits.filter((edit) => edit.by === "agent");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row).toMatchObject({
+      clipId: null,
+      label: "Edited index.html composition",
+      accepted: false,
+      resolution: undefined,
+    });
+    // A no-op save must not append a duplicate against the same history entry.
+    await save((await (await request(`${path}/source`)).json()).content);
+    expect(
+      (await read()).clipEdits.filter((edit) => edit.by === "agent"),
+    ).toEqual(rows);
+    const history = review.history(project, await store.history(project), {
+      kind: "human",
+    });
+    await history.step("back", { kind: "person", name: "You" });
+    expect((await read()).clipEdits.some((edit) => edit.id === row.id)).toBe(
+      false,
+    );
+    await history.step("forward", { kind: "person", name: "You" });
+    expect((await read()).clipEdits.find((edit) => edit.id === row.id)).toEqual(
+      row,
+    );
+    await review.acceptChanges(project, row.id);
+    expect(
+      (await read()).clipEdits.find((edit) => edit.id === row.id)?.accepted,
+    ).toBe(true);
+    expect((await read()).agentChanges).toEqual([]);
   } finally {
     await fixture.close();
   }
