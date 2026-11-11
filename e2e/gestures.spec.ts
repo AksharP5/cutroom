@@ -689,7 +689,7 @@ test("a refused audio drop explains the destination track kind", async ({
   page,
   request,
 }) => {
-  const { project, timeline, read, at, initial } = await open(
+  const { project, timeline, read, at, agent } = await open(
     page,
     request,
     "Refused audio drop",
@@ -704,6 +704,18 @@ test("a refused audio drop explains the destination track kind", async ({
     "-y",
     join(project.path, "tone.wav"),
   ]);
+  // A filename beginning with an existing clip id must remain a filename in a refusal.
+  await agent([
+    {
+      type: "insert",
+      track: 2,
+      at: 0,
+      mode: "place",
+      clip: { id: "tone", src: "tone.wav", kind: "audio", duration: 60 },
+    },
+  ]);
+  await expect(timeline.locator('[data-clip="tone"]')).toBeVisible();
+  const initial = await read();
   const row = page
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")

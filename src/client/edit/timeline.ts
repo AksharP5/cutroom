@@ -297,7 +297,7 @@ function humanReason(message: string, timeline: Timeline) {
   const withNames = ids.length
     ? text.replace(
         new RegExp(
-          `(?<![\\w.-])(?:${ids.map(escaped).join("|")})(?![\\w-])`,
+          `(?<![\\w.-])(?:${ids.map(escaped).join("|")})(?![\\w-]|\\.[\\w.-])`,
           "g",
         ),
         (id) => names.get(id) ?? id,
@@ -327,14 +327,17 @@ export async function editTimeline(
   build: (timeline: Timeline) => CommandInput[],
   /** A mouse gesture keeps the timeline it was pressed on, even across server answers. */
   basis?: Timeline,
+  /** Runs with the accepted optimistic edit, before another key can act on it. */
+  onApply?: (timeline: Timeline, commands: readonly Command[]) => void,
 ) {
   const { view, projectId: open } = useTimeline.getState();
-  if (!view || open !== projectId) return;
+  if (!view || open !== projectId) return false;
   let edit: Edit | null = null;
+  let accepted = false;
   try {
     const from = basis ?? view.timeline;
     const input = z.array(CommandSchema).parse(build(from));
-    if (!input.length) return;
+    if (!input.length) return false;
     const named = name(input, from);
     const { commands, creates } = named;
     const anchors = editAnchors(from, named.timeline, commands);
@@ -366,11 +369,13 @@ export async function editTimeline(
     const made = edit;
     useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
+    onApply?.(timeline, commands);
     await enqueue(async () => {
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
         await send(made);
+        accepted = true;
       } catch (error) {
         made.failure = humanReason(
           error instanceof Error ? error.message : String(error),
@@ -389,9 +394,10 @@ export async function editTimeline(
     });
     if (!made.dropped && refusal && useWorkspace.getState().toast === refusal)
       showToast("");
+    return accepted;
   } catch (error) {
     if (edit) pending = pending.filter((item) => item !== edit);
-    if (useTimeline.getState().projectId !== projectId) return;
+    if (useTimeline.getState().projectId !== projectId) return false;
     const shownView = shown(projectId);
     if (shownView) useTimeline.setState({ view: shownView });
     refusal = humanReason(
@@ -399,6 +405,7 @@ export async function editTimeline(
       view.timeline,
     );
     showToast(refusal);
+    return accepted;
   }
 }
 
