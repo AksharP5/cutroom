@@ -1,0 +1,20 @@
+[
+  {
+    "mode": "before",
+    "shift": false,
+    "pixels": 3,
+    "readout": "-14.4 dB"
+  },
+  {
+    "mode": "before",
+    "shift": false,
+    "pixels": 6,
+    "readout": "-28.8 dB"
+  },
+  {
+    "mode": "before",
+    "shift": false,
+    "pixels": 9,
+    "readout": "-43.2 dB"
+  }
+]

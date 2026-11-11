@@ -1,0 +1,38 @@
+[
+  {
+    "mode": "after",
+    "shift": false,
+    "pixels": 3,
+    "readout": "-0.75 dB"
+  },
+  {
+    "mode": "after",
+    "shift": false,
+    "pixels": 6,
+    "readout": "-1.50 dB"
+  },
+  {
+    "mode": "after",
+    "shift": false,
+    "pixels": 9,
+    "readout": "-2.25 dB"
+  },
+  {
+    "mode": "after",
+    "shift": true,
+    "pixels": 3,
+    "readout": "-0.15 dB"
+  },
+  {
+    "mode": "after",
+    "shift": true,
+    "pixels": 6,
+    "readout": "-0.30 dB"
+  },
+  {
+    "mode": "after",
+    "shift": true,
+    "pixels": 9,
+    "readout": "-0.45 dB"
+  }
+]
