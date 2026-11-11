@@ -3,6 +3,7 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
+import { isAudioKind } from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
 import { posix } from "node:path";
@@ -174,7 +175,11 @@ function* descendants(
 }
 
 function clipKind(element: SourceElement): ClipKind {
-  if (element.tag === "video" || element.tag === "audio") return element.tag;
+  if (element.tag === "audio")
+    return element.attrs["data-cutroom-kind"] === "voiceover"
+      ? "voiceover"
+      : "audio";
+  if (element.tag === "video") return "video";
   if (element.tag === "img") return "image";
   return isSubCompositionHost(element) ? "composition" : "element";
 }
@@ -335,9 +340,9 @@ export function parseComposition(
     const duration =
       read.duration ??
       (kind === "image" ? DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS : null) ??
-      (kind === "video" || kind === "audio"
+      (kind === "video" || isAudioKind(kind)
         ? resolveMediaDuration({
-            tag: kind,
+            tag: isAudioKind(kind) ? "audio" : "video",
             authoredDurationSeconds: null,
             sourceDurationSeconds: lengthOf(element),
             mediaStartSeconds: readMediaOffsetSeconds(attribute),
@@ -412,7 +417,7 @@ export function parseComposition(
       start,
       duration: end - start,
       mediaStart:
-        kind === "video" || kind === "audio" || kind === "composition"
+        kind === "video" || isAudioKind(kind) || kind === "composition"
           ? sourceAtFirstFrame(
               readMediaOffsetSeconds(attribute),
               frameTime(start, fps) - read.begin,
@@ -428,7 +433,7 @@ export function parseComposition(
             : sourceOf(element),
       sourceDuration: lengthOf(element),
       hasAudio:
-        kind === "audio" ||
+        isAudioKind(kind) ||
         (kind === "video" &&
           (element.attrs.muted === undefined ||
             element.attrs["data-cutroom-muted"] !== undefined) &&
@@ -684,7 +689,7 @@ function clipChanges(
   if (
     before.track !== after.track ||
     (normalizeTracks &&
-      after.kind !== "audio" &&
+      !isAudioKind(after.kind) &&
       element.attrs["data-track-index"] !== String(after.track))
   ) {
     changes.push(["data-track-index", String(after.track)]);
@@ -886,6 +891,9 @@ function insertMarkup(
     ["id", clip.id],
     ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
     ["src", input.src],
+    ...(clip.kind === "voiceover"
+      ? [["data-cutroom-kind", "voiceover"] as const]
+      : []),
     ...(clip.kind === "video" || clip.kind === "image"
       ? [
           [
@@ -946,7 +954,12 @@ function insertMarkup(
       value === null ? ` ${name}` : ` ${name}="${escapeAttribute(value)}"`,
     )
     .join("");
-  const tag = clip.kind === "image" ? "img" : clip.kind;
+  const tag =
+    clip.kind === "image"
+      ? "img"
+      : isAudioKind(clip.kind)
+        ? "audio"
+        : clip.kind;
   return tag === "img" ? `<img${text}>` : `<${tag}${text}></${tag}>`;
 }
 
@@ -1020,7 +1033,7 @@ function stackingEdits(
       element.attrs["data-cutroom-track-stacking"] === compositionId,
   );
   const placed = after.clips.some((clip) => {
-    if (clip.kind === "audio") return false;
+    if (isAudioKind(clip.kind)) return false;
     const prior = previous.get(clip.id);
     return (
       prior === undefined ||
@@ -1035,7 +1048,7 @@ function stackingEdits(
   const nested = `${scope} :is([data-start],[data-composition-id],[data-composition-src]) *`;
   const tracks = new Set(
     after.clips
-      .filter((clip) => clip.kind !== "audio")
+      .filter((clip) => !isAudioKind(clip.kind))
       .map((clip) => clip.track),
   );
   const rules = [...tracks]

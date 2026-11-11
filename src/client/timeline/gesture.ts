@@ -1,5 +1,6 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { gainFromDrag } from "./mix";
+import { isAudioKind } from "../../shared/timeline/schema";
 import { z } from "zod";
 import {
   TimelineError,
@@ -280,7 +281,7 @@ function furthest(
   return near;
 }
 
-const isAudio = (clip: Pick<Clip, "kind">) => clip.kind === "audio";
+const isAudio = (clip: Pick<Clip, "kind">) => isAudioKind(clip.kind);
 
 /** A drag under way: the timeline it started from and what it carries, fixed at the press. */
 export interface Drag {
@@ -644,7 +645,7 @@ export function dropPreview(
       },
     },
   ];
-  const fits = (track.kind === "audio") === (media.kind === "audio");
+  const fits = (track.kind === "audio") === isAudioKind(media.kind);
   const result = fits ? previewCommands(timeline, commands) : null;
   return {
     label: "Add media",

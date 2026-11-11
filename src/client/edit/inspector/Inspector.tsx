@@ -1,3 +1,4 @@
+import { isAudioKind } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, X } from "@phosphor-icons/react";
 import {
@@ -311,7 +312,7 @@ export function Inspector({ projectId }: { projectId: string }) {
               </details>
             );
           })}
-          {clip.kind !== "audio" && (
+          {!isAudioKind(clip.kind) && (
             <details
               open={compositeOpen}
               onToggle={(event) => setCompositeOpen(event.currentTarget.open)}

@@ -26,6 +26,7 @@ export const FpsSchema = z.object({
 export const ClipKindSchema = z.enum([
   "video",
   "audio",
+  "voiceover",
   "image",
   "composition",
   "element",
@@ -130,7 +131,7 @@ export const InsertClipSchema = z.object({
     .describe(
       "Element id, never used before in this project; when omitted, the file name and a random suffix",
     ),
-  kind: z.enum(["video", "audio", "image"]),
+  kind: z.enum(["video", "audio", "voiceover", "image"]),
   src: z.string().min(1).max(2_000).describe("Project-relative media path"),
   duration: frames.describe("Length on the timeline in frames"),
   mediaStart: z
@@ -424,3 +425,7 @@ export const emptyTimelineSettings = (): TimelineSettings => ({
   markers: [],
   range: { in: null, out: null },
 });
+
+/** Voiceover keeps its own identity while using the audio editing and rendering path. */
+export const isAudioKind = (kind: ClipKind) =>
+  kind === "audio" || kind === "voiceover";

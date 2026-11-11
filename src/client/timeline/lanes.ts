@@ -1,6 +1,7 @@
 import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { envelopeHeight, fadePath } from "./mix";
 import { clipFades } from "../../shared/timeline/mix";
+import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
@@ -684,8 +685,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { y } = local(event.clientX, event.clientY);
     const first = rows[0];
     const last = rows.at(-1);
-    const above = first && y < first.top && media.kind !== "audio";
-    const below = last && y >= last.top + last.height && media.kind === "audio";
+    const above = first && y < first.top && !isAudioKind(media.kind);
+    const below =
+      last && y >= last.top + last.height && isAudioKind(media.kind);
     const creating = above || below;
     if (creating) {
       const kind = above ? "video" : "audio";

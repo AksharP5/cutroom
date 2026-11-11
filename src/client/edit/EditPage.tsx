@@ -35,6 +35,7 @@ import {
   stepHistory,
   useTimeline,
 } from "./timeline";
+import { useVoiceover } from "../voiceover/Voiceover";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
@@ -92,6 +93,7 @@ export function EditPage({
   /** Opens the project's folder in the file dialog. */
   onFiles(): void;
 }) {
+  const voiceover = useVoiceover(projectId);
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
   const setMode = (next: typeof mode) => editorTools?.setMode(next);
@@ -404,7 +406,11 @@ export function EditPage({
           onOpenNote={onOpenNote}
           onSaveNote={onSaveNote}
         />
-        <TransportBar fullscreen={fullscreen} onFullscreen={toggleFullscreen} />
+        <TransportBar
+          fullscreen={fullscreen}
+          onFullscreen={toggleFullscreen}
+          voiceover={voiceover}
+        />
       </section>
       <Inspector projectId={projectId} />
       <div
@@ -419,6 +425,7 @@ export function EditPage({
       />
       <section className="edit-timeline" aria-label="Timeline">
         <ProjectTimeline
+          voiceover={voiceover}
           projectId={projectId}
           tool={mode === "trim" || mode === "blade" ? mode : "pointer"}
           notes={notes}

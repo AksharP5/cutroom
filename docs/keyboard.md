@@ -1,6 +1,6 @@
 # Keyboard
 
-The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Resolve action id. Shortcuts never fire while you type in a field or work in a dialog. Esc returns to Select.
+The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Resolve action id. Shortcuts never fire while you type in a field or work in a dialog. Esc returns to Select. During voiceover recording, Ctrl+Alt+Shift+V, Space and K stop and save, and Esc stops and asks before discarding the take, including when a field has focus. Cancelling saves it.
 
 | Action                                       | Keys                     | Action id                          |
 | -------------------------------------------- | ------------------------ | ---------------------------------- |
@@ -11,6 +11,7 @@ The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Reso
 | Draw                                         | `Shift+N`                | `cutroomDraw`                      |
 | Comment                                      | `N`                      | `cutroomComment`                   |
 | Play or stop                                 | `Space`                  | `controlPlayToggle`                |
+| Record or stop voiceover                     | `Ctrl+Alt+Shift+V`       | `cutroomRecordVoiceover`           |
 | Play forward, faster on repeat               | `L`, `4`                 | `controlPlayForward`               |
 | Play reverse, faster on repeat               | `J`, `3`                 | `controlPlayReverse`               |
 | Play forward at 4x                           | `Shift+L`                | `controlFastForward`               |
@@ -52,6 +53,8 @@ The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Reso
 | Add a marker                                 | `M`                      | `markMarkerAdd`                    |
 | Snapping                                     | `C`                      | `editSnapping`                     |
 
+Ctrl+Alt+Shift+V is unused in the owner's Resolve preset and avoids the older KDE Klipper shortcut Ctrl+Alt+V. Its only recording-related action, `viewTimelineModeRecord`, has no assigned key. Shift+R remains reserved for Resolve's Freeze Frame.
+
 While a note is open on the picture, its text takes every key: Enter adds it, Shift+Enter starts a new line, Esc discards it, and Ctrl+Z undoes text typed since the last stroke by word or after a one-second pause before taking back strokes. Ctrl+Shift+Z restores strokes and undone text. Ruler clicks return focus to the note.
 
 L and J double the speed on each press, up to 8x; the other direction drops back to 1x, and Shift starts at 4x. Marks are undoable timeline edits that agents see through MCP. Out is inclusive on screen and exclusive in the engine's range.
@@ -65,6 +68,8 @@ Each press is one undo step. The timeline shows the edit as soon as you press th
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
 
 ## Mouse
+
+On an audio track, the R button arms the microphone. Only one track is armed. The microphone icon chooses an input, remembered on this machine, and the armed header shows its input level. The red Record button in the transport or Ctrl+Alt+Shift+V starts playback and recording at the playhead. The armed R stays lit, a Recording mark appears by the timecode, and a take region grows along the armed lane. Recording stops at the end of the cut or after 30 minutes. Loop is temporarily off. A take uses empty space on the armed track; an overlap goes on a new audio track so previous audio stays intact. One undo removes the take and any track it created. The WAV file stays in `assets/voiceover/` for another take or an agent to use. A dropped microphone block leaves silence at its original position, keeps the rest of the take in sync, and reports the dropped duration. A failed save opens the microphone panel with Retry save, Download take, and a confirmed Discard take. Switching projects or editors is blocked until the take is saved or discarded. Closing or reloading warns before leaving an unsaved take.
 
 A, T and B choose what a press on a clip does, as on Resolve's Edit page. A, T, B and C are the owner's Resolve bindings for `editPointer`, `editTrim`, `editBlade` and `editSnapping`.
 

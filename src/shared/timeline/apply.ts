@@ -1,3 +1,4 @@
+import { isAudioKind } from "./schema";
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
 import { TimelineError } from "./errors";
 import { windowMix } from "./mix";
@@ -104,7 +105,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
     if (!tracks.has(clip.track))
       audioOnly.set(
         clip.track,
-        (audioOnly.get(clip.track) ?? true) && clip.kind === "audio",
+        (audioOnly.get(clip.track) ?? true) && isAudioKind(clip.kind),
       );
   for (const [index, audio] of audioOnly)
     tracks.set(index, newTrack(index, audio ? "audio" : "video"));
@@ -203,10 +204,10 @@ function assertTrackKind(
   track: Pick<Track, "index" | "kind"> | undefined,
   name: string,
 ) {
-  if (!track || (track.kind === "audio") === (kind === "audio")) return;
+  if (!track || (track.kind === "audio") === isAudioKind(kind)) return;
   throw new TimelineError(
     "track_kind",
-    `Clip ${name} is ${kind === "audio" ? "audio" : "picture"} and track ${track.index} is ${track.kind === "audio" ? "an" : "a"} ${track.kind} track.`,
+    `Clip ${name} is ${isAudioKind(kind) ? "audio" : "picture"} and track ${track.index} is ${track.kind === "audio" ? "an" : "a"} ${track.kind} track.`,
   );
 }
 
@@ -458,7 +459,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             ? null
             : (batch.mediaLengths.get(input.src) ?? null),
         hasAudio:
-          input.kind === "audio" ||
+          isAudioKind(input.kind) ||
           (input.kind === "video" &&
             !video.muted &&
             !batch.silentMedia.has(input.src)),

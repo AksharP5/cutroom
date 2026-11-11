@@ -9,7 +9,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { KeyboardEvent, PointerEvent, RefObject } from "react";
+import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
 import { flushSync } from "react-dom";
 import {
   CursorClick,
@@ -112,6 +112,12 @@ export interface TimelineProps {
   ): void;
   onRenameTrack(track: Track, name: string): void;
   onAddTrack(kind: Track["kind"]): void;
+  recording?: { track: number; start: number } | null;
+  audioControls?(
+    track: Track,
+    id: string,
+    part: "title" | "buttons",
+  ): ReactNode;
   /** A pin was clicked; the playhead has already been sent to its frame. */
   onOpenPin(id: string): void;
 }
@@ -368,10 +374,12 @@ const TrackHeads = memo(function TrackHeads({
   rows,
   onToggleTrack,
   onRenameTrack,
+  audioControls,
 }: {
   rows: readonly Row[];
   onToggleTrack: TimelineProps["onToggleTrack"];
   onRenameTrack: TimelineProps["onRenameTrack"];
+  audioControls: TimelineProps["audioControls"];
 }) {
   return rows.map(({ track, id, top }) => (
     <div key={track.index} className={`tl-head ${track.kind}`} style={{ top }}>
@@ -397,6 +405,7 @@ const TrackHeads = memo(function TrackHeads({
               event.currentTarget.blur();
           }}
         />
+        {track.kind === "audio" && audioControls?.(track, id, "title")}
       </div>
       <div className="tl-head-buttons">
         <button
@@ -460,6 +469,7 @@ const TrackHeads = memo(function TrackHeads({
             >
               S
             </button>
+            {audioControls?.(track, id, "buttons")}
           </>
         )}
       </div>
@@ -488,6 +498,8 @@ export function Timeline({
   onScrub,
   onScrubEnd,
   onToggleTrack,
+  audioControls,
+  recording,
   onRenameTrack,
   onAddTrack,
   onOpenPin,
@@ -513,6 +525,7 @@ export function Timeline({
   const slider = useRef<HTMLDivElement>(null);
   const playhead = useRef<HTMLElement>(null);
   const playheadHead = useRef<HTMLElement>(null);
+  const takeRegion = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const tickLabels = useRef<HTMLDivElement>(null);
   const bodies = useRef<Bodies | null>(null);
@@ -648,6 +661,16 @@ export function Timeline({
     write();
     return clock.subscribe(write);
   }, [clock]);
+
+  useEffect(() => {
+    if (!recording) return;
+    const write = () => {
+      if (takeRegion.current)
+        takeRegion.current.style.transform = `scaleX(${Math.max(0, clock.frame() - recording.start) / Math.max(1, frames)})`;
+    };
+    write();
+    return clock.subscribe(write);
+  }, [clock, recording, frames]);
 
   function zoomTo(position: number, animate: boolean) {
     const view = viewport.current;
@@ -825,6 +848,7 @@ export function Timeline({
               rows={rows}
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
+              audioControls={audioControls}
             />
             {trackMenu && (
               <div
@@ -880,6 +904,22 @@ export function Timeline({
                   />
                 ))}
                 <canvas className="tl-bodies" ref={canvas} />
+                {recording &&
+                  layout.rows
+                    .filter((row) => row.track.index === recording.track)
+                    .map((row) => (
+                      <i
+                        key={row.track.index}
+                        className="vo-take-region"
+                        ref={takeRegion}
+                        aria-label="Recording voiceover take"
+                        style={{
+                          "--s": recording.start,
+                          top: row.top,
+                          height: row.height,
+                        }}
+                      />
+                    ))}
                 {clips
                   .filter(({ clip }) => agentChanges?.has(clip.id))
                   .map(({ clip, row }) => (

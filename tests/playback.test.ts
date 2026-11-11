@@ -42,6 +42,12 @@ function runtime(length: number) {
       seeks.push(seconds);
     },
     time: () => time,
+    clock: () => ({
+      source: "cutroom-preview",
+      type: "clock",
+      time,
+      at: performance.timeOrigin + now,
+    }),
     playing: () => playing,
     setMuted: () => {},
   };

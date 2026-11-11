@@ -233,7 +233,23 @@ export function App() {
       .catch((error: unknown) =>
         showToast(error instanceof Error ? error.message : String(error)),
       );
-    const change = () => setProjectId(projectFromHash());
+    const change = () => {
+      const next = projectFromHash();
+      const current = activeProjectId.current;
+      if (
+        current &&
+        next !== current &&
+        useWorkspace.getState().beforeProjectChange?.() === false
+      ) {
+        history.replaceState(
+          null,
+          "",
+          `#project/${encodeURIComponent(current)}`,
+        );
+        return;
+      }
+      setProjectId(next);
+    };
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, [loadProjects]);
@@ -320,6 +336,11 @@ export function App() {
     setDialog(null);
   }
   function openProject(next: Project) {
+    if (
+      next.id !== projectId &&
+      useWorkspace.getState().beforeProjectChange?.() === false
+    )
+      return;
     projectOpening.current = null;
     setCreating(false);
     window.location.hash = `project/${encodeURIComponent(next.id)}?v=1&rc=1&tv=1`;
@@ -836,9 +857,13 @@ export function App() {
                 <input
                   type="checkbox"
                   checked={newEditor}
-                  onChange={(event) =>
-                    useWorkspace.setState({ newEditor: event.target.checked })
-                  }
+                  onChange={(event) => {
+                    if (
+                      useWorkspace.getState().beforeProjectChange?.() === false
+                    )
+                      return;
+                    useWorkspace.setState({ newEditor: event.target.checked });
+                  }}
                 />
                 New editor
               </label>

@@ -12,6 +12,11 @@ import {
   Stop,
 } from "@phosphor-icons/react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  VoiceoverTransport,
+  VoiceoverRecordMark,
+} from "../voiceover/Voiceover";
+import type { VoiceoverSession } from "../voiceover/session";
 import { hint } from "../keymap";
 import {
   formatTimecode,
@@ -39,7 +44,7 @@ function useFrameText(
   }, []);
 }
 
-function Timecode() {
+function Timecode({ voiceover }: { voiceover: VoiceoverSession }) {
   const head = useRef<HTMLSpanElement>(null);
   const frames = useRef<HTMLSpanElement>(null);
   const [digits, setDigits] = useState<string | null>(null);
@@ -91,6 +96,8 @@ function Timecode() {
         />
       )}
       <span className="edit-duration">{formatTimecode(duration, fps)}</span>
+      {/* After the clock, so starting a take never moves the timecode. */}
+      <VoiceoverRecordMark session={voiceover} />
     </div>
   );
 }
@@ -145,9 +152,11 @@ function ScrubTrack() {
 }
 
 export function TransportBar({
+  voiceover,
   fullscreen,
   onFullscreen,
 }: {
+  voiceover: VoiceoverSession;
   fullscreen: boolean;
   onFullscreen: () => void;
 }) {
@@ -164,7 +173,7 @@ export function TransportBar({
     <>
       {fullscreen && <ScrubTrack />}
       <div className="edit-transport" aria-label="Transport">
-        <Timecode />
+        <Timecode voiceover={voiceover} />
         <div className="edit-transport-controls">
           <span className="edit-shuttle" />
           <button
@@ -226,6 +235,7 @@ export function TransportBar({
           >
             <SkipForward size={16} />
           </button>
+          <VoiceoverTransport session={voiceover} />
           <span className="edit-shuttle" aria-label="Shuttle speed">
             {shuttle}
           </span>

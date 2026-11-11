@@ -31,8 +31,8 @@ export interface Slide {
 
 /** Waveform columns for one row, by whether their clip is on, and by colour. */
 const paths = () => ({
-  on: { audio: new Path2D(), video: new Path2D() },
-  off: { audio: new Path2D(), video: new Path2D() },
+  on: { audio: new Path2D(), video: new Path2D(), voiceover: new Path2D() },
+  off: { audio: new Path2D(), video: new Path2D(), voiceover: new Path2D() },
 });
 
 /** The view rests this long before single frames are asked for, so a zoom asks once. */
@@ -65,7 +65,11 @@ export function createBodies(
     locked: Number(token("--track-locked-opacity")),
     seam: token("--clip-filmstrip-seam"),
     scrim: token("--clip-video-body"),
-    wave: { audio: token("--wave-audio"), video: token("--wave-video") },
+    wave: {
+      audio: token("--wave-audio"),
+      video: token("--wave-video"),
+      voiceover: token("--wave-vo"),
+    },
     off: {
       filter: token("--clip-disabled-filter"),
       opacity: Number(token("--clip-disabled-opacity")),
@@ -241,7 +245,11 @@ export function createBodies(
       let pairs: Float32Array | undefined;
       const bars =
         waves[clip.enabled ? "on" : "off"][
-          clip.kind === "audio" ? "audio" : "video"
+          clip.kind === "voiceover"
+            ? "voiceover"
+            : clip.kind === "audio"
+              ? "audio"
+              : "video"
         ];
       for (let x = xa; x < xb; x++) {
         const from = Math.floor(first + x * perBucket);
@@ -435,7 +443,7 @@ export function createBodies(
         corners.push([x0, clipBottom], [x1 - hair, clipBottom]);
       }
       for (const state of ["on", "off"] as const)
-        for (const kind of ["audio", "video"] as const) {
+        for (const kind of ["audio", "video", "voiceover"] as const) {
           ctx.filter = state === "off" ? tokens.off.filter : "none";
           ctx.globalAlpha = alpha * (state === "off" ? tokens.off.opacity : 1);
           ctx.fillStyle = tokens.wave[kind];

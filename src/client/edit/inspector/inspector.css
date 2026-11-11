@@ -285,3 +285,7 @@
   text-align: right;
   padding-bottom: var(--space-1);
 }
+
+.inspector-clip[data-kind="voiceover"]::before {
+  background: var(--clip-vo);
+}

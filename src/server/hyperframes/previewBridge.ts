@@ -31,6 +31,16 @@ function installPreviewBridge() {
     const meter = win.__hf?.audioMeter;
     meter?.start();
     const level = win.__player?.isPlaying() ? meter?.read().master : null;
+    if (win.__player?.isPlaying())
+      parent.postMessage(
+        {
+          source: "cutroom-preview",
+          type: "clock",
+          time: win.__player.getTime(),
+          at: performance.timeOrigin + performance.now(),
+        },
+        "*",
+      );
     parent.postMessage(
       {
         source: "cutroom-preview",
