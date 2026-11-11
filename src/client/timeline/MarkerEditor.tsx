@@ -74,9 +74,10 @@ export function MarkerEditor({
         if (event.newState === "closed") onClose();
       }}
       onKeyDown={(event) => {
+        // Keys pressed in the editor are for the editor: Space picks a colour, never plays.
+        event.stopPropagation();
         if (event.key !== "Escape") return;
         event.preventDefault();
-        event.stopPropagation();
         onClose();
       }}
     >

@@ -147,7 +147,7 @@ export const isTyping = (target: EventTarget | null) =>
   target instanceof Element &&
   (!!target.ownerDocument.querySelector("dialog[open]") ||
     !!target.closest(
-      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog, [role=dialog]",
+      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
 
 export function actionFor(event: KeyboardEvent): Action | null {
