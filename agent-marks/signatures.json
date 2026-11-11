@@ -5,33 +5,36 @@
   "versions": {
     "main": {
       "changed": {
-        "p50Ms": 8.404,
-        "p95Ms": 15.649
+        "p50Ms": 8.839,
+        "p95Ms": 19.091
       },
       "unchanged": {
-        "p50Ms": 8.47,
-        "p95Ms": 13.271
+        "p50Ms": 8.922,
+        "p95Ms": 14.078
       }
     },
     "reviewed": {
       "changed": {
-        "p50Ms": 4.543,
-        "p95Ms": 9.552
+        "p50Ms": 4.224,
+        "p95Ms": 7.35
       },
       "unchanged": {
-        "p50Ms": 0.027,
-        "p95Ms": 0.086
+        "p50Ms": 0.029,
+        "p95Ms": 0.073
       }
     },
     "reworked": {
       "changed": {
-        "p50Ms": 7.425,
-        "p95Ms": 15.242
+        "p50Ms": 8.68,
+        "p95Ms": 17.253
       },
       "unchanged": {
-        "p50Ms": 0.026,
-        "p95Ms": 0.063
+        "p50Ms": 0.024,
+        "p95Ms": 0.068
       }
     }
-  }
+  },
+  "base": "75bc255473f98b4b55c811cce8594f23aacbb3d5",
+  "head": "9b3e6b4ef82962ec9129ccc58e21d6ab67fabcdd",
+  "method": "Signature algorithms use the final timeline parser. 20 warmups, 60 interleaved samples per algorithm."
 }
