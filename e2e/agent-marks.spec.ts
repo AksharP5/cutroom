@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { seekFrame } from "./position-helpers";
@@ -212,3 +213,115 @@ for (const [name, before, after, expectedX] of [
     await expect(rows).toHaveCount(0);
   });
 }
+
+test("replacing rendered media reviews its clip and keeps owner replacements unmarked", async ({
+  page,
+  request,
+}, testInfo) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Media replacement review",
+          width: 400,
+          height: 240,
+          duration: 5,
+        },
+      })
+    ).json(),
+  );
+  const base = `/api/cutroom/projects/${project.id}`;
+  const media = `/api/projects/${project.id}`;
+  const png = (color: string) => {
+    const result = spawnSync("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      `color=c=${color}:s=400x240`,
+      "-frames:v",
+      "1",
+      "-f",
+      "image2pipe",
+      "-c:v",
+      "png",
+      "pipe:1",
+    ]);
+    expect(result.status, result.stderr.toString()).toBe(0);
+    return result.stdout;
+  };
+  const red = png("red");
+  const blue = png("blue");
+  const upload = async (buffer: Buffer, agent = false) => {
+    const response = await request.post(`${media}/upload`, {
+      headers: agent ? { "x-cutroom-agent": "external" } : {},
+      multipart: { files: { name: "card.png", mimeType: "image/png", buffer } },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    expect((await response.json()).files).toEqual(["card.png"]);
+  };
+  await upload(red);
+  const original = SourceSchema.parse(
+    await (await request.get(`${base}/source`)).json(),
+  );
+  expect(
+    (
+      await request.put(`${base}/source`, {
+        data: {
+          path: "index.html",
+          expectedVersion: original.version,
+          content:
+            '<html><body style="margin:0"><main data-composition-id="main" data-width="400" data-height="240" data-duration="5"><img id="title" crossorigin="anonymous" src="card.png" data-start="0" data-duration="5" style="width:400px;height:240px"></main></body></html>',
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  const pixel = () =>
+    page
+      .frameLocator("iframe[data-live]")
+      .locator("#title")
+      .evaluate((element) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(element as HTMLImageElement, 0, 0, 1, 1);
+        return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      });
+  await expect.poll(pixel).toEqual([253, 0, 0]);
+  await page.screenshot({ path: testInfo.outputPath("asset-before.png") });
+  expect(
+    (
+      await request.delete(`${media}/files/card.png`, {
+        headers: { "x-cutroom-agent": "external" },
+      })
+    ).ok(),
+  ).toBe(true);
+  await upload(blue, true);
+  await expect.poll(pixel).toEqual([0, 0, 254]);
+  await expect(page.locator("[data-agent-change]")).toHaveCount(1);
+  const view = TimelineViewSchema.parse(
+    await (await request.get(`${base}/timeline`)).json(),
+  );
+  expect(view.agentChanges).toEqual(["title"]);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Accept agent changes", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("asset-after.png") });
+  await page
+    .getByRole("button", { name: "Accept agent changes", exact: true })
+    .click();
+  await expect(page.locator("[data-agent-change]")).toHaveCount(0);
+  expect((await request.delete(`${media}/files/card.png`)).ok()).toBe(true);
+  await upload(red);
+  await expect.poll(pixel).toEqual([253, 0, 0]);
+  expect(
+    TimelineViewSchema.parse(
+      await (await request.get(`${base}/timeline`)).json(),
+    ).agentChanges,
+  ).toEqual([]);
+  await expect(page.locator("[data-agent-change]")).toHaveCount(0);
+});

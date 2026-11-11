@@ -89,6 +89,19 @@ export function createHyperframesApi(
   });
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.use("/projects/:id/*", sourceWriteGuard(store));
+  api.use("/projects/:id/*", async (c, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return next();
+    const family = requestSubPath(c.req.url, "projects/:id").split("/")[0];
+    if (
+      !["upload", "files", "duplicate-file", "file-mutations"].includes(
+        family ?? "",
+      )
+    )
+      return next();
+    const project = await store.get(c.req.param("id") ?? "");
+    await resolveProject(project.id);
+    await reviews.editAssets(project, c.req.header(AGENT_HEADER), next);
+  });
   api.use("/render/*", async (c, next) => {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
@@ -246,7 +259,9 @@ export function createHyperframesApi(
     return url.href;
   };
 
-  const watchProject = (project: ResolvedProject) => {
+  const watchProject = async (project: ResolvedProject) => {
+    if (watchers.has(project.dir)) return;
+    await reviews.observeAssets(await store.get(project.id));
     if (watchers.has(project.dir)) return;
     const watcher = watch(
       project.dir,
@@ -312,6 +327,8 @@ export function createHyperframesApi(
                   : [],
                 ...(receipt ? { writeToken: receipt.writeToken } : {}),
               };
+              if (affects)
+                await reviews.observeAssets(await store.get(project.id));
               for (const subscriber of subscribers) subscriber(change);
             })().catch((error: unknown) =>
               console.error("Project watch failed:", error),
@@ -343,21 +360,23 @@ export function createHyperframesApi(
     ])
       await projectStatePath(project, path, true);
     const resolved = { id: project.id, dir: project.path, title: project.name };
-    watchProject(resolved);
+    await watchProject(resolved);
     return resolved;
   };
 
   const adapter: StudioApiAdapter = {
     async listProjects() {
-      return (await store.list()).map((project) => {
-        const resolved = {
-          id: project.id,
-          dir: project.path,
-          title: project.name,
-        };
-        watchProject(resolved);
-        return resolved;
-      });
+      return Promise.all(
+        (await store.list()).map(async (project) => {
+          const resolved = {
+            id: project.id,
+            dir: project.path,
+            title: project.name,
+          };
+          await watchProject(resolved);
+          return resolved;
+        }),
+      );
     },
     resolveProject,
     // The editor's undo, redo, and restore are the owner's, and can remove sent review notes.
