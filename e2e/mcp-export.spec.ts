@@ -245,3 +245,89 @@ test("stdio and HTTP MCP export marked and whole timelines, share the indicator,
     await Promise.all(clients.map((client) => client.close()));
   }
 });
+
+test("switching projects keeps export cancellation live and allows the next editor export", async ({
+  page,
+  request,
+  baseURL,
+}, testInfo) => {
+  const alpha = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Export Alpha", duration: 600, width: 320, height: 240 },
+      })
+    ).json(),
+  );
+  const beta = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Export Beta", duration: 2, width: 320, height: 240 },
+      })
+    ).json(),
+  );
+  const client = new Client({ name: "switch-export-test", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: new URL(baseURL!).origin } },
+      }),
+    );
+    await page.goto(`/#project/${alpha.id}`);
+    await expect(page.locator("iframe[data-live]")).toHaveCount(1);
+    const started = result(
+      Started,
+      await client.callTool({
+        name: "export_start",
+        arguments: { projectId: alpha.id },
+      }),
+    );
+    await page.getByRole("button", { name: /^Exporting/ }).click();
+    await expect(page.getByRole("dialog")).toContainText(started.outputPath);
+    await page.getByRole("button", { name: "Hide", exact: true }).click();
+    await page.evaluate((id) => {
+      location.hash = `project/${id}`;
+    }, beta.id);
+    await expect(page.locator(".project-switcher")).toHaveText(beta.name);
+    await expect(page.locator("iframe[data-live]")).toHaveCount(1);
+    result(
+      z.object({ status: z.literal("cancelled") }),
+      await client.callTool({
+        name: "export_cancel",
+        arguments: { jobId: started.jobId },
+      }),
+    );
+    await expect(page.locator(".export-indicator")).toHaveText("Export");
+    await page.locator(".export-indicator").click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Export cancelled. Partial output removed.",
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("switched-export-cancelled.png"),
+    });
+    await page.getByRole("button", { name: "New export", exact: true }).click();
+    const response = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/api/projects/${beta.id}/render`),
+    );
+    await page.getByRole("button", { name: "Export MP4", exact: true }).click();
+    const next = Started.parse(await (await response).json());
+    await page
+      .getByRole("button", { name: "Cancel export", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Export cancelled. Partial output removed.",
+    );
+    expect(
+      result(
+        ExportJobSchema,
+        await client.callTool({
+          name: "export_status",
+          arguments: { jobId: next.jobId },
+        }),
+      ).status,
+    ).toBe("cancelled");
+  } finally {
+    await client.close();
+  }
+});

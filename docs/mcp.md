@@ -76,11 +76,13 @@ Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the 
 - Omit `directory` to create the project's `.cutroom/renders` folder on demand. A chosen directory must be an absolute existing folder, under the same path validation as the dialog. App-state folders cannot be redirected through symlinks.
 - Omit `filename` to choose the next free project name, then a suffix from 2, in the chosen folder. An explicit filename must end in `.mp4` and cannot contain folders. Names are suggestions until publication. A taken destination fails without replacing it, even if another file appears during rendering.
 
+Only one export can run at a time across all projects, whether started in the editor or over MCP. A second start is refused with the running export's project, filename, and job ID. Wait for it to finish, or use `export_cancel` with that job ID and wait for cleanup before starting another export.
+
 The response includes `jobId` and `outputPath`. `export_status` takes `jobId` and returns `status`, `stage`, `stageProgress`, `progress` from 0 to 100, `estimate`, `outputPath`, `sizeBytes`, `error`, and timing/range/preset details. `estimate` is either null or `{ milliseconds, stage }` for the current stage, using the dialog's measured frame-rate estimator. Preparation, assembly, retries, and stalled progress do not claim an estimate. `sizeBytes` is available once published; `error` preserves the failure cause, including cleanup errors. Completed, failed, and cancelled jobs remain queryable for five minutes after cleanup, while the server remains running.
 
 `export_cancel` takes `jobId` and waits for worker shutdown and partial-output cleanup before returning `cancelled`. Cleanup failure returns an error and leaves the job `failed`. Cancellation after publication keeps the completed file. A native Cutroom agent can start and cancel jobs only for its active run's project. `export_status` is read-only. Start and cancel require separate native approval, including when **Always allow Cutroom edits** is enabled, because exports create output files beyond editable project source.
 
-Agent jobs appear in the open editor's Export indicator. The dialog can follow and cancel them, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
+Agent jobs appear in the open editor's Export indicator. The dialog follows the running job through completion or cancellation even if you switch projects, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
 
 For example, after `projects_list` and `timeline_read`:
 

@@ -201,7 +201,7 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
           expect(existsSync(outputPath)).toBe(false);
         } else {
           expect(cancelled.status).toBe(200);
-          expect(await cancelled.json()).toEqual({ status: "cancelled" });
+          expect(await cancelled.json()).toMatchObject({ status: "cancelled" });
           expect(existsSync(outputPath)).toBe(false);
         }
       } finally {

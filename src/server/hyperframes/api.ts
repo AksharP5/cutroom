@@ -597,7 +597,10 @@ export function createHyperframesApi(
   api.get("/projects/:id/export-jobs", async (c) => {
     const project = await store.get(c.req.param("id"));
     c.header("Cache-Control", "no-store");
-    return c.json({ jobs: renders.active(project.id).map(snapshot) });
+    const job = renders.active();
+    return c.json({
+      jobs: job?.projectId === project.id ? [snapshot(job)] : [],
+    });
   });
   api.get("/render/:jobId", (c) => {
     const job = renders.get(c.req.param("jobId"));
@@ -610,7 +613,7 @@ export function createHyperframesApi(
     reviews.authorize(c.req.header(AGENT_HEADER), job?.projectId);
     if (!job) throw new HttpError(404, "Export job not found.");
     await job.cancel();
-    return c.json({ status: job.status });
+    return c.json(snapshot(job));
   });
   // Studio's stream serializes only its own fields. Keep its jobs and controls,
   // and include the producer's stage counts while our worker is running.
@@ -644,19 +647,20 @@ export function createHyperframesApi(
       projectId: string,
       listener: (job: ReturnType<typeof snapshot>) => void,
     ) {
-      let latest = renders.active(projectId).at(-1);
+      let current = renders.active();
+      if (current?.projectId !== projectId) current = undefined;
       const notify = (job: NonNullable<ReturnType<typeof renders.get>>) => {
         if (job.projectId !== projectId) return;
-        latest = job;
+        current = job;
         listener(snapshot(job));
       };
       const stop = renders.subscribe(notify);
-      if (latest) notify(latest);
+      if (current) notify(current);
       // Share progress with the project connection rather than consuming another HTTP slot per tab.
       const timer = setInterval(() => {
-        if (!latest) return;
-        listener(snapshot(latest));
-        if (latest.status !== "rendering") latest = undefined;
+        if (!current) return;
+        listener(snapshot(current));
+        if (current.status !== "rendering") current = undefined;
       }, 500);
       return () => {
         clearInterval(timer);

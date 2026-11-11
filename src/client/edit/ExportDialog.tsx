@@ -96,11 +96,13 @@ export function ExportControl({
   const ready = useTimeline(
     (state) => state.projectId === projectId && state.view !== null,
   );
-  useEffect(() => {
-    if (ready) return observeExports(projectId);
-  }, [projectId, ready]);
   const job = useExport((state) => state.job);
   const active = exportActive(job);
+  const observedProject =
+    active && job ? job.projectId : ready ? projectId : null;
+  useEffect(() => {
+    if (observedProject) return observeExports(observedProject);
+  }, [observedProject]);
   const show = () => setOpen(true);
   useKeymap({ workspacePrimaryWorkspaceDeliver: show });
   return (

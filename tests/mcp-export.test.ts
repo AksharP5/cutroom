@@ -326,3 +326,69 @@ test("native cancellation authorizes the job's project and owner-started jobs ar
     await f.close();
   }
 });
+
+test("one active export refuses overlapping MCP and editor starts across projects", async () => {
+  const f = await fixture();
+  try {
+    const alpha = await f.store.create({
+      name: "Alpha",
+      duration: 600,
+      width: 320,
+      height: 240,
+    });
+    const beta = await f.store.create({
+      name: "Beta",
+      width: 320,
+      height: 240,
+    });
+    const running = result(
+      Started,
+      await f.client.callTool({
+        name: "export_start",
+        arguments: { projectId: alpha.id, filename: "Long.mp4" },
+      }),
+    );
+    const [mcp, editor] = await Promise.all([
+      f.client.callTool({
+        name: "export_start",
+        arguments: {
+          projectId: beta.id,
+          filename: "Short.mp4",
+          range: { start: 0, end: 1 },
+        },
+      }),
+      f.app.request(`/api/projects/${beta.id}/render`, {
+        method: "POST",
+        body: JSON.stringify({ format: "mp4" }),
+      }),
+    ]);
+    expect(mcp.isError).toBe(true);
+    expect(editor.status).toBe(409);
+    const error = z
+      .object({ error: z.string() })
+      .parse(await editor.json()).error;
+    for (const message of [JSON.stringify(mcp), error]) {
+      expect(message).toContain("Alpha");
+      expect(message).toContain("Long.mp4");
+      expect(message).toContain(running.jobId);
+      expect(message).toContain("wait");
+      expect(message).toContain("export_cancel");
+    }
+    result(
+      z.object({ status: z.literal("cancelled") }),
+      await f.client.callTool({
+        name: "export_cancel",
+        arguments: { jobId: running.jobId },
+      }),
+    );
+    result(
+      Started,
+      await f.client.callTool({
+        name: "export_start",
+        arguments: { projectId: beta.id },
+      }),
+    );
+  } finally {
+    await f.close();
+  }
+});

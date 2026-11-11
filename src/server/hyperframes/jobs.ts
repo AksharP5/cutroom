@@ -95,18 +95,15 @@ export function createRenderWorkers(
       if (job.finishedAt !== null && Date.now() - job.finishedAt > 300_000)
         jobs.delete(id);
   };
+  const active = () =>
+    [...jobs.values()].find((job) => job.status === "rendering");
   let closing = false;
   return {
     get(jobId: string) {
       prune();
       return jobs.get(jobId);
     },
-    active(projectId: string) {
-      prune();
-      return [...jobs.values()].filter(
-        (job) => job.projectId === projectId && job.status === "rendering",
-      );
-    },
+    active,
     subscribe(listener: (job: RenderState) => void) {
       subscribers.add(listener);
       return () => {
@@ -115,6 +112,12 @@ export function createRenderWorkers(
     },
     start(options: RenderOptions, output?: ExportOptions): RenderState {
       if (closing) throw new HttpError(503, "The renderer is shutting down.");
+      const running = active();
+      if (running)
+        throw new HttpError(
+          409,
+          `Export "${running.name}" to "${basename(running.outputPath)}" is running. Please wait for it to finish or cancel it with export_cancel using jobId "${running.id}".`,
+        );
       let worker: ReturnType<typeof Bun.spawn> | undefined;
       let errors: Promise<string> | undefined;
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;

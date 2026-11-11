@@ -23,7 +23,7 @@ export function registerExportTools(
     "export_start",
     {
       description:
-        "Export MP4 through the editor's render jobs. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. Never overwrites a file.",
+        "Export MP4 through the editor's render jobs. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. Never overwrites a file. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
       inputSchema: ExportStartSchema.extend({ projectId: z.string() }),
       annotations: edit,
     },
@@ -48,7 +48,7 @@ export function registerExportTools(
     "export_cancel",
     {
       description:
-        "Cancel an editor or agent export and wait for worker and partial-file cleanup. A file already published stays complete. Cleanup failures are reported, never hidden as successful cancellation.",
+        "Cancel an editor or agent export and wait for worker and partial-file cleanup. A file already published stays complete. Cleanup failures are reported, never hidden as successful cancellation. Once cleanup finishes, another export can start.",
       inputSchema: job,
       annotations: edit,
     },

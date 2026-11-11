@@ -66,15 +66,13 @@ const updateJob = (change: Partial<ExportJob>) =>
 function receiveExport(job: z.infer<typeof ExportJobSchema>) {
   const current = useExport.getState().job;
   const sameJob = current?.jobId === job.jobId;
-  const sameProject = current?.projectId === job.projectId;
-  if (
-    useTimeline.getState().projectId !== job.projectId ||
-    (sameProject && current?.status === "starting") ||
-    (!sameJob && sameProject && current.startedAt > job.startedAt)
-  )
-    return;
+  if (current?.status === "starting") return;
+  if (!sameJob && useTimeline.getState().projectId !== job.projectId) return;
   const timeline = useTimeline.getState().view?.timeline;
-  if (!timeline) return;
+  const frames = sameJob
+    ? current.frames
+    : (job.range ?? (timeline && { start: 0, end: timeline.duration }));
+  if (!frames) return;
   const size = useWorkspace.getState().composition;
   let notice = sameJob ? current.notice : "";
   if (job.audioLoweredDb !== undefined) {
@@ -95,9 +93,7 @@ function receiveExport(job: z.infer<typeof ExportJobSchema>) {
         : size?.width && size.height
           ? { width: size.width, height: size.height }
           : null,
-      frames: sameJob
-        ? current.frames
-        : (job.range ?? { start: 0, end: timeline.duration }),
+      frames,
       error: job.error ?? "",
       notice,
     },
@@ -274,10 +270,12 @@ export async function cancelExport() {
   if (!job?.jobId || !exportActive(job) || job.status === "cancelling") return;
   updateJob({ status: "cancelling" });
   try {
-    await renderApi(
-      `/render/${encodeURIComponent(job.jobId)}/cancel`,
-      z.object({ status: z.string() }),
-      { method: "POST" },
+    receiveExport(
+      await renderApi(
+        `/render/${encodeURIComponent(job.jobId)}/cancel`,
+        ExportJobSchema,
+        { method: "POST" },
+      ),
     );
   } catch (error) {
     useExport.setState({
