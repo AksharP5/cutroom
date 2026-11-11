@@ -32,6 +32,8 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
 
 `setClip.opacity` sets static inline opacity from 0 to 1, canonical to six decimals; `null` removes the inline override. `setTiming` sets `playbackRate` or `mediaStart` in source seconds while keeping timeline duration and linked source sync. Both use the same commands and undo history as the inspector. Timeline reads also include `clipEdits`, the recent owner/agent ledger, and `agentChanges`, the clips still underlined for review.
 
+`label` is the past-tense summary the owner sees in history and in the inspector's Changes list. Omit it and the edit is named from its commands, the same way the editor names its own edits (for example "Moved 15 frames right" or "Set gain to -6.0 dB").
+
 For example, this razors every unlocked auto-select track at frame 90 and ripple deletes the first half of a linked clip:
 
 ```json

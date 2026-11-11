@@ -4,7 +4,11 @@ import type {
   Fps,
   Timeline,
 } from "../../../shared/timeline/schema";
-import { formatTimecode, parseTimecode } from "../timecode";
+import { formatPercent } from "../../../shared/timeline/labels";
+import {
+  formatTimecode,
+  parseTimecode,
+} from "../../../shared/timeline/timecode";
 
 export type FieldUnit = "timecode" | "percent";
 export type TimingField = "start" | "duration" | "speed" | "sourceIn";
@@ -31,7 +35,7 @@ export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
     ? "Auto"
     : unit === "timecode"
       ? formatTimecode(value, fps)
-      : `${Number((value * 100).toFixed(4))}%`;
+      : formatPercent(value);
 
 /** Uses the same move and trim commands as the timeline, with source timing shared by linked media. */
 export function timingCommands(

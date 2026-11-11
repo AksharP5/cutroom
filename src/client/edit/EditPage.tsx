@@ -19,12 +19,12 @@ import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
-import { hint, keymap, useKeymap } from "../keymap";
+import { hint, isTyping, keymap, useKeymap } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { api, subscribeProjectEvents } from "../api";
 import { noteNumbers } from "../review";
-import { reportEditorError, showToast } from "../workspace";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import "./edit.css";
 import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { exportProject, useExport } from "./export";
@@ -174,6 +174,33 @@ export function EditPage({
       setFullscreen(document.fullscreenElement === viewer.current);
     document.addEventListener("fullscreenchange", change);
     return () => document.removeEventListener("fullscreenchange", change);
+  }, []);
+  useEffect(() => {
+    const closeDrawer = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        isTyping(event.target) ||
+        !useWorkspace.getState().inspector
+      )
+        return;
+      const width = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--breakpoint-drawer",
+        ),
+      );
+      if (!matchMedia(`(width < ${width}px)`).matches) return;
+      event.preventDefault();
+      useWorkspace.setState({ inspector: false });
+      page.current
+        ?.querySelector<HTMLButtonElement>(
+          '.edit-tools [aria-label="Inspector"]',
+        )
+        ?.focus();
+    };
+    // Fields cancel first; consume Escape before the window's selection shortcuts.
+    document.addEventListener("keydown", closeDrawer);
+    return () => document.removeEventListener("keydown", closeDrawer);
   }, []);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();

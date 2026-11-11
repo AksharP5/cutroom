@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState } from "react";
-import { SidebarSimple, X } from "@phosphor-icons/react";
+import { CaretRight, SidebarSimple, X } from "@phosphor-icons/react";
 import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
@@ -8,13 +8,14 @@ import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
-import { clipName, trackRows } from "../../timeline/math";
+import { trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
-import { formatTimecode } from "../timecode";
-import { formatField, timingCommands } from "./fields";
+import { formatTimecode } from "../../../shared/timeline/timecode";
+import { timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
+import { pendingEdit, shownChanges } from "./changes";
 
 export function InspectorToggle() {
   const open = useWorkspace((state) => state.inspector);
@@ -36,6 +37,10 @@ export function Inspector({ projectId }: { projectId: string }) {
   const open = useWorkspace((state) => state.inspector);
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
+  const root = useRef<HTMLElement>(null);
+  const [changesOpen, setChangesOpen] = useState(true);
+  const [compositeOpen, setCompositeOpen] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
   // Closing the project cancels a pending reload, like the timeline's own read.
   const closing = useRef(new AbortController());
@@ -44,26 +49,22 @@ export function Inspector({ projectId }: { projectId: string }) {
     closing.current = controller;
     return () => controller.abort();
   }, [projectId]);
-  const [timingOpen, setTimingOpen] = useState(
-    () =>
-      window.innerHeight >=
-      Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue(
-          "--breakpoint-short",
-        ),
-      ),
-  );
+  const [timingOpen, setTimingOpen] = useState(true);
   useEffect(() => {
-    const height = Number.parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue(
-        "--breakpoint-short",
-      ),
-    );
-    const query = matchMedia(`(height < ${height}px)`);
-    const change = () => setTimingOpen(!query.matches);
-    query.addEventListener("change", change);
-    return () => query.removeEventListener("change", change);
+    // Timeline presses prevent the browser's usual blur. Commit before they change selection.
+    const blur = (event: PointerEvent) => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLInputElement &&
+        root.current?.contains(active) &&
+        active !== event.target
+      )
+        active.blur();
+    };
+    document.addEventListener("pointerdown", blur, true);
+    return () => document.removeEventListener("pointerdown", blur, true);
   }, []);
+  useEffect(() => setExpanded(false), [selection.anchor]);
   useEffect(() => {
     if (mode !== "draw" && mode !== "comment") return;
     const width = Number.parseFloat(
@@ -84,9 +85,16 @@ export function Inspector({ projectId }: { projectId: string }) {
     timeline?.clips.find(
       (item) => item.id === selection.anchor && selection.ids.has(item.id),
     ) ?? timeline?.clips.find((item) => selection.ids.has(item.id));
+  const name =
+    clip &&
+    (clip.label?.trim() ||
+      clip.src?.split("/").at(-1) ||
+      clip.id
+        .replaceAll(/[-_]+/g, " ")
+        .replace(/^./, (letter) => letter.toUpperCase()));
   const edits =
-    view?.clipEdits?.filter((edit) => edit.clipId === clip?.id).toReversed() ??
-    [];
+    view?.clipEdits?.filter((edit) => edit.clipId === clip?.id) ?? [];
+  const shown = shownChanges(edits, expanded);
   const accept = async (editId: string) => {
     setAccepting(editId);
     const { signal } = closing.current;
@@ -115,14 +123,13 @@ export function Inspector({ projectId }: { projectId: string }) {
     }).rows.find((row) => row.track.index === clip.track);
   const timing = (field: TimingField, value: number | null) => {
     if (!clip || !timeline || value === null) return;
-    void editTimeline(
-      projectId,
-      `Set ${field === "sourceIn" ? "source in" : field} to ${formatField(value, field === "speed" ? "percent" : "timecode", timeline.fps)}`,
-      (current) => timingCommands(current, clip.id, field, value),
+    void editTimeline(projectId, "Edit timing", (current) =>
+      timingCommands(current, clip.id, field, value),
     );
   };
   return (
     <aside
+      ref={root}
       id="clip-inspector"
       className="clip-inspector"
       aria-label="Inspector"
@@ -138,30 +145,68 @@ export function Inspector({ projectId }: { projectId: string }) {
           <X size={14} />
         </button>
       </header>
-      {!clip || !timeline ? (
+      {selection.ids.size > 1 ? (
+        <p className="inspector-empty">{selection.ids.size} clips selected</p>
+      ) : !clip || !timeline ? (
         <p className="inspector-empty">Select a clip to inspect it.</p>
       ) : (
-        <div className="inspector-content" key={clip.id}>
+        <div className="inspector-content">
           <div className="inspector-clip" data-kind={clip.kind}>
-            <strong>{clipName(clip)}</strong>
+            <strong title={name || undefined}>{name}</strong>
             <span>
               {clip.kind === "element"
-                ? "Element"
+                ? "Text"
                 : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
               on {track?.id} ·{" "}
               <time>{formatTimecode(clip.start, timeline.fps)}</time>
             </span>
           </div>
-          <details open className="inspector-section">
-            <summary>Changes</summary>
+          <details
+            open={changesOpen}
+            onToggle={(event) => setChangesOpen(event.currentTarget.open)}
+            className="inspector-section"
+          >
+            <summary>
+              <CaretRight size={10} aria-hidden />
+              Changes
+            </summary>
             <ol className="inspector-changes">
-              {edits.map((edit) => (
+              {shown.map((edit) => (
                 <li key={edit.id} data-by={edit.by}>
-                  <span title={edit.at}>{edit.label}</span>
+                  <span
+                    title={[
+                      edit.label,
+                      edit.at &&
+                        new Date(edit.at).toLocaleString(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  >
+                    {edit.label
+                      .split(/(\d{2}:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?%?)/g)
+                      .map((part, index) =>
+                        index % 2 ? (
+                          <span className="inspector-number" key={index}>
+                            {part}
+                          </span>
+                        ) : (
+                          part
+                        ),
+                      )}
+                  </span>
                   {edit.by === "human" ? (
                     <small>You</small>
-                  ) : edit.accepted ? (
-                    <small>Accepted</small>
+                  ) : !pendingEdit(edit) ? (
+                    <small>
+                      {edit.accepted
+                        ? "Accepted"
+                        : edit.resolution === "owner"
+                          ? "Edited by you"
+                          : "Source changed"}
+                    </small>
                   ) : (
                     <button
                       disabled={accepting !== null}
@@ -173,14 +218,31 @@ export function Inspector({ projectId }: { projectId: string }) {
                 </li>
               ))}
             </ol>
+            {(expanded || shown.length < edits.length) && (
+              <button
+                className="inspector-show-all"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? "Show less" : `Show all (${edits.length})`}
+              </button>
+            )}
             {!edits.length && (
               <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
           {clip.kind !== "audio" && (
-            <details open className="inspector-section">
-              <summary>Composite</summary>
+            <details
+              open={compositeOpen}
+              onToggle={(event) => setCompositeOpen(event.currentTarget.open)}
+              className="inspector-section"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Composite
+              </summary>
               <ValueField
+                key={clip.id}
                 label="Opacity"
                 allowAuto
                 max={1}
@@ -188,11 +250,9 @@ export function Inspector({ projectId }: { projectId: string }) {
                 unit="percent"
                 fps={timeline.fps}
                 onCommit={(opacity) => {
-                  void editTimeline(
-                    projectId,
-                    `Set opacity to ${formatField(opacity, "percent", timeline.fps)}`,
-                    () => [{ type: "setClip", clipId: clip.id, opacity }],
-                  );
+                  void editTimeline(projectId, "Edit opacity", () => [
+                    { type: "setClip", clipId: clip.id, opacity },
+                  ]);
                 }}
               />
             </details>
@@ -202,8 +262,12 @@ export function Inspector({ projectId }: { projectId: string }) {
             open={timingOpen}
             onToggle={(event) => setTimingOpen(event.currentTarget.open)}
           >
-            <summary>Timing</summary>
+            <summary>
+              <CaretRight size={10} aria-hidden />
+              Timing
+            </summary>
             <ValueField
+              key={`${clip.id}:start`}
               label="Start"
               value={clip.start}
               unit="timecode"
@@ -211,34 +275,35 @@ export function Inspector({ projectId }: { projectId: string }) {
               onCommit={(value) => timing("start", value)}
             />
             <ValueField
+              key={`${clip.id}:duration`}
               label="Duration"
               value={clip.duration}
               unit="timecode"
               fps={timeline.fps}
               onCommit={(value) => timing("duration", value)}
             />
-            <ValueField
-              label="Speed"
-              value={clip.playbackRate}
-              unit="percent"
-              min={MIN_PLAYBACK_RATE}
-              max={MAX_PLAYBACK_RATE}
-              fps={timeline.fps}
-              disabled={clip.mediaStart === null}
-              onCommit={(value) => timing("speed", value)}
-            />
-            <ValueField
-              label="Source in"
-              value={
-                clip.mediaStart === null
-                  ? 0
-                  : toFrames(clip.mediaStart, timeline.fps)
-              }
-              unit="timecode"
-              fps={timeline.fps}
-              disabled={clip.mediaStart === null}
-              onCommit={(value) => timing("sourceIn", value)}
-            />
+            {clip.src !== null && clip.mediaStart !== null && (
+              <>
+                <ValueField
+                  key={`${clip.id}:speed`}
+                  label="Speed"
+                  value={clip.playbackRate}
+                  unit="percent"
+                  min={MIN_PLAYBACK_RATE}
+                  max={MAX_PLAYBACK_RATE}
+                  fps={timeline.fps}
+                  onCommit={(value) => timing("speed", value)}
+                />
+                <ValueField
+                  key={`${clip.id}:sourceIn`}
+                  label="Source in"
+                  value={toFrames(clip.mediaStart, timeline.fps)}
+                  unit="timecode"
+                  fps={timeline.fps}
+                  onCommit={(value) => timing("sourceIn", value)}
+                />
+              </>
+            )}
           </details>
         </div>
       )}

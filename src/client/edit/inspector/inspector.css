@@ -63,9 +63,29 @@
 }
 .inspector-clip {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: var(--space-3) minmax(0, 1fr);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
   padding: var(--space-3);
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.inspector-clip::before {
+  content: "";
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-clip);
+  background: var(--clip-comp);
+  grid-row: 1 / 3;
+  align-self: center;
+}
+.inspector-clip[data-kind="video"]::before {
+  background: var(--clip-video);
+}
+.inspector-clip[data-kind="audio"]::before {
+  background: var(--clip-audio);
+}
+.inspector-clip[data-kind="image"]::before {
+  background: var(--clip-image);
 }
 .inspector-clip strong {
   overflow: hidden;
@@ -86,13 +106,21 @@
 }
 .inspector-section summary {
   min-height: var(--size-section-head);
-  align-content: center;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
   font-weight: var(--weight-semibold);
   cursor: default;
 }
-.inspector-section summary::marker {
+.inspector-section summary::-webkit-details-marker {
+  display: none;
+}
+.inspector-section summary svg {
   color: var(--text-tertiary);
-  font-size: var(--type-2xs);
+}
+.inspector-section[open] > summary svg {
+  transform: rotate(90deg);
 }
 .inspector-section:not([open]) {
   padding-bottom: 0;
@@ -110,8 +138,7 @@
   padding: 0;
   list-style: none;
 }
-.inspector-changes li,
-.inspector-legacy-change {
+.inspector-changes li {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -138,8 +165,33 @@
   color: var(--text-tertiary);
   font-size: var(--type-xs);
 }
-.inspector-legacy-change {
-  justify-content: space-between;
+.inspector-changes button {
+  font-weight: var(--weight-semibold);
+}
+.inspector-changes small {
+  white-space: nowrap;
+}
+.inspector-show-all {
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.inspector-number {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-size: var(--type-xs);
+}
+.inspector-value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.inspector-value button {
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+}
+.inspector-value button[aria-pressed="true"] {
+  color: var(--text-primary);
 }
 .inspector-field {
   display: grid;

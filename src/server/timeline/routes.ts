@@ -26,6 +26,7 @@ import type {
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
 import { readSource } from "../projects/store";
+import { editLabel } from "../../shared/timeline/labels";
 import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
@@ -198,8 +199,7 @@ export function createTimelineRoutes(
         composition,
         revision,
         timeline: parsed.timeline,
-        agentChanges: await reviews.changedClips(project, composition),
-        clipEdits: await reviews.recentEdits(project, composition),
+        ...(await reviews.clipChanges(project, composition)),
       } satisfies TimelineView);
     } catch (error) {
       return refused(c, error);
@@ -208,8 +208,17 @@ export function createTimelineRoutes(
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(CommandBatchSchema, await c.req.json());
-    const batch = { ...input, composition: canonical(input.composition) };
+    const composition = canonical(input.composition);
     try {
+      // Agents may omit the label; the edit is then named from its commands, as the editor names its own.
+      const label =
+        input.label ??
+        editLabel(
+          input.commands,
+          (await read(project, composition)).parsed.timeline,
+          "Edited timeline",
+        );
+      const batch = { ...input, composition, label };
       return c.json({
         ...(await reviews.editComposition(
           project,
@@ -226,8 +235,7 @@ export function createTimelineRoutes(
             ),
           batch.noteId,
         )),
-        agentChanges: await reviews.changedClips(project, batch.composition),
-        clipEdits: await reviews.recentEdits(project, batch.composition),
+        ...(await reviews.clipChanges(project, batch.composition)),
       });
     } catch (error) {
       return refused(c, error);

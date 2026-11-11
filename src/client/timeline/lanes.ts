@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
 import type { CommandInput, Timeline } from "../../shared/timeline/schema";
 import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
-import { formatTimecode } from "../edit/timecode";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
 import type { Bodies } from "./bodies";
 import {

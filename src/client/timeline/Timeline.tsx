@@ -52,7 +52,7 @@ import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
 import type { TimelineViewport } from "./view";
-import { formatTimecode } from "../edit/timecode";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { useKeymap } from "../keymap";
 import "./timeline.css";
 

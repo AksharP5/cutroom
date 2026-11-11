@@ -2,7 +2,7 @@ import { mediaSettings, peakLevels } from "../../shared/media";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
 import { newTrack } from "../../shared/timeline/tracks";
-import { nominal } from "../edit/timecode";
+import { nominal } from "../../shared/timeline/timecode";
 
 /** A CSS time in milliseconds. Built CSS is minified, which writes `220ms` as `.22s`. */
 export const cssMilliseconds = (time: string) =>
