@@ -44,6 +44,7 @@ export function createThumbnailRenderer() {
     }));
 
   return {
+    getBrowser,
     async capture(options: ThumbnailOptions): Promise<Buffer | null> {
       if (closing || options.signal.aborted) return null;
       let page: Page | undefined;

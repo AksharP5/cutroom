@@ -34,7 +34,10 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
       .evaluate((el) => el.getBoundingClientRect().left);
   await expect.poll(x).toBe(60);
   const commands: string[] = [];
+  const serverRequests: string[] = [];
+  let measuring = false;
   page.on("request", (r) => {
+    if (measuring && r.url().includes("/api/")) serverRequests.push(r.url());
     if (r.method() === "POST" && r.url().endsWith("/commands"))
       commands.push(r.postData()!);
   });
@@ -101,6 +104,7 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
     stats.timeline = 0;
     (stats as unknown as { mutations: string[] }).mutations = [];
   });
+  measuring = true;
   for (let i = 1; i <= 60; i++) {
     await page.mouse.move(box.x + 10 + i * 2, box.y + 5);
     await page.evaluate(
@@ -112,6 +116,7 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
         path: info.outputPath("scrub-60.png"),
       });
   }
+  measuring = false;
   const during = await x();
   const stats = await page.evaluate(() => {
     const stats = (
@@ -146,6 +151,7 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
         pictureX: during,
         field: await field.inputValue(),
         commandsDuring: commands.length,
+        serverRequestsDuring: serverRequests.length,
       },
       null,
       2,
@@ -154,6 +160,7 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
   expect(during).toBe(180);
   expect(commands).toHaveLength(0);
   expect(stats.iframeAdditions).toBe(0);
+  expect(serverRequests).toEqual([]);
   expect(stats.timelineMutations).toBe(0);
   await page.mouse.up();
   await expect(field).toHaveValue("120 px");

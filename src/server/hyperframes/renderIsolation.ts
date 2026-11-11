@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { previewPolicy } from "./isolation.ts";
-import type { RenderJob } from "@hyperframes/producer";
+import type { FileServerHandle, RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 
 let rangeProgress: ((job: RenderJob) => void) | undefined;
@@ -41,6 +41,7 @@ function replaceOnce(
 export function registerRenderIsolation(
   sources: Record<string, string> = {},
   range?: { range: Fps | undefined; progress: (job: RenderJob) => void },
+  positionChecks = false,
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const name of ["producer", "engine"]) {
@@ -213,6 +214,22 @@ export function registerRenderIsolation(
           '    mediaEls.forEach((el) => {\n      const htmlEl = el;\n      if (htmlEl.closest("[data-hidden]")) return;',
           url,
         );
+        if (positionChecks) {
+          source += `
+export async function createPositionDocument(projectDir, htmlPath, html, workDir, fps, sources) {
+            Object.assign(cutroomSources, sources);
+            cutroomSources[htmlPath] = html;
+            try {
+              const compiled = await compileForRender(projectDir, htmlPath, join3(workDir, "downloads"));
+              writeCompiledArtifacts(compiled, workDir, false);
+            } finally {
+              for (const path of Object.keys(sources)) delete cutroomSources[path];
+              delete cutroomSources[htmlPath];
+            }
+            return createFileServer({projectDir, compiledDir: join3(workDir, "compiled"),
+              fps, preHeadScripts: [VIRTUAL_TIME_SHIM]});
+          }`;
+        }
         producerLoaded = true;
       } else {
         source = `import { isolateCapturePage as cutroomIsolatePage } from ${isolation};\n${source}`;
@@ -239,4 +256,16 @@ export function registerRenderIsolation(
         "The HyperFrames render isolation hooks did not load. Export was refused.",
       );
   };
+}
+
+/** The private producer adapter above returns only its public file-server handle. */
+export interface PositionProducer {
+  createPositionDocument(
+    projectDir: string,
+    htmlPath: string,
+    html: string,
+    workDir: string,
+    fps: Fps,
+    sources: Record<string, string>,
+  ): Promise<FileServerHandle>;
 }

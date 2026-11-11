@@ -623,10 +623,8 @@ test("position fields accept signed pixels and step at composition scale", () =>
 
 test("position round-trips native baselines, preserves CSS and linked audio, and undoes as one step", async () => {
   const fixture = await projectFixture();
-  fixture.app.route(
-    "/api/cutroom",
-    createTimelineRoutes(fixture.store, fixture.review),
-  );
+  const routes = createTimelineRoutes(fixture.store, fixture.review);
+  fixture.app.route("/api/cutroom", routes);
   const project = await fixture.store.create({ name: "Position" });
   const path = `/projects/${project.id}`;
   const read = async () =>
@@ -671,6 +669,7 @@ test("position round-trips native baselines, preserves CSS and linked audio, and
       (await edit([{ type: "setClip", clipId: "sound", x: 40 }])).status,
     ).toBe(422);
   } finally {
+    await routes.dispose();
     await fixture.close();
   }
 });

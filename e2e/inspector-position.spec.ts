@@ -80,7 +80,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   );
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#142039}main{position:relative;width:100%;height:100%}video{position:absolute;left:20px;top:30px;width:64px;height:48px;transform:translate(8px,4px)}#title{position:absolute;left:140px;top:145px;width:90px;height:32px;margin:0;background:lime;color:white;font:20px sans-serif}</style><script src="gsap.min.js"></script></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="2"><video id="picture" class="clip" data-label="Picture" src="picture.mp4" muted data-link="pair" data-x="12.25" data-y="-7.5" data-start="0" data-duration="2" data-track-index="0"></video><audio id="sound" src="sound.wav" data-link="pair" data-start="0" data-duration="2" data-track-index="2"></audio><p id="title" class="clip" data-label="Title" data-start="0" data-duration="2" data-track-index="1">Position</p></main><script>window.__timelines.main = gsap.timeline({paused:true}).fromTo('#title',{color:'#00ff00'},{color:'#ffffff',duration:1,ease:'none'},0);</script></body></html>`,
+    `<!doctype html><html><head><style>html,body{margin:0;background:#142039}main{position:relative;width:100%;height:100%}video{position:absolute;left:20px;top:30px;width:64px;height:48px;transform:translate(8px,4px)}#title{position:absolute;left:140px;top:145px;width:90px;height:32px;margin:0;background:lime;color:white;font:20px sans-serif}</style><script src="gsap.min.js"></script></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="2"><video id="picture" class="clip" data-label="Picture" src="picture.mp4" muted data-link="pair" data-x="12.25" data-y="-7.5" data-start="0" data-duration="2" data-track-index="0"></video><audio id="sound" src="sound.wav" data-link="pair" data-start="0" data-duration="2" data-track-index="2"></audio><p id="title" class="clip" data-label="Title" data-start="0" data-duration="2" data-track-index="1">Position</p></main><script>window.__timelines.main = gsap.timeline({paused:true}).fromTo('#title',{x:-40,y:10},{x:20,y:0,duration:1,ease:'none'},0);</script></body></html>`,
   );
   const path = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
@@ -190,9 +190,9 @@ test("position fields and MCP preserve animated offsets through playback, repeat
           .locator("#title")
           .evaluate((el) => el.getBoundingClientRect().left),
       )
-      .toBeCloseTo(140 + offset, 0);
+      .toBeCloseTo(140 - 40 + 60 * Math.min(frame / 30, 1) + offset, 0);
   };
-  // Capture authored CSS and colour animation before adding offsets.
+  // Capture authored CSS and x/y animation before adding offsets.
   const baseline = new Map<number, ReturnType<typeof subjects>>();
   const screenshot = async (name: string) => {
     await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
@@ -298,7 +298,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
     await expect(inspector.getByText("Rotation", { exact: true })).toHaveCount(
       0,
     );
-    // Play from within the colour animation while retaining the offset.
+    // Play from within the x/y animation while retaining the offset.
     await seek(3, 40);
     await page
       .getByRole("button", { name: "Play forward", exact: true })
@@ -310,7 +310,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
           .locator("#title")
           .evaluate((el) => el.getBoundingClientRect().left),
       )
-      .toBeGreaterThan(165);
+      .toBeGreaterThan(150);
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     const preview = new Map<number, ReturnType<typeof subjects>>();
     for (const frame of [45, 3, 15, 45, 3]) {
@@ -371,7 +371,12 @@ test("position fields and MCP preserve animated offsets through playback, repeat
           expect(
             Math.abs(exported[i]![edge] - preview.get(frame)![i]![edge]),
           ).toBeLessThanOrEqual(1);
-      comparisons.push({ frame, preview: preview.get(frame), exported });
+      comparisons.push({
+        frame,
+        baseline: baseline.get(frame),
+        preview: preview.get(frame),
+        exported,
+      });
     }
     await writeFile(
       info.outputPath("positions.json"),

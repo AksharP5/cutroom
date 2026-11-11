@@ -163,3 +163,22 @@ On the same host, main passed the old one-run gate both before and after all 158
 [An unchanged-main branch control](https://github.com/AksharP5/cutroom/actions/runs/42999124119) passed the old gate, so branch identity alone did not reproduce the failures. A [paired CI comparison](https://github.com/AksharP5/cutroom/actions/runs/43002141979) then built exact main `e5c593f` and export head `0eebac9` on one runner with Chromium 158. Both passed normally: median ripple maxima were 85.8/84.8 ms for main and 83.4/93.3 ms for the export build, at 400/500 clips. With identical 2× browser CPU throttling, both failed: main reached 159.0/206.7 ms and export reached 168.7/191.0 ms. Separate profiled passes showed comparable style/layout work over the same element counts; their timings include profiler overhead. This did not reproduce an export-specific ripple regression. It confirms that the absolute ceiling can fail the shared baseline when execution slows; repetition only protects against one slow run, not a consistently slow environment.
 
 [Raw timings, matching worst-frame trace excerpts and compressed traces](https://github.com/AksharP5/cutroom/tree/pr-assets/timeline-frame-rate) include browser, renderer and viewport metadata. The separate profiled 400-clip pass had a worst frame of 104.7 ms before and 84.8 ms after. Those screenshots plot the actual Chromium events and source-map locations; the tables use untraced runs.
+
+## Position support checks
+
+Position checks compile two fresh export documents, with and without a 37/23 px offset, and compare the clip's bounding box after render seeks. The producer and existing capture browser stay warm. Clips up to 150 frames use every frame; longer clips use 150 evenly spaced interior frames plus both endpoints. A conflict entirely between samples can be missed. Checks superseded by a newer revision are cancelled, including queued work. Live scrubs use the preview bridge and do not run checks per move.
+
+Measurements use a 1920×1080, 30 fps project with real H264 video, an SVG image and a GSAP x/y animated title. The large project repeats those media over five tracks. Each scenario starts a fresh browser and compiler, then runs three warm checks on distinct revision keys to avoid result-cache hits. Timings include compilation, document startup, seeks, comparison and cleanup. They exclude API timeline projection and project-signature reads.
+
+| Project   | Target span |    Cold | Warm median |       Warm range |
+| --------- | ----------- | ------: | ----------: | ---------------: |
+| 3 clips   | 2 s         | 1.751 s |     0.700 s | 0.691 to 0.798 s |
+| 3 clips   | 30 s        | 2.792 s |     1.336 s | 1.269 to 1.571 s |
+| 500 clips | 2 s         | 3.034 s |     1.966 s | 1.893 to 2.219 s |
+| 500 clips | 30 s        | 3.536 s |     2.388 s | 2.143 to 2.686 s |
+
+The 500-clip checks exceed the roughly one-second target. The final run observed a one-minute host load of 22.63 on 16 logical CPUs. The frame coverage remains at the agreed limit. Results are cached per revision and clip, and selection starts the same check that a release commit or MCP Position edit awaits.
+
+The full-suite 500-clip live scrub measured 16.7 ms median and p95 frame gaps, zero API requests, zero iframe additions and zero timeline mutations during 60 pointer moves. Across ten repeats, every median remained 16.7 ms and p95 ranged from 16.7 to 33.4 ms, with zero API requests or iframe additions in every run. Three matching runs at the original `b0946c9` head measured 16.7 ms median and p95. These measurements do not establish unchanged p95.
+
+A GSAP x/y slide-in with Position 40 px right and 10 px up was exported to MP4. FFmpeg decoded frames 3, 15 and 45; the video's and title's bounds matched the preview within one pixel. [Raw check timings, scrub counts and decoded positions](evidence/position-runtime.json) retain the concrete before/after values.

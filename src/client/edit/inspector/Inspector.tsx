@@ -1,3 +1,4 @@
+import { PositionSupportSchema } from "../../../shared/timeline/positionCheck";
 import { isAudioKind } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, X } from "@phosphor-icons/react";
@@ -9,7 +10,7 @@ import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
-import { api, json } from "../../api";
+import { ApiError, api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
@@ -101,6 +102,39 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  const [positionCheck, setPositionCheck] = useState<{
+    key: string;
+    reason: string | null;
+  } | null>(null);
+  const positionKey = `${projectId}:${view?.composition}:${view?.revision}:${clip?.id}`;
+  useEffect(() => {
+    if (!clip || !view || isAudioKind(clip.kind)) return;
+    const abort = new AbortController();
+    setPositionCheck(null);
+    const query = new URLSearchParams({
+      composition: view.composition,
+      revision: view.revision,
+      clipId: clip.id,
+    });
+    void api(
+      `/projects/${projectId}/position-support?${query}`,
+      PositionSupportSchema,
+      { signal: abort.signal },
+    )
+      .then(({ reason }) => setPositionCheck({ key: positionKey, reason }))
+      .catch((error: unknown) => {
+        // Optimistic pieces and newer revisions will be checked after the queue reads back.
+        if (
+          abort.signal.aborted ||
+          (error instanceof ApiError && error.status === 409)
+        )
+          return;
+        showToast(error instanceof Error ? error.message : String(error));
+      });
+    return () => abort.abort();
+  }, [projectId, view, clip?.id]);
+  const positionReason =
+    positionCheck?.key === positionKey ? positionCheck.reason : null;
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -267,10 +301,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                   unit="pixels"
                   min={-Infinity}
                   fps={timeline.fps}
-                  disabled={
-                    track?.track.locked ||
-                    !!view?.positionUnsupported?.[clip.id]
-                  }
+                  disabled={track?.track.locked || !!positionReason}
                   onPreview={(value) =>
                     previewPosition(
                       clip.id,
@@ -290,10 +321,8 @@ export function Inspector({ projectId }: { projectId: string }) {
                   }}
                 />
               ))}
-              {view?.positionUnsupported?.[clip.id] && (
-                <p className="inspector-empty">
-                  {view.positionUnsupported[clip.id]}
-                </p>
+              {positionReason && (
+                <p className="inspector-empty">{positionReason}</p>
               )}
               <button
                 type="button"
@@ -301,7 +330,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                 disabled={
                   (clip.x === null && clip.y === null) ||
                   track?.track.locked ||
-                  !!view?.positionUnsupported?.[clip.id]
+                  !!positionReason
                 }
                 onClick={() => {
                   void editTimeline(projectId, "Reset position", () => [

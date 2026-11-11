@@ -11,31 +11,13 @@ for (const fixture of [
     name: "late GSAP",
     style: "",
     script: `<script>setTimeout(()=>{const script=document.createElement('script');script.src='gsap.min.js';script.onload=()=>{window.__timelines.main=gsap.timeline({paused:true}).to('#title',{x:100,y:140,duration:1})};document.head.append(script)},100)</script>`,
-    reason: /custom or delayed scripts/,
-  },
-  {
-    name: "authored translate with GSAP",
-    style: "#title{translate:20px 10px}",
-    script: `<script src="gsap.min.js"></script><script>window.__timelines.main=gsap.timeline({paused:true}).to('#title',{opacity:.5,duration:1});</script>`,
-    reason: /CSS translate and GSAP/,
-  },
-  {
-    name: "GSAP translate",
-    style: "",
-    script: `<script src="gsap.min.js"></script><script>const tl=gsap.timeline({paused:true});tl.to('#title',{translate:'100px 20px',duration:1});window.__timelines.main=tl;</script>`,
-    reason: /coordinate animations/,
-  },
-  {
-    name: "chained ancestor scale",
-    style: "",
-    script: `<script src="gsap.min.js"></script><script>window.__timelines.main=gsap.timeline({paused:true}).to('#main',{scale:.5,duration:1});</script>`,
-    reason: /transformed container/,
+    reason: /Position moves differently/,
   },
   {
     name: "scaled ancestor",
     style: "main{transform:scale(.5);transform-origin:0 0}",
     script: "",
-    reason: /transformed container/,
+    reason: /Position moves differently/,
   },
 ]) {
   test(`${fixture.name}: position fields disable and MCP refuses without changing source or history`, async ({
@@ -56,9 +38,49 @@ for (const fixture of [
     );
     const source = `<!doctype html><html><head><style>html,body{margin:0}#title{position:absolute;left:20px;top:30px;width:40px;height:30px;background:lime}${fixture.style}</style></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-duration="2"><div id="title" class="clip" data-start="0" data-duration="2">Title</div></main>${fixture.script}</body></html>`;
     await writeFile(join(project.path, "index.html"), source);
+    const release = Promise.withResolvers<void>();
+    if (fixture.name === "scaled ancestor")
+      await page.route("**/position-support?**", async (route) => {
+        const response = await route.fetch();
+        await release.promise;
+        await route.fulfill({ response });
+      });
     await page.goto(`/#project/${project.id}`);
     await page.locator('[data-clip="title"]').click();
     const inspector = page.getByRole("complementary", { name: "Inspector" });
+    if (fixture.name === "scaled ancestor") {
+      const x = inspector.getByRole("textbox", {
+        name: "Position X",
+        exact: true,
+      });
+      await expect(x).toBeEnabled();
+      const picture = page.frameLocator("iframe[data-live]").locator("#title");
+      await expect
+        .poll(() => picture.evaluate((el) => el.getBoundingClientRect().left))
+        .toBe(10);
+      const label = inspector
+        .locator("label")
+        .filter({ hasText: /^Position X$/ });
+      const box = await label.boundingBox();
+      if (!box) throw new Error("Position label missing");
+      await page.mouse.move(box.x + 5, box.y + 5);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 45, box.y + 5);
+      await expect(x).toHaveValue("40 px");
+      await expect
+        .poll(() => picture.evaluate((el) => el.getBoundingClientRect().left))
+        .toBe(30);
+      const committed = page.waitForResponse(
+        (r) => r.url().endsWith("/commands") && r.request().method() === "POST",
+      );
+      await page.mouse.up();
+      expect((await committed).status()).toBe(422);
+      await expect(x).toHaveValue("0 px");
+      await expect
+        .poll(() => picture.evaluate((el) => el.getBoundingClientRect().left))
+        .toBe(10);
+      release.resolve();
+    }
     const client = new Client({ name: "position-refusal", version: "1.0" });
     try {
       await client.connect(

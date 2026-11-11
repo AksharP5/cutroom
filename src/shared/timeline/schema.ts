@@ -28,7 +28,7 @@ const position = z
     return offset === 0 ? null : offset;
   })
   .describe(
-    "Additive offset in composition CSS pixels, not an absolute coordinate. Refused when positionUnsupported names this clip, including transformed ancestors and unsupported scripts or styles. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
+    "Additive offset in composition CSS pixels, not an absolute coordinate. A runtime check must confirm that the clip moves exactly as asked on the checked frames before saving. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
   );
 
 export const FpsSchema = z.object({
