@@ -373,7 +373,8 @@ option {
 .header-end {
   justify-content: flex-end;
 }
-.logo-button {
+.logo-button,
+.header-logo {
   flex: none;
   display: flex;
   align-items: center;

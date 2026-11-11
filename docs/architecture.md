@@ -10,6 +10,8 @@ Projects remain ordinary HyperFrames folders. The application registry records t
 
 `src/server/projects/store.ts` owns the project registry, serialized Cutroom mutations, and one upstream `ProjectHistory` per folder. The native editor, transcript service, and MCP tools use that same history. Source writes require the exact content version they read. Metadata writes also refuse concurrent replacement. Shutdown rejects new edits and drains admitted mutations before closing history. The notebook reads review items and a transcript revision; full words load when Script is opened.
 
+Home lists the registry, most recently edited first, and shows the first-run screen only while it is empty. The list paints from the registry alone. Each project then loads lazily once its tile has been on screen: `GET /projects/:id/summary` reads the root composition's size and length through the timeline's own parser, and the poster is the upstream thumbnail route at full size, one second in. That route renders one frame at a time and caches it under the project's `.thumbnails/` by content, so a second visit reads files. A tile that leaves cancels its request, so an unfinished render never holds a connection the editor needs. Rendering a poster resolves the project the way opening it does, which starts its file watcher.
+
 External changes are watched and sent to the editor through server-sent events. The editor preserves its own file-write receipts, selection, playhead, and conflict handling.
 
 Dot folders such as `.cutroom/` hold app state, including review captures and renders. They are left out of the project file list that Media, Assets, and the code tree read, and their changes do not refresh Media.

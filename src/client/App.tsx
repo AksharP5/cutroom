@@ -39,6 +39,7 @@ import { FileDialog } from "./components/FileDialog";
 import { Logo } from "./components/Logo";
 import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
+import { ProjectsHome } from "./components/ProjectsHome";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
@@ -97,7 +98,8 @@ function projectFromHash() {
 }
 
 export function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  // Null until the first list arrives, so home never shows the first-run hero to someone with projects.
+  const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectId, setProjectId] = useState<string | null>(projectFromHash);
   const [documentState, setDocumentState] = useState<{
     projectId: string;
@@ -172,7 +174,7 @@ export function App() {
     projectRequests.current = closing;
     return () => closing.abort();
   }, [projectId]);
-  const project = projects.find((item) => item.id === projectId);
+  const project = projects?.find((item) => item.id === projectId);
 
   // The tab indicator moves and resizes with transform only.
   useLayoutEffect(() => {
@@ -222,9 +224,16 @@ export function App() {
   const browsing = dialog === "projects";
   useEffect(() => {
     if (known && !browsing) return;
-    void loadProjects().catch((error: unknown) =>
-      showToast(error instanceof Error ? error.message : String(error)),
-    );
+    const load = () =>
+      void loadProjects().catch((error: unknown) => {
+        setProjects((current) => current ?? []);
+        showToast(error instanceof Error ? error.message : String(error));
+      });
+    load();
+    // Home also catches up on outside work when the window is looked at again.
+    if (known) return;
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
   }, [projectId, known, browsing, loadProjects]);
 
   useEffect(() => {
@@ -449,21 +458,30 @@ export function App() {
     <div className="cutroom-app">
       <header className="app-header">
         <div className="header-start">
-          <button
-            className="logo-button"
-            aria-label="Cutroom projects"
-            onClick={() => setDialog("projects")}
-          >
-            <Logo />
-          </button>
-          <span className="header-divider" />
-          <button
-            className="project-switcher"
-            onClick={() => setDialog("projects")}
-          >
-            <span>{project?.name ?? "Projects"}</span>
-            <CaretDown size={10} weight="bold" />
-          </button>
+          {project ? (
+            <>
+              <button
+                className="logo-button"
+                aria-label="Cutroom projects"
+                onClick={() => setDialog("projects")}
+              >
+                <Logo />
+              </button>
+              <span className="header-divider" />
+              <button
+                className="project-switcher"
+                onClick={() => setDialog("projects")}
+              >
+                <span>{project.name}</span>
+                <CaretDown size={10} weight="bold" />
+              </button>
+            </>
+          ) : (
+            // Home is the project list, so nothing here opens one.
+            <span className="header-logo">
+              <Logo />
+            </span>
+          )}
         </div>
         <div className="toast-slot">
           {error && (
@@ -498,10 +516,20 @@ export function App() {
         </div>
       </header>
       {!project ? (
-        <EmptyState
-          onCreate={() => setDialog("create")}
-          onImport={() => setPicker("directory")}
-        />
+        projects &&
+        (projects.length ? (
+          <ProjectsHome
+            projects={projects}
+            onOpen={openProject}
+            onCreate={() => setDialog("create")}
+            onImport={() => setPicker("directory")}
+          />
+        ) : (
+          <EmptyState
+            onCreate={() => setDialog("create")}
+            onImport={() => setPicker("directory")}
+          />
+        ))
       ) : (
         <main className={`workspace ${workPanel ? "with-work-panel" : ""}`}>
           <MediaPanel
@@ -743,7 +771,7 @@ export function App() {
             </button>
           </div>
           <div className="project-list">
-            {projects.map((item) => (
+            {projects?.map((item) => (
               <button
                 key={item.id}
                 className="project-row"
@@ -757,7 +785,7 @@ export function App() {
                 {item.id === projectId && <Check size={16} />}
               </button>
             ))}
-            {projects.length === 0 && (
+            {projects?.length === 0 && (
               <p className="quiet-message">Your projects will appear here.</p>
             )}
           </div>

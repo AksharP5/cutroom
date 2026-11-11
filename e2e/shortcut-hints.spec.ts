@@ -6,6 +6,10 @@ import { embeddedEditor } from "./embedded";
 test("the home screen shows the keymap's draw and comment keys", async ({
   page,
 }) => {
+  // The hints are on the first-run screen; other specs share this server's projects.
+  await page.route("**/api/cutroom/projects", (route) =>
+    route.fulfill({ json: { projects: [] } }),
+  );
   await page.goto("/");
   await expect(page.locator(".welcome-instructions kbd")).toHaveText([
     keymap.cutroomDraw.keys[0],

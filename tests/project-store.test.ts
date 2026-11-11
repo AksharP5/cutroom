@@ -43,6 +43,35 @@ test("new projects ship a valid, self-contained Instrument Sans composition", as
   }
 });
 
+test("projects list most recently edited first", async () => {
+  const fixture = await projectFixture();
+  try {
+    const names = async () =>
+      (await fixture.store.list()).map((project) => project.name);
+    const older = await fixture.store.create({ name: "Older" });
+    await Bun.sleep(5);
+    await fixture.store.create({ name: "Newer" });
+    expect(await names()).toEqual(["Newer", "Older"]);
+    await Bun.sleep(5);
+    const source = SourceSchema.parse(
+      await (await fixture.request(`/projects/${older.id}/source`)).json(),
+    );
+    const edited = await fixture.request(
+      `/projects/${older.id}/source`,
+      "PUT",
+      {
+        path: "index.html",
+        content: source.content.replace("Older", "Older, edited"),
+        expectedVersion: source.version,
+      },
+    );
+    expect(edited.status).toBe(200);
+    expect(await names()).toEqual(["Older", "Newer"]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("source writes require the exact version and remain undoable", async () => {
   const fixture = await projectFixture();
   try {

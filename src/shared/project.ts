@@ -97,6 +97,13 @@ export const ProjectSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+/** What home shows beside the registry entry, read from the project's root composition. */
+export const ProjectSummarySchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+  /** Seconds. */
+  duration: z.number().nonnegative(),
+});
 export const CreateProjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
   width: z.number().int().min(240).max(7680).default(1920),
@@ -174,6 +181,7 @@ export type Transcript = z.infer<typeof TranscriptSchema>;
 export type TranscriptView = z.infer<typeof TranscriptViewSchema>;
 export type ProjectDocument = z.infer<typeof ProjectDocumentSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
+export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
 export type CreateProjectInput = z.input<typeof CreateProjectSchema>;
 export type TranscriptImport = z.infer<typeof TranscriptImportSchema>;
 export type CutWords = z.infer<typeof CutWordsSchema>;

@@ -35,7 +35,7 @@ Open `http://127.0.0.1:4317`. `bun run dev` starts the development interface on 
 
 ## Projects and agents
 
-Create a project or open an existing HyperFrames folder containing `index.html`. New projects live in `~/Videos/Cutroom`; application data lives in `~/.local/share/cutroom`. Set `CUTROOM_PROJECTS_DIR`, `CUTROOM_DATA_DIR`, or `CUTROOM_PORT` to change those defaults.
+Create a project or open an existing HyperFrames folder containing `index.html`. Home lists your projects, most recently edited first, each with a frame from its picture, its length, and its shape; click one or press Enter to open it. New projects live in `~/Videos/Cutroom`; application data lives in `~/.local/share/cutroom`. Set `CUTROOM_PROJECTS_DIR`, `CUTROOM_DATA_DIR`, or `CUTROOM_PORT` to change those defaults.
 
 Choose Codex or Claude Code in the agent panel. Type `$` to select one of that provider's installed skills. Claude selections are dispatched using its native skill command. The studio shows native approvals and questions in the chat. [Agent behavior](docs/agents.md).
 
