@@ -243,6 +243,7 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
       x: null,
       y: null,
     });
+    await inspector.locator(".inspector-history > summary").click();
     const row = inspector
       .getByRole("listitem")
       .filter({ hasText: "Moved 40 px right; Moved 10 px up" });

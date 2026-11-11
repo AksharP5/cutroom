@@ -199,9 +199,6 @@
   color: var(--text-tertiary);
   font-size: var(--type-xs);
 }
-.inspector-value button[aria-pressed="true"] {
-  color: var(--text-primary);
-}
 .inspector-field {
   display: grid;
   grid-template-columns: var(--size-inspector-label) minmax(0, 1fr);
@@ -288,4 +285,33 @@
 
 .inspector-clip[data-kind="voiceover"]::before {
   background: var(--clip-vo);
+}
+
+.inspector-count {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font: var(--weight-medium) var(--type-xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.inspector-warning {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  color: var(--human);
+  font-size: var(--type-xs);
+}
+.inspector-warning > svg {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.inspector-warning button {
+  min-height: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  text-decoration: underline;
+  text-underline-offset: var(--stroke-bracket);
 }

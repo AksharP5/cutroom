@@ -1,6 +1,6 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
-import { CaretRight, SidebarSimple, X } from "@phosphor-icons/react";
+import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
 import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
@@ -18,7 +18,8 @@ import { formatTimecode } from "../../../shared/timeline/timecode";
 import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
-import { pendingEdit, shownChanges } from "./changes";
+import { groupedChanges, pendingEdit, shownChanges } from "./changes";
+import { transport } from "../transport";
 import {
   previewPosition,
   observePosition,
@@ -48,7 +49,12 @@ export function Inspector({ projectId }: { projectId: string }) {
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
-  const [changesOpen, setChangesOpen] = useState(true);
+  const [changesOpen, setChangesOpen] = useState(
+    () => sessionStorage.getItem("cutroom.inspector.changes") === "true",
+  );
+  useEffect(() => {
+    sessionStorage.setItem("cutroom.inspector.changes", String(changesOpen));
+  }, [changesOpen]);
   const [audioOpen, setAudioOpen] = useState(true);
   const [transformOpen, setTransformOpen] = useState(
     () =>
@@ -109,6 +115,12 @@ export function Inspector({ projectId }: { projectId: string }) {
     return () => observePosition(null);
   }, [projectId, clip?.id]);
   const positionWarning = warning?.clipId === clip?.id ? warning : null;
+  const warningFrame =
+    positionWarning && timeline
+      ? Math.floor(
+          (positionWarning.time * timeline.fps.num) / timeline.fps.den + 1e-6,
+        )
+      : null;
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -116,20 +128,23 @@ export function Inspector({ projectId }: { projectId: string }) {
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
-  const edits =
+  const edits = groupedChanges(
     view?.clipEdits?.filter((edit) =>
       subject?.members.some((member) => member.id === edit.clipId),
-    ) ?? [];
+    ) ?? [],
+    `${name} (${clip?.kind === "video" && subject?.audio.length ? "picture and sound" : "linked clips"})`,
+  );
   const shown = shownChanges(edits, expanded);
-  const accept = async (editId: string) => {
-    setAccepting(editId);
+  const accept = async (edit: (typeof edits)[number]) => {
+    setAccepting(edit.id);
     const { signal } = closing.current;
     try {
-      await api(
-        `/projects/${projectId}/review/changes/accept`,
-        z.object({ ok: z.boolean() }),
-        json("POST", { editId }),
-      );
+      for (const member of edit.members.filter(pendingEdit))
+        await api(
+          `/projects/${projectId}/review/changes/accept`,
+          z.object({ ok: z.boolean() }),
+          json("POST", { editId: member.id }),
+        );
       await loadTimeline(projectId, signal);
     } catch (error) {
       if (!signal.aborted)
@@ -187,76 +202,6 @@ export function Inspector({ projectId }: { projectId: string }) {
               <time>{formatTimecode(clip.start, timeline.fps)}</time>
             </span>
           </div>
-          <details
-            open={changesOpen}
-            onToggle={(event) => setChangesOpen(event.currentTarget.open)}
-            className="inspector-section"
-          >
-            <summary>
-              <CaretRight size={10} aria-hidden />
-              Changes
-            </summary>
-            <ol className="inspector-changes">
-              {shown.map((edit) => (
-                <li key={edit.id} data-by={edit.by}>
-                  <span
-                    title={[
-                      edit.label,
-                      edit.at &&
-                        new Date(edit.at).toLocaleString(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        }),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  >
-                    {edit.label
-                      .split(/(\d{2}:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?%?)/g)
-                      .map((part, index) =>
-                        index % 2 ? (
-                          <span className="inspector-number" key={index}>
-                            {part}
-                          </span>
-                        ) : (
-                          part
-                        ),
-                      )}
-                  </span>
-                  {edit.by === "human" ? (
-                    <small>You</small>
-                  ) : !pendingEdit(edit) ? (
-                    <small>
-                      {edit.accepted
-                        ? "Accepted"
-                        : edit.resolution === "owner"
-                          ? "Edited by you"
-                          : "Source changed"}
-                    </small>
-                  ) : (
-                    <button
-                      disabled={accepting !== null}
-                      onClick={() => void accept(edit.id)}
-                    >
-                      Accept
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ol>
-            {(expanded || shown.length < edits.length) && (
-              <button
-                className="inspector-show-all"
-                aria-expanded={expanded}
-                onClick={() => setExpanded(!expanded)}
-              >
-                {expanded ? "Show less" : `Show all (${edits.length})`}
-              </button>
-            )}
-            {!edits.length && (
-              <p className="inspector-empty">No recent changes.</p>
-            )}
-          </details>
           {!isAudioKind(clip.kind) && (
             <details
               open={transformOpen}
@@ -295,18 +240,20 @@ export function Inspector({ projectId }: { projectId: string }) {
                   }}
                 />
               ))}
-              {positionWarning && (
-                <p className="inspector-empty" role="status">
-                  This clip's animation overrides Position at{" "}
-                  {formatTimecode(
-                    Math.floor(
-                      (positionWarning.time * timeline.fps.num) /
-                        timeline.fps.den +
-                        1e-6,
-                    ),
-                    timeline.fps,
-                  )}
-                  .
+              {warningFrame !== null && (
+                <p className="inspector-warning" role="status">
+                  <Warning size={14} aria-hidden />
+                  <span>
+                    This clip's animation overrides Position at{" "}
+                    <button
+                      type="button"
+                      title="Seek to this frame"
+                      onClick={() => transport.seek(warningFrame)}
+                    >
+                      {formatTimecode(warningFrame, timeline.fps)}
+                    </button>
+                    .
+                  </span>
                 </p>
               )}
               <button
@@ -323,6 +270,32 @@ export function Inspector({ projectId }: { projectId: string }) {
               >
                 Reset
               </button>
+            </details>
+          )}
+          {!isAudioKind(clip.kind) && (
+            <details
+              open={compositeOpen}
+              onToggle={(event) => setCompositeOpen(event.currentTarget.open)}
+              className="inspector-section"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Composite
+              </summary>
+              <ValueField
+                key={clip.id}
+                label="Opacity"
+                allowAuto
+                max={1}
+                value={clip.opacity}
+                unit="percent"
+                fps={timeline.fps}
+                onCommit={(opacity) => {
+                  void editTimeline(projectId, "Edit opacity", () => [
+                    { type: "setClip", clipId: clip.id, opacity },
+                  ]);
+                }}
+              />
             </details>
           )}
           {subject?.audio.map((audio) => {
@@ -402,32 +375,6 @@ export function Inspector({ projectId }: { projectId: string }) {
               </details>
             );
           })}
-          {!isAudioKind(clip.kind) && (
-            <details
-              open={compositeOpen}
-              onToggle={(event) => setCompositeOpen(event.currentTarget.open)}
-              className="inspector-section"
-            >
-              <summary>
-                <CaretRight size={10} aria-hidden />
-                Composite
-              </summary>
-              <ValueField
-                key={clip.id}
-                label="Opacity"
-                allowAuto
-                max={1}
-                value={clip.opacity}
-                unit="percent"
-                fps={timeline.fps}
-                onCommit={(opacity) => {
-                  void editTimeline(projectId, "Edit opacity", () => [
-                    { type: "setClip", clipId: clip.id, opacity },
-                  ]);
-                }}
-              />
-            </details>
-          )}
           <details
             className="inspector-section inspector-timing"
             open={timingOpen}
@@ -474,6 +421,76 @@ export function Inspector({ projectId }: { projectId: string }) {
                   onCommit={(value) => timing("sourceIn", value)}
                 />
               </>
+            )}
+          </details>
+          <details
+            open={changesOpen}
+            onToggle={(event) => setChangesOpen(event.currentTarget.open)}
+            className="inspector-section inspector-history"
+          >
+            <summary>
+              <CaretRight size={10} aria-hidden />
+              Changes <span className="inspector-count">{edits.length}</span>
+            </summary>
+            <ol className="inspector-changes">
+              {shown.map((edit) => (
+                <li key={edit.id} data-by={edit.by}>
+                  <span
+                    title={[
+                      edit.label,
+                      edit.at &&
+                        new Date(edit.at).toLocaleString(undefined, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  >
+                    {edit.label
+                      .split(/(\d{2}:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?%?)/g)
+                      .map((part, index) =>
+                        index % 2 ? (
+                          <span className="inspector-number" key={index}>
+                            {part}
+                          </span>
+                        ) : (
+                          part
+                        ),
+                      )}
+                  </span>
+                  {edit.by === "human" ? (
+                    <small>You</small>
+                  ) : !pendingEdit(edit) ? (
+                    <small>
+                      {edit.accepted
+                        ? "Accepted"
+                        : edit.resolution === "owner"
+                          ? "Edited by you"
+                          : "Source changed"}
+                    </small>
+                  ) : (
+                    <button
+                      disabled={accepting !== null}
+                      onClick={() => void accept(edit)}
+                    >
+                      Accept
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ol>
+            {(expanded || shown.length < edits.length) && (
+              <button
+                className="inspector-show-all"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? "Show less" : `Show all (${edits.length})`}
+              </button>
+            )}
+            {!edits.length && (
+              <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
         </div>

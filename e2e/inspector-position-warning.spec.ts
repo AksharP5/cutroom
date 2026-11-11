@@ -228,3 +228,56 @@ test("paused video observes the held picture when zoom reduces the Position offs
     await expect(field).toBeEnabled();
   }
 });
+
+test("the Position warning timecode seeks to its displayed frame and stops playback", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(request, {
+    name: "Seek from Position warning",
+    width: 320,
+    height: 240,
+    duration: 4,
+  });
+  await copyFile(
+    join(process.cwd(), "node_modules/gsap/dist/gsap.min.js"),
+    join(project.path, "gsap.min.js"),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><script src="gsap.min.js"></script></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="4" style="position:absolute;width:100px;height:40px;background:lime">Title</div></main><script>window.__timelines.main=gsap.timeline({paused:true}).to('#title',{translate:'160px 0px',duration:4,ease:'none'});</script></body></html>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="title"]').click();
+  const position = positionField(page);
+  await position.fill("40");
+  await afterPaint(page, () => position.press("Enter"));
+  await seekFrame(page, 30);
+  const warning = page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("status");
+  await expect(
+    warning.getByRole("button", { name: "00:00:01:00", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect(warning.getByRole("button")).not.toHaveText("00:00:01:00");
+  // Read and activate the moving warning in the same browser task, before its next verdict.
+  const target = await warning
+    .getByRole("button")
+    .evaluate((button: HTMLButtonElement) => {
+      const timecode = button.textContent;
+      button.click();
+      return timecode;
+    });
+  await expect(
+    page.getByRole("button", {
+      name: "Current time. Click to type a time.",
+      exact: true,
+    }),
+  ).toHaveText(target!);
+  await expect(
+    page.getByRole("button", { name: "Stop", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await expect(warning.getByRole("button")).toHaveText(target!);
+});
