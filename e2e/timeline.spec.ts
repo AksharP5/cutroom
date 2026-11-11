@@ -251,3 +251,139 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
     .toBeGreaterThan(0);
   await page.keyboard.press("k");
 });
+
+test("Fit lets a ripple close its gap before rescaling, and a zoom key takes over", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fit ripple motion" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="12">
+    <div id="first" class="clip" data-start="0" data-duration="4" data-track-index="0">First</div>
+    <div id="middle" class="clip" data-start="4" data-duration="4" data-track-index="0">Middle</div>
+    <div id="last" class="clip" data-start="8" data-duration="4" data-track-index="0">Last</div>
+  </main>`,
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(`/#project/${project.id}`);
+  const grid = page.locator(".tl-grid");
+  const scale = () =>
+    grid.evaluate((element) =>
+      Number(getComputedStyle(element).getPropertyValue("--ppf")),
+    );
+  const old = await scale();
+  const last = page.locator('[data-clip="last"]');
+  await page.locator('[data-clip="middle"]').click();
+  const slide = last.evaluate(
+    (element) =>
+      new Promise<{ scale: number; distance: number; duration: number }>(
+        (resolve, reject) => {
+          const deadline = performance.now() + 3000;
+          const read = () => {
+            const animation = element
+              .getAnimations()
+              .find((animation) => animation.playState === "running");
+            if (animation) {
+              const grid = element.closest(".tl-grid")!;
+              return resolve({
+                scale: Number(getComputedStyle(grid).getPropertyValue("--ppf")),
+                distance: new DOMMatrixReadOnly(
+                  getComputedStyle(element).transform,
+                ).e,
+                duration: Number(animation.effect?.getTiming().duration),
+              });
+            }
+            if (performance.now() > deadline)
+              return reject(new Error("The gap never slid closed."));
+            requestAnimationFrame(read);
+          };
+          read();
+        },
+      ),
+  );
+  await page.keyboard.press("Delete");
+  const moving = await slide;
+  expect(moving.scale).toBe(old);
+  expect(moving.distance).toBeGreaterThan(120 * old * 0.5);
+  expect(moving.duration).toBeGreaterThan(100);
+  await expect.poll(scale).toBeGreaterThan(old * 1.4);
+  await expect(
+    page.getByRole("slider", { name: "Zoom", exact: true }),
+  ).toHaveAttribute("aria-valuenow", "0");
+  await expect
+    .poll(() =>
+      last.evaluate(
+        (element) =>
+          element
+            .getAnimations()
+            .filter((animation) => animation.playState === "running").length,
+      ),
+    )
+    .toBe(0);
+
+  await page.keyboard.press("Control+z");
+  await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
+  await expect.poll(scale).toBeCloseTo(old);
+  await page.waitForTimeout(250);
+  await page.locator('[data-clip="middle"]').click();
+  await page.keyboard.press("Delete");
+  await expect(page.locator('[data-clip="middle"]')).toHaveCount(0);
+  await page.keyboard.press("Control+=");
+  await page.keyboard.press("Control+=");
+  const chosen = await scale();
+  await page.waitForTimeout(500);
+  expect(await scale()).toBe(chosen);
+  await expect(
+    page.getByRole("slider", { name: "Zoom", exact: true }),
+  ).not.toHaveAttribute("aria-valuenow", "0");
+});
+
+test("scrolling while Fit waits to rescale after a ripple keeps the view where you scrolled", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fit ripple scroll" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="12">
+    <div id="first" class="clip" data-start="0" data-duration="4" data-track-index="0">First</div>
+    <div id="middle" class="clip" data-start="4" data-duration="4" data-track-index="0">Middle</div>
+    <div id="last" class="clip" data-start="8" data-duration="4" data-track-index="0">Last</div>
+  </main>`,
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(`/#project/${project.id}`);
+  const grid = page.locator(".tl-grid");
+  const scroller = page.locator(".tl-scroll");
+  const scale = () =>
+    grid.evaluate((element) =>
+      Number(getComputedStyle(element).getPropertyValue("--ppf")),
+    );
+  const old = await scale();
+  await page.locator('[data-clip="middle"]').click();
+  await page.keyboard.press("Delete");
+  // During the slide, before Fit would rescale, the user scrolls the timeline.
+  const scrolled = await scroller.evaluate((element) => {
+    element.scrollLeft = 120;
+    return element.scrollLeft;
+  });
+  expect(scrolled).toBeGreaterThan(0);
+  await page.waitForTimeout(800);
+  expect(await scroller.evaluate((element) => element.scrollLeft)).toBe(
+    scrolled,
+  );
+  expect(await scale()).toBe(old);
+});

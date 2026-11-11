@@ -47,6 +47,7 @@ jobs:
       - run: bun run check
       - run: bun test
       - run: bun run test:e2e
+      - run: bun run test:perf
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

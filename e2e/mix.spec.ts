@@ -10,7 +10,29 @@ import { expect, test } from "./fixtures";
 
 const exec = promisify(execFile);
 
+async function settledPpf(page: Page) {
+  await expect
+    .poll(() =>
+      page
+        .locator(".tl-grid")
+        .evaluate(
+          (grid) =>
+            grid
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.timeline === document.timeline)
+              .length,
+        ),
+    )
+    .toBe(0);
+  return page
+    .locator(".tl-grid")
+    .evaluate((grid: HTMLElement) =>
+      Number(grid.style.getPropertyValue("--ppf")),
+    );
+}
+
 async function drag(page: Page, selector: string, dx: number, dy: number) {
+  await settledPpf(page);
   const box = (await page.locator(selector).boundingBox())!;
   const x = box.x + box.width / 2;
   const y = box.y + box.height / 2;
@@ -130,11 +152,7 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
     .poll(async () => (await music()).volume)
     .toBe(10 ** (-14.4 / 20));
   const gainOnly = (await read()).timeline;
-  const ppf = await page
-    .locator(".tl-grid")
-    .evaluate((grid: HTMLElement) =>
-      Number(grid.style.getPropertyValue("--ppf")),
-    );
+  const ppf = await settledPpf(page);
   await drag(
     page,
     '[data-clip-mix="music"] [data-mix="fadeOut"]',
@@ -415,11 +433,7 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator("iframe[data-live]")).toBeVisible();
   const initial = await read();
-  const ppf = await page
-    .locator(".tl-grid")
-    .evaluate((grid: HTMLElement) =>
-      Number(grid.style.getPropertyValue("--ppf")),
-    );
+  const ppf = await settledPpf(page);
   const edgeDrag = async (
     clipId: string,
     dx: number,
@@ -654,19 +668,7 @@ test("gain follows the pointer, Alt adjusts finely, horizontal presses move clip
   expect((await music()).volume).toBeNull();
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(initial);
-  await page.locator(".tl-grid").evaluate(async (grid) => {
-    await Promise.allSettled(
-      grid
-        .getAnimations({ subtree: true })
-        .filter((animation) => animation.timeline === document.timeline)
-        .map((animation) => animation.finished),
-    );
-  });
-  const ppf = await page
-    .locator(".tl-grid")
-    .evaluate((grid: HTMLElement) =>
-      Number(grid.style.getPropertyValue("--ppf")),
-    );
+  const ppf = await settledPpf(page);
   await drag(
     page,
     '[data-clip-mix="music"] [data-mix="fadeOut"]',
@@ -699,11 +701,7 @@ test("gain follows the pointer, Alt adjusts finely, horizontal presses move clip
   await expect.poll(async () => (await music()).automation).toBeNull();
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(baked);
-  const currentPpf = await page
-    .locator(".tl-grid")
-    .evaluate((grid: HTMLElement) =>
-      Number(grid.style.getPropertyValue("--ppf")),
-    );
+  const currentPpf = await settledPpf(page);
   await drag(
     page,
     '[data-clip-mix="music"] [data-mix="fadeOut"]',
