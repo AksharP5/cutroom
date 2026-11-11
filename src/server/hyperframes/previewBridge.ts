@@ -373,6 +373,7 @@ function installPreviewBridge() {
     }
   >();
   const FRAME_TIMEOUT = 8_000;
+  let retired = false;
   let pictureVersion = 0;
   let picture = Promise.resolve();
   const holdStyle = document.createElement("style");
@@ -584,12 +585,13 @@ function installPreviewBridge() {
   document.addEventListener(
     "play",
     (event) => {
-      if (event.target instanceof HTMLVideoElement)
+      if (!retired && event.target instanceof HTMLVideoElement)
         releasePlaying(event.target);
     },
     true,
   );
   addEventListener("pagehide", () => {
+    retired = true;
     pictureVersion += 1;
     clearTimeout(observationTimer);
     cancelAnimationFrame(observationFrame);
@@ -600,9 +602,18 @@ function installPreviewBridge() {
       cancelRelease(video);
       hold.frame.close();
     }
+    holds.clear();
+    for (const media of document.querySelectorAll<HTMLMediaElement>(
+      "video, audio",
+    )) {
+      media.pause();
+      media.removeAttribute("src");
+      media.load();
+    }
   });
   addEventListener("message", (event: MessageEvent<unknown>) => {
     if (
+      retired ||
       event.source !== parent ||
       !event.data ||
       typeof event.data !== "object"

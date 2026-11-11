@@ -1,6 +1,6 @@
 import { startMediaDrag } from "./media-drag";
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -9,6 +9,16 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+
+declare global {
+  interface Window {
+    recordViewerFrame(type: "opened" | "closed"): Promise<void>;
+    viewerResources: {
+      maxDocuments: number;
+      reports: number;
+    };
+  }
+}
 
 // This test owns the compositor screencast; Playwright's trace must not replace it.
 test.use({ trace: "off" });
@@ -346,6 +356,85 @@ test("the composited sampler catches a one-animation-frame blank", async ({
   }
 });
 
+async function gatePaint(page: Page, phase: "loading" | "promotion") {
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  const channel = `paint-gate-${Date.now()}`;
+  await page.addInitScript(
+    ({ channel, phase }) => {
+      if (parent === window) return;
+      const request = requestAnimationFrame.bind(window);
+      const cancel = cancelAnimationFrame.bind(window);
+      const waiting = new Map<number, FrameRequestCallback>();
+      let blocked = phase === "loading";
+      window.requestAnimationFrame = (callback) => {
+        const handle = request((time) => {
+          if (blocked) waiting.set(handle, callback);
+          else callback(time);
+        });
+        return handle;
+      };
+      window.cancelAnimationFrame = (handle) => {
+        waiting.delete(handle);
+        cancel(handle);
+      };
+      addEventListener("message", (event) => {
+        if (event.source !== parent || event.data?.channel !== channel) return;
+        blocked = event.data.blocked;
+        parent.postMessage({ channel, blocked }, "*");
+        if (blocked) return;
+        window.requestAnimationFrame = request;
+        window.cancelAnimationFrame = cancel;
+        for (const callback of waiting.values()) request(callback);
+        waiting.clear();
+      });
+    },
+    { channel, phase },
+  );
+  const gate = await page.evaluateHandle(
+    ({ channel, phase, before }) => {
+      let blocked = false;
+      const promoted = new WeakSet<HTMLIFrameElement>();
+      const observer = new MutationObserver(() => {
+        for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+          "iframe[data-live]",
+        )) {
+          if (frame.getAttribute("src") === before || promoted.has(frame))
+            continue;
+          promoted.add(frame);
+          // Observe the reveal itself. This also runs on the original implementation,
+          // which never sent a post-promotion paint request.
+          frame.contentWindow!.postMessage({ channel, blocked: true }, "*");
+        }
+      });
+      if (phase === "promotion")
+        observer.observe(document.body, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["data-live"],
+        });
+      const receive = (event: MessageEvent) => {
+        if (event.data?.channel === channel) blocked = event.data.blocked;
+      };
+      addEventListener("message", receive);
+      return {
+        get blocked() {
+          return blocked;
+        },
+        release() {
+          observer.disconnect();
+          removeEventListener("message", receive);
+          for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+            ".edit-frame",
+          ))
+            frame.contentWindow!.postMessage({ channel, blocked: false }, "*");
+        },
+      };
+    },
+    { channel, phase, before },
+  );
+  return { before, gate };
+}
+
 for (const phase of ["loading", "promotion"] as const) {
   test(`a delayed ${phase} paint retains the previous picture`, async ({
     page,
@@ -353,203 +442,49 @@ for (const phase of ["loading", "promotion"] as const) {
   }) => {
     const { seek } = await openMedia(page, request);
     await seek("0311");
-    const before = await page.locator("iframe[data-live]").getAttribute("src");
-    const generation = Number(
-      new URL(before!, "http://localhost").searchParams.get("v"),
-    );
-    const channel = `paint-gate-${Date.now()}`;
-    // Stall only the candidate iframe; releasing the gate restores its native frame APIs.
-    await page.addInitScript(
-      ({ generation, channel, phase }) => {
-        if (
-          parent === window ||
-          Number(new URL(location.href).searchParams.get("v")) <= generation
-        )
-          return;
-        const request = requestAnimationFrame.bind(window);
-        const cancel = cancelAnimationFrame.bind(window);
-        const waiting = new Map<number, FrameRequestCallback>();
-        const resumed = new Map<number, number>();
-        let blocked = phase === "loading";
-        let paints = 0;
-        window.requestAnimationFrame = (callback) => {
-          let handle = 0;
-          handle = request((time) => {
-            if (blocked) {
-              waiting.set(handle, callback);
-              parent.postMessage({ channel, blocked: true }, "*");
-            } else callback(time);
-          });
-          return handle;
-        };
-        window.cancelAnimationFrame = (handle) => {
-          waiting.delete(handle);
-          cancel(resumed.get(handle) ?? handle);
-          resumed.delete(handle);
-        };
-        const release = (
-          event: MessageEvent<{
-            channel?: string;
-            source?: string;
-            action?: string;
-          }>,
-        ) => {
-          if (event.source !== parent) return;
-          if (
-            event.data?.source === "cutroom-viewer" &&
-            event.data.action === "paint"
-          ) {
-            if (++paints === 2 && phase === "promotion") blocked = true;
-            return;
-          }
-          if (event.data?.channel !== channel) return;
-          blocked = false;
-          removeEventListener("message", release);
-          for (const [handle, callback] of waiting) {
-            resumed.set(
-              handle,
-              request((time) => {
-                resumed.delete(handle);
-                if (!resumed.size) {
-                  window.requestAnimationFrame = request;
-                  window.cancelAnimationFrame = cancel;
-                }
-                callback(time);
-              }),
-            );
-          }
-          waiting.clear();
-          if (!resumed.size) {
-            window.requestAnimationFrame = request;
-            window.cancelAnimationFrame = cancel;
-          }
-        };
-        addEventListener("message", release);
-      },
-      { generation, channel, phase },
-    );
-    const sampling = await page.evaluateHandle((channel) => {
-      const frames: {
-        time: number;
-        layers: { generation: number; opacity: number; visible: boolean }[];
-      }[] = [];
-      let blocked = false;
-      const receive = (
-        event: MessageEvent<{ channel?: string; blocked?: boolean }>,
-      ) => {
-        if (event.data?.channel === channel && event.data.blocked)
-          blocked = true;
-      };
-      addEventListener("message", receive);
-      let animation = 0;
-      const sample = (time: number) => {
-        frames.push({
-          time,
-          layers: Array.from(
-            document.querySelectorAll<HTMLIFrameElement>(".edit-frame"),
-          ).map((frame) => ({
-            generation: Number(new URL(frame.src).searchParams.get("v")),
-            opacity: Number(getComputedStyle(frame).opacity),
-            visible: frame.checkVisibility({
-              checkOpacity: true,
-              checkVisibilityCSS: true,
-            }),
-          })),
-        });
-        animation = requestAnimationFrame(sample);
-      };
-      animation = requestAnimationFrame(sample);
-      return {
-        get blocked() {
-          return blocked;
-        },
-        stop() {
-          cancelAnimationFrame(animation);
-          removeEventListener("message", receive);
-          return frames;
-        },
-      };
-    }, channel);
-    let frames;
+    const { before, gate } = await gatePaint(page, phase);
+    const capture = await capturePicture(page);
+    capture.reset();
     try {
       await page.keyboard.press("e");
-      await expect.poll(() => sampling.evaluate((s) => s.blocked)).toBe(true);
-      if (phase === "loading") {
-        await expect(page.locator("iframe[data-live]")).toHaveAttribute(
-          "src",
-          before!,
-        );
-      } else {
-        const promoted = await page
-          .locator("iframe[data-live]")
-          .getAttribute("src");
-        await page.keyboard.press("Control+z");
-        await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-          "src",
-          promoted!,
-        );
-        await expect(page.locator("iframe[data-held]").first()).toHaveAttribute(
-          "src",
-          before!,
-        );
-      }
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() =>
-              requestAnimationFrame(() =>
-                requestAnimationFrame(() => resolve()),
-              ),
-            ),
+      if (phase === "promotion")
+        await expect
+          .poll(() => gate.evaluate((gate) => gate.blocked))
+          .toBe(true);
+      else await expect(page.locator(".edit-frame")).toHaveCount(2);
+      // Let the parent run well past its old two-animation-frame retirement.
+      await page.evaluate(async () => {
+        for (let i = 0; i < 6; i++)
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+      });
+      const result = await capture.read();
+      expect
+        .soft(
+          result.samples.filter(
+            ({ color: [r, g, b] }) => r! < 230 || g! > 20 || b! > 20,
           ),
-      );
-      await page.evaluate((channel) => {
-        for (const frame of document.querySelectorAll<HTMLIFrameElement>(
-          ".edit-frame",
-        ))
-          frame.contentWindow!.postMessage({ channel }, "*");
-      }, channel);
+          "The composited picture stays red while the candidate cannot paint",
+        )
+        .toEqual([]);
+      await expect(
+        page.locator(".edit-frame"),
+        "Retain the confirmed iframe until a visible paint is acknowledged",
+      ).toHaveCount(2);
+      await expect(page.locator(`iframe[src="${before}"]`)).toBeVisible();
+      await gate.evaluate((gate) => gate.release());
+      await expect(page.locator(".edit-frame")).toHaveCount(1);
       await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
         "src",
         before!,
       );
-      await expect(page.locator(".edit-frame")).toHaveCount(1);
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          ),
-      );
+      await expect(page.locator(".status-error")).toHaveCount(0);
     } finally {
-      frames = await sampling.evaluate((s) => s.stop());
-      await sampling.dispose();
-      const path = test.info().outputPath("handoff-frames.json");
-      await writeFile(path, JSON.stringify(frames));
-      await test.info().attach("handoff animation frames", {
-        path,
-        contentType: "application/json",
-      });
+      await gate.evaluate((gate) => gate.release());
+      await gate.dispose();
+      await capture.stop();
     }
-    const firstRevealed = frames.findIndex((frame) =>
-      frame.layers.some(
-        (layer) =>
-          layer.generation > generation && layer.visible && layer.opacity === 1,
-      ),
-    );
-    expect(firstRevealed).toBeGreaterThanOrEqual(0);
-    expect(
-      frames[firstRevealed]!.layers,
-      "The old surface must remain fully visible for the first frame that reveals its replacement",
-    ).toContainEqual({ generation, opacity: 1, visible: true });
-    expect(
-      frames
-        .slice(firstRevealed + 1)
-        .some(
-          (frame) =>
-            !frame.layers.some((layer) => layer.generation === generation),
-        ),
-    ).toBe(true);
-    await expect(page.locator(".status-error")).toHaveCount(0);
   });
 }
 
@@ -1093,4 +1028,383 @@ test("a paused hold preserves fractional flex layout and normal-flow stacking", 
   });
   expect(boxes.held).toEqual(boxes.native);
   await expect(page.locator(".status-error")).toHaveCount(0);
+});
+
+async function trackViewerResources(page: Page) {
+  const frames = { opened: 0, closed: 0 };
+  await page.exposeBinding(
+    "recordViewerFrame",
+    (_, type: "opened" | "closed") => {
+      frames[type]++;
+    },
+  );
+  await page.addInitScript(() => {
+    if (parent === window) {
+      const counts = { maxDocuments: 0, reports: 0 };
+      Object.defineProperty(window, "viewerResources", { value: counts });
+      addEventListener("DOMContentLoaded", () => {
+        let error = "";
+        new MutationObserver(() => {
+          counts.maxDocuments = Math.max(
+            counts.maxDocuments,
+            document.querySelectorAll(".edit-frame").length,
+          );
+          const next =
+            document.querySelector(".status-error")?.textContent ?? "";
+          if (next && next !== error) counts.reports++;
+          error = next;
+        }).observe(document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      });
+      return;
+    }
+    const close = VideoFrame.prototype.close;
+    const closed = new WeakSet<VideoFrame>();
+    VideoFrame.prototype.close = function () {
+      if (!closed.has(this)) {
+        closed.add(this);
+        void window.recordViewerFrame("closed");
+      }
+      close.call(this);
+    };
+    window.VideoFrame = new Proxy(VideoFrame, {
+      construct(Frame, args: unknown[], target) {
+        const frame: VideoFrame = Reflect.construct(Frame, args, target);
+        void window.recordViewerFrame("opened");
+        return frame;
+      },
+    });
+  });
+  return frames;
+}
+
+for (const withheld of [false, true]) {
+  test(`50-edit batches bound documents and decoded frames with ${withheld ? "withheld" : "normal"} acknowledgments`, async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.setTimeout(240_000);
+    const frames = await trackViewerResources(page);
+    const { project, read, seek } = await openMedia(page, request);
+    await seek("0311");
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    const resourceCounts = async () => ({
+      ...(await page.evaluate(() => {
+        const counts = window.viewerResources;
+        return {
+          ...counts,
+          documents: document.querySelectorAll(".edit-frame").length,
+        };
+      })),
+      ...frames,
+    });
+    const browser = await page.context().browser()!.newBrowserCDPSession();
+    const rss = async () => {
+      const { processInfo } = await browser.send("SystemInfo.getProcessInfo");
+      const sizes = await Promise.all(
+        processInfo.map(async ({ id }) => {
+          const status = await readFile(`/proc/${id}/status`, "utf8").catch(
+            (error: unknown) => {
+              if (
+                error instanceof Error &&
+                "code" in error &&
+                error.code === "ENOENT"
+              )
+                return "";
+              throw error;
+            },
+          );
+          return Number(status.match(/^VmRSS:\s+(\d+)/m)?.[1] ?? 0);
+        }),
+      );
+      return sizes.reduce((sum, size) => sum + size, 0) / 1024;
+    };
+    const renderer = await page.context().newCDPSession(page);
+    const memory = async () => {
+      const beforeGcMiB = await rss();
+      await renderer.send("HeapProfiler.collectGarbage");
+      for (const frame of page.frames()) {
+        if (frame === page.mainFrame()) continue;
+        const child = await page.context().newCDPSession(frame);
+        await child.send("HeapProfiler.collectGarbage");
+        expect((await child.send("Memory.getDOMCounters")).documents).toBe(1);
+        await child.detach();
+      }
+      return { beforeGcMiB, rssMiB: await rss() };
+    };
+    const { before, gate } = withheld
+      ? await gatePaint(page, "promotion")
+      : { before: null, gate: null };
+    const measurements = [
+      { batch: 0, ...(await memory()), ...(await resourceCounts()) },
+    ];
+    const initial = await page.locator(".edit-picture").screenshot();
+    try {
+      for (let batch = 1; batch <= 3; batch++) {
+        for (let edit = 0; edit < 50; edit++) {
+          const previous = await page
+            .locator(".edit-frame")
+            .last()
+            .getAttribute("src");
+          const view = await read();
+          const result = await request.post(
+            `/api/cutroom/projects/${project.id}/commands`,
+            {
+              data: {
+                expectedRevision: view.revision,
+                label: "Rename picture",
+                commands: [
+                  {
+                    type: "setClip",
+                    clipId: "picture",
+                    label: `Picture ${batch}-${edit}`,
+                  },
+                ],
+              },
+            },
+          );
+          expect(result.ok(), await result.text()).toBe(true);
+          await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
+            "src",
+            previous!,
+          );
+          // Each candidate must actually allocate a decoded hold before replacement.
+          await expect(
+            page
+              .frameLocator(".edit-frame")
+              .last()
+              .locator("[data-cutroom-video-hold]"),
+          ).toHaveCount(1);
+          if (withheld) {
+            await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+              "src",
+              before!,
+            );
+            await expect(page.locator(`iframe[src="${before}"]`)).toBeVisible();
+          } else await expect(page.locator(".edit-frame")).toHaveCount(1);
+          expect((await resourceCounts()).maxDocuments).toBeLessThanOrEqual(2);
+        }
+        await expect(page.locator(".edit-frame")).toHaveCount(1);
+        if (withheld) {
+          await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+            "src",
+            before!,
+          );
+          await expect(page.locator(".status-error")).toContainText("in time");
+          expect((await resourceCounts()).reports).toBe(1);
+        }
+        await expect
+          .poll(
+            async () => {
+              const counts = await resourceCounts();
+              return counts.opened - counts.closed;
+            },
+            {
+              message:
+                "Every retired decoded frame is closed, leaving only the current hold",
+            },
+          )
+          .toBe(1);
+        const picture = await page.locator(".edit-picture").screenshot();
+        expect(await pictureDifference(page, initial, picture)).toEqual({
+          mean: 0,
+          max: 0,
+          fractionAbove3: 0,
+        });
+
+        measurements.push({
+          batch,
+          ...(await memory()),
+          ...(await resourceCounts()),
+        });
+        console.log(
+          "VIEWER BATCH",
+          JSON.stringify({ withheld, ...measurements.at(-1) }),
+        );
+      }
+      console.log(
+        "VIEWER RESOURCES",
+        JSON.stringify({
+          withheld,
+          measurements,
+        }),
+      );
+      await testInfo.attach("viewer resources", {
+        body: JSON.stringify({ withheld, measurements }, null, 2),
+        contentType: "application/json",
+      });
+      if (withheld) {
+        const replacement = ProjectSchema.parse(
+          await (
+            await request.post("/api/cutroom/projects", {
+              data: { name: "Replacement project" },
+            })
+          ).json(),
+        );
+        const view = await read();
+        const edit = await request.post(
+          `/api/cutroom/projects/${project.id}/commands`,
+          {
+            data: {
+              expectedRevision: view.revision,
+              commands: [
+                {
+                  type: "setClip",
+                  clipId: "picture",
+                  label: "Switch while promoting",
+                },
+              ],
+            },
+          },
+        );
+        expect(edit.ok()).toBe(true);
+        await expect(page.locator("iframe[data-held]")).toHaveCount(1);
+        await gate!.evaluate((gate) => gate.release());
+        await page.evaluate((id) => {
+          location.hash = `project/${id}`;
+        }, replacement.id);
+        await expect(page.locator(".edit-frame")).toHaveCount(1);
+        await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+          "src",
+          new RegExp(replacement.id),
+        );
+        await expect.poll(() => frames.opened - frames.closed).toBe(0);
+      }
+      await page.evaluate(() => {
+        location.hash = "";
+      });
+      await expect(page.locator(".edit-frame")).toHaveCount(0);
+      await expect
+        .poll(async () => {
+          const counts = await resourceCounts();
+          return counts.opened - counts.closed;
+        })
+        .toBe(0);
+      console.log(
+        "VIEWER RELEASED",
+        JSON.stringify({ withheld, ...(await resourceCounts()) }),
+      );
+    } finally {
+      await gate?.evaluate((gate) => gate.release());
+      await gate?.dispose();
+      await renderer.detach();
+      await browser.detach();
+    }
+  });
+}
+
+test("a navigation that never loads expires and keeps the confirmed picture", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request);
+  await seek("0311");
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  let release = () => {};
+  await page.route("**/isolated-preview?*", async (route) => {
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await route.abort();
+  });
+  const capture = await capturePicture(page);
+  capture.reset();
+  const started = Date.now();
+  try {
+    await page.keyboard.press("e");
+    await expect(page.locator(".edit-frame")).toHaveCount(2);
+    await expect(page.locator(".status-error")).toContainText(
+      "did not finish loading",
+      { timeout: 17_000 },
+    );
+    expect(Date.now() - started).toBeLessThan(17_000);
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+      "src",
+      before!,
+    );
+    const result = await capture.read();
+    expect(
+      result.samples.filter(
+        ({ color: [r, g, b] }) => r! < 230 || g! > 20 || b! > 20,
+      ),
+    ).toEqual([]);
+  } finally {
+    release();
+    await capture.stop();
+  }
+});
+
+test("stalled candidate replacements never expose the viewer background", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const { project, read, seek } = await openMedia(page, request);
+  await seek("0311");
+  const { before, gate } = await gatePaint(page, "promotion");
+  const capture = await capturePicture(page);
+  capture.reset();
+  try {
+    for (let edit = 0; edit < 50; edit++) {
+      const previous = await page
+        .locator(".edit-frame")
+        .last()
+        .getAttribute("src");
+      const view = await read();
+      const response = await request.post(
+        `/api/cutroom/projects/${project.id}/commands`,
+        {
+          data: {
+            expectedRevision: view.revision,
+            commands: [
+              {
+                type: "setClip",
+                clipId: "picture",
+                label: `Stalled replacement ${edit}`,
+              },
+            ],
+          },
+        },
+      );
+      expect(response.ok()).toBe(true);
+      await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
+        "src",
+        previous!,
+      );
+      await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+        "src",
+        before!,
+      );
+      await expect(page.locator(".edit-frame")).toHaveCount(2);
+      await expect(page.locator(`iframe[src="${before}"]`)).toBeVisible();
+    }
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+      "src",
+      before!,
+    );
+    const result = await capture.read();
+    const bad = result.samples.filter(
+      ({ color: [r, g, b] }) => r! < 230 || g! > 20 || b! > 20,
+    );
+    console.log(
+      "STALLED PICTURE",
+      JSON.stringify({ edits: 50, samples: result.samples.length, bad }),
+    );
+    await testInfo.attach("stalled replacement frames", {
+      body: JSON.stringify(result.samples),
+      contentType: "application/json",
+    });
+    expect(result.samples.length).toBeGreaterThan(1);
+    expect(bad).toEqual([]);
+    await expect(page.locator(".status-error")).toContainText("in time");
+  } finally {
+    await gate.evaluate((gate) => gate.release());
+    await gate.dispose();
+    await capture.stop();
+  }
 });
