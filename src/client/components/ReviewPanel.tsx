@@ -105,6 +105,10 @@ function ReviewOutcome({ text }: { text: string }) {
           aria-expanded={expanded}
           aria-controls={id}
           onClick={() => setExpanded(!expanded)}
+          // Space presses this toggle rather than reaching the editor's play shortcut.
+          onKeyDown={(event) => {
+            if (event.key === " ") event.stopPropagation();
+          }}
         >
           {expanded ? "Less" : "More"}
         </button>
