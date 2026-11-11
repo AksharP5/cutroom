@@ -5,9 +5,14 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
-import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import {
+  afterPaint,
+  createPositionProject,
+  positionField,
+  seekFrame,
+} from "./position-helpers";
 
 const exec = promisify(execFile);
 
@@ -37,7 +42,7 @@ function subjects(pixels: Buffer) {
   });
 }
 
-test("position fields and MCP preserve animated offsets through playback, repeated seeks and export", async ({
+test("Position fields and MCP retain media offsets and GSAP motion in export without warning flicker", async ({
   page,
   request,
   baseURL,
@@ -45,13 +50,12 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const project = ProjectSchema.parse(
-    await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Position proof", width: 320, height: 240, duration: 2 },
-      })
-    ).json(),
-  );
+  const project = await createPositionProject(request, {
+    name: "Position proof",
+    width: 320,
+    height: 240,
+    duration: 2,
+  });
   await exec("ffmpeg", [
     "-v",
     "error",
@@ -87,20 +91,19 @@ test("position fields and MCP preserve animated offsets through playback, repeat
     TimelineViewSchema.parse(
       await (await request.get(`${path}/timeline`)).json(),
     );
+  await page.addInitScript(() => {
+    const overrides: number[] = [];
+    Object.assign(window, { positionOverrides: overrides });
+    addEventListener("message", (event) => {
+      if (event.data?.type === "position-warning" && event.data.overridden)
+        overrides.push(event.data.time);
+    });
+  });
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="picture"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
-  const field = (name: string) =>
-    inspector.getByRole("textbox", { name, exact: true });
-  const painted = async <T>(action: () => Promise<T>): Promise<T> => {
-    const stage = page.locator(".edit-stage[data-preview-ready]");
-    await expect(stage).toBeVisible();
-    const before = await stage.getAttribute("data-preview-ready");
-    const result = await action();
-    await expect(stage).not.toHaveAttribute("data-preview-ready", before!);
-    await expect(stage).toBeVisible();
-    return result;
-  };
+  const field = (name: string) => positionField(page, name);
+  const painted = <T>(action: () => Promise<T>) => afterPaint(page, action);
   const undo = () =>
     painted(() =>
       page.getByRole("button", { name: "Undo", exact: true }).click(),
@@ -146,10 +149,6 @@ test("position fields and MCP preserve animated offsets through playback, repeat
         .evaluate((el) => el.getBoundingClientRect().left),
     )
     .toBe(65.5);
-  await page.screenshot({
-    path: info.outputPath("live-video-scrub.png"),
-    caret: "initial",
-  });
   await page.keyboard.up("Shift");
   await painted(() => page.mouse.up());
   await expect(field("Position X")).toHaveValue("37.5 px");
@@ -167,22 +166,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
     .toBeNull();
 
   const seek = async (frame: number, offset = 0) => {
-    await page
-      .getByRole("button", {
-        name: "Current time. Click to type a time.",
-        exact: true,
-      })
-      .click();
-    await page
-      .getByRole("textbox", { name: "Go to time", exact: true })
-      .pressSequentially(
-        String(Math.floor(frame / 30) * 100 + (frame % 30)).padStart(8, "0"),
-      );
-    await page
-      .getByRole("textbox", { name: "Go to time", exact: true })
-      .press("Enter");
-    await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
-    await expect(page.locator("iframe[data-live]")).toBeVisible();
+    await seekFrame(page, frame);
     await expect
       .poll(async () =>
         page
@@ -194,17 +178,16 @@ test("position fields and MCP preserve animated offsets through playback, repeat
   };
   // Capture authored CSS and x/y animation before adding offsets.
   const baseline = new Map<number, ReturnType<typeof subjects>>();
-  const screenshot = async (name: string) => {
+  const capture = async () => {
     await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
-    const file = info.outputPath(name);
-    await page.locator("iframe[data-live]").screenshot({ path: file });
-    const { stdout } = await exec(
+    const image = await page.locator("iframe[data-live]").screenshot();
+    const decoding = exec(
       "ffmpeg",
       [
         "-v",
         "error",
         "-i",
-        file,
+        "pipe:0",
         "-vf",
         "scale=320:240",
         "-pix_fmt",
@@ -215,13 +198,14 @@ test("position fields and MCP preserve animated offsets through playback, repeat
       ],
       { encoding: "buffer" },
     );
+    decoding.child.stdin!.end(image);
+    const { stdout } = await decoding;
     return subjects(stdout);
   };
   for (const frame of [3, 15, 45]) {
     await seek(frame);
-    baseline.set(frame, await screenshot(`baseline-${frame}.png`));
+    baseline.set(frame, await capture());
   }
-  await page.screenshot({ path: info.outputPath("before-position.png") });
 
   const client = new Client({ name: "position-agent", version: "1.0.0" });
   try {
@@ -315,7 +299,7 @@ test("position fields and MCP preserve animated offsets through playback, repeat
     const preview = new Map<number, ReturnType<typeof subjects>>();
     for (const frame of [45, 3, 15, 45, 3]) {
       await seek(frame, 40);
-      const positions = await screenshot(`preview-${frame}.png`);
+      const positions = await capture();
       preview.set(frame, positions);
       for (let i = 0; i < 2; i++) {
         expect(positions[i]!.left - baseline.get(frame)![i]!.left).toBeCloseTo(
@@ -329,7 +313,6 @@ test("position fields and MCP preserve animated offsets through playback, repeat
       }
     }
     await seek(45, 40);
-    await page.screenshot({ path: info.outputPath("after-position.png") });
     await page.getByRole("button", { name: "Export", exact: true }).click();
     const started = page.waitForResponse(
       (r) => r.request().method() === "POST" && r.url().endsWith("/render"),
@@ -383,6 +366,14 @@ test("position fields and MCP preserve animated offsets through playback, repeat
       info.outputPath("positions.json"),
       JSON.stringify(comparisons, null, 2),
     );
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { positionOverrides: number[] })
+            .positionOverrides,
+      ),
+    ).toEqual([]);
+    await expect(inspector.getByRole("status")).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
     await client.close();

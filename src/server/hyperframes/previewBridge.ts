@@ -3,6 +3,11 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 
 interface PreviewWindow extends Window {
+  CSSNumericValue: {
+    parse(value: string): {
+      toSum(): { values: Iterable<{ unit: string; value: number }> };
+    };
+  };
   gsap?: { getProperty(element: Element, property: string): unknown };
   __hf?: Window["__hf"] & {
     audioMeter?: {
@@ -90,116 +95,207 @@ function installPreviewBridge() {
         ?.canvas.style.setProperty("translate", translate, original.priority);
     if (draft.x === null) positions.delete(element);
     clearTimeout(observationTimer);
-    observationTimer = window.setTimeout(() => {
-      checkPosition();
-      observePlaying();
-    }, 350);
+    if (observedClip)
+      observationTimer = window.setTimeout(scheduleObservation, 350);
   };
   let observedClip: string | null = null;
   let observationTimer = 0;
   let observingPosition = false;
-  const expected = document.createElement("span");
-  expected.style.cssText = "all:initial;display:none!important";
+  let observationFrame = 0;
+  let foldedClip: string | null = null;
+  // This self-contained iframe script cannot import core's composeTranslate and its
+  // private helpers. Compare the same baseline + pixel delta as numeric CSS sums,
+  // preserving percentages, without adding a layout probe to the document.
+  const translateMatches = (
+    original: string,
+    x: number,
+    y: number,
+    actual: string,
+    style: CSSStyleDeclaration,
+  ) => {
+    const baseline = splitTranslate(original === "none" ? "" : original);
+    const current = splitTranslate(actual === "none" ? "" : actual);
+    const lengths = (value: string) => {
+      const result = new Map<string, number>();
+      for (const term of win.CSSNumericValue.parse(value).toSum().values) {
+        let { unit, value } = term;
+        if (unit === "em" || unit === "rem") {
+          value *= Number.parseFloat(
+            unit === "em"
+              ? style.fontSize
+              : getComputedStyle(document.documentElement).fontSize,
+          );
+          unit = "px";
+        }
+        result.set(unit, (result.get(unit) ?? 0) + value);
+      }
+      return result;
+    };
+    try {
+      return [x, y, 0].every((delta, axis) => {
+        const expected = lengths(baseline[axis] ?? "0px");
+        expected.set("px", (expected.get("px") ?? 0) + delta);
+        const rendered = lengths(current[axis] ?? "0px");
+        return [...new Set([...expected.keys(), ...rendered.keys()])].every(
+          (unit) =>
+            Math.abs((expected.get(unit) ?? 0) - (rendered.get(unit) ?? 0)) <
+            0.0001,
+        );
+      });
+    } catch {
+      // CSS math that Typed OM cannot resolve is not evidence that Position holds.
+      return false;
+    }
+  };
   const checkPosition = (foldedId?: string | null) => {
     observingPosition = false;
     if (!observedClip) return;
-    const element = document.querySelector(`#${CSS.escape(observedClip)}`);
-    if (!(element instanceof HTMLElement || element instanceof SVGElement))
-      return;
-    const number = (name: string) =>
-      Number.parseFloat(element.getAttribute(name) ?? "0") || 0;
-    const draft = positionDraft?.clipId === observedClip ? positionDraft : null;
-    const edited =
-      element.hasAttribute("data-hf-edit-base-x") ||
-      element.hasAttribute("data-hf-edit-base-y");
-    const x =
-      draft?.x ??
-      (edited ? number("data-x") - number("data-hf-edit-base-x") : 0);
-    const y =
-      draft?.y ??
-      (edited ? number("data-y") - number("data-hf-edit-base-y") : 0);
-    observingPosition = Boolean(x || y);
-    let overridden = false;
-    if ((x || y) && element.checkVisibility({ checkVisibilityCSS: true })) {
-      const style = getComputedStyle(element);
-      const saved = positions.get(element);
-      const original =
-        saved?.base ??
-        element.getAttribute("data-hf-edit-original-translate") ??
-        "none";
-      const parts = splitTranslate(original === "none" ? "" : original);
-      const dx = saved ? x - saved.x : x;
-      const dy = saved ? y - saved.y : y;
-      // Let CSS resolve the same calc/percentage values the runtime composes, without
-      // touching the subject's animation or forcing geometry reads on every clip.
-      expected.style.fontSize = style.fontSize;
-      expected.style.translate = `calc(${parts[0] ?? "0px"} + ${dx}px) calc(${parts[1] ?? "0px"} + ${dy}px)${parts[2] ? ` ${parts[2]}` : ""}`;
-      element.append(expected);
-      overridden = style.translate !== getComputedStyle(expected).translate;
-      expected.remove();
-      if (foldedId && element.getAttribute("data-hf-id") === foldedId)
-        overridden = true;
-      for (
-        let ancestor: Element | null = element;
-        ancestor && !overridden;
-        ancestor = ancestor.parentElement
-      ) {
-        const css = ancestor === element ? style : getComputedStyle(ancestor);
-        const matrix = new DOMMatrixReadOnly(
-          css.transform === "none" ? undefined : css.transform,
+    performance.mark("cutroom:position-observation:start");
+    try {
+      const element = document.querySelector(`#${CSS.escape(observedClip)}`);
+      if (!(element instanceof HTMLElement || element instanceof SVGElement))
+        return;
+      const number = (name: string) =>
+        Number.parseFloat(element.getAttribute(name) ?? "0") || 0;
+      const draft =
+        positionDraft?.clipId === observedClip ? positionDraft : null;
+      const edited =
+        element.hasAttribute("data-hf-edit-base-x") ||
+        element.hasAttribute("data-hf-edit-base-y");
+      const x =
+        draft?.x ??
+        (edited ? number("data-x") - number("data-hf-edit-base-x") : 0);
+      const y =
+        draft?.y ??
+        (edited ? number("data-y") - number("data-hf-edit-base-y") : 0);
+      observingPosition = Boolean(x || y);
+      let overridden = false;
+      const picture =
+        element instanceof HTMLVideoElement
+          ? (holds.get(element)?.canvas ?? element)
+          : element;
+      if ((x || y) && picture.checkVisibility({ checkVisibilityCSS: true })) {
+        const style = getComputedStyle(picture);
+        const saved = positions.get(element);
+        const original =
+          saved?.base ??
+          element.getAttribute("data-hf-edit-original-translate") ??
+          "none";
+        const dx = saved ? x - saved.x : x;
+        const dy = saved ? y - saved.y : y;
+        overridden = !translateMatches(
+          original,
+          dx,
+          dy,
+          style.translate,
+          style,
         );
-        const linear = [
-          matrix.m11 - 1,
-          matrix.m12,
-          matrix.m13,
-          matrix.m14,
-          matrix.m21,
-          matrix.m22 - 1,
-          matrix.m23,
-          matrix.m24,
-          matrix.m31,
-          matrix.m32,
-          matrix.m33 - 1,
-          matrix.m34,
-          matrix.m44 - 1,
-        ];
-        overridden =
-          linear.some((value) => Math.abs(value) > 0.000001) ||
-          (css.zoom !== "normal" &&
-            Math.abs(Number.parseFloat(css.zoom) - 1) > 0.000001) ||
-          (css.scale !== "none" &&
-            css.scale
-              .split(/\s+/)
-              .some(
-                (value) =>
-                  Math.abs(
-                    Number.parseFloat(value) / (value.endsWith("%") ? 100 : 1) -
-                      1,
-                  ) > 0.000001,
-              )) ||
-          (css.rotate !== "none" &&
-            Math.abs(Number.parseFloat(css.rotate.split(/\s+/).at(-1)!) % 360) >
-              0.000001);
+        if (foldedId && element.getAttribute("data-hf-id") === foldedId)
+          overridden = true;
+        for (
+          let ancestor: Element | null = picture;
+          ancestor && !overridden;
+          ancestor = ancestor.parentElement
+        ) {
+          const css = ancestor === picture ? style : getComputedStyle(ancestor);
+          const matrix = new DOMMatrixReadOnly(
+            css.transform === "none" ? undefined : css.transform,
+          );
+          const linear = [
+            matrix.m11 - 1,
+            matrix.m12,
+            matrix.m13,
+            matrix.m14,
+            matrix.m21,
+            matrix.m22 - 1,
+            matrix.m23,
+            matrix.m24,
+            matrix.m31,
+            matrix.m32,
+            matrix.m33 - 1,
+            matrix.m34,
+            matrix.m44 - 1,
+          ];
+          overridden =
+            linear.some((value) => Math.abs(value) > 0.000001) ||
+            (css.zoom !== "normal" &&
+              Math.abs(Number.parseFloat(css.zoom) - 1) > 0.000001) ||
+            (css.scale !== "none" &&
+              css.scale
+                .split(/\s+/)
+                .some(
+                  (value) =>
+                    Math.abs(
+                      Number.parseFloat(value) /
+                        (value.endsWith("%") ? 100 : 1) -
+                        1,
+                    ) > 0.000001,
+                )) ||
+            (css.rotate !== "none" &&
+              Math.abs(
+                Number.parseFloat(css.rotate.split(/\s+/).at(-1)!) % 360,
+              ) > 0.000001);
+        }
       }
+      parent.postMessage(
+        {
+          source: "cutroom-preview",
+          type: "position-warning",
+          clipId: observedClip,
+          time: win.__player?.getTime() ?? 0,
+          overridden,
+        },
+        "*",
+      );
+    } finally {
+      performance.measure(
+        "cutroom:position-observation",
+        "cutroom:position-observation:start",
+      );
+      performance.clearMarks("cutroom:position-observation:start");
+      performance.clearMeasures("cutroom:position-observation");
     }
-    parent.postMessage(
-      {
-        source: "cutroom-preview",
-        type: "position-warning",
-        clipId: observedClip,
-        time: win.__player?.getTime() ?? 0,
-        overridden,
-      },
-      "*",
-    );
+  };
+  const scheduleObservation = (foldedId?: string | null) => {
+    if (foldedId) foldedClip = foldedId;
+    if (!observedClip) {
+      cancelAnimationFrame(observationFrame);
+      observationFrame = 0;
+      clearTimeout(observationTimer);
+      observingPosition = false;
+      foldedClip = null;
+      return;
+    }
+    if (observationFrame) return;
+    const frame = requestAnimationFrame(() => {
+      const version = pictureVersion;
+      void picture.then(
+        () => {
+          if (observationFrame !== frame) return;
+          observationFrame = 0;
+          // A newer seek owns the displayed picture. Check only after it settles.
+          if (version !== pictureVersion) {
+            scheduleObservation();
+            return;
+          }
+          checkPosition(foldedClip);
+          foldedClip = null;
+          observePlaying();
+        },
+        () => {
+          // The owning seek/paint request reports picture failures.
+          if (observationFrame === frame) observationFrame = 0;
+        },
+      );
+    });
+    observationFrame = frame;
   };
   const observePlaying = () => {
     clearTimeout(observationTimer);
     if (!observedClip || !observingPosition || !win.__player?.isPlaying())
       return;
     observationTimer = window.setTimeout(() => {
-      checkPosition();
-      observePlaying();
+      scheduleObservation();
     }, 350);
   };
   let metering = false;
@@ -458,6 +554,8 @@ function installPreviewBridge() {
   addEventListener("pagehide", () => {
     pictureVersion += 1;
     clearTimeout(observationTimer);
+    cancelAnimationFrame(observationFrame);
+    observationFrame = 0;
     for (const video of holds.keys()) removeHold(video);
   });
   addEventListener("message", (event: MessageEvent<unknown>) => {
@@ -486,15 +584,14 @@ function installPreviewBridge() {
           )
             return;
           observedClip = data.clipId;
-          checkPosition();
-          observePlaying();
+          scheduleObservation();
           break;
         case "position-fold":
           if (
             "hfId" in data &&
             (data.hfId === null || typeof data.hfId === "string")
           )
-            checkPosition(data.hfId);
+            scheduleObservation(data.hfId);
           return;
         case "position":
           if (
@@ -540,7 +637,7 @@ function installPreviewBridge() {
           if (metering) levels();
           await refreshPicture();
           clearTimeout(observationTimer);
-          checkPosition();
+          scheduleObservation();
           break;
         case "seek":
           if (
@@ -552,8 +649,7 @@ function installPreviewBridge() {
             return;
           win.__player?.seek(data.time);
           if (!win.__player?.isPlaying()) await refreshPicture();
-          checkPosition();
-          observePlaying();
+          scheduleObservation();
           break;
         case "mute":
           if (!("muted" in data) || typeof data.muted !== "boolean") return;
@@ -570,7 +666,7 @@ function installPreviewBridge() {
         case "paint":
           await picture;
           await paint();
-          checkPosition();
+          scheduleObservation();
           break;
         default:
           return;
