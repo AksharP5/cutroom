@@ -1,0 +1,1094 @@
+{
+  "normal": {
+    "cases": 20,
+    "maxErrorMs": 0.5208333333333334,
+    "results": [
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30003,
+          42003,
+          54003,
+          66003
+        ],
+        "errorsSamples": [
+          3,
+          3,
+          3,
+          3
+        ],
+        "errorsMs": [
+          0.0625,
+          0.0625,
+          0.0625,
+          0.0625
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30005,
+          42005,
+          54005,
+          66005
+        ],
+        "errorsSamples": [
+          5,
+          5,
+          5,
+          5
+        ],
+        "errorsMs": [
+          0.10416666666666667,
+          0.10416666666666667,
+          0.10416666666666667,
+          0.10416666666666667
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29997,
+          41997,
+          53997,
+          65997
+        ],
+        "errorsSamples": [
+          -3,
+          -3,
+          -3,
+          -3
+        ],
+        "errorsMs": [
+          -0.0625,
+          -0.0625,
+          -0.0625,
+          -0.0625
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30025,
+          42025,
+          54025,
+          66025
+        ],
+        "errorsSamples": [
+          25,
+          25,
+          25,
+          25
+        ],
+        "errorsMs": [
+          0.5208333333333334,
+          0.5208333333333334,
+          0.5208333333333334,
+          0.5208333333333334
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30002,
+          42002,
+          54002,
+          66002
+        ],
+        "errorsSamples": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "errorsMs": [
+          0.041666666666666664,
+          0.041666666666666664,
+          0.041666666666666664,
+          0.041666666666666664
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29998,
+          41998,
+          53998,
+          65998
+        ],
+        "errorsSamples": [
+          -2,
+          -2,
+          -2,
+          -2
+        ],
+        "errorsMs": [
+          -0.041666666666666664,
+          -0.041666666666666664,
+          -0.041666666666666664,
+          -0.041666666666666664
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      }
+    ]
+  },
+  "cpu0": {
+    "cases": 20,
+    "maxErrorMs": 0.9583333333333334,
+    "results": [
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30025,
+          42025,
+          54025,
+          66025
+        ],
+        "errorsSamples": [
+          25,
+          25,
+          25,
+          25
+        ],
+        "errorsMs": [
+          0.5208333333333334,
+          0.5208333333333334,
+          0.5208333333333334,
+          0.5208333333333334
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29994,
+          41994,
+          53994,
+          65994
+        ],
+        "errorsSamples": [
+          -6,
+          -6,
+          -6,
+          -6
+        ],
+        "errorsMs": [
+          -0.125,
+          -0.125,
+          -0.125,
+          -0.125
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30008,
+          42008,
+          54008,
+          66008
+        ],
+        "errorsSamples": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "errorsMs": [
+          0.16666666666666666,
+          0.16666666666666666,
+          0.16666666666666666,
+          0.16666666666666666
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30006,
+          42006,
+          54006,
+          66006
+        ],
+        "errorsSamples": [
+          6,
+          6,
+          6,
+          6
+        ],
+        "errorsMs": [
+          0.125,
+          0.125,
+          0.125,
+          0.125
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30000,
+          42000,
+          54000,
+          66000
+        ],
+        "errorsSamples": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "errorsMs": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30001,
+          42001,
+          54001,
+          66001
+        ],
+        "errorsSamples": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "errorsMs": [
+          0.020833333333333332,
+          0.020833333333333332,
+          0.020833333333333332,
+          0.020833333333333332
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30009,
+          42009,
+          54009,
+          66009
+        ],
+        "errorsSamples": [
+          9,
+          9,
+          9,
+          9
+        ],
+        "errorsMs": [
+          0.1875,
+          0.1875,
+          0.1875,
+          0.1875
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29993,
+          41993,
+          53993,
+          65993
+        ],
+        "errorsSamples": [
+          -7,
+          -7,
+          -7,
+          -7
+        ],
+        "errorsMs": [
+          -0.14583333333333334,
+          -0.14583333333333334,
+          -0.14583333333333334,
+          -0.14583333333333334
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29996,
+          41996,
+          53996,
+          65996
+        ],
+        "errorsSamples": [
+          -4,
+          -4,
+          -4,
+          -4
+        ],
+        "errorsMs": [
+          -0.08333333333333333,
+          -0.08333333333333333,
+          -0.08333333333333333,
+          -0.08333333333333333
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29993,
+          41993,
+          53993,
+          65993
+        ],
+        "errorsSamples": [
+          -7,
+          -7,
+          -7,
+          -7
+        ],
+        "errorsMs": [
+          -0.14583333333333334,
+          -0.14583333333333334,
+          -0.14583333333333334,
+          -0.14583333333333334
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29954,
+          41954,
+          53954,
+          65954
+        ],
+        "errorsSamples": [
+          -46,
+          -46,
+          -46,
+          -46
+        ],
+        "errorsMs": [
+          -0.9583333333333334,
+          -0.9583333333333334,
+          -0.9583333333333334,
+          -0.9583333333333334
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29999,
+          41999,
+          53999,
+          65999
+        ],
+        "errorsSamples": [
+          -1,
+          -1,
+          -1,
+          -1
+        ],
+        "errorsMs": [
+          -0.020833333333333332,
+          -0.020833333333333332,
+          -0.020833333333333332,
+          -0.020833333333333332
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30009,
+          42009,
+          54009,
+          66009
+        ],
+        "errorsSamples": [
+          9,
+          9,
+          9,
+          9
+        ],
+        "errorsMs": [
+          0.1875,
+          0.1875,
+          0.1875,
+          0.1875
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29998,
+          41998,
+          53998,
+          65998
+        ],
+        "errorsSamples": [
+          -2,
+          -2,
+          -2,
+          -2
+        ],
+        "errorsMs": [
+          -0.041666666666666664,
+          -0.041666666666666664,
+          -0.041666666666666664,
+          -0.041666666666666664
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29994,
+          41994,
+          53994,
+          65994
+        ],
+        "errorsSamples": [
+          -6,
+          -6,
+          -6,
+          -6
+        ],
+        "errorsMs": [
+          -0.125,
+          -0.125,
+          -0.125,
+          -0.125
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29991,
+          41991,
+          53991,
+          65991
+        ],
+        "errorsSamples": [
+          -9,
+          -9,
+          -9,
+          -9
+        ],
+        "errorsMs": [
+          -0.1875,
+          -0.1875,
+          -0.1875,
+          -0.1875
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30002,
+          42002,
+          54002,
+          66002
+        ],
+        "errorsSamples": [
+          2,
+          2,
+          2,
+          2
+        ],
+        "errorsMs": [
+          0.041666666666666664,
+          0.041666666666666664,
+          0.041666666666666664,
+          0.041666666666666664
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30017,
+          42017,
+          54017,
+          66017
+        ],
+        "errorsSamples": [
+          17,
+          17,
+          17,
+          17
+        ],
+        "errorsMs": [
+          0.3541666666666667,
+          0.3541666666666667,
+          0.3541666666666667,
+          0.3541666666666667
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          30008,
+          42008,
+          54008,
+          66008
+        ],
+        "errorsSamples": [
+          8,
+          8,
+          8,
+          8
+        ],
+        "errorsMs": [
+          0.16666666666666666,
+          0.16666666666666666,
+          0.16666666666666666,
+          0.16666666666666666
+        ],
+        "boundSamples": 48
+      },
+      {
+        "expectedTimelineSeconds": [
+          1.625,
+          1.875,
+          2.125,
+          2.375
+        ],
+        "savedSamples": [
+          29997,
+          41997,
+          53997,
+          65997
+        ],
+        "errorsSamples": [
+          -3,
+          -3,
+          -3,
+          -3
+        ],
+        "errorsMs": [
+          -0.0625,
+          -0.0625,
+          -0.0625,
+          -0.0625
+        ],
+        "boundSamples": 48
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "timing": "Voiceover A1\nInput\nFake Default Audio Input\n\nInput delay 10 ms\nLatency compensation 63 ms\n\nOverlaps go on a new audio track. Esc asks to discard the take.\n\nRecord\nCtrl+Alt+Shift+V",
+  "clipStartFrame": 30,
+  "clipEndFrame": 76,
+  "stoppedFrame": 76,
+  "sourceOffsetSamples": 48445,
+  "sourceCorrelation": 0.9966717182081114,
+  "captureCorrelation": 0.9999999923859865,
+  "captureStartInputFrame": 21612,
+  "maxSampleError": 1,
+  "exportCorrelation": 0.9974173844268295,
+  "exportOffsetMs": 0
+}
