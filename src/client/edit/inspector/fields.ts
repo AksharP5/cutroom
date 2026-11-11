@@ -1,3 +1,10 @@
+import {
+  audioDbToGain,
+  audioGainToDb,
+  audioGainToText,
+  MAX_AUDIO_GAIN_DB,
+} from "@hyperframes/core/audio-gain";
+import type { Selection } from "../../timeline/selection";
 import { frameTime, toFrames } from "../../../shared/timeline/apply";
 import type {
   CommandInput,
@@ -10,11 +17,21 @@ import {
   parseTimecode,
 } from "../../../shared/timeline/timecode";
 
-export type FieldUnit = "timecode" | "percent";
+export type FieldUnit = "timecode" | "percent" | "gain";
 export type TimingField = "start" | "duration" | "speed" | "sourceIn";
 
 export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
   const input = text.trim();
+  if (unit === "gain") {
+    if (/^-\s*(?:∞|inf(?:inity)?)(?:\s*dB)?$/i.test(input)) return 0;
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:dB)?$/i.test(input))
+      throw new Error("Enter gain in dB, such as -6 dB, or -∞ for silence.");
+    const db = Number.parseFloat(input);
+    const gain = audioDbToGain(db);
+    if (!Number.isFinite(db) || !Number.isFinite(gain) || gain === 0)
+      throw new Error("Gain is outside the supported range.");
+    return gain;
+  }
   if (unit === "timecode") {
     if (/^\d+(?:\.\d+)?\s*s$/.test(input))
       return toFrames(Number.parseFloat(input), fps);
@@ -33,9 +50,11 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
 export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
   value === null
     ? "Auto"
-    : unit === "timecode"
-      ? formatTimecode(value, fps)
-      : formatPercent(value);
+    : unit === "gain"
+      ? audioGainToText(value)
+      : unit === "timecode"
+        ? formatTimecode(value, fps)
+        : formatPercent(value);
 
 /** Uses the same move and trim commands as the timeline, with source timing shared by linked media. */
 export function timingCommands(
@@ -69,4 +88,44 @@ export function timingCommands(
   return mediaStart === clip.mediaStart
     ? []
     : [{ type: "setTiming", clipId, mediaStart }];
+}
+
+/** Gain gestures travel in dB, with the same silence floor and conversion as the timeline line. */
+export function stepField(value: number, delta: number, unit: FieldUnit) {
+  if (unit === "gain") {
+    const db = Math.max(
+      -60,
+      Math.min(
+        MAX_AUDIO_GAIN_DB,
+        (value > 0 ? audioGainToDb(value) : -60) + delta,
+      ),
+    );
+    return db <= -60 ? 0 : audioDbToGain(Math.round(db * 10) / 10);
+  }
+  return unit === "timecode" ? Math.round(value + delta) : value + delta * 0.01;
+}
+
+/** A full linked group is one subject. Alt-selection can still inspect one partner alone. */
+export function inspectorSubject(timeline: Timeline, selection: Selection) {
+  const members = timeline.clips.filter((clip) => selection.ids.has(clip.id));
+  const first = members[0];
+  if (!first) return null;
+  if (
+    members.length > 1 &&
+    (!first.link ||
+      members.some((clip) => clip.link !== first.link) ||
+      timeline.clips.some(
+        (clip) => clip.link === first.link && !selection.ids.has(clip.id),
+      ))
+  )
+    return null;
+  const clip =
+    members.find((clip) => clip.kind === "video") ??
+    members.find((clip) => clip.id === selection.anchor) ??
+    first;
+  const partners = members.filter((clip) => clip.kind === "audio");
+  const audio = partners.length
+    ? partners
+    : members.filter((clip) => clip.hasAudio);
+  return { clip, members, audio };
 }

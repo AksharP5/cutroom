@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
 import { showToast } from "../../workspace";
-import { formatField, parseField } from "./fields";
+import { formatField, parseField, stepField } from "./fields";
 import type { FieldUnit } from "./fields";
 
 /** Typing and label scrubbing both commit once. A drag keeps its starting value until release. */
@@ -14,6 +14,7 @@ export function ValueField({
   allowAuto = false,
   min = 0,
   max = Infinity,
+  hint,
   onCommit,
 }: {
   label: string;
@@ -24,12 +25,14 @@ export function ValueField({
   allowAuto?: boolean;
   min?: number;
   max?: number;
+  hint?: string;
   onCommit(value: number | null): void;
 }) {
   const id = useId();
   const [draft, setDraft] = useState<string | null>(null);
   const drag = useRef<{
     x: number;
+    distance: number;
     value: number;
     next: number;
     moved: boolean;
@@ -65,6 +68,7 @@ export function ValueField({
           const initial = value ?? 1;
           drag.current = {
             x: event.clientX,
+            distance: 0,
             value: initial,
             next: initial,
             moved: false,
@@ -73,21 +77,18 @@ export function ValueField({
         onPointerMove={(event) => {
           const current = drag.current;
           if (!current) return;
-          const delta = Math.round(event.clientX - current.x);
+          const delta = event.clientX - current.x;
           // A click that wobbles a pixel is still a click.
           if (!current.moved && Math.abs(delta) < 3) return;
+          current.x = event.clientX;
+          current.distance +=
+            delta *
+            ((unit === "gain" ? event.altKey : event.shiftKey) ? 0.1 : 1);
           current.moved = true;
           current.next = Math.min(
             max,
-            Math.max(
-              min,
-              current.value +
-                delta *
-                  (unit === "timecode" ? 1 : 0.01) *
-                  (event.shiftKey ? 0.1 : 1),
-            ),
+            Math.max(min, stepField(current.value, current.distance, unit)),
           );
-          if (unit === "timecode") current.next = Math.round(current.next);
           setDraft(formatField(current.next, unit, fps));
         }}
         onPointerUp={(event) => {
@@ -116,8 +117,11 @@ export function ValueField({
           title={
             allowAuto
               ? "Auto uses source styles. Type a percentage to set static inline opacity."
-              : undefined
+              : unit === "gain"
+                ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
+                : undefined
           }
+          aria-describedby={hint ? `${id}-hint` : undefined}
           type="text"
           spellCheck={false}
           disabled={disabled}
@@ -139,12 +143,15 @@ export function ValueField({
                     ? (value ?? 1)
                     : parseField(draft, unit, fps);
                 const step =
-                  (unit === "timecode" ? 1 : 0.01) *
                   (event.shiftKey ? 10 : 1) *
+                  (unit === "gain" && event.altKey ? 0.1 : 1) *
                   (event.key === "ArrowUp" ? 1 : -1);
                 setDraft(
                   formatField(
-                    Math.min(max, Math.max(min, current + step)),
+                    Math.min(
+                      max,
+                      Math.max(min, stepField(current, step, unit)),
+                    ),
                     unit,
                     fps,
                   ),
@@ -178,6 +185,11 @@ export function ValueField({
           </button>
         )}
       </div>
+      {hint && (
+        <small id={`${id}-hint`} className="inspector-field-hint">
+          {hint}
+        </small>
+      )}
     </div>
   );
 }

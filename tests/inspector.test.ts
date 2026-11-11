@@ -13,6 +13,8 @@ import {
   formatField,
   parseField,
   timingCommands,
+  inspectorSubject,
+  stepField,
 } from "../src/client/edit/inspector/fields";
 import { shownChanges } from "../src/client/edit/inspector/changes";
 import { editLabel } from "../src/shared/timeline/labels";
@@ -536,4 +538,79 @@ test("edit labels describe the commands with past tense and the actual values", 
       { type: "trim", clipId: "title", edge: "start", to: 15, ripple: true },
     ]),
   ).toBe("Ripple trimmed start to 00:00:00:15");
+});
+
+test("a complete linked selection is one picture subject with its audio, while unrelated and partial selections remain multiple", () => {
+  const timeline = parseComposition(
+    `<main data-composition-id="main" data-fps="30" data-duration="8">
+    <video id="picture" muted data-link="pair" data-start="0" data-duration="8" data-track-index="0"></video>
+    <audio id="sound" data-link="pair" data-start="0" data-duration="8" data-track-index="1"></audio>
+    <audio id="music" data-start="0" data-duration="8" data-track-index="2"></audio>
+  </main>`,
+    emptyTimelineSettings(),
+  ).timeline;
+  for (const anchor of ["picture", "sound", null]) {
+    const subject = inspectorSubject(timeline, {
+      ids: new Set(["picture", "sound"]),
+      anchor,
+    });
+    expect(subject?.clip.id).toBe("picture");
+    expect(subject?.audio.map((clip) => clip.id)).toEqual(["sound"]);
+  }
+  expect(
+    inspectorSubject(timeline, {
+      ids: new Set(["picture", "sound", "music"]),
+      anchor: "picture",
+    }),
+  ).toBeNull();
+  expect(
+    inspectorSubject(timeline, { ids: new Set(["sound"]), anchor: "sound" })
+      ?.clip.id,
+  ).toBe("sound");
+  const group = {
+    ...timeline,
+    clips: timeline.clips.map((clip) => ({ ...clip, link: "pair" })),
+  };
+  expect(
+    inspectorSubject(group, {
+      ids: new Set(["picture", "sound"]),
+      anchor: "picture",
+    }),
+  ).toBeNull();
+  expect(
+    inspectorSubject(group, {
+      ids: new Set(["picture", "sound", "music"]),
+      anchor: "picture",
+    })?.audio,
+  ).toHaveLength(2);
+});
+
+test("gain fields round-trip linear gain through signed dB, including silence and fine steps", () => {
+  expect(parseField("-6 dB", "gain", fps)).toBe(10 ** (-6 / 20));
+  expect(parseField("+12", "gain", fps)).toBe(10 ** (12 / 20));
+  expect(parseField("-∞ dB", "gain", fps)).toBe(0);
+  expect(parseField("-Infinity", "gain", fps)).toBe(0);
+  expect(formatField(0, "gain", fps)).toBe("-∞ dB");
+  expect(formatField(1, "gain", fps)).toBe("0.0 dB");
+  for (const db of [-59.9, -6.1, 0, 6, 12]) {
+    const gain = 10 ** (db / 20);
+    expect(parseField(formatField(gain, "gain", fps), "gain", fps)).toBeCloseTo(
+      gain,
+      12,
+    );
+  }
+  expect(formatField(stepField(1, -0.1, "gain"), "gain", fps)).toBe("-0.1 dB");
+  expect(stepField(1, -61, "gain")).toBe(0);
+  expect(formatField(stepField(0, 1, "gain"), "gain", fps)).toBe("-59.0 dB");
+  expect(stepField(1, 20, "gain")).toBe(10 ** (12 / 20));
+  for (const input of [
+    "NaN",
+    "+Infinity",
+    "6dBjunk",
+    "1e5",
+    "",
+    "9999",
+    "-9999",
+  ])
+    expect(() => parseField(input, "gain", fps)).toThrow();
 });

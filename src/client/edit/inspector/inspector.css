@@ -277,3 +277,11 @@
     transition-duration: var(--duration-panel-in);
   }
 }
+
+.inspector-field-hint {
+  grid-column: 2;
+  color: var(--text-tertiary);
+  font-size: var(--type-2xs);
+  text-align: right;
+  padding-bottom: var(--space-1);
+}

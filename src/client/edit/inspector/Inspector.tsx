@@ -4,6 +4,8 @@ import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
+import { clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
@@ -12,7 +14,7 @@ import { trackRows } from "../../timeline/math";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
-import { timingCommands } from "./fields";
+import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { pendingEdit, shownChanges } from "./changes";
@@ -39,6 +41,7 @@ export function Inspector({ projectId }: { projectId: string }) {
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
   const [changesOpen, setChangesOpen] = useState(true);
+  const [audioOpen, setAudioOpen] = useState(true);
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
@@ -81,10 +84,8 @@ export function Inspector({ projectId }: { projectId: string }) {
     return () => query.removeEventListener("change", close);
   }, [mode]);
   const timeline = view?.timeline;
-  const clip =
-    timeline?.clips.find(
-      (item) => item.id === selection.anchor && selection.ids.has(item.id),
-    ) ?? timeline?.clips.find((item) => selection.ids.has(item.id));
+  const subject = timeline ? inspectorSubject(timeline, selection) : null;
+  const clip = subject?.clip;
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -93,7 +94,9 @@ export function Inspector({ projectId }: { projectId: string }) {
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
   const edits =
-    view?.clipEdits?.filter((edit) => edit.clipId === clip?.id) ?? [];
+    view?.clipEdits?.filter((edit) =>
+      subject?.members.some((member) => member.id === edit.clipId),
+    ) ?? [];
   const shown = shownChanges(edits, expanded);
   const accept = async (editId: string) => {
     setAccepting(editId);
@@ -145,7 +148,7 @@ export function Inspector({ projectId }: { projectId: string }) {
           <X size={14} />
         </button>
       </header>
-      {selection.ids.size > 1 ? (
+      {selection.ids.size > 1 && !subject ? (
         <p className="inspector-empty">{selection.ids.size} clips selected</p>
       ) : !clip || !timeline ? (
         <p className="inspector-empty">Select a clip to inspect it.</p>
@@ -231,23 +234,83 @@ export function Inspector({ projectId }: { projectId: string }) {
               <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
-          {clip.hasAudio && clip.automation && (
-            <details open className="inspector-section">
-              <summary>Audio</summary>
-              <button
-                className="inspector-clear-automation"
-                disabled={track?.track.locked}
-                title="Remove this clip's HyperFrames automation, including baked volume ramps"
-                onClick={() => {
-                  void editTimeline(projectId, "Clear clip automation", () => [
-                    { type: "setClip", clipId: clip.id, automation: null },
-                  ]);
-                }}
+          {subject?.audio.map((audio) => {
+            const fades = clipFades(audio);
+            const locked = timeline.tracks.find(
+              (track) => track.index === audio.track,
+            )?.locked;
+            return (
+              <details
+                key={audio.id}
+                open={audioOpen}
+                onToggle={(event) => setAudioOpen(event.currentTarget.open)}
+                className="inspector-section inspector-audio"
               >
-                Clear automation
-              </button>
-            </details>
-          )}
+                <summary>
+                  <CaretRight size={10} aria-hidden />
+                  Audio
+                  {subject.audio.length > 1 && ` · ${audio.label || audio.id}`}
+                </summary>
+                <ValueField
+                  key={`${audio.id}:gain`}
+                  label="Gain"
+                  value={audio.volume ?? 1}
+                  unit="gain"
+                  max={MAX_AUDIO_GAIN}
+                  fps={timeline.fps}
+                  disabled={locked}
+                  onCommit={(volume) => {
+                    void editTimeline(projectId, "Edit gain", () => [
+                      { type: "setClip", clipId: audio.id, volume },
+                    ]);
+                  }}
+                />
+                {(["fadeIn", "fadeOut"] as const).map((field) => (
+                  <ValueField
+                    key={`${audio.id}:${field}`}
+                    label={field === "fadeIn" ? "Fade in" : "Fade out"}
+                    value={audio[field]}
+                    unit="timecode"
+                    fps={timeline.fps}
+                    disabled={locked}
+                    hint={
+                      fades[field] !== audio[field]
+                        ? `Effective ${formatTimecode(Math.round(fades[field]), timeline.fps)} (scaled to fit)`
+                        : undefined
+                    }
+                    onCommit={(value) => {
+                      if (value === null) return;
+                      void editTimeline(projectId, "Edit fade", () => [
+                        { type: "setClip", clipId: audio.id, [field]: value },
+                      ]);
+                    }}
+                  />
+                ))}
+                {audio.automation && (
+                  <button
+                    className="inspector-clear-automation"
+                    disabled={locked}
+                    title="Remove this clip's HyperFrames automation, including baked volume ramps"
+                    onClick={() => {
+                      void editTimeline(
+                        projectId,
+                        "Clear clip automation",
+                        () => [
+                          {
+                            type: "setClip",
+                            clipId: audio.id,
+                            automation: null,
+                          },
+                        ],
+                      );
+                    }}
+                  >
+                    Clear automation
+                  </button>
+                )}
+              </details>
+            );
+          })}
           {clip.kind !== "audio" && (
             <details
               open={compositeOpen}
