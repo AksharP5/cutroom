@@ -1,0 +1,82 @@
+{
+  "fill": {
+    "mean": 0.2464229150947885,
+    "max": 63,
+    "fractionAbove3": 0.03219700831805483
+  },
+  "contain": {
+    "mean": 0.6426808100170118,
+    "max": 129,
+    "fractionAbove3": 0.042861989251597524
+  },
+  "negativeControls": {
+    "shifted": {
+      "mean": 1.5462825815198418,
+      "max": 123,
+      "fractionAbove3": 0.06358390075431614
+    },
+    "wrongFrame": {
+      "mean": 2.944983182834689,
+      "max": 138,
+      "fractionAbove3": 0.07463447460184751
+    }
+  },
+  "cover": {
+    "mean": 0.20828752872636314,
+    "max": 53,
+    "fractionAbove3": 0.02804076162015761
+  },
+  "none": {
+    "mean": 0.1469912320867683,
+    "max": 34,
+    "fractionAbove3": 0.019294476196125905
+  },
+  "scale-down": {
+    "mean": 0.6426808100170118,
+    "max": 129,
+    "fractionAbove3": 0.042861989251597524
+  },
+  "playbackWithHold": {
+    "frames": 70,
+    "maxGap": 50,
+    "averageGap": 33.57391304347826
+  },
+  "playbackNative": {
+    "frames": 70,
+    "maxGap": 66.70000000000027,
+    "averageGap": 34.05507246376812
+  },
+  "bounds": {
+    "fill": {
+      "mean": 0.25,
+      "max": 65,
+      "fractionAbove3": 0.0327
+    },
+    "contain": {
+      "mean": 0.655,
+      "max": 131,
+      "fractionAbove3": 0.0435
+    },
+    "cover": {
+      "mean": 0.212,
+      "max": 55,
+      "fractionAbove3": 0.0285
+    },
+    "none": {
+      "mean": 0.15,
+      "max": 36,
+      "fractionAbove3": 0.0197
+    },
+    "scale-down": {
+      "mean": 0.655,
+      "max": 131,
+      "fractionAbove3": 0.0435
+    }
+  },
+  "head": "cf1acc2c06f6c82703b860c11164262ec76611f3",
+  "ordinaryPausedPicture": {
+    "mean": 0,
+    "max": 0,
+    "fractionAbove3": 0
+  }
+}

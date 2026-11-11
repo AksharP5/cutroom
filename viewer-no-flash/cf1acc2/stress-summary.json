@@ -1,0 +1,240 @@
+{
+  "head": "cf1acc2c06f6c82703b860c11164262ec76611f3",
+  "base": "81ba7b55dd85580068b702c4678398703d340291",
+  "browser": "Chromium 155.0.8059.84",
+  "viewport": {
+    "width": 1720,
+    "height": 1050
+  },
+  "cpu": "taskset -c 0",
+  "editTrials": 45,
+  "compositedFrames": 874,
+  "blanks": 0,
+  "trials": [
+    {
+      "label": "razor 0103",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "razor 0311",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "razor 1117",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "MCP split",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "undo",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "redo",
+      "count": 12,
+      "bad": []
+    },
+    {
+      "label": "ripple delete",
+      "count": 16,
+      "bad": []
+    },
+    {
+      "label": "MCP overwrite insert",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "media drop",
+      "count": 43,
+      "bad": []
+    },
+    {
+      "label": "razor 0103",
+      "count": 10,
+      "bad": []
+    },
+    {
+      "label": "razor 0311",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "razor 1117",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "MCP split",
+      "count": 21,
+      "bad": []
+    },
+    {
+      "label": "undo",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "redo",
+      "count": 19,
+      "bad": []
+    },
+    {
+      "label": "ripple delete",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "MCP overwrite insert",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "media drop",
+      "count": 32,
+      "bad": []
+    },
+    {
+      "label": "razor 0103",
+      "count": 13,
+      "bad": []
+    },
+    {
+      "label": "razor 0311",
+      "count": 13,
+      "bad": []
+    },
+    {
+      "label": "razor 1117",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "MCP split",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "undo",
+      "count": 19,
+      "bad": []
+    },
+    {
+      "label": "redo",
+      "count": 14,
+      "bad": []
+    },
+    {
+      "label": "ripple delete",
+      "count": 13,
+      "bad": []
+    },
+    {
+      "label": "MCP overwrite insert",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "media drop",
+      "count": 28,
+      "bad": []
+    },
+    {
+      "label": "razor 0103",
+      "count": 15,
+      "bad": []
+    },
+    {
+      "label": "razor 0311",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "razor 1117",
+      "count": 22,
+      "bad": []
+    },
+    {
+      "label": "MCP split",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "undo",
+      "count": 19,
+      "bad": []
+    },
+    {
+      "label": "redo",
+      "count": 16,
+      "bad": []
+    },
+    {
+      "label": "ripple delete",
+      "count": 21,
+      "bad": []
+    },
+    {
+      "label": "MCP overwrite insert",
+      "count": 18,
+      "bad": []
+    },
+    {
+      "label": "media drop",
+      "count": 34,
+      "bad": []
+    },
+    {
+      "label": "razor 0103",
+      "count": 26,
+      "bad": []
+    },
+    {
+      "label": "razor 0311",
+      "count": 22,
+      "bad": []
+    },
+    {
+      "label": "razor 1117",
+      "count": 20,
+      "bad": []
+    },
+    {
+      "label": "MCP split",
+      "count": 15,
+      "bad": []
+    },
+    {
+      "label": "undo",
+      "count": 11,
+      "bad": []
+    },
+    {
+      "label": "redo",
+      "count": 18,
+      "bad": []
+    },
+    {
+      "label": "ripple delete",
+      "count": 17,
+      "bad": []
+    },
+    {
+      "label": "MCP overwrite insert",
+      "count": 15,
+      "bad": []
+    },
+    {
+      "label": "media drop",
+      "count": 33,
+      "bad": []
+    }
+  ]
+}
