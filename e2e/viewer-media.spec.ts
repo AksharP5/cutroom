@@ -127,6 +127,141 @@ async function openMedia(
 
 /** Decode every compositor screencast frame in the page, including opaque iframes. */
 async function capturePicture(page: Page) {
+  const trace = () => {
+    if (parent === window) return;
+    let previous = "";
+    let backgroundSet = false;
+    let sequence = 0;
+    const identities = new WeakMap<Element, number>();
+    const identity = (element: Element) => {
+      const found = identities.get(element);
+      if (found) return found;
+      const id = ++sequence;
+      identities.set(element, id);
+      return id;
+    };
+    const sample = () => {
+      if (document.body && !backgroundSet) {
+        backgroundSet = true;
+        const generation = Number(new URL(location.href).searchParams.get("v"));
+        document.body.style.setProperty(
+          "background-color",
+          ["#0040ff", "#00ff40", "#ff00ff", "#40ffff"][generation % 4]!,
+          "important",
+        );
+      }
+      const videos = Array.from(
+        document.querySelectorAll("video"),
+        (video) => ({
+          id: video.id,
+          time: video.currentTime,
+          ready: video.readyState,
+          seeking: video.seeking,
+          paused: video.paused,
+          held: video.hasAttribute("data-cutroom-held"),
+          seekHold: video.hasAttribute("data-hf-seek-video"),
+          style: video.getAttribute("style"),
+          visibility: video.style.visibility,
+          display: video.style.display,
+          opacity: video.style.opacity,
+        }),
+      );
+      const canvases = Array.from(
+        document.querySelectorAll("canvas"),
+        (canvas) => ({
+          id: identity(canvas),
+          hold: canvas.hasAttribute("data-cutroom-video-hold"),
+          width: canvas.width,
+          height: canvas.height,
+          visibility: canvas.style.visibility,
+          display: canvas.style.display,
+          opacity: canvas.style.opacity,
+        }),
+      );
+      const snapshot = JSON.stringify({ videos, canvases });
+      if (snapshot === previous) return;
+      previous = snapshot;
+      parent.postMessage(
+        {
+          source: "cutroom-test-picture",
+          at: performance.timeOrigin + performance.now(),
+          generation: new URL(location.href).searchParams.get("v"),
+          videos,
+          canvases,
+        },
+        "*",
+      );
+    };
+    const observer = new MutationObserver(sample);
+    observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "data-cutroom-held"],
+    });
+    for (const event of [
+      "loadedmetadata",
+      "loadeddata",
+      "seeked",
+      "playing",
+      "pause",
+    ])
+      document.addEventListener(event, sample, true);
+    addEventListener("message", (event) => {
+      if (event.source === parent && event.data?.source === "cutroom-viewer") {
+        parent.postMessage(
+          {
+            source: "cutroom-test-picture",
+            at: performance.timeOrigin + performance.now(),
+            generation: new URL(location.href).searchParams.get("v"),
+            command: event.data,
+          },
+          "*",
+        );
+        sample();
+      }
+    });
+    sample();
+  };
+  await page.evaluate(() => {
+    const records: unknown[] = [];
+    Object.assign(window, { pictureTrace: records });
+    addEventListener("message", (event) => {
+      if (event.data?.source === "cutroom-test-picture")
+        records.push(event.data);
+      if (event.data?.source === "cutroom-preview")
+        records.push({
+          at: performance.timeOrigin + performance.now(),
+          reply: event.data,
+        });
+    });
+    const observer = new MutationObserver(() =>
+      records.push({
+        at: performance.timeOrigin + performance.now(),
+        frames: Array.from(
+          document.querySelectorAll(".edit-frame"),
+          (frame) => ({
+            src: frame.getAttribute("src"),
+            live: frame.hasAttribute("data-live"),
+            held: frame.hasAttribute("data-held"),
+            opacity:
+              frame.hasAttribute("data-live") || frame.hasAttribute("data-held")
+                ? 1
+                : 0.01,
+          }),
+        ),
+      }),
+    );
+    observer.observe(document.querySelector(".edit-picture")!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-live", "data-held"],
+    });
+  });
+  await page.addInitScript(trace);
+  for (const frame of page.frames())
+    if (frame !== page.mainFrame()) await frame.evaluate(trace);
   const session = await page.context().newCDPSession(page);
   const box = (await page.locator(".edit-picture").boundingBox())!;
   const samples: { time: number; color: number[] }[] = [];
@@ -179,8 +314,55 @@ async function capturePicture(page: Page) {
       );
       if (metadata.timestamp! < since) return;
       samples.push({ time: metadata.timestamp!, color });
-      if (!blank && (color[0]! < 230 || color[1]! > 20 || color[2]! > 20))
+      if (!blank && (color[0]! < 230 || color[1]! > 20 || color[2]! > 20)) {
         blank = data;
+        console.log(
+          "BLANK DOM",
+          JSON.stringify(
+            await Promise.all(
+              page.frames().map((frame) =>
+                frame
+                  .evaluate(() => ({
+                    at: performance.timeOrigin + performance.now(),
+                    url: location.href,
+                    holds: Array.from(
+                      document.querySelectorAll<HTMLCanvasElement>(
+                        "canvas[data-cutroom-video-hold]",
+                      ),
+                      (canvas) => ({
+                        display: getComputedStyle(canvas).display,
+                        visibility: getComputedStyle(canvas).visibility,
+                        opacity: getComputedStyle(canvas).opacity,
+                        color: Array.from(
+                          canvas
+                            .getContext("2d")!
+                            .getImageData(
+                              canvas.width / 2,
+                              canvas.height / 2,
+                              1,
+                              1,
+                            ).data,
+                        ),
+                      }),
+                    ),
+                    frames: Array.from(
+                      document.querySelectorAll(".edit-frame"),
+                      (frame) => ({
+                        src: frame.getAttribute("src"),
+                        live: frame.hasAttribute("data-live"),
+                        held: frame.hasAttribute("data-held"),
+                      }),
+                    ),
+                  }))
+                  .catch((error: unknown) => ({
+                    url: frame.url(),
+                    error: String(error),
+                  })),
+              ),
+            ),
+          ),
+        );
+      }
     });
   });
   await session.send("Page.startScreencast", {
@@ -238,6 +420,17 @@ async function keepPicture(
       contentType: "application/json",
     });
     if (result.blank) {
+      const trace = test.info().outputPath(`${label}-handoff.json`);
+      await writeFile(
+        trace,
+        JSON.stringify(
+          await page.evaluate(() => Reflect.get(window, "pictureTrace")),
+        ),
+      );
+      await test.info().attach(`${label} handoff`, {
+        path: trace,
+        contentType: "application/json",
+      });
       const blank = test.info().outputPath(`${label}-blank.png`);
       await writeFile(blank, Buffer.from(result.blank, "base64"));
       await test
@@ -489,8 +682,16 @@ test("razor at fractional-second playheads never blanks the visible picture", as
   try {
     for (const [digits, count] of [
       ["0103", 8],
-      ["0311", 12],
-      ["1117", 16],
+      ["0207", 12],
+      ["0311", 16],
+      ["0419", 20],
+      ["0513", 24],
+      ["0617", 28],
+      ["0719", 32],
+      ["0811", 36],
+      ["0923", 40],
+      ["1017", 44],
+      ["1117", 48],
     ] as const) {
       await seek(digits);
       await keepPicture(page, capture, `razor ${digits}`, () =>
