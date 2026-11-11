@@ -171,6 +171,9 @@ export function frameSummary(
       const frames = runs
         .flatMap((result) => result.frames)
         .sort((a, b) => a - b);
+      const maxima = runs
+        .map((result) => Math.max(...result.frames))
+        .sort((a, b) => a - b);
       const longTasks = runs.flatMap((result) => result.longTasks);
       return [
         interaction,
@@ -178,6 +181,7 @@ export function frameSummary(
           p50: frames[Math.floor(frames.length * 0.5)],
           p95: frames[Math.floor(frames.length * 0.95)],
           max: frames.at(-1),
+          medianMax: maxima[Math.floor(maxima.length / 2)],
           longTasks: longTasks.length,
           longestTask: Math.max(0, ...longTasks),
         },

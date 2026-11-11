@@ -14,6 +14,9 @@ for (const count of [400, 500] as const)
     { tag: "@performance" },
     async ({ page, request }, info) => {
       test.setTimeout(180_000);
+      const runs = Number(process.env.CUTROOM_PERF_RUNS ?? 3);
+      if (!Number.isInteger(runs) || runs < 1)
+        throw new Error("CUTROOM_PERF_RUNS must be a positive integer.");
       await page.emulateMedia({ reducedMotion: "no-preference" });
       const project = await timelineWorkload(request, count);
       await page.goto(`/#project/${project.id}`);
@@ -57,7 +60,6 @@ for (const count of [400, 500] as const)
         await page.getByRole("region", { name: "Viewer", exact: true }).click();
         await page.waitForTimeout(700);
       };
-      const runs = Number(process.env.CUTROOM_PERF_RUNS ?? 1);
       for (let run = 0; run < runs; run++) {
         await fit();
         const key = await timelineFrames(page, "key");
@@ -93,6 +95,16 @@ for (const count of [400, 500] as const)
         ).toHaveAttribute("aria-valuenow", "0");
       }
       const summary = frameSummary(results);
+      // Keep passing CI timings in the log too; failure-only traces omit them.
+      console.log(
+        JSON.stringify({
+          count,
+          runs,
+          trace,
+          key: summary.key,
+          ripple: summary.ripple,
+        }),
+      );
       const evidence = {
         count,
         runs,
@@ -138,12 +150,14 @@ for (const count of [400, 500] as const)
         if (output)
           await writeFile(join(output, `${count}.trace.json.gz`), body);
       }
-      // 60 Hz target locally, with headroom for shared CI runners. This catches the measured
-      // 200–267 ms stalls without treating a runner's single missed refresh as a regression.
+      // Keep the 150 ms ceiling, but require a stall to reproduce: the default three runs
+      // tolerate one slow interaction run. #59's original before-build ripple maxima
+      // were 171/141/164 ms at 400 clips (median 164); after was 78/68/68 (median 68).
+      // Use per-run maxima so a recurring bad frame cannot disappear into pooled p95.
       // Profiling changes frame times; the CI budgets use the untraced runs.
       if (!trace) {
-        expect(summary.key.max).toBeLessThan(150);
-        expect(summary.ripple.max).toBeLessThan(150);
+        expect(summary.key.medianMax).toBeLessThan(150);
+        expect(summary.ripple.medianMax).toBeLessThan(150);
       }
     },
   );
