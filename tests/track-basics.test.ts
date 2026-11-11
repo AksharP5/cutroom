@@ -178,16 +178,14 @@ test("a linked insert reuses free picture-sound tracks, or creates one, and expo
   );
 });
 
-test("overwrite reuses picture sound tracks while leaving Music and VO alone", () => {
-  const parsed = parseComposition(
-    `<main id="main" data-composition-id="main" data-duration="12">
+test("overwrite never cuts another pair's sound, and reuses a free picture sound track while leaving Music and VO alone", () => {
+  const composition = `<main id="main" data-composition-id="main" data-duration="12">
     <video id="interview" src="interview.mp4" muted data-link="interview" data-start="0" data-duration="3" data-track-index="0"></video>
     <audio id="location" src="interview.mp4" data-link="interview" data-start="0" data-duration="10" data-track-index="1"></audio>
     <audio id="music" src="music.wav" data-start="0" data-duration="3" data-track-index="2"></audio>
     <audio id="vo" src="voice.wav" data-link="audio-only" data-start="0" data-duration="3" data-track-index="3"></audio>
-    </main>`,
-    emptyTimelineSettings(),
-  );
+    </main>`;
+  const parsed = parseComposition(composition, emptyTimelineSettings());
   const named = applyAll(parsed.timeline, [
     CommandSchema.parse({ type: "setTrack", index: 2, name: "Music" }),
     CommandSchema.parse({ type: "setTrack", index: 3, name: "VO" }),
@@ -199,15 +197,17 @@ test("overwrite reuses picture sound tracks while leaving Music and VO alone", (
     mode: "overwrite",
     clip: { id: "second", kind: "video", src: "second.mp4", duration: 60 },
   });
+  // The interview's location sound still runs under the drop, so its track isn't free.
   const added = applyAll(named, [insert]);
-  expect(
-    added.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
-      ?.track,
-  ).toBe(1);
-  expect(added.tracks).toEqual(named.tracks);
-  expect(added.clips.find((clip) => clip.id === "music")).toEqual(
-    named.clips.find((clip) => clip.id === "music"),
+  const sound = added.clips.find(
+    (clip) => clip.link === "second" && clip.kind === "audio",
   );
+  expect(sound?.track).not.toBe(1);
+  for (const id of ["location", "music", "vo"])
+    expect(added.clips.find((clip) => clip.id === id)).toEqual(
+      named.clips.find((clip) => clip.id === id),
+    );
+  // An empty audio track is free, so the sound goes there rather than on Music or VO.
   const empty = applyAll(named, [
     CommandSchema.parse({ type: "setTrack", index: 5, kind: "audio" }),
     insert,
@@ -215,6 +215,22 @@ test("overwrite reuses picture sound tracks while leaving Music and VO alone", (
   expect(
     empty.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
       ?.track,
+  ).toBe(5);
+  // When the location sound ends before the drop, its picture sound track is free and reused.
+  const shorter = applyAll(
+    parseComposition(
+      composition.replace(
+        'data-start="0" data-duration="10" data-track-index="1"',
+        'data-start="0" data-duration="5" data-track-index="1"',
+      ),
+      emptyTimelineSettings(),
+    ).timeline,
+    [insert],
+  );
+  expect(
+    shorter.clips.find(
+      (clip) => clip.link === "second" && clip.kind === "audio",
+    )?.track,
   ).toBe(1);
 });
 
