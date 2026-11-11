@@ -587,7 +587,9 @@ export function Timeline({
   }, [source.projectId, source.composition]);
   useLayoutEffect(() => {
     bodies.current?.scene({ rows: layout.rows, tracks, fps });
-  }, [source.projectId, source.composition, layout, tracks, fps]);
+    // Opening an edge band changes row positions; redraw the held filmstrip afterward.
+    if (trackDrag) refreshDrag.current();
+  }, [source.projectId, source.composition, layout, tracks, fps, trackDrag]);
 
   useLayoutEffect(() => {
     if (!scroller.current || !grid.current) return;

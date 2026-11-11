@@ -105,6 +105,21 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
         .getByRole("listitem")
         .filter({ hasText: name }),
     );
+  const filmstripAtClip = () =>
+    page.locator(".tl-lanes canvas").evaluate((canvas: HTMLCanvasElement) => {
+      const clip = document
+        .querySelector('[data-clip="interview"]')!
+        .getBoundingClientRect();
+      const box = canvas.getBoundingClientRect();
+      return canvas
+        .getContext("2d")!
+        .getImageData(
+          Math.round(((clip.x + 20 - box.x) * canvas.width) / box.width),
+          Math.round(((clip.y + 30 - box.y) * canvas.height) / box.height),
+          1,
+          1,
+        ).data[3];
+    });
   const undo = async () => {
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect.poll(read).toEqual(initial);
@@ -180,6 +195,7 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
     await undo();
 
     // Pointer capture allows a clip to reach the top band even above the lanes' original box.
+    await expect.poll(filmstripAtClip).toBe(255);
     point = await at(60);
     const lanes = (await page.locator(".tl-lanes").boundingBox())!;
     await page.mouse.move(point.x, point.y);
@@ -193,6 +209,7 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
           .evaluate((e) => (e as HTMLElement).offsetTop),
       )
       .toBeGreaterThan(0);
+    await expect.poll(filmstripAtClip).toBe(255);
     await page.screenshot({ path: info.outputPath("new-track-preview.png") });
     await page.mouse.up();
     await expect.poll(async () => (await read()).tracks.length).toBe(4);
