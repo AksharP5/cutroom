@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { fileFingerprint } from "../../shared/media";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
@@ -14,7 +15,7 @@ import type { z } from "zod";
 async function fingerprint(source: string) {
   const info = await stat(source, { bigint: true });
   if (!info.isFile()) throw new HttpError(400, "Choose a media file.");
-  return `${source}\0${info.size}\0${info.mtimeNs}\0${info.ctimeNs}\0${info.ino}\0${info.dev}`;
+  return `${fileFingerprint(source, { size: Number(info.size), mtimeMs: Number(info.mtimeNs) / 1e6 })}\0${info.mtimeNs}\0${info.ctimeNs}\0${info.ino}\0${info.dev}`;
 }
 type MediaResult = {
   key: string;
@@ -43,6 +44,7 @@ export function createMediaService(
     workerUrl?: URL;
     stopTimeoutMs?: number;
     failureTtlMs?: number;
+    maxCacheEntries?: number;
     removeDirectory?: (directory: string) => Promise<void>;
   } = {},
 ) {
@@ -52,6 +54,33 @@ export function createMediaService(
   const cleanupErrors: Error[] = [];
   let closing = false;
   let sequence = 0;
+  let maintenance = Promise.resolve();
+  // Bound disposable artifacts across replacements and server restarts, including exact frames.
+  const trimCache = (cache: string, current: string) => {
+    const task = maintenance.then(async () => {
+      const entries = await readdir(cache, { withFileTypes: true });
+      const cached = entries.filter(
+        (entry) => entry.isDirectory() && /^[a-f0-9]{64}$/.test(entry.name),
+      );
+      if (cached.length <= (options.maxCacheEntries ?? 256)) return;
+      const directories = await Promise.all(
+        cached.map(async (entry) => {
+          const path = join(cache, entry.name);
+          return { path, modified: (await stat(path)).mtimeMs };
+        }),
+      );
+      directories.sort((a, b) => a.modified - b.modified);
+      let remaining = directories.length;
+      for (const { path } of directories) {
+        if (remaining <= (options.maxCacheEntries ?? 256)) break;
+        if (path === current || jobs.has(path)) continue;
+        await removeDirectory(path);
+        remaining--;
+      }
+    });
+    maintenance = task.catch(() => {});
+    return task;
+  };
   const removeDirectory =
     options.removeDirectory ??
     ((directory: string) => rm(directory, { recursive: true, force: true }));
@@ -112,7 +141,7 @@ export function createMediaService(
       }
     }
     const key = createHash("sha256")
-      .update(`media-v5\0${kind}\0${identity}\0${frame ?? ""}`)
+      .update(`media-v6\0${kind}\0${identity}\0${frame ?? ""}`)
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
@@ -186,6 +215,7 @@ export function createMediaService(
           if (machine.state.status !== "running") return;
           await rename(scratch, directory);
           scratch = undefined;
+          await trimCache(cache, directory);
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
         } finally {

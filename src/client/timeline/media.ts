@@ -54,23 +54,36 @@ export function createTimelineMedia(
   projectId: string,
   composition: string,
   onLoad: () => void,
+  versions: Readonly<Record<string, string | null>> = {},
 ) {
   const project = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media`;
   const closing = new AbortController();
   // Every clip asks on every paint, so a source's path is resolved and encoded once.
-  const paths = new Map<string, string | null>();
+  const paths = new Map<
+    string,
+    { path: string; encoded: string; version: string } | null
+  >();
   const pathOf = (src: string) => {
     let path = paths.get(src);
     if (path === undefined) {
       const resolved = localMediaPath(composition, src);
-      path = resolved === null ? null : encodeURIComponent(resolved);
+      path =
+        resolved === null
+          ? null
+          : {
+              path: resolved,
+              encoded: encodeURIComponent(resolved),
+              version: encodeURIComponent(versions[resolved] ?? ""),
+            };
       paths.set(src, path);
     }
     return path;
   };
   const route = (kind: string, src: string, query = "") => {
     const path = pathOf(src);
-    return path === null ? null : `${project}/${kind}?path=${path}${query}`;
+    return path === null
+      ? null
+      : `${project}/${kind}?path=${path.encoded}&v=${path.version}${query}`;
   };
 
   /** Asks again while the server is still generating. Null when it has nothing to give. */
@@ -221,6 +234,14 @@ export function createTimelineMedia(
   };
 
   return {
+    /** Only a source already used by this canvas needs its decoded media replaced. */
+    updateVersions(next: Readonly<Record<string, string | null>>) {
+      const changed = [...paths.values()].some(
+        (path) => path !== null && versions[path.path] !== next[path.path],
+      );
+      versions = next;
+      return changed;
+    },
     /** Call when a paint begins: what it reads from here on is what the view shows. */
     beginPaint: () => drawn.clear(),
     /** A video's sprite sheets: one tile every `filmstripInterval` seconds. */
@@ -234,7 +255,7 @@ export function createTimelineMedia(
       const path = pathOf(src);
       if (path === null) return undefined;
       return stills.get(
-        `/api/projects/${encodeURIComponent(projectId)}/preview/${path.replaceAll("%2F", "/")}`,
+        `/api/projects/${encodeURIComponent(projectId)}/preview/${path.encoded.replaceAll("%2F", "/")}?v=${path.version}`,
       );
     },
     /** The frame at a time, if it has arrived. `wantFrames` asks for it. */
@@ -266,7 +287,9 @@ export function createTimelineMedia(
     dispose() {
       closing.abort();
       wanted = [];
-      for (const held of [pictures, stills, frames]) held.clear();
+      firstPeaks.clear();
+      paths.clear();
+      for (const held of [films, pictures, stills, frames, peaks]) held.clear();
     },
   };
 }

@@ -1,3 +1,4 @@
+import { useWorkspace } from "../workspace";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix } from "./mix";
 import { AudioMeters } from "./meters";
@@ -616,9 +617,14 @@ export function Timeline({
       source.composition,
     );
     bodies.current = created;
+    created.versions(useWorkspace.getState().fileChanges);
+    const unsubscribe = useWorkspace.subscribe(({ fileChanges }, previous) => {
+      if (fileChanges !== previous.fileChanges) created.versions(fileChanges);
+    });
     const view = viewport.current?.state();
     if (view) created.view(view);
     return () => {
+      unsubscribe();
       created.destroy();
       bodies.current = null;
     };

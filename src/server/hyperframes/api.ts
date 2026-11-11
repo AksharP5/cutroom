@@ -1,3 +1,4 @@
+import { fileFingerprint } from "../../shared/media";
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
@@ -41,7 +42,7 @@ import type {
   StudioApiAdapter,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
-import { projectPath, readSource } from "../projects/store";
+import { isMissing, projectPath, readSource } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
@@ -576,12 +577,29 @@ export function createHyperframesApi(
     const listing = z
       .looseObject({ files: z.array(z.string()) })
       .parse(await c.res.json());
-    c.res = c.json({
-      ...listing,
-      files: listing.files.filter(
-        (file) => !file.split("/").some((part) => part.startsWith(".")),
+    const files = listing.files.filter(
+      (file) => !file.split("/").some((part) => part.startsWith(".")),
+    );
+    const project = await store.get(c.req.param("id"));
+    const fileVersions = Object.fromEntries(
+      await Promise.all(
+        files.map(async (path) => {
+          const info = await projectPath(project, path)
+            .then((absolute) => stat(absolute))
+            .catch((error: unknown) => {
+              if (
+                isMissing(error) ||
+                (error instanceof HttpError &&
+                  [403, 404].includes(error.status))
+              )
+                return null;
+              throw error;
+            });
+          return [path, info?.isFile() ? fileFingerprint(path, info) : null];
+        }),
       ),
-    });
+    );
+    c.res = c.json({ ...listing, files, fileVersions });
   });
   api.get("/render/:jobId/download", async (c, next) => {
     await next();

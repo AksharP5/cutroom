@@ -45,7 +45,10 @@ const STILL_IMPORTING =
 const UPLOAD_LIMIT =
   "Imports are limited to 500 MB at a time. Copy larger files into the project folder and they will appear here.";
 
-const projectFilesSchema = z.object({ files: z.array(z.string()) });
+const projectFilesSchema = z.object({
+  files: z.array(z.string()),
+  fileVersions: z.record(z.string(), z.string().nullable()),
+});
 const uploadSchema = z.object({
   files: z.array(z.string()),
   skipped: z.array(z.string()).default([]),
@@ -95,7 +98,7 @@ function MediaRow({
     const probe = async () => {
       for (;;) {
         const response = await fetch(
-          `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/probe?path=${encodeURIComponent(path)}`,
+          `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/probe?path=${encodeURIComponent(path)}&v=${encodeURIComponent(changed ?? "")}`,
           { signal: closing.signal },
         );
         if (response.status !== 202) {
@@ -117,7 +120,7 @@ function MediaRow({
     });
     return () => closing.abort();
   }, [seen, kind, projectId, path, changed]);
-  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${changed}` : ""}`;
+  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${encodeURIComponent(changed)}` : ""}`;
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
   };
@@ -197,6 +200,13 @@ export function MediaPanel({
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
+  const active = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
   const loaded = useRef(false);
 
   const load = useCallback(async () => {
@@ -205,9 +215,12 @@ export function MediaPanel({
     if (id !== latestLoad.current) return;
     if (!response.ok)
       throw new Error(`The project media could not load (${response.status}).`);
-    const { files } = projectFilesSchema.parse(await response.json());
-    if (id !== latestLoad.current) return;
+    const { files, fileVersions } = projectFilesSchema.parse(
+      await response.json(),
+    );
+    if (!active.current || id !== latestLoad.current) return;
     loaded.current = true;
+    useWorkspace.setState({ fileChanges: fileVersions });
     setMedia(
       files
         .flatMap((path) => {

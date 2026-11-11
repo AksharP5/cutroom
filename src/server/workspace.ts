@@ -22,10 +22,11 @@ import {
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
+import { fileFingerprint } from "../shared/media";
 import { version } from "../shared/version";
 import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
-import { projectPath } from "./projects/store";
+import { isMissing, projectPath } from "./projects/store";
 import { REVIEW_STATE_PATH } from "../shared/review";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
@@ -210,9 +211,31 @@ export function createWorkspaceRoutes(options: {
             filename,
             setTimeout(() => {
               timers.delete(filename);
-              void stream
-                .writeSSE({ data: JSON.stringify({ changed: filename }) })
-                .catch(() => {});
+              void (async () => {
+                const path = filename.replaceAll("\\", "/");
+                const info = await projectPath(project, path)
+                  .then((absolute) => stat(absolute))
+                  .catch((error: unknown) => {
+                    if (
+                      isMissing(error) ||
+                      (error instanceof HttpError &&
+                        [403, 404].includes(error.status))
+                    )
+                      return null;
+                    throw error;
+                  });
+                await stream.writeSSE({
+                  data: JSON.stringify({
+                    changed: path,
+                    version: info?.isFile()
+                      ? fileFingerprint(path, info)
+                      : null,
+                  }),
+                });
+              })().catch((error: unknown) => {
+                if (!stream.aborted)
+                  console.error("Media watch failed:", error);
+              });
             }, 100),
           );
         },

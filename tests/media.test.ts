@@ -414,3 +414,63 @@ test.skipIf(!Bun.which("ffmpeg"))(
     }
   },
 );
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "repeated file versions change every derived key and bound persisted artifacts after restart",
+  async () => {
+    const fixture = await projectFixture();
+    let media = createMediaService({ maxCacheEntries: 4 });
+    try {
+      const project = await fixture.store.create({ name: "Replacement cache" });
+      const path = join(project.path, "card.mkv");
+      const keys = new Map<string, string>();
+      for (const color of ["red", "blue", "green"]) {
+        await ffmpeg([
+          "-f",
+          "lavfi",
+          "-i",
+          `color=${color}:size=160x90:rate=10:duration=0.2`,
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=duration=0.2",
+          "-c:v",
+          "libx264",
+          "-threads",
+          "1",
+          "-c:a",
+          "pcm_s16le",
+          "-y",
+          path,
+        ]);
+        // A new process must also prune older versions already on disk.
+        await media.dispose();
+        media = createMediaService({ maxCacheEntries: 4 });
+        for (const kind of ["probe", "peaks", "filmstrip", "frame"] as const) {
+          const deadline = Date.now() + 5000;
+          let result = await media.request(project, "card.mkv", kind);
+          while (!result.artifact) {
+            if (result.state.status === "failed" || Date.now() > deadline)
+              throw new Error(`Could not prepare ${kind}`);
+            await Bun.sleep(10);
+            result = await media.request(project, "card.mkv", kind);
+          }
+          expect(result.key).not.toBe(keys.get(kind));
+          keys.set(kind, result.key);
+          expect((await media.request(project, "card.mkv", kind)).key).toBe(
+            result.key,
+          );
+        }
+        const cache = (
+          await readdir(join(project.path, ".cutroom/cache"))
+        ).filter((name) => /^[a-f0-9]{64}$/.test(name));
+        expect(cache.length).toBeLessThanOrEqual(4);
+        expect(cache.sort()).toEqual([...keys.values()].sort());
+      }
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+  15000,
+);

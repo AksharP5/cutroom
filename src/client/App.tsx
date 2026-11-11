@@ -265,11 +265,12 @@ export function App() {
     void refreshDocument().catch((error: unknown) =>
       showToast(error instanceof Error ? error.message : String(error)),
     );
+    useWorkspace.setState({ fileChanges: {} });
     if (!projectId) return;
     return subscribeProjectEvents(projectId, "message", (event) => {
       try {
         const payload = z
-          .object({ changed: z.string() })
+          .object({ changed: z.string(), version: z.string().nullable() })
           .parse(JSON.parse(event.data));
         if (/\.html?$/i.test(payload.changed))
           setSourceRevision((value) => value + 1);
@@ -281,7 +282,7 @@ export function App() {
             mediaRevision: state.mediaRevision + 1,
             fileChanges: {
               ...state.fileChanges,
-              [payload.changed]: Date.now(),
+              [payload.changed]: payload.version,
             },
           }));
           return;
