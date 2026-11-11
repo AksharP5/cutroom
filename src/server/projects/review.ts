@@ -597,9 +597,12 @@ export function createReviewService(store: ProjectStore) {
     acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
         await reconcile(project);
-        const pending = (await currentEdits(project)).filter(
+        const edits = await currentEdits(project);
+        const pending = edits.filter(
           (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
         );
+        // Another surface may have accepted it first; accepting twice is the same outcome.
+        if (edits.some((edit) => edit.id === editId && edit.accepted)) return;
         if (editId !== undefined && !pending.some((edit) => edit.id === editId))
           throw new HttpError(409, "This change is no longer pending review.");
         const ids = new Set(
