@@ -1279,6 +1279,37 @@ test("video overwrite routes sound to the overwritten picture's partner instead 
   }
 });
 
+test("overwriting a silent picture never cuts another picture's sound on the fallback track", () => {
+  const state = timeline([
+    clip("talk", 0, 0, 180, { link: "talk" }),
+    clip("talk-sound", 2, 0, 180, { kind: "audio", link: "talk" }),
+    clip("title", 1, 100, 100),
+  ]);
+  const next = run(state, {
+    type: "insert",
+    mode: "overwrite",
+    track: 1,
+    at: 120,
+    clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration: 60 },
+    linkedAudio: { id: "b-roll-sound" },
+  });
+  // The dialogue under the drop is another pair's sound: it stays whole.
+  expect(next.clips.find((clip) => clip.id === "talk-sound")).toEqual(
+    state.clips.find((clip) => clip.id === "talk-sound"),
+  );
+  const sound = next.clips.find((clip) => clip.id === "b-roll-sound")!;
+  expect(sound.track).not.toBe(2);
+  expect(
+    next.clips.some(
+      (clip) =>
+        clip.id !== sound.id &&
+        clip.track === sound.track &&
+        clip.start < sound.start + sound.duration &&
+        clip.start + clip.duration > sound.start,
+    ),
+  ).toBe(false);
+});
+
 test("overwrite keeps the existing audio fallback without a partner and refuses multiple partner destinations", () => {
   const state = timeline([
     clip("first", 0, 0, 30, { link: "first" }),

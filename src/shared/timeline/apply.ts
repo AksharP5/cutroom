@@ -515,27 +515,29 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             "unsupported",
             "The overwritten pictures have sound on different tracks. Overwrite one linked pair at a time.",
           );
-        let destination = tracks.find((candidate) =>
+        // Only the overwritten picture's own sound is replaced. Any other destination must be free
+        // over the drop, so a fallback never cuts another clip's audio.
+        const partner = tracks.find((candidate) =>
           partnerTracks.has(candidate.index),
         );
-        // With no overwritten partner, keep the existing picture-sound track rule.
-        destination ??= tracks.find(
-          (candidate) =>
-            candidate.kind === "audio" &&
-            !candidate.locked &&
-            clips.every(
-              (clip) =>
-                clip.track !== candidate.index ||
-                (clip.link !== null && pictureLinks.has(clip.link)),
-            ) &&
-            (mode === "overwrite" ||
+        let destination =
+          partner ??
+          tracks.find(
+            (candidate) =>
+              candidate.kind === "audio" &&
+              !candidate.locked &&
+              clips.every(
+                (clip) =>
+                  clip.track !== candidate.index ||
+                  (clip.link !== null && pictureLinks.has(clip.link)),
+              ) &&
               !next.some(
                 (clip) =>
                   clip.track === candidate.index &&
                   clip.start < end &&
                   clipEnd(clip) > at,
-              )),
-        );
+              ),
+          );
         if (!destination) {
           destination = newTrack(
             Math.max(track + 1, nextTrackIndex(tracks)),
@@ -543,8 +545,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
           tracks = [...tracks, destination];
         }
-        if (mode === "overwrite")
-          next = clearRange(next, destination.index, at, end, fps, mint);
+        if (partner) next = clearRange(next, partner.index, at, end, fps, mint);
         onCreate(audioId, { insert: { ...input, kind: "audio", id: audioId } });
         audio = [
           {

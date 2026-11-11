@@ -249,7 +249,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .object({ id: clipId.optional() })
         .optional()
         .describe(
-          "Optional id for video's linked audio clip. Overwrite routes sound to the overwritten picture's linked audio track, refusing locked or multiple partner destinations. With no overwritten partner, use the first unlocked audio track that is empty or contains only linked picture sound, creating one if needed. place and insert also require room for the full interval after any ripple. Silent sources and clip.muted=true stay video-only.",
+          "Optional id for video's linked audio clip. Overwrite routes sound to the overwritten picture's linked audio track, refusing locked or multiple partner destinations. With no overwritten partner, use the first unlocked audio track that contains only linked picture sound and is free over the whole interval, creating one if needed; that fallback never cuts existing audio. place and insert also require room for the full interval after any ripple. Silent sources and clip.muted=true stay video-only.",
         ),
       ids: pieceIds,
     })
