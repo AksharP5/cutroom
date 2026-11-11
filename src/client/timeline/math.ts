@@ -1,7 +1,7 @@
 import { mediaSettings, peakLevels } from "../../shared/media";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
-import { newTrack } from "../../shared/timeline/tracks";
+import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { nominal } from "../../shared/timeline/timecode";
 
 const FLOOR = 10 ** (-48 / 20);
@@ -167,11 +167,12 @@ export interface RowSizes {
   /** Seam under every lane. */
   seam: number;
   divider: number;
-  padding?: number;
+  dropZones?: boolean;
   heights?: Readonly<Record<string, number>>;
 }
 export interface RowLayout {
   rows: Row[];
+  newRows: Record<Track["kind"], Row>;
   dividerTop: number;
   height: number;
 }
@@ -194,8 +195,11 @@ export function trackRows(
   }
   const video = all.filter((track) => track.kind === "video");
   const audio = all.filter((track) => track.kind === "audio");
+  const nextIndex = nextTrackIndex(all);
+  const videoHeight = sizes.heights?.[nextIndex] ?? sizes.video;
+  const audioHeight = sizes.heights?.[nextIndex] ?? sizes.audio;
   const rows: Row[] = [];
-  let top = sizes.padding ?? 0;
+  let top = sizes.dropZones ? videoHeight + sizes.seam : 0;
   for (const [index, track] of video.toReversed().entries()) {
     rows.push({
       track,
@@ -216,7 +220,25 @@ export function trackRows(
     });
     top += rows.at(-1)!.height + sizes.seam;
   }
-  return { rows, dividerTop, height: top + (sizes.padding ?? 0) };
+  return {
+    rows,
+    newRows: {
+      video: {
+        track: newTrack(nextIndex, "video"),
+        id: "New video track",
+        top: 0,
+        height: videoHeight,
+      },
+      audio: {
+        track: newTrack(nextIndex, "audio"),
+        id: "New audio track",
+        top,
+        height: audioHeight,
+      },
+    },
+    dividerTop,
+    height: top + (sizes.dropZones ? audioHeight + sizes.seam : 0),
+  };
 }
 
 /** Rows that touch a vertical span. */

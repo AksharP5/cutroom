@@ -259,6 +259,33 @@ test("video tracks stack upward from the divider and audio downward", () => {
   ]);
 });
 
+test("new-track bands use the same row geometry as the created tracks", () => {
+  const tracks = [track(0), track(1, { kind: "audio" })];
+  for (const height of [28, 200]) {
+    const sizes = {
+      video: 96,
+      audio: 80,
+      seam: 1,
+      divider: 2,
+      heights: { "0": height, "1": height },
+    };
+    const layout = trackRows(tracks, { ...sizes, dropZones: true });
+    for (const kind of ["video", "audio"] as const) {
+      const preview = layout.newRows[kind];
+      const created = trackRows([...tracks, preview.track], sizes).rows.find(
+        (row) => row.track.index === preview.track.index,
+      )!;
+      expect(preview.height).toBe(created.height);
+      expect(preview.top + preview.height).toBeLessThan(layout.height);
+      for (const row of layout.rows)
+        expect(
+          preview.top + preview.height <= row.top ||
+            preview.top >= row.top + row.height,
+        ).toBe(true);
+    }
+  }
+});
+
 test("the mounted range holds until the view leaves it or it grows too long", () => {
   const first = mountedRange(null, { from: 100, to: 200 });
   expect(first).toEqual({ from: 50, to: 250 });

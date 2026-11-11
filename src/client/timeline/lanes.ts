@@ -1,4 +1,5 @@
 import { envelopeHeight, fadePath } from "./mix";
+import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
@@ -8,7 +9,6 @@ import type {
   CommandInput,
   Timeline,
 } from "../../shared/timeline/schema";
-import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
 import { clearEditFrame, previewEditFrame } from "../edit/editFrame";
@@ -27,7 +27,7 @@ import {
 } from "./gesture";
 import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
 import { clipsByTrack, rowsBetween } from "./math";
-import type { Row, TrackClips } from "./math";
+import type { Row, RowLayout, TrackClips } from "./math";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
 import type { Offset } from "./motion";
@@ -38,6 +38,7 @@ import type { TimelineViewport } from "./view";
 export interface LaneGestureOptions {
   timeline: Timeline;
   rows: readonly Row[];
+  newRows: RowLayout["newRows"];
   /** The timeline's clips by track, as the canvas draws them outside a drag. */
   tracks: ReadonlyMap<number, TrackClips>;
   selection: Selection;
@@ -119,7 +120,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   /** Both kinds of drag use the same edge bands; incompatible edges reach track-kind refusal. */
   function destination(kind: Clip["kind"], clientY: number) {
-    const { rows, timeline } = latest.current;
+    const { rows, newRows, timeline } = latest.current;
     const first = rows[0]!;
     const last = rows.at(-1)!;
     const { y } = local(0, clientY);
@@ -128,15 +129,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const creating =
       (above && !isAudioKind(kind)) || (below && isAudioKind(kind));
     const row = creating
-      ? {
-          track: newTrack(
-            nextTrackIndex(rows.map((row) => row.track)),
-            above ? "video" : "audio",
-          ),
-          id: above ? "New video track" : "New audio track",
-          top: above ? 0 : last.top + last.height + 1,
-          height: above ? first.height : last.height,
-        }
+      ? newRows[above ? "video" : "audio"]
       : (rowAt(clientY) ?? (above ? first : last));
     return {
       row,
@@ -324,6 +317,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         if (!item) continue;
         const { piece, source, row } = item;
         box.className = `tl-clip tl-piece ${source.kind} on-${row.track.kind}${source.enabled ? "" : " disabled"}`;
+        box.style.height = `${row.height - 2}px`;
         box.style.transform = `translate(${piece.start * ppf}px, ${row.top}px) scaleX(${Math.max(1, piece.duration * ppf - 1)})`;
       }
     bodies.current?.scene({
@@ -482,12 +476,15 @@ export function useLaneGestures(options: LaneGestureOptions) {
           rowOf(clip?.track),
         );
       } else if (readout.current) {
-        readout.current.textContent =
-          intent.kind === "gain"
-            ? next.delta <= -60
-              ? "-∞ dB"
-              : `${next.delta.toFixed(2)} dB`
-            : `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
+        if (intent.kind === "gain") {
+          const volume =
+            next.shown.clips.find((clip) => clip.id === intent.clipId)!
+              .volume ?? 1;
+          readout.current.textContent =
+            volume === 0 ? "-∞ dB" : `${audioGainToDb(volume).toFixed(2)} dB`;
+        } else {
+          readout.current.textContent = `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
+        }
         readout.current.hidden = false;
       }
     }
@@ -756,6 +753,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (!media || !event.dataTransfer.types.includes(MEDIA_DRAG_TYPE))
       return null;
     const { row, create } = destination(media.kind, event.clientY);
+    destinationRow.current = create.length ? row : null;
     const { timeline, playhead } = latest.current;
     const { fps } = timeline;
     const dragged = {

@@ -657,20 +657,14 @@ export function Timeline({
           ? sizes.tall
           : {}),
       heights: viewSettings.heights,
+      // Clip moves reveal the bands when the pointer reaches an edge.
+      dropZones: draggingMedia || trackDrag,
     }),
-    [sizes, viewSettings],
+    [sizes, viewSettings, draggingMedia, trackDrag],
   );
   const layout = useMemo(
-    () =>
-      trackRows(shownTracks, {
-        ...rowSizes,
-        // Clip moves reveal the bands when the pointer reaches an edge.
-        padding:
-          draggingMedia || trackDrag
-            ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
-            : 0,
-      }),
-    [shownTracks, sizes, rowSizes, draggingMedia, trackDrag],
+    () => trackRows(shownTracks, rowSizes),
+    [shownTracks, rowSizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
   const resize = useTrackResize({
@@ -689,6 +683,7 @@ export function Timeline({
   const gestures = useLaneGestures({
     timeline,
     rows: layout.rows,
+    newRows: layout.newRows,
     tracks,
     selection,
     tool,
@@ -1047,6 +1042,7 @@ export function Timeline({
                 <div
                   key={row.track.index}
                   className="tl-head audio vo-ghost-head"
+                  data-row={row.track.index}
                   style={{ top: row.top, height: row.height + 1 }}
                   aria-label={`New audio lane ${row.id}`}
                 >
@@ -1126,18 +1122,22 @@ export function Timeline({
                   layout.rows
                     .filter((row) => row.track.index === takeTrack?.index)
                     .map((row) => (
-                      <i
+                      <div
                         key={row.track.index}
-                        className="vo-take-region"
-                        ref={takeRegion}
-                        aria-label="Recording voiceover take"
-                        style={{
-                          "--s": recording.start,
-                          "--d": Math.max(1, frames),
-                          top: row.top,
-                          height: row.height,
-                        }}
-                      />
+                        className="tl-row"
+                        data-row={row.track.index}
+                        style={{ top: row.top, height: row.height }}
+                      >
+                        <i
+                          className="vo-take-region"
+                          ref={takeRegion}
+                          aria-label="Recording voiceover take"
+                          style={{
+                            "--s": recording.start,
+                            "--d": Math.max(1, frames),
+                          }}
+                        />
+                      </div>
                     ))}
                 {rows.map((row) => {
                   const rowClips = clips.filter((item) => item.row === row);
