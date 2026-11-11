@@ -67,7 +67,9 @@ export function createThumbnailRenderer() {
           deviceScaleFactor: thumbnailDeviceScaleFactor(options),
         });
         await page.goto(options.previewUrl, {
-          waitUntil: "networkidle0",
+          // Seek, fonts, and paint below own visual readiness. Background requests
+          // must not hold this capture and every note behind it in the shared queue.
+          waitUntil: "load",
           timeout: 20_000,
         });
         await page.evaluate(async (time: number) => {

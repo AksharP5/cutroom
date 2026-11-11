@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   ArrowCounterClockwise,
   ArrowUp,
   ArrowDown,
   ArrowUpRight,
   ChatTeardropText,
+  Check,
+  ImageSquare,
   PencilSimple,
   Queue,
   Trash,
@@ -78,6 +80,58 @@ function outcome(item: ReviewItem) {
   return agentWord(item) ?? (instruction ? instructionText(instruction) : null);
 }
 
+function ReviewOutcome({ text }: { text: string }) {
+  const id = useId();
+  const paragraph = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const element = paragraph.current;
+    if (!element || expanded) return;
+    const observer = new ResizeObserver(() =>
+      setClipped(element.scrollHeight > element.clientHeight),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [expanded, text]);
+  return (
+    <div className="review-row-outcome">
+      <p id={id} ref={paragraph} data-expanded={expanded || undefined}>
+        {text}
+      </p>
+      {(clipped || expanded) && (
+        <button
+          className="text-button review-outcome-toggle"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? "Less" : "More"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function NoteThumbnail({ src, timecode }: { src?: string; timecode: string }) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <>
+      {!loaded && <ImageSquare size={14} aria-label="Frame unavailable" />}
+      {src && (
+        <img
+          loading="lazy"
+          src={src}
+          alt={`Annotated frame at ${timecode}`}
+          data-loaded={loaded || undefined}
+          onLoad={() => setLoaded(true)}
+          onError={() => setLoaded(false)}
+        />
+      )}
+    </>
+  );
+}
+
 /**
  * Each note's timecode uses its own composition's frame rate, so opening another
  * composition never changes it. Unknown rates show no timecode rather than a guess.
@@ -143,6 +197,7 @@ export function ReviewPanel({
   onSend: () => void;
 }) {
   const hasChanges = useTimeline((state) => !!state.view?.agentChanges?.length);
+  const view = useTimeline((state) => state.view);
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
@@ -194,6 +249,15 @@ export function ReviewPanel({
     const status = item.review.status;
     const answering = answer?.id === item.id ? answer : null;
     const result = outcome(item);
+    const clip =
+      view?.composition === item.compositionPath
+        ? view.timeline.clips.find(
+            ({ id }) => id === item.elementId?.split("#").at(-1),
+          )
+        : undefined;
+    const name = item.elementId
+      ? (clip?.label ?? elementName(item.elementId))
+      : "Picture";
     const at = queued.findIndex((candidate) => candidate.id === item.id);
     const open =
       (type: "reject" | "reply") =>
@@ -225,13 +289,7 @@ export function ReviewPanel({
             >
               {timecode(item)}
             </button>
-            <span className="note-element">
-              {item.elementId
-                ? elementName(item.elementId)
-                : item.kind === "drawing"
-                  ? "Drawing"
-                  : "Comment"}
-            </span>
+            <span className="note-element">{name}</span>
             <div className="review-row-actions">
               {at >= 0 && (
                 <>
@@ -344,21 +402,13 @@ export function ReviewPanel({
           title="Note details"
           onClick={() => setDetailsId(item.id)}
         >
-          {item.framePath ? (
-            <img
-              loading="lazy"
-              src={frameUrl(item.framePath)}
-              alt={`Annotated frame at ${timecode(item)}`}
-            />
-          ) : (
-            <ChatTeardropText size={14} />
-          )}
+          <NoteThumbnail
+            key={item.framePath}
+            src={item.framePath ? frameUrl(item.framePath) : undefined}
+            timecode={timecode(item)}
+          />
         </button>
-        {result && (
-          <p className="review-row-outcome" title={result}>
-            {result}
-          </p>
-        )}
+        {result && <ReviewOutcome text={result} />}
         {answering && (
           <form
             className="review-answer"
@@ -422,12 +472,14 @@ export function ReviewPanel({
   return (
     <section className="review-panel" aria-label="Review notes">
       {hasChanges && (
-        <button
-          className="text-button quiet"
-          onClick={() => void run(onAcceptChanges)}
-        >
-          Accept agent changes
-        </button>
+        <div className="review-accept-changes">
+          <button
+            className="secondary-button"
+            onClick={() => void run(onAcceptChanges)}
+          >
+            <Check /> Accept agent changes
+          </button>
+        </div>
       )}
       {current.length > 0 && (
         <div className="review-summary">

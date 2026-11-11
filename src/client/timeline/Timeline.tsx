@@ -98,6 +98,7 @@ export interface TimelineProps {
   onGesture: LaneGestureOptions["onGesture"];
   /** A click on a marker or pin. */
   onSeek(frame: number): void;
+  onOpenMarker?(marker: Marker, anchor: { x: number; y: number }): void;
   /** The pointer is down on the ruler; called for the press and every move until `onScrubEnd`. */
   onScrub(frame: number): void;
   onScrubEnd(): void;
@@ -238,6 +239,7 @@ const Ruler = memo(function Ruler({
   labels,
   onSeek,
   onOpenPin,
+  onOpenMarker,
 }: {
   /** The element holding the timecode labels, which the view writes its scroll offset to. */
   labels: RefObject<HTMLDivElement | null>;
@@ -250,6 +252,7 @@ const Ruler = memo(function Ruler({
   range: TimelineData["range"];
   onSeek(frame: number): void;
   onOpenPin(id: string): void;
+  onOpenMarker?: TimelineProps["onOpenMarker"];
 }) {
   const ticks = majorTicks(frames, step.major);
   const minors = step.minor ? step.major / step.minor : 0;
@@ -322,9 +325,21 @@ const Ruler = memo(function Ruler({
               "--f": marker.frame,
               "--next": stops.find((frame) => frame > marker.frame) ?? end * 2,
             }}
-            title={marker.note || undefined}
+            title={[marker.name, marker.note, "Double-click to edit"]
+              .filter(Boolean)
+              .join("\n")}
             aria-label={`Marker ${marker.name || formatTimecode(marker.frame, fps)}`}
             onClick={() => onSeek(marker.frame)}
+            onDoubleClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              onOpenMarker?.(marker, { x: box.left, y: box.bottom });
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              const box = event.currentTarget.getBoundingClientRect();
+              onOpenMarker?.(marker, { x: box.left, y: box.bottom });
+            }}
           >
             {marker.name && <span>{marker.name}</span>}
           </button>
@@ -476,6 +491,7 @@ export function Timeline({
   onRenameTrack,
   onAddTrack,
   onOpenPin,
+  onOpenMarker,
 }: TimelineProps) {
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
@@ -789,6 +805,7 @@ export function Timeline({
                 labels={tickLabels}
                 onSeek={onSeek}
                 onOpenPin={onOpenPin}
+                onOpenMarker={onOpenMarker}
               />
             )}
             <i className="tl-playhead-head" ref={playheadHead} data-unscaled />

@@ -195,6 +195,10 @@ test("D turns each selected clip on or off, and M adds one marker at the playhea
     music: true,
   });
   const marked = apply(timeline, press("markMarkerAdd", timeline, 45));
-  expect(marked.markers.map((marker) => marker.frame)).toEqual([45]);
+  expect(marked.markers[0]).toMatchObject({
+    frame: 45,
+    name: "Marker 1",
+    color: "blue",
+  });
   expect(press("markMarkerAdd", marked, 45)).toEqual([]);
 });

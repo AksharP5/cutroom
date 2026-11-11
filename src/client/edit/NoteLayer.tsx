@@ -26,6 +26,7 @@ import type { Draft, NoteEvent } from "./notes";
 import { dispatchNote, useProjectNotes } from "./noteStore";
 import { useNoteVisibility } from "./noteVisibility";
 import { transport, useTransport } from "./transport";
+import { useTimeline } from "./timeline";
 
 /**
  * Saves a committed note and resolves with its id. A rejection reopens the note with the error.
@@ -550,6 +551,6 @@ function reviewDraft(draft: Draft, fps: Fps): EditorReviewDraft {
     compositionPath: COMPOSITION,
     point: draft.at,
     strokes: draft.strokes,
-    elementIds: [],
+    elementIds: [...useTimeline.getState().selection.ids],
   };
 }

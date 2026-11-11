@@ -157,7 +157,7 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
           ripple: true,
         },
         { type: "setTrack", index: 2, locked: true },
-        { type: "setMarker", frame: 90, name: "Beat" },
+        { type: "setMarker", frame: 90, name: "Beat", color: "green" },
       ],
     });
     expect(edited.status).toBe(200);
@@ -169,6 +169,7 @@ test("a command batch is atomic, one undo step, and refuses stale revisions", as
     expect(view.timeline.markers.map((marker) => marker.name)).toEqual([
       "Beat",
     ]);
+    expect(view.timeline.markers[0]?.color).toBe("green");
     expect(
       TimelineViewSchema.parse(
         await (
