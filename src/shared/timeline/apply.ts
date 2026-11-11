@@ -11,7 +11,10 @@ export type { TimelineErrorCode } from "./errors";
  * Where a clip created by a batch gets its markup: a copy of a clip from the timeline the batch
  * started with, or new media.
  */
-export type ClipOrigin = { copyOf: string } | { insert: InsertClip };
+export type ClipOrigin =
+  | { copyOf: string }
+  | { insert: InsertClip }
+  | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
 /**
  * Names a clip a command creates when the command does not: `base` is the id of the clip a piece
@@ -24,6 +27,7 @@ export type NewId = (
 ) => string;
 /** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
 interface Batch {
+  clipboards: ReadonlyMap<string, readonly Clip[]>;
   /** Ids in the timeline and ids the project used before; a new clip takes none of them. */
   reserved: Set<string>;
   retired: ReadonlySet<string>;
@@ -40,6 +44,7 @@ interface Batch {
  * `silentMedia` every `src` known to hold no audio stream.
  */
 interface ApplyOptions {
+  clipboards?: Batch["clipboards"];
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
@@ -143,6 +148,7 @@ export function apply(
   timeline: Timeline,
   command: Command,
   {
+    clipboards = new Map(),
     onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -152,6 +158,7 @@ export function apply(
   }: ApplyOptions = {},
 ): Timeline {
   return applyIn(timeline, command, {
+    clipboards,
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
@@ -167,6 +174,7 @@ export function applyAll(
   timeline: Timeline,
   commands: readonly Command[],
   {
+    clipboards = new Map(),
     onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -177,6 +185,7 @@ export function applyAll(
 ): Timeline {
   const origins = new Map<string, ClipOrigin>();
   const batch: Batch = {
+    clipboards,
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
@@ -239,7 +248,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   // Ids the command names for the pieces it cuts, by the clip each is cut from, in cutting order.
   const supplied = new Map(
     Object.entries(
-      command.type === "split" ||
+      command.type === "paste" ||
+        command.type === "split" ||
         command.type === "insert" ||
         command.type === "trim" ||
         command.type === "remove" ||
@@ -508,83 +518,27 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
       if (separate) {
-        // Overwrite may have removed a linked video entirely; classify sound from the input.
-        const pictureLinks = new Set(
-          clips
-            .filter((clip) => clip.kind === "video" && clip.link !== null)
-            .map((clip) => clip.link),
-        );
         const audioId =
           command.linkedAudio?.id === undefined
             ? mint.name(`${slug(input.src, "audio")}-audio`, null)
             : claim(command.linkedAudio.id);
-        // Read links before clearing picture: a full overwrite can remove the partner's link.
-        const overwrittenLinks = new Set(
-          mode === "overwrite"
-            ? clips
-                .filter(
-                  (clip) =>
-                    clip.track === track &&
-                    clip.kind === "video" &&
-                    clip.start < end &&
-                    clipEnd(clip) > at,
-                )
-                .flatMap((clip) => clip.link ?? [])
-            : [],
+        const routed = routePictureSound(
+          timeline,
+          { clips: next, tracks },
+          [added],
+          added,
+          mode === "overwrite",
         );
-        const partnerTracks = new Set(
-          clips
-            .filter(
-              (clip) =>
-                isAudioKind(clip.kind) &&
-                clip.link !== null &&
-                overwrittenLinks.has(clip.link),
-            )
-            .map((clip) => clip.track),
-        );
-        if (partnerTracks.size > 1)
-          throw new TimelineError(
-            "unsupported",
-            "The overwritten pictures have sound on different tracks. Overwrite one linked pair at a time.",
-          );
-        // Only the overwritten picture's own sound is replaced. Any other destination must be free
-        // over the drop, so a fallback never cuts another clip's audio.
-        const partner = tracks.find((candidate) =>
-          partnerTracks.has(candidate.index),
-        );
-        let destination =
-          partner ??
-          tracks.find(
-            (candidate) =>
-              candidate.kind === "audio" &&
-              !candidate.locked &&
-              clips.every(
-                (clip) =>
-                  clip.track !== candidate.index ||
-                  (clip.link !== null && pictureLinks.has(clip.link)),
-              ) &&
-              !next.some(
-                (clip) =>
-                  clip.track === candidate.index &&
-                  clip.start < end &&
-                  clipEnd(clip) > at,
-              ),
-          );
-        if (!destination) {
-          destination = newTrack(
-            Math.max(track + 1, nextTrackIndex(tracks)),
-            "audio",
-          );
-          tracks = [...tracks, destination];
-        }
-        if (partner) next = clearRange(next, partner.index, at, end, fps, mint);
+        tracks = routed.tracks;
+        if (routed.replace)
+          next = clearRange(next, routed.track, at, end, fps, mint);
         onCreate(audioId, { insert: { ...input, kind: "audio", id: audioId } });
         audio = [
           {
             ...added,
             id: audioId,
             kind: "audio",
-            track: destination.index,
+            track: routed.track,
             hasAudio: true,
           },
         ];
@@ -594,6 +548,122 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         tracks,
         clips: [...next, added, ...audio],
       };
+    }
+    case "paste": {
+      const source = batch.clipboards.get(command.clipboardId);
+      if (!source?.length)
+        throw new TimelineError(
+          "not_found",
+          "The clip clipboard is unavailable. Copy the clips again.",
+        );
+      for (const clip of source) {
+        if (clip.sourceRestrictions?.copy)
+          throw new TimelineError(
+            "unsupported",
+            `${clip.label ?? clip.id} can't be copied. ${clip.sourceRestrictions.copy}`,
+          );
+        assertTrackKind(clip.kind, trackAt(clip.track), clip.id);
+      }
+      // Reserve clipboard names too, even when a cut removed their source clips.
+      for (const clip of source) {
+        taken.add(clip.id);
+        if (clip.link) taken.add(clip.link);
+      }
+      const start = Math.min(...source.map((clip) => clip.start));
+      const duration = Math.max(...source.map(clipEnd)) - start;
+      const links = new Map<string, string>();
+      const added = source.map((clip): Clip => {
+        const id = mint.name(clip.id, clip.id);
+        if (clip.link && !links.has(clip.link))
+          links.set(clip.link, uniqueName(taken, "lk", 1));
+        onCreate(id, { clipboardId: command.clipboardId, clipId: clip.id });
+        return {
+          ...clip,
+          id,
+          start: command.at + clip.start - start,
+          link: clip.link ? links.get(clip.link)! : null,
+          startRef: null,
+        };
+      });
+      let next = clips;
+      if (command.mode === "overwrite") {
+        const pictures = added.filter((clip) => !isAudioKind(clip.kind));
+        const sound = added.filter((clip) => isAudioKind(clip.kind));
+        const standalone = sound.filter(
+          (clip) =>
+            !pictures.some(
+              (picture) => clip.link !== null && picture.link === clip.link,
+            ),
+        );
+        // Place picture first. Sound routing reads its overwritten links from the input timeline.
+        for (const clip of pictures)
+          next = clearRange(
+            next,
+            clip.track,
+            clip.start,
+            clipEnd(clip),
+            fps,
+            mint,
+          );
+        // Keep the pasted group outside the cutter so it can never erase its own copies.
+        const placed = [...pictures, ...standalone];
+        for (const clip of standalone) {
+          next = clearRange(
+            next,
+            clip.track,
+            clip.start,
+            clipEnd(clip),
+            fps,
+            mint,
+          );
+        }
+        // A different composition may not have the copied picture or standalone audio tracks yet.
+        let tracks = normalizeTimeline({
+          ...timeline,
+          clips: [...next, ...placed],
+        }).tracks;
+        for (const clip of sound) {
+          const partners = clip.link
+            ? pictures.filter((picture) => picture.link === clip.link)
+            : [];
+          if (!partners.length) continue;
+          const routed = routePictureSound(
+            timeline,
+            { clips: [...next, ...placed], tracks },
+            partners,
+            clip,
+            true,
+          );
+          tracks = routed.tracks;
+          if (routed.replace)
+            next = clearRange(
+              next,
+              routed.track,
+              clip.start,
+              clipEnd(clip),
+              fps,
+              mint,
+            );
+          placed.push({ ...clip, track: routed.track });
+        }
+        return { ...timeline, tracks, clips: [...next, ...placed] };
+      }
+      const tracks = rippleTracks(
+        timeline,
+        source.map((clip) => clip.track),
+      );
+      const spans = (clip: Clip) =>
+        clip.start < command.at && command.at < clipEnd(clip);
+      const targets = withPartners(
+        next,
+        next.filter((clip) => tracks.has(clip.track) && spans(clip)),
+      ).filter(spans);
+      for (const clip of targets)
+        if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
+      next = splitClips(next, targets, command.at, fps, mint);
+      next = shiftAfter(next, tracks, () => command.at, duration);
+      assertRippleSync(timeline, next, tracks, copies);
+      return { ...timeline, clips: [...next, ...added] };
     }
     case "setTiming": {
       const target = find(command.clipId);
@@ -848,6 +918,95 @@ function settle(before: Timeline, after: Timeline): Timeline {
         : { ...clip, startRef: null };
     }),
   });
+}
+
+/** Drops and clipboard pastes replace only the overwritten picture's sound, otherwise use room. */
+function routePictureSound(
+  before: Timeline,
+  current: Pick<Timeline, "clips" | "tracks">,
+  pictures: readonly Clip[],
+  sound: Clip,
+  overwrite: boolean,
+) {
+  const { clips } = before;
+  let { tracks } = current;
+  const at = sound.start;
+  const end = clipEnd(sound);
+  // Read links before clearing picture: a full overwrite can remove the partner's link.
+  const overwrittenLinks = new Set(
+    overwrite
+      ? clips
+          .filter(
+            (clip) =>
+              clip.kind === "video" &&
+              pictures.some(
+                (picture) =>
+                  clip.track === picture.track &&
+                  clip.start < clipEnd(picture) &&
+                  clipEnd(clip) > picture.start,
+              ),
+          )
+          .flatMap((clip) => clip.link ?? [])
+      : [],
+  );
+  const partnerTracks = new Set(
+    clips
+      .filter(
+        (clip) =>
+          isAudioKind(clip.kind) &&
+          clip.link !== null &&
+          overwrittenLinks.has(clip.link),
+      )
+      .map((clip) => clip.track),
+  );
+  if (partnerTracks.size > 1)
+    throw new TimelineError(
+      "unsupported",
+      "The overwritten pictures have sound on different tracks. Overwrite one linked pair at a time.",
+    );
+  // Classify from the input: an overwrite can remove the original picture entirely.
+  const existing = [...clips, ...current.clips];
+  const pictureLinks = new Set(
+    existing
+      .filter((clip) => clip.kind === "video" && clip.link !== null)
+      .map((clip) => clip.link),
+  );
+  const partner = tracks.find((candidate) =>
+    partnerTracks.has(candidate.index),
+  );
+  let destination =
+    partner ??
+    tracks.find(
+      (candidate) =>
+        candidate.kind === "audio" &&
+        !candidate.locked &&
+        existing.every(
+          (clip) =>
+            clip.track !== candidate.index ||
+            (clip.link !== null && pictureLinks.has(clip.link)),
+        ) &&
+        !current.clips.some(
+          (clip) =>
+            clip.track === candidate.index &&
+            clip.start < end &&
+            clipEnd(clip) > at,
+        ),
+    );
+  if (!destination) {
+    destination = newTrack(
+      Math.max(
+        ...pictures.map((picture) => picture.track + 1),
+        nextTrackIndex(tracks),
+      ),
+      "audio",
+    );
+    tracks = [...tracks, destination];
+  }
+  return {
+    tracks,
+    track: destination.index,
+    replace: partner !== undefined,
+  };
 }
 
 /** Only clips a command moved are checked, so overlaps already in the HTML stay editable. */
@@ -1308,4 +1467,21 @@ function slug(src: string, fallback: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || fallback
   );
+}
+
+/** Snapshot a selection with its linked partners; copies must own their source bytes. */
+export function copyClips(timeline: Timeline, ids: readonly string[]): Clip[] {
+  const named = ids.map((id) => {
+    const clip = timeline.clips.find((clip) => clip.id === id);
+    if (!clip) throw new TimelineError("not_found", `No clip has id ${id}.`);
+    return clip;
+  });
+  const clips = withPartners(timeline.clips, named);
+  for (const clip of clips)
+    if (clip.sourceRestrictions?.copy)
+      throw new TimelineError(
+        "unsupported",
+        `${clip.label ?? clip.id} can't be copied. ${clip.sourceRestrictions.copy}`,
+      );
+  return clips;
 }

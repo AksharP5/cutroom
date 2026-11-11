@@ -56,6 +56,10 @@ export const keymap = {
   controlGotoIn: { label: "Go to in", keys: ["Shift+I"] },
   controlGotoOut: { label: "Go to out", keys: ["Shift+O"] },
   controlLoop: { label: "Loop", keys: ["Ctrl+/"] },
+  editCopy: { label: "Copy clips", keys: ["Ctrl+C"] },
+  editCut: { label: "Cut clips, leaving a gap", keys: ["Ctrl+X"] },
+  editPaste: { label: "Paste clips", keys: ["Ctrl+V"] },
+  editPasteInsert: { label: "Paste insert", keys: ["Ctrl+Shift+V"] },
   editUndo: { label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { label: "Redo", keys: ["Ctrl+Shift+Z"] },
   workspaceViewerModeCinemaViewer: {

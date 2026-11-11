@@ -46,6 +46,8 @@ export function editLabel(
         return `Split at ${time(command.at)}`;
       case "remove":
         return command.ripple ? "Ripple deleted clips" : "Lifted clips";
+      case "paste":
+        return `Pasted clips${command.mode === "insert" ? " with insert" : ""} at ${time(command.at)}`;
       case "insert":
         return `Added ${command.clip.kind} at ${time(command.at)}`;
       case "setClip": {

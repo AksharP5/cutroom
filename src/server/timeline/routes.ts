@@ -12,10 +12,12 @@ import {
   applyAll,
   canonicalTimeline,
   toSeconds,
+  copyClips,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   CommandBatchSchema,
+  CopyClipsSchema,
   TimelineSettingsSchema,
   emptyTimelineSettings,
 } from "../../shared/timeline/schema";
@@ -32,6 +34,7 @@ import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
+  rebaseClipboard,
   declareTrackLayer,
   mediaSources,
   parseComposition,
@@ -39,6 +42,7 @@ import {
   timelineContent,
   settingsOf,
 } from "./composition";
+import type { ParsedComposition } from "./composition";
 import { mediaFacts } from "./media";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
@@ -66,6 +70,15 @@ export function createTimelineRoutes(
   store: ProjectStore,
   reviews: ReviewService,
 ) {
+  const clipboards = new Map<
+    string,
+    {
+      projectId: string;
+      composition: string;
+      clipIds: string[];
+      parsed: ParsedComposition;
+    }
+  >();
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -115,6 +128,44 @@ export function createTimelineRoutes(
       string,
       NonNullable<TimelineView["skippedClips"]>[number]
     >();
+    const snapshots = new Map<string, ParsedComposition>();
+    for (const command of batch.commands) {
+      if (command.type !== "paste") continue;
+      const snapshot = clipboards.get(command.clipboardId);
+      if (!snapshot || snapshot.projectId !== project.id)
+        throw new TimelineError(
+          "not_found",
+          "The clip clipboard is unavailable in this project. Copy the clips again.",
+        );
+      if (
+        !Bun.deepEquals(
+          snapshot.parsed.timeline.fps,
+          current.parsed.timeline.fps,
+        )
+      )
+        throw new TimelineError(
+          "unsupported",
+          "Paste requires timelines with the same frame rate.",
+        );
+      const rebased = rebaseClipboard(
+        snapshot.parsed,
+        snapshot.composition,
+        composition,
+      );
+      snapshots.set(command.clipboardId, {
+        ...rebased,
+        timeline: {
+          ...rebased.timeline,
+          clips: rebased.timeline.clips.filter((clip) =>
+            snapshot.clipIds.includes(clip.id),
+          ),
+        },
+      });
+    }
+    for (const parsed of snapshots.values())
+      for (const clip of parsed.timeline.clips)
+        if (clip.src !== null && clip.sourceDuration !== null)
+          lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
@@ -126,13 +177,16 @@ export function createTimelineRoutes(
             label: clip.label,
             reason,
           }),
+        clipboards: new Map(
+          [...snapshots].map(([id, parsed]) => [id, parsed.timeline.clips]),
+        ),
         mediaLengths: lengths,
         silentMedia: inserted.silent,
         // No new clip takes an id the project used before, even one undone since.
         retired: await usedClipIds(project),
       }),
     );
-    const html = patchComposition(current.parsed, timeline, origins);
+    const html = patchComposition(current.parsed, timeline, origins, snapshots);
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
     const written = parseComposition(html, settings, {
@@ -228,6 +282,26 @@ export function createTimelineRoutes(
         height: size("data-height", 1080),
         duration: toSeconds(timeline.duration, timeline.fps),
       } satisfies ProjectSummary);
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+  api.post("/projects/:id/timeline/copy", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(CopyClipsSchema, await c.req.json());
+    try {
+      const current = await read(project, canonical(input.composition));
+      if (current.revision !== input.expectedRevision)
+        throw new HttpError(409, "The timeline changed. Copy the clips again.");
+      const clips = copyClips(current.parsed.timeline, input.clipIds);
+      const id = crypto.randomUUID();
+      clipboards.set(id, {
+        projectId: project.id,
+        composition: canonical(input.composition),
+        clipIds: clips.map((clip) => clip.id),
+        parsed: current.parsed,
+      });
+      return c.json({ id, clips });
     } catch (error) {
       return refused(c, error);
     }

@@ -2,6 +2,11 @@ import {
   parseAutomation,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
+import {
+  CSS_URL_RE,
+  rewriteSrcsetUrls,
+} from "@hyperframes/parsers/asset-paths";
+import { localMediaPath } from "../../shared/media";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
@@ -1130,6 +1135,7 @@ export function patchComposition(
   parsed: ParsedComposition,
   after: Timeline,
   origins: ReadonlyMap<string, ClipOrigin>,
+  clipboards: ReadonlyMap<string, ParsedComposition> = new Map(),
 ): string {
   const { html, timeline: before } = parsed;
   const { fps } = before;
@@ -1224,6 +1230,20 @@ export function patchComposition(
       ]);
       continue;
     }
+    if ("clipboardId" in origin) {
+      const snapshot = clipboards.get(origin.clipboardId)!;
+      const template = snapshot.timeline.clips.find(
+        (item) => item.id === origin.clipId,
+      )!;
+      const at = lastClip
+        ? elementEnd(parsed, lastClip[1], lastClip[0])
+        : parsed.root.openEnd;
+      inserts.set(at, [
+        ...(inserts.get(at) ?? []),
+        `\n${copyMarkup(snapshot, template, clip, stacking !== null, mix)}`,
+      ]);
+      continue;
+    }
     const template = previous.get(origin.copyOf)!;
     const element = parsed.elements.get(template.id)!;
     const at = elementEnd(parsed, element, template.id);
@@ -1242,4 +1262,74 @@ export function patchComposition(
       ]),
     );
   return applyEdits(html, edits);
+}
+
+/** A copied element keeps its media paths when pasted into another composition folder. */
+export function rebaseClipboard(
+  parsed: ParsedComposition,
+  from: string,
+  to: string,
+): ParsedComposition {
+  if (posix.dirname(from) === posix.dirname(to)) return parsed;
+  const rewrite = (src: string) => {
+    if (src.startsWith("#")) return src;
+    const path = localMediaPath(from, src);
+    if (path === null) return src;
+    const suffix = src.slice(
+      src.search(/[?#]/) < 0 ? src.length : src.search(/[?#]/),
+    );
+    return (
+      posix
+        .relative(posix.dirname(to), path)
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/") + suffix
+    );
+  };
+  const spans = new Map(
+    scanHtmlOpeningTags(parsed.html).map((span) => [span.start, span]),
+  );
+  const edits: Edit[] = [];
+  for (const element of descendants(parsed.roots, true)) {
+    const changes: AttributeChange[] = [];
+    for (const [name, value] of Object.entries(element.attrs)) {
+      const next = ["src", "poster", "href", "data-composition-src"].includes(
+        name,
+      )
+        ? rewrite(value)
+        : name === "srcset"
+          ? rewriteSrcsetUrls(value, rewrite)
+          : name === "style"
+            ? value.replace(
+                CSS_URL_RE,
+                (_, quote: string, url: string) =>
+                  `url(${quote}${rewrite(url)}${quote})`,
+              )
+            : value;
+      if (next !== value) changes.push([name, next]);
+    }
+    if (changes.length)
+      edits.push(
+        ...attributeEdits(
+          openingTag(spans, element, "clipboard"),
+          parsed.html,
+          changes,
+        ),
+      );
+  }
+  const rebased = parseComposition(
+    applyEdits(parsed.html, edits),
+    settingsOf(parsed.timeline),
+    {
+      scope: parsed.scope,
+      mediaLengths: new Map(
+        parsed.timeline.clips.flatMap((clip) =>
+          clip.src !== null && clip.sourceDuration !== null
+            ? [[rewrite(clip.src), clip.sourceDuration] as const]
+            : [],
+        ),
+      ),
+    },
+  );
+  return rebased;
 }

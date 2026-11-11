@@ -4,7 +4,12 @@ import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
 import { nextTrackIndex } from "../../shared/timeline/tracks";
 import { editKeys, trimmedPlayhead } from "../edit/keys";
-import { editTimeline, loadTimeline, useTimeline } from "../edit/timeline";
+import {
+  clipboardEdit,
+  editTimeline,
+  loadTimeline,
+  useTimeline,
+} from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
@@ -133,6 +138,10 @@ export function ProjectTimeline({
     ],
   );
   useKeymap({
+    editCopy: () => clipboardEdit(projectId, "copy", clock.frame()),
+    editCut: () => clipboardEdit(projectId, "cut", clock.frame()),
+    editPaste: () => clipboardEdit(projectId, "overwrite", clock.frame()),
+    editPasteInsert: () => clipboardEdit(projectId, "insert", clock.frame()),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
     editSelectItemAtPlayhead: () => {
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));
