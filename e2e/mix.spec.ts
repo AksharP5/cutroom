@@ -11,6 +11,10 @@ import { expect, test } from "./fixtures";
 const exec = promisify(execFile);
 
 async function settledPpf(page: Page) {
+  await expect(page.locator(".tl-grid")).toHaveAttribute(
+    "data-refit",
+    "settled",
+  );
   await expect
     .poll(() =>
       page
@@ -306,6 +310,7 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
       fadeOut: (await music()).fadeOut,
     }))
     .toEqual({ duration: 60, fadeOut: 120 });
+  await expect(page.locator('[data-clip-mix="music"]')).toHaveCSS("--d", "60");
   await drag(page, '[data-clip-mix="music"] [data-mix="fadeOut"]', 35, 0);
   await expect.poll(async () => (await music()).fadeOut).toBeLessThan(60);
   expect((await music()).fadeOut).toBeGreaterThan(0);

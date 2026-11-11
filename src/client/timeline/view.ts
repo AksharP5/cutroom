@@ -9,6 +9,7 @@ import {
   settledScroll,
 } from "./math";
 import type { FrameRange } from "./math";
+import { MEDIA_DRAG_TYPE } from "./mediaDrag";
 
 /** The most one wheel event zooms, in wheel pixels. */
 const WHEEL_STEP = 24;
@@ -64,9 +65,17 @@ export function createViewport(
   let beforeFit: number | null = null;
   let refit: Animation | undefined;
 
+  const refitState = () => {
+    grid.dataset.refit = refit
+      ? "pending"
+      : animations.some((animation) => animation.playState === "running")
+        ? "zooming"
+        : "settled";
+  };
   const cancelRefit = () => {
     refit?.cancel();
     refit = undefined;
+    refitState();
   };
 
   const lanesLeft = () => scroller.getBoundingClientRect().left + headWidth;
@@ -82,6 +91,18 @@ export function createViewport(
   const stop = () => {
     for (const animation of animations) animation.cancel();
     animations = [];
+    refitState();
+  };
+  const setAnimations = (next: Animation[]) => {
+    animations = next;
+    refitState();
+    void Promise.allSettled(next.map((animation) => animation.finished)).then(
+      () => {
+        if (animations !== next) return;
+        animations = [];
+        refitState();
+      },
+    );
   };
   const motion = (duration: string) => {
     const style = getComputedStyle(grid);
@@ -100,6 +121,7 @@ export function createViewport(
       { duration },
     );
     refit = wait;
+    refitState();
     void wait.finished.then(
       () => {
         if (refit !== wait) return;
@@ -147,7 +169,7 @@ export function createViewport(
       );
       return [{ element, by: stuck - (rect.left - left) }];
     });
-    animations = [
+    setAnimations([
       ...[...grid.querySelectorAll(".tl-scaled")].map((layer) =>
         layer.animate(
           {
@@ -165,10 +187,11 @@ export function createViewport(
           options,
         ),
       ),
-    ];
+    ]);
   }
 
   function zoom(target: number, anchor: number, animate: boolean) {
+    if (gesturing) return;
     cancelRefit();
     const next = clampPpf(target, fit);
     fitted = next === fit;
@@ -198,6 +221,7 @@ export function createViewport(
   function onWheel(event: WheelEvent) {
     if (!event.ctrlKey && !event.altKey) return;
     event.preventDefault();
+    if (gesturing) return;
     // Chromium reports a pinch as Ctrl+wheel steps of -100 * ln(scale), so this follows the
     // fingers exactly. A mouse wheel notch is 100 or more; capping it makes a notch about 1.27x.
     const delta = Math.max(
@@ -229,10 +253,100 @@ export function createViewport(
     exact = settledScroll(exact, scroll);
     onChange(false);
   }
+
+  /** Freeze before an input on the lanes or ruler measures timeline coordinates. */
+  function gesture(active: boolean) {
+    if (gesturing === active) return;
+    gesturing = active;
+    grid.toggleAttribute("data-gesturing", active);
+    cancelRefit();
+    if (active) {
+      wheel = null;
+      if (animations.some((animation) => animation.playState === "running")) {
+        const from = shown();
+        stop();
+        write(from.ppf);
+        scrollTo(from.scroll);
+        onChange(true);
+      }
+      return;
+    }
+    if ((fitted && ppf !== fit) || ppf < fit)
+      refitAfterSlide(motion("--duration-edit").duration);
+  }
+
+  let pointer: number | null = null;
+  let dragging = false;
+  let external = false;
+  const positions = (target: EventTarget | null) =>
+    target instanceof Element && target.closest(".tl-lanes, .tl-ruler");
+  const media = (event: DragEvent) =>
+    event.dataTransfer?.types.some(
+      (type) => type === MEDIA_DRAG_TYPE || type === "Files",
+    );
+  function onPointerDown(event: PointerEvent) {
+    if (event.button !== 0 || !positions(event.target)) return;
+    pointer = event.pointerId;
+    gesture(true);
+  }
+  function onPointerEnd(event: PointerEvent) {
+    if (pointer !== event.pointerId) return;
+    pointer = null;
+    gesture(dragging);
+  }
+  function onDragStart(event: DragEvent) {
+    if (!media(event)) return;
+    dragging = true;
+    gesture(true);
+  }
+  function onDragEnter(event: DragEvent) {
+    if (dragging || !positions(event.target) || !media(event)) return;
+    external = true;
+    onDragStart(event);
+  }
+  function onDragEnd() {
+    dragging = false;
+    external = false;
+    gesture(pointer !== null);
+  }
+  function onDragLeave(event: DragEvent) {
+    if (!external) return;
+    const box = scroller.getBoundingClientRect();
+    if (
+      event.clientX < box.left ||
+      event.clientX >= box.right ||
+      event.clientY < box.top ||
+      event.clientY >= box.bottom
+    )
+      onDragEnd();
+  }
+  function onBlur() {
+    pointer = null;
+    onDragEnd();
+  }
   const resized = new ResizeObserver(() => measure(extent));
+  const events = new AbortController();
+  const { signal } = events;
   resized.observe(scroller);
-  scroller.addEventListener("wheel", onWheel, { passive: false });
-  scroller.addEventListener("scroll", onScroll, { passive: true });
+  scroller.addEventListener("wheel", onWheel, { passive: false, signal });
+  scroller.addEventListener("scroll", onScroll, { passive: true, signal });
+  scroller.addEventListener("pointerdown", onPointerDown, {
+    capture: true,
+    signal,
+  });
+  document.addEventListener("pointerup", onPointerEnd, { signal });
+  document.addEventListener("pointercancel", onPointerEnd, { signal });
+  document.addEventListener("lostpointercapture", onPointerEnd, { signal });
+  document.addEventListener("dragstart", onDragStart, { signal });
+  scroller.addEventListener("dragenter", onDragEnter, {
+    capture: true,
+    signal,
+  });
+  scroller.addEventListener("dragleave", onDragLeave, { signal });
+  document.addEventListener("dragend", onDragEnd, { signal });
+  document.addEventListener("drop", onDragEnd, { signal });
+  window.addEventListener("blur", onBlur, { signal });
+  refitState();
 
   /** Let an edit close its gap at the old scale before easing back to Fit. */
   function measure(next: Extent) {
@@ -248,7 +362,7 @@ export function createViewport(
     exact = settledScroll(exact, scroll);
     grid.style.setProperty("--view", `${width}px`);
     fit = fitPpf(extent.frames, width, extent.fps);
-    if (fitted && gesturing) {
+    if (gesturing) {
       onChange(false);
       return;
     }
@@ -263,22 +377,7 @@ export function createViewport(
   return {
     measure,
     /** A following drag keeps the scale it grabbed, including during an interrupted zoom. */
-    gesture(active: boolean) {
-      gesturing = active;
-      cancelRefit();
-      if (active) {
-        if (animations.some((animation) => animation.playState === "running")) {
-          const from = shown();
-          stop();
-          write(from.ppf);
-          scrollTo(from.scroll);
-          onChange(true);
-        }
-        return;
-      }
-      if (fitted && ppf !== fit)
-        refitAfterSlide(motion("--duration-edit").duration);
-    },
+    gesture,
     /** Multiplies the zoom around a pixel offset in the lanes, tracking the input directly. */
     zoomBy: (factor: number, anchor: number) =>
       zoom(ppf * factor, anchor, false),
@@ -325,20 +424,20 @@ export function createViewport(
       stop();
       const options = motion("--duration-page");
       if (!options.duration) return;
-      animations = [...grid.querySelectorAll(".tl-ruler, .tl-lanes")].map(
-        (layer) =>
+      setAnimations(
+        [...grid.querySelectorAll(".tl-ruler, .tl-lanes")].map((layer) =>
           layer.animate(
             { transform: [`translateX(${scroll - from}px)`, "translateX(0)"] },
             options,
           ),
+        ),
       );
     },
     destroy() {
       cancelRefit();
       stop();
       resized.disconnect();
-      scroller.removeEventListener("wheel", onWheel);
-      scroller.removeEventListener("scroll", onScroll);
+      events.abort();
     },
   };
 }
