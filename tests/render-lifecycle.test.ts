@@ -201,7 +201,7 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
           expect(existsSync(outputPath)).toBe(false);
         } else {
           expect(cancelled.status).toBe(200);
-          expect(await cancelled.json()).toEqual({ status: "cancelled" });
+          expect(await cancelled.json()).toMatchObject({ status: "cancelled" });
           expect(existsSync(outputPath)).toBe(false);
         }
       } finally {
@@ -209,6 +209,29 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
       }
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a worker startup failure retains its cause instead of only the Node version", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-render-startup-"));
+  const workerPath = join(directory, "worker.mjs");
+  await writeFile(workerPath, 'import "./missing-worker-dependency.mjs";');
+  const workers = createRenderWorkers({ workerPath });
+  try {
+    const state = workers.start({
+      project: { id: "test", dir: directory },
+      outputPath: join(directory, "output.mp4"),
+      format: "mp4",
+      fps: { num: 30, den: 1 },
+      quality: "standard",
+      jobId: "startup-failure",
+    });
+    await waitFor(() => state.status === "failed");
+    expect(state.error).toContain("missing-worker-dependency.mjs");
+    expect(workers.get(state.id)?.error).toBe(state.error);
+  } finally {
+    await workers.cancelAll();
     await rm(directory, { recursive: true, force: true });
   }
 });

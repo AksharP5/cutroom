@@ -1,6 +1,12 @@
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { ExportOptionsSchema } from "../../shared/export";
+import {
+  defaultExportRange,
+  exportFilename,
+  exportRange,
+  ExportOptionsSchema,
+  ExportStartSchema,
+} from "../../shared/export";
 import type { ExportOptions } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
@@ -40,6 +46,7 @@ import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import { createThumbnailRenderer } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
+import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
 import { withPreviewBridge } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
@@ -76,14 +83,20 @@ export function createHyperframesApi(
   reviews: ReviewService,
 ) {
   const api = new Hono();
+  // Internal export forwarding must preserve errors for the application's HTTP boundary.
+  api.onError((error) => {
+    throw error;
+  });
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.use("/projects/:id/*", sourceWriteGuard(store));
   api.use("/render/*", async (c, next) => {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
       c.req.header(AGENT_HEADER) !== undefined
-    )
-      throw new HttpError(409, "Only the owner can control render jobs.");
+    ) {
+      if (c.req.method !== "POST" || !c.req.path.endsWith("/cancel"))
+        throw new HttpError(409, "Only the owner can control render jobs.");
+    }
     await next();
   });
   const subscribers = new Set<(change: FileChange) => void>();
@@ -100,6 +113,67 @@ export function createHyperframesApi(
       ),
   });
   const exportRequest = new AsyncLocalStorage<ExportOptions>();
+  const readTimeline = async (projectId: string) => {
+    const project = await store.get(projectId);
+    const [source, document] = await Promise.all([
+      readSource(project, "index.html"),
+      store.document(project),
+    ]);
+    const { lengths } = await mediaFacts(
+      project,
+      "index.html",
+      mediaSources(source.content, "document"),
+    );
+    return parseComposition(
+      source.content,
+      document.timelines["index.html"] ?? emptyTimelineSettings(),
+      { mediaLengths: lengths },
+    ).timeline;
+  };
+  api.post("/projects/:id/export", async (c) => {
+    const input = ExportStartSchema.parse(await c.req.json());
+    const project = await store.get(c.req.param("id"));
+    const timeline = await readTimeline(project.id);
+    const choice = input.range ?? defaultExportRange(timeline);
+    let frames;
+    try {
+      frames =
+        typeof choice === "string" ? exportRange(timeline, choice) : choice;
+    } catch (error) {
+      throw new HttpError(
+        400,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (frames.end > timeline.duration)
+      throw new HttpError(400, "In and Out must be inside the timeline.");
+    const directory =
+      input.directory ??
+      (await projectStatePath(project, ".cutroom/renders", true));
+    if (!isAbsolute(directory))
+      throw new HttpError(400, "Enter an absolute output folder.");
+    const filename =
+      input.filename ??
+      (await nextExportName(directory, exportFilename(project.name)));
+    // Enter the dialog's route with the caller's identity. It owns destination validation and registration.
+    return api.request(
+      new URL(`/projects/${encodeURIComponent(project.id)}/render`, c.req.url),
+      {
+        method: "POST",
+        headers: c.req.raw.headers,
+        body: JSON.stringify({
+          format: "mp4",
+          quality: input.quality,
+          fps: `${timeline.fps.num}/${timeline.fps.den}`,
+          cutroom: {
+            directory,
+            filename,
+            range: choice === "timeline" ? null : frames,
+          },
+        }),
+      },
+    );
+  });
   // Extend Studio's one job registry, progress stream and cancel route with Cutroom's output intent.
   api.use("/projects/:id/render", async (c, next) => {
     if (c.req.method !== "POST") return next();
@@ -116,20 +190,7 @@ export function createHyperframesApi(
       throw new HttpError(400, "Enter an absolute output folder.");
     const project = await store.get(c.req.param("id"));
     if (cutroom.range) {
-      const [source, document] = await Promise.all([
-        readSource(project, "index.html"),
-        store.document(project),
-      ]);
-      const { lengths } = await mediaFacts(
-        project,
-        "index.html",
-        mediaSources(source.content, "document"),
-      );
-      const { timeline } = parseComposition(
-        source.content,
-        document.timelines["index.html"] ?? emptyTimelineSettings(),
-        { mediaLengths: lengths },
-      );
+      const timeline = await readTimeline(project.id);
       const { fps } = z
         .object({ fps: z.union([z.string(), z.number()]) })
         .parse(body);
@@ -514,6 +575,44 @@ export function createHyperframesApi(
     );
     c.header("Content-Disposition", `attachment; filename*=UTF-8''${encoded}`);
   });
+  const snapshot = (job: NonNullable<ReturnType<typeof renders.get>>) => ({
+    jobId: job.id,
+    projectId: job.projectId,
+    name: job.name,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage ?? "Preparing",
+    stageProgress: job.stageProgress,
+    estimate: job.estimate,
+    outputPath: job.outputPath,
+    sizeBytes: job.sizeBytes ?? null,
+    audioLoweredDb: job.audioLoweredDb,
+    error: job.error ?? null,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    fps: job.fps,
+    quality: job.quality,
+    range: job.range,
+  });
+  // One export runs at a time across projects, so any editor can find and control it.
+  api.get("/export-jobs", (c) => {
+    c.header("Cache-Control", "no-store");
+    const job = renders.active();
+    return c.json({ jobs: job ? [snapshot(job)] : [] });
+  });
+  api.get("/render/:jobId", (c) => {
+    const job = renders.get(c.req.param("jobId"));
+    if (!job) throw new HttpError(404, "Export job not found.");
+    c.header("Cache-Control", "no-store");
+    return c.json(snapshot(job));
+  });
+  api.post("/render/:jobId/cancel", async (c) => {
+    const job = renders.get(c.req.param("jobId"));
+    reviews.authorize(c.req.header(AGENT_HEADER), job?.projectId);
+    if (!job) throw new HttpError(404, "Export job not found.");
+    await job.cancel();
+    return c.json(snapshot(job));
+  });
   // Studio's stream serializes only its own fields. Keep its jobs and controls,
   // and include the producer's stage counts while our worker is running.
   api.get("/render/:jobId/progress", (c, next) => {
@@ -542,6 +641,30 @@ export function createHyperframesApi(
   });
   api.route("/", createStudioApi(adapter));
   return Object.assign(api, {
+    subscribeExports(
+      projectId: string,
+      listener: (job: ReturnType<typeof snapshot>) => void,
+    ) {
+      let current = renders.active();
+      if (current?.projectId !== projectId) current = undefined;
+      const notify = (job: NonNullable<ReturnType<typeof renders.get>>) => {
+        if (job.projectId !== projectId) return;
+        current = job;
+        listener(snapshot(job));
+      };
+      const stop = renders.subscribe(notify);
+      if (current) notify(current);
+      // Share progress with the project connection rather than consuming another HTTP slot per tab.
+      const timer = setInterval(() => {
+        if (!current) return;
+        listener(snapshot(current));
+        if (current.status !== "rendering") current = undefined;
+      }, 500);
+      return () => {
+        clearInterval(timer);
+        stop();
+      };
+    },
     subscribe(projectId: string, listener: (change: FileChange) => void) {
       const notify = (change: FileChange) => {
         if (change.projectId === projectId) listener(change);

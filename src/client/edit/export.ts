@@ -1,23 +1,13 @@
 import { z } from "zod";
 import { create } from "zustand";
 import type { Fps } from "../../shared/timeline/schema";
-import { ExportStageSchema, exportRange } from "../../shared/export";
+import { ExportJobSchema, exportRange } from "../../shared/export";
 import type { ExportOptions, ExportQuality } from "../../shared/export";
 import { useWorkspace } from "../workspace";
 import { trackRows } from "../timeline/math";
 import { afterTimelineEdits, useTimeline } from "./timeline";
-import { sampleExportRate } from "./exportEstimate";
-import type { ExportRate } from "./exportEstimate";
+import { subscribeProjectEvents } from "../api";
 
-const ProgressSchema = z.object({
-  progress: z.number().min(0).max(100),
-  status: z.enum(["rendering", "complete", "failed", "cancelled"]),
-  stage: z.string().optional(),
-  stageProgress: ExportStageSchema.optional(),
-  error: z.string().nullish(),
-  audioLoweredDb: z.number().optional(),
-  sizeBytes: z.number().int().nonnegative().optional(),
-});
 export interface ExportJob {
   projectId: string;
   name: string;
@@ -25,7 +15,8 @@ export interface ExportJob {
   outputPath: string;
   fps: Fps;
   size: { width: number; height: number } | null;
-  frames: { start: number; end: number };
+  /** Null for a whole-timeline export of a project that is not open. */
+  frames: { start: number; end: number } | null;
   quality: ExportQuality;
   status:
     | "starting"
@@ -36,7 +27,7 @@ export interface ExportJob {
     | "cancelled";
   progress: number;
   stage: string;
-  rate: ExportRate | null;
+  estimate: z.infer<typeof ExportJobSchema>["estimate"];
   error: string;
   startedAt: number;
   finishedAt: number | null;
@@ -73,58 +64,91 @@ async function renderApi<T>(
 const updateJob = (change: Partial<ExportJob>) =>
   useExport.setState(({ job }) => ({ job: job && { ...job, ...change } }));
 
-function follow(jobId: string) {
-  return new Promise<void>((resolve) => {
-    const events = new EventSource(
-      `/api/render/${encodeURIComponent(jobId)}/progress`,
-    );
-    events.addEventListener("progress", (event) => {
-      const parsed = ProgressSchema.safeParse(JSON.parse(String(event.data)));
-      if (!parsed.success) {
-        useExport.setState({
-          controlError: "The renderer sent invalid progress.",
-        });
-        return;
-      }
-      const state = parsed.data;
-      const cancelling = useExport.getState().job?.status === "cancelling";
-      updateJob({
-        progress: state.progress,
-        status:
-          state.status === "rendering" && cancelling
-            ? "cancelling"
-            : state.status,
-        stage: state.stage ?? "Rendering",
-        rate: sampleExportRate(
-          useExport.getState().job?.rate ?? null,
-          state.stageProgress,
-          Date.now(),
-        ),
-        error: state.error ?? "",
-        finishedAt: state.status === "rendering" ? null : Date.now(),
-        sizeBytes: state.sizeBytes ?? null,
-        ...(state.audioLoweredDb === undefined
-          ? {}
-          : {
-              notice: [
-                useExport.getState().job?.notice,
-                `Audio lowered ${state.audioLoweredDb.toFixed(1)} dB to prevent clipping.`,
-              ]
-                .filter(Boolean)
-                .join(" "),
-            }),
-      });
-      useExport.setState({ controlError: "" });
-      if (state.status === "rendering") return;
-      events.close();
-      resolve();
-    });
-    // EventSource reconnects to the same job. A lost connection is not a failed render.
-    events.onerror = () =>
-      useExport.setState({
-        controlError: "Connection lost. Reconnecting to the export.",
-      });
+function receiveExport(job: z.infer<typeof ExportJobSchema>) {
+  const current = useExport.getState().job;
+  const sameJob = current?.jobId === job.jobId;
+  if (current?.status === "starting") return;
+  const open = useTimeline.getState();
+  const timeline =
+    open.projectId === job.projectId ? open.view?.timeline : undefined;
+  const frames = sameJob
+    ? current.frames
+    : (job.range ?? (timeline ? { start: 0, end: timeline.duration } : null));
+  const size = timeline ? useWorkspace.getState().composition : null;
+  let notice = sameJob ? current.notice : "";
+  if (job.audioLoweredDb !== undefined) {
+    const lowered = `Audio lowered ${job.audioLoweredDb.toFixed(1)} dB to prevent clipping.`;
+    if (!notice.includes(lowered))
+      notice = [notice, lowered].filter(Boolean).join(" ");
+  }
+  useExport.setState({
+    controlError: "",
+    job: {
+      ...job,
+      status:
+        sameJob && current.status === "cancelling" && job.status === "rendering"
+          ? "cancelling"
+          : job.status,
+      size: sameJob
+        ? current.size
+        : size?.width && size.height
+          ? { width: size.width, height: size.height }
+          : null,
+      frames,
+      error: job.error ?? "",
+      notice,
+    },
   });
+  useWorkspace.setState({ exporting: job.status === "rendering" });
+}
+
+/** Discover jobs created by another editor or MCP client, including on reconnect. */
+export function observeExports(projectId: string) {
+  const closing = new AbortController();
+  const observe = (job: z.infer<typeof ExportJobSchema>) => {
+    if (!closing.signal.aborted) receiveExport(job);
+  };
+  const stop = subscribeProjectEvents(projectId, "export", (event) => {
+    const parsed = ExportJobSchema.safeParse(JSON.parse(String(event.data)));
+    if (parsed.success) observe(parsed.data);
+  });
+  const refresh = async () => {
+    const current = useExport.getState().job;
+    if (
+      current?.projectId === projectId &&
+      current.jobId &&
+      exportActive(current)
+    ) {
+      observe(
+        await renderApi(
+          `/render/${encodeURIComponent(current.jobId)}`,
+          ExportJobSchema,
+          { signal: closing.signal },
+        ),
+      );
+      return;
+    }
+    const { jobs } = await renderApi(
+      "/export-jobs",
+      z.object({ jobs: z.array(ExportJobSchema) }),
+      { signal: closing.signal },
+    );
+    jobs.forEach(observe);
+  };
+  const load = () =>
+    void refresh().catch((error: unknown) => {
+      if (!closing.signal.aborted)
+        useExport.setState({
+          controlError: error instanceof Error ? error.message : String(error),
+        });
+    });
+  const stopReady = subscribeProjectEvents(projectId, "ready", load);
+  load();
+  return () => {
+    closing.abort();
+    stop();
+    stopReady();
+  };
 }
 
 /** Starts the existing Studio job after all edits already shown have settled. */
@@ -158,7 +182,7 @@ export async function exportProject(
       status: "starting",
       progress: 0,
       stage: "Waiting for edits",
-      rate: null,
+      estimate: null,
       error: "",
       startedAt: Date.now(),
       finishedAt: null,
@@ -226,7 +250,9 @@ export async function exportProject(
       });
       return started.jobId;
     });
-    await follow(jobId);
+    receiveExport(
+      await renderApi(`/render/${encodeURIComponent(jobId)}`, ExportJobSchema),
+    );
   } catch (error) {
     updateJob({
       status: "failed",
@@ -234,7 +260,9 @@ export async function exportProject(
       finishedAt: Date.now(),
     });
   } finally {
-    useWorkspace.setState({ exporting: false });
+    useWorkspace.setState({
+      exporting: exportActive(useExport.getState().job),
+    });
   }
 }
 
@@ -243,10 +271,12 @@ export async function cancelExport() {
   if (!job?.jobId || !exportActive(job) || job.status === "cancelling") return;
   updateJob({ status: "cancelling" });
   try {
-    await renderApi(
-      `/render/${encodeURIComponent(job.jobId)}/cancel`,
-      z.object({ status: z.string() }),
-      { method: "POST" },
+    receiveExport(
+      await renderApi(
+        `/render/${encodeURIComponent(job.jobId)}/cancel`,
+        ExportJobSchema,
+        { method: "POST" },
+      ),
     );
   } catch (error) {
     useExport.setState({

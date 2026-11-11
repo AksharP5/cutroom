@@ -293,7 +293,7 @@ test("creation and import require a live token but have no target-project grant"
   }
 });
 
-test("native tokens cannot change agent controls, grants, owner review actions, or render jobs", async () => {
+test("native tokens cannot change agent controls, grants, owner review actions, or delete render jobs", async () => {
   const fixture = await projectFixture();
   const { createAgentService } = await import("../src/server/agents/service");
   const { createAgentRoutes } = await import("../src/server/agents/routes");
@@ -323,7 +323,8 @@ test("native tokens cannot change agent controls, grants, owner review actions, 
         .filter(
           (route) =>
             ["POST", "DELETE"].includes(route.method) &&
-            route.path.startsWith("/render/"),
+            route.path.startsWith("/render/") &&
+            !route.path.endsWith("/cancel"),
         )
         .map((route) => ({ ...route, path: `/api/editor${route.path}` })),
       {

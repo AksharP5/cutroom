@@ -20,9 +20,22 @@ import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { ExportOptions } from "../../shared/export";
 import { ExportStageSchema } from "../../shared/export";
+import {
+  estimateExportStage,
+  sampleExportRate,
+} from "../../shared/exportEstimate";
+import type { ExportRate } from "../../shared/exportEstimate";
 
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
 type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
+  projectId: string;
+  name: string;
+  fps: RenderOptions["fps"];
+  quality: "draft" | "standard" | "high";
+  range: ExportOptions["range"];
+  startedAt: number;
+  finishedAt: number | null;
+  estimate: ReturnType<typeof estimateExportStage>;
   stageProgress?: z.infer<typeof ExportStageSchema>;
   sizeBytes?: number;
   cancel: () => Promise<void>;
@@ -75,14 +88,36 @@ export function createRenderWorkers(
     removeScratch?: (path: string) => Promise<void>;
   } = {},
 ) {
-  const running = new Map<string, RenderState>();
+  const jobs = new Map<string, RenderState>();
+  const subscribers = new Set<(job: RenderState) => void>();
+  const prune = () => {
+    for (const [id, job] of jobs)
+      if (job.finishedAt !== null && Date.now() - job.finishedAt > 300_000)
+        jobs.delete(id);
+  };
+  const active = () =>
+    [...jobs.values()].find((job) => job.status === "rendering");
   let closing = false;
   return {
     get(jobId: string) {
-      return running.get(jobId);
+      prune();
+      return jobs.get(jobId);
+    },
+    active,
+    subscribe(listener: (job: RenderState) => void) {
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+      };
     },
     start(options: RenderOptions, output?: ExportOptions): RenderState {
       if (closing) throw new HttpError(503, "The renderer is shutting down.");
+      const running = active();
+      if (running)
+        throw new HttpError(
+          409,
+          `Export "${running.name}" to "${basename(running.outputPath)}" is running. Please wait for it to finish or cancel it with export_cancel using jobId "${running.id}".`,
+        );
       let worker: ReturnType<typeof Bun.spawn> | undefined;
       let errors: Promise<string> | undefined;
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +126,7 @@ export function createRenderWorkers(
       let failure: string | undefined;
       let cleanupFailure: string | undefined;
       let task: Promise<void>;
+      let rate: ExportRate | null = null;
       const outputPath = output
         ? join(output.directory, output.filename)
         : options.outputPath;
@@ -134,6 +170,21 @@ export function createRenderWorkers(
       };
       const state: RenderState = {
         id: options.jobId,
+        projectId: options.project.id,
+        name: options.project.title ?? options.project.id,
+        fps: options.fps,
+        quality:
+          options.quality === "draft" || options.quality === "high"
+            ? options.quality
+            : "standard",
+        range: output?.range ?? null,
+        startedAt: Date.now(),
+        finishedAt: null,
+        get estimate() {
+          return job.state.status === "running"
+            ? estimateExportStage(rate, Date.now())
+            : null;
+        },
         get status() {
           switch (job.state.status) {
             case "done":
@@ -260,6 +311,7 @@ export function createRenderWorkers(
               });
               state.stage = event.stage;
               state.stageProgress = event.stageProgress;
+              rate = sampleExportRate(rate, event.stageProgress, Date.now());
             }
             if (event.type === "error") {
               failure = event.message;
@@ -277,8 +329,8 @@ export function createRenderWorkers(
         if (!completed || exitCode !== 0)
           throw new Error(
             failure ||
-              // The tail names the cause; the full log is far too long for a dialog.
-              stderr.trim().split("\n").slice(-2).join("\n") ||
+              // Startup failures cannot send a structured event. Keep the bounded stderr tail's cause.
+              stderr.trim() ||
               `Renderer exited with code ${exitCode}.`,
           );
         publishing = true;
@@ -371,16 +423,20 @@ export function createRenderWorkers(
                 error: failure,
               });
             else job.transition({ status: "done", progress: 1 });
-            running.delete(options.jobId);
+            state.finishedAt = Date.now();
           }
         });
-      running.set(options.jobId, state);
+      prune();
+      jobs.set(options.jobId, state);
+      for (const listener of subscribers) listener(state);
       return state;
     },
     async cancelAll() {
       closing = true;
       const results = await Promise.allSettled(
-        [...running.values()].map((state) => state.cancel()),
+        [...jobs.values()]
+          .filter((state) => state.status === "rendering")
+          .map((state) => state.cancel()),
       );
       const failures = results
         .filter((result) => result.status === "rejected")

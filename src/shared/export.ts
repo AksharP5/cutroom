@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FpsSchema } from "./timeline/schema.ts";
 import type { Timeline } from "./timeline/schema";
 
 export const ExportRangeSchema = z
@@ -32,6 +33,19 @@ export const exportQualities = ["draft", "standard", "high"] as const;
 export const ExportQualitySchema = z.enum(exportQualities);
 export type ExportQuality = z.infer<typeof ExportQualitySchema>;
 
+export const ExportStartSchema = ExportDestinationSchema.partial().extend({
+  range: z.union([z.enum(["timeline", "marks"]), ExportRangeSchema]).optional(),
+  quality: ExportQualitySchema.default("standard"),
+});
+
+export const exportFilename = (name: string) =>
+  `${
+    name
+      .replace(/[/\\\x00-\x1f]/g, "-")
+      .trim()
+      .slice(0, 196) || "Cut"
+  }.mp4`;
+
 export const ExportStageSchema = z.object({
   code: z.enum([
     "compile",
@@ -46,6 +60,28 @@ export const ExportStageSchema = z.object({
   total: z.number().positive().optional(),
 });
 export type ExportStage = z.infer<typeof ExportStageSchema>;
+
+export const ExportJobSchema = z.object({
+  jobId: z.string(),
+  projectId: z.string(),
+  name: z.string(),
+  status: z.enum(["rendering", "complete", "failed", "cancelled"]),
+  progress: z.number().min(0).max(100),
+  stage: z.string(),
+  stageProgress: ExportStageSchema.optional(),
+  estimate: z
+    .object({ milliseconds: z.number(), stage: z.string() })
+    .nullable(),
+  outputPath: z.string(),
+  sizeBytes: z.number().nonnegative().nullable(),
+  audioLoweredDb: z.number().optional(),
+  error: z.string().nullable(),
+  startedAt: z.number(),
+  finishedAt: z.number().nullable(),
+  fps: FpsSchema,
+  quality: ExportQualitySchema,
+  range: ExportRangeSchema.nullable(),
+});
 
 /**
  * Marks are half-open in the engine. A lone mark never silently shortens the export.

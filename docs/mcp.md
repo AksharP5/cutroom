@@ -21,6 +21,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `history_list`, `history_undo`, `history_redo`             | Use the editor's shared history.                                   |
 | `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
 | `timeline_view`                                            | Render one timeline frame as an image.                             |
+| `export_start`, `export_status`, `export_cancel`           | Start, inspect, and cancel the editor's MP4 render jobs.           |
 
 Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
@@ -66,4 +67,51 @@ MCP mutations use the same server commands as the interface. Edits to project fi
 
 Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the run has several claimed notes. It must name a note claimed by that run. With one claimed note it is automatic; ambiguous edits are refused before writing, so accepting one note never accepts another note's clips.
 
-Video export is not an MCP tool. Local automation uses the editor's existing `POST /api/projects/:id/render` endpoint with Cutroom's Origin header. `format: "mp4"`, the project's rational `fps`, and `quality: "draft" | "standard" | "high"` select the same producer settings as the dialog. Add `cutroom: { filename: "Cut.mp4", directory: "/absolute/output/folder", range: null }` for a named whole-timeline file, or set `range` to `{ start: 30, end: 90 }` for half-open project frames. The output folder must already exist, except for the default `.cutroom/renders` folder. The response includes `jobId` and `outputPath`. The existing progress, cancel and inline-video routes remain `/api/render/:jobId/progress`, `/cancel` and `/view`. Existing agent authorization and owner-only job control still apply.
+## Export
+
+`export_start` takes `projectId` and optional `range`, `quality`, `filename`, and `directory`. It uses the editor's render route and job registry over both the stdio bridge and HTTP `/mcp`. The bridge sends the local Origin header; clients do not need to call the render route themselves.
+
+- Omit `range` to use In to Out when both marks exist, otherwise the whole timeline. `"marks"` requires both marks, `"timeline"` exports everything, and `{ "start": 30, "end": 90 }` exports those half-open project frames. Out is exclusive, as in `timeline_read`. Size and rational fps come from the project.
+- `quality` is `"draft"`, `"standard"`, or `"high"`, with Standard as the default, using the dialog's producer presets.
+- Omit `directory` to create the project's `.cutroom/renders` folder on demand. A chosen directory must be an absolute existing folder, under the same path validation as the dialog. App-state folders cannot be redirected through symlinks.
+- Omit `filename` to choose the next free project name, then a suffix from 2, in the chosen folder. An explicit filename must end in `.mp4` and cannot contain folders. Names are suggestions until publication. A taken destination fails without replacing it, even if another file appears during rendering.
+
+Only one export can run at a time across all projects, whether started in the editor or over MCP. A second start is refused with the running export's project, filename, and job ID. Wait for it to finish, or use `export_cancel` with that job ID and wait for cleanup before starting another export.
+
+The response includes `jobId` and `outputPath`. `export_status` takes `jobId` and returns `status`, `stage`, `stageProgress`, `progress` from 0 to 100, `estimate`, `outputPath`, `sizeBytes`, `error`, and timing/range/preset details. `estimate` is either null or `{ milliseconds, stage }` for the current stage, using the dialog's measured frame-rate estimator. Preparation, assembly, retries, and stalled progress do not claim an estimate. `sizeBytes` is available once published; `error` preserves the failure cause, including cleanup errors. Completed, failed, and cancelled jobs remain queryable for five minutes after cleanup, while the server remains running.
+
+`export_cancel` takes `jobId` and waits for worker shutdown and partial-output cleanup before returning `cancelled`. Cleanup failure returns an error and leaves the job `failed`. Cancellation after publication keeps the completed file. A native Cutroom agent can start and cancel jobs only for its active run's project. `export_status` is read-only. Start and cancel require separate native approval, including when **Always allow Cutroom edits** is enabled, because exports create output files beyond editable project source.
+
+Agent jobs appear in the open editor's Export indicator. The dialog follows the running job through completion or cancellation even if you switch projects or reload in another one, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
+
+For example, after `projects_list` and `timeline_read`:
+
+```json
+{ "name": "export_start", "arguments": { "projectId": "…" } }
+```
+
+Both marks select the marked range automatically. Retain the returned `jobId`, then poll until `status` is `complete`, `failed`, or `cancelled`:
+
+```json
+{ "name": "export_status", "arguments": { "jobId": "…" } }
+```
+
+A completed result includes the saved path and byte size. To export the entire timeline despite the marks, choose it explicitly:
+
+```json
+{
+  "name": "export_start",
+  "arguments": {
+    "projectId": "…",
+    "range": "timeline",
+    "quality": "high",
+    "filename": "Final.mp4"
+  }
+}
+```
+
+To stop an active job and await cleanup:
+
+```json
+{ "name": "export_cancel", "arguments": { "jobId": "…" } }
+```

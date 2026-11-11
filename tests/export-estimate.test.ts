@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   estimateExportStage,
   sampleExportRate,
-} from "../src/client/edit/exportEstimate";
+} from "../src/shared/exportEstimate";
 
 test("startup progress cannot become a time-left estimate", () => {
   expect(

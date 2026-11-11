@@ -109,6 +109,7 @@ export async function createApp(
       projectsDir,
       mcpCommand,
       subscribePreview: editor.subscribe,
+      subscribeExports: editor.subscribeExports,
     }),
   );
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));

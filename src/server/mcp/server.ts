@@ -15,6 +15,7 @@ import {
   TranscriptImportSchema,
 } from "../../shared/project";
 import { registerTimelineTools } from "./timelineTools";
+import { registerExportTools } from "./exportTools";
 
 type LocalFetch = (
   url: string,
@@ -64,9 +65,9 @@ export function createMcpServer(options: McpOptions = {}) {
       return tool;
     },
   };
-  const request = async (path: string, method = "GET", body?: unknown) => {
+  const requestApi = async (path: string, method = "GET", body?: unknown) => {
     try {
-      const response = await fetchLocal(`${baseUrl}/api/cutroom${path}`, {
+      const response = await fetchLocal(`${baseUrl}/api${path}`, {
         method,
         headers: {
           origin: baseUrl,
@@ -105,6 +106,8 @@ export function createMcpServer(options: McpOptions = {}) {
       };
     }
   };
+  const request = (path: string, method?: string, body?: unknown) =>
+    requestApi(`/cutroom${path}`, method, body);
   const id = encodeURIComponent;
   const readOnly = {
     readOnlyHint: true,
@@ -307,6 +310,7 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) => request(`/projects/${id(input.projectId)}/history/redo`, "POST"),
   );
   registerReviewTools(registry, request);
+  registerExportTools(registry, requestApi);
   registerTimelineTools(registry, request, async (path) =>
     fetchLocal(`${baseUrl}${path}`),
   );
