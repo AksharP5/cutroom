@@ -1,0 +1,16 @@
+[
+  {
+    "capture": "mid-slide",
+    "mean_channel_delta": 0.10906334820194444,
+    "fraction_pixels_above_3": 0.015574923164702215,
+    "fraction_pixels_changed": 0.07120176981014417,
+    "max_channel_delta": 167
+  },
+  {
+    "capture": "after-edit",
+    "mean_channel_delta": 0.020906553996107153,
+    "fraction_pixels_above_3": 0.0005005695038635057,
+    "fraction_pixels_changed": 0.000576927563774888,
+    "max_channel_delta": 178
+  }
+]

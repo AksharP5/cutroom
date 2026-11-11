@@ -1,0 +1,36 @@
+{
+  "head": "bd9777f79e4adaf9d5734f3ffe2d44b5f104e02f",
+  "application_tested_before_ci_only_rebase": "b52e02c3104bb4b6e4422182607d299292735924",
+  "unit": {
+    "passed": 460,
+    "skipped": 5,
+    "failed": 0
+  },
+  "functional": {
+    "passed": 182,
+    "failed": 0
+  },
+  "perf_sessions": [
+    {
+      "session": 1,
+      "exit_status": 0
+    },
+    {
+      "session": 2,
+      "exit_status": 0
+    },
+    {
+      "session": 3,
+      "exit_status": 0
+    }
+  ],
+  "format": "passed",
+  "format_check": "passed",
+  "types": "passed",
+  "visual": "controlled image pairs inspected, representative bounds identical; small rasterization differences retained",
+  "ports": [
+    4920,
+    4921
+  ],
+  "software_or_browser_installations": false
+}

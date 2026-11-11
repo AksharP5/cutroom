@@ -1,0 +1,450 @@
+[
+  {
+    "first": {
+      "frame_ms": 82.2,
+      "style_elements": 782,
+      "style_ms": 30.991,
+      "layout_ms": 14.595
+    },
+    "build": "before",
+    "count": 400,
+    "frame_ms": 82.2,
+    "frame_start_after_input_ms": -0.092,
+    "style_elements": 782,
+    "style_ms": 30.991,
+    "total_style_ms": 31.227,
+    "layout_ms": 14.595,
+    "events": [
+      {
+        "args": {
+          "beginData": {
+            "frame": "ED1991CA6D3306A6AFC319EC4B315989"
+          },
+          "elementCount": 2
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 191,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2701466,
+        "tdur": 186,
+        "tid": 2701466,
+        "ts": 129492511969,
+        "tts": 1918350
+      },
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 24,
+            "frame": "ED1991CA6D3306A6AFC319EC4B315989",
+            "partialLayout": false,
+            "totalObjects": 930
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 14258,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 2701466,
+        "tdur": 14199,
+        "tid": 2701466,
+        "ts": 129492512170,
+        "tts": 1918545
+      },
+      {
+        "args": {
+          "beginData": {
+            "frame": "ED1991CA6D3306A6AFC319EC4B315989"
+          },
+          "elementCount": 0
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 45,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2701466,
+        "tdur": 44,
+        "tid": 2701466,
+        "ts": 129492529840,
+        "tts": 1936005
+      },
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 10,
+            "frame": "ED1991CA6D3306A6AFC319EC4B315989",
+            "partialLayout": false,
+            "totalObjects": 933
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 337,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 2701466,
+        "tdur": 333,
+        "tid": 2701466,
+        "ts": 129492529892,
+        "tts": 1936055
+      },
+      {
+        "args": {
+          "beginData": {
+            "frame": "ED1991CA6D3306A6AFC319EC4B315989"
+          },
+          "elementCount": 782
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 30991,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2701466,
+        "tdur": 30784,
+        "tid": 2701466,
+        "ts": 129492540361,
+        "tts": 1945038
+      }
+    ]
+  },
+  {
+    "first": {
+      "frame_ms": 97.3,
+      "style_elements": 982,
+      "style_ms": 35.282,
+      "layout_ms": 17.265
+    },
+    "build": "before",
+    "count": 500,
+    "frame_ms": 97.3,
+    "frame_start_after_input_ms": 0.097,
+    "style_elements": 982,
+    "style_ms": 35.282,
+    "total_style_ms": 35.565,
+    "layout_ms": 17.265,
+    "events": [
+      {
+        "args": {
+          "beginData": {
+            "frame": "CE0DA28A14902959DE0A354280B1CAFD"
+          },
+          "elementCount": 2
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 237,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2703529,
+        "tdur": 229,
+        "tid": 2703529,
+        "ts": 129515129791,
+        "tts": 1984998
+      },
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 24,
+            "frame": "CE0DA28A14902959DE0A354280B1CAFD",
+            "partialLayout": false,
+            "totalObjects": 1054
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 16898,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 2703529,
+        "tdur": 16814,
+        "tid": 2703529,
+        "ts": 129515130045,
+        "tts": 1985242
+      },
+      {
+        "args": {
+          "beginData": {
+            "frame": "CE0DA28A14902959DE0A354280B1CAFD"
+          },
+          "elementCount": 0
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 46,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2703529,
+        "tdur": 45,
+        "tid": 2703529,
+        "ts": 129515151563,
+        "tts": 2006553
+      },
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 10,
+            "frame": "CE0DA28A14902959DE0A354280B1CAFD",
+            "partialLayout": false,
+            "totalObjects": 1057
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 367,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 2703529,
+        "tdur": 366,
+        "tid": 2703529,
+        "ts": 129515151616,
+        "tts": 2006605
+      },
+      {
+        "args": {
+          "beginData": {
+            "frame": "CE0DA28A14902959DE0A354280B1CAFD"
+          },
+          "elementCount": 982
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 35282,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 2703529,
+        "tdur": 35103,
+        "tid": 2703529,
+        "ts": 129515165584,
+        "tts": 2018593
+      }
+    ]
+  },
+  {
+    "first": {
+      "frame_ms": 50.0,
+      "style_elements": 782,
+      "style_ms": 9.178,
+      "layout_ms": 10.916
+    },
+    "build": "after",
+    "count": 400,
+    "frame_ms": 61.0,
+    "frame_start_after_input_ms": 317.46,
+    "style_elements": 2,
+    "style_ms": 0.126,
+    "total_style_ms": 0.126,
+    "layout_ms": 0.803,
+    "events": [
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 18,
+            "frame": "73F3E6CFB2BA3A84E287D9E45266898A",
+            "partialLayout": false,
+            "totalObjects": 937
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 512,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 3388024,
+        "tdur": 506,
+        "tid": 3388024,
+        "ts": 133083533711,
+        "tts": 2423886
+      },
+      {
+        "args": {
+          "beginData": {
+            "frame": "73F3E6CFB2BA3A84E287D9E45266898A"
+          },
+          "elementCount": 2
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 126,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 3388024,
+        "tdur": 125,
+        "tid": 3388024,
+        "ts": 133083593442,
+        "tts": 2442829
+      },
+      {
+        "args": {
+          "beginData": {
+            "dirtyObjects": 17,
+            "frame": "73F3E6CFB2BA3A84E287D9E45266898A",
+            "partialLayout": false,
+            "totalObjects": 935
+          },
+          "endData": {
+            "layoutRoots": [
+              {
+                "depth": 1,
+                "nodeId": 5,
+                "nodeName": "#document",
+                "quads": [
+                  [
+                    0,
+                    0,
+                    1720,
+                    0,
+                    1720,
+                    1050,
+                    0,
+                    1050
+                  ]
+                ]
+              }
+            ]
+          }
+        },
+        "cat": "devtools.timeline",
+        "dur": 291,
+        "name": "Layout",
+        "ph": "X",
+        "pid": 3388024,
+        "tdur": 290,
+        "tid": 3388024,
+        "ts": 133083593575,
+        "tts": 2442960
+      }
+    ]
+  },
+  {
+    "first": {
+      "frame_ms": 60.3,
+      "style_elements": 982,
+      "style_ms": 13.247,
+      "layout_ms": 13.997
+    },
+    "build": "after",
+    "count": 500,
+    "frame_ms": 65.8,
+    "frame_start_after_input_ms": 401.708,
+    "style_elements": 41,
+    "style_ms": 0.265,
+    "total_style_ms": 0.265,
+    "layout_ms": 0.0,
+    "events": [
+      {
+        "args": {
+          "beginData": {
+            "frame": "0B36B3C2B5F3357B4FBC827CD7863376"
+          },
+          "elementCount": 41
+        },
+        "cat": "blink,devtools.timeline",
+        "dur": 265,
+        "name": "UpdateLayoutTree",
+        "ph": "X",
+        "pid": 3392318,
+        "tdur": 263,
+        "tid": 3392318,
+        "ts": 133106344358,
+        "tts": 2419770
+      }
+    ]
+  }
+]
