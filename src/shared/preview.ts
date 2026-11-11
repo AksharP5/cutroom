@@ -29,6 +29,7 @@ export const RuntimeStateSchema = z.object({
 export const PreviewLevelsSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("levels"),
+  playing: z.boolean(),
   l: z.number().nonnegative().finite(),
   r: z.number().nonnegative().finite(),
 });

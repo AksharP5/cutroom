@@ -105,6 +105,54 @@ const drag = (
   playhead = 0,
 ) => beginDrag(timeline, intent, new Set(selection), origin, playhead);
 
+test("a horizontal envelope press hands off to a move once, while a vertical drag keeps gain", () => {
+  const press = step(idle, {
+    type: "press",
+    intent: { kind: "gain", clipId: "a", alone: true },
+    point: { x: 0, y: 0 },
+  }).gesture;
+  const horizontal = step(press, {
+    type: "move",
+    point: { x: 4, y: 1 },
+  }).gesture;
+  expect(horizontal).toMatchObject({
+    phase: "dragging",
+    intent: { kind: "move", clipId: "a", alone: true },
+  });
+  expect(
+    step(horizontal, { type: "move", point: { x: 4, y: 20 } }).gesture,
+  ).toMatchObject({ intent: { kind: "move" } });
+  expect(
+    step(press, { type: "move", point: { x: 1, y: 4 } }).gesture,
+  ).toMatchObject({ phase: "dragging", intent: { kind: "gain" } });
+});
+
+test("a fade drag leaves a clip's authored volume automation alone", () => {
+  const timeline = sequence();
+  // Hand-drawn points look like an edge ramp, but nothing marks them as Cutroom's.
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "volume",
+        points: [
+          { t: 0, v: 1 },
+          { t: 8, v: 0.5 },
+        ],
+      },
+    ],
+  });
+  timeline.clips = [clip("music", 2, 0, 240, { automation })];
+  const preview = dragPreview(
+    drag({ kind: "fade", clipId: "music", edge: "fadeOut" }, [], 240, timeline),
+    { frame: 210, track: 2, reach: 0 },
+  );
+  expect(preview.commands).toEqual([
+    { type: "setClip", clipId: "music", fadeOut: 30 },
+  ]);
+  expect(preview.shown.clips[0]?.automation).toBe(automation);
+});
+
 test("fade drags on a clip shorter than its fades keep both handles where they are drawn", () => {
   const timeline = sequence();
   // 60/180 authored on 61 frames: the runtime scales them to 15.25 and 45.75.

@@ -1,8 +1,5 @@
-import {
-  audioDbToGain,
-  audioGainToDb,
-  MAX_AUDIO_GAIN_DB,
-} from "@hyperframes/core/audio-gain";
+import { audioGainToDb } from "@hyperframes/core/audio-gain";
+import { gainFromDrag } from "./mix";
 import { z } from "zod";
 import {
   TimelineError,
@@ -39,7 +36,7 @@ export interface Point {
 
 /** What a press on the lanes will do if it becomes a drag, decided at the press. */
 export type Intent =
-  | { kind: "gain"; clipId: string }
+  | { kind: "gain"; clipId: string; alone: boolean }
   | { kind: "fade"; clipId: string; edge: "fadeIn" | "fadeOut" }
   | { kind: "move"; clipId: string; alone: boolean }
   | { kind: "trim"; clipId: string; edge: "start" | "end"; ripple: boolean }
@@ -88,11 +85,19 @@ export function step(
     case "press":
       return { gesture, outcome: null };
     case "move": {
-      const { origin, intent } = gesture;
+      const { origin } = gesture;
+      let { intent } = gesture;
       const travelled =
         gesture.phase === "dragging" ||
         Math.hypot(event.point.x - origin.x, event.point.y - origin.y) >=
           DRAG_THRESHOLD;
+      if (
+        travelled &&
+        gesture.phase === "armed" &&
+        intent.kind === "gain" &&
+        Math.abs(event.point.x - origin.x) > Math.abs(event.point.y - origin.y)
+      )
+        intent = { kind: "move", clipId: intent.clipId, alone: intent.alone };
       return {
         gesture: travelled
           ? { phase: "dragging", intent, origin, point: event.point }
@@ -136,7 +141,7 @@ export function intentAt(
     return null;
   if (tool === "pointer" && hit.mix && clip.hasAudio)
     return hit.mix === "gain"
-      ? { kind: "gain", clipId: clip.id }
+      ? { kind: "gain", clipId: clip.id, alone }
       : { kind: "fade", clipId: clip.id, edge: hit.mix };
   if (tool === "blade") return { kind: "blade", clipId: clip.id };
   const reach = Math.min(EDGE_PX, width / 3);
@@ -333,6 +338,8 @@ export function beginDrag(
 export interface DragInput {
   /** Vertical pointer travel in pixels, for gain. */
   dy?: number;
+  /** Actual drawable SVG height, in screen pixels. */
+  gainHeight?: number;
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -379,26 +386,21 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
 
   switch (intent.kind) {
     case "gain": {
-      if (!input.dy) return still("Clip gain");
+      if (!input.dy || !input.gainHeight) return still("Clip gain");
       const clip = find(intent.clipId);
-      const db = Math.max(
-        -60,
-        Math.min(
-          MAX_AUDIO_GAIN_DB,
-          Math.round(
-            ((clip.volume === 0 ? -60 : audioGainToDb(clip.volume ?? 1)) -
-              (input.dy ?? 0) / 2) *
-              10,
-          ) / 10,
-        ),
+      const volume = gainFromDrag(
+        clip,
+        timeline.fps,
+        drag.origin,
+        input.dy,
+        input.gainHeight,
       );
-      const volume = db === -60 ? 0 : audioDbToGain(db);
       return edit(
         "Clip gain",
         volume === (clip.volume ?? 1)
           ? []
           : [{ type: "setClip", clipId: clip.id, volume }],
-        db,
+        volume > 0 ? audioGainToDb(volume) : -60,
         null,
       );
     }

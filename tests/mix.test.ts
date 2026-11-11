@@ -10,6 +10,8 @@ import {
 } from "@hyperframes/engine";
 import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
+import { gainFromDrag, gainHeight } from "../src/client/timeline/mix";
+import { emptyMeter, meterSample } from "../src/client/timeline/meters";
 import {
   CommandSchema,
   emptyTimelineSettings,
@@ -25,6 +27,78 @@ import {
 import { withPreviewBridge } from "../src/server/hyperframes/previewBridge";
 
 const html = `<main data-composition-id="main" data-duration="10" data-fps="30000/1001"><audio id="music" src="music.wav" data-start="0" data-duration="10"></audio><video id="voice" src="voice.mp4" data-start="0" data-duration="10" data-track-index="1"></video></main>`;
+
+test("clearing a split's automation removes its baked ramp with exact HTML readback", () => {
+  const split = edited(
+    html.replace(
+      'data-duration="10"></audio>',
+      'data-duration="10" data-fade-out="4"></audio>',
+    ),
+    [{ type: "split", clipIds: ["music"], at: 240 }],
+  );
+  const clip = split.timeline.clips.find((clip) => clip.id === "music")!;
+  expect(clip.automation).toBeTruthy();
+  const cleared = edited(split.html, [
+    { type: "setClip", clipId: clip.id, automation: null },
+  ]);
+  expect(cleared.timeline.clips.find((item) => item.id === clip.id)).toEqual({
+    ...clip,
+    automation: null,
+  });
+  expect(
+    CommandSchema.safeParse({
+      type: "setClip",
+      clipId: clip.id,
+      automation: "{}",
+    }).success,
+  ).toBe(false);
+});
+
+test("gain drag inverts the rendered scale below and above unity at each track height", () => {
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  const clip = timeline.clips[0]!;
+  for (const height of [25, 61]) {
+    for (const [start, dy] of [
+      [0, 3],
+      [-24, -3],
+      [-6, -5],
+      [6, 3],
+      [0, 9],
+    ] as const) {
+      const volume = audioDbToGain(start);
+      const next = gainFromDrag(
+        { ...clip, volume },
+        timeline.fps,
+        30,
+        dy,
+        height,
+      );
+      const drawnTravel =
+        ((gainHeight(next) - gainHeight(volume)) / 100) * height;
+      expect(drawnTravel).toBeCloseTo(dy, 0);
+    }
+  }
+  expect(gainFromDrag(clip, timeline.fps, 30, 100, 25)).toBe(0);
+  expect(gainFromDrag(clip, timeline.fps, 30, -100, 25)).toBe(MAX_AUDIO_GAIN);
+});
+
+test("meters latch clipping through silence and stop, reset peaks on stop and clear on restart", () => {
+  const clipped = meterSample(emptyMeter, 1.1, true, 100);
+  const quiet = meterSample(clipped, 0.1, true, 200);
+  expect(quiet.clipped).toBe(true);
+  expect(quiet.peak).toBe(1);
+  const falling = meterSample(quiet, 0.1, true, 1800);
+  expect(falling.peak).toBeLessThan(1);
+  const stopped = meterSample(falling, 0, false, 1900);
+  expect(stopped).toMatchObject({ clipped: true, peak: 0 });
+  expect(meterSample(stopped, 0, true, 2000)).toMatchObject({
+    clipped: false,
+    peak: 0,
+  });
+  expect(
+    meterSample({ ...quiet, clipped: false }, 0.1, true, 300).clipped,
+  ).toBe(false);
+});
 
 test("gain and frame fades round-trip exactly through HTML and the producer's audio reader", () => {
   let parsed = parseComposition(html, emptyTimelineSettings());

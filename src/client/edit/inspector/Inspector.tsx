@@ -231,6 +231,23 @@ export function Inspector({ projectId }: { projectId: string }) {
               <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
+          {clip.hasAudio && clip.automation && (
+            <details open className="inspector-section">
+              <summary>Audio</summary>
+              <button
+                className="inspector-clear-automation"
+                disabled={track?.track.locked}
+                title="Remove this clip's HyperFrames automation, including baked volume ramps"
+                onClick={() => {
+                  void editTimeline(projectId, "Clear clip automation", () => [
+                    { type: "setClip", clipId: clip.id, automation: null },
+                  ]);
+                }}
+              >
+                Clear automation
+              </button>
+            </details>
+          )}
           {clip.kind !== "audio" && (
             <details
               open={compositeOpen}

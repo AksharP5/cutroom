@@ -965,12 +965,12 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
 );
 
-test("MCP clip gain and frame fades read back exactly and each batch undoes in one step", async () => {
+test("MCP gain, authored fades and cleared automation read back exactly and undo in one step", async () => {
   const fixture = await timelineFixture();
   const { project } = fixture;
   await writeFile(
     join(project.path, "index.html"),
-    '<main data-composition-id="main" data-duration="10" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="10"></audio></main>',
+    `<main data-composition-id="main" data-duration="10" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="10" data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":1},{"t":10,"v":0}]}]}'></audio></main>`,
   );
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -997,6 +997,8 @@ test("MCP clip gain and frame fades read back exactly and each batch undoes in o
         }),
       ).structuredContent.result;
     const initial = await read();
+    const originalFiles = await fixture.files();
+    expect(initial.timeline.clips[0]?.automation).toBeString();
     const gain = 10 ** (-12 / 20);
     const changed = result.parse(
       await client.callTool({
@@ -1009,6 +1011,7 @@ test("MCP clip gain and frame fades read back exactly and each batch undoes in o
               type: "setClip",
               clipId: "music",
               volume: gain,
+              automation: null,
               fadeIn: 1,
               fadeOut: 120,
             },
@@ -1019,6 +1022,7 @@ test("MCP clip gain and frame fades read back exactly and each batch undoes in o
     ).structuredContent.result;
     expect(changed.timeline.clips[0]).toMatchObject({
       volume: gain,
+      automation: null,
       duration: 60,
       fadeIn: 1,
       fadeOut: 120,
@@ -1026,6 +1030,7 @@ test("MCP clip gain and frame fades read back exactly and each batch undoes in o
     expect(await read()).toEqual(changed);
     await fixture.request(`/projects/${project.id}/history/undo`, "POST");
     expect((await read()).timeline).toEqual(initial.timeline);
+    expect(await fixture.files()).toEqual(originalFiles);
     await fixture.request(`/projects/${project.id}/history/redo`, "POST");
     expect((await read()).timeline).toEqual(changed.timeline);
   } finally {

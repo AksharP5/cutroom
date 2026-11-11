@@ -119,12 +119,16 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   await page.keyboard.press("Home");
   const gain = '[data-clip-mix="music"] [data-mix="gain"]';
   const initial = (await read()).timeline;
-  await drag(page, gain, 0, 24);
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-12 / 20));
+  await drag(page, gain, 0, 3);
+  await expect
+    .poll(async () => (await music()).volume)
+    .toBe(10 ** (-14.4 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(initial);
   await page.keyboard.press("Control+Shift+z");
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-12 / 20));
+  await expect
+    .poll(async () => (await music()).volume)
+    .toBe(10 ** (-14.4 / 20));
   const gainOnly = (await read()).timeline;
   const ppf = await page
     .locator(".tl-grid")
@@ -343,8 +347,10 @@ test("pressing the curved envelope changes gain without moving the clip, in one 
   await page.screenshot({ path: info.outputPath("curve-before.png") });
   await page.mouse.move(point.x, point.y);
   await page.mouse.down();
-  await page.mouse.move(point.x + 80, point.y - 12, { steps: 12 });
+  await page.keyboard.down("Alt");
+  await page.mouse.move(point.x, point.y - 12.5, { steps: 12 });
   await page.mouse.up();
+  await page.keyboard.up("Alt");
   await expect.poll(read).not.toEqual(initial);
   const actual = await read();
   await writeFile(
@@ -574,4 +580,262 @@ test("a fade drag that returns to its start redraws the fade it began with", asy
     expect(await drawing()).toEqual(before);
   }
   expect(await readFile(index, "utf8")).toBe(source);
+});
+
+test("gain follows the pointer, Alt adjusts finely, horizontal presses move clips, and baked ramps clear explicitly in one undo step", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Mix gestures", duration: 10 },
+      })
+    ).json(),
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=10",
+    join(project.path, "Music.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="10" data-fps="30"><audio id="music" src="Music.wav" data-start="0" data-duration="8"></audio></main></body></html>',
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    ).timeline;
+  const music = async () =>
+    (await read()).clips.find((clip) => clip.id === "music")!;
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  const initial = await read();
+  const line = page.locator('[data-clip-mix="music"] path').first();
+  const point = () =>
+    line.evaluate((path: SVGPathElement) => {
+      const point = path
+        .getPointAtLength(path.getTotalLength() / 2)
+        .matrixTransform(path.getScreenCTM()!);
+      return { x: point.x, y: point.y };
+    });
+  const origin = await point();
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  const measurements = [];
+  for (const dy of [3, 6, 9]) {
+    await page.mouse.move(origin.x, origin.y + dy, { steps: 6 });
+    const actual = await point();
+    expect(Math.abs(actual.y - origin.y - dy)).toBeLessThan(0.2);
+    measurements.push({ pointerY: origin.y + dy, lineY: actual.y });
+    await expect(page.locator(".tl-readout")).toBeVisible();
+  }
+  await page.screenshot({ path: info.outputPath("pointer-gain.png") });
+  await writeFile(
+    info.outputPath("pointer-gain.json"),
+    JSON.stringify(measurements, null, 2),
+  );
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  expect(await read()).toEqual(initial);
+  await page.keyboard.down("Alt");
+  await drag(page, '[data-clip-mix="music"] [data-mix="gain"]', 0, 25);
+  await page.keyboard.up("Alt");
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-12 / 20));
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(initial);
+  await drag(page, '[data-clip-mix="music"] [data-mix="gain"]', 50, 1);
+  await expect.poll(async () => (await music()).start).toBeGreaterThan(0);
+  expect((await music()).volume).toBeNull();
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(initial);
+  await page.locator(".tl-grid").evaluate(async (grid) => {
+    await Promise.allSettled(
+      grid
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation.timeline === document.timeline)
+        .map((animation) => animation.finished),
+    );
+  });
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((grid: HTMLElement) =>
+      Number(grid.style.getPropertyValue("--ppf")),
+    );
+  await drag(
+    page,
+    '[data-clip-mix="music"] [data-mix="fadeOut"]',
+    -ppf * 120,
+    0,
+  );
+  await expect.poll(async () => (await music()).fadeOut).toBe(120);
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("600");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("e");
+  await expect.poll(async () => (await read()).clips.length).toBe(2);
+  const tail = (await read()).clips.find((clip) => clip.id !== "music")!;
+  await page
+    .locator(`[data-clip="${tail.id}"]`)
+    .click({ position: { x: 20, y: 5 } });
+  await page.keyboard.press("Backspace");
+  await expect.poll(async () => (await read()).clips.length).toBe(1);
+  const baked = await read();
+  expect((await music()).automation).toBeTruthy();
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 25, y: 5 } });
+  const clear = page.getByRole("button", {
+    name: "Clear automation",
+    exact: true,
+  });
+  await expect(clear).toBeVisible();
+  await clear.click();
+  await expect.poll(async () => (await music()).automation).toBeNull();
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(baked);
+  const currentPpf = await page
+    .locator(".tl-grid")
+    .evaluate((grid: HTMLElement) =>
+      Number(grid.style.getPropertyValue("--ppf")),
+    );
+  await drag(
+    page,
+    '[data-clip-mix="music"] [data-mix="fadeOut"]',
+    -currentPpf * 30,
+    0,
+  );
+  // A fresh fade never removes automation on its own; clearing is explicit.
+  await expect
+    .poll(async () => ({
+      automation: (await music()).automation,
+      fadeOut: (await music()).fadeOut,
+    }))
+    .toEqual({
+      automation: baked.clips.find((clip) => clip.id === "music")!.automation,
+      fadeOut: 30,
+    });
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(baked);
+});
+
+test("cold audio starting at five seconds drives meters, clipping latches until click or restart, and stop clears peak markers", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Late clip meters", duration: 12 },
+      })
+    ).json(),
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "aevalsrc='if(lt(t,1),0.8,0.03)*sin(2*PI*440*t)':s=48000:d=7",
+    "-ac",
+    "2",
+    join(project.path, "Late.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="12" data-fps="30"><audio id="late" src="Late.wav" data-start="5" data-duration="7" data-volume="${10 ** (12 / 20)}"></audio></main></body></html>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page.keyboard.press("Space");
+  const left = page.getByRole("button", {
+    name: "Clear L clipping indicator",
+    exact: true,
+  });
+  const right = page.getByRole("button", {
+    name: "Clear R clipping indicator",
+    exact: true,
+  });
+  await expect(left).toBeEnabled();
+  await expect(right).toBeEnabled();
+  const frame = page
+    .frames()
+    .find((frame) => frame.url().includes("/api/isolated/"))!;
+  await expect
+    .poll(() =>
+      frame.evaluate(
+        () =>
+          (
+            window as Window & { __player?: { getTime(): number } }
+          ).__player?.getTime() ?? 0,
+      ),
+    )
+    .toBeGreaterThan(6.5);
+  await expect(left).toBeEnabled();
+  await page.screenshot({ path: info.outputPath("latched-meters.png") });
+  await left.click();
+  await expect(left).toBeDisabled();
+  await expect(right).toBeEnabled();
+  await page.keyboard.press("k");
+  await expect(page.locator(".tl-meter-peak:visible")).toHaveCount(0);
+  await expect(right).toBeEnabled();
+  const idle = await page.locator(".tl-meter-channel").last().innerHTML();
+  await page.waitForTimeout(200);
+  expect(await page.locator(".tl-meter-channel").last().innerHTML()).toBe(idle);
+  await page.keyboard.press("Space");
+  await expect(left).toBeDisabled();
+  await expect(right).toBeDisabled();
+  await page.keyboard.press("k");
+  await expect(page.locator(".tl-meter-scale")).toHaveText("0-6-12-24-48");
+});
+
+test("a horizontal drag from the gain line moves the whole selection, as a body drag does", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Gain handoff", duration: 10 },
+      })
+    ).json(),
+  );
+  for (const name of ["Music", "Voice"])
+    await exec("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=220:duration=10",
+      join(project.path, `${name}.wav`),
+    ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="10" data-fps="30"><audio id="music" src="Music.wav" data-start="0" data-duration="4" data-track-index="0"></audio><audio id="voice" src="Voice.wav" data-start="0" data-duration="4" data-track-index="1"></audio></main></body></html>',
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const starts = async () =>
+    Object.fromEntries(
+      TimelineViewSchema.parse(
+        await (await request.get(`${api}/timeline`)).json(),
+      ).timeline.clips.map((clip) => [clip.id, clip.start]),
+    );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 25, y: 5 } });
+  await page
+    .locator('[data-clip="voice"]')
+    .click({ position: { x: 25, y: 5 }, modifiers: ["Control"] });
+  await drag(page, '[data-clip-mix="music"] [data-mix="gain"]', 60, 1);
+  await expect.poll(async () => (await starts()).music).toBeGreaterThan(0);
+  const moved = await starts();
+  expect(moved.voice).toBe(moved.music);
 });
