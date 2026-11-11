@@ -888,12 +888,19 @@
   background: var(--text-secondary);
   border: 1px solid var(--surface-panel);
   cursor: ew-resize;
-  visibility: hidden;
+  opacity: 0;
   pointer-events: none;
 }
-.tl-mix:is(.selected, [data-hover]) .tl-fade-handle {
-  visibility: visible;
+/* Hover fades the handles in; selection shows them at once. */
+.tl-mix[data-hover] .tl-fade-handle {
+  opacity: 1;
   pointer-events: auto;
+  transition: opacity var(--duration-hover) var(--ease-out);
+}
+.tl-mix.selected .tl-fade-handle {
+  opacity: 1;
+  pointer-events: auto;
+  transition: none;
 }
 .tl-fade-handle[data-mix="fadeIn"] {
   left: clamp(

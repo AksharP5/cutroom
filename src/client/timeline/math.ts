@@ -4,11 +4,17 @@ import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
 import { newTrack } from "../../shared/timeline/tracks";
 import { nominal } from "../../shared/timeline/timecode";
 
-/** -48 dB hides the noise floor; 10% headroom keeps full-scale peaks off the body edges. */
+const FLOOR = 10 ** (-48 / 20);
+
+/**
+ * Peak height as a fraction of the body. A square root lifts speech well clear of the floor while
+ * loud music keeps visible dynamics, which a straight dB scale flattens into a solid band. Below
+ * -48 dB is drawn as silence, and 10% headroom keeps full-scale peaks off the body edges.
+ */
 export function waveformPeak(amplitude: number) {
-  if (amplitude === 0) return 0;
-  const db = 20 * Math.log10(Math.abs(amplitude));
-  return Math.sign(amplitude) * Math.max(0, Math.min(1, (db + 48) / 48)) * 0.9;
+  const level = Math.min(1, Math.abs(amplitude));
+  if (level < FLOOR) return 0;
+  return Math.sign(amplitude) * Math.sqrt(level) * 0.9;
 }
 
 /** A CSS time in milliseconds. Built CSS is minified, which writes `220ms` as `.22s`. */

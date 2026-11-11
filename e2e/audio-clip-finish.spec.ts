@@ -48,15 +48,20 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
   const mix = page.locator('[data-clip-mix="dialogue"]');
   const handle = mix.locator('[data-mix="fadeOut"]');
   await expect(body).toBeVisible();
+  // Hidden handles are transparent and can't be pressed; hover fades them in, selection shows them.
+  const shown = async (visible: boolean) => {
+    await expect(handle).toHaveCSS("opacity", visible ? "1" : "0");
+    await expect(handle).toHaveCSS("pointer-events", visible ? "auto" : "none");
+  };
   await page.mouse.move(100, 300);
-  await expect(handle).toBeHidden();
+  await shown(false);
   await body.hover({ position: { x: 30, y: 5 } });
-  await expect(handle).toBeVisible();
+  await shown(true);
   await page.mouse.move(100, 300);
-  await expect(handle).toBeHidden();
+  await shown(false);
   await body.click({ position: { x: 30, y: 5 } });
   await page.mouse.move(100, 300);
-  await expect(handle).toBeVisible();
+  await shown(true);
   const label = (await page
     .locator('[data-clip-label="dialogue"]')
     .boundingBox())!;

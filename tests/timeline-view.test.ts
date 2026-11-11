@@ -526,13 +526,17 @@ test("a media source resolves to one project file for the server and the timelin
 });
 
 test("waveform dB mapping hides the noise floor and gives speech room without hitting the edges", () => {
+  const height = (db: number) => waveformPeak(10 ** (db / 20));
   expect(waveformPeak(0)).toBe(0);
-  expect(waveformPeak(10 ** (-60 / 20))).toBe(0);
-  expect(waveformPeak(10 ** (-48 / 20))).toBe(0);
-  expect(waveformPeak(10 ** (-24 / 20))).toBeCloseTo(0.45, 6);
-  expect(waveformPeak(10 ** (-12 / 20))).toBeCloseTo(0.675, 6);
-  expect(waveformPeak(10 ** (-3.5 / 20))).toBeCloseTo(0.834375, 6);
-  expect(waveformPeak(-(10 ** (-3.5 / 20)))).toBeCloseTo(-0.834375, 6);
+  // Noise below the floor reads as silence.
+  expect(height(-60)).toBe(0);
+  // Speech peaking near -3.5 dB fills most of the body.
+  expect(height(-3.5)).toBeGreaterThan(0.7);
+  // A loud music bed moving between -12 and -3 dB keeps visible dynamics, not a solid band.
+  expect(height(-3) - height(-12)).toBeGreaterThan(0.25);
+  // Quiet room tone stays small.
+  expect(height(-40)).toBeLessThan(0.1);
+  expect(waveformPeak(-(10 ** (-3.5 / 20)))).toBe(-height(-3.5));
   expect(waveformPeak(1)).toBe(0.9);
-  expect(waveformPeak(-1)).toBe(-0.9);
+  expect(waveformPeak(2)).toBe(0.9);
 });
