@@ -187,6 +187,25 @@ Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture
 
 [Every session's median maximum and p95, raw frame samples, traces, capture method, and matching images](https://github.com/AksharP5/cutroom/tree/pr-assets/ripple-first-edit) are retained separately from the source branch. Reproduce with `CUTROOM_PERF_DIR=... bun run test:perf`; set `CUTROOM_PERF_TRACE=1 CUTROOM_PERF_RUNS=1` for the separate profiling pass.
 
+## Trim preview
+
+The 400-clip roll check sends 540 pointer updates over 180 displayed frames per run, with all clips mounted at Fit. Each run must send more than ten seeks, send no more seeks than displayed frames, and keep at most one seek in flight. These assertions gate seek coalescing independently of runner speed.
+
+Frame pacing uses three fresh page loads and the median of their per-run p95 callback gaps, with a 75 ms ceiling. The clock is `performance.now()` at callback entry, so delays before a callback runs remain visible. This roll-specific check complements the zoom and ripple-delete budgets above. One slow run can pass; p95 at or above 75 ms in two of three runs fails. `CUTROOM_PERF_RUNS` also controls this run count. Logs, the `trim-frame-times.json` attachment, and `CUTROOM_TRIM_PERF_DIR/400-trim.json` retain the individual runs.
+
+On November 11, 2026, the rebased trim build ran in installed Chromium 155 at 1720x1050. The contention case pinned the browser, server, and two busy workers to the same four logical CPUs. These are local scheduling measurements, not a reproduction of Chromium 158 on GitHub's runner.
+
+| Condition                   | Per-run p95 callback gaps | Median p95 | Seeks per run | Maximum pending |
+| --------------------------- | ------------------------- | ---------- | ------------- | --------------- |
+| Shared host                 | 27.1, 26.0, 22.3 ms       | 26.0 ms    | 60, 59, 56    | 1               |
+| Four CPUs, two busy workers | 50.9, 58.7, 51.9 ms       | 51.9 ms    | 53, 54, 55    | 1               |
+
+The previous single-run ceiling of less than 50 ms would reject all three contention measurements despite bounded seeks. [CI job `130688607437`](https://github.com/AksharP5/cutroom/actions/runs/43068171313/job/130688607437) likewise reported exactly 50 ms with 51 seeks and one pending request. The 75 ms ceiling leaves 23.1 ms above the measured contention median while retaining a repeated pacing gate. It does not promise 60 fps or tolerate consistently slower execution without limit.
+
+A temporary negative control removed the seek queue's in-flight guard. The roll reached three pending seeks and failed the one-pending assertion, even with p95 at 34.2 ms. The guard was restored before final validation. Frame pacing alone cannot detect that backlog; the functional seek assertions remain the gate on every run.
+
+The frame-accuracy fixture encodes source frame numbers in binary `drawbox` squares. It needs neither `drawtext` nor a system font; CI's static FFmpeg 6.1.1 reports `No such filter: 'drawtext'`. Local FFmpeg 9.0.2 marks `drawbox` with timeline support, and the browser cases generate and decode the fixture without text.
+
 ## Position preview
 
 The preview observes only the selected clip with a non-zero Position, after seek/pause and at most three times per second during playback. Seek observations coalesce to one per animation frame after the latest picture settles. A paused video is observed through its displayed canvas, since the bridge hides its native surface. The observer reads styles without inserting a DOM probe. With nothing selected it does not inspect clip styles or run an observation timer. Position commits do not compile or render a test document.

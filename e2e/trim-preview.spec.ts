@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -67,15 +66,6 @@ async function openEditFrameProject(
     (_, bit) =>
       `drawbox=x=${10 + bit * 24}:y=10:w=20:h=20:color=white:t=fill:enable='mod(floor(n/${2 ** bit}),2)'`,
   );
-  const font = [
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-  ].find(existsSync);
-  if (!font)
-    throw new Error(
-      "The frame-number fixture needs an installed sans-serif font.",
-    );
   await promisify(execFile)("ffmpeg", [
     "-v",
     "error",
@@ -91,11 +81,7 @@ async function openEditFrameProject(
     "aac",
     "-shortest",
     "-vf",
-    [
-      "drawbox=x=0:y=0:w=260:h=40:color=black:t=fill",
-      ...bits,
-      `drawtext=fontfile=${font}:text='FRAME %{n}  %{pts\\:hms}':x=16:y=55:fontsize=28:fontcolor=white:box=1:boxcolor=black`,
-    ].join(","),
+    ["drawbox=x=0:y=0:w=260:h=40:color=black:t=fill", ...bits].join(","),
     "-c:v",
     "libx264",
     "-preset",
@@ -150,40 +136,30 @@ for (const operation of [
     if (operation === "roll" || operation.startsWith("ripple"))
       await page.keyboard.press("t");
     const grid = page.locator(".tl-grid");
-    await expect(grid).toHaveAttribute("data-refit", "settled");
-    const ppf = await grid.evaluate((grid) =>
-      Number((grid as HTMLElement).style.getPropertyValue("--ppf")),
-    );
     const start = operation.endsWith("audio")
       ? "sound"
       : operation.endsWith("in")
         ? "incoming"
         : "outgoing";
     const clip = page.locator(`[data-clip="${start}"]`);
-    const box = (await clip.boundingBox())!;
     const isIn = operation.endsWith("in");
     const inset = operation.startsWith("ripple") ? 5 : 1;
-    const from = {
-      x: isIn ? box.x + inset : box.x + box.width - inset,
-      y: box.y + box.height / 2,
-    };
     const evidence = process.env.CUTROOM_TRIM_EVIDENCE;
     const baseline = process.env.CUTROOM_TRIM_BASELINE === "1";
     if (evidence) await mkdir(evidence, { recursive: true });
     for (const ending of ["escape", "release"] as const) {
-      await expect
-        .poll(() =>
-          page
-            .locator(".tl-lanes")
-            .evaluate(
-              (element) =>
-                element
-                  .getAnimations({ subtree: true })
-                  .filter((animation) => !(animation instanceof CSSAnimation))
-                  .length,
-            ),
-        )
-        .toBe(0);
+      await expect(page.locator(".tl-lanes")).not.toHaveAttribute(
+        "data-sliding",
+      );
+      await expect(grid).toHaveAttribute("data-refit", "settled");
+      const ppf = await grid.evaluate((grid) =>
+        Number((grid as HTMLElement).style.getPropertyValue("--ppf")),
+      );
+      const box = (await clip.boundingBox())!;
+      const from = {
+        x: isIn ? box.x + inset : box.x + box.width - inset,
+        y: box.y + box.height / 2,
+      };
       const previewSrc = await page
         .locator("iframe[data-live]")
         .getAttribute("src");
