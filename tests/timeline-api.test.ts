@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
+import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
@@ -26,6 +27,43 @@ const timelineFixture = async () => {
     );
   return { ...fixture, project, files };
 };
+
+test("a project summary reports the picture size and length the editor would show", async () => {
+  const fixture = await timelineFixture();
+  try {
+    const summary = async (id: string) =>
+      ProjectSummarySchema.parse(
+        await (await fixture.request(`/projects/${id}/summary`)).json(),
+      );
+    const portrait = await fixture.store.create({
+      name: "Portrait",
+      width: 1080,
+      height: 1920,
+      duration: 20,
+    });
+    expect(await summary(portrait.id)).toEqual({
+      width: 1080,
+      height: 1920,
+      duration: 20,
+    });
+    // No authored size or length: the size the preview renders at, and the end of the last clip.
+    await writeFile(
+      join(fixture.project.path, "index.html"),
+      `<!doctype html><html><body><main id="main" data-composition-id="main" data-fps="30"><div id="card" class="clip" data-start="1" data-duration="2.5" data-track-index="0"></div></main></body></html>`,
+    );
+    expect(await summary(fixture.project.id)).toEqual({
+      width: 1920,
+      height: 1080,
+      duration: 3.5,
+    });
+    await writeFile(join(fixture.project.path, "index.html"), "<p>notes</p>");
+    expect(
+      (await fixture.request(`/projects/${fixture.project.id}/summary`)).status,
+    ).toBe(422);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("outside HTML uses persisted mute and solo on read without a history write or undo loop", async () => {
   const fixture = await timelineFixture();

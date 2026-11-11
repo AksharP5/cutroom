@@ -6,11 +6,12 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
-import type { Project } from "../../shared/project";
+import type { Project, ProjectSummary } from "../../shared/project";
 import {
   TimelineError,
   applyAll,
   canonicalTimeline,
+  toSeconds,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
@@ -209,6 +210,24 @@ export function createTimelineRoutes(
         timeline: parsed.timeline,
         ...(await reviews.clipChanges(project, composition)),
       } satisfies TimelineView);
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+  api.get("/projects/:id/summary", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    try {
+      const { timeline, root } = (await read(project, "index.html")).parsed;
+      // The preview and frame capture render a composition without a size at 1920 x 1080.
+      const size = (name: string, fallback: number) => {
+        const value = Number(root.attrs[name]);
+        return Number.isFinite(value) && value > 0 ? value : fallback;
+      };
+      return c.json({
+        width: size("data-width", 1920),
+        height: size("data-height", 1080),
+        duration: toSeconds(timeline.duration, timeline.fps),
+      } satisfies ProjectSummary);
     } catch (error) {
       return refused(c, error);
     }

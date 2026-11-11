@@ -1,0 +1,160 @@
+/* Home: every project is a frame on the ground, like a contact sheet. No cards. */
+.home {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.home-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 24px 32px 16px;
+}
+.home-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: var(--weight-semibold);
+  line-height: 28px;
+  letter-spacing: -0.01em;
+}
+.home-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+/* The padding keeps a selected tile's brackets inside the scrolling box. */
+.home-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  align-content: start;
+  gap: 28px var(--space-5);
+  margin: 0;
+  padding: var(--space-1) 32px 48px;
+  list-style: none;
+}
+.home-project {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+}
+/* The picture takes the selection, as a clip does. */
+.home-project:focus-visible {
+  outline: none;
+}
+
+/* Every well is 16:9; a frame of another shape sits inside it at its own. */
+.home-well {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  background: var(--surface-lane);
+}
+.home-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--surface-raised);
+}
+.home-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity var(--duration-fade) var(--ease-fade);
+}
+.home-project[data-poster="ready"] .home-frame img {
+  opacity: 1;
+}
+/* The picture outline, over the frame so a dark one still has an edge. */
+.home-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line);
+}
+/*
+  The timeline's selection: brackets at both ends, and a 1px paper outline once selected.
+  Hover fades the brackets in, clear of the picture; selection is instant.
+*/
+.home-selection {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-clip-selected);
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.home-selection::before,
+.home-selection::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 6px;
+  border: var(--stroke-bracket) solid currentColor;
+}
+.home-selection::before {
+  left: -3px;
+  border-right: 0;
+}
+.home-selection::after {
+  right: -3px;
+  border-left: 0;
+}
+.home-project:hover .home-selection {
+  opacity: 1;
+}
+.home-project:focus-visible .home-selection {
+  color: var(--selection);
+  box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
+  opacity: 1;
+  transition: none;
+}
+
+.home-name {
+  margin-top: 10px;
+  overflow: hidden;
+  font-size: var(--type-md);
+  font-weight: var(--weight-medium);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: var(--leading-body);
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+  line-height: var(--leading-body);
+  white-space: nowrap;
+}
+/* Mono runs wide; a size down reads level with the sans text beside it. */
+.home-meta .mono {
+  color: var(--text-secondary);
+  font-size: var(--type-2xs);
+}
+.home-unreadable {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-meta time {
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .home-head,
+  .home-grid {
+    padding-inline: var(--space-4);
+  }
+}

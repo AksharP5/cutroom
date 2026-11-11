@@ -67,6 +67,8 @@ Each press is one undo step. The timeline shows the edit as soon as you press th
 
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
 
+On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens.
+
 ## Mouse
 
 On an audio track, the R button arms the microphone. Only one track is armed. The microphone icon chooses an input, remembered on this machine, and the armed header shows its input level. The red Record button in the transport or Ctrl+Alt+Shift+V starts playback and recording at the playhead. The armed R stays lit, a Recording mark appears by the timecode, and a take region grows along the armed lane. Recording stops at the end of the cut or after 30 minutes. Loop is temporarily off. A take uses empty space on the armed track; an overlap goes on a new audio track so previous audio stays intact. One undo removes the take and any track it created. The WAV file stays in `assets/voiceover/` for another take or an agent to use. A dropped microphone block leaves silence at its original position, keeps the rest of the take in sync, and reports the dropped duration. A failed save opens the microphone panel with Retry save, Download take, and a confirmed Discard take. Switching projects or editors is blocked until the take is saved or discarded. Closing or reloading warns before leaving an unsaved take.
