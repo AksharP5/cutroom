@@ -398,6 +398,7 @@ export function EditPage({
       </div>
       <section ref={viewer} className="edit-viewer" aria-label="Viewer">
         <Viewer
+          key={projectId}
           projectId={projectId}
           revision={revision}
           zoom={zoom}

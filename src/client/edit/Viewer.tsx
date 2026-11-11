@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
@@ -9,22 +15,15 @@ import { NoteLayer } from "./NoteLayer";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview } from "./preview";
+import { transitionHandoff } from "./viewerHandoff";
 
 export type Zoom = "fit" | "actual";
 
-interface Slot {
-  gen: number;
-  revision: number;
-  width: number;
-  height: number;
-}
-
-/** A load that has not produced a player by then has failed; the held frame stays. */
+/** Includes navigation, preparation, and the first fully visible paint. */
 const READY_TIMEOUT = 15_000;
 /**
- * The composition picture. A reload loads the new document under the one on screen, which holds
- * its last frame; the new one takes over at the same frame once it has painted. A failed load
- * leaves the held frame and reports in the status bar.
+ * Warm one candidate over the last confirmed picture. Only a visible paint can
+ * confirm its replacement; a failed or superseded candidate is retired.
  */
 export function Viewer({
   projectId,
@@ -58,9 +57,16 @@ export function Viewer({
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
-  const [live, setLive] = useState<Slot | null>(null);
-  const [held, setHeld] = useState<Slot | null>(null);
-  const [pending, setPending] = useState<number | null>(null);
+  const [handoff, transition] = useReducer(transitionHandoff, {
+    kind: "showing",
+    confirmed: null,
+  });
+  const candidate =
+    handoff.kind === "loading" || handoff.kind === "promoting"
+      ? handoff.candidate
+      : null;
+  const live =
+    handoff.kind === "promoting" ? handoff.candidate : handoff.confirmed;
 
   useLayoutEffect(() => {
     const element = stage.current;
@@ -74,28 +80,87 @@ export function Viewer({
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latest.current += 1;
-    setPending(latest.current);
+    transition({
+      type: "navigate",
+      gen: latest.current,
+      deadline: performance.now() + READY_TIMEOUT,
+    });
   }, [revision]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     for (const [gen, connection] of connections.current) {
-      if (gen === live?.gen || gen === held?.gen || gen === pending) continue;
+      if (gen === handoff.confirmed?.gen || gen === candidate?.gen) continue;
       connection.dispose();
       connections.current.delete(gen);
     }
-  }, [live?.gen, held?.gen, pending]);
+  }, [handoff.confirmed, candidate]);
+
+  useEffect(() => {
+    if (!candidate) return;
+    const timer = window.setTimeout(
+      () => {
+        transition({
+          type: "failed",
+          gen: candidate.gen,
+          reason: new Error(
+            "The preview did not finish loading or drawing in time.",
+          ),
+        });
+      },
+      Math.max(0, candidate.deadline - performance.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [candidate?.gen, candidate?.deadline]);
+
+  useEffect(() => {
+    if (handoff.kind !== "failed") return;
+    reportEditorError("viewer", handoff.reason);
+    transition({ type: "reported" });
+  }, [handoff]);
+
+  const reloading = !!candidate && candidate.gen === handoff.confirmed?.gen;
+  useLayoutEffect(() => {
+    if (reloading) transport.suspend();
+  }, [reloading]);
 
   useLayoutEffect(() => {
-    if (!held) return;
-    // The first callback leaves both surfaces available for a paint. Only the
-    // following animation frame may retire the held surface.
-    let animation = requestAnimationFrame(() => {
-      animation = requestAnimationFrame(() => setHeld(null));
+    if (handoff.kind !== "promoting") return;
+    const { candidate } = handoff;
+    const preview = connections.current.get(candidate.gen);
+    if (!preview) return;
+    // Warmup painted at 1% opacity. Confirm the fully visible document, then
+    // let the parent paint before retiring the last confirmed picture.
+    void (async () => {
+      await preview.painted();
+      preview.signal.throwIfAborted();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      preview.signal.throwIfAborted();
+      transition({ type: "painted", gen: candidate.gen });
+    })().catch((reason: unknown) => {
+      if (!preview.signal.aborted)
+        transition({ type: "failed", gen: candidate.gen, reason });
     });
-    return () => cancelAnimationFrame(animation);
-  }, [held]);
+  }, [handoff]);
+
+  useLayoutEffect(() => {
+    const picture = handoff.confirmed;
+    if (!picture) return;
+    const preview = connections.current.get(picture.gen);
+    if (!preview) return;
+    useWorkspace.setState({
+      composition: {
+        fps: compositionFps(preview.state.fps),
+        width: picture.width,
+        height: picture.height,
+      },
+    });
+    transport.attach(preview.player, picture.shown);
+    reportEditorError("viewer", null);
+  }, [handoff.confirmed]);
 
   useEffect(
     () => () => {
@@ -110,8 +175,14 @@ export function Viewer({
   );
 
   const load = async (gen: number, frame: HTMLIFrameElement) => {
-    const started = performance.now();
-    const preview = connectPreview(frame);
+    if (gen !== latest.current || !frame.isConnected) return;
+    const preview = connectPreview(frame, () => {
+      transition({
+        type: "unloaded",
+        gen,
+        deadline: performance.now() + READY_TIMEOUT,
+      });
+    });
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
@@ -121,8 +192,6 @@ export function Viewer({
           throw new Error(
             `The preview failed to start: ${preview.state.error}`,
           );
-        if (performance.now() - started > READY_TIMEOUT)
-          throw new Error("The preview did not finish loading.");
         await new Promise((resolve) => setTimeout(resolve, 50));
         preview.signal.throwIfAborted();
         if (gen !== latest.current) return;
@@ -144,26 +213,14 @@ export function Viewer({
       await preview.activate();
       preview.signal.throwIfAborted();
       if (gen !== latest.current) return;
-      const { width, height, fps } = preview.state;
-      const size = { width, height };
-      setHeld(live);
-      setLive({ gen, revision, ...size });
-      setPending(null);
-      // The status bar shows the open composition's rate and size, as with the embedded editor.
-      useWorkspace.setState({
-        composition: {
-          fps: compositionFps(fps),
-          ...size,
-        },
+      const { width, height } = preview.state;
+      transition({
+        type: "prepared",
+        picture: { gen, revision, width, height, shown },
       });
-      transport.attach(player, shown);
-      reportEditorError("viewer", null);
-    } catch (error) {
+    } catch (reason) {
       if (preview.signal.aborted || gen !== latest.current) return;
-      preview.dispose();
-      connections.current.delete(gen);
-      setPending(null);
-      reportEditorError("viewer", error);
+      transition({ type: "failed", gen, reason });
     }
   };
 
@@ -185,7 +242,7 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
-  const slots = [held?.gen, live?.gen, pending].filter(
+  const slots = [...new Set([handoff.confirmed?.gen, candidate?.gen])].filter(
     (gen): gen is number => gen != null,
   );
 
@@ -193,9 +250,10 @@ export function Viewer({
     <div
       ref={stage}
       className="edit-stage"
+      data-handoff={handoff.kind}
       data-preview-ready={
-        pending === null && live?.revision === revision && held === null
-          ? live.revision
+        handoff.kind === "showing" && handoff.confirmed?.revision === revision
+          ? revision
           : undefined
       }
     >
@@ -206,8 +264,11 @@ export function Viewer({
         style={box}
       >
         {slots.map((gen) => {
-          const size =
-            gen === held?.gen ? held : gen === live?.gen ? live : fit;
+          const retained =
+            handoff.kind === "promoting" &&
+            gen === handoff.confirmed?.gen &&
+            gen !== candidate?.gen;
+          const size = gen === handoff.confirmed?.gen ? handoff.confirmed : fit;
           return (
             <iframe
               key={gen}
@@ -218,13 +279,20 @@ export function Viewer({
               allow="autoplay"
               src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}`}
               data-live={gen === live?.gen || undefined}
-              data-held={gen === held?.gen || undefined}
+              data-held={Boolean(retained) || undefined}
               style={{
                 width: size.width,
                 height: size.height,
                 transform: `scale(${width / size.width}, ${height / size.height})`,
               }}
-              onLoad={(event) => void load(gen, event.currentTarget)}
+              onLoad={(event) => {
+                transition({
+                  type: "loaded",
+                  gen,
+                  deadline: performance.now() + READY_TIMEOUT,
+                });
+                void load(gen, event.currentTarget);
+              }}
             />
           );
         })}

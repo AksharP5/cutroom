@@ -7,6 +7,7 @@ import {
   PreviewLevelsSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
+  PreviewUnloadedSchema,
   RuntimeStateSchema,
 } from "../../shared/preview";
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
@@ -52,7 +53,7 @@ export async function commitPositionPreview(commit: () => Promise<boolean>) {
 }
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
-export function connectPreview(frame: HTMLIFrameElement) {
+export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   let state: PreviewState = {
     ready: false,
     root: false,
@@ -104,6 +105,11 @@ export function connectPreview(frame: HTMLIFrameElement) {
       state.playing = runtime.data.isPlaying;
       return;
     }
+    if (PreviewUnloadedSchema.safeParse(event.data).success) {
+      dispose();
+      onUnload();
+      return;
+    }
     const parsed = PreviewReplySchema.safeParse(event.data);
     if (!parsed.success) return;
     const reply = parsed.data;
@@ -123,10 +129,13 @@ export function connectPreview(frame: HTMLIFrameElement) {
   window.addEventListener("message", receive);
   const send = (action: string, payload: object = {}) => {
     const id = crypto.randomUUID();
-    frame.contentWindow?.postMessage(
-      { source: "cutroom-viewer", id, action, ...payload },
-      "*",
-    );
+    // A WindowProxy survives navigation. A retired connection must never command
+    // the new document through that same window.
+    if (!closing.signal.aborted)
+      frame.contentWindow?.postMessage(
+        { source: "cutroom-viewer", id, action, ...payload },
+        "*",
+      );
     return id;
   };
   const request = (action: string) =>
@@ -165,6 +174,25 @@ export function connectPreview(frame: HTMLIFrameElement) {
   };
   const observe = (clipId: string | null) =>
     send("observe-position", { clipId });
+  const dispose = () => {
+    if (positionTargets.delete(position) && !positionTargets.size)
+      positionDraft = null;
+    observers.delete(observe);
+    if (warningSource === frame) {
+      warningSource = null;
+      usePositionWarning.setState({ warning: null });
+    }
+    send("meter", { enabled: false });
+    closing.abort();
+    if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
+    active = false;
+    window.removeEventListener("message", receive);
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(closing.signal.reason);
+    }
+    pending.clear();
+  };
   return {
     player,
     signal: closing.signal,
@@ -190,24 +218,6 @@ export function connectPreview(frame: HTMLIFrameElement) {
     },
     inspect: () => request("inspect"),
     painted: () => request("paint"),
-    dispose() {
-      if (positionTargets.delete(position) && !positionTargets.size)
-        positionDraft = null;
-      observers.delete(observe);
-      if (warningSource === frame) {
-        warningSource = null;
-        usePositionWarning.setState({ warning: null });
-      }
-      closing.abort();
-      send("meter", { enabled: false });
-      if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
-      active = false;
-      window.removeEventListener("message", receive);
-      for (const request of pending.values()) {
-        clearTimeout(request.timer);
-        request.reject(closing.signal.reason);
-      }
-      pending.clear();
-    },
+    dispose,
   };
 }
