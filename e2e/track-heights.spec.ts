@@ -158,4 +158,8 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     .toBe(2);
   await page.keyboard.press("Control+z");
   await expect.poll(clip).toEqual(before);
+  await writeFile(join(project.path, ".cutroom/view.json"), "{broken");
+  await page.reload();
+  await expect(density).toHaveValue("normal");
+  await expect(height).toHaveAttribute("aria-valuenow", "56");
 });

@@ -3,6 +3,7 @@ import { fileContentVersion } from "@hyperframes/studio-server";
 import { mkdir, unlink, utimes, writeFile } from "node:fs/promises";
 import { clipVersions } from "../src/server/projects/changes";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
 
 const document = (element: string, shared = "") =>
@@ -217,6 +218,62 @@ test("watcher attributes direct media writes to the active turn, while owner upl
   } finally {
     await api.dispose();
     await server.stop(true);
+    await f.close();
+  }
+});
+
+test("view writes under an active agent turn emit no project events, review rows, or agent marks", async () => {
+  const f = await setup();
+  const api = createHyperframesApi(f.store, f.review);
+  f.app.route("/api/editor", api);
+  f.app.route("/api/cutroom", createTimelineRoutes(f.store, f.review));
+  const changes: string[] = [];
+  const stop = api.subscribe(f.project.id, (change) =>
+    changes.push(change.path),
+  );
+  try {
+    expect(
+      (await f.app.request(`/api/editor/projects/${f.project.id}`)).status,
+    ).toBe(200);
+    const before = await f.read();
+    const turn = await f.review.beginTurn(f.project, {
+      id: "view-test",
+      kind: "message",
+      token: "view-test",
+    });
+    try {
+      expect(
+        (
+          await f.request(`/projects/${f.project.id}/timeline-view`, "PUT", {
+            density: "compact",
+            heights: { "0": 100 },
+          })
+        ).status,
+      ).toBe(200);
+      // Let the real watcher drain, then prove it still reports ordinary project files.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(changes).toEqual([]);
+      const changed = new Promise<void>((resolve) => {
+        const unsubscribe = api.subscribe(f.project.id, (change) => {
+          if (change.path === "sentinel.txt") {
+            unsubscribe();
+            resolve();
+          }
+        });
+      });
+      await writeFile(`${f.project.path}/sentinel.txt`, "watcher is live");
+      await changed;
+      expect(changes).toEqual(["sentinel.txt"]);
+      const after = await f.read();
+      expect(after.agentChanges).toEqual(before.agentChanges);
+      expect(after.clipEdits).toEqual(before.clipEdits);
+      expect(await f.review.list(f.project)).toEqual([]);
+    } finally {
+      await turn.end();
+    }
+  } finally {
+    stop();
+    await api.dispose();
     await f.close();
   }
 });

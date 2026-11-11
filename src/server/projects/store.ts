@@ -29,7 +29,6 @@ import type {
   Project,
   ProjectDocument,
 } from "../../shared/project";
-import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { HttpError } from "../../shared/errors";
 import { isMissing, projectPath, projectWritePath } from "./path";
 
@@ -305,37 +304,6 @@ export async function createProjectStore(options: {
     document,
     writeDocument,
     writeFiles,
-    setTimelineView(
-      project: Project,
-      composition: string,
-      settings: TimelineViewSettings,
-    ) {
-      return track(async () => {
-        const previous = queues.get(project.id) ?? Promise.resolve();
-        const pending = previous
-          .catch(() => undefined)
-          .then(async () => {
-            const value = await document(project);
-            value.view ??= { timelines: {} };
-            value.view.timelines[composition] = settings;
-            const raw = documentReads.get(value);
-            const mutation = await documentMutation(project, value);
-            if (raw) {
-              const persisted = z
-                .record(z.string(), z.unknown())
-                .parse(JSON.parse(raw));
-              mutation.after = `${JSON.stringify({ ...persisted, view: value.view }, null, 2)}\n`;
-            }
-            writeFiles(project, [mutation]);
-          });
-        queues.set(project.id, pending);
-        try {
-          await pending;
-        } finally {
-          if (queues.get(project.id) === pending) queues.delete(project.id);
-        }
-      });
-    },
     async create(raw: CreateProjectInput) {
       return track(async () => {
         const input = CreateProjectSchema.parse(raw);

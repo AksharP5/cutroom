@@ -8,8 +8,6 @@ import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
   ClipboardSchema,
-
-  emptyTimelineSettings,
   TimelineViewSchema,
 } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
@@ -1759,68 +1757,125 @@ test("clipboard copy refuses id-styled clips and stale revisions without changin
   }
 });
 
-test("track view settings persist without history entries and survive mix undo and redo", async () => {
+test("track view settings stay outside history and survive real-edit undo and redo", async () => {
   const fixture = await timelineFixture();
   const { project, store } = fixture;
   const ledger = await store.history(project);
-  const view = { density: "compact" as const, heights: { "0": 120 } };
+  const endpoint = `/projects/${project.id}`;
+  const settings = { density: "compact", heights: { "0": 120 } };
+  const save = (view: unknown, composition = "index.html") =>
+    fixture.request(
+      `${endpoint}/timeline-view?composition=${composition}`,
+      "PUT",
+      view,
+    );
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await fixture.request(`${endpoint}/timeline`)).json(),
+    );
   try {
+    const original = await fixture.files();
     await ledger.checkpoint();
     const initial = ledger.list().length;
-    await store.setTimelineView(project, "index.html", view);
+    expect((await save(settings)).status).toBe(200);
     await ledger.checkpoint();
     expect(ledger.list()).toHaveLength(initial);
-    const current = await store.document(project);
-    await store.mutate(project, "Rename a track", async () => {
-      current.timelines["index.html"] = {
-        ...emptyTimelineSettings(),
-        tracks: [
-          {
-            index: 0,
-            kind: "video",
-            name: "Picture",
-            enabled: true,
-            muted: false,
-            solo: false,
-            locked: false,
-            autoSelect: true,
-          },
-        ],
-      };
-      await store.writeDocument(project, current);
-    });
+    expect(await fixture.files()).toEqual(original);
+    const before = await read();
+    expect(
+      (
+        await fixture.request(`${endpoint}/commands`, "POST", {
+          expectedRevision: before.revision,
+          commands: [{ type: "setTrack", index: 0, name: "Picture" }],
+        })
+      ).status,
+    ).toBe(200);
     expect(ledger.list()).toHaveLength(initial + 1);
-    await store.setTimelineView(project, "index.html", {
-      density: "tall",
-      heights: {},
-    });
+    const tall = { density: "tall", heights: {} };
+    expect((await save(tall)).status).toBe(200);
     await ledger.checkpoint();
     expect(ledger.list()).toHaveLength(initial + 1);
     expect(
-      (await ledger.step("back", { kind: "person", name: "You" })).ok,
-    ).toBe(true);
+      (await fixture.request(`${endpoint}/history/undo`, "POST", {})).status,
+    ).toBe(200);
+    expect((await read()).timeline.tracks[0]?.name).not.toBe("Picture");
     expect(
-      (await store.document(project)).view?.timelines["index.html"],
-    ).toEqual({ density: "tall", heights: {} });
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(tall);
     expect(
-      (await store.document(project)).timelines["index.html"],
-    ).toBeUndefined();
+      (await fixture.request(`${endpoint}/history/redo`, "POST", {})).status,
+    ).toBe(200);
+    expect((await read()).timeline.tracks[0]?.name).toBe("Picture");
     expect(
-      (await ledger.step("forward", { kind: "person", name: "You" })).ok,
-    ).toBe(true);
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(tall);
+    // A second composition has its own preferences; concurrent saves retain both entries.
+    await writeFile(join(project.path, "second.html"), original[0]!);
+    const responses = await Promise.all([
+      save(settings, "./index.html"),
+      save({ density: "normal", heights: { "1": 80 } }, "second.html"),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
     expect(
-      (await store.document(project)).view?.timelines["index.html"],
-    ).toEqual({ density: "tall", heights: {} });
+      JSON.parse(
+        await readFile(join(project.path, ".cutroom/view.json"), "utf8"),
+      ),
+    ).toEqual({
+      timelines: {
+        "index.html": settings,
+        "second.html": { density: "normal", heights: { "1": 80 } },
+      },
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("missing or malformed view preferences use defaults and do not block timeline edits", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const endpoint = `/projects/${project.id}`;
+  const defaults = { density: "normal", heights: {} };
+  try {
     expect(
-      (await store.document(project)).timelines["index.html"]?.tracks[0]?.name,
-    ).toBe("Picture");
-    const snapshot = ledger
-      .list()
-      .at(-1)!
-      .files.find((file) => file.path === "cutroom.json")!;
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual(defaults);
+    await mkdir(join(project.path, ".cutroom"), { recursive: true });
+    for (const corrupt of [
+      "{broken",
+      JSON.stringify({
+        timelines: {
+          "index.html": { density: "giant", heights: { "0": 500 } },
+        },
+      }),
+    ]) {
+      await writeFile(join(project.path, ".cutroom/view.json"), corrupt);
+      expect(
+        await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+      ).toEqual(defaults);
+      const view = TimelineViewSchema.parse(
+        await (await fixture.request(`${endpoint}/timeline`)).json(),
+      );
+      expect(
+        (
+          await fixture.request(`${endpoint}/commands`, "POST", {
+            expectedRevision: view.revision,
+            commands: [{ type: "setTrack", index: 0, name: corrupt }],
+          })
+        ).status,
+      ).toBe(200);
+    }
     expect(
-      JSON.parse((await ledger.readBlob(snapshot.after!)).toString()).view,
-    ).toBeUndefined();
+      (
+        await fixture.request(`${endpoint}/timeline-view`, "PUT", {
+          density: "compact",
+          heights: {},
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual({ density: "compact", heights: {} });
   } finally {
     await fixture.close();
   }

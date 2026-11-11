@@ -1,5 +1,2 @@
-preload = ["./src/server/projects/historyView.ts"]
-
 [test]
-preload = ["./src/server/projects/historyView.ts"]
 root = "./tests"
