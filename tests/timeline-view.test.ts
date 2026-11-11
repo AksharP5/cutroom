@@ -1,3 +1,4 @@
+import { waveformPeak } from "../src/client/timeline/math";
 import { expect, test } from "bun:test";
 import { normalizeTimeline } from "../src/shared/timeline/apply";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
@@ -522,4 +523,20 @@ test("a media source resolves to one project file for the server and the timelin
   expect(localMediaPath("index.html", "https://example.com/a.mp4")).toBeNull();
   expect(localMediaPath("index.html", "//example.com/a.mp4")).toBeNull();
   expect(localMediaPath("index.html", "bad%zz.mp4")).toBeNull();
+});
+
+test("waveform dB mapping hides the noise floor and gives speech room without hitting the edges", () => {
+  const height = (db: number) => waveformPeak(10 ** (db / 20));
+  expect(waveformPeak(0)).toBe(0);
+  // Noise below the floor reads as silence.
+  expect(height(-60)).toBe(0);
+  // Speech peaking near -3.5 dB fills most of the body.
+  expect(height(-3.5)).toBeGreaterThan(0.7);
+  // A loud music bed moving between -12 and -3 dB keeps visible dynamics, not a solid band.
+  expect(height(-3) - height(-12)).toBeGreaterThan(0.25);
+  // Quiet room tone stays small.
+  expect(height(-40)).toBeLessThan(0.1);
+  expect(waveformPeak(-(10 ** (-3.5 / 20)))).toBe(-height(-3.5));
+  expect(waveformPeak(1)).toBe(0.9);
+  expect(waveformPeak(2)).toBe(0.9);
 });

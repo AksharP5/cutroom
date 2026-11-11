@@ -667,7 +667,8 @@
   transform: scaleX(calc(1 / var(--k, 1)));
 }
 .tl-lanes[data-cursor="trim"],
-.tl-lanes[data-cursor="trim"] .tl-clip {
+.tl-lanes[data-cursor="trim"] .tl-clip,
+.tl-lanes[data-cursor="trim"] .tl-gain {
   cursor: ew-resize;
 }
 .tl-lanes[data-cursor="roll"],
@@ -840,6 +841,7 @@
   height: calc(var(--size-track-audio) - 2px);
   margin-top: 1px;
   pointer-events: none;
+  transform-origin: 0 0;
 }
 .tl-mix.on-video {
   height: calc(var(--size-track-video) - 2px);
@@ -871,20 +873,48 @@
 }
 .tl-fade-handle {
   --handle-width: 8px;
+  --handle-inset: clamp(0px, calc((100% - var(--handle-width)) / 2), 6px);
   position: absolute;
-  top: 1px;
+  top: clamp(
+    var(--size-clip-name),
+    calc(
+      var(--size-clip-name) + (100% - var(--size-clip-name) - 3px) *
+        var(--level) / 100 - 4px
+    ),
+    calc(100% - 9px)
+  );
   width: min(var(--handle-width), 100%);
   height: 9px;
   background: var(--text-secondary);
   border: 1px solid var(--surface-panel);
   cursor: ew-resize;
+  opacity: 0;
+  pointer-events: none;
+}
+/* Hover fades the handles in; selection shows them at once. */
+.tl-mix[data-hover] .tl-fade-handle {
+  opacity: 1;
   pointer-events: auto;
+  transition: opacity var(--duration-hover) var(--ease-out);
+}
+.tl-mix.selected .tl-fade-handle {
+  opacity: 1;
+  pointer-events: auto;
+  transition: none;
 }
 .tl-fade-handle[data-mix="fadeIn"] {
-  left: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
+  left: clamp(
+    var(--handle-inset),
+    calc(var(--fade) - var(--handle-width)),
+    calc(100% - var(--handle-width) - var(--handle-inset))
+  );
 }
 .tl-fade-handle[data-mix="fadeOut"] {
-  right: clamp(0px, var(--fade), calc(100% - var(--handle-width)));
+  right: clamp(
+    var(--handle-inset),
+    calc(var(--fade) - var(--handle-width)),
+    calc(100% - var(--handle-width) - var(--handle-inset))
+  );
 }
 .tl-lanes[data-cursor="gain"] {
   cursor: ns-resize;

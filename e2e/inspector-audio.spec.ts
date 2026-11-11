@@ -117,9 +117,15 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
     ["fadeIn", 12.5],
     ["fadeOut", 25],
   ] as const)
-    await expect(
-      page.locator(`[data-clip-mix="sound"] [data-mix="${field}"]`),
-    ).toHaveAttribute("style", `--fade: ${percent}%;`);
+    await expect
+      .poll(() =>
+        page
+          .locator(`[data-clip-mix="sound"] [data-mix="${field}"]`)
+          .evaluate((handle: HTMLElement) =>
+            handle.style.getPropertyValue("--fade"),
+          ),
+      )
+      .toBe(`${percent}%`);
   // Authored fades survive proportional clamping, and the effective length is explicit.
   await set("Fade in", "12s");
   await expect.poll(async () => (await sound()).fadeIn).toBe(360);

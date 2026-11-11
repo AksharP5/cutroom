@@ -18,7 +18,15 @@ export interface MediaDrag {
  * timeline needs the file's kind and length while it is still over a track.
  */
 let dragged: MediaDrag | null = null;
+const listeners = new Set<() => void>();
+export function subscribeMediaDrag(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 export const setMediaDrag = (media: MediaDrag | null) => {
   dragged = media;
+  for (const listener of listeners) listener();
 };
 export const mediaDrag = () => dragged;

@@ -105,6 +105,42 @@ const drag = (
   playhead = 0,
 ) => beginDrag(timeline, intent, new Set(selection), origin, playhead);
 
+test("the outer six pixels trim through the gain band, while the middle adjusts gain", () => {
+  const timeline = sequence();
+  const audio = clip("music", 2, 0, 240, { hasAudio: true });
+  for (const [x, edge] of [
+    [0, "start"],
+    [5.9, "start"],
+    [194, "end"],
+    [199, "end"],
+  ] as const)
+    expect(
+      intentAt("pointer", timeline, {
+        clip: audio,
+        x,
+        width: 200,
+        mix: "gain",
+      }),
+    ).toEqual({ kind: "trim", clipId: "music", edge, ripple: false });
+  for (const x of [6, 100, 193.9])
+    expect(
+      intentAt("pointer", timeline, {
+        clip: audio,
+        x,
+        width: 200,
+        mix: "gain",
+      }),
+    ).toMatchObject({ kind: "gain", clipId: "music" });
+  expect(
+    intentAt("pointer", timeline, {
+      clip: audio,
+      x: 20,
+      width: 200,
+      mix: "fadeIn",
+    }),
+  ).toEqual({ kind: "fade", clipId: "music", edge: "fadeIn" });
+});
+
 test("a horizontal envelope press hands off to a move once, while a vertical drag keeps gain", () => {
   const press = step(idle, {
     type: "press",
@@ -386,7 +422,7 @@ test("a press means move, resize, ripple, roll, or razor by tool and by where it
     left: "a",
     right: "b",
   });
-  expect(intentAt("trim", timeline, hit(b, 6))).toEqual({
+  expect(intentAt("trim", timeline, hit(b, 5))).toEqual({
     kind: "trim",
     clipId: "b",
     edge: "start",

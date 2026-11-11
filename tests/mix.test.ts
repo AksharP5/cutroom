@@ -1,3 +1,4 @@
+import { fadeGain } from "@hyperframes/core/audio-fade";
 import { expect, test } from "bun:test";
 import { parseAutomation } from "@hyperframes/core/audio-automation";
 import { audioDbToGain, MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
@@ -10,7 +11,12 @@ import {
 } from "@hyperframes/engine";
 import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
-import { gainFromDrag, gainHeight } from "../src/client/timeline/mix";
+import {
+  envelopeHeight,
+  fadePath,
+  gainFromDrag,
+  gainHeight,
+} from "../src/client/timeline/mix";
 import { emptyMeter, meterSample } from "../src/client/timeline/meters";
 import {
   CommandSchema,
@@ -566,4 +572,45 @@ test("a cut that would exceed HyperFrames' automation limit is refused, not thro
   }
   expect(refusal).toBeInstanceOf(TimelineError);
   expect(refusal).toMatchObject({ code: "unsupported" });
+});
+
+test("the drawn fade follows core's linear amplitude ramp and reaches its knee and silence", () => {
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  for (const volume of [audioDbToGain(-12), 1, audioDbToGain(6)]) {
+    const clip = {
+      ...timeline.clips[0]!,
+      duration: 300,
+      fadeIn: 30,
+      fadeOut: 90,
+      volume,
+    };
+    const path = fadePath(clip, timeline.fps);
+    const points = [...path.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(
+      (point) => [Number(point[1]), Number(point[2])] as const,
+    );
+    for (const elapsed of [0, 15, 30, 100, 210, 232.5, 255, 277.5, 300]) {
+      const x = (elapsed / clip.duration) * 100;
+      const next = points.findIndex((point) => point[0] >= x);
+      const [x1, y1] = points[next]!;
+      const [x0, y0] = points[Math.max(0, next - 1)]!;
+      const y = x0 === x1 ? y1 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
+      const fraction = (100 - y) / (100 - gainHeight(volume));
+      expect(fraction).toBeCloseTo(fadeGain(elapsed, clip.duration, clip), 3);
+    }
+    expect(points).toContainEqual([70, Number(gainHeight(volume).toFixed(2))]);
+    expect(points.at(-1)).toEqual([100, 100]);
+    expect(envelopeHeight(clip, timeline.fps, 255)).toBeCloseTo(
+      (100 + gainHeight(volume)) / 2,
+      6,
+    );
+    const faded = gainFromDrag(clip, timeline.fps, clip.start + 255, 1, 25);
+    const actual = envelopeHeight(
+      { ...clip, volume: faded },
+      timeline.fps,
+      255,
+    );
+    expect(
+      ((actual - envelopeHeight(clip, timeline.fps, 255)) / 100) * 25,
+    ).toBeCloseTo(1, 1);
+  }
 });

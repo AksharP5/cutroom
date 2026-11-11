@@ -86,6 +86,17 @@ Before is main without clip bodies. It missed frames while zooming near fit beca
 
 At 32 px per frame every filmstrip tile is its own frame from the server. Frames are asked for only after the view has rested 150 ms, and a move drops every request not yet sent, so scrolling there draws the sprite's frames and costs the same as at any other zoom.
 
+### Audio clip finish
+
+On November 10, 2026 the same 500-clip workload was checked at 1720x1050: 240 linked picture and sound pieces plus 20 titles, over a twelve-minute H.264/AAC file. Muted Chromium used ANGLE on an NVIDIA GeForce RTX 5060. Each run swept Ctrl+wheel zoom from fit to 32 px/frame and back for 910 animation frames, then scrolled at 2 px/frame by 8 px per frame for 900 frames. There were two runs per build. Before is `d315fb5`; after includes the audio clip finish. Gaps use `performance.now()` at callback entry and include all late frames. The machine was shared.
+
+| Gesture |      FPS before | FPS after | Callback p95 after | Gaps over 20 ms after |
+| ------- | --------------: | --------: | -----------------: | --------------------: |
+| Zoom    |       56.8–58.2 | 59.5–59.7 |       18.7–18.8 ms |  32 of 909, both runs |
+| Scroll  | 60.0, both runs | 59.5–60.0 |       17.1–17.8 ms |          15, 1 of 899 |
+
+The averages stay near 60 fps, with occasional missed frames. Source peaks are remapped to the dB display scale once per fetched range, with no new animation loop. Gain overlays use the existing 28 px label threshold, since narrower clips cannot fit the trim margins and fade handles. Unautomated fades draw only endpoints and knees instead of 33 sampled vertices.
+
 ### Dragging
 
 500 clips referencing a generated 15-second 320x180 H.264/AAC file, reused across the linked picture and sound pieces, fit view at 0.06776 px/frame, 415 clips following a ripple trim, Chromium 1720x1050. Hardware renderer verified as ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2. Each run sent native pointer moves from an independent 60 Hz source for ten seconds, with the CPU profiler running. Callback gaps use `performance.now()` at actual callback entry, not RAF's supplied timestamp. These measurements were taken on the fix based on `3287a9d`, before the notes integration.
