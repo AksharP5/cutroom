@@ -13,7 +13,11 @@ import { expect, test } from "./fixtures";
 // This test owns the compositor screencast; Playwright's trace must not replace it.
 test.use({ trace: "off" });
 
-async function openMedia(page: Page, request: APIRequestContext) {
+async function openMedia(
+  page: Page,
+  request: APIRequestContext,
+  appearance?: { pattern: boolean; style: string },
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -28,7 +32,9 @@ async function openMedia(page: Page, request: APIRequestContext) {
     "-f",
     "lavfi",
     "-i",
-    "color=c=red:s=640x360:r=30:d=12",
+    appearance?.pattern
+      ? "testsrc2=s=640x360:r=30:d=12"
+      : "color=c=red:s=640x360:r=30:d=12",
     "-f",
     "lavfi",
     "-i",
@@ -67,6 +73,7 @@ async function openMedia(page: Page, request: APIRequestContext) {
     `<!doctype html><html><head><style>
     body{margin:0;background:#101010}main{position:relative;width:640px;height:360px}
     video{position:absolute;inset:0;width:100%;height:100%}img{position:absolute;right:12px;top:12px;width:100px;height:60px}
+    ${appearance?.style ?? ""}
     </style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-duration="12" data-fps="30">
     <video id="picture" data-start="0" data-duration="12" data-track-index="0" muted data-link="sound" src="Picture.mp4"></video>
     <audio id="sound" data-start="0" data-duration="12" data-track-index="2" data-link="sound" src="Picture.mp4"></audio>
@@ -589,4 +596,341 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
     await capture.stop();
     await client.close();
   }
+});
+
+async function pictureDifference(page: Page, held: Buffer, native: Buffer) {
+  return page.evaluate(
+    async ({ held, native }) => {
+      const pixels = async (data: string) => {
+        const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+        const image = await createImageBitmap(
+          new Blob([bytes], { type: "image/png" }),
+        );
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        image.close();
+        return context.getImageData(0, 0, canvas.width, canvas.height).data;
+      };
+      const a = await pixels(held);
+      const b = await pixels(native);
+      let total = 0;
+      let max = 0;
+      let above3 = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        let pixelMax = 0;
+        for (let channel = 0; channel < 3; channel++) {
+          const delta = Math.abs(a[i + channel]! - b[i + channel]!);
+          total += delta;
+          max = Math.max(max, delta);
+          pixelMax = Math.max(pixelMax, delta);
+        }
+        if (pixelMax > 3) above3++;
+      }
+      return {
+        mean: total / ((a.length / 4) * 3),
+        max,
+        fractionAbove3: above3 / (a.length / 4),
+      };
+    },
+    { held: held.toString("base64"), native: native.toString("base64") },
+  );
+}
+
+test("paused holds match native object-fit, transforms, opacity and stacking, then release for playback", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { seek } = await openMedia(page, request, {
+    pattern: true,
+    style: `video{inset:auto;left:71px;top:49px;width:430px;height:240px;
+      object-position:23% 71%;transform:rotate(7deg) scale(.91);transform-origin:31% 64%;
+      opacity:.63;border:3px solid #74abcf;border-radius:13px}
+      main{opacity:.87;transform:translate(3px,2px)}img{z-index:1;right:100px;top:100px}`,
+  });
+  await seek("0103");
+  const live = page.frameLocator("iframe[data-live]");
+  const bounds = {
+    fill: { mean: 0.25, max: 65, fractionAbove3: 0.0327 },
+    contain: { mean: 0.655, max: 131, fractionAbove3: 0.0435 },
+    cover: { mean: 0.212, max: 55, fractionAbove3: 0.0285 },
+    none: { mean: 0.15, max: 36, fractionAbove3: 0.0197 },
+    "scale-down": { mean: 0.655, max: 131, fractionAbove3: 0.0435 },
+  };
+  for (const fit of [
+    "fill",
+    "contain",
+    "cover",
+    "none",
+    "scale-down",
+  ] as const) {
+    await live.locator("video").evaluate((video, fit) => {
+      video.style.objectFit = fit;
+    }, fit);
+    await seek("0103");
+    await expect(live.locator("[data-cutroom-video-hold]")).toHaveCount(1);
+    const geometry = await live.locator("video").evaluate((video) => {
+      const canvas = video.nextElementSibling as HTMLCanvasElement;
+      const display = canvas.style.display;
+      canvas.style.display = "none";
+      video.removeAttribute("data-cutroom-held");
+      const properties = [
+        "width",
+        "height",
+        "object-fit",
+        "object-position",
+        "transform",
+        "transform-origin",
+        "translate",
+        "rotate",
+        "scale",
+        "opacity",
+        "z-index",
+        "border-radius",
+      ];
+      const appearance = (element: Element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return {
+          box: { x, y, width, height },
+          style: Object.fromEntries(
+            properties.map((name) => [
+              name,
+              getComputedStyle(element).getPropertyValue(name),
+            ]),
+          ),
+        };
+      };
+      const native = appearance(video);
+      video.setAttribute("data-cutroom-held", "");
+      canvas.style.display = display;
+      return { video: native, canvas: appearance(canvas) };
+    });
+    expect(geometry.canvas.style).toEqual(geometry.video.style);
+    // Computed transform matrices serialize to six decimals in Chromium.
+    for (const key of ["x", "y", "width", "height"] as const)
+      expect(
+        Math.abs(geometry.canvas.box[key] - geometry.video.box[key]),
+      ).toBeLessThan(0.0001);
+    const held = await page.locator(".edit-picture").screenshot();
+    await live.locator("video").evaluate((video) => {
+      video.removeAttribute("data-cutroom-held");
+      video.nextElementSibling!.setAttribute(
+        "style",
+        `${video.nextElementSibling!.getAttribute("style")};visibility:hidden!important`,
+      );
+    });
+    const native = await page.locator(".edit-picture").screenshot();
+    const difference = await pictureDifference(page, held, native);
+    console.log("HOLD PIXELS", fit, JSON.stringify(difference));
+    await writeFile(testInfo.outputPath(`${fit}-held.png`), held);
+    await writeFile(testInfo.outputPath(`${fit}-native.png`), native);
+    await testInfo.attach(`${fit} held`, {
+      body: held,
+      contentType: "image/png",
+    });
+    await testInfo.attach(`${fit} native`, {
+      body: native,
+      contentType: "image/png",
+    });
+    expect(difference.mean).toBeLessThanOrEqual(bounds[fit].mean);
+    expect(difference.max).toBeLessThanOrEqual(bounds[fit].max);
+    expect(difference.fractionAbove3).toBeLessThanOrEqual(
+      bounds[fit].fractionAbove3,
+    );
+    await live.locator("video").evaluate((video) => {
+      video.setAttribute("data-cutroom-held", "");
+      (video.nextElementSibling as HTMLElement).style.visibility = "visible";
+    });
+    if (fit === "contain") {
+      await live
+        .locator("[data-cutroom-video-hold]")
+        .evaluate((canvas: HTMLCanvasElement) => {
+          canvas.style.translate = "2px 0";
+        });
+      const shifted = await page.locator(".edit-picture").screenshot();
+      const shiftDifference = await pictureDifference(page, shifted, native);
+      await writeFile(testInfo.outputPath("shifted-hold.png"), shifted);
+      await live
+        .locator("[data-cutroom-video-hold]")
+        .evaluate((canvas: HTMLCanvasElement) => {
+          canvas.style.translate = "none";
+        });
+      await live.locator("video").evaluate(async (video: HTMLVideoElement) => {
+        await new Promise<void>((resolve) => {
+          video.addEventListener("seeked", () => resolve(), { once: true });
+          video.currentTime = 5;
+        });
+        video.removeAttribute("data-cutroom-held");
+        (video.nextElementSibling as HTMLElement).style.visibility = "hidden";
+      });
+      const wrongFrame = await page.locator(".edit-picture").screenshot();
+      const wrongDifference = await pictureDifference(page, held, wrongFrame);
+      await writeFile(
+        testInfo.outputPath("wrong-native-frame.png"),
+        wrongFrame,
+      );
+      console.log(
+        "HOLD NEGATIVE CONTROLS",
+        JSON.stringify({
+          shifted: shiftDifference,
+          wrongFrame: wrongDifference,
+        }),
+      );
+      for (const difference of [shiftDifference, wrongDifference]) {
+        expect(difference.mean).toBeGreaterThan(bounds.contain.mean);
+      }
+      await live.locator("video").evaluate((video) => {
+        video.setAttribute("data-cutroom-held", "");
+        (video.nextElementSibling as HTMLElement).style.visibility = "visible";
+      });
+    }
+  }
+  await seek("0311");
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  await page.keyboard.press("e");
+  await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+    "src",
+    before!,
+  );
+  await expect(page.locator(".edit-frame")).toHaveCount(1);
+  const fresh = page.frameLocator("iframe[data-live]");
+  await expect(fresh.locator("[data-cutroom-video-hold]")).toHaveCount(1);
+  await seek("0200");
+  const frame = await page.locator("iframe[data-live]").elementHandle();
+  const preview = (await frame!.contentFrame())!;
+  const pacing = await preview.evaluateHandle(() => {
+    const times: number[] = [];
+    const callbacks = new Map<HTMLVideoElement, number>();
+    const sample = (video: HTMLVideoElement) => {
+      callbacks.set(
+        video,
+        video.requestVideoFrameCallback((_, metadata) => {
+          if (!video.paused) times.push(metadata.expectedDisplayTime);
+          sample(video);
+        }),
+      );
+    };
+    for (const video of document.querySelectorAll("video")) sample(video);
+    return {
+      stop() {
+        for (const [video, id] of callbacks) video.cancelVideoFrameCallback(id);
+        return times.sort((a, b) => a - b);
+      },
+    };
+  });
+  await page.keyboard.press("Space");
+  await expect(fresh.locator("[data-cutroom-video-hold]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    /00:00:04:/,
+  );
+  await page.keyboard.press("k");
+  const times = await pacing.evaluate((pacing) => pacing.stop());
+  await pacing.dispose();
+  const gaps = times.slice(1).map((time, i) => time - times[i]!);
+  const averageGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  console.log(
+    "CUT PLAYBACK",
+    JSON.stringify({
+      frames: times.length,
+      maxGap: Math.max(...gaps),
+      averageGap,
+    }),
+  );
+  expect(times.length).toBeGreaterThan(55);
+  expect(averageGap).toBeLessThan(40);
+  expect(Math.max(...gaps)).toBeLessThan(150);
+  await expect(fresh.locator("[data-cutroom-video-hold]")).toHaveCount(1);
+  await expect(page.locator(".status-error")).toHaveCount(0);
+});
+
+test("the ordinary paused picture is pixel-identical and a timed-out hold keeps it", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request);
+  await seek("0311");
+  const live = page.frameLocator("iframe[data-live]");
+  const held = await page.locator(".edit-picture").screenshot();
+  await live.locator("video").evaluate((video) => {
+    video.removeAttribute("data-cutroom-held");
+    (video.nextElementSibling as HTMLElement).style.visibility = "hidden";
+  });
+  const native = await page.locator(".edit-picture").screenshot();
+  expect(await pictureDifference(page, held, native)).toEqual({
+    mean: 0,
+    max: 0,
+    fractionAbove3: 0,
+  });
+  await live.locator("video").evaluate((video) => {
+    video.setAttribute("data-cutroom-held", "");
+    (video.nextElementSibling as HTMLElement).style.visibility = "visible";
+  });
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  const generation = Number(
+    new URL(before!, "http://localhost").searchParams.get("v"),
+  );
+  await page.addInitScript((generation) => {
+    if (
+      parent === window ||
+      Number(new URL(location.href).searchParams.get("v")) <= generation
+    )
+      return;
+    Object.defineProperty(window, "__hfWaitForSeekCompletion", {
+      get: () => () => new Promise<void>(() => {}),
+      set: () => {},
+    });
+  }, generation);
+  const capture = await capturePicture(page);
+  try {
+    capture.reset();
+    await page.keyboard.press("e");
+    await expect(page.locator(".status-error")).toContainText(
+      "did not draw the frame in time",
+      { timeout: 12_000 },
+    );
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+      "src",
+      before!,
+    );
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    const { samples } = await capture.read();
+    expect(
+      samples.every(({ color: [r, g, b] }) => r! > 230 && g! < 20 && b! < 20),
+    ).toBe(true);
+  } finally {
+    await capture.stop();
+  }
+});
+
+test("a paused hold preserves fractional flex layout and normal-flow stacking", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request, {
+    pattern: true,
+    style: `main{display:flex;align-items:center;gap:13px}
+      video{position:relative;inset:auto;width:320.5px;height:180.25px;margin:11.25px;transform:translate(3.25px,2.5px);opacity:.5}
+      img{z-index:1;left:280px;top:100px}`,
+  });
+  await seek("0103");
+  const live = page.frameLocator("iframe[data-live]");
+  const boxes = await live.locator("video").evaluate((video) => {
+    const canvas = video.nextElementSibling as HTMLCanvasElement;
+    const box = (element: Element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    const held = box(canvas);
+    const display = canvas.style.display;
+    canvas.style.display = "none";
+    video.removeAttribute("data-cutroom-held");
+    const native = box(video);
+    video.setAttribute("data-cutroom-held", "");
+    canvas.style.display = display;
+    return { native, held };
+  });
+  expect(boxes.held).toEqual(boxes.native);
+  await expect(page.locator(".status-error")).toHaveCount(0);
 });

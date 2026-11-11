@@ -1,3 +1,4 @@
+import { reportEditorError } from "../workspace";
 import { audioLevels } from "./levels";
 import {
   PreviewLevelsSchema,
@@ -51,10 +52,14 @@ export function connectPreview(frame: HTMLIFrameElement) {
     if (!parsed.success) return;
     const reply = parsed.data;
     state = reply.state;
-    if (!reply.id) return;
-    const request = pending.get(reply.id);
-    if (!request) return;
-    pending.delete(reply.id);
+    const id = reply.id;
+    const request = id ? pending.get(id) : undefined;
+    if (!id || !request) {
+      if (active && reply.error)
+        reportEditorError("viewer", new Error(reply.error));
+      return;
+    }
+    pending.delete(id);
     clearTimeout(request.timer);
     if (reply.error) request.reject(new Error(reply.error));
     else request.resolve();

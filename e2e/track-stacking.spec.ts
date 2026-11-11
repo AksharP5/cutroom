@@ -324,7 +324,13 @@ test("inserted 4K video and images fill and letterbox above V1 in preview and ex
   ]);
   await page.goto(`/#project/${project.id}`);
   const preview = page.frameLocator("iframe[data-live]").locator("#main");
-  await expect(preview.locator("#picture")).toBeVisible();
+  await expect(preview.locator("#picture")).toHaveAttribute(
+    "data-cutroom-held",
+    "",
+  );
+  await expect(
+    preview.locator("#picture + [data-cutroom-video-hold]"),
+  ).toBeVisible();
   await fitted(
     await captureFrame(request, project.id, "4k-video-preview", testInfo),
   );
