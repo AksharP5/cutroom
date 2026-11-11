@@ -100,6 +100,7 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
         : join(root, "node_modules/electron/dist/electron"),
       args: [
         "--ozone-platform=headless",
+        "--use-fake-device-for-media-stream",
         ...(process.env.CUTROOM_TEST_NO_SANDBOX === "1"
           ? ["--no-sandbox"]
           : []),
@@ -173,6 +174,18 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
           'navigator.permissions.query({name:"camera"}).then(permission => permission.state)',
         ),
       ).toBe("denied");
+      expect(
+        await page.evaluate(async () => {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+          const live = stream
+            .getAudioTracks()
+            .some((track) => track.readyState === "live");
+          stream.getTracks().forEach((track) => track.stop());
+          return live;
+        }),
+      ).toBe(true);
       expect((await fetch(`http://127.0.0.1:${port}/health`)).ok).toBe(true);
       const origin = `http://127.0.0.1:${port}`;
       const isolatedProject = z
@@ -238,6 +251,56 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
           ).json(),
         );
       expect(document.annotations).toEqual([]);
+      const voiceoverProject = z.object({ id: z.string() }).parse(
+        await (
+          await fetch(`${origin}/api/cutroom/projects`, {
+            method: "POST",
+            headers: { origin, "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "Keep the native take",
+              duration: 30,
+            }),
+          })
+        ).json(),
+      );
+      await page.goto(`${origin}/#project/${voiceoverProject.id}`);
+      await page.getByRole("button", { name: "Arm A1", exact: true }).click();
+      await page.getByRole("button", { name: "Record voiceover" }).click();
+      await page.getByRole("button", { name: "Stop voiceover" }).waitFor();
+      const notice = await application.evaluate(
+        ({ app, dialog }) =>
+          new Promise<string>((resolve) => {
+            const original = dialog.showMessageBox;
+            Object.defineProperty(dialog, "showMessageBox", {
+              value: (_window: unknown, options: { message: string }) => {
+                Object.defineProperty(dialog, "showMessageBox", {
+                  value: original,
+                });
+                resolve(options.message);
+                return Promise.resolve({ response: 0, checkboxChecked: false });
+              },
+            });
+            app.quit();
+          }),
+      );
+      expect(notice).toBe(
+        "Save or discard the voiceover take before closing Cutroom.",
+      );
+      expect((await fetch(`${origin}/health`)).ok).toBe(true);
+      expect(
+        await page.getByRole("button", { name: "Stop voiceover" }).count(),
+      ).toBe(1);
+      await page.keyboard.press("Space");
+      await page
+        .getByRole("button", { name: "Record voiceover" })
+        .waitFor({ state: "visible" });
+      // A visible but disabled record control still means the delayed tail or upload is saving.
+      await page.waitForFunction(
+        () =>
+          !window.document.querySelector<HTMLButtonElement>(
+            '[aria-label="Record voiceover"]',
+          )?.disabled,
+      );
       if (packaged) {
         const status = z
           .object({ mcpCommand: z.string() })

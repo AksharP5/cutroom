@@ -1,10 +1,11 @@
 import { audioLevels } from "./levels";
 import {
   PreviewLevelsSchema,
+  PlaybackClockSchema,
   PreviewReplySchema,
   RuntimeStateSchema,
 } from "../../shared/preview";
-import type { PreviewState } from "../../shared/preview";
+import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
@@ -21,6 +22,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
   };
   const closing = new AbortController();
   let active = false;
+  let clock: PlaybackClock | null = null;
   const pending = new Map<
     string,
     { resolve(): void; reject(error: Error): void; timer: number }
@@ -28,6 +30,11 @@ export function connectPreview(frame: HTMLIFrameElement) {
   const receive = (event: MessageEvent<unknown>) => {
     if (event.source !== frame.contentWindow) return;
     if (active) {
+      const playback = PlaybackClockSchema.safeParse(event.data);
+      if (playback.success) {
+        clock = playback.data;
+        return;
+      }
       const levels = PreviewLevelsSchema.safeParse(event.data);
       if (levels.success) {
         audioLevels.publish(levels.data);
@@ -73,6 +80,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
     });
   const player: RuntimePlayer = {
     play: () => {
+      clock = null;
       state.playing = true;
       send("play");
     },
@@ -85,6 +93,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
       send("seek", { time });
     },
     time: () => state.time,
+    clock: () => clock,
     playing: () => state.playing,
     setMuted: (muted) => {
       send("mute", { muted });

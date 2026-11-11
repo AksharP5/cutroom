@@ -15,6 +15,10 @@ export const keymap = {
   cutroomDraw: { label: "Draw", keys: ["Shift+N"] },
   cutroomComment: { label: "Comment", keys: ["N"] },
   controlPlayToggle: { label: "Play or stop", keys: ["Space"] },
+  cutroomRecordVoiceover: {
+    label: "Record or stop voiceover",
+    keys: ["Ctrl+Alt+Shift+V"],
+  },
   controlPlayForward: {
     label: "Play forward, faster on repeat",
     keys: ["L", "4"],

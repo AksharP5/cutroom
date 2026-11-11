@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { z } from "zod";
+import { desktopPermission } from "./permissions";
 import {
   connectLocalServer,
   isApplicationUrl,
@@ -102,30 +103,26 @@ async function start() {
     if (error) throw new Error(error);
   });
   window.webContents.setAudioMuted(process.env.CUTROOM_MUTE_AUDIO === "1");
-  const permissionAllowed = (
-    permission: string,
-    url: string,
-    mainFrame: boolean,
-  ) =>
-    isApplicationUrl(url, baseUrl) &&
-    (permission === "fullscreen" ||
-      (permission === "clipboard-sanitized-write" && mainFrame));
   window.webContents.session.setPermissionRequestHandler(
     (_contents, permission, callback, details) =>
       callback(
-        permissionAllowed(
+        desktopPermission(
           permission,
           details.requestingUrl,
+          baseUrl,
           details.isMainFrame,
+          "mediaTypes" in details ? details.mediaTypes : [],
         ),
       ),
   );
   window.webContents.session.setPermissionCheckHandler(
     (_contents, permission, origin, details) =>
-      permissionAllowed(
+      desktopPermission(
         permission,
         details.requestingUrl ?? origin,
+        baseUrl,
         details.isMainFrame,
+        details.mediaType ? [details.mediaType] : [],
       ),
   );
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -138,6 +135,14 @@ async function start() {
     openExternal(url);
   });
   window.once("ready-to-show", () => window?.show());
+  window.webContents.on("will-prevent-unload", () => {
+    if (!window) return;
+    void dialog.showMessageBox(window, {
+      type: "info",
+      message: "Save or discard the voiceover take before closing Cutroom.",
+      buttons: ["Return to take"],
+    });
+  });
   window.on("closed", () => {
     window = undefined;
   });
@@ -156,6 +161,10 @@ else {
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
+    if (window) {
+      window.close();
+      return;
+    }
     quitting = true;
     lifetime.abort();
     void (async () => {

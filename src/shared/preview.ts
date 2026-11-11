@@ -12,6 +12,15 @@ export const PreviewStateSchema = z.object({
 });
 export type PreviewState = z.infer<typeof PreviewStateSchema>;
 
+export const PlaybackClockSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("clock"),
+  time: z.number().nonnegative().finite(),
+  /** Absolute performance time, shared across the opaque iframe and editor. */
+  at: z.number().nonnegative().finite(),
+});
+export type PlaybackClock = z.infer<typeof PlaybackClockSchema>;
+
 export const PreviewReplySchema = z.object({
   source: z.literal("cutroom-preview"),
   id: z.string().optional(),

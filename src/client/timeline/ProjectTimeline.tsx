@@ -1,3 +1,4 @@
+import { useStore } from "zustand";
 import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
@@ -20,6 +21,8 @@ import {
   selectionAtPlayhead,
 } from "./selection";
 import type { Selection } from "./selection";
+import type { VoiceoverSession } from "../voiceover/session";
+import { VoiceoverHeader } from "../voiceover/Voiceover";
 
 /** Notes the agent still owes work on are the owner's mark; withdrawn notes leave the ruler. */
 const pinStates = {
@@ -54,16 +57,21 @@ const clock: TimelineClock = {
  * playhead, review notes as ruler pins, and track changes and editing keys sent back as commands.
  */
 export function ProjectTimeline({
+  voiceover,
   projectId,
   tool,
   notes,
   onOpenNote,
 }: {
+  voiceover: VoiceoverSession;
   projectId: string;
   tool: Tool;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
 }) {
+  const recording = useStore(voiceover.store, ({ state }) =>
+    state.kind === "recording" ? state : null,
+  );
   const view = useTimeline((state) => state.view);
   const [editingMarker, setEditingMarker] = useState<{
     marker: Marker;
@@ -184,6 +192,19 @@ export function ProjectTimeline({
   return (
     <>
       <Timeline
+        recording={
+          recording
+            ? { track: recording.track.index, start: recording.start }
+            : null
+        }
+        audioControls={(track, id, part) => (
+          <VoiceoverHeader
+            session={voiceover}
+            track={track}
+            id={id}
+            part={part}
+          />
+        )}
         timeline={view.timeline}
         source={{ projectId, composition: view.composition }}
         clock={clock}

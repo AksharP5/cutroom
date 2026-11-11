@@ -1,5 +1,6 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { toFrames } from "./apply";
+import { isAudioKind } from "./schema";
 import type { Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
 
@@ -26,7 +27,9 @@ export function editLabel(
           const clip = timeline.clips.find(
             (item) => item.id === (command.trackClipIds ?? command.clipIds)[0],
           );
-          const up = command.trackBy > 0 !== (clip?.kind === "audio");
+          const up =
+            command.trackBy > 0 !==
+            (clip !== undefined && isAudioKind(clip.kind));
           parts.push(
             `${Math.abs(command.trackBy)} ${Math.abs(command.trackBy) === 1 ? "track" : "tracks"} ${up ? "up" : "down"}`,
           );

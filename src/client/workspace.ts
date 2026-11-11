@@ -43,6 +43,8 @@ export const useWorkspace = create(() => ({
   newEditor: localStorage.getItem(NEW_EDITOR_KEY) !== "false",
   /** A press is under way in the timeline. Esc cancels it and does nothing else. */
   gesture: false,
+  /** The open editor can refuse navigation while it holds an unsaved take. */
+  beforeProjectChange: null as (() => boolean) | null,
   /**
    * The new editor's failures, shown in the status bar. Each side sets and clears only its own,
    * so a preview that loads fine never hides a timeline the engine refused.

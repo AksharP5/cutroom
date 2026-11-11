@@ -1,0 +1,92 @@
+.vo-arm.armed,
+.vo-arm.armed:disabled,
+.edit-transport .edit-icon.vo-record,
+.vo-record-mark {
+  color: var(--danger);
+}
+.vo-arm.armed:disabled {
+  opacity: 1;
+}
+.vo-record.recording {
+  background: var(--surface-active);
+}
+.vo-record-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: var(--weight-semibold) var(--type-xs) var(--font-sans);
+}
+.vo-take-region {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  width: 100%;
+  background: var(--clip-vo-body);
+  border-top: var(--stroke-rail) solid var(--danger);
+  transform-origin: left;
+  pointer-events: none;
+  z-index: var(--z-clip-selected);
+}
+.vo-input {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.vo-input-panel {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: calc(var(--width-inspector) - var(--space-4));
+  padding: var(--space-3);
+  border: var(--stroke-hair) solid var(--line);
+  border-radius: var(--radius-float);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  font: var(--type-sm)/var(--leading-body) var(--font-sans);
+}
+.vo-input-panel strong {
+  display: block;
+  margin-bottom: var(--space-3);
+}
+.vo-input-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.vo-input-panel .select-trigger {
+  width: 100%;
+  height: var(--size-field);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  border: var(--stroke-hair) solid var(--line);
+}
+.vo-input-panel p {
+  margin: var(--space-2) 0;
+  color: var(--text-secondary);
+}
+.vo-input-panel [role="alert"] {
+  color: var(--danger);
+}
+.vo-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.vo-input-panel .tl-meters-compact {
+  width: 100%;
+  height: var(--space-2);
+  margin-top: var(--space-1);
+}
+.vo-actions .vo-discard {
+  color: var(--danger);
+}
+
+.vo-input-panel .primary-button kbd {
+  font-size: var(--type-2xs);
+}

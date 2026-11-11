@@ -1,3 +1,4 @@
+import { isAudioKind } from "../../shared/timeline/schema";
 import { clipEnd } from "../../shared/timeline/apply";
 import type {
   Clip,
@@ -49,7 +50,7 @@ function underPlayhead(timeline: Timeline, target: EditTarget) {
   return timeline.clips
     .filter((clip) => editable.has(clip.track) && spans(clip, frame))
     .toSorted(
-      (a, b) => Number(a.kind === "audio") - Number(b.kind === "audio"),
+      (a, b) => Number(isAudioKind(a.kind)) - Number(isAudioKind(b.kind)),
     );
 }
 

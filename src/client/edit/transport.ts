@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { frameTime } from "../../shared/timeline/apply";
 import type { Fps, Timeline } from "../../shared/timeline/schema";
+import type { PlaybackClock } from "../../shared/preview";
 
 export type Direction = "forward" | "reverse";
 export type Speed = 1 | 2 | 4 | 8;
@@ -68,6 +69,8 @@ export interface RuntimePlayer {
   seek(seconds: number): void;
   /** Seconds on the runtime's own clock, which leads at 1x so audio stays in sync. */
   time(): number;
+  /** Continuous playback time paired with the instant it was observed in the preview. */
+  clock(): PlaybackClock | null;
   /** False once the runtime stops by itself at the end of the composition. */
   playing(): boolean;
   setMuted(muted: boolean): void;
@@ -190,6 +193,7 @@ function run(next: TransportState) {
 }
 
 export const transport = {
+  clock: () => player?.clock() ?? null,
   dispatch(event: TransportEvent) {
     run(transition(get().state, event));
   },
