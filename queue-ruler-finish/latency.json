@@ -1,0 +1,42 @@
+{
+  "before": {
+    "burst": [
+      1195,
+      1981,
+      2764
+    ],
+    "singleNote": 912,
+    "poll": {
+      "ms": 20031,
+      "status": 500
+    }
+  },
+  "after": {
+    "burst": [
+      {
+        "t": 0.83,
+        "ms": 776,
+        "status": 200,
+        "bytes": 29910
+      },
+      {
+        "t": 1.83,
+        "ms": 1191,
+        "status": 200,
+        "bytes": 29910
+      },
+      {
+        "t": 2.83,
+        "ms": 991,
+        "status": 200,
+        "bytes": 29910
+      }
+    ],
+    "poll": {
+      "ms": 211,
+      "status": 200,
+      "bytes": 8122
+    },
+    "singleNote": 404
+  }
+}
