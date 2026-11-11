@@ -34,7 +34,12 @@
       }
     }
   },
-  "base": "75bc255473f98b4b55c811cce8594f23aacbb3d5",
-  "head": "9b3e6b4ef82962ec9129ccc58e21d6ab67fabcdd",
-  "method": "Signature algorithms use the final timeline parser. 20 warmups, 60 interleaved samples per algorithm."
+  "base": "26d541bf9704c0d854d4ca1f62d48c0b53c13fe5",
+  "head": "21cd878717348b1e45ff81b0fa2fa56dfbb50447",
+  "method": "Signature algorithms use the final timeline parser. 20 warmups, 60 interleaved samples per algorithm.",
+  "measuredBase": "75bc255473f98b4b55c811cce8594f23aacbb3d5",
+  "measuredHead": "9b3e6b4ef82962ec9129ccc58e21d6ab67fabcdd",
+  "signatureBlob": "0fd85e5d6651acad69a6422a5a2e45f3610fa5e4",
+  "parserBlob": "f1121543dc71a46157bcb961500cc2b324fbe70a",
+  "serverCodeUnchangedThroughFinalRebase": true
 }
