@@ -1335,3 +1335,37 @@ test("overwrite keeps the existing audio fallback without a partner and refuses 
   );
   expect(failure(() => run(state, { ...command, at: 0 }))).toBe("unsupported");
 });
+
+test("setMarker on an existing marker changes only the fields it names", () => {
+  const added = run(timeline([]), {
+    type: "setMarker",
+    id: "beat",
+    frame: 60,
+    duration: 15,
+    name: "Downbeat",
+    note: "Keep this cue",
+    color: "green",
+  });
+  // An agent moves the marker; a rename made against the older view must not revert that.
+  const moved = run(added, {
+    type: "setMarker",
+    id: "beat",
+    frame: 90,
+    note: "Agent moved this",
+  });
+  expect(
+    run(moved, { type: "setMarker", id: "beat", name: "Drop" }).markers,
+  ).toEqual([
+    {
+      id: "beat",
+      frame: 90,
+      duration: 15,
+      name: "Drop",
+      note: "Agent moved this",
+      color: "green",
+    },
+  ]);
+  expect(
+    failure(() => run(timeline([]), { type: "setMarker", name: "No frame" })),
+  ).toBe("unsupported");
+});

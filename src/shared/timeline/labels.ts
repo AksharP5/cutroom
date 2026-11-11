@@ -109,7 +109,9 @@ export function editLabel(
         return parts.join("; ") || fallback;
       }
       case "setMarker":
-        return `Set marker at ${time(command.frame)}`;
+        return command.frame === undefined
+          ? "Edited marker"
+          : `Set marker at ${time(command.frame)}`;
       case "removeMarker":
         return "Removed marker";
       case "setRange":
