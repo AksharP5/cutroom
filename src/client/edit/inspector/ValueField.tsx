@@ -1,3 +1,4 @@
+import { ArrowCounterClockwise } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../../workspace";
@@ -218,18 +219,18 @@ export function ValueField({
               commit();
           }}
         />
-        {allowAuto && (
+        {allowAuto && value !== null && (
           <button
             type="button"
-            aria-label="Use automatic opacity"
-            aria-pressed={value === null}
-            title="Use source styles"
+            aria-label="Restore source opacity"
+            title="Restore source opacity"
+            disabled={disabled}
             onClick={() => {
               setDraft(null);
-              if (value !== null) onCommit(null);
+              onCommit(null);
             }}
           >
-            Auto
+            <ArrowCounterClockwise size={14} aria-hidden />
           </button>
         )}
       </div>

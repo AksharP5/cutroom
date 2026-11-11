@@ -52,6 +52,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   await expect(inspector).toContainText("Picture");
   await expect(inspector).toContainText("Video on V1");
+  await inspector.locator(".inspector-history > summary").click();
   const set = async (label: string, value: string) => {
     await inspector
       .getByRole("textbox", { name: label, exact: true })
@@ -429,6 +430,11 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="opening-title"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(inspector.locator(".inspector-history")).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await inspector.locator(".inspector-history > summary").click();
   const rows = inspector.getByRole("listitem");
   await expect(inspector.locator(".inspector-clip strong")).toHaveText(
     "Opening title",
@@ -511,9 +517,12 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.locator('[data-clip="opening-title"]').click();
   await expect(opacity).toHaveValue("30%");
   await inspector
-    .getByRole("button", { name: "Use automatic opacity", exact: true })
+    .getByRole("button", { name: "Restore source opacity", exact: true })
     .click();
   await expect(opacity).toHaveValue("Auto");
+  await expect(
+    inspector.getByRole("button", { name: "Restore source opacity" }),
+  ).toHaveCount(0);
   const autoRow = rows.filter({ hasText: "Set opacity to Auto" });
   await expect(autoRow).toBeVisible();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
@@ -522,7 +531,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   for (const name of ["Changes", "Composite", "Timing"])
     await inspector
       .locator("summary")
-      .filter({ hasText: new RegExp(`^${name}$`) })
+      .filter({ hasText: new RegExp(`^${name}(?:\\s*\\d+)?$`) })
       .click();
   await page.locator('[data-clip="caption"]').click();
   await expect(inspector.locator("details[open]")).toHaveCount(0);
@@ -538,7 +547,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   for (const name of ["Changes", "Composite", "Timing"])
     await inspector
       .locator("summary")
-      .filter({ hasText: new RegExp(`^${name}$`) })
+      .filter({ hasText: new RegExp(`^${name}(?:\\s*\\d+)?$`) })
       .click();
   // A timeline drag and a typed Start both receive their labels from the same command path.
   await page.getByRole("button", { name: "Snapping", exact: true }).click();
@@ -566,7 +575,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.setViewportSize({ width: 1280, height: 800 });
   await inspector
     .locator("summary")
-    .filter({ hasText: /^Changes$/ })
+    .filter({ hasText: /^Changes/ })
     .focus();
   await page.keyboard.press("Escape");
   await expect(inspector).toHaveAttribute("data-open", "false");

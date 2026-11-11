@@ -170,9 +170,9 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   await page.locator('[data-clip="music"]').click();
   await expect.poll(async () => (await sound()).volume).toBe(10 ** (-9 / 20));
   await expect(inspector.locator("summary")).toHaveText([
-    "Changes",
     "Audio",
     "Timing",
+    /^Changes\s*\d+$/,
   ]);
   await page.locator('[data-clip="picture"]').click();
   await undo.click();
@@ -239,6 +239,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
       }),
     );
     await expect(gain).toHaveValue("+6.0 dB");
+    await inspector.locator(".inspector-history > summary").click();
     const row = inspector
       .getByRole("listitem")
       .filter({ hasText: "Set gain to +6.0 dB" });
@@ -370,4 +371,119 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
     JSON.stringify(evidence, null, 2),
   );
   await page.screenshot({ path: info.outputPath("inspector-audio.png") });
+});
+
+test("linked Changes has one row per history entry and keeps review and session state", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Linked changes", width: 320, height: 240, duration: 3 },
+      })
+    ).json(),
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=red:s=320x240:r=30:d=3",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=3",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    join(project.path, "Interview.mp4"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="3"><video id="picture" data-label="Interview" src="Interview.mp4" muted data-link="pair" data-start="0" data-duration="3" data-track-index="0"></video><audio id="sound" src="Interview.mp4" data-link="pair" data-start="0" data-duration="3" data-track-index="1"></audio></main></body></html>`,
+  );
+  const path = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${path}/timeline`)).json(),
+    );
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="picture"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const history = inspector.locator(".inspector-history");
+  const summary = history.locator("summary");
+  const rows = history.getByRole("listitem");
+  await expect(inspector.locator("summary")).toHaveText([
+    "Transform",
+    "Composite",
+    "Audio",
+    "Timing",
+    "Changes 0",
+  ]);
+  await expect(history).not.toHaveAttribute("open", "");
+  const duration = inspector.getByRole("textbox", {
+    name: "Duration",
+    exact: true,
+  });
+  await duration.fill("60f");
+  await duration.press("Enter");
+  await expect(summary).toHaveText("Changes 1");
+  await summary.click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText(
+    "Interview (picture and sound) · Trimmed end to 00:00:02:00",
+  );
+  await expect.poll(async () => (await read()).clipEdits?.length).toBe(2);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(summary).toHaveText("Changes 0");
+  await expect(rows).toHaveCount(0);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(rows).toHaveCount(1);
+  const view = await read();
+  const response = await request.post(`${path}/commands`, {
+    headers: { "x-cutroom-agent": "external" },
+    data: {
+      expectedRevision: view.revision,
+      label: "Slowed interview",
+      commands: [{ type: "setTiming", clipId: "picture", playbackRate: 0.5 }],
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const agentRow = rows.filter({ hasText: "Slowed interview" });
+  await expect(rows).toHaveCount(2);
+  await expect(summary).toHaveText("Changes 2");
+  // Another review surface can accept one partner before this grouped row is accepted.
+  const edits = (await read()).clipEdits!.filter((edit) => edit.by === "agent");
+  expect(edits).toHaveLength(2);
+  expect(
+    (
+      await request.post(`${path}/review/changes/accept`, {
+        data: { editId: edits[0]!.id },
+      })
+    ).ok(),
+  ).toBe(true);
+  await agentRow.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(agentRow).toContainText("Accepted");
+  await expect
+    .poll(async () =>
+      (await read())
+        .clipEdits!.filter((edit) => edit.by === "agent")
+        .every((edit) => edit.accepted),
+    )
+    .toBe(true);
+  await page.locator('[data-clip="sound"]').click();
+  await expect(history).toHaveAttribute("open", "");
+  await page.reload();
+  await page.locator('[data-clip="picture"]').click();
+  await expect(history).toHaveAttribute("open", "");
+  await summary.click();
+  await expect(history).not.toHaveAttribute("open", "");
+  await page.reload();
+  await page.locator('[data-clip="picture"]').click();
+  await expect(history).not.toHaveAttribute("open", "");
 });
