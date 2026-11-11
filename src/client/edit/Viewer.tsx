@@ -59,7 +59,7 @@ export function Viewer({
   const latest = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [live, setLive] = useState<Slot | null>(null);
-  const [held, setHeld] = useState<Slot | null>(null);
+  const [held, setHeld] = useState<Slot[]>([]);
   const [pending, setPending] = useState<number | null>(null);
 
   useLayoutEffect(() => {
@@ -81,21 +81,41 @@ export function Viewer({
 
   useEffect(() => {
     for (const [gen, connection] of connections.current) {
-      if (gen === live?.gen || gen === held?.gen || gen === pending) continue;
+      if (
+        gen === live?.gen ||
+        held.some((slot) => slot.gen === gen) ||
+        gen === pending
+      )
+        continue;
       connection.dispose();
       connections.current.delete(gen);
     }
-  }, [live?.gen, held?.gen, pending]);
+  }, [live?.gen, held, pending]);
 
   useLayoutEffect(() => {
-    if (!held) return;
-    // The first callback leaves both surfaces available for a paint. Only the
-    // following animation frame may retire the held surface.
-    let animation = requestAnimationFrame(() => {
-      animation = requestAnimationFrame(() => setHeld(null));
-    });
-    return () => cancelAnimationFrame(animation);
-  }, [held]);
+    if (!live) return;
+    const preview = connections.current.get(live.gen);
+    if (!preview) return;
+    // Warmup painted at 1% opacity. Confirm a paint after the DOM promotes this
+    // iframe, then let the parent paint before retiring older documents.
+    void (async () => {
+      try {
+        await preview.painted();
+        if (preview.signal.aborted) return;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        if (preview.signal.aborted) return;
+        setHeld((held) =>
+          held.some((slot) => slot.gen < live.gen)
+            ? held.filter((slot) => slot.gen >= live.gen)
+            : held,
+        );
+      } catch (error) {
+        if (!preview.signal.aborted) reportEditorError("viewer", error);
+      }
+    })();
+  }, [live]);
 
   useEffect(
     () => () => {
@@ -146,7 +166,11 @@ export function Viewer({
       if (gen !== latest.current) return;
       const { width, height, fps } = preview.state;
       const size = { width, height };
-      setHeld(live);
+      setHeld((held) =>
+        live && live.gen !== gen && !held.some((slot) => slot.gen === live.gen)
+          ? [...held, live]
+          : held,
+      );
       setLive({ gen, revision, ...size });
       setPending(null);
       // The status bar shows the open composition's rate and size, as with the embedded editor.
@@ -185,7 +209,7 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
-  const slots = [held?.gen, live?.gen, pending].filter(
+  const slots = [...held.map((slot) => slot.gen), live?.gen, pending].filter(
     (gen): gen is number => gen != null,
   );
 
@@ -194,7 +218,7 @@ export function Viewer({
       ref={stage}
       className="edit-stage"
       data-preview-ready={
-        pending === null && live?.revision === revision && held === null
+        pending === null && live?.revision === revision && held.length === 0
           ? live.revision
           : undefined
       }
@@ -206,8 +230,8 @@ export function Viewer({
         style={box}
       >
         {slots.map((gen) => {
-          const size =
-            gen === held?.gen ? held : gen === live?.gen ? live : fit;
+          const retained = held.find((slot) => slot.gen === gen);
+          const size = retained ?? (gen === live?.gen ? live : fit);
           return (
             <iframe
               key={gen}
@@ -218,7 +242,7 @@ export function Viewer({
               allow="autoplay"
               src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}`}
               data-live={gen === live?.gen || undefined}
-              data-held={gen === held?.gen || undefined}
+              data-held={Boolean(retained) || undefined}
               style={{
                 width: size.width,
                 height: size.height,

@@ -366,6 +366,7 @@ function installPreviewBridge() {
     HTMLVideoElement,
     {
       canvas: HTMLCanvasElement;
+      frame: VideoFrame;
       display: string;
       callback?: number;
       timer?: number;
@@ -390,10 +391,24 @@ function installPreviewBridge() {
   };
   const removeHold = (video: HTMLVideoElement) => {
     cancelRelease(video);
-    holds.get(video)?.canvas.remove();
+    const hold = holds.get(video);
+    hold?.canvas.remove();
+    hold?.frame.close();
     holds.delete(video);
     video.removeAttribute("data-cutroom-held");
     video.removeAttribute("data-cutroom-flow");
+  };
+  const captureFrames = (videos: HTMLVideoElement[]) => {
+    const frames = new Map<HTMLVideoElement, VideoFrame>();
+    try {
+      for (const video of videos) frames.set(video, new VideoFrame(video));
+      return frames;
+    } catch (error) {
+      for (const frame of frames.values()) frame.close();
+      if (error instanceof DOMException && error.name === "InvalidStateError")
+        return null;
+      throw error;
+    }
   };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
@@ -407,8 +422,7 @@ function installPreviewBridge() {
           for (;;) {
             if (version !== pictureVersion || win.__player?.isPlaying()) return;
             // Read authored visibility without our native-surface suppression.
-            for (const [video, hold] of holds) {
-              hold.canvas.style.setProperty("display", "none", "important");
+            for (const video of holds.keys()) {
               video.removeAttribute("data-cutroom-held");
             }
             const videos = Array.from(
@@ -419,9 +433,8 @@ function installPreviewBridge() {
                 checkVisibilityCSS: true,
               }),
             );
-            for (const [video, hold] of holds) {
+            for (const video of holds.keys()) {
               video.setAttribute("data-cutroom-held", "");
-              hold.canvas.style.setProperty("display", hold.display);
             }
             const failed = videos.find((video) => video.error);
             if (failed)
@@ -434,82 +447,102 @@ function installPreviewBridge() {
               );
               continue;
             }
-            for (const [video] of holds) {
-              if (!videos.includes(video)) removeHold(video);
-            }
-            for (const video of videos) {
-              cancelRelease(video);
-              const previous = holds.get(video);
-              previous?.canvas.style.setProperty(
-                "display",
-                "none",
-                "important",
+            // A native element can paint nothing despite reporting HAVE_CURRENT_DATA.
+            // Acquire every decoded frame before replacing any displayed picture.
+            const frames = captureFrames(videos);
+            if (!frames) {
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
               );
-              video.removeAttribute("data-cutroom-held");
-              try {
-                const style = getComputedStyle(video);
-                const canvas = document.createElement("canvas");
-                canvas.setAttribute("data-cutroom-video-hold", "");
-                for (const name of style)
-                  canvas.style.setProperty(name, style.getPropertyValue(name));
-                // Keep the source aspect ratio so the browser applies object-fit and
-                // object-position exactly as it does to the replaced video element.
-                let a = video.videoWidth;
-                let b = video.videoHeight;
-                while (b) [a, b] = [b, a % b];
-                const unitWidth = video.videoWidth / a;
-                const unitHeight = video.videoHeight / a;
-                const scale = Math.min(
-                  a,
-                  Math.max(
-                    1,
-                    Math.ceil(
-                      devicePixelRatio *
-                        Math.max(
-                          video.clientWidth / unitWidth,
-                          video.clientHeight / unitHeight,
-                        ),
+              continue;
+            }
+            try {
+              for (const [video] of holds) {
+                if (!videos.includes(video)) removeHold(video);
+              }
+              for (const [video, frame] of frames) {
+                cancelRelease(video);
+                const previous = holds.get(video);
+                video.removeAttribute("data-cutroom-held");
+                try {
+                  const style = getComputedStyle(video);
+                  const canvas =
+                    previous?.canvas ?? document.createElement("canvas");
+                  canvas.setAttribute("data-cutroom-video-hold", "");
+                  for (const name of style)
+                    canvas.style.setProperty(
+                      name,
+                      style.getPropertyValue(name),
+                    );
+                  // Keep the source aspect ratio so the browser applies object-fit and
+                  // object-position exactly as it does to the replaced video element.
+                  let a = video.videoWidth;
+                  let b = video.videoHeight;
+                  while (b) [a, b] = [b, a % b];
+                  const unitWidth = video.videoWidth / a;
+                  const unitHeight = video.videoHeight / a;
+                  const scale = Math.min(
+                    a,
+                    Math.max(
+                      1,
+                      Math.ceil(
+                        devicePixelRatio *
+                          Math.max(
+                            video.clientWidth / unitWidth,
+                            video.clientHeight / unitHeight,
+                          ),
+                      ),
                     ),
-                  ),
-                );
-                canvas.width =
-                  style.objectFit === "none"
-                    ? video.videoWidth
-                    : unitWidth * scale;
-                canvas.height =
-                  style.objectFit === "none"
-                    ? video.videoHeight
-                    : unitHeight * scale;
-                if (
-                  style.position === "absolute" ||
-                  style.position === "fixed"
-                ) {
-                  canvas.style.right = "auto";
-                  canvas.style.bottom = "auto";
-                } else {
-                  // The canvas takes the video's place in flow, including flex/grid
-                  // layout and paint order. The hidden native video keeps decoding.
-                  video.setAttribute("data-cutroom-flow", "");
-                }
-                canvas.style.pointerEvents = "none";
-                canvas.style.animation = "none";
-                canvas.style.transition = "none";
-                const context = canvas.getContext("2d");
-                if (!context)
-                  throw new Error(
-                    "The preview could not hold the video frame.",
                   );
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                video.after(canvas);
-                holds.get(video)?.canvas.remove();
-                holds.set(video, { canvas, display: canvas.style.display });
-              } finally {
-                const hold = holds.get(video);
-                if (hold) {
-                  video.setAttribute("data-cutroom-held", "");
-                  hold.canvas.style.setProperty("display", hold.display);
+                  const width =
+                    style.objectFit === "none"
+                      ? video.videoWidth
+                      : unitWidth * scale;
+                  const height =
+                    style.objectFit === "none"
+                      ? video.videoHeight
+                      : unitHeight * scale;
+                  if (canvas.width !== width) canvas.width = width;
+                  if (canvas.height !== height) canvas.height = height;
+                  if (
+                    style.position === "absolute" ||
+                    style.position === "fixed"
+                  ) {
+                    canvas.style.right = "auto";
+                    canvas.style.bottom = "auto";
+                  } else {
+                    // The canvas takes the video's place in flow, including flex/grid
+                    // layout and paint order. The hidden native video keeps decoding.
+                    video.setAttribute("data-cutroom-flow", "");
+                  }
+                  canvas.style.pointerEvents = "none";
+                  canvas.style.animation = "none";
+                  canvas.style.transition = "none";
+                  const context = canvas.getContext("2d");
+                  if (!context)
+                    throw new Error(
+                      "The preview could not hold the video frame.",
+                    );
+                  context.clearRect(0, 0, canvas.width, canvas.height);
+                  context.drawImage(frame, 0, 0, canvas.width, canvas.height);
+                  if (video.nextElementSibling !== canvas) video.after(canvas);
+                  previous?.frame.close();
+                  holds.set(video, {
+                    canvas,
+                    frame,
+                    display: canvas.style.display,
+                  });
+                  frames.delete(video);
+                } finally {
+                  const hold = holds.get(video);
+                  if (hold) {
+                    video.setAttribute("data-cutroom-held", "");
+                    hold.canvas.style.setProperty("display", hold.display);
+                  }
                 }
               }
+            } finally {
+              for (const frame of frames.values()) frame.close();
             }
             return;
           }
@@ -561,7 +594,12 @@ function installPreviewBridge() {
     clearTimeout(observationTimer);
     cancelAnimationFrame(observationFrame);
     observationFrame = 0;
-    for (const video of holds.keys()) removeHold(video);
+    // The parent compositor can still show this document while retiring its iframe.
+    // Release decoding resources without erasing the last painted picture.
+    for (const [video, hold] of holds) {
+      cancelRelease(video);
+      hold.frame.close();
+    }
   });
   addEventListener("message", (event: MessageEvent<unknown>) => {
     if (

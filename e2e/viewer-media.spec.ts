@@ -127,141 +127,6 @@ async function openMedia(
 
 /** Decode every compositor screencast frame in the page, including opaque iframes. */
 async function capturePicture(page: Page) {
-  const trace = () => {
-    if (parent === window) return;
-    let previous = "";
-    let backgroundSet = false;
-    let sequence = 0;
-    const identities = new WeakMap<Element, number>();
-    const identity = (element: Element) => {
-      const found = identities.get(element);
-      if (found) return found;
-      const id = ++sequence;
-      identities.set(element, id);
-      return id;
-    };
-    const sample = () => {
-      if (document.body && !backgroundSet) {
-        backgroundSet = true;
-        const generation = Number(new URL(location.href).searchParams.get("v"));
-        document.body.style.setProperty(
-          "background-color",
-          ["#0040ff", "#00ff40", "#ff00ff", "#40ffff"][generation % 4]!,
-          "important",
-        );
-      }
-      const videos = Array.from(
-        document.querySelectorAll("video"),
-        (video) => ({
-          id: video.id,
-          time: video.currentTime,
-          ready: video.readyState,
-          seeking: video.seeking,
-          paused: video.paused,
-          held: video.hasAttribute("data-cutroom-held"),
-          seekHold: video.hasAttribute("data-hf-seek-video"),
-          style: video.getAttribute("style"),
-          visibility: video.style.visibility,
-          display: video.style.display,
-          opacity: video.style.opacity,
-        }),
-      );
-      const canvases = Array.from(
-        document.querySelectorAll("canvas"),
-        (canvas) => ({
-          id: identity(canvas),
-          hold: canvas.hasAttribute("data-cutroom-video-hold"),
-          width: canvas.width,
-          height: canvas.height,
-          visibility: canvas.style.visibility,
-          display: canvas.style.display,
-          opacity: canvas.style.opacity,
-        }),
-      );
-      const snapshot = JSON.stringify({ videos, canvases });
-      if (snapshot === previous) return;
-      previous = snapshot;
-      parent.postMessage(
-        {
-          source: "cutroom-test-picture",
-          at: performance.timeOrigin + performance.now(),
-          generation: new URL(location.href).searchParams.get("v"),
-          videos,
-          canvases,
-        },
-        "*",
-      );
-    };
-    const observer = new MutationObserver(sample);
-    observer.observe(document.documentElement, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ["style", "class", "data-cutroom-held"],
-    });
-    for (const event of [
-      "loadedmetadata",
-      "loadeddata",
-      "seeked",
-      "playing",
-      "pause",
-    ])
-      document.addEventListener(event, sample, true);
-    addEventListener("message", (event) => {
-      if (event.source === parent && event.data?.source === "cutroom-viewer") {
-        parent.postMessage(
-          {
-            source: "cutroom-test-picture",
-            at: performance.timeOrigin + performance.now(),
-            generation: new URL(location.href).searchParams.get("v"),
-            command: event.data,
-          },
-          "*",
-        );
-        sample();
-      }
-    });
-    sample();
-  };
-  await page.evaluate(() => {
-    const records: unknown[] = [];
-    Object.assign(window, { pictureTrace: records });
-    addEventListener("message", (event) => {
-      if (event.data?.source === "cutroom-test-picture")
-        records.push(event.data);
-      if (event.data?.source === "cutroom-preview")
-        records.push({
-          at: performance.timeOrigin + performance.now(),
-          reply: event.data,
-        });
-    });
-    const observer = new MutationObserver(() =>
-      records.push({
-        at: performance.timeOrigin + performance.now(),
-        frames: Array.from(
-          document.querySelectorAll(".edit-frame"),
-          (frame) => ({
-            src: frame.getAttribute("src"),
-            live: frame.hasAttribute("data-live"),
-            held: frame.hasAttribute("data-held"),
-            opacity:
-              frame.hasAttribute("data-live") || frame.hasAttribute("data-held")
-                ? 1
-                : 0.01,
-          }),
-        ),
-      }),
-    );
-    observer.observe(document.querySelector(".edit-picture")!, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-live", "data-held"],
-    });
-  });
-  await page.addInitScript(trace);
-  for (const frame of page.frames())
-    if (frame !== page.mainFrame()) await frame.evaluate(trace);
   const session = await page.context().newCDPSession(page);
   const box = (await page.locator(".edit-picture").boundingBox())!;
   const samples: { time: number; color: number[] }[] = [];
@@ -316,52 +181,41 @@ async function capturePicture(page: Page) {
       samples.push({ time: metadata.timestamp!, color });
       if (!blank && (color[0]! < 230 || color[1]! > 20 || color[2]! > 20)) {
         blank = data;
-        console.log(
-          "BLANK DOM",
-          JSON.stringify(
-            await Promise.all(
-              page.frames().map((frame) =>
-                frame
-                  .evaluate(() => ({
-                    at: performance.timeOrigin + performance.now(),
-                    url: location.href,
-                    holds: Array.from(
-                      document.querySelectorAll<HTMLCanvasElement>(
-                        "canvas[data-cutroom-video-hold]",
-                      ),
-                      (canvas) => ({
-                        display: getComputedStyle(canvas).display,
-                        visibility: getComputedStyle(canvas).visibility,
-                        opacity: getComputedStyle(canvas).opacity,
+        const contexts = await Promise.all(
+          page
+            .frames()
+            .filter((frame) => frame !== page.mainFrame())
+            .map((frame) =>
+              frame
+                .evaluate(() => ({
+                  url: location.href,
+                  holds: Array.from(
+                    document.querySelectorAll<HTMLCanvasElement>(
+                      "canvas[data-cutroom-video-hold]",
+                    ),
+                    (canvas) => {
+                      const context = canvas.getContext("2d")!;
+                      return {
+                        lost: context.isContextLost(),
                         color: Array.from(
-                          canvas
-                            .getContext("2d")!
-                            .getImageData(
-                              canvas.width / 2,
-                              canvas.height / 2,
-                              1,
-                              1,
-                            ).data,
+                          context.getImageData(
+                            canvas.width / 2,
+                            canvas.height / 2,
+                            1,
+                            1,
+                          ).data,
                         ),
-                      }),
-                    ),
-                    frames: Array.from(
-                      document.querySelectorAll(".edit-frame"),
-                      (frame) => ({
-                        src: frame.getAttribute("src"),
-                        live: frame.hasAttribute("data-live"),
-                        held: frame.hasAttribute("data-held"),
-                      }),
-                    ),
-                  }))
-                  .catch((error: unknown) => ({
-                    url: frame.url(),
-                    error: String(error),
-                  })),
-              ),
+                      };
+                    },
+                  ),
+                }))
+                .catch((error: unknown) => ({
+                  url: frame.url(),
+                  error: String(error),
+                })),
             ),
-          ),
         );
+        console.log("BLANK CONTEXTS", JSON.stringify(contexts));
       }
     });
   });
@@ -420,17 +274,6 @@ async function keepPicture(
       contentType: "application/json",
     });
     if (result.blank) {
-      const trace = test.info().outputPath(`${label}-handoff.json`);
-      await writeFile(
-        trace,
-        JSON.stringify(
-          await page.evaluate(() => Reflect.get(window, "pictureTrace")),
-        ),
-      );
-      await test.info().attach(`${label} handoff`, {
-        path: trace,
-        contentType: "application/json",
-      });
       const blank = test.info().outputPath(`${label}-blank.png`);
       await writeFile(blank, Buffer.from(result.blank, "base64"));
       await test
@@ -503,175 +346,212 @@ test("the composited sampler catches a one-animation-frame blank", async ({
   }
 });
 
-test("a delayed first paint keeps the old surface through the first visible handoff frame", async ({
-  page,
-  request,
-}) => {
-  const { seek } = await openMedia(page, request);
-  await seek("0311");
-  const before = await page.locator("iframe[data-live]").getAttribute("src");
-  const generation = Number(
-    new URL(before!, "http://localhost").searchParams.get("v"),
-  );
-  const channel = `paint-gate-${Date.now()}`;
-  // Stall only the candidate iframe; releasing the gate restores its native frame APIs.
-  await page.addInitScript(
-    ({ generation, channel }) => {
-      if (
-        parent === window ||
-        Number(new URL(location.href).searchParams.get("v")) <= generation
-      )
-        return;
-      const request = requestAnimationFrame.bind(window);
-      const cancel = cancelAnimationFrame.bind(window);
-      const waiting = new Map<number, FrameRequestCallback>();
-      const resumed = new Map<number, number>();
-      let blocked = true;
-      window.requestAnimationFrame = (callback) => {
-        let handle = 0;
-        handle = request((time) => {
-          if (blocked) {
-            waiting.set(handle, callback);
-            parent.postMessage({ channel, blocked: true }, "*");
-          } else callback(time);
-        });
-        return handle;
+for (const phase of ["loading", "promotion"] as const) {
+  test(`a delayed ${phase} paint retains the previous picture`, async ({
+    page,
+    request,
+  }) => {
+    const { seek } = await openMedia(page, request);
+    await seek("0311");
+    const before = await page.locator("iframe[data-live]").getAttribute("src");
+    const generation = Number(
+      new URL(before!, "http://localhost").searchParams.get("v"),
+    );
+    const channel = `paint-gate-${Date.now()}`;
+    // Stall only the candidate iframe; releasing the gate restores its native frame APIs.
+    await page.addInitScript(
+      ({ generation, channel, phase }) => {
+        if (
+          parent === window ||
+          Number(new URL(location.href).searchParams.get("v")) <= generation
+        )
+          return;
+        const request = requestAnimationFrame.bind(window);
+        const cancel = cancelAnimationFrame.bind(window);
+        const waiting = new Map<number, FrameRequestCallback>();
+        const resumed = new Map<number, number>();
+        let blocked = phase === "loading";
+        let paints = 0;
+        window.requestAnimationFrame = (callback) => {
+          let handle = 0;
+          handle = request((time) => {
+            if (blocked) {
+              waiting.set(handle, callback);
+              parent.postMessage({ channel, blocked: true }, "*");
+            } else callback(time);
+          });
+          return handle;
+        };
+        window.cancelAnimationFrame = (handle) => {
+          waiting.delete(handle);
+          cancel(resumed.get(handle) ?? handle);
+          resumed.delete(handle);
+        };
+        const release = (
+          event: MessageEvent<{
+            channel?: string;
+            source?: string;
+            action?: string;
+          }>,
+        ) => {
+          if (event.source !== parent) return;
+          if (
+            event.data?.source === "cutroom-viewer" &&
+            event.data.action === "paint"
+          ) {
+            if (++paints === 2 && phase === "promotion") blocked = true;
+            return;
+          }
+          if (event.data?.channel !== channel) return;
+          blocked = false;
+          removeEventListener("message", release);
+          for (const [handle, callback] of waiting) {
+            resumed.set(
+              handle,
+              request((time) => {
+                resumed.delete(handle);
+                if (!resumed.size) {
+                  window.requestAnimationFrame = request;
+                  window.cancelAnimationFrame = cancel;
+                }
+                callback(time);
+              }),
+            );
+          }
+          waiting.clear();
+          if (!resumed.size) {
+            window.requestAnimationFrame = request;
+            window.cancelAnimationFrame = cancel;
+          }
+        };
+        addEventListener("message", release);
+      },
+      { generation, channel, phase },
+    );
+    const sampling = await page.evaluateHandle((channel) => {
+      const frames: {
+        time: number;
+        layers: { generation: number; opacity: number; visible: boolean }[];
+      }[] = [];
+      let blocked = false;
+      const receive = (
+        event: MessageEvent<{ channel?: string; blocked?: boolean }>,
+      ) => {
+        if (event.data?.channel === channel && event.data.blocked)
+          blocked = true;
       };
-      window.cancelAnimationFrame = (handle) => {
-        waiting.delete(handle);
-        cancel(resumed.get(handle) ?? handle);
-        resumed.delete(handle);
-      };
-      const release = (event: MessageEvent<{ channel?: string }>) => {
-        if (event.source !== parent || event.data?.channel !== channel) return;
-        blocked = false;
-        removeEventListener("message", release);
-        for (const [handle, callback] of waiting) {
-          resumed.set(
-            handle,
-            request((time) => {
-              resumed.delete(handle);
-              if (!resumed.size) {
-                window.requestAnimationFrame = request;
-                window.cancelAnimationFrame = cancel;
-              }
-              callback(time);
+      addEventListener("message", receive);
+      let animation = 0;
+      const sample = (time: number) => {
+        frames.push({
+          time,
+          layers: Array.from(
+            document.querySelectorAll<HTMLIFrameElement>(".edit-frame"),
+          ).map((frame) => ({
+            generation: Number(new URL(frame.src).searchParams.get("v")),
+            opacity: Number(getComputedStyle(frame).opacity),
+            visible: frame.checkVisibility({
+              checkOpacity: true,
+              checkVisibilityCSS: true,
             }),
-          );
-        }
-        waiting.clear();
-        if (!resumed.size) {
-          window.requestAnimationFrame = request;
-          window.cancelAnimationFrame = cancel;
-        }
+          })),
+        });
+        animation = requestAnimationFrame(sample);
       };
-      addEventListener("message", release);
-    },
-    { generation, channel },
-  );
-  const sampling = await page.evaluateHandle((channel) => {
-    const frames: {
-      time: number;
-      layers: { generation: number; opacity: number; visible: boolean }[];
-    }[] = [];
-    let blocked = false;
-    const receive = (
-      event: MessageEvent<{ channel?: string; blocked?: boolean }>,
-    ) => {
-      if (event.data?.channel === channel && event.data.blocked) blocked = true;
-    };
-    addEventListener("message", receive);
-    let animation = 0;
-    const sample = (time: number) => {
-      frames.push({
-        time,
-        layers: Array.from(
-          document.querySelectorAll<HTMLIFrameElement>(".edit-frame"),
-        ).map((frame) => ({
-          generation: Number(new URL(frame.src).searchParams.get("v")),
-          opacity: Number(getComputedStyle(frame).opacity),
-          visible: frame.checkVisibility({
-            checkOpacity: true,
-            checkVisibilityCSS: true,
-          }),
-        })),
-      });
       animation = requestAnimationFrame(sample);
-    };
-    animation = requestAnimationFrame(sample);
-    return {
-      get blocked() {
-        return blocked;
-      },
-      stop() {
-        cancelAnimationFrame(animation);
-        removeEventListener("message", receive);
-        return frames;
-      },
-    };
-  }, channel);
-  let frames;
-  try {
-    await page.keyboard.press("e");
-    await expect.poll(() => sampling.evaluate((s) => s.blocked)).toBe(true);
-    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
-      "src",
-      before!,
-    );
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ),
-        ),
-    );
-    await page.evaluate((channel) => {
-      for (const frame of document.querySelectorAll<HTMLIFrameElement>(
-        ".edit-frame:not([data-live])",
-      ))
-        frame.contentWindow!.postMessage({ channel }, "*");
+      return {
+        get blocked() {
+          return blocked;
+        },
+        stop() {
+          cancelAnimationFrame(animation);
+          removeEventListener("message", receive);
+          return frames;
+        },
+      };
     }, channel);
-    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-      "src",
-      before!,
-    );
-    await expect(page.locator(".edit-frame")).toHaveCount(1);
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-    );
-  } finally {
-    frames = await sampling.evaluate((s) => s.stop());
-    await sampling.dispose();
-    const path = test.info().outputPath("handoff-frames.json");
-    await writeFile(path, JSON.stringify(frames));
-    await test.info().attach("handoff animation frames", {
-      path,
-      contentType: "application/json",
-    });
-  }
-  const firstRevealed = frames.findIndex((frame) =>
-    frame.layers.some(
-      (layer) =>
-        layer.generation > generation && layer.visible && layer.opacity === 1,
-    ),
-  );
-  expect(firstRevealed).toBeGreaterThanOrEqual(0);
-  expect(
-    frames[firstRevealed]!.layers,
-    "The old surface must remain fully visible for the first frame that reveals its replacement",
-  ).toContainEqual({ generation, opacity: 1, visible: true });
-  expect(
-    frames
-      .slice(firstRevealed + 1)
-      .some(
-        (frame) =>
-          !frame.layers.some((layer) => layer.generation === generation),
+    let frames;
+    try {
+      await page.keyboard.press("e");
+      await expect.poll(() => sampling.evaluate((s) => s.blocked)).toBe(true);
+      if (phase === "loading") {
+        await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+          "src",
+          before!,
+        );
+      } else {
+        const promoted = await page
+          .locator("iframe[data-live]")
+          .getAttribute("src");
+        await page.keyboard.press("Control+z");
+        await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+          "src",
+          promoted!,
+        );
+        await expect(page.locator("iframe[data-held]").first()).toHaveAttribute(
+          "src",
+          before!,
+        );
+      }
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              ),
+            ),
+          ),
+      );
+      await page.evaluate((channel) => {
+        for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+          ".edit-frame",
+        ))
+          frame.contentWindow!.postMessage({ channel }, "*");
+      }, channel);
+      await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+        "src",
+        before!,
+      );
+      await expect(page.locator(".edit-frame")).toHaveCount(1);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          ),
+      );
+    } finally {
+      frames = await sampling.evaluate((s) => s.stop());
+      await sampling.dispose();
+      const path = test.info().outputPath("handoff-frames.json");
+      await writeFile(path, JSON.stringify(frames));
+      await test.info().attach("handoff animation frames", {
+        path,
+        contentType: "application/json",
+      });
+    }
+    const firstRevealed = frames.findIndex((frame) =>
+      frame.layers.some(
+        (layer) =>
+          layer.generation > generation && layer.visible && layer.opacity === 1,
       ),
-  ).toBe(true);
-  await expect(page.locator(".status-error")).toHaveCount(0);
-});
+    );
+    expect(firstRevealed).toBeGreaterThanOrEqual(0);
+    expect(
+      frames[firstRevealed]!.layers,
+      "The old surface must remain fully visible for the first frame that reveals its replacement",
+    ).toContainEqual({ generation, opacity: 1, visible: true });
+    expect(
+      frames
+        .slice(firstRevealed + 1)
+        .some(
+          (frame) =>
+            !frame.layers.some((layer) => layer.generation === generation),
+        ),
+    ).toBe(true);
+    await expect(page.locator(".status-error")).toHaveCount(0);
+  });
+}
 
 test("razor at fractional-second playheads never blanks the visible picture", async ({
   page,
@@ -693,14 +573,93 @@ test("razor at fractional-second playheads never blanks the visible picture", as
       ["1017", 44],
       ["1117", 48],
     ] as const) {
-      await seek(digits);
-      await keepPicture(page, capture, `razor ${digits}`, () =>
-        page.keyboard.press("e"),
-      );
+      await keepPicture(page, capture, `razor ${digits}`, async () => {
+        await seek(digits);
+        await page.keyboard.press("e");
+      });
       await expect
         .poll(async () => (await read()).timeline.clips.length)
         .toBe(count);
     }
+  } finally {
+    await capture.stop();
+  }
+});
+
+test("the held picture survives native snapshot loss and retirement", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request);
+  await seek("0311");
+  const loseNativeSnapshot = () => {
+    if (parent === window) return;
+    // Chromium can report a decoded video yet paint no pixels through its native
+    // element. Model that browser boundary; the decoded VideoFrame remains usable.
+    CanvasRenderingContext2D.prototype.drawImage = new Proxy(
+      CanvasRenderingContext2D.prototype.drawImage,
+      {
+        apply(draw, context: CanvasRenderingContext2D, args: unknown[]) {
+          if (
+            args[0] instanceof HTMLVideoElement &&
+            context.canvas.hasAttribute("data-cutroom-video-hold")
+          )
+            return;
+          return Reflect.apply(draw, context, args);
+        },
+      },
+    );
+    let attempts = 0;
+    Object.defineProperty(window, "decodedFrameAttempts", {
+      get: () => attempts,
+    });
+    window.VideoFrame = new Proxy(VideoFrame, {
+      construct(Frame, args: unknown[], target) {
+        if (args[0] instanceof HTMLVideoElement && ++attempts <= 3)
+          throw new DOMException("No decoded frame yet", "InvalidStateError");
+        return Reflect.construct(Frame, args, target);
+      },
+    });
+  };
+  await page.addInitScript(loseNativeSnapshot);
+  await page
+    .frameLocator("iframe[data-live]")
+    .locator("body")
+    .evaluate(loseNativeSnapshot);
+  const capture = await capturePicture(page);
+  try {
+    await keepPicture(page, capture, "unavailable native snapshot", () =>
+      page.keyboard.press("e"),
+    );
+    expect(
+      await page
+        .frameLocator("iframe[data-live]")
+        .locator("body")
+        .evaluate(() => Reflect.get(window, "decodedFrameAttempts")),
+    ).toBeGreaterThanOrEqual(4);
+    capture.reset();
+    await page
+      .frameLocator("iframe[data-live]")
+      .locator("body")
+      .evaluate(() => {
+        // The compositor may still show this document after its native video retires.
+        document
+          .querySelector<HTMLVideoElement>("video[data-cutroom-held]")!
+          .style.setProperty("visibility", "hidden", "important");
+        dispatchEvent(new PageTransitionEvent("pagehide"));
+      });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+        ),
+    );
+    const { samples } = await capture.read();
+    expect(
+      samples.every(({ color: [r, g, b] }) => r! > 230 && g! < 20 && b! < 20),
+    ).toBe(true);
   } finally {
     await capture.stop();
   }
