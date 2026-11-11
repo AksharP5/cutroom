@@ -247,11 +247,11 @@ The screenshot and raw timing evidence is on the `pr-assets` branch under `track
 
 ## Selection on the picture
 
-The outline needs the selected clip's box at every frame it is shown. The bridge reads it for that one clip: after a seek, pause, paint or Position draft, and once per animation frame while playing. Nothing is read with no clip selected, and a box that has not moved is not sent. The editor places the outline with eight transform writes outside React, so playback adds no layout or style work in the editor. A press on the picture costs one `elementsFromPoint` in the preview and style reads for the few elements under the pointer; inactive clips are not laid out and are never visited.
+The outline needs the selected clip's box at every frame it is shown. The bridge reads it for that one clip: after a seek, pause, paint or Position draft, and once per animation frame while playing. Nothing is read with no clip selected, and a box that has not moved is not sent. The editor places the outline with eight transform writes outside React, so playback adds no layout or style work in the editor. A press on the picture costs one `elementsFromPoint` in the preview and style reads for the elements under the pointer. Only an editor hit test temporarily enables pointer events. Classification shares that style pass, and `finally` removes the rule before returning. Captures never request hits; no pointer override stays installed.
 
 `bun run test:perf` collects `cutroom:clip-box` and `cutroom:picture-hit` measures on the 500-clip workload, beside the Position observation above. Every box read must finish within 5 ms and the usual playback read within 0.5 ms; an unselected run must make none; the selected condition's late-frame rate may not rise by five percentage points; and each of ten hit tests must finish within 8 ms.
 
-On November 11, 2026, installed Chromium 155 at 1720×1050 ran that workload on a shared machine: 240 linked picture and sound pieces plus 20 titles, with a Position-edited title selected or nothing selected, three runs each.
+Before the pointer-events review fix, on November 11, 2026, installed Chromium 155 at 1720×1050 ran that workload on a shared machine: 240 linked picture and sound pieces plus 20 titles, with a Position-edited title selected or nothing selected, three runs each.
 
 | 500 clips                         | Box reads per run | Usual read | p95 read | Slowest read | Late frames per run |
 | --------------------------------- | ----------------: | ---------: | -------: | -----------: | ------------------: |
@@ -261,3 +261,5 @@ On November 11, 2026, installed Chromium 155 at 1720×1050 ran that workload on 
 | Ruler scrub, title selected       |        95, 95, 95 |     0.5 ms |   0.7 ms |       1.0 ms |             5, 7, 3 |
 
 Playback reads once per displayed frame and usually finds the layout the frame already made. A scrub read follows each seek and pays for the layout that seek left pending, which the next paint would otherwise do. Ten presses on the picture, five on the video and five on the title's glyphs, took 0.1 to 0.5 ms each in the preview. [The run's measures](https://github.com/AksharP5/cutroom/blob/pr-assets/on-picture/outline-timing.json) list every read and frame gap. They describe this host, not every machine.
+
+Removing the persistent pointer override adds a style pass to each hit. The first review fix restored the rule before classification and forced a second pass: ten hits reached 9.8 ms and failed the 8 ms gate. Keeping the synchronous hit and classification together, with cleanup in `finally`, passed the affected performance test on the same 500-clip workload. The ten hits ranged from 2.5 to 6.9 ms. Position observations stayed at or below 0.2 ms, outline reads at or below 1.0 ms, and unselected runs made no observations or box reads. The other four performance tests passed in the completed full run. These are local shared-machine measurements.

@@ -32,7 +32,7 @@ const position = z
   );
 
 /**
- * Plain clip text as HTML lays it out by default: lines break only at `\n` (a `<br>` in the source),
+ * Plain clip text: explicit breaks and preserved source line breaks use `\n`,
  * whitespace runs collapse to one space, and each line is trimmed. No-break spaces are content.
  */
 export const canonicalText = (text: string) =>
@@ -88,7 +88,7 @@ export const ClipSchema = z.object({
     .nullable()
     .default(null)
     .describe(
-      "The words of a text element, with line breaks at <br>; null for media and elements without text. setClip.text replaces them unless sourceRestrictions.text says why it cannot.",
+      "The words of a text element, with line breaks at <br> and preserved source newlines; null for media and elements without text. setClip.text replaces them unless sourceRestrictions.text says why it cannot.",
     ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
@@ -367,7 +367,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .refine((text) => text.length > 0, "Text cannot be empty.")
         .optional()
         .describe(
-          "Replace a text element's words. Newlines become <br>; other whitespace collapses as HTML renders it. Refused for media, elements without text, and text with nested markup or a script that writes it.",
+          "Replace a text element's words. Newlines become <br>; other whitespace collapses as HTML renders it. Refused for media, elements without text, and nested markup, uncertain multiline whitespace, or certain script writes by id. Other scripts can replace the saved words. Verify with timeline_view frames.",
         ),
       enabled: z
         .boolean()

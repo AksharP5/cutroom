@@ -1,4 +1,11 @@
-import { copyFile, readFile } from "node:fs/promises";
+import { z } from "zod";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -35,11 +42,15 @@ main{position:relative;width:640px;height:360px;overflow:hidden}
 <script>window.__timelines.main=gsap.timeline({paused:true}).to('#slide',{x:300,duration:2,ease:'none'},1);</script>
 </body></html>`;
 
-async function open(page: Page, request: APIRequestContext) {
+async function open(
+  page: Page,
+  request: APIRequestContext,
+  html = composition,
+) {
   const project = await createPositionProject(
     request,
     { name: "On picture", width: 640, height: 360, duration: 4 },
-    composition,
+    html,
   );
   await copyFile(
     join(process.cwd(), "node_modules/gsap/dist/gsap.min.js"),
@@ -370,4 +381,275 @@ test("the inspector edits a title's words in one undo step and refuses text with
     "This text has markup inside it. Edit it in the source.",
   );
   expect(await source()).toContain("<b>Ada Park</b> <span>Editor</span>");
+});
+
+test("a held picture drag refuses a concurrent edit to the same clip", async ({
+  page,
+  request,
+}) => {
+  const { project, at, selected, drawn } = await open(page, request);
+  await page.mouse.move(...at(100, 125));
+  await page.mouse.down();
+  await page.mouse.move(...at(120, 125), { steps: 4 });
+  await expect(selected).toHaveText("Title");
+  await expect.poll(async () => (await drawn("title")).left).toBe(80);
+  const path = `/api/cutroom/projects/${project.id}/timeline`;
+  const before = TimelineViewSchema.parse(
+    await (await request.get(path)).json(),
+  );
+  const loaded = page.waitForResponse(
+    (r) => r.request().method() === "GET" && r.url().endsWith("/timeline"),
+  );
+  const changed = await request.post(
+    `/api/cutroom/projects/${project.id}/commands`,
+    {
+      data: {
+        expectedRevision: before.revision,
+        commands: [{ type: "setClip", clipId: "title", x: 100 }],
+      },
+    },
+  );
+  expect(changed.ok()).toBe(true);
+  await loaded;
+  await page.mouse.up();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "changed those clips first" }),
+  ).toBeVisible();
+  await expect(positionField(page)).toHaveValue("100 px");
+  const after = TimelineViewSchema.parse(
+    await (await request.get(path)).json(),
+  );
+  expect(after.timeline.clips.find((c) => c.id === "title")!.x).toBe(100);
+  await expect.poll(async () => (await drawn("title")).left).toBe(160);
+});
+
+test("a border paints only its edges when choosing a clip", async ({
+  page,
+  request,
+}) => {
+  const { at, selected } = await open(
+    page,
+    request,
+    composition.replace(
+      "#words{",
+      "#words{border:15px solid white;box-sizing:border-box;",
+    ),
+  );
+  await page.mouse.click(...at(345, 260));
+  await expect(selected).toHaveText("Words");
+  await page.mouse.click(...at(100, 180));
+  await expect(selected).toHaveText("Shot");
+  await page.mouse.click(...at(500, 280));
+  await expect(selected).toHaveText("Shot");
+});
+
+test("changing tools releases the picture's arrow keys and hides the grab handles", async ({
+  page,
+  request,
+}) => {
+  const { at, selected, commands } = await open(page, request);
+  await page.mouse.click(...at(100, 125));
+  await expect(selected).toHaveText("Title");
+  await page.mouse.click(...at(100, 125));
+  const handle = page.locator(".edit-select-outline b").first();
+  await expect(handle).toBeVisible();
+  await page.keyboard.press("n");
+  await expect(handle).toBeHidden();
+  await expect(
+    page.getByRole("application", { name: "Picture" }),
+  ).not.toBeFocused();
+  await page.keyboard.press("a");
+  await expect(handle).toBeHidden();
+  await expect(
+    page.getByRole("application", { name: "Picture" }),
+  ).toHaveAttribute("title", /click the selected clip again/i);
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    page.getByRole("button", {
+      name: "Current time. Click to type a time.",
+      exact: true,
+    }),
+  ).toHaveText("00:00:00:01");
+  expect(commands).toHaveLength(0);
+});
+
+test("class-targeted script text saves and warns only where the shown frame replaces it", async ({
+  page,
+  request,
+}) => {
+  const html = composition
+    .replace("#title{", "#title{text-transform:uppercase;")
+    .replace('id="title" class="clip"', 'id="title" class="clip live-title"')
+    .replace(
+      "window.__timelines.main=",
+      "const words=document.querySelector('.live-title'); const saved=words.textContent; const state={t:0}; window.__timelines.main=",
+    )
+    .replace(
+      ".to('#slide'",
+      ".to(state,{t:3,duration:3,ease:'none',onUpdate:()=>{words.textContent=state.t>=1&&state.t<2?'Script words':saved}},0).to('#slide'",
+    );
+  const { project, at } = await open(page, request, html);
+  await page.mouse.click(...at(100, 125));
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const field = inspector.getByRole("textbox", { name: "Text", exact: true });
+  const warning = inspector.getByRole("status");
+  await expect(field).toBeEnabled();
+  await field.fill("Committed words");
+  await field.press("Enter");
+  await expect(field).toHaveValue("Committed words");
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#title"),
+  ).toHaveText("Committed words");
+  await expect(warning).toHaveCount(0);
+  for (const frame of [30, 60, 30, 0]) {
+    await seekFrame(page, frame);
+    if (frame === 30) {
+      await expect(warning).toHaveText(
+        "This clip's script replaces its text at 00:00:01:00.",
+      );
+      await expect(field).toBeEnabled();
+    } else await expect(warning).toHaveCount(0);
+  }
+  expect(await readFile(join(project.path, "index.html"), "utf8")).toContain(
+    ">Committed words</div>",
+  );
+});
+
+test("inline pre-line edits retain both lines and uncertain stylesheet whitespace is disabled", async ({
+  page,
+  request,
+}) => {
+  const multiline = composition.replace(
+    ">Launch day</div>",
+    ">First line\nSecond line</div>",
+  );
+  const { project, at } = await open(
+    page,
+    request,
+    multiline.replace(
+      'id="title" class="clip"',
+      'id="title" class="clip" style="white-space:pre-line"',
+    ),
+  );
+  await page.mouse.click(...at(100, 125));
+  const field = page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("textbox", { name: "Text", exact: true });
+  await expect(field).toHaveValue("First line\nSecond line");
+  await expect(field).toBeEnabled();
+  await field.fill("Updated line\nSecond line");
+  await field.press("Enter");
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#title"),
+  ).toHaveText("Updated lineSecond line");
+  expect(await readFile(join(project.path, "index.html"), "utf8")).toContain(
+    "Updated line<br>Second line",
+  );
+  const styled = await open(
+    page,
+    request,
+    multiline.replace("#title{", "#title{white-space:pre-line;"),
+  );
+  await page.mouse.click(...styled.at(100, 125));
+  await expect(field).toHaveValue("First line\nSecond line");
+  await expect(field).toBeDisabled();
+  await expect(
+    page.getByRole("complementary", { name: "Inspector" }),
+  ).toContainText(
+    "This text may preserve source line breaks. Edit it in the source.",
+  );
+  expect(
+    await readFile(join(styled.project.path, "index.html"), "utf8"),
+  ).toContain("First line\nSecond line");
+});
+
+test("pointer-events stays authored in editor, thumbnail, timeline_view and MP4", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  test.setTimeout(120_000);
+  const project = await createPositionProject(
+    request,
+    { name: "Pointer style parity", width: 320, height: 240, duration: 1 },
+    `<!doctype html><html><head><style>html,body{margin:0}main{width:320px;height:240px}#paint{position:absolute;inset:0;pointer-events:none}</style></head><body><main id="main" data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="1"><div id="paint" data-start="0" data-duration="1"></div></main><script>const paint=document.getElementById('paint'); function draw(){paint.style.background=getComputedStyle(paint).pointerEvents==='none'?'rgb(0,255,0)':'rgb(255,0,255)';requestAnimationFrame(draw)}draw();</script></body></html>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  const painted = page.frameLocator("iframe[data-live]").locator("#paint");
+  await expect(painted).toHaveCSS("pointer-events", "none");
+  // Hit-testing still selects the pointer-transparent clip, without changing its paint.
+  await page.locator(".edit-select").click({ position: { x: 100, y: 100 } });
+  await expect(page.locator(".inspector-clip strong")).toHaveText("Paint");
+  await expect(painted).toHaveCSS("pointer-events", "none");
+  await expect(painted).toHaveCSS("background-color", "rgb(0, 255, 0)");
+  const editor = info.outputPath("editor.png");
+  await painted.screenshot({ path: editor });
+  const thumb = await request.get(
+    `/api/projects/${project.id}/thumbnail/index.html?t=0&format=jpeg&output=source`,
+  );
+  expect(thumb.ok()).toBe(true);
+  const thumbnail = info.outputPath("thumbnail.jpg");
+  await writeFile(thumbnail, await thumb.body());
+  const client = new Client({ name: "pointer-style-parity", version: "1.0" });
+  const timeline = info.outputPath("timeline-view.jpg");
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${baseURL}/mcp`), {
+        requestInit: { headers: { origin: baseURL! } },
+      }),
+    );
+    const result = await client.callTool({
+      name: "timeline_view",
+      arguments: { projectId: project.id, frame: 0 },
+    });
+    expect(result.isError).not.toBe(true);
+    const image = CallToolResultSchema.parse(result).content.find(
+      (item) => item.type === "image",
+    );
+    if (!image || image.type !== "image")
+      throw new Error("No timeline_view image");
+    await writeFile(timeline, Buffer.from(image.data, "base64"));
+  } finally {
+    await client.close();
+  }
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith("/render"),
+  );
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await dialog.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 90_000 });
+  const mp4 = info.outputPath("export.mp4");
+  await writeFile(
+    mp4,
+    await (await request.get(`/api/render/${jobId}/download`)).body(),
+  );
+  for (const file of [editor, thumbnail, timeline, mp4]) {
+    const { stdout } = await promisify(execFile)(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-i",
+        file,
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=1:1",
+        "-pix_fmt",
+        "rgb24",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+      ],
+      { encoding: "buffer" },
+    );
+    expect(stdout[0], file).toBeLessThan(10);
+    expect(stdout[1], file).toBeGreaterThan(240);
+    expect(stdout[2], file).toBeLessThan(10);
+  }
 });

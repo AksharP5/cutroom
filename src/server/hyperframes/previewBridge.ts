@@ -1,6 +1,7 @@
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { canonicalText } from "../../shared/timeline/schema";
 import type { EditFrame } from "../../shared/preview";
 
 interface PreviewWindow extends Window {
@@ -29,7 +30,8 @@ interface PreviewWindow extends Window {
 }
 
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
-function installPreviewBridge() {
+function installPreviewBridge(texts: [string, string[]][] = []) {
+  const sourceTexts = new Map(texts);
   const win = window as PreviewWindow;
   const positions = new Map<
     HTMLElement | SVGElement,
@@ -101,6 +103,46 @@ function installPreviewBridge() {
       observationTimer = window.setTimeout(scheduleObservation, 350);
   };
   let observedClip: string | null = null;
+  let observedText: string | null = null;
+  const checkText = () => {
+    if (!observedClip || observedText === null) return;
+    // A saved edit can be observed before its replacement document is promoted. Only compare
+    // against the document containing that source, never the held picture of an earlier edit.
+    if (!sourceTexts.get(observedClip)?.includes(observedText)) return;
+    const element = document.getElementById(observedClip);
+    if (!element) return;
+    // Read the painted text nodes rather than innerText's CSS text-transform result: a
+    // capitalized title still contains the committed words. Keep authored <br> boundaries.
+    const preserveLines = /^(?:pre|pre-wrap|pre-line|break-spaces)$/.test(
+      getComputedStyle(element).whiteSpace,
+    );
+    const words = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.nodeValue ?? "";
+        return preserveLines ? text : text.replace(/[\t\n\f\r ]+/g, " ");
+      }
+      if (node instanceof HTMLElement && node.tagName === "BR") return "\n";
+      return [...node.childNodes].map(words).join("");
+    };
+    const rendered = words(element)
+      .split(/\r\n?|\n/)
+      .map((line) => line.replace(/[\t\f ]+/g, " ").replace(/^ | $/g, ""))
+      .join("\n")
+      .replace(/^\n+|\n+$/g, "");
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "text-warning",
+        clipId: observedClip,
+        text: observedText,
+        time: win.__player?.getTime() ?? 0,
+        overridden:
+          element.checkVisibility({ checkVisibilityCSS: true }) &&
+          rendered !== observedText,
+      },
+      "*",
+    );
+  };
   let observationTimer = 0;
   let observingPosition = false;
   let observationFrame = 0;
@@ -286,6 +328,7 @@ function installPreviewBridge() {
             scheduleObservation();
             return;
           }
+          checkText();
           checkPosition(foldedClip);
           foldedClip = null;
           observePlaying();
@@ -300,7 +343,11 @@ function installPreviewBridge() {
   };
   const observePlaying = () => {
     clearTimeout(observationTimer);
-    if (!observedClip || !observingPosition || !win.__player?.isPlaying())
+    if (
+      !observedClip ||
+      (!observingPosition && observedText === null) ||
+      !win.__player?.isPlaying()
+    )
       return;
     observationTimer = window.setTimeout(() => {
       scheduleObservation();
@@ -385,6 +432,32 @@ function installPreviewBridge() {
         )
       )
         return true;
+      // A transparent box can still paint its border. Its empty centre stays click-through.
+      if (!pseudo) {
+        const rect = element.getBoundingClientRect();
+        for (const [side, distance] of [
+          ["Left", x - rect.left],
+          ["Right", rect.right - x],
+          ["Top", y - rect.top],
+          ["Bottom", rect.bottom - y],
+        ] as const) {
+          const edge = side.toLowerCase();
+          const width = Number.parseFloat(
+            style.getPropertyValue(`border-${edge}-width`),
+          );
+          if (
+            distance >= 0 &&
+            distance <= width &&
+            !["none", "hidden"].includes(
+              style.getPropertyValue(`border-${edge}-style`),
+            ) &&
+            !/^(?:transparent|rgba\(.+,\s*0\)|.+\/\s*0\))$/.test(
+              style.getPropertyValue(`border-${edge}-color`),
+            )
+          )
+            return true;
+        }
+      }
     }
     const range = document.createRange();
     for (const node of element.childNodes) {
@@ -408,27 +481,41 @@ function installPreviewBridge() {
   const clipsAt = (x: number, y: number) => {
     const root = document.querySelector("[data-composition-id]");
     const hits = new Map<Element, boolean>();
-    for (const element of document.elementsFromPoint(x, y)) {
-      if (!root?.contains(element) || element === root) continue;
-      if (element.hasAttribute("data-cutroom-edit-frame")) continue;
-      const source = element.hasAttribute("data-cutroom-video-hold")
-        ? element.previousElementSibling
-        : element;
-      let clip: Element | null = null;
-      for (let node = source; node && node !== root; node = node.parentElement)
-        if (
-          node.matches(
-            "[data-start],[data-composition-src],[data-composition-id],[data-track-index][data-duration],video,audio,img",
-          )
+    // Only the editor requests hits. Restore authored styles synchronously, before any
+    // composition script, observer, paint or capture can see a different pointer-events value.
+    const style = document.createElement("style");
+    style.textContent = "* { pointer-events: auto !important; }";
+    document.head.append(style);
+    try {
+      // Classify before restoring the rule so these reads share the hit test's style pass.
+      for (const element of document.elementsFromPoint(x, y)) {
+        if (!root?.contains(element) || element === root) continue;
+        if (element.hasAttribute("data-cutroom-edit-frame")) continue;
+        const source = element.hasAttribute("data-cutroom-video-hold")
+          ? element.previousElementSibling
+          : element;
+        let clip: Element | null = null;
+        for (
+          let node = source;
+          node && node !== root;
+          node = node.parentElement
         )
-          clip = node;
-      if (!clip?.id || !clip.hasAttribute("data-start")) continue;
-      hits.set(clip, hits.get(clip) || paintsAt(element, x, y));
+          if (
+            node.matches(
+              "[data-start],[data-composition-src],[data-composition-id],[data-track-index][data-duration],video,audio,img",
+            )
+          )
+            clip = node;
+        if (!clip?.id || !clip.hasAttribute("data-start")) continue;
+        hits.set(clip, hits.get(clip) || paintsAt(element, x, y));
+      }
+      return [...hits].flatMap(([clip, painted]) => {
+        const box = boxOf(clip);
+        return box ? [{ clipId: clip.id, painted, box }] : [];
+      });
+    } finally {
+      style.remove();
     }
-    return [...hits].flatMap(([clip, painted]) => {
-      const box = boxOf(clip);
-      return box ? [{ clipId: clip.id, painted, box }] : [];
-    });
   };
   let metering = false;
   let animation = 0;
@@ -643,10 +730,7 @@ function installPreviewBridge() {
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
     "video[data-cutroom-held] { visibility: hidden !important; }" +
-    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }" +
-    // The editor never forwards pointer events here. Hit tests must still find overlays
-    // authored with pointer-events: none, and the canvases that hold paused video.
-    "* { pointer-events: auto !important; }";
+    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }";
   document.head.append(holdStyle);
   const cancelRelease = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
@@ -908,7 +992,13 @@ function installPreviewBridge() {
             !(data.clipId === null || typeof data.clipId === "string")
           )
             return;
+          if (
+            !("text" in data) ||
+            !(data.text === null || typeof data.text === "string")
+          )
+            return;
           observedClip = data.clipId;
+          observedText = data.text;
           postedBox = "";
           scheduleObservation();
           if (!boxFrame && win.__player?.isPlaying())
@@ -1063,8 +1153,6 @@ function installPreviewBridge() {
   });
 }
 
-export const previewBridgeScript = `(${installPreviewBridge.toString()})();`;
-
 export function withPreviewBridge(html: string) {
   const document = parse(html, { sourceCodeLocationInfo: true });
   const root = document.childNodes.find((node) => node.nodeName === "html");
@@ -1074,9 +1162,8 @@ export function withPreviewBridge(html: string) {
       : undefined;
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
-  const edits = [
-    { offset, end: offset, text: `<script>${previewBridgeScript}</script>` },
-  ];
+  const sourceTexts: [string, string[]][] = [];
+  const edits: { offset: number; end: number; text: string }[] = [];
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
@@ -1091,6 +1178,35 @@ export function withPreviewBridge(html: string) {
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
+      const id = timing.get("id");
+      if (id && timing.has("data-start")) {
+        const text = node.childNodes
+          .map((child) =>
+            "value" in child
+              ? child.value
+              : "tagName" in child && child.tagName === "br"
+                ? "\n"
+                : "",
+          )
+          .join("");
+        sourceTexts.push([
+          id,
+          [
+            canonicalText(text),
+            canonicalText(
+              node.childNodes
+                .map((child) =>
+                  "value" in child
+                    ? child.value.replace(/[\t\n\f\r ]+/g, " ")
+                    : "tagName" in child && child.tagName === "br"
+                      ? "\n"
+                      : "",
+                )
+                .join(""),
+            ),
+          ],
+        ]);
+      }
       const start = Number(timing.get("data-start"));
       const duration = Number(timing.get("data-duration"));
       const end = timing.has("data-duration")
@@ -1134,6 +1250,13 @@ export function withPreviewBridge(html: string) {
     }
   };
   visit(document.childNodes);
+  // Escape '<' so authored words cannot terminate the bridge's script element.
+  const texts = JSON.stringify(sourceTexts).replaceAll("<", "\\u003c");
+  edits.push({
+    offset,
+    end: offset,
+    text: `<script>(${installPreviewBridge.toString()})(${texts});</script>`,
+  });
   return edits
     .sort((a, b) => b.offset - a.offset)
     .reduce(

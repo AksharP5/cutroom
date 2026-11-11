@@ -26,6 +26,7 @@ import {
   previewPosition,
   observePosition,
   usePositionWarning,
+  useTextWarning,
   cancelPositionPreview,
   commitPositionPreview,
   usePictureMove,
@@ -155,9 +156,22 @@ export function Inspector({ projectId }: { projectId: string }) {
   const clip = subject?.clip;
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
-    observePosition(clip && !isAudioKind(clip.kind) ? clip.id : null);
+    observePosition(
+      clip && !isAudioKind(clip.kind) ? clip.id : null,
+      clip?.sourceRestrictions?.text ? null : (clip?.text ?? null),
+    );
     return () => observePosition(null);
-  }, [projectId, clip?.id]);
+  }, [projectId, clip?.id, clip?.text, clip?.sourceRestrictions?.text]);
+  const textWarning = useTextWarning((state) => state.warning);
+  const textWarningFrame =
+    textWarning &&
+    textWarning.clipId === clip?.id &&
+    textWarning.text === clip?.text &&
+    timeline
+      ? Math.floor(
+          (textWarning.time * timeline.fps.num) / timeline.fps.den + 1e-6,
+        )
+      : null;
   const positionWarning = warning?.clipId === clip?.id ? warning : null;
   const warningFrame =
     positionWarning && timeline
@@ -267,6 +281,15 @@ export function Inspector({ projectId }: { projectId: string }) {
                   ]);
                 }}
               />
+              {textWarningFrame !== null && timeline && (
+                <p className="inspector-warning" role="status">
+                  <Warning size={14} aria-hidden />
+                  <span>
+                    This clip's script replaces its text at{" "}
+                    {formatTimecode(textWarningFrame, timeline.fps)}.
+                  </span>
+                </p>
+              )}
             </details>
           )}
           {!isAudioKind(clip.kind) && (

@@ -917,3 +917,53 @@ test("text with markup inside or a script that writes it is shown but never rewr
     html.replace("Fades in", "New"),
   );
 });
+
+test("inline pre-line keeps source newlines in the field and in a text edit", () => {
+  const html = composition(
+    '<div id="title" data-start="0" data-duration="2" style="white-space:pre-line">First\nSecond</div>',
+  );
+  const clip = parseComposition(html, emptyTimelineSettings()).timeline
+    .clips[0]!;
+  expect(clip.text).toBe("First\nSecond");
+  expect(clip.sourceRestrictions?.text).toBeUndefined();
+  const written = edit(html, [
+    { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+  ]);
+  expect(written).toContain(">Updated<br>Second</div>");
+  expect(
+    parseComposition(written, emptyTimelineSettings()).timeline.clips[0]!.text,
+  ).toBe("Updated\nSecond");
+});
+
+test("uncertain stylesheet whitespace preserves source newlines and refuses a lossy edit", () => {
+  for (const sheet of [
+    "<style>.title{white-space:pre-line}</style>",
+    '<link rel="stylesheet" href="type.css">',
+  ]) {
+    const html = composition(
+      `${sheet}<div id="title" class="title" data-start="0" data-duration="2">First\nSecond</div>`,
+    );
+    const clip = parseComposition(html, emptyTimelineSettings()).timeline
+      .clips[0]!;
+    expect(clip.text).toBe("First\nSecond");
+    expect(clip.sourceRestrictions?.text).toContain("source line breaks");
+    expect(() =>
+      edit(html, [
+        { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+      ]),
+    ).toThrow("source line breaks");
+  }
+  for (const whiteSpace of ["pre", "pre-wrap", "break-spaces"]) {
+    const html = composition(
+      `<div id="title" data-start="0" data-duration="2" style="white-space:${whiteSpace}">First\nSecond</div>`,
+    );
+    const clip = parseComposition(html, emptyTimelineSettings()).timeline
+      .clips[0]!;
+    expect(clip.text).toBe("First\nSecond");
+    expect(() =>
+      edit(html, [
+        { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+      ]),
+    ).toThrow("exact spacing");
+  }
+});

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { PictureBox, PictureHit } from "../../shared/preview";
 import { isAudioKind } from "../../shared/timeline/schema";
-import type { Clip } from "../../shared/timeline/schema";
+import type { Clip, Timeline } from "../../shared/timeline/schema";
 import { SNAP_PX } from "../timeline/gesture";
 import { clickSelection, emptySelection } from "../timeline/selection";
 import { useWorkspace } from "../workspace";
@@ -34,12 +34,14 @@ interface Offset {
 
 /** One Position change in flight: where the clip was and where the gesture has put it. */
 interface Move {
+  timeline: Timeline;
   clip: Clip;
   from: Offset;
   to: Offset;
 }
 
 interface Press {
+  timeline: Timeline;
   /** Where it landed, in screen and composition pixels. */
   client: Offset;
   at: Offset;
@@ -87,8 +89,8 @@ export function PictureSelect({
     clip &&
     view?.timeline.tracks.find((track) => track.index === clip.track)?.locked,
   );
-  const latest = useRef({ projectId, frame, scale, clip, locked });
-  latest.current = { projectId, frame, scale, clip, locked };
+  const latest = useRef({ projectId, frame, scale, clip, locked, active });
+  latest.current = { projectId, frame, scale, clip, locked, active };
 
   const surface = useRef<HTMLDivElement>(null);
   const outline = useRef<HTMLDivElement>(null);
@@ -181,9 +183,12 @@ export function PictureSelect({
     }
     const { projectId } = latest.current;
     void commitPositionPreview(() =>
-      editTimeline(projectId, "Edit position", () => [
-        { type: "setClip", clipId: clip.id, x: to.x, y: to.y },
-      ]),
+      editTimeline(
+        projectId,
+        "Edit position",
+        () => [{ type: "setClip", clipId: clip.id, x: to.x, y: to.y }],
+        move.timeline,
+      ),
     );
     // The timeline already shows the edit, so the fields go straight to the new value.
     usePictureMove.setState({ move: null });
@@ -206,7 +211,7 @@ export function PictureSelect({
 
   /** Runs on every pointer event and when the preview answers, whichever comes last. */
   const act = (current: Press) => {
-    if (!current.hits || current.idle) return;
+    if (!latest.current.active || !current.hits || current.idle) return;
     const { view } = useTimeline.getState();
     if (!view) return;
     const { frame, scale, clip } = latest.current;
@@ -238,7 +243,7 @@ export function PictureSelect({
         DRAG_PX
       )
         return;
-      const target = view.timeline.clips.find(
+      const target = current.timeline.clips.find(
         (item) => item.id === hit?.clipId,
       );
       if (!hit || !target) {
@@ -248,7 +253,13 @@ export function PictureSelect({
       }
       if (target.id !== clip?.id) select(hit, false);
       const from = { x: target.x ?? 0, y: target.y ?? 0 };
-      current.drag = { clip: target, from, to: from, box: hit.box };
+      current.drag = {
+        timeline: current.timeline,
+        clip: target,
+        from,
+        to: from,
+        box: hit.box,
+      };
       grab();
       // Like a timeline drag, this one owns Esc while it lasts.
       useWorkspace.setState({ gesture: true });
@@ -352,6 +363,8 @@ export function PictureSelect({
     if (active) return;
     end(true);
     endNudge(false);
+    surface.current?.blur();
+    if (surface.current) delete surface.current.dataset.grabbed;
   }, [active]);
   useEffect(() => () => endNudge(false), [clip?.id]);
 
@@ -363,12 +376,18 @@ export function PictureSelect({
       role="application"
       aria-label="Picture"
       aria-describedby="edit-select-help"
+      title={
+        active && clip
+          ? "Drag to move. Click the selected clip again to nudge with arrow keys."
+          : undefined
+      }
       data-active={active || undefined}
       tabIndex={active ? 0 : -1}
       // Focus is given by hand: only a grab of the selected clip hands the arrows to the picture.
       onMouseDown={(event) => event.preventDefault()}
       onPointerDown={(event) => {
-        if (!active || event.button !== 0 || press.current) return;
+        const timeline = useTimeline.getState().view?.timeline;
+        if (!active || !timeline || event.button !== 0 || press.current) return;
         // A press still ends typing elsewhere, as a click on any other part of the editor does.
         const focused = document.activeElement;
         if (focused instanceof HTMLElement && focused !== event.currentTarget)
@@ -381,6 +400,7 @@ export function PictureSelect({
         };
         event.currentTarget.setPointerCapture(event.pointerId);
         const current: Press = {
+          timeline,
           client,
           at,
           cycle: event.altKey,
@@ -447,6 +467,8 @@ export function PictureSelect({
           !step ||
           !active ||
           !clip ||
+          !view ||
+          !event.currentTarget.hasAttribute("data-grabbed") ||
           locked ||
           press.current ||
           event.ctrlKey ||
@@ -458,6 +480,7 @@ export function PictureSelect({
         event.preventDefault();
         const from = { x: clip.x ?? 0, y: clip.y ?? 0 };
         const current = (nudge.current ??= {
+          timeline: view.timeline,
           clip,
           from,
           to: from,

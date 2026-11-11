@@ -89,3 +89,8 @@ export const PositionFoldSchema = z.object({
   event: z.literal("position_edit_fold_skipped"),
   properties: z.object({ hfId: z.string().nullable() }),
 });
+
+export const TextWarningSchema = PositionWarningSchema.extend({
+  type: z.literal("text-warning"),
+  text: z.string(),
+});

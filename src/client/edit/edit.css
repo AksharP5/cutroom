@@ -254,7 +254,7 @@
   height: calc(var(--space-1) + var(--stroke-selection));
   box-shadow: 0 0 0 var(--stroke-hair) var(--pencil-casing);
 }
-.edit-select:focus .edit-select-outline b {
+.edit-select[data-active][data-grabbed]:focus .edit-select-outline b {
   display: block;
 }
 .edit-select-guides i[data-axis="x"] {

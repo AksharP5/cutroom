@@ -4,6 +4,7 @@ import { audioLevels } from "./levels";
 import {
   ClipBoxSchema,
   PositionWarningSchema,
+  TextWarningSchema,
   PositionFoldSchema,
   PreviewLevelsSchema,
   PlaybackClockSchema,
@@ -28,11 +29,20 @@ import { seekQueue } from "./seekQueue";
 export const usePositionWarning = create<{
   warning: { clipId: string; time: number } | null;
 }>(() => ({ warning: null }));
+export const useTextWarning = create<{
+  warning: { clipId: string; time: number; text: string } | null;
+}>(() => ({ warning: null }));
 let observedClip: string | null = null;
+let observedText: string | null = null;
 let warningSource: HTMLIFrameElement | null = null;
 const observers = new Set<(clipId: string | null) => void>();
-export function observePosition(clipId: string | null) {
+export function observePosition(
+  clipId: string | null,
+  text: string | null = null,
+) {
   observedClip = clipId;
+  observedText = text;
+  useTextWarning.setState({ warning: null });
   usePositionWarning.setState({ warning: null });
   pictureBox.publish(null);
   for (const observe of observers) observe(clipId);
@@ -138,6 +148,19 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
           });
         return;
       }
+      const textWarning = TextWarningSchema.safeParse(event.data);
+      if (textWarning.success) {
+        const { clipId, time, text, overridden } = textWarning.data;
+        if (
+          frame === warningSource &&
+          clipId === observedClip &&
+          text === observedText
+        )
+          useTextWarning.setState({
+            warning: overridden ? { clipId, time, text } : null,
+          });
+        return;
+      }
       const box = ClipBoxSchema.safeParse(event.data);
       if (box.success) {
         if (frame === warningSource && box.data.clipId === observedClip)
@@ -224,7 +247,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     send("position", draft);
   };
   const observe = (clipId: string | null) =>
-    send("observe-position", { clipId });
+    send("observe-position", { clipId, text: observedText });
   const hit = async (x: number, y: number) =>
     (await request("hit", { x, y })).hits ?? [];
   const edit = seekQueue<EditPicture | null>(
@@ -251,6 +274,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (warningSource === frame) {
       warningSource = null;
       usePositionWarning.setState({ warning: null });
+      useTextWarning.setState({ warning: null });
       pictureBox.publish(null);
     }
     if (hitTarget === hit) hitTarget = null;

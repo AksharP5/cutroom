@@ -95,6 +95,8 @@ export interface ParsedComposition {
   ids: Set<string>;
   scripts: string[];
   scriptsAndStyles: string[];
+  /** Source line breaks stay visible when CSS might preserve them; uncertain cascades refuse edits. */
+  textLayout: Map<SourceElement, { preserveLines: boolean; reason?: string }>;
   /** Source range of every element (start tag through end tag) and text node, in tree order. */
   nodes: SourceRange[];
   /**
@@ -217,7 +219,7 @@ const HTML_SPACE = /[\t\n\f\r ]+/g;
  * A text element's words, with `<br>` as a line break. `plain` is false when anything else is
  * inside, such as a `<span>` or a comment, which a text edit would delete.
  */
-function elementText(element: SourceElement) {
+function elementText(element: SourceElement, preserveLines = false) {
   if (
     element.tag === "svg" ||
     element.tag === "canvas" ||
@@ -229,7 +231,10 @@ function elementText(element: SourceElement) {
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
       if (defaultTreeAdapter.isTextNode(node))
-        text += node.value.replace(HTML_SPACE, " ");
+        text += node.value.replace(
+          preserveLines ? /[\t\f ]+/g : HTML_SPACE,
+          " ",
+        );
       else if (!defaultTreeAdapter.isElementNode(node)) plain = false;
       else if (node.tagName === "br") text += "\n";
       else {
@@ -492,6 +497,43 @@ export function parseComposition(
     rows.push({ id, element, read, start, end });
   }
 
+  // CSS selectors, inheritance and external sheets are not a CSS cascade we
+  // can resolve in this parser. Keep multiline source visible and refuse uncertain rewrites.
+  const sharedWhiteSpace = all.some(
+    (element) =>
+      ["pre", "textarea"].includes(element.tag) ||
+      (element.tag === "style" &&
+        /white-space\s*:/i.test(html.slice(element.openEnd, element.end))) ||
+      (element.tag === "link" &&
+        /\bstylesheet\b/i.test(element.attrs.rel ?? "")),
+  );
+  const inlineWhiteSpace = all.filter((element) =>
+    /white-space\s*:/i.test(element.attrs.style ?? ""),
+  );
+  const textLayout: ParsedComposition["textLayout"] = new Map();
+  for (const { element } of rows) {
+    const preserveLines =
+      sharedWhiteSpace ||
+      inlineWhiteSpace.length > 0 ||
+      ["pre", "textarea"].includes(element.tag);
+    const multiline = elementText(element, true)?.text.includes("\n");
+    const inlinePreLine =
+      !sharedWhiteSpace &&
+      inlineWhiteSpace.length === 1 &&
+      inlineWhiteSpace[0] === element &&
+      /(?:^|;)\s*white-space\s*:\s*pre-line\s*(?:!important\s*)?(?:;|$)/i.test(
+        element.attrs.style ?? "",
+      );
+    textLayout.set(element, {
+      preserveLines,
+      ...(preserveLines &&
+        multiline &&
+        !inlinePreLine && {
+          reason:
+            "This text may preserve source line breaks. Edit it in the source.",
+        }),
+    });
+  }
   const clips = rows.map(({ id, element, read, start, end }): Clip => {
     const kind = clipKind(element);
     const attribute = (name: string) => element.attrs[name] ?? null;
@@ -548,7 +590,11 @@ export function parseComposition(
       opacity: readOpacity(element.attrs.style),
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
       y: isAudioKind(kind) ? null : readPosition(element.attrs, "y"),
-      text: kind === "element" ? (elementText(element)?.text ?? null) : null,
+      text:
+        kind === "element"
+          ? (elementText(element, textLayout.get(element)?.preserveLines)
+              ?.text ?? null)
+          : null,
       fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
       fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
@@ -597,6 +643,7 @@ export function parseComposition(
     scope,
     root,
     rootDurationAuthored,
+    textLayout,
     elements: new Map(rows.map(({ id, element }) => [id, element])),
     anonymous,
     ids: new Set(byId.keys()),
@@ -992,9 +1039,13 @@ function textRestriction(
   if (
     element.tag === "pre" ||
     element.tag === "textarea" ||
-    /white-space\s*:\s*(?:pre|break-spaces)/.test(element.attrs.style ?? "")
+    /white-space\s*:\s*(?:pre(?:-wrap)?|break-spaces)(?:\s|;|!|$)/i.test(
+      element.attrs.style ?? "",
+    )
   )
     return "This text keeps its exact spacing. Edit it in the source.";
+  const spacing = parsed.textLayout.get(element)?.reason;
+  if (spacing) return spacing;
   if (!parsed.nodes[element.index]!.own[1])
     return "This element has no closing tag. Edit it in the source.";
   if (element.attrs.id && scriptWritesText(parsed.scripts, element.attrs.id))
