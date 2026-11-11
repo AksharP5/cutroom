@@ -126,7 +126,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { y } = local(0, clientY);
     const above = y < first.top;
     const below = y >= last.top + last.height;
-    const creating = (above && !isAudioKind(kind)) || (below && isAudioKind(kind));
+    const creating =
+      (above && !isAudioKind(kind)) || (below && isAudioKind(kind));
     const row = creating
       ? {
           track: newTrack(
@@ -743,9 +744,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frames: Math.max(1, Math.floor((media.seconds * fps.num) / fps.den)),
       hasAudio: media.hasAudio,
     };
+    const mode =
+      event.shiftKey && (event.ctrlKey || event.metaKey)
+        ? "insert"
+        : "overwrite";
     return {
       media: dragged,
       row,
+      mode,
       preview: dropPreview(
         timeline,
         dragged,
@@ -754,9 +760,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         playhead(),
         reach(event.ctrlKey || event.metaKey),
         create,
-        event.shiftKey && (event.ctrlKey || event.metaKey)
-          ? "insert"
-          : "overwrite",
+        mode,
       ),
     };
   }
@@ -765,7 +769,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const over = dropAt(event);
     if (!over) return;
     event.preventDefault();
-    const { preview: drop, row, media } = over;
+    const { preview: drop, row, media, mode } = over;
     // A refused preview still needs the native drop so the edit can explain why in the header.
     event.dataTransfer.dropEffect = drop ? "copy" : "none";
     const box = ghost.current;
@@ -782,7 +786,25 @@ export function useLaneGestures(options: LaneGestureOptions) {
       ? "false"
       : "true";
     box.style.width = `${Math.max(1, media.frames * ppf - 1)}px`;
-    box.textContent = `${box.dataset.newTrack === "true" ? `${row.id}: ` : ""}${media.src.split("/").at(-1) ?? ""}`;
+    box.textContent = `${mode === "insert" ? "Insert" : "Overwrite"}: ${box.dataset.newTrack === "true" ? `${row.id}: ` : ""}${media.src.split("/").at(-1) ?? ""}`;
+    const hint = readout.current;
+    if (hint) {
+      const width = hint.offsetWidth || 220;
+      const height = hint.offsetHeight || 24;
+      const point = local(event.clientX, event.clientY);
+      const scroller = latest.current.lanes.current
+        ?.closest(".tl-scroll")
+        ?.getBoundingClientRect();
+      const edge = scroller
+        ? local(scroller.right, scroller.bottom)
+        : { x: Infinity, y: Infinity };
+      hint.textContent =
+        mode === "insert"
+          ? "Release Ctrl/Cmd+Shift to overwrite"
+          : "Ctrl/Cmd+Shift to insert";
+      hint.style.transform = `translate(${Math.min(point.x + 14, edge.x - width - 8)}px, ${Math.min(point.y + 18, edge.y - height - 8)}px)`;
+      hint.hidden = false;
+    }
     mark(box, drop.at ?? 0, row);
   }
 

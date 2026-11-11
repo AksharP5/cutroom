@@ -486,7 +486,40 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           command.linkedAudio?.id === undefined
             ? mint.name(`${slug(input.src, "audio")}-audio`, null)
             : claim(command.linkedAudio.id);
-        let destination = tracks.find(
+        // Read links before clearing picture: a full overwrite can remove the partner's link.
+        const overwrittenLinks = new Set(
+          mode === "overwrite"
+            ? clips
+                .filter(
+                  (clip) =>
+                    clip.track === track &&
+                    clip.kind === "video" &&
+                    clip.start < end &&
+                    clipEnd(clip) > at,
+                )
+                .flatMap((clip) => clip.link ?? [])
+            : [],
+        );
+        const partnerTracks = new Set(
+          clips
+            .filter(
+              (clip) =>
+                isAudioKind(clip.kind) &&
+                clip.link !== null &&
+                overwrittenLinks.has(clip.link),
+            )
+            .map((clip) => clip.track),
+        );
+        if (partnerTracks.size > 1)
+          throw new TimelineError(
+            "unsupported",
+            "The overwritten pictures have sound on different tracks. Overwrite one linked pair at a time.",
+          );
+        let destination = tracks.find((candidate) =>
+          partnerTracks.has(candidate.index),
+        );
+        // With no overwritten partner, keep the existing picture-sound track rule.
+        destination ??= tracks.find(
           (candidate) =>
             candidate.kind === "audio" &&
             !candidate.locked &&

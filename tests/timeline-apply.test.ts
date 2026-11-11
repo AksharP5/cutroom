@@ -1232,3 +1232,75 @@ test("video overwrite clears matching picture-sound ranges, including fully cove
     }
   }
 });
+
+test("video overwrite routes sound to the overwritten picture's partner instead of another pair", () => {
+  for (const duration of [60, 180]) {
+    const state = timeline([
+      clip("background", 0, 0, 300, { link: "background" }),
+      clip("background-sound", 2, 0, 300, {
+        kind: "audio",
+        link: "background",
+      }),
+      clip("interview", 1, 30, 120, { link: "interview" }),
+      clip("dialogue", 3, 0, 180, { kind: "audio", link: "interview" }),
+    ]);
+    const command: CommandInput = {
+      type: "insert",
+      mode: "overwrite",
+      track: 1,
+      at: 0,
+      clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration },
+      linkedAudio: { id: "b-roll-audio" },
+    };
+    const next = run(state, command);
+    expect(
+      next.clips.filter((clip) => clip.track === 0 || clip.track === 2),
+    ).toEqual(
+      state.clips.filter((clip) => clip.track === 0 || clip.track === 2),
+    );
+    expect(next.clips.find((clip) => clip.id === "b-roll-audio")).toMatchObject(
+      {
+        track: 3,
+        start: 0,
+        duration,
+        link: "b-roll",
+      },
+    );
+    expect(
+      next.clips
+        .filter((clip) => clip.src === "talk.mp4" && clip.track === 3)
+        .map((clip) => [clip.start, clip.duration]),
+    ).toEqual(duration === 180 ? [] : [[60, 120]]);
+    expect(
+      failure(() =>
+        run(state, { type: "setTrack", index: 3, locked: true }, command),
+      ),
+    ).toBe("locked");
+  }
+});
+
+test("overwrite keeps the existing audio fallback without a partner and refuses multiple partner destinations", () => {
+  const state = timeline([
+    clip("first", 0, 0, 30, { link: "first" }),
+    clip("first-sound", 2, 0, 30, { kind: "audio", link: "first" }),
+    clip("second", 0, 30, 30, { link: "second" }),
+    clip("second-sound", 3, 30, 30, { kind: "audio", link: "second" }),
+    clip("music", 4, 0, 300, { kind: "audio" }),
+  ]);
+  const command: CommandInput = {
+    type: "insert",
+    mode: "overwrite",
+    track: 0,
+    at: 90,
+    clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration: 60 },
+    linkedAudio: { id: "b-roll-sound" },
+  };
+  const fallback = run(state, command);
+  expect(
+    fallback.clips.find((clip) => clip.id === "b-roll-sound"),
+  ).toMatchObject({ track: 2 });
+  expect(fallback.clips.filter((clip) => clip.src === "talk.mp4")).toEqual(
+    state.clips,
+  );
+  expect(failure(() => run(state, { ...command, at: 0 }))).toBe("unsupported");
+});

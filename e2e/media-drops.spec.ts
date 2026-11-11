@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { APIRequestContext } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -10,11 +11,10 @@ import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { startMediaDrag } from "./media-drag";
 import { expect, test } from "./fixtures";
 
-test("media overwrite, modifier insert and edge tracks match MCP and undo one step each", async ({
-  page,
-  request,
-  baseURL,
-}, info) => {
+async function createMediaProject(
+  request: APIRequestContext,
+  twoPairs = false,
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -63,11 +63,26 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
     (await readFile(index, "utf8")).replace(
       /<main[^>]*>[\s\S]*<\/main>/,
       `<main id="main" data-composition-id="main" data-fps="30" data-width="320" data-height="180" data-duration="20">
-<video id="interview" src="Interview.mp4" data-start="0" data-duration="12" data-track-index="0" data-link="pair" muted></video>
+<video id="interview" src="Interview.mp4" data-start="0" data-duration="12" data-track-index="${twoPairs ? 1 : 0}" data-link="pair" muted></video>
 <audio id="dialogue" src="Interview.mp4" data-start="0" data-duration="12" data-track-index="3" data-link="pair"></audio>
+${
+  twoPairs
+    ? `<video id="background" src="Interview.mp4" data-start="0" data-duration="12" data-track-index="0" data-link="background" muted></video>
+<audio id="background-sound" src="Interview.mp4" data-start="0" data-duration="12" data-track-index="2" data-link="background"></audio>`
+    : ""
+}
 <audio id="music" src="Music.wav" data-start="0" data-duration="20" data-track-index="4"></audio></main>`,
     ),
   );
+  return project;
+}
+
+test("media overwrite, modifier insert and edge tracks match MCP and undo one step each", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const project = await createMediaProject(request);
   const path = `/api/cutroom/projects/${project.id}/timeline`;
   const read = async () =>
     TimelineViewSchema.parse(await (await request.get(path)).json()).timeline;
@@ -168,6 +183,8 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
     await page.keyboard.down("Control");
     await page.keyboard.down("Shift");
     await page.mouse.move(point.x, point.y);
+    await expect(page.locator(".tl-ghost")).toContainText("Insert:");
+    await expect(page.locator(".tl-readout")).toContainText("to overwrite");
     await page.mouse.up();
     await page.keyboard.up("Shift");
     await page.keyboard.up("Control");
@@ -262,4 +279,73 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
   } finally {
     await client.close();
   }
+});
+
+test("overwriting V2 previews and cuts A2 while preserving the V1/A1 pair", async ({
+  page,
+  request,
+}, info) => {
+  const project = await createMediaProject(request, true);
+  const path = `/api/cutroom/projects/${project.id}/timeline`;
+  const read = async () =>
+    TimelineViewSchema.parse(await (await request.get(path)).json()).timeline;
+  const initial = await read();
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("[data-clip]")).toHaveCount(5);
+  await startMediaDrag(
+    page,
+    page
+      .getByRole("region", { name: "Media", exact: true })
+      .getByRole("listitem")
+      .filter({ hasText: "B-roll.mp4" }),
+  );
+  const lanes = (await page.locator(".tl-lanes").boundingBox())!;
+  const lane = (await page.locator(".tl-lane.video").first().boundingBox())!;
+  const ppf = Number(
+    await page
+      .locator(".tl-grid")
+      .evaluate((e) => e.style.getPropertyValue("--ppf")),
+  );
+  await page.mouse.move(lanes.x + 120.5 * ppf, lane.y + 20, { steps: 12 });
+  await expect(page.locator(".tl-ghost")).toContainText("Overwrite:");
+  await expect(page.locator(".tl-readout")).toBeVisible();
+  await expect(page.locator(".tl-readout")).toContainText(
+    "Ctrl/Cmd+Shift to insert",
+  );
+  // The preview cuts A2, leaving A1's box and waveform at their original full length.
+  const dialogue = page.locator('[data-clip="dialogue"]');
+  const background = page.locator('[data-clip="background-sound"]');
+  await expect(dialogue).toHaveAttribute("data-held", "");
+  await expect(background).not.toHaveAttribute("data-held");
+  await expect(page.locator(".tl-piece:not([hidden])")).toHaveCount(2);
+  const tailRows = await page
+    .locator(".tl-piece:not([hidden])")
+    .evaluateAll((pieces) => pieces.map((e) => e.getBoundingClientRect().y));
+  const dialogueRow = (await dialogue.boundingBox())!.y;
+  expect(tailRows).toContain(dialogueRow);
+  expect(tailRows).not.toContain((await background.boundingBox())!.y);
+  await page.screenshot({ path: info.outputPath("two-pair-preview.png") });
+  await page.mouse.up();
+  await expect.poll(async () => (await read()).clips.length).toBe(9);
+  const edited = await read();
+  expect(edited.tracks).toEqual(initial.tracks);
+  expect(edited.clips.filter((c) => [0, 2, 4].includes(c.track))).toEqual(
+    initial.clips.filter((c) => [0, 2, 4].includes(c.track)),
+  );
+  expect(
+    edited.clips
+      .filter((c) => c.src === "Interview.mp4" && [1, 3].includes(c.track))
+      .map((c) => [c.track, c.start, c.duration]),
+  ).toEqual([
+    [1, 0, 120],
+    [1, 180, 180],
+    [3, 0, 120],
+    [3, 180, 180],
+  ]);
+  expect(
+    edited.clips.find((c) => c.src === "B-roll.mp4" && c.kind === "audio"),
+  ).toMatchObject({ track: 3, start: 120, duration: 60 });
+  await page.screenshot({ path: info.outputPath("two-pair-overwrite.png") });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(read).toEqual(initial);
 });
