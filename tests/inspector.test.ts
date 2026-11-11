@@ -603,14 +603,11 @@ test("gain fields round-trip linear gain through signed dB, including silence an
   expect(stepField(1, -61, "gain")).toBe(0);
   expect(formatField(stepField(0, 1, "gain"), "gain", fps)).toBe("-59.0 dB");
   expect(stepField(1, 20, "gain")).toBe(10 ** (12 / 20));
-  for (const input of [
-    "NaN",
-    "+Infinity",
-    "6dBjunk",
-    "1e5",
-    "",
-    "9999",
-    "-9999",
-  ])
+  // Below the -60 dB floor is silence, so stepping up from a typed -70 dB raises the level.
+  const quiet = parseField("-70 dB", "gain", fps);
+  expect(quiet).toBe(0);
+  expect(parseField("-9999", "gain", fps)).toBe(0);
+  expect(stepField(quiet, 1, "gain")).toBeGreaterThan(quiet);
+  for (const input of ["NaN", "+Infinity", "6dBjunk", "1e5", "", "9999"])
     expect(() => parseField(input, "gain", fps)).toThrow();
 });

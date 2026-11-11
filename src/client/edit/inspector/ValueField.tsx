@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
-import { showToast } from "../../workspace";
+import { showToast, useWorkspace } from "../../workspace";
 import { formatField, parseField, stepField } from "./fields";
 import type { FieldUnit } from "./fields";
 
@@ -36,7 +36,15 @@ export function ValueField({
     value: number;
     next: number;
     moved: boolean;
+    release(): void;
   } | null>(null);
+  const endDrag = () => {
+    if (!drag.current) return;
+    drag.current.release();
+    drag.current = null;
+    setDraft(null);
+    useWorkspace.setState({ gesture: false });
+  };
   const input = useRef<HTMLInputElement>(null);
   const cancelled = useRef(false);
   const commit = () => {
@@ -66,12 +74,23 @@ export function ValueField({
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
           const initial = value ?? 1;
+          // Esc during a scrub cancels it, before the drawer or editor sees the key.
+          const cancel = (key: KeyboardEvent) => {
+            if (key.key !== "Escape") return;
+            key.preventDefault();
+            key.stopImmediatePropagation();
+            endDrag();
+          };
+          window.addEventListener("keydown", cancel, true);
+          // Like a timeline drag, a scrub owns Esc while it lasts.
+          useWorkspace.setState({ gesture: true });
           drag.current = {
             x: event.clientX,
             distance: 0,
             value: initial,
             next: initial,
             moved: false,
+            release: () => window.removeEventListener("keydown", cancel, true),
           };
         }}
         onPointerMove={(event) => {
@@ -91,22 +110,15 @@ export function ValueField({
           );
           setDraft(formatField(current.next, unit, fps));
         }}
-        onPointerUp={(event) => {
+        onPointerUp={() => {
           const current = drag.current;
-          drag.current = null;
+          endDrag();
           if (!current) return;
-          setDraft(null);
           if (!current.moved) input.current?.focus();
           else if (current.next !== current.value) onCommit(current.next);
         }}
-        onPointerCancel={() => {
-          drag.current = null;
-          setDraft(null);
-        }}
-        onLostPointerCapture={() => {
-          drag.current = null;
-          setDraft(null);
-        }}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
       >
         {label}
       </label>

@@ -185,6 +185,15 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   await expect(gain).toHaveValue("-5.0 dB");
   await undo.click();
   await expect.poll(async () => (await read()).timeline).toEqual(beforeScrub);
+  // Esc during a scrub cancels it: release commits nothing, and the key goes no further.
+  await page.mouse.move(box.x + 10, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 60, box.y + box.height / 2, { steps: 5 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(gain).toHaveValue("-6.0 dB");
+  expect((await read()).timeline).toEqual(beforeScrub);
+  await expect(gain).toBeVisible();
 
   const client = new Client({
     name: "inspector-audio-agent",

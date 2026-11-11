@@ -18,6 +18,9 @@ import {
 } from "../../../shared/timeline/timecode";
 
 export type FieldUnit = "timecode" | "percent" | "gain";
+
+/** The gain floor shared with the timeline line: at or below it a clip is silent. */
+const SILENCE_DB = -60;
 export type TimingField = "start" | "duration" | "speed" | "sourceIn";
 
 export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
@@ -27,6 +30,8 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
     if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:dB)?$/i.test(input))
       throw new Error("Enter gain in dB, such as -6 dB, or -∞ for silence.");
     const db = Number.parseFloat(input);
+    // The timeline line and stepping treat -60 dB as silence; typing below it means the same.
+    if (db <= SILENCE_DB) return 0;
     const gain = audioDbToGain(db);
     if (!Number.isFinite(db) || !Number.isFinite(gain) || gain === 0)
       throw new Error("Gain is outside the supported range.");
@@ -94,13 +99,13 @@ export function timingCommands(
 export function stepField(value: number, delta: number, unit: FieldUnit) {
   if (unit === "gain") {
     const db = Math.max(
-      -60,
+      SILENCE_DB,
       Math.min(
         MAX_AUDIO_GAIN_DB,
-        (value > 0 ? audioGainToDb(value) : -60) + delta,
+        (value > 0 ? audioGainToDb(value) : SILENCE_DB) + delta,
       ),
     );
-    return db <= -60 ? 0 : audioDbToGain(Math.round(db * 10) / 10);
+    return db <= SILENCE_DB ? 0 : audioDbToGain(Math.round(db * 10) / 10);
   }
   return unit === "timecode" ? Math.round(value + delta) : value + delta * 0.01;
 }
