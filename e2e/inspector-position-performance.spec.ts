@@ -265,7 +265,8 @@ test(
       // Off the title, then on its glyphs.
       await page.mouse.click(picture.x + 900 * scale, picture.y + 600 * scale);
       await expect(positionField(page)).toHaveValue("0 px");
-      await page.mouse.click(picture.x + 40 * scale, picture.y + 30 * scale);
+      // The title sits at 20 px plus its 40 px Position.
+      await page.mouse.click(picture.x + 80 * scale, picture.y + 30 * scale);
       await expect(positionField(page)).toHaveValue("40 px");
     }
     const hitDurations = await hits.jsonValue();
