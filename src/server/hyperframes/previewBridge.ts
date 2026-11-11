@@ -83,6 +83,204 @@ function installPreviewBridge() {
     new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );
+  const holds = new Map<
+    HTMLVideoElement,
+    {
+      canvas: HTMLCanvasElement;
+      display: string;
+      callback?: number;
+      timer?: number;
+    }
+  >();
+  const FRAME_TIMEOUT = 8_000;
+  let pictureVersion = 0;
+  let picture = Promise.resolve();
+  const holdStyle = document.createElement("style");
+  holdStyle.textContent =
+    "video[data-cutroom-held] { visibility: hidden !important; }" +
+    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }";
+  document.head.append(holdStyle);
+  const cancelRelease = (video: HTMLVideoElement) => {
+    const hold = holds.get(video);
+    if (!hold) return;
+    if (hold.callback !== undefined)
+      video.cancelVideoFrameCallback(hold.callback);
+    clearTimeout(hold.timer);
+    delete hold.callback;
+    delete hold.timer;
+  };
+  const removeHold = (video: HTMLVideoElement) => {
+    cancelRelease(video);
+    holds.get(video)?.canvas.remove();
+    holds.delete(video);
+    video.removeAttribute("data-cutroom-held");
+    video.removeAttribute("data-cutroom-flow");
+  };
+  const holdPaused = async (version: number) => {
+    const waitForSeek = win.__hfWaitForSeekCompletion;
+    if (typeof waitForSeek !== "function")
+      throw new Error("The preview cannot confirm that it drew the frame.");
+    let timer = 0;
+    try {
+      await Promise.race([
+        (async () => {
+          await waitForSeek();
+          for (;;) {
+            if (version !== pictureVersion || win.__player?.isPlaying()) return;
+            // Read authored visibility without our native-surface suppression.
+            for (const [video, hold] of holds) {
+              hold.canvas.style.setProperty("display", "none", "important");
+              video.removeAttribute("data-cutroom-held");
+            }
+            const videos = Array.from(
+              document.querySelectorAll("video"),
+            ).filter((video) =>
+              video.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+              }),
+            );
+            for (const [video, hold] of holds) {
+              video.setAttribute("data-cutroom-held", "");
+              hold.canvas.style.setProperty("display", hold.display);
+            }
+            const failed = videos.find((video) => video.error);
+            if (failed)
+              throw new Error(
+                `The preview could not load ${failed.getAttribute("src")}.`,
+              );
+            if (videos.some((video) => video.readyState < 2 || video.seeking)) {
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+              );
+              continue;
+            }
+            for (const [video] of holds) {
+              if (!videos.includes(video)) removeHold(video);
+            }
+            for (const video of videos) {
+              cancelRelease(video);
+              const previous = holds.get(video);
+              previous?.canvas.style.setProperty(
+                "display",
+                "none",
+                "important",
+              );
+              video.removeAttribute("data-cutroom-held");
+              try {
+                const style = getComputedStyle(video);
+                const canvas = document.createElement("canvas");
+                canvas.setAttribute("data-cutroom-video-hold", "");
+                for (const name of style)
+                  canvas.style.setProperty(name, style.getPropertyValue(name));
+                // Keep the source aspect ratio so the browser applies object-fit and
+                // object-position exactly as it does to the replaced video element.
+                let a = video.videoWidth;
+                let b = video.videoHeight;
+                while (b) [a, b] = [b, a % b];
+                const unitWidth = video.videoWidth / a;
+                const unitHeight = video.videoHeight / a;
+                const scale = Math.min(
+                  a,
+                  Math.max(
+                    1,
+                    Math.ceil(
+                      devicePixelRatio *
+                        Math.max(
+                          video.clientWidth / unitWidth,
+                          video.clientHeight / unitHeight,
+                        ),
+                    ),
+                  ),
+                );
+                canvas.width =
+                  style.objectFit === "none"
+                    ? video.videoWidth
+                    : unitWidth * scale;
+                canvas.height =
+                  style.objectFit === "none"
+                    ? video.videoHeight
+                    : unitHeight * scale;
+                if (
+                  style.position === "absolute" ||
+                  style.position === "fixed"
+                ) {
+                  canvas.style.right = "auto";
+                  canvas.style.bottom = "auto";
+                } else {
+                  // The canvas takes the video's place in flow, including flex/grid
+                  // layout and paint order. The hidden native video keeps decoding.
+                  video.setAttribute("data-cutroom-flow", "");
+                }
+                canvas.style.pointerEvents = "none";
+                canvas.style.animation = "none";
+                canvas.style.transition = "none";
+                const context = canvas.getContext("2d");
+                if (!context)
+                  throw new Error(
+                    "The preview could not hold the video frame.",
+                  );
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                video.after(canvas);
+                holds.get(video)?.canvas.remove();
+                holds.set(video, { canvas, display: canvas.style.display });
+              } finally {
+                const hold = holds.get(video);
+                if (hold) {
+                  video.setAttribute("data-cutroom-held", "");
+                  hold.canvas.style.setProperty("display", hold.display);
+                }
+              }
+            }
+            return;
+          }
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = window.setTimeout(
+            () =>
+              reject(new Error("The preview did not draw the frame in time.")),
+            FRAME_TIMEOUT,
+          );
+        }),
+      ]);
+    } catch (error) {
+      if (version !== pictureVersion) return;
+      pictureVersion += 1;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const refreshPicture = () => {
+    const version = ++pictureVersion;
+    for (const video of holds.keys()) cancelRelease(video);
+    picture = holdPaused(version);
+    return picture;
+  };
+  const releasePlaying = (video: HTMLVideoElement) => {
+    const hold = holds.get(video);
+    if (!hold || hold.callback !== undefined) return;
+    hold.callback = video.requestVideoFrameCallback(() => {
+      delete hold.callback;
+      if (!video.paused && win.__player?.isPlaying()) removeHold(video);
+    });
+    hold.timer = window.setTimeout(() => {
+      cancelRelease(video);
+      reply(undefined, "The preview did not supply a playback frame in time.");
+    }, FRAME_TIMEOUT);
+  };
+  document.addEventListener(
+    "play",
+    (event) => {
+      if (event.target instanceof HTMLVideoElement)
+        releasePlaying(event.target);
+    },
+    true,
+  );
+  addEventListener("pagehide", () => {
+    pictureVersion += 1;
+    for (const video of holds.keys()) removeHold(video);
+  });
   addEventListener("message", (event: MessageEvent<unknown>) => {
     if (
       event.source !== parent ||
@@ -113,6 +311,8 @@ function installPreviewBridge() {
           else win.__hf?.audioMeter?.stop();
           break;
         case "play":
+          pictureVersion += 1;
+          for (const video of holds.keys()) releasePlaying(video);
           win.__player?.play();
           if (metering && !animation) levels();
           break;
@@ -121,6 +321,7 @@ function installPreviewBridge() {
           cancelAnimationFrame(animation);
           animation = 0;
           if (metering) levels();
+          await refreshPicture();
           break;
         case "seek":
           if (
@@ -131,6 +332,7 @@ function installPreviewBridge() {
           )
             return;
           win.__player?.seek(data.time);
+          if (!win.__player?.isPlaying()) await refreshPicture();
           break;
         case "mute":
           if (!("muted" in data) || typeof data.muted !== "boolean") return;
@@ -145,35 +347,7 @@ function installPreviewBridge() {
           );
           break;
         case "paint":
-          if (typeof win.__hfWaitForSeekCompletion !== "function")
-            throw new Error(
-              "The preview cannot confirm that it drew the frame.",
-            );
-          await win.__hfWaitForSeekCompletion();
-          // Seek completion can omit an unprepared video. Keep the live iframe until
-          // every visible native video has a decoded frame, including a new split piece.
-          for (;;) {
-            const videos = Array.from(
-              document.querySelectorAll("video"),
-            ).filter((video) =>
-              video.checkVisibility({
-                checkOpacity: true,
-                checkVisibilityCSS: true,
-              }),
-            );
-            const failed = videos.find((video) => video.error);
-            if (failed)
-              throw new Error(
-                `The preview could not load ${failed.getAttribute("src")}.`,
-              );
-            if (
-              videos.every((video) => video.readyState >= 2 && !video.seeking)
-            )
-              break;
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() => resolve()),
-            );
-          }
+          await picture;
           await paint();
           break;
         default:

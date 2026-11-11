@@ -176,7 +176,7 @@
  * same frame. Not fully transparent: Chromium stops drawing video in a layer nobody can see,
  * and the first frame after revealing one would be black.
  */
-.edit-frame:not([data-live]) {
+.edit-frame:not([data-live]):not([data-held]) {
   opacity: 0.01;
 }
 /* Notes on the picture: pins, pencil strokes, and the open note's popover */
