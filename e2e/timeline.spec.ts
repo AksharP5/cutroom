@@ -344,3 +344,46 @@ test("Fit lets a ripple close its gap before rescaling, and a zoom key takes ove
     page.getByRole("slider", { name: "Zoom", exact: true }),
   ).not.toHaveAttribute("aria-valuenow", "0");
 });
+
+test("scrolling while Fit waits to rescale after a ripple keeps the view where you scrolled", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Fit ripple scroll" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="12">
+    <div id="first" class="clip" data-start="0" data-duration="4" data-track-index="0">First</div>
+    <div id="middle" class="clip" data-start="4" data-duration="4" data-track-index="0">Middle</div>
+    <div id="last" class="clip" data-start="8" data-duration="4" data-track-index="0">Last</div>
+  </main>`,
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto(`/#project/${project.id}`);
+  const grid = page.locator(".tl-grid");
+  const scroller = page.locator(".tl-scroll");
+  const scale = () =>
+    grid.evaluate((element) =>
+      Number(getComputedStyle(element).getPropertyValue("--ppf")),
+    );
+  const old = await scale();
+  await page.locator('[data-clip="middle"]').click();
+  await page.keyboard.press("Delete");
+  // During the slide, before Fit would rescale, the user scrolls the timeline.
+  const scrolled = await scroller.evaluate((element) => {
+    element.scrollLeft = 120;
+    return element.scrollLeft;
+  });
+  expect(scrolled).toBeGreaterThan(0);
+  await page.waitForTimeout(800);
+  expect(await scroller.evaluate((element) => element.scrollLeft)).toBe(
+    scrolled,
+  );
+  expect(await scale()).toBe(old);
+});

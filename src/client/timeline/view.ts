@@ -219,6 +219,11 @@ export function createViewport(
     });
   }
   function onScroll() {
+    // Scrolling while an edit's slide waits to refit takes over the view: it stays where the user put it.
+    if (refit && scroller.scrollLeft !== scroll) {
+      cancelRefit();
+      fitted = false;
+    }
     scroll = scroller.scrollLeft;
     top = scroller.scrollTop;
     exact = settledScroll(exact, scroll);
