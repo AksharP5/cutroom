@@ -47,14 +47,32 @@ export const ClipSchema = z.object({
   hasAudio: z.boolean(),
   link: z.string().nullable(),
   label: z.string().nullable(),
-  volume: z.number().nonnegative().nullable(),
+  volume: z
+    .number()
+    .nonnegative()
+    .nullable()
+    .describe("Linear clip gain, 1 = 0 dB, null = unity"),
   /** Static inline opacity; null leaves the authored stylesheet in control. */
   opacity: opacity.nullable(),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
-  fadeIn: frame.default(0),
-  fadeOut: frame.default(0),
+  fadeIn: frame
+    .default(0)
+    .describe(
+      "Authored fade-in frames. Effective fades are proportionally clamped to duration",
+    ),
+  fadeOut: frame
+    .default(0)
+    .describe(
+      "Authored fade-out frames. Effective fades are proportionally clamped to duration",
+    ),
   /** HyperFrames clip-local automation, stored in its native attribute format. */
-  automation: z.string().nullable().default(null),
+  automation: z
+    .string()
+    .nullable()
+    .default(null)
+    .describe(
+      "HyperFrames clip-local automation JSON, which may contain baked volume ramps",
+    ),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -243,7 +261,15 @@ export const CommandSchema = z.discriminatedUnion("type", [
       volume: volume
         .nullable()
         .optional()
-        .describe("Linear clip gain, 0 for silence, 1 for unity, up to +12 dB"),
+        .describe(
+          "Linear clip gain, 0 for silence, 1 = 0 dB, null = unity, up to +12 dB",
+        ),
+      automation: z
+        .null()
+        .optional()
+        .describe(
+          "Clear HyperFrames automation, including baked volume ramps. Null only",
+        ),
       fadeIn: frame
         .optional()
         .describe(

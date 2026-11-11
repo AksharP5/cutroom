@@ -63,10 +63,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
   latest.current = options;
   const gesture = useRef<Gesture>(idle);
   const drag = useRef<Drag | null>(null);
-  const originY = useRef(0);
+  const gainHeight = useRef(0);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
-  const pointer = useRef({ x: 0, y: 0, bypass: false });
+  const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0 });
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
@@ -340,11 +340,22 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** Draws the drag as the pointer stands: after a pointer move, a scroll, or a zoom under it. */
   function update() {
     const current = gesture.current;
-    const active = drag.current;
+    let active = drag.current;
     const ppf = view()?.ppf;
     if (current.phase !== "dragging" || !ppf) return;
     if (current.intent.kind === "marquee") return drawMarquee();
     if (!active) return;
+    if (active.intent.kind === "gain" && current.intent.kind === "move") {
+      active = beginDrag(
+        active.timeline,
+        current.intent,
+        new Set(active.named.map((clip) => clip.id)),
+        active.origin,
+        latest.current.playhead(),
+      );
+      drag.current = active;
+      latest.current.lanes.current?.setAttribute("data-cursor", "move");
+    }
     if (preview.current && refuseChanged(active.timeline, preview.current)) {
       end("cancel");
       return;
@@ -356,7 +367,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frame: frameAt(x),
       track: rowAt(y)?.track.index ?? null,
       reach: reach(bypass),
-      dy: active.intent.kind === "gain" ? at.y - current.origin.y : 0,
+      dy: active.intent.kind === "gain" ? pointer.current.dy : 0,
+      gainHeight: gainHeight.current,
     };
     const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.dy}`;
     if (key !== drawn.current) {
@@ -436,7 +448,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
             frame: frameAt(pointer.current.x),
             track: rowAt(pointer.current.y)?.track.index ?? null,
             reach: reach(pointer.current.bypass),
-            dy: local(pointer.current.x, pointer.current.y).y - originY.current,
+            dy: pointer.current.dy,
+            gainHeight: gainHeight.current,
           });
     settle(result, active.timeline);
   }
@@ -513,10 +526,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const hit = hitAt(event);
     const toggle = event.ctrlKey || event.metaKey;
     const intent = intentAt(tool, timeline, hit, event.altKey);
-    // A press on a selected clip keeps the selection, so several clips drag as one.
+    // A press on a selected clip keeps the selection, so several clips drag as one. A gain press
+    // keeps it too, since a mostly horizontal gain drag becomes that same move.
     const keep =
       hit !== null &&
-      intent?.kind === "move" &&
+      (intent?.kind === "move" || intent?.kind === "gain") &&
       !toggle &&
       !event.shiftKey &&
       !event.altKey &&
@@ -542,13 +556,21 @@ export function useLaneGestures(options: LaneGestureOptions) {
     if (!intent || (hit && tool !== "blade" && (toggle || event.shiftKey)))
       return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    pointer.current = { x: event.clientX, y: event.clientY, bypass: toggle };
+    pointer.current = {
+      x: event.clientX,
+      y: event.clientY,
+      bypass: toggle,
+      dy: 0,
+    };
     gesture.current = step(gesture.current, {
       type: "press",
       intent,
       point: local(event.clientX, event.clientY),
     }).gesture;
-    originY.current = local(event.clientX, event.clientY).y;
+    gainHeight.current =
+      event.target instanceof Element
+        ? (event.target.closest("svg")?.getBoundingClientRect().height ?? 0)
+        : 0;
     onGesture(true);
     if (intent.kind === "marquee") {
       marqueeBase.current =
@@ -568,16 +590,23 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
     if (gesture.current.phase === "idle") return hover(event);
-    pointer.current = {
-      x: event.clientX,
-      y: event.clientY,
-      bypass: event.ctrlKey || event.metaKey,
-    };
+    movePointer(event);
     gesture.current = step(gesture.current, {
       type: "move",
       point: local(event.clientX, event.clientY),
     }).gesture;
     update();
+  }
+
+  function movePointer(event: PointerEvent<HTMLDivElement>) {
+    pointer.current = {
+      x: event.clientX,
+      y: event.clientY,
+      bypass: event.ctrlKey || event.metaKey,
+      dy:
+        pointer.current.dy +
+        (event.clientY - pointer.current.y) * (event.altKey ? 0.1 : 1),
+    };
   }
 
   function end(type: "release" | "cancel") {
@@ -723,11 +752,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onPointerDown,
       onPointerMove,
       onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
-        pointer.current = {
-          x: event.clientX,
-          y: event.clientY,
-          bypass: event.ctrlKey || event.metaKey,
-        };
+        movePointer(event);
         end("release");
       },
       onPointerCancel: () => end("cancel"),

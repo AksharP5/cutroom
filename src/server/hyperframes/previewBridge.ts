@@ -34,6 +34,7 @@ function installPreviewBridge() {
       {
         source: "cutroom-preview",
         type: "levels",
+        playing: Boolean(win.__player?.isPlaying()),
         l: level?.l ?? 0,
         r: level?.r ?? 0,
       },

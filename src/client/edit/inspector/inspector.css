@@ -125,6 +125,15 @@
 .inspector-section:not([open]) {
   padding-bottom: 0;
 }
+.inspector-clear-automation {
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-raised);
+  border: var(--stroke-hair) solid var(--line-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
 .inspector-empty {
   margin: 0;
   padding: var(--space-3);

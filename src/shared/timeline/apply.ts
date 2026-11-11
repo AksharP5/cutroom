@@ -569,6 +569,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 fadeOut,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
+                ...(command.automation !== undefined && {
+                  automation: command.automation,
+                }),
                 ...(command.opacity !== undefined && {
                   opacity: command.opacity,
                 }),

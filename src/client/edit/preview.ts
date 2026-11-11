@@ -105,7 +105,7 @@ export function connectPreview(frame: HTMLIFrameElement) {
     dispose() {
       closing.abort();
       send("meter", { enabled: false });
-      if (active) audioLevels.publish({ l: 0, r: 0 });
+      if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
       active = false;
       window.removeEventListener("message", receive);
       for (const request of pending.values()) {

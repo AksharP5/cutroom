@@ -679,7 +679,8 @@
   cursor: crosshair;
 }
 .tl-lanes[data-cursor="move"],
-.tl-lanes[data-cursor="move"] .tl-clip {
+.tl-lanes[data-cursor="move"] .tl-clip,
+.tl-lanes[data-cursor="move"] .tl-gain {
   cursor: grabbing;
 }
 /* A drop the engine would refuse: the held clips' outline and the ghost turn to the error colour. */
@@ -916,7 +917,7 @@
 }
 .tl-meter-channel > span {
   position: absolute;
-  top: -16px;
+  top: -20px;
   width: 5px;
   text-align: center;
   color: var(--text-tertiary);
@@ -936,22 +937,48 @@
 .tl-meter-peak {
   --peak: var(--meter-peak);
   position: absolute;
-  inset: -2px 0 2px;
+  inset: 0;
   transform: translateY(100%);
   background: linear-gradient(var(--peak) 0 2px, transparent 2px);
 }
-.tl-meter-channel[data-clipping="true"] .tl-meter-peak {
-  --peak: var(--meter-clip);
+.tl-meter-clip {
+  position: absolute;
+  top: -8px;
+  left: -1px;
+  width: 7px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  background: var(--meter-clip);
+  cursor: pointer;
+}
+.tl-meter-clip:disabled {
+  background: var(--meter-off);
+  cursor: default;
 }
 .tl-meter-scale {
   position: absolute;
   top: 34px;
   bottom: 12px;
-  left: 4px;
+  left: 1px;
+  width: 17px;
   font: var(--type-micro) / 1 var(--font-mono);
   color: var(--text-tertiary);
 }
 .tl-meter-scale span {
   position: absolute;
+  right: 0;
   transform: translateY(-50%);
+}
+.tl-meter-scale::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 18px;
+  width: 14px;
+  height: 1px;
+  background: var(--text-secondary);
+}
+.tl-meter-scale span:first-child {
+  color: var(--text-primary);
 }

@@ -11,6 +11,33 @@ const height = (level: number) =>
     ),
   );
 
+export const emptyMeter = {
+  peak: 0,
+  held: 0,
+  at: 0,
+  playing: false,
+  clipped: false,
+};
+
+/** Playback owns peak hold; clipping survives a stop until cleared or playback restarts. */
+export function meterSample(
+  state: typeof emptyMeter,
+  value: number,
+  playing: boolean,
+  now: number,
+) {
+  const current = height(value);
+  const elapsed = Math.min(100, now - state.at);
+  const fall = now > state.held ? elapsed / 2500 : 0;
+  return {
+    peak: playing ? Math.max(current, state.peak - fall) : 0,
+    held: playing && current >= state.peak ? now + 1500 : state.held,
+    at: now,
+    playing,
+    clipped: (playing && !state.playing ? false : state.clipped) || value >= 1,
+  };
+}
+
 /** One bounded paint per runtime sample. No clock, React updates, or animation while idle. */
 export function AudioMeters() {
   const root = useRef<HTMLDivElement>(null);
@@ -22,39 +49,45 @@ export function AudioMeters() {
       channel,
       level: channel.querySelector<HTMLElement>(".tl-meter-level")!,
       peak: channel.querySelector<HTMLElement>(".tl-meter-peak")!,
+      clip: channel.querySelector<HTMLButtonElement>(".tl-meter-clip")!,
+      state: emptyMeter,
     }));
-    const peaks = [0, 0];
-    const held = [0, 0];
-    let previous = performance.now();
-    return audioLevels.subscribe((level) => {
+    for (const item of channels)
+      item.clip.onclick = () => {
+        item.state = { ...item.state, clipped: false };
+        item.channel.dataset.clipping = "false";
+        item.clip.disabled = true;
+      };
+    const unsubscribe = audioLevels.subscribe((level) => {
       const now = performance.now();
-      const elapsed = Math.min(100, now - previous);
-      previous = now;
-      channels.forEach(({ channel, level: bar, peak }, index) => {
+      channels.forEach((item, index) => {
+        const { channel, level: bar, peak, clip } = item;
         const value = index === 0 ? level.l : level.r;
         const current = height(value);
-        if (current >= peaks[index]!) {
-          peaks[index] = current;
-          held[index] = now + 1500;
-        } else if (now > held[index]!)
-          peaks[index] = Math.max(current, peaks[index]! - elapsed / 2500);
+        item.state = meterSample(item.state, value, level.playing, now);
         // Clipping the lit segments keeps each LED its size; the peak line moves on the compositor.
         bar.style.clipPath = `inset(${(1 - current) * 100}% 0 0 0)`;
-        peak.style.transform = `translateY(${(1 - peaks[index]!) * 100}%)`;
-        channel.dataset.clipping = String(value >= 1);
+        peak.style.transform = `translateY(${(1 - item.state.peak) * 100}%)`;
+        peak.hidden = item.state.peak === 0;
+        channel.dataset.clipping = String(item.state.clipped);
+        clip.disabled = !item.state.clipped;
       });
     });
+    return () => {
+      unsubscribe();
+      for (const item of channels) item.clip.onclick = null;
+    };
   }, []);
   return (
     <div
       ref={root}
       className="tl-meters"
-      role="img"
+      role="group"
       aria-label="Stereo output levels, dBFS"
     >
       <div className="tl-meter-scale">
-        {[0, 6, 12, 24, 48].map((db) => (
-          <span key={db} style={{ top: `${(db / 60) * 100}%` }}>
+        {[0, -6, -12, -24, -48].map((db) => (
+          <span key={db} style={{ top: `${(-db / 60) * 100}%` }}>
             {db}
           </span>
         ))}
@@ -62,8 +95,14 @@ export function AudioMeters() {
       {(["L", "R"] as const).map((name) => (
         <div key={name} className="tl-meter-channel">
           <span>{name}</span>
+          <button
+            className="tl-meter-clip"
+            aria-label={`Clear ${name} clipping indicator`}
+            title={`Clear ${name} clipping indicator`}
+            disabled
+          />
           <div className="tl-meter-level" />
-          <i className="tl-meter-peak" />
+          <i className="tl-meter-peak" hidden />
         </div>
       ))}
     </div>

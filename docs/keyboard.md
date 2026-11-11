@@ -79,3 +79,7 @@ With snapping on, a dragged edge within 8px of a clip edge, the playhead, a mark
 Drag a file from Media onto a track to add it, with its first frame under the pointer. In free space it is placed as it is. Over other clips it is inserted there, and every auto-select track opens to make room. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.
 
 Shift+8 opens Export, matching `workspacePrimaryWorkspaceDeliver` in the owner's Resolve preset. It has no video-render binding; Ctrl+E exports a Resolve project. When both In and Out exist, Export defaults to that range. Closing the dialog keeps its job running; the Export indicator opens it again.
+
+Drag a clip's volume envelope vertically to change gain, with the line following the pointer and a dB readout. Hold Alt for one-tenth travel for fine adjustment. A mostly horizontal drag that starts on the envelope moves the clip. Alt at the press still moves a clip without its linked partners. The owner's Resolve preset contains no fine-gain mouse binding. Alt fine adjustment is Cutroom's mouse convention.
+
+A cut inside a fade leaves the rest of that fade as volume automation on the piece. Select the clip and use Inspector > Audio > Clear automation to remove it before drawing a fresh fade. Clearing undoes in one step.
