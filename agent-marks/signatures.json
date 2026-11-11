@@ -1,0 +1,37 @@
+{
+  "clips": 500,
+  "bytes": 101818,
+  "samples": 60,
+  "versions": {
+    "main": {
+      "changed": {
+        "p50Ms": 8.404,
+        "p95Ms": 15.649
+      },
+      "unchanged": {
+        "p50Ms": 8.47,
+        "p95Ms": 13.271
+      }
+    },
+    "reviewed": {
+      "changed": {
+        "p50Ms": 4.543,
+        "p95Ms": 9.552
+      },
+      "unchanged": {
+        "p50Ms": 0.027,
+        "p95Ms": 0.086
+      }
+    },
+    "reworked": {
+      "changed": {
+        "p50Ms": 7.425,
+        "p95Ms": 15.242
+      },
+      "unchanged": {
+        "p50Ms": 0.026,
+        "p95Ms": 0.063
+      }
+    }
+  }
+}
