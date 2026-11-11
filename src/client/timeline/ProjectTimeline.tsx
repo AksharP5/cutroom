@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
 import { nextTrackIndex } from "../../shared/timeline/tracks";
@@ -11,6 +11,8 @@ import type { Action } from "../keymap";
 import { reportEditorError, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
 import { Timeline } from "./Timeline";
+import { MarkerEditor } from "./MarkerEditor";
+import type { Marker } from "../../shared/timeline/schema";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
   emptySelection,
@@ -63,6 +65,10 @@ export function ProjectTimeline({
   onOpenNote(id: string): void;
 }) {
   const view = useTimeline((state) => state.view);
+  const [editingMarker, setEditingMarker] = useState<{
+    marker: Marker;
+    anchor: { x: number; y: number };
+  } | null>(null);
   const selection = useTimeline((state) => state.selection);
   const snapping = useTimeline((state) => state.snapping);
   const setSelection = (next: Selection) =>
@@ -176,43 +182,71 @@ export function ProjectTimeline({
 
   if (!view) return null;
   return (
-    <Timeline
-      timeline={view.timeline}
-      source={{ projectId, composition: view.composition }}
-      clock={clock}
-      pins={pins}
-      agentChanges={new Set(view.agentChanges)}
-      selection={selection}
-      onSelect={setSelection}
-      tool={tool}
-      snapping={snapping}
-      onEdit={(label, commands, basis) => {
-        // The editor shows an edit it takes before this returns.
-        const before = useTimeline.getState().view;
-        void editTimeline(projectId, label, () => commands, basis);
-        return useTimeline.getState().view !== before;
-      }}
-      onGesture={(gesture) => useWorkspace.setState({ gesture })}
-      onSeek={transport.seek}
-      onScrub={transport.scrub}
-      onScrubEnd={transport.release}
-      onToggleTrack={toggleTrack}
-      onRenameTrack={(track, name) =>
-        void editTimeline(projectId, "Rename track", () => [
-          {
-            type: "setTrack",
-            index: track.index,
-            kind: track.kind,
-            name: name || null,
-          },
-        ])
-      }
-      onAddTrack={(kind) =>
-        void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
-          { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
-        ])
-      }
-      onOpenPin={onOpenNote}
-    />
+    <>
+      <Timeline
+        timeline={view.timeline}
+        source={{ projectId, composition: view.composition }}
+        clock={clock}
+        pins={pins}
+        agentChanges={new Set(view.agentChanges)}
+        selection={selection}
+        onSelect={setSelection}
+        tool={tool}
+        snapping={snapping}
+        onEdit={(label, commands, basis) => {
+          // The editor shows an edit it takes before this returns.
+          const before = useTimeline.getState().view;
+          void editTimeline(projectId, label, () => commands, basis);
+          return useTimeline.getState().view !== before;
+        }}
+        onGesture={(gesture) => useWorkspace.setState({ gesture })}
+        onSeek={transport.seek}
+        onScrub={transport.scrub}
+        onScrubEnd={transport.release}
+        onToggleTrack={toggleTrack}
+        onRenameTrack={(track, name) =>
+          void editTimeline(projectId, "Rename track", () => [
+            {
+              type: "setTrack",
+              index: track.index,
+              kind: track.kind,
+              name: name || null,
+            },
+          ])
+        }
+        onAddTrack={(kind) =>
+          void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
+            { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
+          ])
+        }
+        onOpenPin={onOpenNote}
+        onOpenMarker={(marker, anchor) => setEditingMarker({ marker, anchor })}
+      />
+      {editingMarker &&
+        view.timeline.markers.some(
+          ({ id }) => id === editingMarker.marker.id,
+        ) && (
+          <MarkerEditor
+            key={editingMarker.marker.id}
+            {...editingMarker}
+            onClose={() => setEditingMarker(null)}
+            onSave={(changes) =>
+              // Built on the marker as it is now, so an agent's newer edit to its other fields stays.
+              editTimeline(projectId, "Edit marker", (timeline) => {
+                const current = timeline.markers.find(
+                  ({ id }) => id === editingMarker.marker.id,
+                );
+                if (!current) throw new Error("This marker was removed.");
+                return [{ type: "setMarker", ...current, ...changes }];
+              })
+            }
+            onDelete={() =>
+              editTimeline(projectId, "Remove marker", () => [
+                { type: "removeMarker", id: editingMarker.marker.id },
+              ])
+            }
+          />
+        )}
+    </>
   );
 }

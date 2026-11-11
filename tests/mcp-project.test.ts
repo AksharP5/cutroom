@@ -17,6 +17,118 @@ import {
 import { createMcpHttpHandler, localApiBase } from "../src/server/mcp/server";
 import { projectFixture } from "./project-fixture";
 import { z } from "zod";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
+
+test("marker names and colours round-trip through MCP, disk, and undo history", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Marker review beats" });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "marker-test", version: "1" });
+  const resultSchema = z.object({
+    structuredContent: z.object({ result: TimelineViewSchema }),
+  });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const read = async () =>
+      resultSchema.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: project.id },
+        }),
+      ).structuredContent.result;
+    const before = await read();
+    const edited = resultSchema.parse(
+      await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: project.id,
+          expectedRevision: before.revision,
+          commands: [
+            {
+              type: "setMarker",
+              id: "downbeat",
+              frame: 45,
+              duration: 12,
+              name: "Downbeat",
+              note: "Keep this cue",
+              color: "purple",
+            },
+          ],
+        },
+      }),
+    ).structuredContent.result;
+    const expected = [
+      {
+        id: "downbeat",
+        frame: 45,
+        duration: 12,
+        name: "Downbeat",
+        note: "Keep this cue",
+        color: "purple" as const,
+      },
+    ];
+    expect(edited.timeline.markers).toEqual(expected);
+    expect((await read()).timeline.markers).toEqual(expected);
+    expect(
+      TimelineViewSchema.parse(
+        await (
+          await fixture.request(`/projects/${project.id}/timeline`)
+        ).json(),
+      ).timeline.markers,
+    ).toEqual(expected);
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect((await read()).timeline.markers).toEqual([]);
+    expect(
+      (
+        await client.callTool({
+          name: "history_redo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect((await read()).timeline.markers).toEqual(expected);
+    const current = await read();
+    expect(
+      (
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: project.id,
+            expectedRevision: current.revision,
+            commands: [{ type: "removeMarker", id: "downbeat" }],
+          },
+        })
+      ).isError,
+    ).not.toBe(true);
+    expect((await read()).timeline.markers).toEqual([]);
+  } finally {
+    await client.close();
+    await server.stop(true);
+    await fixture.close();
+  }
+});
 
 test("an external MCP client edits the same project and undo history as the UI", async () => {
   const fixture = await projectFixture();

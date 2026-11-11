@@ -192,9 +192,14 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   await undo.click();
   await expect.poll(async () => (await read()).timeline).toEqual(beforeScrub);
   // Esc during a scrub cancels it: release commits nothing, and the key goes no further.
-  await page.mouse.move(box.x + 10, box.y + box.height / 2);
+  // Undo can reflow the inspector, so find the label where it is now.
+  await expect(gain).toHaveValue("-6.0 dB");
+  const label2 = (await label.boundingBox())!;
+  await page.mouse.move(label2.x + 10, label2.y + label2.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + 60, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.move(label2.x + 60, label2.y + label2.height / 2, {
+    steps: 5,
+  });
   await page.keyboard.press("Escape");
   await page.mouse.up();
   await expect(gain).toHaveValue("-6.0 dB");

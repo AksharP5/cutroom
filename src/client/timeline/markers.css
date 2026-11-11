@@ -1,0 +1,44 @@
+.marker-editor {
+  position: fixed;
+  inset: auto;
+  width: 248px;
+  max-width: calc(100vw - var(--space-4));
+  margin: var(--space-1) 0 0;
+  padding: var(--space-3);
+  border: var(--stroke-hair) solid var(--line);
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  /* The ruler can scroll to either window edge. */
+  left: clamp(var(--space-2), var(--marker-editor-x), calc(100vw - 264px));
+  top: min(var(--marker-editor-y), calc(100vh - 200px));
+}
+.marker-editor form {
+  display: grid;
+  gap: var(--space-2);
+}
+.marker-editor-heading,
+.marker-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.marker-editor input {
+  width: 100%;
+  height: var(--size-field);
+}
+.marker-colors {
+  display: flex;
+  gap: var(--space-2);
+}
+.marker-colors button {
+  width: var(--size-field);
+  height: var(--size-field);
+  border: 3px solid var(--surface-float);
+  border-radius: var(--radius-control);
+  background: var(--marker);
+}
+.marker-colors button[aria-pressed="true"] {
+  outline: var(--stroke-hair) solid var(--text-primary);
+}

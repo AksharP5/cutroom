@@ -137,6 +137,6 @@ export const editKeys = {
     commands: ({ markers }, { frame }) =>
       markers.some((marker) => marker.frame === frame)
         ? []
-        : [{ type: "setMarker", frame }],
+        : [{ type: "setMarker", frame, name: `Marker ${markers.length + 1}` }],
   },
 } satisfies Partial<Record<Action, EditKey>>;

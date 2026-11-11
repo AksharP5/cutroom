@@ -330,7 +330,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
       duration: frame.default(0),
       name: label.default(""),
       note: z.string().max(20_000).default(""),
-      color: MarkerColorSchema.default("blue"),
+      color: MarkerColorSchema.default("blue").describe(
+        "Ruler palette: blue/cyan = grey, green = green, purple = violet, pink/red = rose, yellow = sand",
+      ),
     })
     .describe("Add or replace a timeline marker."),
   z.object({ type: z.literal("removeMarker"), id: z.string().min(1) }),
