@@ -1,0 +1,89 @@
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
+  border-radius: var(--radius-control);
+}
+.select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-trigger > svg {
+  flex: none;
+}
+.select-menu {
+  position: fixed;
+  inset: auto;
+  top: anchor(bottom);
+  left: anchor(left);
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  margin: var(--space-1) 0;
+  min-width: max(96px, anchor-size(width));
+  max-width: min(var(--width-left-max), calc(100vw - var(--space-4)));
+  max-height: min(50vh, calc(var(--size-row) * 10 + var(--space-2)));
+  overflow: auto;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+  transform-origin: top left;
+  transition:
+    opacity var(--duration-panel-out) var(--ease-exit),
+    transform var(--duration-panel-out) var(--ease-exit),
+    overlay var(--duration-panel-out) allow-discrete,
+    display var(--duration-panel-out) allow-discrete;
+  opacity: 0;
+  transform: scale(var(--modal-scale));
+}
+.select-menu:popover-open {
+  display: grid;
+  opacity: 1;
+  transform: none;
+  transition-duration: var(--duration-panel-in);
+  transition-timing-function: var(--ease-out);
+}
+@starting-style {
+  .select-menu:popover-open {
+    opacity: 0;
+    transform: scale(var(--modal-scale));
+  }
+}
+.select-menu button {
+  position: relative;
+  flex-shrink: 0;
+  min-height: var(--size-row);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.select-menu button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.select-menu button:hover::before {
+  opacity: 1;
+}
+.select-menu button[aria-selected="true"] {
+  background: var(--surface-active);
+}
+@media (prefers-reduced-motion: reduce) {
+  .select-menu {
+    transition-duration: var(--duration-press);
+  }
+}

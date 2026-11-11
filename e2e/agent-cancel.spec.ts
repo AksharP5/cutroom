@@ -104,7 +104,8 @@ test("Stop cancels turn preparation, keeps the draft, and does not appear for mo
   try {
     await page.goto(`/#project/${project.id}`);
     await expect(page.getByLabel("Model", { exact: true })).toBeEnabled();
-    await page.getByLabel("Model", { exact: true }).selectOption("model-b");
+    await page.getByLabel("Model", { exact: true }).click();
+    await page.getByRole("option", { name: "Model B", exact: true }).click();
     await modelPending;
     await expect(
       page.getByRole("button", { name: "Stop agent", exact: true }),

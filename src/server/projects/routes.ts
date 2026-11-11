@@ -1,5 +1,7 @@
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
+import { realpath } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   applyFileMutations,
@@ -25,13 +27,15 @@ import {
 } from "../../shared/review";
 import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
+import { ExportDestinationSchema } from "../../shared/export";
+import { nextExportName } from "../hyperframes/exportName";
 import { createTranscriptService } from "../transcript/service";
 import type { TranscriptService } from "../transcript/service";
 import { listMedia } from "./media";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
-import { projectWritePath } from "./path";
+import { projectStatePath, projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 
 export function parseInput<T extends z.ZodType>(
@@ -75,6 +79,29 @@ export function createProjectRoutes(
   api.get("/projects/:id", async (c) =>
     c.json(await store.get(c.req.param("id"))),
   );
+  api.get("/projects/:id/export-defaults", async (c) => {
+    const query = parseInput(
+      ExportDestinationSchema.partial({ directory: true }),
+      c.req.query(),
+    );
+    const project = await store.get(c.req.param("id"));
+    if (query.directory && !isAbsolute(query.directory))
+      throw new HttpError(400, "Enter an absolute output folder.");
+    const defaultDirectory = await projectStatePath(
+      project,
+      ".cutroom/renders",
+      true,
+    );
+    const directory =
+      !query.directory || query.directory === defaultDirectory
+        ? defaultDirectory
+        : await realpath(query.directory);
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      directory,
+      filename: await nextExportName(directory, query.filename),
+    });
+  });
   api.get("/projects/:id/document", async (c) => {
     const document = await store.document(await store.get(c.req.param("id")));
     // Status lives in the review queue; never echo a stale pre-queue copy.

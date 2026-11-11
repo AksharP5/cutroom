@@ -21,7 +21,7 @@
 }
 
 /* Hover is a white overlay faded by opacity; press is a scale. Nothing animates color. */
-:is(.edit-tool, .edit-icon, .edit-zoom, .edit-menu button, button.edit-now) {
+:is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now) {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -31,13 +31,7 @@
   cursor: default;
   transition: transform var(--duration-press) var(--ease-out);
 }
-:is(
-  .edit-tool,
-  .edit-icon,
-  .edit-zoom,
-  .edit-menu button,
-  button.edit-now
-)::before {
+:is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now)::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -48,22 +42,16 @@
   pointer-events: none;
 }
 @media (hover: hover) and (pointer: fine) {
-  :is(
-      .edit-tool,
-      .edit-icon,
-      .edit-zoom,
-      .edit-menu button,
-      button.edit-now
-    ):not(:disabled):hover::before {
+  :is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now):not(
+      :disabled
+    ):hover::before {
     opacity: 1;
   }
   .edit-icon:not(:disabled):hover {
     color: var(--text-primary);
   }
 }
-:is(.edit-tool, .edit-icon, .edit-zoom, .edit-menu button):not(
-    :disabled
-  ):active {
+:is(.edit-tool, .edit-icon, .edit-zoom):not(:disabled):active {
   transform: scale(var(--press-scale));
 }
 :is(.edit-tool, .edit-icon)[aria-pressed="true"] {
@@ -146,58 +134,11 @@
   color: var(--text-secondary);
 }
 .edit-zoom {
-  anchor-name: --edit-zoom;
   height: var(--size-tool-button);
   gap: var(--space-1);
   padding: 0 var(--space-2);
   font-weight: var(--weight-medium);
 }
-.edit-menu {
-  position: fixed;
-  position-anchor: --edit-zoom;
-  inset: auto;
-  top: anchor(bottom);
-  right: anchor(right);
-  margin: var(--space-1) 0 0;
-  min-width: 96px;
-  padding: var(--space-1);
-  border: 0;
-  border-radius: var(--radius-float);
-  background: var(--surface-float);
-  box-shadow: var(--shadow-float);
-  color: var(--text-primary);
-  transform-origin: top right;
-  transition:
-    opacity var(--duration-panel-out) var(--ease-exit),
-    transform var(--duration-panel-out) var(--ease-exit),
-    overlay var(--duration-panel-out) allow-discrete,
-    display var(--duration-panel-out) allow-discrete;
-  opacity: 0;
-  transform: scale(var(--modal-scale));
-}
-.edit-menu:popover-open {
-  display: grid;
-  opacity: 1;
-  transform: none;
-  transition-duration: var(--duration-panel-in);
-  transition-timing-function: var(--ease-out);
-}
-@starting-style {
-  .edit-menu:popover-open {
-    opacity: 0;
-    transform: scale(var(--modal-scale));
-  }
-}
-.edit-menu button {
-  height: var(--size-row);
-  justify-content: flex-start;
-  padding: 0 var(--space-2);
-}
-.edit-menu button[aria-checked="true"] {
-  background: var(--surface-active);
-  color: var(--text-primary);
-}
-
 /* Viewer: stage and transport, the part that goes fullscreen */
 .edit-viewer {
   min-height: 0;
