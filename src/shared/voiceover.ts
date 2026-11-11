@@ -1,8 +1,34 @@
 import { clipEnd } from "./timeline/apply";
 import type { CommandInput, Timeline, Track } from "./timeline/schema";
-import { nextTrackIndex } from "./timeline/tracks";
+import { newTrack, nextTrackIndex } from "./timeline/tracks";
 
-/** Keep earlier takes intact. Occupied or newly locked destinations get a new audio track. */
+/** Prefer the armed lane, then the first unlocked audio lane with room for the whole take. */
+export function voiceoverTrack(
+  timeline: Timeline,
+  armed: Track,
+  at: number,
+  duration: number,
+): Track {
+  const available = (track: Track) =>
+    track.kind === "audio" &&
+    !track.locked &&
+    !timeline.clips.some(
+      (clip) =>
+        clip.track === track.index &&
+        clip.start < at + duration &&
+        clipEnd(clip) > at,
+    );
+  const current =
+    timeline.tracks.find((track) => track.index === armed.index) ?? armed;
+  if (available(current)) return current;
+  return (
+    timeline.tracks.find(available) ?? {
+      ...newTrack(nextTrackIndex(timeline.tracks), "audio"),
+      name: "Voiceover",
+    }
+  );
+}
+
 export function voiceoverCommands(
   timeline: Timeline,
   armed: Track,
@@ -10,22 +36,13 @@ export function voiceoverCommands(
   duration: number,
   src: string,
 ): CommandInput[] {
-  const current = timeline.tracks.find((track) => track.index === armed.index);
-  const occupied = timeline.clips.some(
-    (clip) =>
-      clip.track === armed.index &&
-      clip.start < at + duration &&
-      clipEnd(clip) > at,
-  );
-  const separate =
-    occupied || current?.locked || (current && current.kind !== "audio");
-  const track = separate ? nextTrackIndex(timeline.tracks) : armed.index;
+  const track = voiceoverTrack(timeline, armed, at, duration);
   return [
-    ...(!current || separate
+    ...(!timeline.tracks.some((current) => current.index === track.index)
       ? [
           {
             type: "setTrack" as const,
-            index: track,
+            index: track.index,
             kind: "audio" as const,
             name: "Voiceover",
           },
@@ -34,7 +51,7 @@ export function voiceoverCommands(
     {
       type: "insert",
       mode: "place",
-      track,
+      track: track.index,
       at,
       clip: { kind: "voiceover", src, duration, label: "Voiceover" },
     },

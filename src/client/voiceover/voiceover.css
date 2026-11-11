@@ -1,6 +1,7 @@
 .vo-arm.armed,
 .vo-arm.armed:disabled,
 .edit-transport .edit-icon.vo-record,
+.edit-transport .edit-icon.vo-record:hover,
 .vo-record-mark {
   color: var(--danger);
 }
@@ -79,14 +80,32 @@
 }
 
 .vo-input-panel .tl-meters-compact {
+  --compact-meter-height: var(--space-2);
   width: 100%;
-  height: var(--space-2);
   margin-top: var(--space-1);
 }
-.vo-actions .vo-discard {
+.vo-discard {
   color: var(--danger);
 }
 
 .vo-input-panel .primary-button kbd {
   font-size: var(--type-2xs);
+}
+
+.vo-input.vo-recover {
+  color: var(--danger);
+}
+.vo-discard-message {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-secondary);
+}
+.tl-head.audio .tl-head-title {
+  padding-right: var(--space-1);
+}
+.tl-head.audio .tl-head-buttons {
+  gap: 0;
+}
+.vo-ghost-head {
+  color: var(--text-secondary);
 }

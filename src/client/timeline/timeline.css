@@ -1023,16 +1023,17 @@
 }
 
 .tl-meters.tl-meters-compact {
+  --compact-meter-height: var(--space-1);
   flex: none;
   position: relative;
   width: var(--size-track-id);
-  height: var(--space-1);
-  background: var(--meter-off);
+  height: var(--icon-lg);
+  background: transparent;
   overflow: hidden;
   border: 0;
 }
 .tl-meters.tl-meters-compact .tl-meter-channel {
-  inset: 0;
+  inset: calc((var(--icon-lg) - var(--compact-meter-height)) / 2) 0;
   width: 100%;
   background: var(--meter-off);
 }
@@ -1052,17 +1053,17 @@
 }
 
 .tl-meters-compact .tl-meter-channel[data-clipping="true"] {
-  background: var(--danger);
+  background: var(--meter-clip);
 }
 .tl-meters-compact .tl-meter-channel[data-clipping="true"] .tl-meter-level {
-  background: var(--danger);
+  background: var(--meter-clip);
 }
 
 .tl-meters-compact .tl-meter-clip,
 .tl-meters-compact .tl-meter-clip:disabled {
-  inset: 0;
+  inset: calc((var(--compact-meter-height) - var(--icon-lg)) / 2) 0 auto;
   width: 100%;
-  height: 100%;
+  height: var(--icon-lg);
   background: transparent;
   z-index: var(--z-clip);
 }

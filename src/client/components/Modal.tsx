@@ -34,6 +34,36 @@ export function Modal({
       aria-labelledby={titleId}
       className={`modal ${wide ? "modal-wide" : ""}`}
       onCancel={onClose}
+      onKeyDown={(event) => {
+        if (
+          event.key !== "Tab" ||
+          event.altKey ||
+          event.ctrlKey ||
+          event.metaKey
+        )
+          return;
+        const controls = [
+          ...event.currentTarget.querySelectorAll<HTMLElement>(
+            "button, a[href], input, select, textarea, [tabindex]",
+          ),
+        ].filter(
+          (control) =>
+            control.tabIndex >= 0 &&
+            !control.matches(":disabled") &&
+            control.checkVisibility(),
+        );
+        const first = controls[0];
+        const last = controls.at(-1);
+        const target =
+          event.shiftKey && document.activeElement === first
+            ? last
+            : !event.shiftKey && document.activeElement === last
+              ? first
+              : null;
+        if (!target) return;
+        event.preventDefault();
+        target.focus();
+      }}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           const box = event.currentTarget.getBoundingClientRect();

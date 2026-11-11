@@ -449,8 +449,12 @@ test("fake microphone records over the cut, preserves audio, undoes once, and ex
     .getByRole("button", { name: "Record voiceover", exact: true })
     .click();
   await page.waitForTimeout(150);
-  page.once("dialog", (dialog) => dialog.accept());
   await page.keyboard.press("Escape");
+  const discard = page.getByRole("dialog", { name: "Discard voiceover take?" });
+  await expect(discard).toBeVisible();
+  await discard
+    .getByRole("button", { name: "Discard take", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "Record voiceover", exact: true }),
   ).toBeEnabled();
@@ -959,9 +963,26 @@ test("recording and failed-save controls stay visible through recovery", async (
   await page.route("**/upload?dir=assets/voiceover", (route) =>
     route.fulfill({ status: 503, json: { error: "Unavailable" } }),
   );
+  const header = page.locator(".tl-head.audio").first();
+  const headBox = (await header.boundingBox())!;
+  const armBox = (await header
+    .getByRole("button", { name: "Arm A1", exact: true })
+    .boundingBox())!;
+  const micBox = (await header
+    .getByRole("button", { name: "Microphone input A1" })
+    .boundingBox())!;
+  expect(
+    headBox.x + headBox.width - armBox.x - armBox.width,
+  ).toBeGreaterThanOrEqual(4);
+  expect(
+    headBox.x + headBox.width - micBox.x - micBox.width,
+  ).toBeGreaterThanOrEqual(4);
   const clock = page.getByRole("button", { name: /^Current time/ });
   const idle = (await clock.boundingBox())!.x;
   await record.click();
+  const stopButton = page.getByRole("button", { name: "Stop voiceover" });
+  await stopButton.hover();
+  await expect(stopButton).toHaveCSS("color", "rgb(255, 122, 107)");
   await page.waitForTimeout(1200);
   await expect(
     page.getByRole("status").filter({ hasText: "Recording" }),
@@ -993,12 +1014,47 @@ test("recording and failed-save controls stay visible through recovery", async (
   await page.screenshot({ path: info.outputPath("failed-save.png") });
   const panel = page.locator(".vo-input-panel:popover-open");
   await expect(panel).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Retry save", exact: true }),
+  ).toBeFocused();
+  await clock.click();
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  const recovery = page.getByRole("button", { name: "Microphone input A1" });
+  await expect(recovery).toHaveCSS("color", "rgb(255, 122, 107)");
+  await recovery.click();
+  await expect(
+    panel.getByRole("button", { name: "Retry save", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Control+Alt+Shift+V");
   await expect(page.locator(".toast")).toContainText(
     "Save failed. Retry or download",
   );
-  page.once("dialog", (dialog) => dialog.dismiss());
-  await page.getByRole("button", { name: "Discard take", exact: true }).click();
+  const discardButton = panel.getByRole("button", {
+    name: "Discard take",
+    exact: true,
+  });
+  await discardButton.click();
+  const discard = page.getByRole("dialog", { name: "Discard voiceover take?" });
+  await expect(discard).toBeVisible();
+  await expect(
+    discard.getByRole("button", { name: "Keep take" }),
+  ).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    discard.getByRole("button", { name: "Close dialog" }),
+  ).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    discard.getByRole("button", { name: "Discard take", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    discard.getByRole("button", { name: "Close dialog" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(discard).toHaveCount(0);
+  await expect(discardButton).toBeFocused();
   await expect(
     panel.getByRole("button", { name: "Retry save", exact: true }),
   ).toBeVisible();
@@ -1186,13 +1242,194 @@ test("the compact microphone meter shows and clears clipping after the input fal
   await expect(meter.first()).toHaveAttribute("aria-valuenow", "0");
   await expect(meter.first().locator(".tl-meter-channel")).toHaveCSS(
     "background-color",
-    "rgb(255, 122, 107)",
+    "rgb(255, 79, 58)",
   );
+  const clear = meter
+    .first()
+    .getByRole("button", { name: "Clear microphone clipping indicator" });
+  expect((await clear.boundingBox())!.height).toBeGreaterThanOrEqual(16);
   await page.screenshot({ path: info.outputPath("clipping.png") });
   await panel
-    .getByRole("button", { name: "Clear I clipping indicator" })
+    .getByRole("button", { name: "Clear microphone clipping indicator" })
     .click();
   await expect(
     panel.getByRole("meter").locator('[data-clipping="true"]'),
   ).toHaveCount(0);
+});
+
+test("occupied takes preview their destination and reuse A2 until the growing range overlaps", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Reusable voiceover lane", duration: 12 },
+      })
+    ).json(),
+  );
+  await run("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:sample_rate=48000:duration=12",
+    join(project.path, "assets/music.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="12"><div id="picture" class="clip" data-start="0" data-duration="12" data-track-index="0">Picture</div><audio id="music" src="assets/music.wav" data-start="0" data-duration="12" data-track-index="1"></audio></main></body></html>',
+  );
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page.getByRole("button", { name: "Arm A1", exact: true }).click();
+  const record = page.getByRole("button", {
+    name: "Record voiceover",
+    exact: true,
+  });
+  await expect(record).toBeEnabled();
+  const seek = async (time: string) => {
+    await page.getByRole("button", { name: /^Current time/ }).click();
+    await page.getByLabel("Go to time").pressSequentially(time);
+    await page.keyboard.press("Enter");
+  };
+  const region = page.getByLabel("Recording voiceover take");
+  for (const [i, time] of ["0100", "0400", "0700"].entries()) {
+    await seek(time);
+    await record.click();
+    await expect(region).toBeVisible();
+    await page.waitForTimeout(350);
+    const row =
+      i === 0
+        ? page.getByLabel("New audio lane A2")
+        : page.locator(".tl-head.audio").nth(1);
+    const top = (await row.boundingBox())!.y;
+    expect((await region.boundingBox())!.y).toBe(top);
+    const bed = (await page.locator('[data-clip="music"]').boundingBox())!;
+    expect((await region.boundingBox())!.y).toBeGreaterThanOrEqual(
+      bed.y + bed.height,
+    );
+    await page.keyboard.press("Space");
+    await expect(record).toBeEnabled();
+    const view = await read();
+    const takes = view.timeline.clips.filter(
+      (clip) => clip.kind === "voiceover",
+    );
+    expect(takes).toHaveLength(i + 1);
+    expect(takes.map((clip) => clip.track)).toEqual(Array(i + 1).fill(2));
+    await expect(page.locator(`[data-clip="${takes.at(-1)!.id}"]`)).toHaveCSS(
+      "top",
+      `${top - (await page.locator(".tl-lanes").boundingBox())!.y}px`,
+    );
+  }
+  const before = await read();
+  expect(
+    before.timeline.tracks.filter((track) => track.kind === "audio"),
+  ).toHaveLength(2);
+  expect(
+    before.timeline.clips.find((clip) => clip.id === "music"),
+  ).toMatchObject({ track: 1, start: 0, duration: 360 });
+  await seek("0315");
+  await record.click();
+  const a2 = page.locator(".tl-head.audio").nth(1);
+  await expect(region).toBeVisible();
+  expect((await region.boundingBox())!.y).toBe((await a2.boundingBox())!.y);
+  await expect(page.getByLabel("New audio lane A3")).toBeVisible();
+  const destination = (await page
+    .getByLabel("New audio lane A3")
+    .boundingBox())!.y;
+  expect((await region.boundingBox())!.y).toBe(destination);
+  await page.keyboard.press("Space");
+  await expect(record).toBeEnabled();
+  const after = await read();
+  const take = after.timeline.clips
+    .filter((clip) => clip.kind === "voiceover")
+    .at(-1)!;
+  expect(take.track).toBe(3);
+  expect(after.timeline.clips.filter((clip) => clip.id !== take.id)).toEqual(
+    before.timeline.clips,
+  );
+});
+
+test("recording clears its resolved error and a clean save preserves an unrelated toast", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Voiceover toast ownership", duration: 8 },
+      })
+    ).json(),
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page.locator(".tl-clip").first().click();
+  const opacity = page.getByRole("textbox", { name: "Opacity", exact: true });
+  await expect(opacity).toBeVisible();
+  await page.getByRole("button", { name: "Arm A1", exact: true }).click();
+  const record = page.getByRole("button", {
+    name: "Record voiceover",
+    exact: true,
+  });
+  await expect(record).toBeEnabled();
+  await page.getByRole("button", { name: "Lock A1", exact: true }).click();
+  await record.click();
+  await expect(page.locator(".toast")).toContainText(
+    "Unlock an audio track before recording.",
+  );
+  await page.getByRole("button", { name: "Lock A1", exact: true }).click();
+  await record.click();
+  await expect(
+    page.getByRole("button", { name: "Stop voiceover" }),
+  ).toBeVisible();
+  await expect(page.locator(".toast")).toHaveCount(0);
+  let finishUpload = () => {};
+  const upload = new Promise<void>((resolve) => {
+    finishUpload = resolve;
+  });
+  await page.route("**/upload?dir=assets/voiceover", async (route) => {
+    await upload;
+    await route.continue();
+  });
+  await page.waitForTimeout(350);
+  await page.keyboard.press("Space");
+  await expect(record).toBeDisabled();
+  await opacity.fill("150%");
+  await opacity.press("Enter");
+  await expect(page.locator(".toast")).toContainText(
+    "Opacity must be between 0% and 100%.",
+  );
+  finishUpload();
+  await expect(record).toBeEnabled();
+  await expect(page.locator(".toast")).toContainText(
+    "Opacity must be between 0% and 100%.",
+  );
+  // Cancelling the recording discard saves the take and restores focus to Record.
+  await record.click();
+  await page.waitForTimeout(250);
+  await page.keyboard.press("Escape");
+  const discard = page.getByRole("dialog", { name: "Discard voiceover take?" });
+  await expect(
+    discard.getByRole("button", { name: "Save take" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(discard).toHaveCount(0);
+  await expect(record).toBeEnabled();
+  await expect(record).toBeFocused();
+  const view = TimelineViewSchema.parse(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+    ).json(),
+  );
+  expect(
+    view.timeline.clips.filter((clip) => clip.kind === "voiceover"),
+  ).toHaveLength(2);
 });

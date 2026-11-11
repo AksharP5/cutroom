@@ -119,8 +119,16 @@ export function AudioMeters({
           <span>{name}</span>
           <button
             className="tl-meter-clip"
-            aria-label={`Clear ${name} clipping indicator`}
-            title={`Clear ${name} clipping indicator`}
+            aria-label={
+              compact
+                ? "Clear microphone clipping indicator"
+                : `Clear ${name} clipping indicator`
+            }
+            title={
+              compact
+                ? "Clear microphone clipping indicator"
+                : `Clear ${name} clipping indicator`
+            }
             disabled
           />
           <div className="tl-meter-level" />

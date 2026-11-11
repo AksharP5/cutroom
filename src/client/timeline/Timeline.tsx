@@ -1,3 +1,4 @@
+import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix } from "./mix";
 import { AudioMeters } from "./meters";
 import {
@@ -112,7 +113,7 @@ export interface TimelineProps {
   ): void;
   onRenameTrack(track: Track, name: string): void;
   onAddTrack(kind: Track["kind"]): void;
-  recording?: { track: number; start: number } | null;
+  recording?: { track: Track; start: number } | null;
   audioControls?(
     track: Track,
     id: string,
@@ -505,6 +506,43 @@ export function Timeline({
   onOpenPin,
   onOpenMarker,
 }: TimelineProps) {
+  const [takeTrack, setTakeTrack] = useState<Track | null>(null);
+  useLayoutEffect(() => {
+    if (!recording) {
+      setTakeTrack(null);
+      return;
+    }
+    let index: number | undefined;
+    const write = () => {
+      const destination = voiceoverTrack(
+        timeline,
+        recording.track,
+        recording.start,
+        Math.max(1, clock.frame() - recording.start),
+      );
+      if (destination.index === index) return;
+      index = destination.index;
+      setTakeTrack(destination);
+    };
+    write();
+    return clock.subscribe(write);
+  }, [timeline, recording, clock]);
+  const ghost =
+    recording &&
+    takeTrack &&
+    takeTrack.index !== recording.track.index &&
+    !timeline.tracks.some((track) => track.index === takeTrack.index)
+      ? takeTrack.index
+      : undefined;
+  const shownTracks = useMemo(
+    () =>
+      recording &&
+      takeTrack &&
+      !timeline.tracks.some((track) => track.index === takeTrack.index)
+        ? [...timeline.tracks, takeTrack]
+        : timeline.tracks,
+    [timeline.tracks, takeTrack, recording],
+  );
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
   const [trackMenu, setTrackMenu] = useState<{ x: number; y: number } | null>(
@@ -540,7 +578,7 @@ export function Timeline({
     useSyncExternalStore(subscribeMediaDrag, mediaDrag) !== null;
   const layout = useMemo(
     () =>
-      trackRows(timeline.tracks, {
+      trackRows(shownTracks, {
         ...sizes.rows,
         // Clip moves reveal the bands when the pointer reaches an edge.
         padding:
@@ -548,7 +586,7 @@ export function Timeline({
             ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
             : 0,
       }),
-    [timeline.tracks, sizes, draggingMedia, trackDrag],
+    [shownTracks, sizes, draggingMedia, trackDrag],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
   const gestures = useLaneGestures({
@@ -681,7 +719,7 @@ export function Timeline({
     };
     write();
     return clock.subscribe(write);
-  }, [clock, recording, frames]);
+  }, [clock, recording, frames, takeTrack]);
 
   function zoomTo(position: number, animate: boolean) {
     const view = viewport.current;
@@ -740,6 +778,10 @@ export function Timeline({
   const rows = mounted
     ? rowsBetween(layout.rows, mounted.rows.from, mounted.rows.to)
     : [];
+  const headRows =
+    ghost === undefined
+      ? rows
+      : rows.filter((row) => row.track.index !== ghost);
   const suppressed = useMemo(
     () => trackMix(timeline.tracks).hidden,
     [timeline.tracks],
@@ -856,11 +898,26 @@ export function Timeline({
             }}
           >
             <TrackHeads
-              rows={rows}
+              rows={headRows}
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
               audioControls={audioControls}
             />
+            {rows
+              .filter((row) => row.track.index === ghost)
+              .map((row) => (
+                <div
+                  key={row.track.index}
+                  className="tl-head audio vo-ghost-head"
+                  style={{ top: row.top }}
+                  aria-label={`New audio lane ${row.id}`}
+                >
+                  <div className="tl-head-title">
+                    <span className="tl-head-id">{row.id}</span>
+                    <span>Voiceover</span>
+                  </div>
+                </div>
+              ))}
             {trackMenu && (
               <div
                 className="tl-track-menu"
@@ -917,7 +974,7 @@ export function Timeline({
                 <canvas className="tl-bodies" ref={canvas} />
                 {recording &&
                   layout.rows
-                    .filter((row) => row.track.index === recording.track)
+                    .filter((row) => row.track.index === takeTrack?.index)
                     .map((row) => (
                       <i
                         key={row.track.index}

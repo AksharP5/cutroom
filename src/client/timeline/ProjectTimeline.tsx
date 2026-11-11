@@ -193,9 +193,7 @@ export function ProjectTimeline({
     <>
       <Timeline
         recording={
-          recording
-            ? { track: recording.track.index, start: recording.start }
-            : null
+          recording ? { track: recording.track, start: recording.start } : null
         }
         audioControls={(track, id, part) => (
           <VoiceoverHeader

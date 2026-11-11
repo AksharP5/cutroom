@@ -77,6 +77,7 @@ export function createVoiceoverSession(projectId: string) {
     inputLatency: null as number | null,
     compensation: 0,
     error: "",
+    discard: null as "recording" | "unsaved" | null,
   }));
   const get = store.getState;
   const set = store.setState;
@@ -108,11 +109,32 @@ export function createVoiceoverSession(projectId: string) {
     peak = next;
     meters.forEach((listener) => listener(next));
   };
+  let dismissToast = () => {};
+  const notify = (message: string) => {
+    dismissToast = showToast(message);
+  };
+  const clearMessage = () => {
+    dismissToast();
+    set({ error: "" });
+  };
+  let resolveDiscard: ((discard: boolean) => void) | null = null;
+  const confirmDiscard = (discard: "recording" | "unsaved") => {
+    set({ discard });
+    return new Promise<boolean>((resolve) => {
+      resolveDiscard = resolve;
+    });
+  };
+  const answerDiscard = (discard: boolean) => {
+    const resolve = resolveDiscard;
+    resolveDiscard = null;
+    set({ discard: null });
+    resolve?.(discard);
+  };
   const fail = (error: unknown) => {
     if (!disposed) {
       const message = microphoneError(error);
       set({ error: message });
-      showToast(message);
+      notify(message);
     }
   };
   const refreshDevices = async () => {
@@ -140,7 +162,7 @@ export function createVoiceoverSession(projectId: string) {
       return;
     }
     transition("arm", { kind: "arming", track });
-    set({ error: "" });
+    clearMessage();
     try {
       const opened = await openMicrophone(device, level, () => {
         void (async () => {
@@ -164,6 +186,7 @@ export function createVoiceoverSession(projectId: string) {
       microphone = opened;
       localStorage.setItem(DEVICE_KEY, opened.deviceId);
       transition("ready", { kind: "armed", track });
+      clearMessage();
       set({
         device: opened.deviceId,
         inputLatency: opened.inputLatency,
@@ -189,6 +212,7 @@ export function createVoiceoverSession(projectId: string) {
   function disarm() {
     releaseMicrophone();
     transition("release", { kind: "idle" });
+    clearMessage();
   }
 
   async function start() {
@@ -218,7 +242,7 @@ export function createVoiceoverSession(projectId: string) {
           start: frame,
           loop,
         });
-        set({ error: "" });
+        clearMessage();
         let aligned = false;
         stopTransport = useTransport.subscribe((next, previous) => {
           if (next.state.kind !== "playing") {
@@ -248,7 +272,7 @@ export function createVoiceoverSession(projectId: string) {
 
   async function save(track: Track, take: Take) {
     transition("save", { kind: "saving", track });
-    set({ error: "" });
+    clearMessage();
     try {
       if (!take.file) {
         const body = new FormData();
@@ -283,11 +307,9 @@ export function createVoiceoverSession(projectId: string) {
       useWorkspace.setState((state) => ({
         mediaRevision: state.mediaRevision + 1,
       }));
-      showToast(
-        take.droppedMs
-          ? `${take.droppedMs} ms of microphone audio dropped`
-          : "",
-      );
+      clearMessage();
+      if (take.droppedMs)
+        notify(`${take.droppedMs} ms of microphone audio dropped`);
     } catch (error) {
       if (disposed) return;
       transition("failed", { kind: "save-failed", track, take });
@@ -307,24 +329,23 @@ export function createVoiceoverSession(projectId: string) {
       Math.max(1, (playedThrough ?? frame) - recording.start),
     );
     useTransport.setState({ loop: recording.loop });
-    if (
-      discard &&
-      window.confirm("Discard this voiceover take? Choose Cancel to save it.")
-    ) {
-      microphone.discard();
-      settle(recording.track);
-      showToast("Voiceover take discarded.");
-      return;
-    }
     try {
       const captured = await microphone.finish(frameTime(duration, fps));
-      if (!disposed)
-        await save(recording.track, {
-          ...captured,
-          duration,
-          start: recording.start,
-          file: null,
-        });
+      if (disposed) return;
+      if (discard && (await confirmDiscard("recording"))) {
+        if (disposed) return;
+        settle(recording.track);
+        clearMessage();
+        notify("Voiceover take discarded.");
+        return;
+      }
+      if (disposed) return;
+      await save(recording.track, {
+        ...captured,
+        duration,
+        start: recording.start,
+        file: null,
+      });
     } catch (error) {
       if (!disposed) {
         settle(recording.track);
@@ -340,7 +361,7 @@ export function createVoiceoverSession(projectId: string) {
     canLeave() {
       const kind = get().state.kind;
       if (!["recording", "saving", "save-failed"].includes(kind)) return true;
-      showToast(
+      notify(
         kind === "saving"
           ? "Wait for the voiceover take to finish saving."
           : "Save or discard the voiceover take before leaving this project.",
@@ -359,31 +380,29 @@ export function createVoiceoverSession(projectId: string) {
     toggleRecord() {
       if (get().state.kind === "recording") void stop();
       else if (get().state.kind === "idle")
-        showToast("Arm an audio track to record voiceover.");
+        notify("Arm an audio track to record voiceover.");
       else if (get().state.kind === "save-failed")
-        showToast(
+        notify(
           "Save failed. Retry or download the take in the microphone panel before recording again.",
         );
       else if (get().state.kind === "saving")
-        showToast("Wait for the voiceover take to finish saving.");
+        notify("Wait for the voiceover take to finish saving.");
       else if (get().state.kind === "arming")
-        showToast("Wait for the microphone to be ready.");
+        notify("Wait for the microphone to be ready.");
       else void start();
     },
+    answerDiscard,
     retry() {
       const state = get().state;
       if (state.kind === "save-failed") void save(state.track, state.take);
     },
-    discardUnsaved() {
+    async discardUnsaved() {
       const state = get().state;
-      if (
-        state.kind !== "save-failed" ||
-        !window.confirm("Discard this voiceover take? This cannot be undone.")
-      )
-        return;
+      if (state.kind !== "save-failed" || get().discard) return;
+      if (!(await confirmDiscard("unsaved")) || disposed) return;
       settle(state.track);
-      set({ error: "" });
-      showToast("Voiceover take discarded.");
+      clearMessage();
+      notify("Voiceover take discarded.");
     },
     download() {
       const state = get().state;
@@ -405,6 +424,8 @@ export function createVoiceoverSession(projectId: string) {
     refreshDevices,
     dispose() {
       disposed = true;
+      answerDiscard(false);
+      dismissToast();
       closing.abort();
       const state = get().state;
       if (state.kind === "recording") {
