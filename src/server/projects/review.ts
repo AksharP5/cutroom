@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ProjectHistory } from "@hyperframes/studio-server";
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  writeFile,
+} from "node:fs/promises";
 import { z } from "zod";
 import {
   AnnotationInputSchema,
@@ -30,7 +37,8 @@ import { HttpError } from "../../shared/errors";
 import { ProjectDocumentError, isMissing, projectPath } from "./store";
 import type { ProjectStore } from "./store";
 import { ClipEditSchema } from "../../shared/timeline/schema";
-import { clipVersions, sourceClipVersions } from "./changes";
+import { clipVersions, compositionVersions, missingSignature } from "./changes";
+import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
@@ -41,6 +49,7 @@ const ReviewFileSchema = z.object({
     .array(
       ClipEditSchema.omit({ resolution: true }).extend({
         signature: z.string().optional(),
+        beforeSignature: z.string().optional(),
         noteIds: z.array(z.string()).default([]),
       }),
     )
@@ -66,6 +75,26 @@ const ReviewFileSchema = z.object({
   ),
 });
 type ReviewFile = z.infer<typeof ReviewFileSchema>;
+/** Accepting a row establishes that target's accepted bytes for its remaining pending rows. */
+function acceptEdits(edits: ReviewFile["clipEdits"], ids: Set<string>) {
+  const accepted = new Map<string, string>();
+  const target = (edit: ReviewFile["clipEdits"][number]) =>
+    JSON.stringify([edit.composition, edit.clipId]);
+  return edits.map((edit) => {
+    if (ids.has(edit.id)) {
+      if (!edit.accepted && edit.signature?.startsWith("v3:"))
+        accepted.set(target(edit), edit.signature);
+      return { ...edit, accepted: true };
+    }
+    const baseline = accepted.get(target(edit));
+    return !edit.accepted &&
+      edit.signature?.startsWith("v3:") &&
+      baseline !== undefined
+      ? { ...edit, beforeSignature: baseline }
+      : edit;
+  });
+}
+
 /** Who changed a sent note's content, and how: "by undo", "outside Cutroom", and so on. */
 type Cause = { actor: ReviewActor; how: string };
 
@@ -295,14 +324,22 @@ export function createReviewService(store: ProjectStore) {
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
-      clipEdits: state.clipEdits.map((edit) =>
-        edit.noteIds.length &&
-        edit.noteIds.every(
-          (id) =>
-            next.find((item) => item.id === id)?.review.status === "accepted",
-        )
-          ? { ...edit, accepted: true }
-          : edit,
+      clipEdits: acceptEdits(
+        state.clipEdits,
+        new Set(
+          state.clipEdits
+            .filter(
+              (edit) =>
+                !edit.accepted &&
+                edit.noteIds.length &&
+                edit.noteIds.every(
+                  (id) =>
+                    next.find((item) => item.id === id)?.review.status ===
+                    "accepted",
+                ),
+            )
+            .map((edit) => edit.id),
+        ),
       ),
       changes: [],
       items: [
@@ -382,18 +419,15 @@ export function createReviewService(store: ProjectStore) {
   });
 
   /** Project the active history onto the ledger. Undo changes visibility, never approval. */
-  const currentEdits = async (project: Project, composition?: string) => {
+  const currentEdits = async (project: Project) => {
     const state = await readState(project);
     const history = await store.history(project);
     const entries = history.list();
-    const positions = new Map(entries.map((entry, index) => [entry.id, index]));
     const undone = new Set(
       entries.filter((entry) => entry.undone).map((entry) => entry.id),
     );
     const edits = state.clipEdits.filter(
-      (edit) =>
-        (composition === undefined || edit.composition === composition) &&
-        (edit.historyId === undefined || !undone.has(edit.historyId)),
+      (edit) => edit.historyId === undefined || !undone.has(edit.historyId),
     );
     const versions = new Map(
       await Promise.all(
@@ -408,79 +442,207 @@ export function createReviewService(store: ProjectStore) {
         ),
       ),
     );
-    const latest = new Map<string, (typeof edits)[number]>();
-    const key = (
-      edit: Pick<(typeof edits)[number], "composition" | "clipId">,
-    ) => JSON.stringify([edit.composition, edit.clipId]);
-    edits.forEach((edit) => {
-      latest.set(key(edit), edit);
-    });
-    const recorded = new Map(
-      edits.map((edit) => [JSON.stringify([edit.historyId, key(edit)]), edit]),
+    return edits.map(
+      ({ signature, beforeSignature, noteIds: _noteIds, ...edit }) => {
+        if (edit.by === "human" || edit.accepted)
+          return { ...edit, resolution: undefined };
+        // Old signatures included shared code. They cannot establish an accepted v3 state.
+        if (!signature?.startsWith("v3:") || beforeSignature === undefined)
+          return { ...edit, resolution: undefined };
+        return (versions.get(edit.composition)?.get(edit.clipId) ??
+          missingSignature) === beforeSignature
+          ? { ...edit, resolution: "source" as const }
+          : { ...edit, resolution: undefined };
+      },
     );
-    // Cache immutable blobs only within this projection; resolution is never persisted.
-    const snapshots = new Map<string, Promise<Map<string, string>>>();
-    const snapshot = (hash: string | null, composition: string) => {
-      if (hash === null) return Promise.resolve(new Map<string, string>());
-      const id = JSON.stringify([hash, composition]);
-      let versions = snapshots.get(id);
-      if (!versions) {
-        versions = history
-          .readBlob(hash)
-          .then((content) =>
-            sourceClipVersions(content.toString("utf8"), composition),
-          );
-        snapshots.set(id, versions);
+  };
+
+  const recordEdits = async (
+    project: Project,
+    composition: string,
+    before: ClipVersions,
+    after: ClipVersions,
+    changed: Set<string | null>,
+    actor: ReviewActor | undefined,
+    noteIds: string[],
+    pendingRows: Awaited<ReturnType<typeof currentEdits>>,
+  ) => {
+    const entry = (await store.history(project)).list().at(-1);
+    const state = await readState(project);
+    const pendingIds = new Set(pendingRows.map((edit) => edit.id));
+    const at = new Date().toISOString();
+    state.clipEdits.push(
+      ...[...changed]
+        .filter(
+          (id) =>
+            !state.clipEdits.some(
+              (edit) =>
+                entry &&
+                edit.historyId === entry.id &&
+                edit.composition === composition &&
+                edit.clipId === id,
+            ),
+        )
+        .map((clipId) => ({
+          id: randomUUID(),
+          clipId,
+          composition,
+          label:
+            clipId === null
+              ? `Edited ${composition} composition`
+              : (entry?.label ?? "Edited source"),
+          historyId: entry?.id,
+          signature: after.get(clipId) ?? missingSignature,
+          beforeSignature:
+            state.clipEdits.find(
+              (edit) =>
+                edit.composition === composition &&
+                edit.clipId === clipId &&
+                pendingIds.has(edit.id) &&
+                edit.signature?.startsWith("v3:") &&
+                edit.beforeSignature !== undefined &&
+                !(entry && edit.historyId === entry.id),
+            )?.beforeSignature ??
+            before.get(clipId) ??
+            missingSignature,
+          noteIds,
+          at,
+          by: actor ? ("agent" as const) : ("human" as const),
+          accepted: !actor,
+        })),
+    );
+    // Unreviewed agent work never ages out of the ledger; only settled rows are trimmed.
+    const pending = (edit: (typeof state.clipEdits)[number]) =>
+      edit.by === "agent" && !edit.accepted;
+    const kept = new Set(
+      state.clipEdits.filter((edit) => !pending(edit)).slice(-200),
+    );
+    state.clipEdits = state.clipEdits.filter(
+      (edit) => pending(edit) || kept.has(edit),
+    );
+    await writeState(project, state);
+  };
+
+  type AssetSnapshot = Map<
+    string,
+    Awaited<ReturnType<typeof compositionVersions>>
+  >;
+  const assetSnapshots = new Map<string, AssetSnapshot>();
+  const readAssets = async (project: Project): Promise<AssetSnapshot> => {
+    const snapshot: AssetSnapshot = new Map();
+    const directories = [""];
+    for (const directory of directories) {
+      for (const entry of await readdir(`${project.path}/${directory}`, {
+        withFileTypes: true,
+      })) {
+        if (
+          entry.name.startsWith(".") ||
+          ["node_modules", "renders"].includes(entry.name)
+        )
+          continue;
+        const path = directory ? `${directory}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) directories.push(path);
+        else if (entry.isFile() && /\.html?$/i.test(entry.name))
+          snapshot.set(path, await compositionVersions(project, path));
       }
-      return versions;
-    };
-    return Promise.all(
-      edits.map(
-        async (
-          { signature: _signature, noteIds: _noteIds, ...edit },
-          index,
-        ) => {
-          if (edit.by === "human" || edit.accepted)
-            return { ...edit, resolution: undefined };
-          const position = edit.historyId && positions.get(edit.historyId);
-          if (typeof position === "number") {
-            for (const entry of entries.slice(position + 1)) {
-              // Undo/redo changes which original entries count, rather than replacing their work.
-              if (entry.undone || entry.undoes) continue;
-              const row = recorded.get(JSON.stringify([entry.id, key(edit)]));
-              if (row?.by === "human")
-                return { ...edit, resolution: "owner" as const };
-              if (row?.by === "agent") continue;
-              const file = entry.files.find(
-                (file) => file.path === edit.composition,
-              );
-              if (!file) continue;
-              const [before, after] = await Promise.all([
-                snapshot(file.before, edit.composition),
-                snapshot(file.after, edit.composition),
-              ]);
-              if (before.get(edit.clipId) !== after.get(edit.clipId))
-                return { ...edit, resolution: "source" as const };
-            }
-          } else if (
-            edits
-              .slice(index + 1)
-              .some((row) => key(row) === key(edit) && row.by === "human")
+    }
+    return snapshot;
+  };
+  const recordAssets = async (
+    project: Project,
+    before: AssetSnapshot,
+    after: AssetSnapshot,
+    actor: Extract<ReviewActor, { kind: "agent" }> | undefined,
+  ) => {
+    if (!actor) return;
+    const changes = [...after].flatMap(([path, next]) => {
+      const previous = before.get(path);
+      if (!previous) return [];
+      // A reference being authored is a source edit. Compare files already referenced before
+      // this revision, so owner source edits cannot turn into agent asset replacements.
+      const changed = new Set(
+        [...next.references]
+          .filter(([, paths]) =>
+            [...paths].some(
+              (path) =>
+                previous.mediaFiles.has(path) &&
+                next.mediaFiles.has(path) &&
+                previous.mediaFiles.get(path) !== next.mediaFiles.get(path),
+            ),
           )
-            return { ...edit, resolution: "owner" as const };
-          const signature = latest.get(key(edit))?.signature;
-          return signature !== undefined &&
-            versions.get(edit.composition)?.get(edit.clipId) === signature
-            ? { ...edit, resolution: undefined }
-            : { ...edit, resolution: "source" as const };
-        },
-      ),
+          .map(([id]) => id),
+      );
+      return changed.size ? [{ path, previous, next, changed }] : [];
+    });
+    if (!changes.length) return;
+    const pending = (await currentEdits(project)).filter(
+      (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
     );
+    await (await store.history(project)).checkpoint();
+    const items = await reconcile(project);
+    const noteIds = items
+      .filter(
+        (item) =>
+          item.review.status === "working" &&
+          item.review.turnId === actor.turn.id,
+      )
+      .map((item) => item.id);
+    for (const { path, previous, next, changed } of changes)
+      await recordEdits(
+        project,
+        path,
+        previous.versions,
+        next.versions,
+        changed,
+        actor,
+        noteIds,
+        pending,
+      );
+  };
+  const observeAssets = (project: Project) => {
+    const turn = turns.get(project.id);
+    const actor = turn ? { kind: "agent" as const, turn } : undefined;
+    return serialize(project, async () => {
+      const after = await readAssets(project);
+      const before = assetSnapshots.get(project.id);
+      if (before) await recordAssets(project, before, after, actor);
+      assetSnapshots.set(project.id, after);
+    });
   };
 
   return {
     agent,
     authorize,
+    observeAssets,
+    /** API asset writers retain their request identity even during an agent turn. */
+    editAssets: <T>(
+      project: Project,
+      token: string | undefined,
+      work: () => Promise<T>,
+    ) =>
+      serialize(project, async () => {
+        authorize(token, project.id);
+        const before = await readAssets(project);
+        const previous = assetSnapshots.get(project.id);
+        const turn = turns.get(project.id);
+        if (previous)
+          await recordAssets(
+            project,
+            previous,
+            before,
+            turn ? { kind: "agent", turn } : undefined,
+          );
+        const result = await work();
+        const after = await readAssets(project);
+        await recordAssets(
+          project,
+          before,
+          after,
+          token === undefined ? undefined : agent(project, token),
+        );
+        assetSnapshots.set(project.id, after);
+        return result;
+      }),
     /** Source and timeline edits share the review queue, so accepting cannot race attribution. */
     editComposition: <T>(
       project: Project,
@@ -493,9 +655,8 @@ export function createReviewService(store: ProjectStore) {
         authorize(token, project.id);
         await projectWritePath(project, composition);
         composition = posix.normalize(composition.replaceAll("\\", "/"));
-        if (!composition.endsWith(".html")) return work();
         let items: ReviewItem[];
-        let before: Map<string, string>;
+        let before: ClipVersions;
         try {
           items = await reconcile(project);
           before = await clipVersions(project, composition);
@@ -528,6 +689,9 @@ export function createReviewService(store: ProjectStore) {
           );
         const noteIds =
           noteId === undefined ? claimed.map((item) => item.id) : [noteId];
+        const pendingRows = (await currentEdits(project)).filter(
+          (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
+        );
         const result = await work();
         const after = await clipVersions(project, composition);
         const changed = new Set(
@@ -536,45 +700,46 @@ export function createReviewService(store: ProjectStore) {
           ),
         );
         if (!changed.size) return result;
-        const state = await readState(project);
-        const entry = (await store.history(project)).list().at(-1);
-        const at = new Date().toISOString();
-        state.clipEdits.push(
-          ...[...changed]
-            .filter((id) => after.has(id))
-            .map((clipId) => ({
-              id: randomUUID(),
-              clipId,
-              composition,
-              label: entry?.label ?? "Edited source",
-              historyId: entry?.id,
-              signature: after.get(clipId),
-              noteIds,
-              at,
-              by: actor ? ("agent" as const) : ("human" as const),
-              accepted: !actor,
-            })),
+        await recordEdits(
+          project,
+          composition,
+          before,
+          after,
+          changed,
+          actor,
+          noteIds,
+          pendingRows,
         );
-        // Unreviewed agent work never ages out of the ledger; only settled rows are trimmed.
-        const pending = (edit: (typeof state.clipEdits)[number]) =>
-          edit.by === "agent" && !edit.accepted;
-        const kept = new Set(
-          state.clipEdits.filter((edit) => !pending(edit)).slice(-200),
-        );
-        state.clipEdits = state.clipEdits.filter(
-          (edit) => pending(edit) || kept.has(edit),
-        );
-        await writeState(project, state);
         return result;
       }),
     clipChanges: (project: Project, composition: string) =>
       serialize(project, async () => {
         try {
           await reconcile(project);
-          const clipEdits = await currentEdits(
-            project,
-            posix.normalize(composition.replaceAll("\\", "/")),
-          );
+          const path = posix.normalize(composition.replaceAll("\\", "/"));
+          const edits = await currentEdits(project);
+          const clipEdits = edits.filter((edit) => edit.composition === path);
+          // Another file's clip bytes belong to a composition row in this view. Keep one
+          // row per history entry and file, choosing pending work so it cannot be hidden.
+          const compositions = new Map<string, (typeof edits)[number]>();
+          for (const edit of edits) {
+            if (edit.composition === path) continue;
+            const key = JSON.stringify([
+              edit.historyId ?? edit.id,
+              edit.composition,
+            ]);
+            const previous = compositions.get(key);
+            if (
+              !previous ||
+              (edit.by === "agent" && !edit.accepted && !edit.resolution)
+            )
+              compositions.set(key, {
+                ...edit,
+                clipId: null,
+                label: `Edited ${edit.composition} composition`,
+              });
+          }
+          clipEdits.push(...compositions.values());
           return {
             clipEdits,
             agentChanges: [
@@ -584,7 +749,11 @@ export function createReviewService(store: ProjectStore) {
                     (edit) =>
                       edit.by === "agent" && !edit.accepted && !edit.resolution,
                   )
-                  .map((edit) => edit.clipId),
+                  .flatMap((edit) =>
+                    edit.clipId === null || edit.composition !== path
+                      ? []
+                      : [edit.clipId],
+                  ),
               ),
             ],
           };
@@ -613,9 +782,7 @@ export function createReviewService(store: ProjectStore) {
         const state = await readState(project);
         await writeState(project, {
           ...state,
-          clipEdits: state.clipEdits.map((edit) =>
-            ids.has(edit.id) ? { ...edit, accepted: true } : edit,
-          ),
+          clipEdits: acceptEdits(state.clipEdits, ids),
         });
       }),
     /** Waits for in-flight review changes, so a read never shows an undo half done. */
@@ -846,16 +1013,23 @@ export function createReviewService(store: ProjectStore) {
           409,
           "A conversation in this project is already working. Stop it or wait for it to finish.",
         );
+      const baseline = observeAssets(project);
       turns.set(project.id, turn);
       let ended = false;
       const end = async () => {
         if (ended) return;
         ended = true;
+        const observed = observeAssets(project);
         if (turns.get(project.id) === turn) turns.delete(project.id);
-        await update(project, (items) => items);
+        try {
+          await observed;
+        } finally {
+          await update(project, (items) => items);
+        }
       };
       const human: ReviewActor = { kind: "human" };
       try {
+        await baseline;
         const items = await update(project, (items) =>
           items.map((item) =>
             item.review.status === "open"

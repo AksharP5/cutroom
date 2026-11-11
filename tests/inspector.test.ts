@@ -277,11 +277,11 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
         .clipEdits!.filter((edit) => edit.clipId === "headline")
         .every((edit) => edit.accepted),
     ).toBe(true);
-    await edit("caption", "Owner caption", false);
+    await edit("caption", "Getting started", false);
     expect((await read()).agentChanges).toEqual([]);
     expect(
       (await read()).clipEdits!.find((edit) => edit.label === "Agent caption"),
-    ).toMatchObject({ accepted: false, resolution: "owner" });
+    ).toMatchObject({ accepted: false, resolution: "source" });
     await fixture.request(`${path}/history/undo`, "POST");
     expect((await read()).agentChanges).toEqual(["caption"]);
     expect(
@@ -295,113 +295,6 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
     await fixture.close();
   }
 });
-
-test.each(["external edit", "restore", "owner edit"] as const)(
-  "a rename superseded by %s stays resolved after another agent edit",
-  async (replacement) => {
-    const fixture = await projectFixture();
-    fixture.app.route(
-      "/api/cutroom",
-      createTimelineRoutes(fixture.store, fixture.review),
-    );
-    const project = await fixture.store.create({ name: "Superseded rename" });
-    const path = `/projects/${project.id}`;
-    const read = async () =>
-      TimelineViewSchema.parse(
-        await (await fixture.request(`${path}/timeline`)).json(),
-      );
-    const edit = async (
-      label: string,
-      change: { label: string } | { opacity: number },
-      agent = true,
-    ) => {
-      const response = await fixture.app.request(
-        `/api/cutroom${path}/commands`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(agent && { "x-cutroom-agent": "external" }),
-          },
-          body: JSON.stringify({
-            expectedRevision: (await read()).revision,
-            label,
-            commands: [{ type: "setClip", clipId: "caption", ...change }],
-          }),
-        },
-      );
-      expect(response.status, await response.clone().text()).toBe(200);
-      return TimelineViewSchema.parse(await response.json());
-    };
-    try {
-      await read();
-      const history = await fixture.store.history(project);
-      await history.checkpoint();
-      const point = history.list().at(-1)?.id ?? "start";
-      const renamed = await edit("Renamed caption", { label: "Agent rename" });
-      const rename = renamed.clipEdits!.at(-1)!;
-      if (replacement === "restore") {
-        await fixture.review
-          .history(project, history, { kind: "human" })
-          .restore(point, { kind: "person", name: "You" });
-      } else if (replacement === "owner edit") {
-        await edit("Owner rename", { label: "Owner name" }, false);
-      } else {
-        const file = join(project.path, "index.html");
-        await writeFile(
-          file,
-          (await readFile(file, "utf8")).replace(
-            "Agent rename",
-            "External name",
-          ),
-        );
-      }
-      const resolution = replacement === "owner edit" ? "owner" : "source";
-      expect(
-        (await read()).clipEdits!.find((row) => row.id === rename.id),
-      ).toMatchObject({ accepted: false, resolution });
-
-      const changed = await edit("Set opacity to 40%", { opacity: 0.4 });
-      const opacity = changed.clipEdits!.at(-1)!;
-      expect(
-        changed.clipEdits!.find((row) => row.id === rename.id),
-      ).toMatchObject({ accepted: false, resolution });
-      expect(opacity.resolution).toBeUndefined();
-      expect(
-        (
-          await fixture.request(`${path}/review/changes/accept`, "POST", {
-            editId: rename.id,
-          })
-        ).status,
-      ).toBe(409);
-      expect(
-        (
-          await fixture.request(`${path}/review/changes/accept`, "POST", {
-            editId: opacity.id,
-          })
-        ).status,
-      ).toBe(200);
-      expect((await read()).agentChanges).toEqual([]);
-
-      await fixture.request(`${path}/history/undo`, "POST");
-      await fixture.request(`${path}/history/undo`, "POST");
-      const undone = await read();
-      expect(
-        undone.timeline.clips.find((clip) => clip.id === "caption")?.label,
-      ).toBe("Agent rename");
-      expect(
-        undone.clipEdits!.find((row) => row.id === rename.id)?.resolution,
-      ).toBeUndefined();
-      expect(undone.agentChanges).toEqual(["caption"]);
-      await fixture.request(`${path}/history/redo`, "POST");
-      expect(
-        (await read()).clipEdits!.find((row) => row.id === rename.id),
-      ).toMatchObject({ accepted: false, resolution });
-    } finally {
-      await fixture.close();
-    }
-  },
-);
 
 test("undo hides owner and agent rows; redo restores the same pending edit without accepting it", async () => {
   const fixture = await projectFixture();

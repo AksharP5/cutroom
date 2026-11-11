@@ -438,7 +438,12 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect(rows).toContainText(
     "Interview (picture and sound) · Trimmed end to 00:00:02:00",
   );
-  await expect.poll(async () => (await read()).clipEdits?.length).toBe(2);
+  await expect
+    .poll(
+      async () =>
+        (await read()).clipEdits?.filter((edit) => edit.clipId !== null).length,
+    )
+    .toBe(2);
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(summary).toHaveText("Changes 0");
   await expect(rows).toHaveCount(0);

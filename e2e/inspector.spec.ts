@@ -499,7 +499,10 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await inspector
     .getByRole("button", { name: "Show all (16)", exact: true })
     .click();
-  await expect(pending).toContainText("Edited by you");
+  await expect(
+    pending.getByRole("button", { name: "Accept", exact: true }),
+  ).toBeVisible();
+  await expect(pending).not.toContainText("Edited by you");
   await expect(pending).not.toContainText("Accepted");
   await inspector
     .getByRole("button", { name: "Show less", exact: true })

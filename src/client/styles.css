@@ -1276,6 +1276,16 @@ option {
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
   color: var(--text-secondary);
 }
+.review-composition-changes {
+  margin: 0;
+  padding: 8px 14px;
+  list-style: none;
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+  color: var(--text-secondary);
+}
+.review-composition-changes li + li {
+  margin-top: 4px;
+}
 .review-accept-changes {
   padding: 8px 14px;
 }

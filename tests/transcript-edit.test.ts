@@ -1131,7 +1131,7 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   },
 );
 
-test("an agent's script cut marks the changed pieces and ripple followers, keeping other tracks unmarked", async () => {
+test("an agent's script cut marks every rewritten element, including editor identity stamps", async () => {
   const fixture = await projectFixture();
   try {
     const project = await fixture.store.create({ name: "Agent script cut" });
@@ -1163,9 +1163,14 @@ test("an agent's script cut marks the changed pieces and ripple followers, keepi
     expect(response.status).toBe(200);
     const changes = (await fixture.review.clipChanges(project, "index.html"))
       .agentChanges;
-    expect(changes).toHaveLength(3);
+    expect(changes).toHaveLength(4);
     expect(changes).toContain("following");
-    expect(changes).not.toContain("other-track");
+    // Upstream serialization adds data-hf-id to this element, so its source bytes changed too.
+    expect(changes).toContain("other-track");
+    const element = /<div[^>]*id="other-track"[^>]*>/.exec(
+      await readFile(join(project.path, "index.html"), "utf8"),
+    )?.[0];
+    expect(element).toContain("data-hf-id=");
   } finally {
     await fixture.close();
   }

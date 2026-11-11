@@ -26,6 +26,7 @@ import { strokePath } from "../edit/notes";
 import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
 import { useFps } from "../workspace";
 import { useTimeline } from "../edit/timeline";
+import { pendingEdit } from "../edit/inspector/changes";
 import { Modal } from "./Modal";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
@@ -200,8 +201,12 @@ export function ReviewPanel({
   onAcceptChanges: () => Promise<void>;
   onSend: () => void;
 }) {
-  const hasChanges = useTimeline((state) => !!state.view?.agentChanges?.length);
   const view = useTimeline((state) => state.view);
+  const hasChanges = view?.clipEdits?.some(pendingEdit);
+  const compositionChanges =
+    view?.clipEdits?.filter(
+      (edit) => edit.clipId === null && pendingEdit(edit),
+    ) ?? [];
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
@@ -486,6 +491,16 @@ export function ReviewPanel({
             <Check /> Accept agent changes
           </button>
         </div>
+      )}
+      {compositionChanges.length > 0 && (
+        <ol
+          className="review-composition-changes"
+          aria-label="Composition changes"
+        >
+          {compositionChanges.map((edit) => (
+            <li key={edit.id}>{edit.label}</li>
+          ))}
+        </ol>
       )}
       {current.length > 0 && (
         <div className="review-summary">
