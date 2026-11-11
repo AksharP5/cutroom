@@ -10,6 +10,9 @@ import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
+// This test owns the compositor screencast; Playwright's trace must not replace it.
+test.use({ trace: "off" });
+
 async function openMedia(page: Page, request: APIRequestContext) {
   const project = ProjectSchema.parse(
     await (
@@ -83,44 +86,135 @@ async function openMedia(page: Page, request: APIRequestContext) {
     await page.getByRole("button", { name: /^Current time/ }).click();
     await page.getByLabel("Go to time").pressSequentially(digits);
     await page.keyboard.press("Enter");
+    // Finish this setup seek before measuring the edit's handoff.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const frame =
+            document.querySelector<HTMLIFrameElement>("iframe[data-live]")!;
+          const id = crypto.randomUUID();
+          const receive = (event: MessageEvent<unknown>) => {
+            if (
+              event.source !== frame.contentWindow ||
+              !event.data ||
+              typeof event.data !== "object" ||
+              !("id" in event.data) ||
+              event.data.id !== id
+            )
+              return;
+            removeEventListener("message", receive);
+            if ("error" in event.data && event.data.error)
+              reject(new Error(String(event.data.error)));
+            else resolve();
+          };
+          addEventListener("message", receive);
+          frame.contentWindow!.postMessage(
+            { source: "cutroom-viewer", action: "paint", id },
+            "*",
+          );
+        }),
+    );
   };
   return { project, read, seek };
 }
 
-/** Sample actual composited pixels, including the handoff, rather than an iframe's readiness flag. */
-async function keepPicture(page: Page, change: () => Promise<unknown>) {
-  const before = await page.locator("iframe[data-live]").getAttribute("src");
+/** Decode every compositor screencast frame in the page, including opaque iframes. */
+async function capturePicture(page: Page) {
+  const session = await page.context().newCDPSession(page);
   const box = (await page.locator(".edit-picture").boundingBox())!;
-  const colors: number[][] = [];
-  let settled = false;
-  const sampling = (async () => {
-    const started = Date.now();
-    // Screenshots take about 200 ms on CI, so a second alone can yield too few samples.
-    while (!settled || Date.now() - started < 1000 || colors.length < 6) {
-      const png = await page.screenshot({
-        clip: {
-          x: Math.floor(box.x + box.width / 2),
-          y: Math.floor(box.y + box.height / 2),
-          width: 4,
-          height: 4,
-        },
-      });
-      colors.push(
-        await page.evaluate(async (bytes) => {
+  const samples: { time: number; color: number[] }[] = [];
+  let blank: string | null = null;
+  let since = 0;
+  let decoding = Promise.resolve();
+  await page.evaluate(() => {
+    const marker = document.createElement("div");
+    marker.id = "frame-sampler-pulse";
+    marker.style.cssText =
+      "position:fixed;top:0;left:0;width:1px;height:1px;pointer-events:none;z-index:2147483647";
+    document.body.append(marker);
+    let beat = 0;
+    const pulse = () => {
+      if (!marker.isConnected) return;
+      marker.style.background = ++beat % 2 ? "black" : "white";
+      requestAnimationFrame(pulse);
+    };
+    pulse();
+  });
+  session.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
+    void session.send("Page.screencastFrameAck", { sessionId });
+    decoding = decoding.then(async () => {
+      const color = await page.evaluate(
+        async ({ data, box }) => {
+          const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
           const image = await createImageBitmap(
-            new Blob([new Uint8Array(bytes)], { type: "image/png" }),
+            new Blob([bytes], { type: "image/png" }),
           );
           const canvas = document.createElement("canvas");
-          canvas.width = canvas.height = 4;
-          const context = canvas.getContext("2d")!;
-          context.drawImage(image, 0, 0);
+          canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d", {
+            willReadFrequently: true,
+          })!;
+          context.drawImage(
+            image,
+            ((box.x + box.width / 2) * image.width) / innerWidth,
+            ((box.y + box.height / 2) * image.height) / innerHeight,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+          );
           image.close();
-          return Array.from(context.getImageData(1, 1, 1, 1).data).slice(0, 3);
-        }, Array.from(png)),
+          return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3);
+        },
+        { data, box },
       );
-      await page.waitForTimeout(25);
-    }
-  })();
+      if (metadata.timestamp! < since) return;
+      samples.push({ time: metadata.timestamp!, color });
+      if (!blank && (color[0]! < 230 || color[1]! > 20 || color[2]! > 20))
+        blank = data;
+    });
+  });
+  await session.send("Page.startScreencast", {
+    format: "png",
+    everyNthFrame: 1,
+    maxWidth: 860,
+    maxHeight: 525,
+  });
+  await expect.poll(() => samples.at(-1)?.color[0]).toBeGreaterThan(230);
+  return {
+    reset() {
+      since = Date.now() / 1000;
+      samples.length = 0;
+      blank = null;
+    },
+    async read() {
+      const count = samples.length;
+      await expect.poll(() => samples.length).toBeGreaterThan(count + 1);
+      await decoding;
+      return { samples: [...samples], blank };
+    },
+    async stop() {
+      await session.send("Page.stopScreencast");
+      await decoding;
+      await page
+        .locator("#frame-sampler-pulse")
+        .evaluate((marker) => marker.remove());
+      await session.detach();
+    },
+  };
+}
+
+async function keepPicture(
+  page: Page,
+  capture: Awaited<ReturnType<typeof capturePicture>>,
+  label: string,
+  change: () => Promise<unknown>,
+) {
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  capture.reset();
+  let result;
   try {
     await change();
     await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
@@ -129,34 +223,278 @@ async function keepPicture(page: Page, change: () => Promise<unknown>) {
     );
     await expect(page.locator(".edit-frame")).toHaveCount(1);
   } finally {
-    settled = true;
-    await sampling;
+    result = await capture.read();
+    const frames = test.info().outputPath(`${label}-frames.json`);
+    await writeFile(frames, JSON.stringify(result.samples));
+    await test.info().attach(`${label} frames`, {
+      path: frames,
+      contentType: "application/json",
+    });
+    if (result.blank) {
+      const blank = test.info().outputPath(`${label}-blank.png`);
+      await writeFile(blank, Buffer.from(result.blank, "base64"));
+      await test
+        .info()
+        .attach(`${label} blank`, { path: blank, contentType: "image/png" });
+    }
   }
-  expect(colors.length).toBeGreaterThan(5);
-  expect(
-    colors.filter(
-      ([red, green, blue]) => red! < 230 || green! > 20 || blue! > 20,
-    ),
-    "Every sample must be the old or new red video frame, never the blank background",
-  ).toEqual([]);
+  const { samples } = result;
+  console.log(
+    "FRAME SAMPLES",
+    JSON.stringify({
+      label,
+      count: samples.length,
+      bad: samples.filter(
+        ({ color: [r, g, b] }) => r! < 230 || g! > 20 || b! > 20,
+      ),
+    }),
+  );
+  expect(samples.length).toBeGreaterThan(1);
+  expect
+    .soft(
+      samples.filter(
+        ({ color: [red, green, blue] }) =>
+          red! < 230 || green! > 20 || blue! > 20,
+      ),
+      "Every animation frame must show the old or new red video, never the blank background",
+    )
+    .toEqual([]);
   await expect(page.locator(".status-error")).toHaveCount(0);
 }
+
+test("the composited sampler catches a one-animation-frame blank", async ({
+  page,
+}) => {
+  await page.route("**/frame-sampler", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: '<div class="edit-picture" style="position:fixed;inset:0;background:red"></div>',
+    }),
+  );
+  await page.goto("/frame-sampler");
+  const capture = await capturePicture(page);
+  capture.reset();
+  try {
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            const picture =
+              document.querySelector<HTMLElement>(".edit-picture")!;
+            picture.style.background = "#0a0a0a";
+            requestAnimationFrame(() => {
+              picture.style.background = "red";
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              );
+            });
+          });
+        }),
+    );
+    const { samples } = await capture.read();
+    expect(
+      samples.some(
+        ({ color: [red, green, blue] }) =>
+          red! < 20 && green! < 20 && blue! < 20,
+      ),
+    ).toBe(true);
+  } finally {
+    await capture.stop();
+  }
+});
+
+test("a delayed first paint keeps the old surface through the first visible handoff frame", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request);
+  await seek("0311");
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  const generation = Number(
+    new URL(before!, "http://localhost").searchParams.get("v"),
+  );
+  const channel = `paint-gate-${Date.now()}`;
+  // Stall only the candidate iframe; releasing the gate restores its native frame APIs.
+  await page.addInitScript(
+    ({ generation, channel }) => {
+      if (
+        parent === window ||
+        Number(new URL(location.href).searchParams.get("v")) <= generation
+      )
+        return;
+      const request = requestAnimationFrame.bind(window);
+      const cancel = cancelAnimationFrame.bind(window);
+      const waiting = new Map<number, FrameRequestCallback>();
+      const resumed = new Map<number, number>();
+      let blocked = true;
+      window.requestAnimationFrame = (callback) => {
+        let handle = 0;
+        handle = request((time) => {
+          if (blocked) {
+            waiting.set(handle, callback);
+            parent.postMessage({ channel, blocked: true }, "*");
+          } else callback(time);
+        });
+        return handle;
+      };
+      window.cancelAnimationFrame = (handle) => {
+        waiting.delete(handle);
+        cancel(resumed.get(handle) ?? handle);
+        resumed.delete(handle);
+      };
+      const release = (event: MessageEvent<{ channel?: string }>) => {
+        if (event.source !== parent || event.data?.channel !== channel) return;
+        blocked = false;
+        removeEventListener("message", release);
+        for (const [handle, callback] of waiting) {
+          resumed.set(
+            handle,
+            request((time) => {
+              resumed.delete(handle);
+              if (!resumed.size) {
+                window.requestAnimationFrame = request;
+                window.cancelAnimationFrame = cancel;
+              }
+              callback(time);
+            }),
+          );
+        }
+        waiting.clear();
+        if (!resumed.size) {
+          window.requestAnimationFrame = request;
+          window.cancelAnimationFrame = cancel;
+        }
+      };
+      addEventListener("message", release);
+    },
+    { generation, channel },
+  );
+  const sampling = await page.evaluateHandle((channel) => {
+    const frames: {
+      time: number;
+      layers: { generation: number; opacity: number; visible: boolean }[];
+    }[] = [];
+    let blocked = false;
+    const receive = (
+      event: MessageEvent<{ channel?: string; blocked?: boolean }>,
+    ) => {
+      if (event.data?.channel === channel && event.data.blocked) blocked = true;
+    };
+    addEventListener("message", receive);
+    let animation = 0;
+    const sample = (time: number) => {
+      frames.push({
+        time,
+        layers: Array.from(
+          document.querySelectorAll<HTMLIFrameElement>(".edit-frame"),
+        ).map((frame) => ({
+          generation: Number(new URL(frame.src).searchParams.get("v")),
+          opacity: Number(getComputedStyle(frame).opacity),
+          visible: frame.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true,
+          }),
+        })),
+      });
+      animation = requestAnimationFrame(sample);
+    };
+    animation = requestAnimationFrame(sample);
+    return {
+      get blocked() {
+        return blocked;
+      },
+      stop() {
+        cancelAnimationFrame(animation);
+        removeEventListener("message", receive);
+        return frames;
+      },
+    };
+  }, channel);
+  let frames;
+  try {
+    await page.keyboard.press("e");
+    await expect.poll(() => sampling.evaluate((s) => s.blocked)).toBe(true);
+    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
+      "src",
+      before!,
+    );
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ),
+        ),
+    );
+    await page.evaluate((channel) => {
+      for (const frame of document.querySelectorAll<HTMLIFrameElement>(
+        ".edit-frame:not([data-live])",
+      ))
+        frame.contentWindow!.postMessage({ channel }, "*");
+    }, channel);
+    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+      "src",
+      before!,
+    );
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+  } finally {
+    frames = await sampling.evaluate((s) => s.stop());
+    await sampling.dispose();
+    const path = test.info().outputPath("handoff-frames.json");
+    await writeFile(path, JSON.stringify(frames));
+    await test.info().attach("handoff animation frames", {
+      path,
+      contentType: "application/json",
+    });
+  }
+  const firstRevealed = frames.findIndex((frame) =>
+    frame.layers.some(
+      (layer) =>
+        layer.generation > generation && layer.visible && layer.opacity === 1,
+    ),
+  );
+  expect(firstRevealed).toBeGreaterThanOrEqual(0);
+  expect(
+    frames[firstRevealed]!.layers,
+    "The old surface must remain fully visible for the first frame that reveals its replacement",
+  ).toContainEqual({ generation, opacity: 1, visible: true });
+  expect(
+    frames
+      .slice(firstRevealed + 1)
+      .some(
+        (frame) =>
+          !frame.layers.some((layer) => layer.generation === generation),
+      ),
+  ).toBe(true);
+  await expect(page.locator(".status-error")).toHaveCount(0);
+});
 
 test("razor at fractional-second playheads never blanks the visible picture", async ({
   page,
   request,
 }) => {
   const { read, seek } = await openMedia(page, request);
-  for (const [digits, count] of [
-    ["0103", 8],
-    ["0311", 12],
-    ["1117", 16],
-  ] as const) {
-    await seek(digits);
-    await keepPicture(page, () => page.keyboard.press("e"));
-    await expect
-      .poll(async () => (await read()).timeline.clips.length)
-      .toBe(count);
+  const capture = await capturePicture(page);
+  try {
+    for (const [digits, count] of [
+      ["0103", 8],
+      ["0311", 12],
+      ["1117", 16],
+    ] as const) {
+      await seek(digits);
+      await keepPicture(page, capture, `razor ${digits}`, () =>
+        page.keyboard.press("e"),
+      );
+      await expect
+        .poll(async () => (await read()).timeline.clips.length)
+        .toBe(count);
+    }
+  } finally {
+    await capture.stop();
   }
 });
 
@@ -172,10 +510,11 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       requestInit: { headers: { origin: new URL(baseURL!).origin } },
     }),
   );
+  const capture = await capturePicture(page);
   try {
     await seek("0311");
     const { revision } = await read();
-    await keepPicture(page, async () => {
+    await keepPicture(page, capture, "MCP split", async () => {
       const result = await client.callTool({
         name: "timeline_edit",
         arguments: {
@@ -187,16 +526,22 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       });
       expect(result.isError).not.toBe(true);
     });
-    await keepPicture(page, () => page.keyboard.press("Control+z"));
-    await keepPicture(page, () => page.keyboard.press("Control+Shift+z"));
+    await keepPicture(page, capture, "undo", () =>
+      page.keyboard.press("Control+z"),
+    );
+    await keepPicture(page, capture, "redo", () =>
+      page.keyboard.press("Control+Shift+z"),
+    );
     await page.locator('[data-clip="picture"]').click();
-    await keepPicture(page, () => page.keyboard.press("Shift+X"));
+    await keepPicture(page, capture, "ripple delete", () =>
+      page.keyboard.press("Shift+X"),
+    );
 
     // Cutroom has no paste command yet. Insert a copy through the shared media
     // command to cover the new-element path a paste would use.
     await seek("0311");
     const current = await read();
-    await keepPicture(page, async () => {
+    await keepPicture(page, capture, "MCP overwrite insert", async () => {
       const result = await client.callTool({
         name: "timeline_edit",
         arguments: {
@@ -226,7 +571,7 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       .getByRole("region", { name: "Media", exact: true })
       .getByRole("listitem")
       .filter({ hasText: "Picture.mp4" });
-    await keepPicture(page, async () => {
+    await keepPicture(page, capture, "media drop", async () => {
       await startMediaDrag(page, row);
       const bounds = (await clip.boundingBox())!;
       const playhead = (await page
@@ -241,6 +586,7 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       await page.mouse.up();
     });
   } finally {
+    await capture.stop();
     await client.close();
   }
 });

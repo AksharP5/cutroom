@@ -58,6 +58,7 @@ export function Viewer({
   const latest = useRef(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [live, setLive] = useState<Slot | null>(null);
+  const [held, setHeld] = useState<Slot | null>(null);
   const [pending, setPending] = useState<number | null>(null);
 
   useLayoutEffect(() => {
@@ -79,11 +80,21 @@ export function Viewer({
 
   useEffect(() => {
     for (const [gen, connection] of connections.current) {
-      if (gen === live?.gen || gen === pending) continue;
+      if (gen === live?.gen || gen === held?.gen || gen === pending) continue;
       connection.dispose();
       connections.current.delete(gen);
     }
-  }, [live?.gen, pending]);
+  }, [live?.gen, held?.gen, pending]);
+
+  useLayoutEffect(() => {
+    if (!held) return;
+    // The first callback leaves both surfaces available for a paint. Only the
+    // following animation frame may retire the held surface.
+    let animation = requestAnimationFrame(() => {
+      animation = requestAnimationFrame(() => setHeld(null));
+    });
+    return () => cancelAnimationFrame(animation);
+  }, [held]);
 
   useEffect(
     () => () => {
@@ -131,6 +142,7 @@ export function Viewer({
       }
       const { width, height, fps } = preview.state;
       const size = { width, height };
+      setHeld(live);
       setLive({ gen, ...size });
       setPending(null);
       // The status bar shows the open composition's rate and size, as with the embedded editor.
@@ -170,7 +182,7 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
-  const slots = [live?.gen, pending].filter(
+  const slots = [held?.gen, live?.gen, pending].filter(
     (gen): gen is number => gen != null,
   );
 
@@ -183,7 +195,8 @@ export function Viewer({
         style={box}
       >
         {slots.map((gen) => {
-          const size = gen === live?.gen ? live : fit;
+          const size =
+            gen === held?.gen ? held : gen === live?.gen ? live : fit;
           return (
             <iframe
               key={gen}
@@ -194,6 +207,7 @@ export function Viewer({
               allow="autoplay"
               src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}`}
               data-live={gen === live?.gen || undefined}
+              data-held={gen === held?.gen || undefined}
               style={{
                 width: size.width,
                 height: size.height,
