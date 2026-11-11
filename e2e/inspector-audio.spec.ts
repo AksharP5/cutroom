@@ -482,6 +482,7 @@ test("linked Changes has one row per history entry and keeps review and session 
   await page.locator('[data-clip="picture"]').click();
   await expect(history).toHaveAttribute("open", "");
   await summary.click();
+  await expect(history).not.toHaveAttribute("open", "");
   await page.reload();
   await page.locator('[data-clip="picture"]').click();
   await expect(history).not.toHaveAttribute("open", "");

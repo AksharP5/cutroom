@@ -52,9 +52,6 @@ export function Inspector({ projectId }: { projectId: string }) {
   const [changesOpen, setChangesOpen] = useState(
     () => sessionStorage.getItem("cutroom.inspector.changes") === "true",
   );
-  useEffect(() => {
-    sessionStorage.setItem("cutroom.inspector.changes", String(changesOpen));
-  }, [changesOpen]);
   const [audioOpen, setAudioOpen] = useState(true);
   const [transformOpen, setTransformOpen] = useState(
     () =>
@@ -425,7 +422,11 @@ export function Inspector({ projectId }: { projectId: string }) {
           </details>
           <details
             open={changesOpen}
-            onToggle={(event) => setChangesOpen(event.currentTarget.open)}
+            onToggle={(event) => {
+              const { open } = event.currentTarget;
+              sessionStorage.setItem("cutroom.inspector.changes", String(open));
+              setChangesOpen(open);
+            }}
             className="inspector-section inspector-history"
           >
             <summary>
