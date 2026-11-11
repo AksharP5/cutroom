@@ -216,6 +216,35 @@ for (const seekAgain of [false, true]) {
   });
 }
 
+test("a server-refused W on the last clip puts the playhead back where it was", async ({
+  page,
+  request,
+}) => {
+  const { clips, seek } = await open(page, request, "Refused W at the end");
+  const initial = await clips();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/cutroom/projects/*/commands", async (route) => {
+    await gate;
+    await route.fulfill({
+      status: 422,
+      json: { error: "Track 0 is locked.", code: "locked" },
+    });
+  });
+  await seek("1015");
+  await page.keyboard.press("w");
+  // The shortened timeline ends at the cut, so the playhead parks on its last frame.
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:10:14",
+  );
+  release();
+  await expect(page.locator(".toast")).toContainText("V1 is locked.");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:10:15",
+  );
+  expect(await clips()).toEqual(initial);
+});
+
 test("a refused edit is taken back and the header shows the engine's reason", async ({
   page,
   request,

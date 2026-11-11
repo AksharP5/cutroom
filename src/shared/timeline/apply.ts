@@ -413,7 +413,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "track_kind",
           "Only video can have linked audio.",
         );
-      assertTrackKind(input.kind, trackAt(track), input.id ?? input.src);
+      // A file name is quoted so it reads as written, never as a clip id.
+      assertTrackKind(input.kind, trackAt(track), input.id ?? `"${input.src}"`);
       const id =
         input.id === undefined
           ? mint.name(slug(input.src, input.kind), null)

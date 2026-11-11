@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
@@ -715,11 +715,16 @@ test("a refused audio drop explains the destination track kind", async ({
     },
   ]);
   await expect(timeline.locator('[data-clip="tone"]')).toBeVisible();
+  // A copied file's name starts with that id and continues after a space.
+  await copyFile(
+    join(project.path, "tone.wav"),
+    join(project.path, "tone (1).wav"),
+  );
   const initial = await read();
   const row = page
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")
-    .filter({ hasText: "tone.wav" });
+    .filter({ hasText: "tone (1).wav" });
   await expect(row).toHaveAttribute("draggable", "true");
   const to = await at(420);
   await row.hover();
@@ -733,7 +738,7 @@ test("a refused audio drop explains the destination track kind", async ({
   await page.mouse.up();
   await refusalEvidence(page, "audio-drop.png");
   await expect(page.locator(".toast")).toContainText(
-    "Clip tone.wav is audio and V1 is a video track.",
+    "Clip tone (1).wav is audio and V1 is a video track.",
   );
   expect(await read()).toEqual(initial);
 });

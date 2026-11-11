@@ -100,8 +100,11 @@ export function ProjectTimeline({
           (current) => commands(current, target),
           undefined,
           (next, built) => {
-            parked = trimmedPlayhead(next, built);
-            if (parked !== null) transport.seek(parked);
+            const frame = trimmedPlayhead(next, built);
+            if (frame === null) return;
+            transport.seek(frame);
+            // A trim at the end shortens the timeline, and the transport parks on its last frame.
+            parked = Math.min(frame, next.duration - 1);
           },
         ).then((accepted) => {
           if (

@@ -294,15 +294,21 @@ function humanReason(message: string, timeline: Timeline) {
     }),
   );
   const ids = [...names.keys()].sort((a, b) => b.length - a.length);
-  const withNames = ids.length
-    ? text.replace(
-        new RegExp(
-          `(?<![\\w.-])(?:${ids.map(escaped).join("|")})(?![\\w-]|\\.[\\w.-])`,
-          "g",
-        ),
-        (id) => names.get(id) ?? id,
-      )
-    : text;
+  const pattern = new RegExp(
+    `(?<![\\w.-])(?:${ids.map(escaped).join("|")})(?![\\w-]|\\.[\\w.-])`,
+    "g",
+  );
+  // Quoted text is a file name as written: shown without its quotes, never searched for ids.
+  const withNames = text
+    .split(/("[^"]*")/)
+    .map((part) =>
+      part.startsWith('"')
+        ? part.slice(1, -1)
+        : ids.length
+          ? part.replace(pattern, (id) => names.get(id) ?? id)
+          : part,
+    )
+    .join("");
   return withNames
     .replace(
       /\btrack (\d+)\b/gi,
