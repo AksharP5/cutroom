@@ -11,11 +11,26 @@ export interface Offset {
   y: number;
 }
 
+interface SlideTiming {
+  at: number;
+  duration: number;
+  ease: Slide["ease"];
+}
+interface ClipMotion {
+  frame: number;
+  elements: Map<
+    HTMLElement,
+    { slides: (Offset & { timing: SlideTiming })[]; translate: string }
+  >;
+}
+const moving = new WeakMap<HTMLElement, ClipMotion>();
+
 /**
  * Slides clips from where they were drawn, `offsets` away, to where they are. Their boxes, names
  * and outlines move by transform, added to any slide or zoom still running, and `slideBodies`
  * moves their filmstrips and waveforms on the canvas the same way. Reduced motion sets
- * `--duration-edit` to zero, which skips it.
+ * `--duration-edit` to zero, which skips it. One callback writes all the translations: starting
+ * a Web Animation per clip made Chromium resolve hundreds of keyframe styles on the first edit.
  */
 export function slideClips(
   root: HTMLElement,
@@ -35,6 +50,14 @@ export function slideClips(
   );
   if (!slides.length) return;
   const byId = new Map(slides.map((slide) => [slide.id, slide]));
+  const at = Number(document.timeline.currentTime);
+  const timing = { at, duration, ease };
+  const motion: ClipMotion = moving.get(root) ?? {
+    frame: 0,
+    elements: new Map(),
+  };
+  moving.set(root, motion);
+  root.toggleAttribute("data-sliding", true);
   for (const element of root.querySelectorAll<HTMLElement>(
     "[data-clip], [data-clip-label], [data-clip-outline], [data-agent-change], [data-clip-mix]",
   )) {
@@ -44,14 +67,48 @@ export function slideClips(
       clip ?? clipLabel ?? clipOutline ?? agentChange ?? clipMix ?? "",
     );
     if (!slide) continue;
-    const { x, y } = slide;
-    const transform = `translate(${x}px, ${y}px)`;
-    element.animate([{ transform }, { transform: "none" }], {
-      duration,
-      easing,
-      composite: "add",
-    });
+    const held = motion.elements.get(element) ?? {
+      slides: [],
+      translate: element.style.translate,
+    };
+    held.slides.push({ x: slide.x, y: slide.y, timing });
+    motion.elements.set(element, held);
   }
+  cancelAnimationFrame(motion.frame);
+  const draw = (now: number) => {
+    const remaining = new Map<SlideTiming, number>();
+    for (const [element, held] of motion.elements) {
+      held.slides = held.slides.filter(
+        ({ timing }) => now - timing.at < timing.duration && root.isConnected,
+      );
+      if (!held.slides.length) {
+        element.style.translate = held.translate;
+        motion.elements.delete(element);
+        continue;
+      }
+      let x = 0;
+      let y = 0;
+      for (const slide of held.slides) {
+        let left = remaining.get(slide.timing);
+        if (left === undefined) {
+          const { at, duration, ease } = slide.timing;
+          left = 1 - ease(Math.min(1, (now - at) / duration));
+          remaining.set(slide.timing, left);
+        }
+        x += slide.x * left;
+        y += slide.y * left;
+      }
+      // A held trim scales its underlying transform. Match additive transform's order.
+      const scale = Number(element.style.getPropertyValue("--k")) || 1;
+      element.style.translate = `${x * scale}px ${y}px`;
+    }
+    if (motion.elements.size) motion.frame = requestAnimationFrame(draw);
+    else {
+      root.removeAttribute("data-sliding");
+      moving.delete(root);
+    }
+  };
+  draw(at);
   slideBodies(slides);
 }
 

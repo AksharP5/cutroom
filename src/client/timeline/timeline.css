@@ -4,7 +4,8 @@
   Zoom is one custom property, --ppf (pixels per frame), set on .tl-grid, so a zoom step writes
   one property. It is not inherited: only the few elements that opt in below are restyled by a
   zoom. The many (clips, outlines, names, ticks, timecodes) place themselves in percent of
-  .tl-time, a box --span frames wide, so a zoom lays them out again without restyling them.
+  .tl-time, a box a fixed --span frames wide, so a zoom lays them out again without restyling them.
+  Its coordinate scale stays the same when an edit changes the timeline's length.
   They sit one level below it, in layers whose own style never changes: a changed custom
   property restyles an element's children.
 */
@@ -12,6 +13,11 @@
   syntax: "<number>";
   inherits: false;
   initial-value: 1;
+}
+@property --frames {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
 }
 .tl-ruler,
 .tl-lanes,
@@ -23,6 +29,9 @@
 }
 
 .tl {
+  /* A large basis avoids subpixel rounding at Fit; at 32 px/frame it stays below Chromium's
+     2^25 px layout limit. This is a coordinate scale, not a limit on the project's length. */
+  --span: 1000000;
   height: 100%;
   min-width: 0;
   background: var(--surface-panel);
@@ -134,7 +143,13 @@
   cursor: default;
   touch-action: none;
 }
-/* As wide as the timeline's frames at this zoom. */
+.tl-ruler,
+.tl-lanes {
+  /* The grid owns the scroll extent. The fixed coordinate box and overscanned clips must not
+     extend it; layout containment keeps them visible without propagating their overflow. */
+  contain: layout;
+}
+/* A fixed number of frames at this zoom, independent of the timeline's current length. */
 .tl-time {
   position: absolute;
   top: 0;
@@ -463,8 +478,7 @@
 
 .tl-lanes {
   position: relative;
-  /* Its own stacking context, so the playhead stem passes under the ruler when tracks scroll. */
-  isolation: isolate;
+  /* Layout containment above also keeps the playhead stem under the ruler when tracks scroll. */
   background: var(--surface-lane);
 }
 .tl-lane {

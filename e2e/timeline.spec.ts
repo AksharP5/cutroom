@@ -252,6 +252,67 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
   await page.keyboard.press("k");
 });
 
+for (const seconds of [4, 12_000])
+  test(`ripple and history keep clip coordinates and scroll bounds aligned (${seconds}s pieces)`, async ({
+    page,
+    request,
+  }) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: "Ripple coordinates" },
+        })
+      ).json(),
+    );
+    await writeFile(
+      join(project.path, "index.html"),
+      `<main data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="${seconds * 3}">
+        <div id="first" class="clip" data-start="0" data-duration="${seconds}" data-track-index="0">First</div>
+        <div id="middle" class="clip" data-start="${seconds}" data-duration="${seconds}" data-track-index="0">Middle</div>
+        <div id="last" class="clip" data-start="${seconds * 2}" data-duration="${seconds}" data-track-index="0">Last</div>
+      </main>`,
+    );
+    await page.goto(`/#project/${project.id}`);
+    const last = page.locator('[data-clip="last"]');
+    const aligned = async (start: number) => {
+      await expect(page.locator(".tl-grid")).toHaveAttribute(
+        "data-refit",
+        "settled",
+      );
+      const geometry = await last.evaluate((element) => {
+        const grid = element.closest(".tl-grid")!;
+        const lanes = element.closest(".tl-lanes")!;
+        const scroller = grid.parentElement!;
+        return {
+          ppf: Number(getComputedStyle(grid).getPropertyValue("--ppf")),
+          left:
+            element.getBoundingClientRect().left -
+            lanes.getBoundingClientRect().left,
+          width: element.getBoundingClientRect().width,
+          overflow: scroller.scrollWidth - grid.getBoundingClientRect().width,
+        };
+      });
+      expect(Math.abs(geometry.left - start * 30 * geometry.ppf)).toBeLessThan(
+        1,
+      );
+      expect(
+        Math.abs(geometry.width - (seconds * 30 * geometry.ppf - 1)),
+      ).toBeLessThan(1);
+      expect(Math.abs(geometry.overflow)).toBeLessThanOrEqual(1);
+    };
+    await aligned(seconds * 2);
+    await page.locator('[data-clip="middle"]').click();
+    await page.keyboard.press("Shift+X");
+    await expect(page.locator('[data-clip="middle"]')).toHaveCount(0);
+    await aligned(seconds);
+    await page.keyboard.press("Control+z");
+    await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
+    await aligned(seconds * 2);
+    await page.keyboard.press("Control+Shift+z");
+    await expect(page.locator('[data-clip="middle"]')).toHaveCount(0);
+    await aligned(seconds);
+  });
+
 test("Fit lets a ripple close its gap before rescaling, and a zoom key takes over", async ({
   page,
   request,
@@ -283,55 +344,62 @@ test("Fit lets a ripple close its gap before rescaling, and a zoom key takes ove
   await page.locator('[data-clip="middle"]').click();
   const slide = last.evaluate(
     (element) =>
-      new Promise<{ scale: number; distance: number; duration: number }>(
-        (resolve, reject) => {
-          const deadline = performance.now() + 3000;
-          const read = () => {
-            const animation = element
-              .getAnimations()
-              .find((animation) => animation.playState === "running");
-            if (animation) {
-              const grid = element.closest(".tl-grid")!;
-              return resolve({
-                scale: Number(getComputedStyle(grid).getPropertyValue("--ppf")),
-                distance: new DOMMatrixReadOnly(
-                  getComputedStyle(element).transform,
-                ).e,
-                duration: Number(animation.effect?.getTiming().duration),
-              });
-            }
-            if (performance.now() > deadline)
-              return reject(new Error("The gap never slid closed."));
-            requestAnimationFrame(read);
-          };
-          read();
-        },
-      ),
+      new Promise<{ scale: number; distance: number }>((resolve, reject) => {
+        const deadline = performance.now() + 3000;
+        const read = () => {
+          if (element.closest("[data-sliding]")) {
+            const grid = element.closest(".tl-grid")!;
+            const scale = Number(
+              getComputedStyle(grid).getPropertyValue("--ppf"),
+            );
+            return resolve({
+              scale,
+              distance:
+                element.getBoundingClientRect().left -
+                element.closest(".tl-lanes")!.getBoundingClientRect().left -
+                120 * scale,
+            });
+          }
+          if (performance.now() > deadline)
+            return reject(new Error("The gap never slid closed."));
+          requestAnimationFrame(read);
+        };
+        read();
+      }),
   );
   await page.keyboard.press("Delete");
   const moving = await slide;
   expect(moving.scale).toBe(old);
   expect(moving.distance).toBeGreaterThan(120 * old * 0.5);
-  expect(moving.duration).toBeGreaterThan(100);
   await expect.poll(scale).toBeGreaterThan(old * 1.4);
   await expect(
     page.getByRole("slider", { name: "Zoom", exact: true }),
   ).toHaveAttribute("aria-valuenow", "0");
-  await expect
-    .poll(() =>
-      last.evaluate(
-        (element) =>
-          element
-            .getAnimations()
-            .filter((animation) => animation.playState === "running").length,
-      ),
-    )
-    .toBe(0);
+  await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
 
   await page.keyboard.press("Control+z");
   await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
   await expect.poll(scale).toBeCloseTo(old);
   await page.waitForTimeout(250);
+  // Undo while the gap is still closing must add to that motion, without a jump.
+  await grid.evaluate((element: HTMLElement) =>
+    element.style.setProperty("--duration-edit", "1200ms"),
+  );
+  await page.locator('[data-clip="middle"]').click();
+  await page.keyboard.press("Shift+X");
+  await expect(page.locator(".tl-lanes")).toHaveAttribute("data-sliding", "");
+  await page.waitForTimeout(150);
+  const beforeUndo = (await last.boundingBox())!.x;
+  await page.keyboard.press("Control+z");
+  await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
+  expect(Math.abs((await last.boundingBox())!.x - beforeUndo)).toBeLessThan(
+    120 * old * 0.2,
+  );
+  await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
+  await expect(grid).toHaveAttribute("data-refit", "settled");
+  await grid.evaluate((element: HTMLElement) =>
+    element.style.removeProperty("--duration-edit"),
+  );
   await page.locator('[data-clip="middle"]').click();
   await page.keyboard.press("Delete");
   await expect(page.locator('[data-clip="middle"]')).toHaveCount(0);
