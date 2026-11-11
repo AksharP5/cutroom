@@ -665,17 +665,29 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "marker",
           1,
         );
+      // Only the given fields change, so an edit never reverts someone else's newer ones.
+      const current = timeline.markers.find((marker) => marker.id === id) ?? {
+        id,
+        frame: command.frame,
+        duration: 0,
+        name: "",
+        note: "",
+        color: "blue" as const,
+      };
+      const frame = command.frame ?? current.frame;
+      if (frame === undefined)
+        throw new TimelineError("unsupported", "A new marker needs a frame.");
       return {
         ...timeline,
         markers: [
           ...timeline.markers.filter((marker) => marker.id !== id),
           {
             id,
-            frame: command.frame,
-            duration: command.duration,
-            name: command.name,
-            note: command.note,
-            color: command.color,
+            frame,
+            duration: command.duration ?? current.duration,
+            name: command.name ?? current.name,
+            note: command.note ?? current.note,
+            color: command.color ?? current.color,
           },
         ],
       };

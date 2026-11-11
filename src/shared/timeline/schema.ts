@@ -327,15 +327,17 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .max(200)
         .optional()
         .describe("Omit to add a marker"),
-      frame,
-      duration: frame.default(0),
-      name: label.default(""),
-      note: z.string().max(20_000).default(""),
-      color: MarkerColorSchema.default("blue").describe(
+      frame: frame.optional().describe("Required for a new marker"),
+      duration: frame.optional(),
+      name: label.optional(),
+      note: z.string().max(20_000).optional(),
+      color: MarkerColorSchema.optional().describe(
         "Ruler palette: blue/cyan = grey, green = green, purple = violet, pink/red = rose, yellow = sand",
       ),
     })
-    .describe("Add or replace a timeline marker."),
+    .describe(
+      "Add a marker, or change the given fields of an existing one; fields you omit keep their values. A new marker defaults to no duration, no name or note, and blue.",
+    ),
   z.object({ type: z.literal("removeMarker"), id: z.string().min(1) }),
   z
     .object({

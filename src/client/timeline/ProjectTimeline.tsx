@@ -252,13 +252,22 @@ export function ProjectTimeline({
             {...editingMarker}
             onClose={() => setEditingMarker(null)}
             onSave={(changes) =>
-              // Built on the marker as it is now, so an agent's newer edit to its other fields stays.
+              // Only the changed fields are sent, so an agent's newer edit to the others stays,
+              // even when it lands after this edit was made.
               editTimeline(projectId, "Edit marker", (timeline) => {
-                const current = timeline.markers.find(
-                  ({ id }) => id === editingMarker.marker.id,
-                );
-                if (!current) throw new Error("This marker was removed.");
-                return [{ type: "setMarker", ...current, ...changes }];
+                if (
+                  !timeline.markers.some(
+                    ({ id }) => id === editingMarker.marker.id,
+                  )
+                )
+                  throw new Error("This marker was removed.");
+                return [
+                  {
+                    type: "setMarker",
+                    id: editingMarker.marker.id,
+                    ...changes,
+                  },
+                ];
               })
             }
             onDelete={() =>
