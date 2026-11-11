@@ -4,13 +4,16 @@ import {
   TimelineError,
   apply,
   applyAll,
+  copyClips,
   randomClipId,
 } from "../../shared/timeline/apply";
 import {
   CommandSchema,
+  ClipboardSchema,
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
 import type {
+  Clip,
   Command,
   CommandInput,
   Timeline,
@@ -24,6 +27,10 @@ import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
 import { editLabel } from "../../shared/timeline/labels";
+
+const clipboards = new Map<string, readonly Clip[]>();
+const clipboardIds = new Map<string, string>();
+let clipboardTask = Promise.resolve();
 
 const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
 
@@ -117,6 +124,7 @@ function name(commands: Command[], timeline: Timeline) {
   const named = commands.map((command): Command => {
     // Positional edits can cut new pieces, including moves that overwrite a spanning clip.
     if (
+      command.type !== "paste" &&
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
@@ -131,6 +139,7 @@ function name(commands: Command[], timeline: Timeline) {
     let audioId =
       command.type === "insert" ? command.linkedAudio?.id : undefined;
     current = apply(current, command, {
+      clipboards,
       onCreate: (id, origin) => {
         creates.add(id);
         if (command.type !== "insert" || !("insert" in origin)) return;
@@ -168,7 +177,7 @@ function shown(projectId: string): TimelineView | null {
     .reduce((current, edit) => {
       if (anchorsChanged(edit.anchors, current)) return current;
       try {
-        return applyAll(current, edit.commands);
+        return applyAll(current, edit.commands, { clipboards });
       } catch (error) {
         if (error instanceof TimelineError) return current;
         throw error;
@@ -352,7 +361,7 @@ export async function editTimeline(
     const timeline =
       from === view.timeline
         ? named.timeline
-        : applyAll(view.timeline, commands);
+        : applyAll(view.timeline, commands, { clipboards });
     edit = {
       projectId,
       label: editLabel(commands, from, label),
@@ -445,11 +454,70 @@ export async function editTimeline(
 }
 
 export const stepHistory = (projectId: string, step: "undo" | "redo") =>
-  enqueue(async () => {
-    await api(
-      `${project(projectId)}/history/${step}`,
-      z.unknown(),
-      json("POST"),
-    );
-    await read(projectId);
-  });
+  clipboardTask.then(() =>
+    enqueue(async () => {
+      await api(
+        `${project(projectId)}/history/${step}`,
+        z.unknown(),
+        json("POST"),
+      );
+      await read(projectId);
+    }),
+  );
+
+/** Clipboard keys serialize copy/cut/paste, including a paste pressed before copy has answered. */
+export function clipboardEdit(
+  projectId: string,
+  action: "copy" | "cut" | "overwrite" | "insert",
+  at: number,
+) {
+  const { selection, view } = useTimeline.getState();
+  const clipIds = [...selection.ids];
+  const seen = view?.timeline;
+  clipboardTask = clipboardTask
+    .then(async () => {
+      if (action === "copy" || action === "cut") {
+        if (!clipIds.length || !seen) return;
+        const targets = copyClips(seen, clipIds);
+        const copied = await enqueue(async () => {
+          const view = await read(projectId);
+          if (
+            anchorsChanged({ clips: targets, destinations: [] }, view.timeline)
+          )
+            throw new Error(
+              "An agent changed those clips first. Copy them again.",
+            );
+          return api(
+            `${project(projectId)}/timeline/copy`,
+            ClipboardSchema,
+            json("POST", {
+              composition: view.composition,
+              expectedRevision: view.revision,
+              clipIds,
+            }),
+          );
+        });
+        clipboards.set(copied.id, copied.clips);
+        clipboardIds.set(projectId, copied.id);
+        if (action === "cut")
+          await editTimeline(
+            projectId,
+            "Cut clips",
+            () => [{ type: "remove", clipIds, ripple: false }],
+            seen,
+          );
+        return;
+      }
+      const clipboardId = clipboardIds.get(projectId);
+      if (!clipboardId) {
+        showToast("Copy clips before pasting.");
+        return;
+      }
+      await editTimeline(projectId, "Pasted clips", () => [
+        { type: "paste", clipboardId, at, mode: action },
+      ]);
+    })
+    .catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : String(error));
+    });
+}

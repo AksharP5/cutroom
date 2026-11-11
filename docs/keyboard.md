@@ -35,6 +35,10 @@ The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Reso
 | Go to in                                     | `Shift+I`                | `controlGotoIn`                    |
 | Go to out                                    | `Shift+O`                | `controlGotoOut`                   |
 | Loop                                         | `Ctrl+/`                 | `controlLoop`                      |
+| Copy clips                                   | `Ctrl+C`                 | `editCopy`                         |
+| Cut clips, leaving a gap                     | `Ctrl+X`                 | `editCut`                          |
+| Paste clips                                  | `Ctrl+V`                 | `editPaste`                        |
+| Paste insert                                 | `Ctrl+Shift+V`           | `editPasteInsert`                  |
 | Undo                                         | `Ctrl+Z`, `` ` ``        | `editUndo`                         |
 | Redo                                         | `Ctrl+Shift+Z`           | `editRedo`                         |
 | Fullscreen viewer                            | `P`, `Ctrl+F`            | `workspaceViewerModeCinemaViewer`  |
@@ -92,3 +96,7 @@ Shift+8 opens Export, matching `workspacePrimaryWorkspaceDeliver` in the owner's
 Drag a clip's volume envelope vertically to change gain, with the line following the pointer and a dB readout. Hold Alt for one-tenth travel for fine adjustment. A mostly horizontal drag that starts on the envelope moves the clip. Alt at the press still moves a clip without its linked partners. The owner's Resolve preset contains no fine-gain mouse binding. Alt fine adjustment is Cutroom's mouse convention.
 
 A cut inside a fade leaves the rest of that fade as volume automation on the piece. Select the clip and use Inspector > Audio > Clear automation to remove it before drawing a fresh fade. Clearing undoes in one step.
+
+Ctrl+C copies the selected clips with their linked partners. Ctrl+X copies and lifts them, leaving a gap. Ctrl+V pastes at the playhead on their source tracks, overwriting only the copied intervals. Ctrl+Shift+V is Paste Insert: it opens the whole copied span once, including gaps, and ripples unlocked auto-select tracks with the same link and source-cut rules as media insert. The earliest copied start lands on the playhead; relative timing, J/L cuts, clip properties, and source offsets stay intact. Each cut or paste is one undo step; copy adds no history. Copied clips get fresh ids and their own links.
+
+The in-app clipboard survives selection changes and timeline switches within the same project during the server session. It keeps the copied source even after a cut or later source edit. Timelines must use the same frame rate. Other projects have separate clipboards; pasting between projects is unsupported. Copy refuses source-restricted clips by name, as an explicit razor does. Paste Insert refuses a spanning restricted clip with the existing auto-select hint. The preset's Alt+V is Paste Attributes, which remains unsupported; it is not Paste Insert.

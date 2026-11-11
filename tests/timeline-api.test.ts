@@ -6,7 +6,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { z } from "zod";
 import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
-import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import {
+  ClipboardSchema,
+  TimelineViewSchema,
+} from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { readTrackMix } from "../src/server/timeline/mix";
@@ -1421,3 +1424,188 @@ for (const [name, command, expectedPicture] of [
     }
   });
 }
+
+test("MCP clipboard snapshots survive cuts and timeline switches, paste once, and refuse other projects", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "clipboard-test", version: "1" });
+  const viewResult = z.object({
+    structuredContent: z.object({ result: TimelineViewSchema }),
+  });
+  const copyResult = z.object({
+    structuredContent: z.object({ result: ClipboardSchema }),
+  });
+  try {
+    await mkdir(join(project.path, "scenes"));
+    const tone = Bun.spawnSync(
+      [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=6",
+        join(project.path, "tone.wav"),
+      ],
+      { stderr: "pipe" },
+    );
+    expect(tone.exitCode, tone.stderr.toString()).toBe(0);
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><body><main data-composition-id="main" data-duration="12" data-fps="30">
+      <div id="picture" data-start="1" data-duration="2" data-track-index="0" data-link="pair" data-label="Picture"><span>Copied content</span></div>
+      <audio src="tone.wav" id="sound" data-start="0.5" data-duration="3" data-track-index="1" data-link="pair"></audio>
+    </main></body></html>`,
+    );
+    await writeFile(
+      join(project.path, "scenes/other.html"),
+      `<template><main data-composition-id="other" data-duration="12" data-fps="30"></main></template>`,
+    );
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const read = async (composition = "index.html") =>
+      viewResult.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: project.id, composition },
+        }),
+      ).structuredContent.result;
+    const before = await read();
+    const api = `/projects/${project.id}`;
+    const historyBefore = await (
+      await fixture.request(`${api}/history`)
+    ).json();
+    const copy = copyResult.parse(
+      await client.callTool({
+        name: "timeline_copy",
+        arguments: {
+          projectId: project.id,
+          expectedRevision: before.revision,
+          clipIds: ["picture"],
+        },
+      }),
+    ).structuredContent.result;
+    expect(copy.clips.map((clip) => clip.id)).toEqual(["picture", "sound"]);
+    expect(await (await fixture.request(`${api}/history`)).json()).toEqual(
+      historyBefore,
+    );
+    const edit = async (composition: string, commands: CommandInput[]) =>
+      viewResult.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: project.id,
+            composition,
+            expectedRevision: (await read(composition)).revision,
+            commands,
+          },
+        }),
+      ).structuredContent.result;
+    await edit("index.html", [{ type: "remove", clipIds: ["picture"] }]);
+    expect((await read()).timeline.clips).toHaveLength(0);
+    const paste: CommandInput = {
+      type: "paste",
+      clipboardId: copy.id,
+      at: 120,
+    };
+    const otherBefore = await read("scenes/other.html");
+    const other = await edit("scenes/other.html", [paste]);
+    expect(
+      other.timeline.clips.map((clip) => [
+        clip.track,
+        clip.start,
+        clip.duration,
+      ]),
+    ).toEqual([
+      [0, 135, 60],
+      [1, 120, 90],
+    ]);
+    expect(other.timeline.clips[1]).toMatchObject({
+      src: "../tone.wav",
+      sourceDuration: 6,
+    });
+    expect(other.timeline.clips[0]!.link).toBe(other.timeline.clips[1]!.link);
+    expect(other.timeline.clips[0]!.link).not.toBe("pair");
+    expect(
+      await readFile(join(project.path, "scenes/other.html"), "utf8"),
+    ).toContain("<span>Copied content</span>");
+    await fixture.request(`${api}/history/undo`, "POST");
+    expect((await read("scenes/other.html")).timeline).toEqual(
+      otherBefore.timeline,
+    );
+    await fixture.request(`${api}/history/redo`, "POST");
+    expect((await read("scenes/other.html")).timeline).toEqual(other.timeline);
+    await fixture.request(`${api}/history/undo`, "POST");
+    const repasted = await edit("scenes/other.html", [paste]);
+    expect(
+      repasted.timeline.clips.every(
+        (clip) => !other.timeline.clips.some((old) => old.id === clip.id),
+      ),
+    ).toBe(true);
+    const restored = await edit("index.html", [paste]);
+    expect(restored.timeline.clips).toHaveLength(2);
+    const another = await fixture.store.create({ name: "Other project" });
+    const anotherView = TimelineViewSchema.parse(
+      await (await fixture.request(`/projects/${another.id}/timeline`)).json(),
+    );
+    const refused = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: another.id,
+        expectedRevision: anotherView.revision,
+        commands: [paste],
+      },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused)).toContain(
+      "clipboard is unavailable in this project",
+    );
+  } finally {
+    await client.close();
+    await server.stop(true);
+    await fixture.close();
+  }
+});
+
+test("clipboard copy refuses id-styled clips and stale revisions without changing files", async () => {
+  const fixture = await timelineFixture();
+  const { project } = fixture;
+  try {
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><head><style>#lower{color:white}</style></head><body><main data-composition-id="main" data-duration="12"><div id="lower" data-label="Lower third" data-start="0" data-duration="12"></div></main></body></html>`,
+    );
+    const api = `/projects/${project.id}`;
+    const view = TimelineViewSchema.parse(
+      await (await fixture.request(`${api}/timeline`)).json(),
+    );
+    const files = await fixture.files();
+    const restricted = await fixture.request(`${api}/timeline/copy`, "POST", {
+      expectedRevision: view.revision,
+      clipIds: ["lower"],
+    });
+    expect(restricted.status).toBe(422);
+    expect((await restricted.json()).error).toContain(
+      "Lower third can't be copied",
+    );
+    const stale = await fixture.request(`${api}/timeline/copy`, "POST", {
+      expectedRevision: "old",
+      clipIds: ["lower"],
+    });
+    expect(stale.status).toBe(409);
+    expect(await fixture.files()).toEqual(files);
+  } finally {
+    await fixture.close();
+  }
+});

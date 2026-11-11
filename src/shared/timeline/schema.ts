@@ -175,6 +175,17 @@ const pieceIds = z
     "Ids for the pieces this command cuts off, keyed by the id of the clip they are cut from, in the order the command cuts them. A ripple through several ranges cuts a spanning clip once per range, last range first. Each id must never have been used in this project, even by a clip that was deleted or undone; any other id is refused with duplicate_id. Pieces without one get a new random id.",
   );
 
+export const ClipboardSchema = z.object({
+  id: z.string().min(1),
+  clips: z.array(ClipSchema).min(1).max(10_000),
+});
+
+export const CopyClipsSchema = z.object({
+  composition: z.string().min(1).default("index.html"),
+  clipIds,
+  expectedRevision: z.string().min(1),
+});
+
 export const CommandSchema = z.discriminatedUnion("type", [
   z
     .object({
@@ -279,6 +290,22 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe("Add a media clip."),
+  z
+    .object({
+      type: z.literal("paste"),
+      clipboardId: z
+        .string()
+        .min(1)
+        .describe(
+          "Snapshot id returned by timeline_copy, in this project and server session",
+        ),
+      at: frame,
+      mode: z.enum(["overwrite", "insert"]).default("overwrite"),
+      ids: pieceIds,
+    })
+    .describe(
+      "Paste copied clips on their source tracks, preserving relative timing and links. Insert opens the entire copied span once.",
+    ),
   z
     .object({
       type: z.literal("setClip"),

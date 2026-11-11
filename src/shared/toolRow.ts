@@ -157,6 +157,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => target ?? "the timeline",
   },
+  timeline_copy: {
+    verb: ["Copied", "Copying", "Copy"],
+    kind: "project",
+    object: () => "clips",
+  },
   timeline_view: {
     verb: ["Rendered", "Rendering", "Render"],
     kind: "frame",

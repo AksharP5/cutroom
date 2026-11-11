@@ -4,6 +4,7 @@ import { z } from "zod";
 import { frameTime } from "../../shared/timeline/apply";
 import {
   CommandBatchSchema,
+  CopyClipsSchema,
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
 
@@ -61,6 +62,17 @@ export function registerTimelineTools(
     },
     ({ projectId, ...batch }) =>
       request(`/projects/${id(projectId)}/commands`, "POST", batch),
+  );
+  server.registerTool(
+    "timeline_copy",
+    {
+      description:
+        "Copy selected clips and linked partners into a project-scoped in-app clipboard snapshot. No history write. Pass its id as clipboardId to a timeline_edit paste command. The snapshot survives cuts and timeline switches until this server restarts. Source-restricted clips refuse the whole copy.",
+      inputSchema: CopyClipsSchema.extend({ projectId: input.projectId }),
+      annotations: readOnly,
+    },
+    ({ projectId, ...copy }) =>
+      request(`/projects/${id(projectId)}/timeline/copy`, "POST", copy),
   );
   server.registerTool(
     "timeline_view",

@@ -47,6 +47,8 @@ export function editAnchors(
   if (
     !commands.some(
       ({ type }) =>
+        type === "paste" ||
+        type === "remove" ||
         type === "trim" ||
         type === "split" ||
         type === "move" ||
@@ -55,6 +57,12 @@ export function editAnchors(
   )
     return { clips: [], destinations };
   const clips = new Map(after.clips.map((clip) => [clip.id, clip]));
+  if (commands.some((command) => command.type === "paste")) {
+    const previous = new Set(before.clips.map((clip) => clip.id));
+    for (const clip of after.clips)
+      if (!previous.has(clip.id))
+        destinations.push({ range: clip, clips: occupants(before, clip) });
+  }
   for (const command of commands) {
     if (command.type !== "move" || command.mode === "place") continue;
     const named = new Set(command.clipIds);

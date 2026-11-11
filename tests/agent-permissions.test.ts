@@ -29,6 +29,7 @@ const reads = [
   "review_list",
   "export_status",
   "timeline_read",
+  "timeline_copy",
   "timeline_view",
 ];
 

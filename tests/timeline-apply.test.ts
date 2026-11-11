@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   TimelineError,
   applyAll,
+  copyClips,
   normalizeTimeline,
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
@@ -1528,4 +1529,169 @@ test("setMarker on an existing marker changes only the fields it names", () => {
   expect(
     failure(() => run(timeline([]), { type: "setMarker", name: "No frame" })),
   ).toBe("unsupported");
+});
+
+test("paste keeps relative timing and J-cut partners on their tracks with fresh ids and links", () => {
+  const state = timeline([
+    clip("picture", 0, 30, 60, { link: "pair" }),
+    clip("sound", 1, 15, 90, { kind: "audio", link: "pair", hasAudio: true }),
+    clip("other", 2, 90, 30),
+  ]);
+  const copied = copyClips(state, ["picture", "other"]);
+  expect(copied.map((clip) => clip.id)).toEqual(["picture", "sound", "other"]);
+  const paste = CommandSchema.parse({
+    type: "paste",
+    clipboardId: "copy",
+    at: 300,
+  });
+  const options = {
+    clipboards: new Map([["copy", copied]]),
+    newId: countingIds,
+  };
+  const after = applyAll(state, [paste], options);
+  const added = after.clips.filter(
+    (clip) => !state.clips.some((old) => old.id === clip.id),
+  );
+  expect(
+    added.map((clip) => [
+      clip.track,
+      clip.start,
+      clip.duration,
+      clip.mediaStart,
+    ]),
+  ).toEqual([
+    [0, 315, 60, 0],
+    [1, 300, 90, 0],
+    [2, 375, 30, 0],
+  ]);
+  expect(added[0]!.link).toBe(added[1]!.link);
+  expect(added[0]!.link).not.toBe("pair");
+  expect(added[2]!.link).toBeNull();
+  const twice = applyAll(
+    after,
+    [CommandSchema.parse({ ...paste, at: 450 })],
+    options,
+  );
+  expect(new Set(twice.clips.map((clip) => clip.id)).size).toBe(9);
+  expect(new Set(twice.clips.flatMap((clip) => clip.link ?? [])).size).toBe(3);
+  // A cut never empties the snapshot.
+  const cut = run(state, { type: "remove", clipIds: ["picture", "other"] });
+  expect(applyAll(cut, [paste], options).clips).toHaveLength(3);
+});
+
+test("paste overwrite clears each copied interval; insert opens the whole span once across auto-select tracks", () => {
+  const source = [clip("a", 0, 20, 20), clip("b", 0, 60, 20)];
+  const state = timeline([clip("bed", 0, 0, 180), clip("title", 1, 0, 180)]);
+  const paste = (mode: "overwrite" | "insert") =>
+    applyAll(
+      state,
+      [
+        CommandSchema.parse({
+          type: "paste",
+          clipboardId: "copy",
+          at: 60,
+          mode,
+        }),
+      ],
+      { clipboards: new Map([["copy", source]]), newId: countingIds },
+    );
+  expect(
+    paste("overwrite").clips.map((clip) => [
+      clip.track,
+      clip.start,
+      clip.duration,
+    ]),
+  ).toEqual([
+    [0, 0, 60],
+    [0, 60, 20],
+    [0, 80, 20],
+    [0, 100, 20],
+    [0, 120, 60],
+    [1, 0, 180],
+  ]);
+  expect(
+    paste("insert").clips.map((clip) => [
+      clip.track,
+      clip.start,
+      clip.duration,
+    ]),
+  ).toEqual([
+    [0, 0, 60],
+    [0, 60, 20],
+    [0, 100, 20],
+    [0, 120, 120],
+    [1, 0, 60],
+    [1, 120, 120],
+  ]);
+});
+
+test("copy and paste refuse restricted clips by name, and insert keeps the existing auto-select hint", () => {
+  const restricted = clip("lower", 1, 0, 180, {
+    label: "Lower third",
+    sourceRestrictions: { copy: "Styled by id." },
+  });
+  expect(() => copyClips(timeline([restricted]), ["lower"])).toThrow(
+    "Lower third can't be copied",
+  );
+  const command = CommandSchema.parse({
+    type: "paste",
+    clipboardId: "copy",
+    at: 60,
+    mode: "insert",
+  });
+  expect(() =>
+    applyAll(timeline([]), [command], {
+      clipboards: new Map([["copy", [restricted]]]),
+    }),
+  ).toThrow("Lower third can't be copied");
+  const state = timeline([clip("bed", 0, 0, 180), restricted]);
+  const options = {
+    clipboards: new Map([["copy", [clip("source", 0, 0, 30)]]]),
+    newId: countingIds,
+  };
+  expect(() => applyAll(state, [command], options)).toThrow(
+    "Lower third on V2 can't be cut here. Turn off auto-select on V2",
+  );
+  const off = run(state, { type: "setTrack", index: 1, autoSelect: false });
+  expect(
+    applyAll(off, [command], options).clips.find((clip) => clip.id === "lower"),
+  ).toEqual(restricted);
+  expect(() =>
+    applyAll(
+      state,
+      [CommandSchema.parse({ ...command, ids: { source: ["spent"] } })],
+      { ...options, retired: new Set(["spent"]) },
+    ),
+  ).toThrow("used earlier");
+});
+
+test("paste insert refuses a linked partner on an excluded track and a locked destination", () => {
+  const state = timeline(
+    [
+      clip("picture", 0, 0, 180, { link: "pair" }),
+      clip("sound", 1, 0, 180, { kind: "audio", link: "pair" }),
+    ],
+    [{ index: 1, kind: "audio", autoSelect: false }],
+  );
+  const command = CommandSchema.parse({
+    type: "paste",
+    clipboardId: "copy",
+    at: 60,
+    mode: "insert",
+  });
+  const options = {
+    clipboards: new Map([["copy", [clip("source", 0, 0, 30)]]]),
+    newId: countingIds,
+  };
+  expect(() => applyAll(state, [command], options)).toThrow(
+    "cannot preserve sync",
+  );
+  const locked = run(state, { type: "setTrack", index: 0, locked: true });
+  expect(() =>
+    applyAll(
+      locked,
+      [CommandSchema.parse({ ...command, mode: "overwrite", at: 240 })],
+      options,
+    ),
+  ).toThrow("locked");
 });

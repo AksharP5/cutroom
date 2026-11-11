@@ -11,7 +11,10 @@ export type { TimelineErrorCode } from "./errors";
  * Where a clip created by a batch gets its markup: a copy of a clip from the timeline the batch
  * started with, or new media.
  */
-export type ClipOrigin = { copyOf: string } | { insert: InsertClip };
+export type ClipOrigin =
+  | { copyOf: string }
+  | { insert: InsertClip }
+  | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
 /**
  * Names a clip a command creates when the command does not: `base` is the id of the clip a piece
@@ -24,6 +27,7 @@ export type NewId = (
 ) => string;
 /** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
 interface Batch {
+  clipboards: ReadonlyMap<string, readonly Clip[]>;
   /** Ids in the timeline and ids the project used before; a new clip takes none of them. */
   reserved: Set<string>;
   retired: ReadonlySet<string>;
@@ -40,6 +44,7 @@ interface Batch {
  * `silentMedia` every `src` known to hold no audio stream.
  */
 interface ApplyOptions {
+  clipboards?: Batch["clipboards"];
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
@@ -143,6 +148,7 @@ export function apply(
   timeline: Timeline,
   command: Command,
   {
+    clipboards = new Map(),
     onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -152,6 +158,7 @@ export function apply(
   }: ApplyOptions = {},
 ): Timeline {
   return applyIn(timeline, command, {
+    clipboards,
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
@@ -167,6 +174,7 @@ export function applyAll(
   timeline: Timeline,
   commands: readonly Command[],
   {
+    clipboards = new Map(),
     onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -177,6 +185,7 @@ export function applyAll(
 ): Timeline {
   const origins = new Map<string, ClipOrigin>();
   const batch: Batch = {
+    clipboards,
     reserved: usedNames(timeline, retired),
     retired,
     onSkip,
@@ -239,7 +248,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   // Ids the command names for the pieces it cuts, by the clip each is cut from, in cutting order.
   const supplied = new Map(
     Object.entries(
-      command.type === "split" ||
+      command.type === "paste" ||
+        command.type === "split" ||
         command.type === "insert" ||
         command.type === "trim" ||
         command.type === "remove" ||
@@ -594,6 +604,72 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         tracks,
         clips: [...next, added, ...audio],
       };
+    }
+    case "paste": {
+      const source = batch.clipboards.get(command.clipboardId);
+      if (!source?.length)
+        throw new TimelineError(
+          "not_found",
+          "The clip clipboard is unavailable. Copy the clips again.",
+        );
+      for (const clip of source) {
+        if (clip.sourceRestrictions?.copy)
+          throw new TimelineError(
+            "unsupported",
+            `${clip.label ?? clip.id} can't be copied. ${clip.sourceRestrictions.copy}`,
+          );
+        assertTrackKind(clip.kind, trackAt(clip.track), clip.id);
+      }
+      // Reserve clipboard names too, even when a cut removed their source clips.
+      for (const clip of source) {
+        taken.add(clip.id);
+        if (clip.link) taken.add(clip.link);
+      }
+      const start = Math.min(...source.map((clip) => clip.start));
+      const duration = Math.max(...source.map(clipEnd)) - start;
+      const links = new Map<string, string>();
+      const added = source.map((clip): Clip => {
+        const id = mint.name(clip.id, clip.id);
+        if (clip.link && !links.has(clip.link))
+          links.set(clip.link, uniqueName(taken, "lk", 1));
+        onCreate(id, { clipboardId: command.clipboardId, clipId: clip.id });
+        return {
+          ...clip,
+          id,
+          start: command.at + clip.start - start,
+          link: clip.link ? links.get(clip.link)! : null,
+          startRef: null,
+        };
+      });
+      let next = clips;
+      if (command.mode === "overwrite") {
+        for (const clip of added)
+          next = clearRange(
+            next,
+            clip.track,
+            clip.start,
+            clipEnd(clip),
+            fps,
+            mint,
+          );
+      } else {
+        const tracks = rippleTracks(
+          timeline,
+          source.map((clip) => clip.track),
+        );
+        const spans = (clip: Clip) =>
+          clip.start < command.at && command.at < clipEnd(clip);
+        const targets = withPartners(
+          next,
+          next.filter((clip) => tracks.has(clip.track) && spans(clip)),
+        ).filter(spans);
+        for (const clip of targets)
+          if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
+        next = splitClips(next, targets, command.at, fps, mint);
+        next = shiftAfter(next, tracks, () => command.at, duration);
+        assertRippleSync(timeline, next, tracks, copies);
+      }
+      return { ...timeline, clips: [...next, ...added] };
     }
     case "setTiming": {
       const target = find(command.clipId);
@@ -1308,4 +1384,21 @@ function slug(src: string, fallback: string): string {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || fallback
   );
+}
+
+/** Snapshot a selection with its linked partners; copies must own their source bytes. */
+export function copyClips(timeline: Timeline, ids: readonly string[]): Clip[] {
+  const named = ids.map((id) => {
+    const clip = timeline.clips.find((clip) => clip.id === id);
+    if (!clip) throw new TimelineError("not_found", `No clip has id ${id}.`);
+    return clip;
+  });
+  const clips = withPartners(timeline.clips, named);
+  for (const clip of clips)
+    if (clip.sourceRestrictions?.copy)
+      throw new TimelineError(
+        "unsupported",
+        `${clip.label ?? clip.id} can't be copied. ${clip.sourceRestrictions.copy}`,
+      );
+  return clips;
 }
