@@ -16,6 +16,7 @@ import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview } from "./preview";
 import { transitionHandoff } from "./viewerHandoff";
+import { editPicture, followEditPicture } from "./editFrame";
 
 export type Zoom = "fit" | "actual";
 
@@ -44,6 +45,20 @@ export function Viewer({
   onSaveNote: SaveNote;
 }) {
   const stage = useRef<HTMLDivElement>(null);
+  const editLabels = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const show = () => {
+      const element = editLabels.current;
+      if (!element) return;
+      const labels = editPicture()?.labels ?? [];
+      element.hidden = labels.length !== 2;
+      Array.from(element.children).forEach((child, index) => {
+        child.textContent = labels[index] ?? "";
+      });
+    };
+    show();
+    return followEditPicture(show);
+  }, []);
   const connections = useRef(
     new Map<number, ReturnType<typeof connectPreview>>(),
   );
@@ -296,6 +311,10 @@ export function Viewer({
             />
           );
         })}
+        <div ref={editLabels} className="edit-edge-labels" hidden>
+          <span />
+          <span />
+        </div>
       </div>
       <NoteLayer
         projectId={projectId}

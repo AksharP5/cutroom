@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export type EditFrame = { clipId: string; time: number };
+
 export const PreviewStateSchema = z.object({
   ready: z.boolean(),
   root: z.boolean(),

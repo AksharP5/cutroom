@@ -1,6 +1,7 @@
 import { parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import type { EditFrame } from "../../shared/preview";
 
 interface PreviewWindow extends Window {
   CSSNumericValue: {
@@ -376,6 +377,139 @@ function installPreviewBridge() {
   let retired = false;
   let pictureVersion = 0;
   let picture = Promise.resolve();
+  let editCanvas: HTMLCanvasElement | null = null;
+  let editFrames: VideoFrame[] = [];
+  const editPreloads = new Map<HTMLVideoElement, string | null>();
+  const clearEditPicture = () => {
+    editCanvas?.remove();
+    editCanvas = null;
+    for (const frame of editFrames) frame.close();
+    editFrames = [];
+    for (const [video, preload] of editPreloads) {
+      if (preload === null) video.removeAttribute("preload");
+      else video.setAttribute("preload", preload);
+    }
+    editPreloads.clear();
+  };
+  const showEditPicture = async (edges: EditFrame[], version: number) => {
+    // Reuse the document's source elements, even beyond their saved trim windows.
+    // The runtime is paused; its normal seek restores all media on release.
+    await win.__hfWaitForSeekCompletion?.();
+    const deadline = performance.now() + FRAME_TIMEOUT;
+    const sources = await Promise.all(
+      edges.map(async (edge) => {
+        const element = document.getElementById(edge.clipId);
+        if (!(
+          element instanceof HTMLVideoElement ||
+          element instanceof HTMLImageElement
+        ))
+          throw new Error(
+            `The preview cannot show the edit frame for ${edge.clipId}.`,
+          );
+        if (element instanceof HTMLVideoElement) {
+          element.pause();
+          if (!editPreloads.has(element))
+            editPreloads.set(element, element.getAttribute("preload"));
+          element.preload = "auto";
+          if (!element.readyState) element.load();
+          while (!element.readyState) {
+            if (retired || version !== pictureVersion) return element;
+            if (element.error) throw new Error(element.error.message);
+            if (performance.now() > deadline)
+              throw new Error(
+                "The preview did not load the edit source in time.",
+              );
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            );
+          }
+          // Match the runtime's media-element lead, avoiding a decode on the preceding
+          // frame when an exact rational boundary rounds down in the native decoder.
+          element.currentTime = edge.time + 0.00001;
+        }
+        return element;
+      }),
+    );
+    const frames: (VideoFrame | HTMLImageElement)[] = [];
+    try {
+      for (;;) {
+        if (retired || version !== pictureVersion) return;
+        if (performance.now() > deadline)
+          throw new Error("The preview did not draw the edit frame in time.");
+        if (
+          sources.some((source) =>
+            source instanceof HTMLVideoElement
+              ? source.seeking || source.readyState < 2
+              : !source.complete || !source.naturalWidth,
+          )
+        ) {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          continue;
+        }
+        try {
+          for (const source of sources)
+            frames.push(
+              source instanceof HTMLVideoElement
+                ? new VideoFrame(source)
+                : source,
+            );
+          break;
+        } catch (error) {
+          for (const frame of frames)
+            if (frame instanceof VideoFrame) frame.close();
+          frames.length = 0;
+          if (!(
+            error instanceof DOMException && error.name === "InvalidStateError"
+          ))
+            throw error;
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+        }
+      }
+      const { width, height } = state();
+      const canvas = editCanvas ?? document.createElement("canvas");
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      canvas.dataset.cutroomEditFrame = "";
+      canvas.dataset.count = String(frames.length);
+      canvas.style.cssText =
+        "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;pointer-events:none";
+      const context = canvas.getContext("2d");
+      if (!context)
+        throw new Error("The preview could not hold the edit frame.");
+      context.fillRect(0, 0, width, height);
+      frames.forEach((frame, index) => {
+        const w =
+          frame instanceof VideoFrame ? frame.displayWidth : frame.naturalWidth;
+        const h =
+          frame instanceof VideoFrame
+            ? frame.displayHeight
+            : frame.naturalHeight;
+        const panel = width / frames.length;
+        const scale = Math.min(panel / w, height / h);
+        context.drawImage(
+          frame,
+          index * panel + (panel - w * scale) / 2,
+          (height - h * scale) / 2,
+          w * scale,
+          h * scale,
+        );
+      });
+      if (!editCanvas) document.body.append(canvas);
+      editCanvas = canvas;
+      for (const frame of editFrames) frame.close();
+      editFrames = frames.filter(
+        (frame): frame is VideoFrame => frame instanceof VideoFrame,
+      );
+      frames.length = 0;
+    } finally {
+      for (const frame of frames)
+        if (frame instanceof VideoFrame) frame.close();
+    }
+  };
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
     "video[data-cutroom-held] { visibility: hidden !important; }" +
@@ -599,6 +733,8 @@ function installPreviewBridge() {
     observationFrame = 0;
     // The parent compositor can still show this document while retiring its iframe.
     // Release decoding resources without erasing the last painted picture.
+    for (const frame of editFrames) frame.close();
+    editFrames = [];
     for (const [video, hold] of holds) {
       cancelRelease(video);
       hold.frame.close();
@@ -670,6 +806,11 @@ function installPreviewBridge() {
           return;
         case "inspect":
           break;
+        case "cancel-edit":
+          // Let the one pending seek finish without painting a stale edge. The queued
+          // playhead seek then restores the picture, even when the source is still loading.
+          pictureVersion += 1;
+          return;
         case "meter":
           if (!("enabled" in data) || typeof data.enabled !== "boolean") return;
           metering = data.enabled;
@@ -679,6 +820,7 @@ function installPreviewBridge() {
           else win.__hf?.audioMeter?.stop();
           break;
         case "play":
+          clearEditPicture();
           pictureVersion += 1;
           for (const video of holds.keys()) releasePlaying(video);
           win.__player?.play();
@@ -702,8 +844,36 @@ function installPreviewBridge() {
             data.time < 0
           )
             return;
+          if ("edit" in data && Array.isArray(data.edit) && data.edit.length) {
+            const edges: EditFrame[] = [];
+            if (data.edit.length > 2) return;
+            for (const edge of data.edit) {
+              if (
+                !edge ||
+                typeof edge !== "object" ||
+                !("clipId" in edge) ||
+                typeof edge.clipId !== "string" ||
+                !("time" in edge) ||
+                typeof edge.time !== "number" ||
+                !Number.isFinite(edge.time) ||
+                edge.time < 0
+              )
+                return;
+              edges.push({ clipId: edge.clipId, time: edge.time });
+            }
+            win.__player?.pause();
+            const version = ++pictureVersion;
+            picture = showEditPicture(edges, version);
+            await picture;
+            break;
+          }
           win.__player?.seek(data.time);
-          if (!win.__player?.isPlaying()) await refreshPicture();
+          if (!win.__player?.isPlaying()) {
+            const restored = refreshPicture();
+            const version = pictureVersion;
+            await restored;
+            if (version === pictureVersion) clearEditPicture();
+          }
           scheduleObservation();
           break;
         case "mute":
