@@ -170,8 +170,15 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
     .getByRole("option", { name: "First conversation", exact: true })
     .click();
   await expect(conversation).toHaveText("First conversation");
+  // Choosing a conversation loads it; the trigger is disabled until it has.
+  await expect(conversation).toBeEnabled();
+  await expect(conversation).toBeFocused();
   await conversation.press("Enter");
+  await expect(page.getByRole("listbox")).toBeVisible();
   await page.keyboard.press("s");
+  await expect(
+    page.getByRole("option", { name: "Second conversation", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(conversation).toHaveText("Second conversation");
 
