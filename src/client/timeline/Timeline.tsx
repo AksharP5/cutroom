@@ -602,10 +602,7 @@ export function Timeline({
     playhead: clock.frame,
     onSelect,
     onEdit,
-    onGesture: (active) => {
-      viewport.current?.gesture(active);
-      onGesture(active);
-    },
+    onGesture,
     onTrackDrag: setTrackDrag,
   });
   const refreshDrag = useRef(gestures.refresh);

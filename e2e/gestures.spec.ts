@@ -60,6 +60,10 @@ async function open(
     ]);
   const lanes = timeline.locator(".tl-lanes");
   const at = async (frame: number, row: "V2" | "V1" | "A1" = "V1") => {
+    await expect(timeline.locator(".tl-grid")).toHaveAttribute(
+      "data-refit",
+      "settled",
+    );
     // Clips still sliding after the last edit are not yet where a frame is.
     await expect
       .poll(() =>
@@ -633,6 +637,10 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
     .getByRole("listitem")
     .filter({ hasText: "red.mp4" });
   const hold = async (destination: () => ReturnType<typeof at>) => {
+    await expect(timeline.locator(".tl-grid")).toHaveAttribute(
+      "data-refit",
+      "settled",
+    );
     await startMediaDrag(page, row);
     const to = await destination();
     await page.mouse.move(to.x, to.y, { steps: 10 });
@@ -826,4 +834,196 @@ test("a trim after an overwrite names the short sound partner", async ({
     "Clip red.mp4 on A1 would be shorter than one frame.",
   );
   expect(await read()).toEqual(before);
+});
+
+test("a Media-panel drag during a pending Fit keeps its scale and aimed drop frame", async ({
+  page,
+  request,
+}) => {
+  const { project, timeline, read, agent } = await open(
+    page,
+    request,
+    "Media drag holds Fit",
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=red:s=320x180:r=30:d=2",
+    "-y",
+    join(project.path, "red.mp4"),
+  ]);
+  const row = page
+    .getByRole("region", { name: "Media", exact: true })
+    .getByRole("listitem")
+    .filter({ hasText: "red.mp4" });
+  await expect(row).toHaveAttribute("draggable", "true");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const grid = timeline.locator(".tl-grid");
+  // Leave time to grab the media while the real edit motion is still running.
+  await grid.evaluate((element: HTMLElement) =>
+    element.style.setProperty("--duration-edit", "3000ms"),
+  );
+  await agent([{ type: "move", clipIds: ["shot-4"], by: 120 }]);
+  await expect(timeline.locator('[data-clip="shot-4"]')).toHaveCSS(
+    "--s",
+    "390",
+  );
+  await expect
+    .poll(() =>
+      timeline
+        .locator('[data-clip="shot-4"]')
+        .evaluate((element) => element.getAnimations().length),
+    )
+    .toBeGreaterThan(0);
+  await expect(grid).toHaveAttribute("data-refit", "pending");
+  await startMediaDrag(page, row);
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  const ppf = await grid.evaluate((element: HTMLElement) =>
+    Number(element.style.getPropertyValue("--ppf")),
+  );
+  const lanes = timeline.locator(".tl-lanes");
+  const box = (await lanes.boundingBox())!;
+  const lane = (await lanes.locator(".tl-lane").nth(1).boundingBox())!;
+  const aimed = 130;
+  const target = { x: box.x + aimed * ppf, y: lane.y + lane.height / 2 };
+  await page.mouse.move(target.x, target.y, { steps: 10 });
+  await expect(timeline.locator(".tl-ghost")).toBeVisible();
+  // Cross the edit's actual animation boundary with the native drag still held.
+  await expect
+    .poll(() =>
+      grid.evaluate(
+        (element) =>
+          element
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.timeline === document.timeline)
+            .length,
+      ),
+    )
+    .toBe(0);
+  const held = await grid.evaluate((element: HTMLElement) =>
+    Number(element.style.getPropertyValue("--ppf")),
+  );
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.up();
+  await expect(grid).not.toHaveAttribute("data-gesturing", "");
+  expect.soft(held).toBe(ppf);
+  await expect
+    .poll(
+      async () =>
+        (await read()).find(([id]) => String(id).startsWith("red-"))?.[2],
+    )
+    .toBe(aimed);
+});
+
+test("a ruler scrub holds a pending Fit until pointer release", async ({
+  page,
+  request,
+}) => {
+  const { timeline, agent } = await open(page, request, "Scrub holds Fit");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const grid = timeline.locator(".tl-grid");
+  await grid.evaluate((element: HTMLElement) =>
+    element.style.setProperty("--duration-edit", "1500ms"),
+  );
+  await agent([{ type: "move", clipIds: ["shot-4"], by: 120 }]);
+  await expect(grid).toHaveAttribute("data-refit", "pending");
+  const scale = () =>
+    grid.evaluate((element: HTMLElement) =>
+      Number(element.style.getPropertyValue("--ppf")),
+    );
+  const before = await scale();
+  const lanes = (await timeline.locator(".tl-lanes").boundingBox())!;
+  const ruler = (await timeline.locator(".tl-ruler").boundingBox())!;
+  const target = { x: lanes.x + 130 * before, y: ruler.y + ruler.height / 2 };
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.down();
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  await expect
+    .poll(() =>
+      grid.evaluate(
+        (element) =>
+          element
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.timeline === document.timeline)
+            .length,
+      ),
+    )
+    .toBe(0);
+  expect(await scale()).toBe(before);
+  // Switching windows mid-scrub keeps the press, so the scale stays held.
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  expect(await scale()).toBe(before);
+  await page.mouse.move(target.x, target.y);
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:04:10",
+  );
+  await page.mouse.up();
+  await expect(grid).not.toHaveAttribute("data-gesturing", "");
+  await expect(grid).toHaveAttribute("data-refit", "settled");
+  const fitted = await scale();
+  expect(fitted).toBeLessThan(before);
+
+  // Only automatic Fit waits: an explicit zoom during a press still applies.
+  await page.mouse.down();
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  await page.keyboard.press("Control+=");
+  await expect.poll(scale).toBeGreaterThan(fitted);
+  await page.mouse.up();
+});
+
+test("an external file drag freezes Fit while over the timeline and releases on exit", async ({
+  page,
+  request,
+}) => {
+  const { timeline, agent } = await open(
+    page,
+    request,
+    "External drag holds Fit",
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const grid = timeline.locator(".tl-grid");
+  const lanes = timeline.locator(".tl-lanes");
+  await grid.evaluate((element: HTMLElement) =>
+    element.style.setProperty("--duration-edit", "1500ms"),
+  );
+  await agent([{ type: "move", clipIds: ["shot-4"], by: 120 }]);
+  await expect(grid).toHaveAttribute("data-refit", "pending");
+  const scale = () =>
+    grid.evaluate((element: HTMLElement) =>
+      Number(element.style.getPropertyValue("--ppf")),
+    );
+  const before = await scale();
+  const dataTransfer = await page.evaluateHandle(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(["image"], "picture.png", { type: "image/png" }));
+    return data;
+  });
+  await lanes.dispatchEvent("dragenter", { dataTransfer });
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  await expect
+    .poll(() =>
+      grid.evaluate(
+        (element) =>
+          element
+            .getAnimations({ subtree: true })
+            .filter((animation) => animation.timeline === document.timeline)
+            .length,
+      ),
+    )
+    .toBe(0);
+  expect(await scale()).toBe(before);
+  // OS drags have no in-page source to emit dragend when they leave.
+  await lanes.dispatchEvent("dragleave", {
+    dataTransfer,
+    clientX: 0,
+    clientY: 0,
+  });
+  await dataTransfer.dispose();
+  await expect(grid).not.toHaveAttribute("data-gesturing", "");
+  await expect(grid).toHaveAttribute("data-refit", "settled");
+  expect(await scale()).toBeLessThan(before);
 });
