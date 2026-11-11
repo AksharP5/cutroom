@@ -112,7 +112,13 @@ export const ClipMix = memo(function ClipMix({
       >
         <path d={path} />
         <path className="tl-gain" data-mix="gain" d={path}>
-          <title>{`Gain ${audioGainToText(clip.volume ?? 1)}. Alt for fine adjustment`}</title>
+          <title>
+            {`Gain ${audioGainToText(clip.volume ?? 1)}. Alt for fine adjustment.${
+              clip.automation
+                ? " Volume automation present: clear it in Inspector > Audio."
+                : ""
+            }`}
+          </title>
         </path>
       </svg>
       <i
