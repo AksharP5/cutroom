@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { localMediaPath, mediaSettings, peakLevels } from "../../shared/media";
+import { waveformPeak } from "./math";
 
 /** Waveform buckets fetched per request: 16 seconds at the finest level, 18 hours at the coarsest. */
 export const PEAK_CHUNK = 8192;
@@ -184,11 +185,13 @@ export function createTimelineMedia(
     const response = await fetchReady(url, POLL_MS);
     if (!response) return null;
     const bytes = await response.arrayBuffer();
-    return new Int16Array(
+    const pairs = new Int16Array(
       bytes,
       PEAK_HEADER,
       (bytes.byteLength - PEAK_HEADER) >> 1,
     );
+    // Remap once per cached range, never per column or animation frame.
+    return Float32Array.from(pairs, (peak) => waveformPeak(peak / 32768));
   });
 
   const firstPeaks = new Map<string, string>();

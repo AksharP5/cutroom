@@ -1,3 +1,4 @@
+import { startMediaDrag } from "./media-drag";
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -221,18 +222,17 @@ test("MCP split, undo, redo, ripple deletion and a media drop keep the picture",
       (clip) => clip.kind === "video",
     )!;
     const clip = page.locator(`[data-clip="${picture.id}"]`);
-    const bounds = (await clip.boundingBox())!;
-    const playhead = (await page
-      .locator(".tl-playhead")
-      .first()
-      .boundingBox())!;
     const row = page
       .getByRole("region", { name: "Media", exact: true })
       .getByRole("listitem")
       .filter({ hasText: "Picture.mp4" });
     await keepPicture(page, async () => {
-      await row.hover();
-      await page.mouse.down();
+      await startMediaDrag(page, row);
+      const bounds = (await clip.boundingBox())!;
+      const playhead = (await page
+        .locator(".tl-playhead")
+        .first()
+        .boundingBox())!;
       await page.mouse.move(playhead.x, bounds.y + bounds.height / 2, {
         steps: 12,
       });

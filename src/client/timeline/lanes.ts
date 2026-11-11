@@ -1,5 +1,5 @@
 import { audioGainToText } from "@hyperframes/core/audio-gain";
-import { fadePath } from "./mix";
+import { envelopeHeight, fadePath } from "./mix";
 import { clipFades } from "../../shared/timeline/mix";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
@@ -80,6 +80,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const remixed = useRef<ReadonlySet<string>>(new Set());
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
+  const hoveredMix = useRef<HTMLElement | null>(null);
   /** Snap targets for the blade's hover, made again when the timeline or playhead changes. */
   const hoverTargets = useRef<{
     timeline: Timeline;
@@ -201,11 +202,24 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const fades = clipFades(clip);
       for (const edge of ["fadeIn", "fadeOut"] as const) {
         const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
-        if (handle)
+        if (handle) {
           handle.style.setProperty(
             "--fade",
             `${(fades[edge] / clip.duration) * 100}%`,
           );
+          handle.style.setProperty(
+            "--level",
+            String(
+              envelopeHeight(
+                clip,
+                shown.fps,
+                edge === "fadeIn"
+                  ? fades.fadeIn
+                  : clip.duration - fades.fadeOut,
+              ),
+            ),
+          );
+        }
       }
     }
     placed.current = next;
@@ -363,6 +377,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { x, y, bypass } = pointer.current;
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
+    const scroller = latest.current.lanes.current
+      ?.closest(".tl-scroll")
+      ?.getBoundingClientRect();
+    const bottomRight = scroller
+      ? local(scroller.right, scroller.bottom)
+      : { x: Infinity, y: Infinity };
+    const readoutWidth = readout.current?.offsetWidth || 120;
+    const readoutHeight = readout.current?.offsetHeight || 24;
     const input = {
       frame: frameAt(x),
       track: rowAt(y)?.track.index ?? null,
@@ -398,7 +420,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     }
     if (readout.current && !readout.current.hidden) {
-      readout.current.style.transform = `translate(${at.x + 14}px, ${at.y + 18}px)`;
+      readout.current.style.transform = `translate(${Math.min(at.x + 14, bottomRight.x - readoutWidth - 8)}px, ${Math.min(at.y + 18, bottomRight.y - readoutHeight - 8)}px)`;
     }
   }
 
@@ -479,6 +501,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { tool, timeline, lanes, playhead } = latest.current;
     const root = lanes.current;
     const hit = hitAt(event);
+    const mix =
+      hit &&
+      root?.querySelector<HTMLElement>(
+        `[data-clip-mix="${CSS.escape(hit.clip.id)}"]`,
+      );
+    if (mix !== hoveredMix.current) {
+      hoveredMix.current?.removeAttribute("data-hover");
+      hoveredMix.current = mix || null;
+      hoveredMix.current?.setAttribute("data-hover", "");
+    }
     const intent = intentAt(tool, timeline, hit);
     // The pointer and an empty lane keep the default cursor.
     const cursor =
@@ -758,6 +790,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onPointerCancel: () => end("cancel"),
       onPointerLeave: () => {
         if (gesture.current.phase === "idle") {
+          hoveredMix.current?.removeAttribute("data-hover");
+          hoveredMix.current = null;
           mark(bladeLine.current, null);
           mark(snapLine.current, null);
         }

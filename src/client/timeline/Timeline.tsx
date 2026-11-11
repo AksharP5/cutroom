@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { KeyboardEvent, PointerEvent, RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -47,6 +48,7 @@ import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import type { Tool } from "./gesture";
 import { useLaneGestures } from "./lanes";
+import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
 import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
@@ -149,10 +151,6 @@ function readSizes(): { rows: RowSizes; head: number } {
       audio: px("--size-track-audio"),
       seam: px("--stroke-hair"),
       divider: px("--stroke-rail"),
-      // A new-track preview must fit entirely inside the drop target.
-      padding:
-        Math.max(px("--size-track-video"), px("--size-track-audio")) +
-        px("--stroke-hair"),
     },
     head: px("--size-track-head"),
   };
@@ -508,9 +506,18 @@ export function Timeline({
 
   const { fps } = timeline;
   const frames = timelineFrames(timeline);
+  const draggingMedia =
+    useSyncExternalStore(subscribeMediaDrag, mediaDrag) !== null;
   const layout = useMemo(
-    () => trackRows(timeline.tracks, sizes.rows),
-    [timeline.tracks, sizes],
+    () =>
+      trackRows(timeline.tracks, {
+        ...sizes.rows,
+        // A new-track preview fits in the band only while media is being dragged.
+        padding: draggingMedia
+          ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
+          : 0,
+      }),
+    [timeline.tracks, sizes, draggingMedia],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
   const gestures = useLaneGestures({
@@ -872,13 +879,19 @@ export function Timeline({
                     />
                   ))}
                 {clips
-                  .filter(({ clip }) => clip.hasAudio)
+                  .filter(
+                    ({ clip }) =>
+                      clip.hasAudio &&
+                      mounted &&
+                      clip.duration * mounted.labelPpf >= NAME_MIN_WIDTH,
+                  )
                   .map(({ clip, row }) => (
                     <ClipMix
                       key={clip.id}
                       clip={clip}
                       row={row}
                       fps={timeline.fps}
+                      selected={selection.ids.has(clip.id)}
                     />
                   ))}
                 {clips.map(

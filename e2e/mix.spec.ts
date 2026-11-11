@@ -271,7 +271,7 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
     .toEqual({ duration: 120, fadeOut: 0 });
   await expect(
     page.locator('[data-clip-mix="music"] [data-mix="fadeOut"]'),
-  ).toHaveAttribute("style", "--fade: 0%;");
+  ).toHaveCSS("--fade", "0%");
   await page.screenshot({ path: info.outputPath("split-envelope.png") });
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await music()).duration).toBe(240);
@@ -364,7 +364,7 @@ test("pressing the curved envelope changes gain without moving the clip, in one 
   await page.screenshot({ path: info.outputPath("curve-after.png") });
   expect(actual.clips[0]).toEqual({
     ...initial.clips[0],
-    volume: 10 ** (6 / 20),
+    volume: 10 ** (12 / 20),
   });
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(initial);
@@ -459,7 +459,7 @@ test("trim and roll out and back keep edge fades and each gesture undoes exactly
     });
     await expect(
       page.locator('[data-clip-mix="music"] [data-mix="fadeOut"]'),
-    ).toHaveAttribute("style", "--fade: 100%;");
+    ).toHaveCSS("--fade", "100%");
     const handle = (await page
       .locator('[data-clip-mix="music"] [data-mix="fadeOut"]')
       .boundingBox())!;

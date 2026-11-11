@@ -20,7 +20,7 @@ import type {
 /** Pixels the pointer travels before a press becomes a drag. */
 export const DRAG_THRESHOLD = 3;
 /** Pixels inside a clip's edge that grab the edge instead of the clip. */
-const EDGE_PX = 8;
+const EDGE_PX = 6;
 /** Pixels either side of a cut that grab both of its clips, with the Trim tool. */
 const ROLL_PX = 4;
 /** Pixels within which a dragged edge jumps to a clip edge, the playhead, a marker, or in/out. */
@@ -139,17 +139,17 @@ export function intentAt(
   const { clip, x, width } = hit;
   if (timeline.tracks.find((track) => track.index === clip.track)?.locked)
     return null;
+  if (tool === "blade") return { kind: "blade", clipId: clip.id };
+  const reach = Math.min(EDGE_PX, width / 3);
+  const edge = x < reach ? "start" : x >= width - reach ? "end" : null;
+  if (tool === "pointer" && edge)
+    return { kind: "trim", clipId: clip.id, edge, ripple: false };
   if (tool === "pointer" && hit.mix && clip.hasAudio)
     return hit.mix === "gain"
       ? { kind: "gain", clipId: clip.id, alone }
       : { kind: "fade", clipId: clip.id, edge: hit.mix };
-  if (tool === "blade") return { kind: "blade", clipId: clip.id };
-  const reach = Math.min(EDGE_PX, width / 3);
-  const edge = x < reach ? "start" : x >= width - reach ? "end" : null;
   if (!edge)
     return tool === "pointer" ? { kind: "move", clipId: clip.id, alone } : null;
-  if (tool === "pointer")
-    return { kind: "trim", clipId: clip.id, edge, ripple: false };
   const cut = edge === "start" ? clip.start : clipEnd(clip);
   const neighbour = timeline.clips.find(
     (other) =>

@@ -238,7 +238,7 @@ export function createBodies(
         ctx.globalAlpha = alpha;
       }
       let held = -1;
-      let pairs: Int16Array | undefined;
+      let pairs: Float32Array | undefined;
       const bars =
         waves[clip.enabled ? "on" : "off"][
           clip.kind === "audio" ? "audio" : "video"
@@ -246,8 +246,8 @@ export function createBodies(
       for (let x = xa; x < xb; x++) {
         const from = Math.floor(first + x * perBucket);
         const to = Math.max(from + 1, Math.floor(first + (x + 1) * perBucket));
-        let low = 32767;
-        let high = -32768;
+        let low = Infinity;
+        let high = -Infinity;
         for (let bucket = from; bucket < to; bucket++) {
           const chunk = Math.floor(bucket / PEAK_CHUNK);
           if (chunk !== held) {
@@ -263,12 +263,12 @@ export function createBodies(
         if (high < low) continue;
         if (strip) {
           // Too short for a centred wave: loudness rises from the bottom edge.
-          const tall = Math.round((Math.max(-low, high) / 32768) * span);
+          const tall = Math.round(Math.max(-low, high) * span);
           bars.rect(x, y1 - Math.max(1, tall), 1, Math.max(1, tall));
           continue;
         }
-        const upper = Math.round(middle - (high / 32768) * (span / 2));
-        const lower = Math.round(middle - (low / 32768) * (span / 2));
+        const upper = Math.round(middle - high * (span / 2));
+        const lower = Math.round(middle - low * (span / 2));
         bars.rect(x, upper, 1, Math.max(1, lower - upper));
       }
     }

@@ -1,3 +1,4 @@
+import { startMediaDrag } from "./media-drag";
 import { execFile } from "node:child_process";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -631,16 +632,15 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "red.mp4" });
-  await expect(row).toHaveAttribute("draggable", "true");
-  const hold = async (to: Awaited<ReturnType<typeof at>>) => {
-    await row.hover();
-    await page.mouse.down();
+  const hold = async (destination: () => ReturnType<typeof at>) => {
+    await startMediaDrag(page, row);
+    const to = await destination();
     await page.mouse.move(to.x, to.y, { steps: 10 });
     await page.mouse.move(to.x, to.y);
   };
 
   // Picture is refused on an audio track: the ghost says so and the drop does nothing.
-  await hold(await at(420, "A1"));
+  await hold(() => at(420, "A1"));
   await expect(timeline.locator(".tl-lanes")).toHaveAttribute(
     "data-refused",
     "",
@@ -654,7 +654,7 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   );
 
   // Free space takes the clip as it is.
-  await hold(await at(420));
+  await hold(() => at(420));
   await expect(timeline.locator(".tl-ghost")).toBeVisible();
   await page.mouse.up();
   const placed = [
@@ -665,7 +665,7 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   await expect.poll(read).toEqual(placed);
 
   // Over a clip it is inserted: the cut it lands on opens, and every track makes room.
-  await hold(await at(92));
+  await hold(() => at(92));
   await page.mouse.up();
   await expect
     .poll(read)
@@ -725,10 +725,8 @@ test("a refused audio drop explains the destination track kind", async ({
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "tone (1).wav" });
-  await expect(row).toHaveAttribute("draggable", "true");
+  await startMediaDrag(page, row);
   const to = await at(420);
-  await row.hover();
-  await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 10 });
   await page.mouse.move(to.x, to.y);
   await expect(timeline.locator(".tl-lanes")).toHaveAttribute(

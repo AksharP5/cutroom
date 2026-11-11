@@ -1,3 +1,4 @@
+import { startMediaDrag } from "./media-drag";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
@@ -21,10 +22,8 @@ async function drop(
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")
     .filter({ hasText: file });
-  await expect(row).toHaveAttribute("draggable", "true");
+  await startMediaDrag(page, row);
   const point = await destination();
-  await row.hover();
-  await page.mouse.down();
   await page.mouse.move(point.x, point.y, { steps: 12 });
   await page.mouse.move(point.x, point.y);
   await expect(page.locator(".tl-ghost")).toBeVisible();
@@ -176,14 +175,15 @@ test("starter layout keeps new-track drops inside the lanes at 1440 by 900", asy
     element.scrollTop = element.scrollHeight;
   });
   const lanes = page.locator(".tl-lanes");
-  const last = (await page.locator(".tl-lane.audio").last().boundingBox())!;
   const row = page
     .getByRole("region", { name: "Media", exact: true })
     .getByRole("listitem")
     .filter({ hasText: "Voice.wav" });
-  await expect(row).toHaveAttribute("draggable", "true");
-  await row.hover();
-  await page.mouse.down();
+  await startMediaDrag(page, row);
+  await scroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  const last = (await page.locator(".tl-lane.audio").last().boundingBox())!;
   await page.mouse.move(last.x + 2, last.y + last.height + 7, { steps: 12 });
   const ghost = page.locator(".tl-ghost");
   await expect(ghost).toContainText("New audio track");

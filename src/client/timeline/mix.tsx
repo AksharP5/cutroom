@@ -30,6 +30,20 @@ function volumeLane(clip: Clip) {
     : undefined;
 }
 
+/** Fades are linear amplitude ramps from the envelope to silence at the body's bottom. */
+export function envelopeHeight(
+  clip: Clip,
+  fps: Fps,
+  time: number,
+  lane = volumeLane(clip) ?? null,
+) {
+  const value = lane
+    ? sampleAutomationLane(lane, (time * fps.den) / fps.num)
+    : 1;
+  const level = gainHeight(gainTimesLane(clip.volume ?? 1, value));
+  return 100 - (100 - level) * fadeGain(time, clip.duration, clip);
+}
+
 /** Invert the drawn envelope at the grabbed frame, including its fades and volume lane. */
 export function gainFromDrag(
   clip: Clip,
@@ -44,16 +58,13 @@ export function gainFromDrag(
     ? sampleAutomationLane(lane, (time * fps.den) / fps.num)
     : 1;
   const fade = fadeGain(time, clip.duration, clip);
-  const envelope = value * fade;
-  const gain =
-    envelope > 0
-      ? gainTimesLane(clip.volume ?? 1, value) * fade
-      : (clip.volume ?? 1);
-  const position = gainHeight(gain) + (dy / height) * 100;
-  const drawn = audioFaderPositionToGain(100 - position * 2);
+  const position =
+    envelopeHeight(clip, fps, time, lane ?? null) + (dy / height) * 100;
+  const level = fade > 0 ? 100 - (100 - position) / fade : position;
+  const drawn = audioFaderPositionToGain(100 - level * 2);
   const volume = Math.min(
     MAX_AUDIO_GAIN,
-    envelope > 0 ? drawn / envelope : drawn,
+    value > 0 && fade > 0 ? drawn / value : drawn,
   );
   return volume > 0
     ? audioDbToGain(Math.round(audioGainToDb(volume) * 10) / 10)
@@ -63,11 +74,13 @@ export function gainFromDrag(
 /** Draw native automation and fades at the clip's gain level. */
 export function fadePath(clip: Clip, fps: Fps) {
   const fades = clipFades(clip);
-  const lane = volumeLane(clip);
+  const lane = volumeLane(clip) ?? null;
   const framesPerSecond = fps.num / fps.den;
   const times = [
     ...new Set([
-      ...Array.from({ length: 33 }, (_, index) => (clip.duration * index) / 32),
+      ...(lane
+        ? Array.from({ length: 33 }, (_, index) => (clip.duration * index) / 32)
+        : [0, clip.duration]),
       fades.fadeIn,
       clip.duration - fades.fadeOut,
       ...(lane?.points.map((point) => point.t * framesPerSecond) ?? []),
@@ -77,12 +90,7 @@ export function fadePath(clip: Clip, fps: Fps) {
     .sort((a, b) => a - b);
   return times
     .map((time, index) => {
-      const gain =
-        gainTimesLane(
-          clip.volume ?? 1,
-          lane ? sampleAutomationLane(lane, time / framesPerSecond) : 1,
-        ) * fadeGain(time, clip.duration, clip);
-      return `${index ? "L" : "M"}${((time / clip.duration) * 100).toFixed(2)},${gainHeight(gain).toFixed(2)}`;
+      return `${index ? "L" : "M"}${((time / clip.duration) * 100).toFixed(2)},${envelopeHeight(clip, fps, time, lane).toFixed(2)}`;
     })
     .join(" ");
 }
@@ -91,16 +99,18 @@ export const ClipMix = memo(function ClipMix({
   clip,
   row,
   fps,
+  selected,
 }: {
   clip: Clip;
   row: Row;
   fps: Fps;
+  selected: boolean;
 }) {
   const path = fadePath(clip, fps);
   const fades = clipFades(clip);
   return (
     <div
-      className={`tl-mix on-${row.track.kind}${row.track.locked ? " locked" : ""}`}
+      className={`tl-mix on-${row.track.kind}${row.track.locked ? " locked" : ""}${selected ? " selected" : ""}`}
       data-clip-mix={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: row.top }}
     >
@@ -125,13 +135,19 @@ export const ClipMix = memo(function ClipMix({
         className="tl-fade-handle"
         data-mix="fadeIn"
         title={`Fade in: ${clip.fadeIn} authored frames`}
-        style={{ "--fade": `${(fades.fadeIn / clip.duration) * 100}%` }}
+        style={{
+          "--fade": `${(fades.fadeIn / clip.duration) * 100}%`,
+          "--level": envelopeHeight(clip, fps, fades.fadeIn),
+        }}
       />
       <i
         className="tl-fade-handle"
         data-mix="fadeOut"
         title={`Fade out: ${clip.fadeOut} authored frames`}
-        style={{ "--fade": `${(fades.fadeOut / clip.duration) * 100}%` }}
+        style={{
+          "--fade": `${(fades.fadeOut / clip.duration) * 100}%`,
+          "--level": envelopeHeight(clip, fps, clip.duration - fades.fadeOut),
+        }}
       />
     </div>
   );
