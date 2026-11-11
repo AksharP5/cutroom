@@ -12,6 +12,7 @@ import {
   parseComposition,
   patchComposition,
   settingsOf,
+  timelineContent,
 } from "../src/server/timeline/composition";
 import type { CompositionScope } from "../src/server/timeline/composition";
 import { countingIds } from "./clip-ids";
@@ -54,8 +55,10 @@ const edit = (
   );
   const output = patchComposition(parsed, timeline, origins);
   expect(
-    parseComposition(output, settingsOf(timeline), { scope }).timeline,
-  ).toEqual(timeline);
+    timelineContent(
+      parseComposition(output, settingsOf(timeline), { scope }).timeline,
+    ),
+  ).toEqual(timelineContent(timeline));
   return output;
 };
 
@@ -69,6 +72,19 @@ const withoutStacking = (html: string) =>
       /<style data-cutroom-track-stacking[^>]*>[\s\S]*?<\/style>\n?/g,
       "",
     );
+
+for (const command of [{ type: "split", at: 90 }] satisfies CommandInput[]) {
+  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} leaves an auto-select id-animated title whole`, () => {
+    const title = `<div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1">Lower third</div>`;
+    const html = composition(
+      `<video id="shot" src="shot.mp4" muted data-start="2" data-duration="2" data-track-index="0"></video>\n${title}\n<script>gsap.to("#lower", {opacity: 1});</script>`,
+    );
+    const output = edit(html, [command]);
+    expect(output).toContain(title);
+    expect(output).not.toContain('id="lower-2"');
+    expect(output).not.toBe(html);
+  });
+}
 
 test("overwrite moves read back exactly at 30000/1001 with linked cuts and source offsets", () => {
   const html = composition(

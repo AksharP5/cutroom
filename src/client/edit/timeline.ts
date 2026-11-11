@@ -70,7 +70,7 @@ let confirmed: { projectId: string; view: TimelineView } | null = null;
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
 /** The header toast this queue last showed, cleared by the next edit that lands. */
-let refusal = "";
+let lastToast = "";
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
 export function openTimeline(projectId: string) {
@@ -214,7 +214,7 @@ async function send(edit: Edit) {
     // user saw them; an agent may have moved them since, whether or not the revision is stale.
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
     try {
-      await api(
+      const result = await api(
         `${project(edit.projectId)}/commands`,
         TimelineViewSchema,
         json("POST", {
@@ -224,7 +224,7 @@ async function send(edit: Edit) {
           commands: edit.commands,
         }),
       );
-      return;
+      return result;
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
       if (error.status === 409 && !retry) continue;
@@ -376,11 +376,34 @@ export async function editTimeline(
     useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
     onApply?.(timeline, commands);
+    let report = "";
     await enqueue(async () => {
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
-        await send(made);
+        const result = await send(made);
+        if (result?.skippedClips?.length) {
+          const current = new Map(
+            result.timeline.clips.map((clip) => [clip.id, clip]),
+          );
+          const count = from.clips.filter((clip) => {
+            const next = current.get(clip.id);
+            return (
+              !next ||
+              clip.start !== next.start ||
+              clip.duration !== next.duration
+            );
+          }).length;
+          const verb = commands.every((command) => command.type === "split")
+            ? "Cut"
+            : "Edited";
+          const names = result.skippedClips.map(
+            (clip) =>
+              clip.label ??
+              clipName(from.clips.find((item) => item.id === clip.clipId)!),
+          );
+          report = `${count ? `${verb} ${count} clip${count === 1 ? "" : "s"}. ` : ""}${names.join(", ")} left whole.`;
+        }
         accepted = true;
       } catch (error) {
         made.failure = humanReason(
@@ -398,19 +421,25 @@ export async function editTimeline(
       pending = pending.filter((item) => item !== made);
       await read(projectId);
     });
-    if (!made.dropped && refusal && useWorkspace.getState().toast === refusal)
-      showToast("");
+    if (!made.dropped) {
+      if (report) {
+        lastToast = report;
+        showToast(report);
+      } else if (lastToast && useWorkspace.getState().toast === lastToast) {
+        showToast("");
+      }
+    }
     return accepted;
   } catch (error) {
     if (edit) pending = pending.filter((item) => item !== edit);
     if (useTimeline.getState().projectId !== projectId) return false;
     const shownView = shown(projectId);
     if (shownView) useTimeline.setState({ view: shownView });
-    refusal = humanReason(
+    lastToast = humanReason(
       error instanceof Error ? error.message : String(error),
       view.timeline,
     );
-    showToast(refusal);
+    showToast(lastToast);
     return accepted;
   }
 }

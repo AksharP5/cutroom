@@ -80,6 +80,164 @@ const positions = (state: Timeline) =>
     ]),
   );
 
+test("auto-select razor cuts supported clips and reports the title it leaves whole", () => {
+  const title = clip("lower", 1, 0, 180, {
+    kind: "element",
+    label: "Lower third",
+    src: null,
+    mediaStart: null,
+    sourceRestrictions: {
+      copy: "Clip lower is animated by its id. Edit it in the source instead.",
+    },
+  });
+  const state = timeline([clip("picture", 0, 0, 180), title]);
+  const skipped: string[] = [];
+  const result = applyAll(
+    state,
+    [
+      CommandSchema.parse({
+        type: "split",
+        at: 90,
+        clipIds: ["picture", "lower"],
+        autoSelect: true,
+      }),
+    ],
+    {
+      newId: countingIds,
+      onSkip: (clip, reason) => {
+        skipped.push(clip.id);
+        expect(reason).toContain("animated by its id");
+      },
+    },
+  );
+  expect(positions(result)).toEqual({
+    picture: [0, 0, 90],
+    "picture-2": [0, 90, 90],
+    lower: [1, 0, 180],
+  });
+  expect(result.clips.find((clip) => clip.id === "lower")).toEqual(title);
+  expect(skipped).toEqual(["lower"]);
+  for (const clipIds of [["lower"], ["picture", "lower"]])
+    expect(() => run(state, { type: "split", at: 90, clipIds })).toThrow(
+      "Edit it in the source instead.",
+    );
+  expect(run(timeline([title]), { type: "split", at: 90 }).clips).toEqual([
+    title,
+  ]);
+});
+
+test("auto-select leaves a restricted clip's linked group whole", () => {
+  const state = timeline([
+    clip("picture", 0, 0, 180, { link: "pair" }),
+    clip("sound", 1, 0, 180, {
+      kind: "audio",
+      link: "pair",
+      sourceRestrictions: { copy: "Cannot copy sound." },
+    }),
+    clip("other", 2, 0, 180),
+  ]);
+  const result = run(state, { type: "split", at: 90 });
+  expect(positions(result)).toEqual({
+    picture: [0, 0, 180],
+    sound: [1, 0, 180],
+    other: [2, 0, 90],
+    "other-2": [2, 90, 90],
+  });
+});
+
+for (const [name, command, expected] of [
+  [
+    "Q",
+    { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
+    { shot: [0, 60, 30], later: [0, 90, 360] },
+  ],
+  [
+    "W",
+    { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
+    { shot: [0, 60, 30], later: [0, 90, 360] },
+  ],
+  [
+    "Shift+X",
+    { type: "remove", clipIds: ["shot"], ripple: true },
+    { later: [0, 60, 360] },
+  ],
+  [
+    "ripple extension",
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+    { shot: [0, 60, 90], later: [0, 150, 360] },
+  ],
+  [
+    "insert ripple",
+    {
+      type: "insert",
+      track: 0,
+      at: 120,
+      mode: "insert",
+      clip: { id: "inserted", kind: "image", src: "still.png", duration: 30 },
+    },
+    { shot: [0, 60, 60], inserted: [0, 120, 30], later: [0, 150, 360] },
+  ],
+] satisfies [string, CommandInput, Record<string, number[]>][]) {
+  for (const kind of ["element", "audio"] as const) {
+    test(`${name} refuses a spanning restricted ${kind} atomically until its track opts out`, () => {
+      const state = timeline(
+        [
+          clip("shot", 0, 60, 60, { mediaStart: 2 }),
+          clip("later", 0, 120, 360),
+          clip("restricted", 1, 0, 300, {
+            kind,
+            label: kind === "audio" ? "Voiceover" : "Lower third",
+            sourceRestrictions: { copy: "Cannot copy restricted." },
+          }),
+          clip("later-cue", 1, 420, 60, { kind }),
+        ],
+        [{ index: 1, kind: kind === "audio" ? "audio" : "video" }],
+      );
+      const before = structuredClone(state);
+      const onSkip = () => {
+        throw new Error("A ripple must never skip a clip.");
+      };
+      const track = kind === "audio" ? "A1" : "V2";
+      const label = kind === "audio" ? "Voiceover" : "Lower third";
+      expect(() =>
+        applyAll(state, [CommandSchema.parse(command)], { onSkip }),
+      ).toThrow(
+        `Command 1 (${command.type}): ${label} on ${track} can't be cut here. Turn off auto-select on ${track} to ripple without it.`,
+      );
+      expect(state).toEqual(before);
+      const result = run(
+        state,
+        { type: "setTrack", index: 1, autoSelect: false },
+        command,
+      );
+      expect(positions(result)).toEqual({
+        ...expected,
+        restricted: [1, 0, 300],
+        "later-cue": [1, 420, 60],
+      });
+      expect(result.clips.filter((clip) => clip.track === 1)).toEqual(
+        state.clips.filter((clip) => clip.track === 1),
+      );
+    });
+  }
+}
+
+test("a ripple refuses a fully covered clip whose source cannot be removed", () => {
+  const state = timeline([
+    clip("shot", 0, 60, 60, { mediaStart: 2 }),
+    clip("later", 0, 120, 360),
+    clip("restricted", 1, 60, 60, {
+      label: "Lower third",
+      sourceRestrictions: { remove: "Cannot remove restricted." },
+    }),
+  ]);
+  expect(() =>
+    run(state, { type: "remove", clipIds: ["shot"], ripple: true }),
+  ).toThrow(
+    "Lower third on V2 can't be cut here. Turn off auto-select on V2 to ripple without it.",
+  );
+});
+
 const failure = (action: () => unknown) => {
   try {
     action();

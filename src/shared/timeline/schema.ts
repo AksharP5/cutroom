@@ -93,6 +93,10 @@ export const ClipSchema = z.object({
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
   startRef: z.object({ clipId, offset: z.number().int() }).nullable(),
+  /** Source restrictions are projected by the parser, never persisted in clip attributes. */
+  sourceRestrictions: z
+    .object({ copy: z.string().optional(), remove: z.string().optional() })
+    .optional(),
 });
 
 export const TrackSchema = z.object({
@@ -227,6 +231,12 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("split"),
       at: frame,
+      autoSelect: z
+        .boolean()
+        .optional()
+        .describe(
+          "The named targets came from auto-select. Leave unsupported clips and their linked partners whole. Omitted clipIds also uses this behavior.",
+        ),
       clipIds: clipIds
         .optional()
         .describe(
@@ -405,6 +415,9 @@ export const ClipEditSchema = z.object({
 });
 
 export const TimelineViewSchema = z.object({
+  skippedClips: z
+    .array(z.object({ clipId, label: label.nullable(), reason: z.string() }))
+    .optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
   composition: z.string(),

@@ -98,6 +98,9 @@ const razor = (timeline: Timeline, target: EditTarget): CommandInput[] => {
     {
       type: "split",
       at: target.frame,
+      ...(!clips.some((clip) => target.selection.has(clip.id)) && {
+        autoSelect: true,
+      }),
       ...(clips.length && { clipIds: clips.map((clip) => clip.id) }),
     },
   ];

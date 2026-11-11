@@ -35,6 +35,7 @@ import {
   mediaSources,
   parseComposition,
   patchComposition,
+  timelineContent,
   settingsOf,
 } from "./composition";
 import { mediaFacts } from "./media";
@@ -109,11 +110,21 @@ export function createTimelineRoutes(
       ),
     );
     const lengths = new Map([...current.lengths, ...inserted.lengths]);
+    const skippedClips = new Map<
+      string,
+      NonNullable<TimelineView["skippedClips"]>[number]
+    >();
     const origins = new Map<string, ClipOrigin>();
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
         onCreate: (id, origin) => origins.set(id, origin),
+        onSkip: (clip, reason) =>
+          skippedClips.set(clip.id, {
+            clipId: clip.id,
+            label: clip.label,
+            reason,
+          }),
         mediaLengths: lengths,
         silentMedia: inserted.silent,
         // No new clip takes an id the project used before, even one undone since.
@@ -122,16 +133,12 @@ export function createTimelineRoutes(
     );
     const html = patchComposition(current.parsed, timeline, origins);
     const settings = settingsOf(timeline);
-    // The written source must read back as exactly the timeline that was applied.
-    if (
-      !Bun.deepEquals(
-        parseComposition(html, settings, {
-          scope: current.scope,
-          mediaLengths: lengths,
-        }).timeline,
-        timeline,
-      )
-    )
+    // Compare authored content; removing markup can change the remaining source restrictions.
+    const written = parseComposition(html, settings, {
+      scope: current.scope,
+      mediaLengths: lengths,
+    }).timeline;
+    if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
@@ -184,7 +191,8 @@ export function createTimelineRoutes(
         fileContentVersion(html),
         timelines[composition] ?? emptyTimelineSettings(),
       ),
-      timeline,
+      timeline: written,
+      ...(skippedClips.size && { skippedClips: [...skippedClips.values()] }),
     };
   };
 
