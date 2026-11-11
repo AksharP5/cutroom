@@ -265,6 +265,27 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       expect(progress).toContain('"status":"complete"');
       expect((await request(`/api/render/${jobId}/download`)).status).toBe(200);
       await unchanged(render);
+
+      const marked = await request(
+        `/api/projects/${render.project.id}/render`,
+        {
+          fps: 30,
+          quality: "draft",
+          format: "mp4",
+          cutroom: {
+            filename: "marked.mp4",
+            directory: render.project.path,
+            range: { start: 5, end: 10 },
+          },
+        },
+      );
+      const markedJob = z
+        .object({ jobId: z.string() })
+        .parse(await marked.json());
+      expect(
+        await (await request(`/api/render/${markedJob.jobId}/progress`)).text(),
+      ).toContain('"status":"complete"');
+      await unchanged(render);
     } finally {
       await client.close();
       await browser.close();

@@ -115,6 +115,9 @@ test.skipIf(process.env.CUTROOM_TEST_DESKTOP !== "1")(
         .waitFor();
       expect(await page.title()).toBe("Cutroom");
       expect(
+        await page.evaluate(() => typeof window.cutroomDesktop?.exportFile),
+      ).toBe("function");
+      expect(
         await application.evaluate(
           ({ Menu }) => Menu.getApplicationMenu() === null,
         ),

@@ -29,10 +29,13 @@ test.skipIf(process.platform !== "linux")(
     await writeFile(
       workerPath,
       `import { writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 let body = ""; for await (const chunk of process.stdin) body += chunk;
-const { outputPath } = JSON.parse(body);
-await writeFile(outputPath, "partial render");
+const { outputPath: rendered } = JSON.parse(body);
+// The worker renders into a staging folder beside the destination.
+const outputPath = join(dirname(dirname(rendered)), basename(rendered));
+await writeFile(rendered, "partial render");
 process.on("SIGTERM", () => {});
 const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{});console.log(process.pid);setInterval(()=>{},1000)'], {stdio:["ignore","pipe","ignore"]});
 const pid = await new Promise(resolve => child.stdout.once("data", chunk => resolve(chunk.toString().trim())));
@@ -53,7 +56,8 @@ setInterval(() => {}, 1000);
         jobId: "test",
       });
       await waitFor(() => state.stage === "ready");
-      expect(existsSync(outputPath)).toBe(true);
+      // The destination stays untouched until the finished file is linked into place.
+      expect(existsSync(outputPath)).toBe(false);
       // The upstream HTTP cancel route writes status before invoking cancel().
       state.status = "cancelled";
       await workers.cancelAll();
@@ -144,15 +148,15 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
   const workerPath = join(directory, "worker.mjs");
   await writeFile(
     workerPath,
-    `import {writeFile} from 'node:fs/promises';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'partial');await writeFile(outputPath+'.pid',String(process.pid));console.log('CUTROOM_RENDER:'+JSON.stringify({type:'progress',progress:1,stage:'ready'}));setInterval(()=>{},1000);`,
+    `import {writeFile} from 'node:fs/promises';import {basename,dirname,join} from 'node:path';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(outputPath,'partial');await writeFile(join(dirname(dirname(outputPath)),basename(outputPath))+'.pid',String(process.pid));console.log('CUTROOM_RENDER:'+JSON.stringify({type:'progress',progress:1,stage:'ready'}));setInterval(()=>{},1000);`,
   );
   try {
     for (const failCleanup of [false, true]) {
       const workers = createRenderWorkers({
         workerPath,
-        removeOutput: async (path) => {
+        removeScratch: async (path) => {
+          await rm(path, { recursive: true, force: true });
           if (failCleanup) throw new Error("Disk refused cleanup");
-          await rm(path, { force: true });
         },
       });
       let state: ReturnType<typeof workers.start> | undefined;
@@ -194,7 +198,7 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
           expect(await cancelled.text()).toContain("Disk refused cleanup");
           expect(state.status).toBe("failed");
           expect(state.error).toContain("Disk refused cleanup");
-          expect(existsSync(outputPath)).toBe(true);
+          expect(existsSync(outputPath)).toBe(false);
         } else {
           expect(cancelled.status).toBe(200);
           expect(await cancelled.json()).toEqual({ status: "cancelled" });

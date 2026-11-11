@@ -1,7 +1,9 @@
 import { mkdirSync } from "node:fs";
+import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { app, BrowserWindow, dialog, Menu, shell } from "electron";
+import { isAbsolute, join, resolve } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { z } from "zod";
 import {
   connectLocalServer,
   isApplicationUrl,
@@ -65,12 +67,39 @@ async function start() {
     show: false,
     icon: join(root, "src", "desktop", "icon.png"),
     webPreferences: {
+      preload: resolve(
+        app.getAppPath(),
+        app.isPackaged ? "desktop/preload.cjs" : "preload.cjs",
+      ),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
       webSecurity: true,
       autoplayPolicy: "user-gesture-required",
     },
+  });
+  ipcMain.handle("cutroom:export-file", async (event, value: unknown) => {
+    if (
+      event.sender !== window?.webContents ||
+      event.senderFrame !== window.webContents.mainFrame ||
+      !isApplicationUrl(event.senderFrame.url, baseUrl)
+    )
+      throw new Error("Only Cutroom can open an export.");
+    const input = z
+      .object({
+        path: z.string().refine(isAbsolute),
+        action: z.enum(["open", "reveal"]),
+      })
+      .parse(value);
+    const path = await realpath(input.path);
+    if (!path.toLowerCase().endsWith(".mp4") || !(await stat(path)).isFile())
+      throw new Error("Choose an exported MP4 file.");
+    if (input.action === "reveal") {
+      shell.showItemInFolder(path);
+      return;
+    }
+    const error = await shell.openPath(path);
+    if (error) throw new Error(error);
   });
   window.webContents.setAudioMuted(process.env.CUTROOM_MUTE_AUDIO === "1");
   const permissionAllowed = (

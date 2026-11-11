@@ -1,5 +1,7 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { link, mkdir, mkdtemp, rm, rmdir, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
@@ -8,14 +10,20 @@ import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
+import type { ExportOptions } from "../../shared/export";
+import { ExportStageSchema } from "../../shared/export";
 
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
-type RenderState = ReturnType<StudioApiAdapter["startRender"]>;
+type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
+  stageProgress?: z.infer<typeof ExportStageSchema>;
+  cancel: () => Promise<void>;
+};
 const WorkerEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("progress"),
     progress: z.number(),
     stage: z.string().optional(),
+    stageProgress: ExportStageSchema.optional(),
   }),
   z.object({
     type: z.literal("complete"),
@@ -36,19 +44,35 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
   return tail;
 }
 
+/** Each export writes into a folder with this prefix beside its destination. */
+export const STAGING_PREFIX = ".cutroom-render-";
+
+async function removeRenderScratch(path: string) {
+  await rm(path, { recursive: true, force: true });
+  // Concurrent Chromium cleanup can leave an empty root after Bun's forced rm.
+  await rmdir(path).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return;
+    throw error;
+  });
+}
+
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
 export function createRenderWorkers(
   configuration: {
     workerPath?: string;
     sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
     stopTimeoutMs?: number;
-    removeOutput?: (path: string) => Promise<void>;
+    removeScratch?: (path: string) => Promise<void>;
   } = {},
 ) {
-  const running = new Set<() => Promise<void>>();
+  const running = new Map<string, RenderState>();
   let closing = false;
   return {
-    start(options: RenderOptions): RenderState {
+    get(jobId: string) {
+      return running.get(jobId);
+    },
+    start(options: RenderOptions, output?: ExportOptions): RenderState {
       if (closing) throw new HttpError(503, "The renderer is shutting down.");
       let worker: ReturnType<typeof Bun.spawn> | undefined;
       let errors: Promise<string> | undefined;
@@ -58,6 +82,13 @@ export function createRenderWorkers(
       let failure: string | undefined;
       let cleanupFailure: string | undefined;
       let task: Promise<void>;
+      const outputPath = output
+        ? join(output.directory, output.filename)
+        : options.outputPath;
+      let temporary: string | undefined;
+      let staging: string | undefined;
+      /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
+      let publishing = false;
       const isCancelling = () => job.state.status === "cancelling";
       const signalWorker = (signal: NodeJS.Signals) => {
         if (!worker) return;
@@ -81,7 +112,7 @@ export function createRenderWorkers(
         }, configuration.stopTimeoutMs ?? 6000);
       };
       const cancel = () => {
-        if (job.state.status === "running") {
+        if (job.state.status === "running" && !publishing) {
           job.transition({
             status: "cancelling",
             progress: job.state.progress,
@@ -116,7 +147,7 @@ export function createRenderWorkers(
         get error() {
           return job.state.status === "failed" ? job.state.error : undefined;
         },
-        outputPath: options.outputPath,
+        outputPath,
         cancel,
       };
       const started = performance.now();
@@ -126,7 +157,19 @@ export function createRenderWorkers(
           throw new Error(
             "Node.js 22.18 or newer is required for local video exports.",
           );
-        await mkdir(dirname(options.outputPath), { recursive: true });
+        await mkdir(dirname(outputPath), { recursive: true });
+        // Refuse a taken name before rendering. Publishing refuses it again, so no file is replaced.
+        if (existsSync(outputPath))
+          throw new Error(
+            `A file named "${basename(outputPath)}" is already there. Choose another name.`,
+          );
+        // The worker's temporary files stay outside the project, which the producer copies.
+        temporary = await mkdtemp(join(tmpdir(), "cutroom-render-"));
+        // The producer puts work and transaction folders beside the file it writes. Writing into an
+        // owned folder on the destination's filesystem lets cancellation remove all of it, and the
+        // finished file is linked into place without replacing anything that appeared meanwhile.
+        staging = await mkdtemp(join(dirname(outputPath), STAGING_PREFIX));
+        const rendered = join(staging, basename(outputPath));
         if (isCancelling()) return;
         const config: Omit<RenderRequestOptions, "engineConfig"> = {
           fps: options.fps,
@@ -166,6 +209,7 @@ export function createRenderWorkers(
               ...(browserExecutable()
                 ? { PRODUCER_HEADLESS_SHELL_PATH: browserExecutable() }
                 : {}),
+              TMPDIR: temporary,
             },
           },
         );
@@ -173,9 +217,10 @@ export function createRenderWorkers(
         child.stdin.write(
           JSON.stringify({
             projectDir: options.project.dir,
-            outputPath: options.outputPath,
+            outputPath: rendered,
             options: config,
             sources,
+            range: output?.range,
           }),
         );
         child.stdin.end();
@@ -199,9 +244,13 @@ export function createRenderWorkers(
               if (job.state.status !== "running") continue;
               job.transition({
                 status: "running",
-                progress: Math.max(0, Math.min(1, event.progress / 100)),
+                progress: Math.max(
+                  job.state.progress,
+                  Math.min(1, event.progress / 100),
+                ),
               });
               state.stage = event.stage;
+              state.stageProgress = event.stageProgress;
             }
             if (event.type === "error") {
               failure = event.message;
@@ -219,9 +268,20 @@ export function createRenderWorkers(
         if (!completed || exitCode !== 0)
           throw new Error(
             failure ||
-              stderr.trim() ||
+              // The tail names the cause; the full log is far too long for a dialog.
+              stderr.trim().split("\n").slice(-2).join("\n") ||
               `Renderer exited with code ${exitCode}.`,
           );
+        publishing = true;
+        await link(rendered, outputPath).catch((error: unknown) => {
+          const code =
+            error instanceof Error && "code" in error ? String(error.code) : "";
+          throw new Error(
+            code === "EEXIST"
+              ? `A file named "${basename(outputPath)}" appeared there during the export. Choose another name and export again.`
+              : `This folder can't receive the export (${code || String(error)}). Choose another folder.`,
+          );
+        });
         await writeFile(
           options.outputPath.replace(/\.(mp4|webm|mov|gif)$/, ".meta.json"),
           JSON.stringify({
@@ -229,7 +289,6 @@ export function createRenderWorkers(
             durationMs: Math.round(performance.now() - started),
           }),
         );
-        if (isCancelling()) return;
       })()
         .catch((error: unknown) => {
           failure = error instanceof Error ? error.message : String(error);
@@ -240,21 +299,47 @@ export function createRenderWorkers(
             await worker?.exited;
             signalWorker("SIGKILL");
             await errors;
-            if (isCancelling() || failure) {
-              await (
-                configuration.removeOutput ??
-                ((path: string) => rm(path, { force: true }))
-              )(options.outputPath);
-              await rm(
-                options.outputPath.replace(
-                  /\.(mp4|webm|mov|gif)$/,
-                  ".meta.json",
+            const cleanup: Promise<unknown>[] = [];
+            // Cleanup touches only what this job made; the destination is the user's once linked.
+            if (isCancelling() || failure)
+              cleanup.push(
+                rm(
+                  options.outputPath.replace(
+                    /\.(mp4|webm|mov|gif)$/,
+                    ".meta.json",
+                  ),
+                  { force: true },
                 ),
-                { force: true },
               );
-            }
+            const remove = configuration.removeScratch ?? removeRenderScratch;
+            if (temporary) cleanup.push(remove(temporary));
+            // A folder moved mid-export takes staging with it; say so rather than claim it was removed.
+            if (staging)
+              cleanup.push(
+                existsSync(staging)
+                  ? remove(staging)
+                  : Promise.reject(
+                      new Error(
+                        `The export folder moved during the export, so its hidden ${basename(staging)} folder, which may hold the render, could not be removed.`,
+                      ),
+                    ),
+              );
+            const failures = (await Promise.allSettled(cleanup))
+              .filter((result) => result.status === "rejected")
+              .map((result) =>
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : String(result.reason),
+              );
+            if (failures.length) throw new Error(failures.join("\n"));
           } catch (error) {
-            cleanupFailure = `Render cleanup failed: ${error instanceof Error ? error.message : String(error)}`;
+            // Keep the render's own cause first; the cleanup problem follows it.
+            cleanupFailure = [
+              failure,
+              error instanceof Error ? error.message : String(error),
+            ]
+              .filter(Boolean)
+              .join(" ");
           } finally {
             clearTimeout(stopTimeout);
             if (cleanupFailure)
@@ -275,16 +360,16 @@ export function createRenderWorkers(
                 error: failure,
               });
             else job.transition({ status: "done", progress: 1 });
-            running.delete(cancel);
+            running.delete(options.jobId);
           }
         });
-      running.add(cancel);
+      running.set(options.jobId, state);
       return state;
     },
     async cancelAll() {
       closing = true;
       const results = await Promise.allSettled(
-        [...running].map((cancel) => cancel()),
+        [...running.values()].map((state) => state.cancel()),
       );
       const failures = results
         .filter((result) => result.status === "rejected")

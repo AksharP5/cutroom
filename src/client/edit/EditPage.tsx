@@ -27,7 +27,7 @@ import { noteNumbers } from "../review";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import "./edit.css";
 import { Inspector, InspectorToggle } from "./inspector/Inspector";
-import { exportProject, useExport } from "./export";
+import { ExportControl } from "./ExportDialog";
 import {
   editTimeline,
   loadTimeline,
@@ -102,8 +102,6 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const snapping = useTimeline((state) => state.snapping);
-  const exporting = useExport((state) => state.progress);
-  const exportNotice = useExport((state) => state.notice);
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
@@ -406,30 +404,7 @@ export function EditPage({
         </button>
         <span className="edit-separator" />
         <InspectorToggle />
-        {exportNotice && (
-          <span
-            className="edit-export-notice"
-            role="status"
-            title={exportNotice}
-          >
-            {exportNotice}
-          </span>
-        )}
-        <button
-          className="edit-export"
-          disabled={exporting !== null}
-          onClick={() =>
-            void exportProject(
-              projectId,
-              projectName,
-              useTransport.getState().fps,
-            )
-          }
-        >
-          {exporting === null
-            ? "Export"
-            : `Exporting ${Math.round(exporting)}%`}
-        </button>
+        <ExportControl projectId={projectId} projectName={projectName} />
       </div>
       <section ref={viewer} className="edit-viewer" aria-label="Viewer">
         <Viewer

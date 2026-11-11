@@ -295,10 +295,22 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
     },
   });
   await page.screenshot({ path: info.outputPath("preview.png") });
-  const download = page.waitForEvent("download", { timeout: 60_000 });
   await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await dialog.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
   const file = info.outputPath("inspector.mp4");
-  await (await download).saveAs(file);
+  const exported = await request.get(`/api/render/${jobId}/download`);
+  expect(exported.ok()).toBeTruthy();
+  await writeFile(file, await exported.body());
   const { stdout } = await exec(
     "ffmpeg",
     [
