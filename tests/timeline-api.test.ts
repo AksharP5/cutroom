@@ -1425,6 +1425,153 @@ for (const [name, command, expectedPicture] of [
   });
 }
 
+for (const destination of ["new", "free", "partner"] as const) {
+  test(`HTTP and MCP paste route linked sound to a ${destination} track and preserve another pair`, async () => {
+    const fixture = await timelineFixture();
+    const { project } = fixture;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({ name: "paste-sound-routing", version: "1" });
+    const result = z.object({
+      structuredContent: z.object({ result: TimelineViewSchema }),
+    });
+    const copied = z.object({
+      structuredContent: z.object({ result: ClipboardSchema }),
+    });
+    try {
+      const media = Bun.spawnSync(
+        [
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=c=blue:s=64x36:r=30:d=6",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=6",
+          "-shortest",
+          join(project.path, "source.mp4"),
+        ],
+        { stderr: "pipe" },
+      );
+      expect(media.exitCode, media.stderr.toString()).toBe(0);
+      await writeFile(
+        join(project.path, "index.html"),
+        `<!doctype html><html><body><main data-composition-id="main" data-fps="30" data-duration="8">
+        <video id="picture" src="source.mp4" muted data-start="0" data-duration="1" data-track-index="1" data-link="source"></video>
+        <audio id="sound" src="source.mp4" data-start="0" data-duration="1" data-track-index="2" data-link="source"></audio>
+        <video id="other-picture" src="source.mp4" muted data-start="4" data-duration="2" data-track-index="0" data-link="other"></video>
+        <audio id="other-sound" src="source.mp4" data-start="4" data-duration="2" data-track-index="2" data-link="other"></audio>
+        ${
+          destination === "partner"
+            ? `
+          <video id="destination" src="source.mp4" muted data-start="4" data-duration="2" data-track-index="1" data-link="destination"></video>
+          <audio id="destination-sound" src="source.mp4" data-start="4" data-duration="2" data-track-index="4" data-link="destination"></audio>`
+            : ""
+        }
+        </main></body></html>`,
+      );
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const read = async () =>
+        result.parse(
+          await client.callTool({
+            name: "timeline_read",
+            arguments: { projectId: project.id },
+          }),
+        ).structuredContent.result;
+      const api = `/projects/${project.id}`;
+      if (destination !== "new") {
+        const response = await fixture.request(`${api}/commands`, "POST", {
+          expectedRevision: (await read()).revision,
+          commands: [{ type: "setTrack", index: 3, kind: "audio" }],
+        });
+        expect(response.status).toBe(200);
+      }
+      const before = await read();
+      const copy = copied.parse(
+        await client.callTool({
+          name: "timeline_copy",
+          arguments: {
+            projectId: project.id,
+            expectedRevision: before.revision,
+            clipIds: ["picture"],
+          },
+        }),
+      ).structuredContent.result;
+      const commands = [{ type: "paste", clipboardId: copy.id, at: 135 }];
+      for (const route of ["http", "mcp"]) {
+        const edited =
+          route === "http"
+            ? TimelineViewSchema.parse(
+                await (
+                  await fixture.request(`${api}/commands`, "POST", {
+                    expectedRevision: (await read()).revision,
+                    commands,
+                  })
+                ).json(),
+              )
+            : result.parse(
+                await client.callTool({
+                  name: "timeline_edit",
+                  arguments: {
+                    projectId: project.id,
+                    expectedRevision: (await read()).revision,
+                    commands,
+                  },
+                }),
+              ).structuredContent.result;
+        expect(
+          edited.timeline.clips.filter((clip) => clip.link === "other"),
+        ).toEqual(
+          before.timeline.clips.filter((clip) => clip.link === "other"),
+        );
+        const picture = edited.timeline.clips.find(
+          (clip) => clip.kind === "video" && clip.start === 135,
+        )!;
+        expect(picture).toMatchObject({ track: 1, duration: 30 });
+        const sound = edited.timeline.clips.find(
+          (clip) => clip.kind === "audio" && clip.link === picture.link,
+        )!;
+        expect(sound).toMatchObject({
+          track: destination === "partner" ? 4 : 3,
+          start: 135,
+          duration: 30,
+        });
+        if (destination === "partner")
+          expect(
+            edited.timeline.clips
+              .filter((clip) => clip.id.startsWith("destination"))
+              .map((clip) => [clip.track, clip.start, clip.duration]),
+          ).toEqual([
+            [1, 120, 15],
+            [1, 165, 15],
+            [4, 120, 15],
+            [4, 165, 15],
+          ]);
+        expect((await read()).timeline).toEqual(edited.timeline);
+        await fixture.request(`${api}/history/undo`, "POST");
+        expect((await read()).timeline).toEqual(before.timeline);
+      }
+    } finally {
+      await client.close();
+      await server.stop(true);
+      await fixture.close();
+    }
+  });
+}
+
 test("MCP clipboard snapshots survive cuts and timeline switches, paste once, and refuse other projects", async () => {
   const fixture = await timelineFixture();
   const { project } = fixture;

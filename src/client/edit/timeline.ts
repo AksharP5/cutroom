@@ -7,6 +7,7 @@ import {
   copyClips,
   randomClipId,
 } from "../../shared/timeline/apply";
+import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   CommandSchema,
   ClipboardSchema,
@@ -121,6 +122,7 @@ export function afterTimelineEdits<T>(
 function name(commands: Command[], timeline: Timeline) {
   let current = timeline;
   const creates = new Set<string>();
+  const origins = new Map<string, ClipOrigin>();
   const named = commands.map((command): Command => {
     // Positional edits can cut new pieces, including moves that overwrite a spanning clip.
     if (
@@ -142,6 +144,7 @@ function name(commands: Command[], timeline: Timeline) {
       clipboards,
       onCreate: (id, origin) => {
         creates.add(id);
+        origins.set(id, origin);
         if (command.type !== "insert" || !("insert" in origin)) return;
         if (origin.insert.kind === command.clip.kind) clipId = id;
         else audioId = id;
@@ -162,7 +165,7 @@ function name(commands: Command[], timeline: Timeline) {
         }
       : { ...command, ids };
   });
-  return { commands: named, creates, timeline: current };
+  return { commands: named, creates, origins, timeline: current };
 }
 
 /**
@@ -343,7 +346,11 @@ export async function editTimeline(
   /** A mouse gesture keeps the timeline it was pressed on, even across server answers. */
   basis?: Timeline,
   /** Runs with the accepted optimistic edit, before another key can act on it. */
-  onApply?: (timeline: Timeline, commands: readonly Command[]) => void,
+  onApply?: (
+    timeline: Timeline,
+    commands: readonly Command[],
+    origins: ReadonlyMap<string, ClipOrigin>,
+  ) => void,
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
@@ -384,7 +391,7 @@ export async function editTimeline(
     const made = edit;
     useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
-    onApply?.(timeline, commands);
+    onApply?.(timeline, commands, named.origins);
     let report = "";
     await enqueue(async () => {
       // An edit that made a clip this one names was refused, and both were taken back.
@@ -513,9 +520,23 @@ export function clipboardEdit(
         showToast("Copy clips before pasting.");
         return;
       }
-      await editTimeline(projectId, "Pasted clips", () => [
-        { type: "paste", clipboardId, at, mode: action },
-      ]);
+      await editTimeline(
+        projectId,
+        "Pasted clips",
+        () => [{ type: "paste", clipboardId, at, mode: action }],
+        undefined,
+        (_timeline, _commands, origins) => {
+          // Destination heads and tails are new pieces too; select only the clipboard copies.
+          const ids = new Set(
+            [...origins].flatMap(([id, origin]) =>
+              "clipboardId" in origin ? [id] : [],
+            ),
+          );
+          useTimeline.setState({
+            selection: { ids, anchor: [...ids][0] ?? null },
+          });
+        },
+      );
     })
     .catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : String(error));

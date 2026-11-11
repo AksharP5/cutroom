@@ -45,8 +45,8 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
       `<main$1data-duration="12"$2>
     <video src="source.mp4" muted id="picture" class="clip" data-label="Picture" data-start="0" data-duration="2" data-track-index="0" data-link="pair"></video>
     <audio src="source.mp4" id="sound" class="clip" data-label="Sound" data-start="0.5" data-duration="2" data-track-index="1" data-link="pair"></audio>
-    <video src="source.mp4" muted id="destination" class="clip" data-label="Destination" data-start="3" data-duration="6" data-track-index="0"></video>
-    <audio src="source.mp4" id="destination-sound" class="clip" data-start="3" data-duration="6" data-track-index="1"></audio>
+    <video src="source.mp4" muted id="destination" class="clip" data-label="Destination" data-start="3" data-duration="6" data-track-index="0" data-link="destination-pair"></video>
+    <audio src="source.mp4" id="destination-sound" class="clip" data-start="3" data-duration="6" data-track-index="1" data-link="destination-pair"></audio>
     </main>`,
     ),
   );
@@ -69,6 +69,35 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
   const undo = async () => {
     await page.keyboard.press("Control+z");
     await expect.poll(read).toEqual(before);
+  };
+  const liftPasted = async () => {
+    const pasted = await read();
+    const copies = pasted.clips.filter(
+      (clip) =>
+        clip.start >= 120 &&
+        (clip.label === "Picture" || clip.label === "Sound"),
+    );
+    expect(copies).toHaveLength(2);
+    await expect(timeline.locator("[data-clip].selected")).toHaveCount(2);
+    for (const clip of copies)
+      await expect(timeline.locator(`[data-clip="${clip.id}"]`)).toHaveClass(
+        /selected/,
+      );
+    await page.keyboard.press("x");
+    await expect
+      .poll(async () => (await read()).clips)
+      .toEqual(pasted.clips.filter((clip) => !copies.includes(clip)));
+    expect(
+      (await read()).clips.filter(
+        (clip) => clip.id === "picture" || clip.id === "sound",
+      ),
+    ).toEqual(
+      before.clips.filter(
+        (clip) => clip.id === "picture" || clip.id === "sound",
+      ),
+    );
+    await page.keyboard.press("Control+z");
+    await expect.poll(read).toEqual(pasted);
   };
   await timeline.locator('[data-clip="picture"]').click();
   // Delayed copy proves an immediate paste waits for its snapshot, even after deselection.
@@ -98,6 +127,7 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
   expect(pasted[0]!.link).not.toBe("pair");
   await expect(timeline.locator("[data-clip]")).toHaveCount(8);
   await page.screenshot({ path: testInfo.outputPath("after-overwrite.png") });
+  await liftPasted();
   await undo();
 
   await timeline.locator('[data-clip="picture"]').click();
@@ -108,6 +138,7 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
   await undo();
 
   // Cut left the clipboard intact. Paste Insert opens its full 75-frame span once.
+  await timeline.locator('[data-clip="picture"]').click();
   await seek();
   await page.keyboard.press("Control+Shift+v");
   await expect.poll(async () => (await read()).clips.length).toBe(8);
@@ -125,6 +156,7 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
   ]);
   await expect(timeline.locator("[data-clip]")).toHaveCount(8);
   await page.screenshot({ path: testInfo.outputPath("after-insert.png") });
+  await liftPasted();
   await undo();
 
   // Typing and open dialogs keep their ordinary clipboard keys.

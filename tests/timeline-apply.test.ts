@@ -1531,6 +1531,160 @@ test("setMarker on an existing marker changes only the fields it names", () => {
   ).toBe("unsupported");
 });
 
+for (const destination of ["new", "free", "partner"] as const) {
+  test(`paste overwrite routes linked sound to a ${destination} track without cutting another pair`, () => {
+    const state = timeline(
+      [
+        clip("picture", 1, 0, 30, { link: "source" }),
+        clip("sound", 2, 0, 30, { kind: "audio", link: "source" }),
+        clip("other-picture", 0, 120, 60, { link: "other" }),
+        clip("other-sound", 2, 120, 60, { kind: "audio", link: "other" }),
+        ...(destination === "partner"
+          ? [
+              clip("destination", 1, 120, 60, { link: "destination" }),
+              clip("destination-sound", 4, 120, 60, {
+                kind: "audio",
+                link: "destination",
+              }),
+            ]
+          : []),
+      ],
+      destination === "new" ? [] : [{ index: 3, kind: "audio" }],
+    );
+    const next = applyAll(
+      state,
+      [CommandSchema.parse({ type: "paste", clipboardId: "copy", at: 135 })],
+      {
+        clipboards: new Map([["copy", copyClips(state, ["picture"])]]),
+        newId: countingIds,
+      },
+    );
+    expect(next.clips.filter((clip) => clip.link === "other")).toEqual(
+      state.clips.filter((clip) => clip.link === "other"),
+    );
+    expect(next.clips.find((clip) => clip.id === "picture-2")).toMatchObject({
+      track: 1,
+      start: 135,
+      duration: 30,
+    });
+    expect(next.clips.find((clip) => clip.id === "sound-2")).toMatchObject({
+      track: destination === "partner" ? 4 : 3,
+      start: 135,
+      duration: 30,
+    });
+    if (destination === "partner")
+      expect(
+        next.clips
+          .filter((clip) => clip.id.startsWith("destination"))
+          .map((clip) => [clip.track, clip.start, clip.duration]),
+      ).toEqual([
+        [1, 120, 15],
+        [1, 165, 15],
+        [4, 120, 15],
+        [4, 165, 15],
+      ]);
+    else
+      expect(next.tracks).toHaveLength(
+        destination === "new" ? 4 : state.tracks.length,
+      );
+  });
+}
+
+test("paste into an empty composition retains picture tracks and reserves standalone audio before routing sound", () => {
+  const source = timeline([
+    clip("picture", 0, 0, 30, { link: "source" }),
+    clip("title", 1, 0, 30, { kind: "element", src: null, mediaStart: null }),
+    clip("sound", 3, 0, 30, { kind: "audio", link: "source" }),
+    clip("voice", 2, 0, 30, { kind: "audio" }),
+  ]);
+  for (const audioTrack of [3, 4]) {
+    const pasted = applyAll(
+      timeline([], audioTrack === 4 ? [{ index: 4, kind: "audio" }] : []),
+      [CommandSchema.parse({ type: "paste", clipboardId: "copy", at: 135 })],
+      { clipboards: new Map([["copy", source.clips]]), newId: countingIds },
+    );
+    expect(positions(pasted)).toEqual({
+      "picture-2": [0, 135, 30],
+      "title-2": [1, 135, 30],
+      "voice-2": [2, 135, 30],
+      "sound-2": [audioTrack, 135, 30],
+    });
+    expect(pasted.tracks.map((track) => [track.index, track.kind])).toEqual([
+      [0, "video"],
+      [1, "video"],
+      [2, "audio"],
+      [audioTrack, "audio"],
+    ]);
+  }
+});
+
+test("linked paste needs room for the whole J-cut sound span and skips locked or music tracks", () => {
+  const state = timeline(
+    [
+      clip("picture", 1, 30, 30, { link: "source" }),
+      clip("sound", 2, 0, 90, { kind: "audio", link: "source" }),
+      clip("other-picture", 0, 120, 30, { link: "other" }),
+      clip("other-sound", 2, 120, 30, { kind: "audio", link: "other" }),
+      clip("music", 4, 0, 30, { kind: "audio" }),
+    ],
+    [{ index: 3, kind: "audio", locked: true }],
+  );
+  const pasted = applyAll(
+    state,
+    [CommandSchema.parse({ type: "paste", clipboardId: "copy", at: 135 })],
+    {
+      clipboards: new Map([["copy", copyClips(state, ["picture"])]]),
+      newId: countingIds,
+    },
+  );
+  expect(pasted.clips.find((clip) => clip.id === "sound-2")).toMatchObject({
+    track: 5,
+    start: 135,
+    duration: 90,
+  });
+  expect(
+    pasted.clips.filter((clip) => clip.link === "other" || clip.id === "music"),
+  ).toEqual(
+    state.clips.filter((clip) => clip.link === "other" || clip.id === "music"),
+  );
+});
+
+test("standalone audio paste keeps the same overwrite semantics as an audio drop", () => {
+  const state = timeline([
+    clip("sound", 1, 0, 30, { kind: "audio", hasAudio: true }),
+    clip("picture", 0, 120, 60, { link: "other" }),
+    clip("other-sound", 1, 120, 60, { kind: "audio", link: "other" }),
+  ]);
+  const pasted = applyAll(
+    state,
+    [CommandSchema.parse({ type: "paste", clipboardId: "copy", at: 135 })],
+    {
+      clipboards: new Map([["copy", copyClips(state, ["sound"])]]),
+      newId: countingIds,
+    },
+  );
+  const dropped = run(state, {
+    type: "insert",
+    mode: "overwrite",
+    track: 1,
+    at: 135,
+    clip: { kind: "audio", src: "talk.mp4", duration: 30 },
+  });
+  expect(
+    pasted.clips
+      .filter((clip) => clip.track === 1)
+      .map((clip) => [clip.start, clip.duration]),
+  ).toEqual([
+    [0, 30],
+    [120, 15],
+    [135, 30],
+    [165, 15],
+  ]);
+  expect(pasted.clips.filter((clip) => clip.link === "other")).toEqual(
+    dropped.clips.filter((clip) => clip.link === "other"),
+  );
+});
+
 test("paste keeps relative timing and J-cut partners on their tracks with fresh ids and links", () => {
   const state = timeline([
     clip("picture", 0, 30, 60, { link: "pair" }),
