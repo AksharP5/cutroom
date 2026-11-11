@@ -32,6 +32,51 @@ const reads = [
   "timeline_view",
 ];
 
+// Queue status only: nothing in the project or outside it can change.
+const bookkeeping = [
+  "review_claim",
+  "review_complete",
+  "review_block",
+  "review_release",
+];
+
+test("claiming, finishing, blocking, and releasing a note never ask, while edits, withdrawals, and exports still do", () => {
+  const asks = (name: string, always = false) => ({
+    claude: !claudeToolPermissions(always).allowedTools.includes(
+      `mcp__cutroom_studio__${name}`,
+    ),
+    codex:
+      codexToolPermissions(always)[
+        `mcp_servers.cutroom_studio.tools.${name}.approval_mode`
+      ] === "prompt",
+  });
+  for (const name of bookkeeping)
+    expect(asks(name)).toEqual({ claude: false, codex: false });
+  for (const name of [
+    "timeline_edit",
+    "source_write",
+    "transcript_edit",
+    "history_undo",
+    "review_add",
+    "review_withdraw",
+    "annotation_remove",
+    "export_start",
+    "export_cancel",
+    "project_create",
+    "project_import",
+  ])
+    expect(asks(name)).toEqual({ claude: true, codex: true });
+  // The owner's own native rule still wins over Cutroom's default.
+  expect(
+    codexToolPermissions(false, [
+      { tools: { review_claim: { approval_mode: "prompt" } } },
+    ])["mcp_servers.cutroom_studio.tools.review_claim.approval_mode"],
+  ).toBe("prompt");
+  // Export and project creation reach beyond the project, so not even Always allow covers them.
+  for (const name of ["export_start", "export_cancel", "project_create"])
+    expect(asks(name, true)).toEqual({ claude: true, codex: true });
+});
+
 test("native permission rules match every tool advertised over MCP", async () => {
   const server = createMcpServer();
   const client = new Client({ name: "permissions-test", version: "1" });
@@ -52,6 +97,7 @@ test("native permission rules match every tool advertised over MCP", async () =>
         const name = `mcp__cutroom_studio__${tool.name}`;
         const allowed =
           reads.includes(tool.name) ||
+          bookkeeping.includes(tool.name) ||
           (always && !unscoped.includes(tool.name));
         expect(claude.allowedTools.includes(name)).toBe(allowed);
         expect(

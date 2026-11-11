@@ -8,12 +8,16 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
+import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
+import type { ToolNames } from "./tool-subject";
 
 export interface RuntimeOptions {
   cwd: string;
   /** Identifies this conversation's review actions; its MCP bridge sends it with every call. */
   agentToken: string;
   allowCutroomEdits?: () => boolean;
+  /** What the editor calls the notes, clips, and transcripts a tool call names by id. */
+  names?: ToolNames;
   model?: string;
   nativeSessionId?: string;
   emit: (event: AgentEvent) => void;
@@ -76,8 +80,17 @@ export function completeMessage(
 export function toolCalls(cwd: string) {
   const calls = new Map<string, { name: string; target?: string }>();
   return {
-    start(id: string, name: string, input: unknown): AgentMessage {
-      const target = toolTarget(input, cwd);
+    /** `subject` names what one of Cutroom's own tools acts on; native tools name a file or command. */
+    start(
+      id: string,
+      name: string,
+      input: unknown,
+      subject?: string,
+    ): AgentMessage {
+      const target =
+        parseTool(name).server === CUTROOM_SERVER
+          ? subject
+          : toolTarget(input, cwd);
       calls.set(id, { name, target });
       return {
         ...completeMessage(

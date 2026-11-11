@@ -23,6 +23,23 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
       !isSchemaOptional(projectId),
   };
 });
+/**
+ * Review bookkeeping: these only move a note between queue states in `.cutroom/review.json`,
+ * outside project content and its undo history. Nothing a render, the timeline, or a file
+ * outside the project shows can change, so they run without approval, as reads do.
+ * Withdrawing stays out: it cancels a request the owner made.
+ */
+const bookkeepingTools = new Set([
+  "review_claim",
+  "review_complete",
+  "review_block",
+  "review_release",
+]);
+/** Whether a tool runs without asking: reads, bookkeeping, and edits the owner always allows. */
+const runsFreely = (tool: (typeof tools)[number], always: boolean) =>
+  tool.readOnly ||
+  bookkeepingTools.has(tool.name) ||
+  (always && tool.projectScoped);
 const editTools = new Set(
   tools
     .filter((tool) => !tool.readOnly && tool.projectScoped)
@@ -40,7 +57,7 @@ export function claudeToolPermissions(always = false) {
   // Creation/import have no existing project and always require approval.
   return {
     allowedTools: tools
-      .filter((tool) => tool.readOnly || (always && tool.projectScoped))
+      .filter((tool) => runsFreely(tool, always))
       .map(({ name }) => `mcp__cutroom_studio__${name}`),
     settings: {
       permissions: {
@@ -104,13 +121,11 @@ export function codexToolPermissions(
   return {
     "mcp_servers.cutroom_studio.default_tools_approval_mode": "prompt",
     ...Object.fromEntries(
-      tools.map(({ name, readOnly, projectScoped }) => [
-        `mcp_servers.cutroom_studio.tools.${name}.approval_mode`,
-        codexAsks(configs, name)
-          ? "prompt"
-          : readOnly || (always && projectScoped)
-            ? "approve"
-            : "prompt",
+      tools.map((tool) => [
+        `mcp_servers.cutroom_studio.tools.${tool.name}.approval_mode`,
+        !codexAsks(configs, tool.name) && runsFreely(tool, always)
+          ? "approve"
+          : "prompt",
       ]),
     ),
   };

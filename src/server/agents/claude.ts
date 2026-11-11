@@ -12,6 +12,7 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolApproval } from "./tool-approval";
+import { toolSubject } from "./tool-subject";
 import {
   claudeToolPermissions,
   claudeEditPermission,
@@ -196,7 +197,12 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
     // "Write index.html?" rather than the tool's internal name.
-    const approval = toolApproval(tool, input, this.options.cwd);
+    const approval = await toolApproval(
+      tool,
+      input,
+      this.options.cwd,
+      this.options.names,
+    );
     const target = approval.target;
     const questions =
       tool === "AskUserQuestion"
@@ -211,6 +217,7 @@ export class ClaudeRuntime implements AgentRuntime {
       title:
         tool === "AskUserQuestion" ? "Claude has a question" : approval.title,
       input: approval.input,
+      ...(approval.detail ? { detail: approval.detail } : {}),
       ...(target ? { target } : {}),
       ...(questions?.success
         ? {
@@ -300,7 +307,8 @@ export class ClaudeRuntime implements AgentRuntime {
   }
 
   private async read(session: Query) {
-    for await (const message of session) this.receive(message);
+    // One at a time: naming a tool call reads the project, and rows must keep their order.
+    for await (const message of session) await this.receive(message);
     if (!this.disposed) {
       const error = new Error(
         "The Claude Code connection closed. Send a message to reconnect.",
@@ -310,7 +318,7 @@ export class ClaudeRuntime implements AgentRuntime {
     }
   }
 
-  private receive(message: SDKMessage) {
+  private async receive(message: SDKMessage) {
     if (
       "session_id" in message &&
       message.session_id &&
@@ -375,7 +383,12 @@ export class ClaudeRuntime implements AgentRuntime {
         if (block.type !== "tool_use") continue;
         this.options.emit({
           type: "message",
-          message: this.tools.start(block.id, block.name, block.input),
+          message: this.tools.start(
+            block.id,
+            block.name,
+            block.input,
+            await toolSubject(block.name, block.input, this.options.names),
+          ),
         });
       }
       return;

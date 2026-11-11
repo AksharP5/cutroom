@@ -21,6 +21,7 @@ import type { ProjectStore } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { createNativeRuntimeFactory } from "./factory";
 import { isCutroomEdit } from "./tool-permissions";
+import { projectNames } from "./tool-subject";
 import { completeMessage } from "./runtime";
 import type { AgentRuntime, RuntimeFactory } from "./runtime";
 
@@ -446,6 +447,11 @@ export class AgentService {
         nativeSessionId: session.nativeSessionId,
         agentToken: this.agentToken(id),
         allowCutroomEdits: () => this.cutroomEdits[session.projectId] === true,
+        names: projectNames(
+          this.options.projects,
+          this.options.review,
+          project,
+        ),
         emit: (event) => {
           if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
             return;
