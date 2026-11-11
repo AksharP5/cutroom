@@ -1181,3 +1181,157 @@ test("every piece a command cuts takes the caller's ids in order, and spent ids 
     }),
   ).toThrow("Id old was used earlier in this project.");
 });
+
+test("video overwrite clears matching picture-sound ranges, including fully covered picture, without rippling music", () => {
+  for (const duration of [60, 180]) {
+    const state = timeline([
+      clip("interview", 0, 30, 120, { link: "interview" }),
+      clip("dialogue", 1, 0, 180, { kind: "audio", link: "interview" }),
+      clip("music", 2, 0, 300, { kind: "audio" }),
+      clip("later", 0, 240, 30),
+    ]);
+    const next = run(state, {
+      type: "insert",
+      mode: "overwrite",
+      track: 0,
+      at: 0,
+      clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration },
+      linkedAudio: { id: "b-roll-audio" },
+    });
+    expect(next.clips.find((clip) => clip.id === "b-roll-audio")).toMatchObject(
+      {
+        track: 1,
+        start: 0,
+        duration,
+        link: "b-roll",
+      },
+    );
+    expect(next.clips.find((clip) => clip.id === "music")).toEqual(
+      state.clips.find((clip) => clip.id === "music"),
+    );
+    expect(next.clips.find((clip) => clip.id === "later")).toEqual(
+      state.clips.find((clip) => clip.id === "later"),
+    );
+    if (duration === 180) {
+      expect(
+        next.clips.some(
+          (clip) => clip.id === "interview" || clip.id === "dialogue",
+        ),
+      ).toBe(false);
+    } else {
+      expect(next.clips.find((clip) => clip.id === "interview")).toMatchObject({
+        start: 60,
+        duration: 90,
+        mediaStart: 1,
+      });
+      expect(next.clips.find((clip) => clip.id === "dialogue")).toMatchObject({
+        start: 60,
+        duration: 120,
+        mediaStart: 2,
+      });
+    }
+  }
+});
+
+test("video overwrite routes sound to the overwritten picture's partner instead of another pair", () => {
+  for (const duration of [60, 180]) {
+    const state = timeline([
+      clip("background", 0, 0, 300, { link: "background" }),
+      clip("background-sound", 2, 0, 300, {
+        kind: "audio",
+        link: "background",
+      }),
+      clip("interview", 1, 30, 120, { link: "interview" }),
+      clip("dialogue", 3, 0, 180, { kind: "audio", link: "interview" }),
+    ]);
+    const command: CommandInput = {
+      type: "insert",
+      mode: "overwrite",
+      track: 1,
+      at: 0,
+      clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration },
+      linkedAudio: { id: "b-roll-audio" },
+    };
+    const next = run(state, command);
+    expect(
+      next.clips.filter((clip) => clip.track === 0 || clip.track === 2),
+    ).toEqual(
+      state.clips.filter((clip) => clip.track === 0 || clip.track === 2),
+    );
+    expect(next.clips.find((clip) => clip.id === "b-roll-audio")).toMatchObject(
+      {
+        track: 3,
+        start: 0,
+        duration,
+        link: "b-roll",
+      },
+    );
+    expect(
+      next.clips
+        .filter((clip) => clip.src === "talk.mp4" && clip.track === 3)
+        .map((clip) => [clip.start, clip.duration]),
+    ).toEqual(duration === 180 ? [] : [[60, 120]]);
+    expect(
+      failure(() =>
+        run(state, { type: "setTrack", index: 3, locked: true }, command),
+      ),
+    ).toBe("locked");
+  }
+});
+
+test("overwriting a silent picture never cuts another picture's sound on the fallback track", () => {
+  const state = timeline([
+    clip("talk", 0, 0, 180, { link: "talk" }),
+    clip("talk-sound", 2, 0, 180, { kind: "audio", link: "talk" }),
+    clip("title", 1, 100, 100),
+  ]);
+  const next = run(state, {
+    type: "insert",
+    mode: "overwrite",
+    track: 1,
+    at: 120,
+    clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration: 60 },
+    linkedAudio: { id: "b-roll-sound" },
+  });
+  // The dialogue under the drop is another pair's sound: it stays whole.
+  expect(next.clips.find((clip) => clip.id === "talk-sound")).toEqual(
+    state.clips.find((clip) => clip.id === "talk-sound"),
+  );
+  const sound = next.clips.find((clip) => clip.id === "b-roll-sound")!;
+  expect(sound.track).not.toBe(2);
+  expect(
+    next.clips.some(
+      (clip) =>
+        clip.id !== sound.id &&
+        clip.track === sound.track &&
+        clip.start < sound.start + sound.duration &&
+        clip.start + clip.duration > sound.start,
+    ),
+  ).toBe(false);
+});
+
+test("overwrite keeps the existing audio fallback without a partner and refuses multiple partner destinations", () => {
+  const state = timeline([
+    clip("first", 0, 0, 30, { link: "first" }),
+    clip("first-sound", 2, 0, 30, { kind: "audio", link: "first" }),
+    clip("second", 0, 30, 30, { link: "second" }),
+    clip("second-sound", 3, 30, 30, { kind: "audio", link: "second" }),
+    clip("music", 4, 0, 300, { kind: "audio" }),
+  ]);
+  const command: CommandInput = {
+    type: "insert",
+    mode: "overwrite",
+    track: 0,
+    at: 90,
+    clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration: 60 },
+    linkedAudio: { id: "b-roll-sound" },
+  };
+  const fallback = run(state, command);
+  expect(
+    fallback.clips.find((clip) => clip.id === "b-roll-sound"),
+  ).toMatchObject({ track: 2 });
+  expect(fallback.clips.filter((clip) => clip.src === "talk.mp4")).toEqual(
+    state.clips,
+  );
+  expect(failure(() => run(state, { ...command, at: 0 }))).toBe("unsupported");
+});

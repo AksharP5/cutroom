@@ -1040,3 +1040,125 @@ test("MCP gain, authored fades and cleared automation read back exactly and undo
     await fixture.close();
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "MCP keeps place as the default and routes explicit V2 overwrite to A2, preserving V1/A1",
+  async () => {
+    const fixture = await timelineFixture();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({ name: "two-pair-overwrite", version: "1.0.0" });
+    const result = z.object({
+      structuredContent: z.object({ result: TimelineViewSchema }),
+    });
+    const { id, path } = fixture.project;
+    const read = async () =>
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: id },
+        }),
+      ).structuredContent.result;
+    try {
+      const media = Bun.spawnSync(
+        [
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "color=c=blue:s=64x36:r=30:d=1",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=1",
+          "-shortest",
+          join(path, "sound.mp4"),
+        ],
+        { stderr: "pipe" },
+      );
+      expect(media.exitCode).toBe(0);
+      const index = join(path, "index.html");
+      await writeFile(
+        index,
+        (await readFile(index, "utf8")).replace(
+          /<main[^>]*>[\s\S]*<\/main>/,
+          `<main id="main" data-composition-id="main" data-fps="30" data-duration="1">
+<video id="background" src="sound.mp4" data-start="0" data-duration="1" data-track-index="0" data-link="background" muted></video>
+<video id="interview" src="sound.mp4" data-start="0" data-duration="1" data-track-index="1" data-link="interview" muted></video>
+<audio id="background-sound" src="sound.mp4" data-start="0" data-duration="1" data-track-index="2" data-link="background"></audio>
+<audio id="dialogue" src="sound.mp4" data-start="0" data-duration="1" data-track-index="3" data-link="interview"></audio></main>`,
+        ),
+      );
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const before = await fixture.files();
+      const initial = await read();
+      const insert = {
+        type: "insert",
+        track: 1,
+        at: 10,
+        clip: { id: "b-roll", kind: "video", src: "sound.mp4", duration: 10 },
+        linkedAudio: { id: "b-roll-sound" },
+      };
+      const refused = await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: id,
+          expectedRevision: initial.revision,
+          commands: [insert],
+        },
+      });
+      expect(refused.isError).toBe(true);
+      expect(await read()).toEqual(initial);
+      expect(await fixture.files()).toEqual(before);
+      const edited = result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: id,
+            expectedRevision: initial.revision,
+            commands: [{ ...insert, mode: "overwrite" }],
+          },
+        }),
+      ).structuredContent.result;
+      expect(edited.timeline.tracks).toEqual(initial.timeline.tracks);
+      expect(
+        edited.timeline.clips.filter((c) => c.track === 0 || c.track === 2),
+      ).toEqual(
+        initial.timeline.clips.filter((c) => c.track === 0 || c.track === 2),
+      );
+      expect(
+        edited.timeline.clips
+          .filter((c) => [1, 3].includes(c.track))
+          .map((c) => [c.track, c.start, c.duration]),
+      ).toEqual([
+        [1, 0, 10],
+        [1, 10, 10],
+        [1, 20, 10],
+        [3, 0, 10],
+        [3, 10, 10],
+        [3, 20, 10],
+      ]);
+      expect(
+        edited.timeline.clips.find((c) => c.id === "b-roll-sound"),
+      ).toMatchObject({ track: 3, link: "b-roll" });
+      expect(await read()).toEqual(edited);
+      await fixture.request(`/projects/${id}/history/undo`, "POST");
+      expect(await fixture.files()).toEqual(before);
+    } finally {
+      await client.close();
+      server.stop(true);
+      await fixture.close();
+    }
+  },
+);

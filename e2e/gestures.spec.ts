@@ -664,9 +664,32 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   ];
   await expect.poll(read).toEqual(placed);
 
-  // Over a clip it is inserted: the cut it lands on opens, and every track makes room.
+  // Overwrite is the default. The interview's tail keeps its original end.
   await hold(() => at(92));
   await page.mouse.up();
+  await expect
+    .poll(read)
+    .toEqual([
+      shots[0],
+      [expect.stringMatching(/^red-[a-z0-9]{6}$/), 0, 90, 60],
+      ["shot-2", 0, 150, 30],
+      shots[2],
+      shots[3],
+      [expect.stringMatching(/^red-[a-z0-9]{6}$/), 0, 420, 60],
+      title,
+    ]);
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toEqual(placed);
+
+  // Ctrl+Shift explicitly inserts and opens the auto-select tracks.
+  await hold(() => at(90));
+  await page.keyboard.down("Control");
+  await page.keyboard.down("Shift");
+  const insertPoint = await at(90.5);
+  await page.mouse.move(insertPoint.x, insertPoint.y);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await page.keyboard.up("Control");
   await expect
     .poll(read)
     .toEqual([

@@ -476,8 +476,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
       if (separate) {
+        // Overwrite may have removed a linked video entirely; classify sound from the input.
         const pictureLinks = new Set(
-          next
+          clips
             .filter((clip) => clip.kind === "video" && clip.link !== null)
             .map((clip) => clip.link),
         );
@@ -485,22 +486,58 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           command.linkedAudio?.id === undefined
             ? mint.name(`${slug(input.src, "audio")}-audio`, null)
             : claim(command.linkedAudio.id);
-        let destination = tracks.find(
-          (candidate) =>
-            candidate.kind === "audio" &&
-            !candidate.locked &&
-            next.every(
-              (clip) =>
-                clip.track !== candidate.index ||
-                (clip.link !== null && pictureLinks.has(clip.link)),
-            ) &&
-            !next.some(
-              (clip) =>
-                clip.track === candidate.index &&
-                clip.start < end &&
-                clipEnd(clip) > at,
-            ),
+        // Read links before clearing picture: a full overwrite can remove the partner's link.
+        const overwrittenLinks = new Set(
+          mode === "overwrite"
+            ? clips
+                .filter(
+                  (clip) =>
+                    clip.track === track &&
+                    clip.kind === "video" &&
+                    clip.start < end &&
+                    clipEnd(clip) > at,
+                )
+                .flatMap((clip) => clip.link ?? [])
+            : [],
         );
+        const partnerTracks = new Set(
+          clips
+            .filter(
+              (clip) =>
+                isAudioKind(clip.kind) &&
+                clip.link !== null &&
+                overwrittenLinks.has(clip.link),
+            )
+            .map((clip) => clip.track),
+        );
+        if (partnerTracks.size > 1)
+          throw new TimelineError(
+            "unsupported",
+            "The overwritten pictures have sound on different tracks. Overwrite one linked pair at a time.",
+          );
+        // Only the overwritten picture's own sound is replaced. Any other destination must be free
+        // over the drop, so a fallback never cuts another clip's audio.
+        const partner = tracks.find((candidate) =>
+          partnerTracks.has(candidate.index),
+        );
+        let destination =
+          partner ??
+          tracks.find(
+            (candidate) =>
+              candidate.kind === "audio" &&
+              !candidate.locked &&
+              clips.every(
+                (clip) =>
+                  clip.track !== candidate.index ||
+                  (clip.link !== null && pictureLinks.has(clip.link)),
+              ) &&
+              !next.some(
+                (clip) =>
+                  clip.track === candidate.index &&
+                  clip.start < end &&
+                  clipEnd(clip) > at,
+              ),
+          );
         if (!destination) {
           destination = newTrack(
             Math.max(track + 1, nextTrackIndex(tracks)),
@@ -508,6 +545,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
           tracks = [...tracks, destination];
         }
+        if (partner) next = clearRange(next, partner.index, at, end, fps, mint);
         onCreate(audioId, { insert: { ...input, kind: "audio", id: audioId } });
         audio = [
           {

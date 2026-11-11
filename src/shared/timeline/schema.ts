@@ -240,7 +240,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .enum(["place", "overwrite", "insert"])
         .default("place")
         .describe(
-          "place refuses overlaps, overwrite replaces the range on the track, insert splits and shifts unlocked auto-select tracks",
+          "Defaults to place, which refuses overlaps. Unlike UI media drops, agents must explicitly choose overwrite to replace destination frames. insert splits and shifts unlocked auto-select tracks.",
         ),
       track: frame,
       at: frame,
@@ -249,7 +249,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .object({ id: clipId.optional() })
         .optional()
         .describe(
-          "Optional id for video's linked audio clip. Video inserts split sound onto the first free unlocked audio track by default, creating a track if needed. Silent sources and clip.muted=true stay video-only.",
+          "Optional id for video's linked audio clip. Overwrite routes sound to the overwritten picture's linked audio track, refusing locked or multiple partner destinations. With no overwritten partner, use the first unlocked audio track that contains only linked picture sound and is free over the whole interval, creating one if needed; that fallback never cuts existing audio. place and insert also require room for the full interval after any ripple. Silent sources and clip.muted=true stay video-only.",
         ),
       ids: pieceIds,
     })

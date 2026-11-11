@@ -81,7 +81,9 @@ A press becomes a drag after 3px. Esc cancels a drag and changes nothing else: t
 
 With snapping on, a dragged edge within 8px of a clip edge, the playhead, a marker, or in or out jumps to it, and a line marks where. C turns snapping off or on, also in the middle of a drag, as Resolve's snapping key does. Holding Ctrl while dragging turns it off until the key is let go; that hold is Cutroom's, not Resolve's.
 
-Drag a file from Media onto a track to add it, with its first frame under the pointer. In free space it is placed as it is. Over other clips it is inserted there, and every auto-select track opens to make room. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.
+Drag a file from Media onto a track to add it, with its first frame under the pointer. A normal drop overwrites only the covered frames on the destination track. Hold Ctrl+Shift on Windows/Linux or Cmd+Shift on macOS while dropping to insert and open auto-select tracks. Video with sound also overwrites the same range on its linked picture-sound track; music and voice tracks stay in place. Drag picture above the top video track to create a video track, or audio below the last audio track to create an audio track. Existing clips use those same edge bands when moved. An incompatible edge refuses the drop and explains why in the header. Track creation and the drop undo together. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.
+
+Media-drop overwrite and insert modifiers follow the [Resolve 21.1 manual, pages 891-893](https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_21.1_Reference_Manual.pdf#page=891). The owner's Resolve 21.1.2 preset has Insert and Overwrite actions, with no separate mouse-modifier binding. Ctrl/Cmd still bypasses snapping, including during an insert drop.
 
 Shift+8 opens Export, matching `workspacePrimaryWorkspaceDeliver` in the owner's Resolve preset. It has no video-render binding; Ctrl+E exports a Resolve project. When both In and Out exist, Export defaults to that range. Closing the dialog keeps its job running; the Export indicator opens it again.
 

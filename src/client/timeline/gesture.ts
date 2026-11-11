@@ -337,6 +337,8 @@ export function beginDrag(
 }
 
 export interface DragInput {
+  /** Tracks created with this move, in the same undo step. */
+  create?: readonly Track[];
   /** Vertical pointer travel in pixels, for gain. */
   dy?: number;
   /** Actual drawable SVG height, in screen pixels. */
@@ -461,6 +463,11 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
       if (!by && !trackBy) return still("Move");
       // One command carries the whole selection before clearing any destination frames.
       const commands: CommandInput[] = [
+        ...(input.create ?? []).map((track): CommandInput => ({
+          type: "setTrack",
+          index: track.index,
+          kind: track.kind,
+        })),
         {
           type: "move",
           clipIds: named.map((clip) => clip.id),
@@ -598,8 +605,7 @@ export interface DraggedMedia {
 }
 
 /**
- * Dropping media on a track with its first frame under the pointer. Free space takes it as it
- * is (`place`); over other clips it is inserted, and every auto-select track opens to make room.
+ * Dropping media overwrites its destination. Explicit insert opens auto-select tracks instead.
  * Audio on a video track or picture on an audio track is refused, as the engine refuses it.
  */
 export function dropPreview(
@@ -610,6 +616,7 @@ export function dropPreview(
   playhead: number,
   reach: number,
   create: readonly Track[] = [],
+  mode: "overwrite" | "insert" = "overwrite",
 ): Preview {
   const hit = snap(
     [frame, frame + media.frames],
@@ -617,11 +624,6 @@ export function dropPreview(
     reach,
   );
   const at = Math.max(0, frame + (hit?.by ?? 0));
-  const end = at + media.frames;
-  const taken = timeline.clips.some(
-    (clip) =>
-      clip.track === track.index && clip.start < end && clipEnd(clip) > at,
-  );
   const commands: CommandInput[] = [
     ...create.map((track): CommandInput => ({
       type: "setTrack",
@@ -634,7 +636,7 @@ export function dropPreview(
       : []),
     {
       type: "insert",
-      mode: taken ? "insert" : "place",
+      mode,
       track: track.index,
       at,
       clip: {
