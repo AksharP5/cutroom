@@ -1162,3 +1162,88 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
     }
   },
 );
+
+test("MCP reports clips left whole by auto-select edits and refuses an explicit razor", async () => {
+  const fixture = await timelineFixture();
+  const handler = createMcpHttpHandler({
+    fetch: (url, init) => fixture.app.request(url, init),
+  });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+  const client = new Client({ name: "partial-auto-select", version: "1.0.0" });
+  const result = z.object({
+    structuredContent: z.object({ result: TimelineViewSchema }),
+  });
+  const title = `<div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1">Lower third</div>`;
+  const html = `<main data-composition-id="main" data-duration="10" data-fps="30"><video id="shot" src="shot.mp4" muted data-start="2" data-duration="2" data-track-index="0"></video>${title}<script>gsap.to("#lower", {opacity:1});</script></main>`;
+  const index = join(fixture.project.path, "index.html");
+  try {
+    await writeFile(index, html);
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const read = async () =>
+      result.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: fixture.project.id },
+        }),
+      ).structuredContent.result;
+    for (const command of [
+      { type: "split", at: 90 },
+      { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
+      { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
+      { type: "remove", clipIds: ["shot"], ripple: true },
+    ]) {
+      const before = await read();
+      const edited = result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: fixture.project.id,
+            expectedRevision: before.revision,
+            commands: [command],
+          },
+        }),
+      ).structuredContent.result;
+      expect(edited.skippedClips).toEqual([
+        {
+          clipId: "lower",
+          label: "Lower third",
+          reason: expect.stringContaining("animated by its id"),
+        },
+      ]);
+      expect(edited.timeline).not.toEqual(before.timeline);
+      expect(edited.timeline.clips.find((clip) => clip.id === "lower")).toEqual(
+        before.timeline.clips.find((clip) => clip.id === "lower"),
+      );
+      expect(await readFile(index, "utf8")).toContain(title);
+      await fixture.request(
+        `/projects/${fixture.project.id}/history/undo`,
+        "POST",
+        {},
+      );
+      expect((await read()).timeline).toEqual(before.timeline);
+      expect(await readFile(index, "utf8")).toBe(html);
+    }
+    const before = await read();
+    const refused = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: fixture.project.id,
+        expectedRevision: before.revision,
+        commands: [{ type: "split", clipIds: ["lower"], at: 90 }],
+      },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain(
+      "Edit it in the source instead.",
+    );
+    expect((await read()).timeline).toEqual(before.timeline);
+  } finally {
+    await client.close();
+    server.stop(true);
+    await fixture.close();
+  }
+});

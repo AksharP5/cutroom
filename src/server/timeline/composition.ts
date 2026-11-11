@@ -489,7 +489,7 @@ export function parseComposition(
         settings.range.out === null ? null : toFrames(settings.range.out, fps),
     },
   });
-  return {
+  const parsed: ParsedComposition = {
     html,
     timeline,
     roots,
@@ -509,6 +509,24 @@ export function parseComposition(
             element.attrs["data-cutroom-track-stacking"] === undefined),
       )
       .map((element) => html.slice(element.openEnd, element.end)),
+  };
+  parsed.timeline = {
+    ...timeline,
+    clips: timeline.clips.map((clip) => {
+      const restrictions = sourceRestrictions(parsed, clip);
+      return restrictions
+        ? { ...clip, sourceRestrictions: restrictions }
+        : clip;
+    }),
+  };
+  return parsed;
+}
+
+/** Source restrictions describe the current document; they are not authored timeline content. */
+export function timelineContent(timeline: Timeline) {
+  return {
+    ...timeline,
+    clips: timeline.clips.map(({ sourceRestrictions, ...clip }) => clip),
   };
 }
 
@@ -834,6 +852,38 @@ function indentOf(html: string, at: number): string {
   return /^[\t ]*$/.test(indent) ? indent : "";
 }
 
+/** Project source constraints once so browser and server commands make the same decision. */
+function sourceRestrictions(
+  parsed: ParsedComposition,
+  clip: Clip,
+): Clip["sourceRestrictions"] {
+  const element = parsed.elements.get(clip.id)!;
+  try {
+    elementEnd(parsed, element, clip.id);
+  } catch (error) {
+    if (!(error instanceof TimelineError)) throw error;
+    return { copy: error.message, remove: error.message };
+  }
+  const authoredId = element.attrs.id;
+  const escaped = authoredId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reference =
+    escaped && new RegExp(`#${escaped}(?![\\w-])|(["'\`])${escaped}\\1`);
+  if (reference && parsed.scriptsAndStyles.some((text) => reference.test(text)))
+    return {
+      copy: `Clip ${clip.id} is styled or animated by its id, so a cut copy would lose that. Edit it in the source instead.`,
+    };
+  const source = parsed.html.slice(element.start, element.end);
+  if (
+    scanHtmlOpeningTags(source)
+      .slice(1)
+      .some((span) => span.attributes.some((item) => item.name === "id"))
+  )
+    return {
+      copy: `Clip ${clip.id} contains elements with ids, which a cut copy would duplicate. Edit it in the source instead.`,
+    };
+  return undefined;
+}
+
 function copyMarkup(
   parsed: ParsedComposition,
   template: Clip,
@@ -842,25 +892,13 @@ function copyMarkup(
   mix: TrackMix,
 ): string {
   const element = parsed.elements.get(template.id)!;
-  const authoredId = element.attrs.id;
-  const escaped = authoredId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const reference =
-    escaped && new RegExp(`#${escaped}(?![\\w-])|(["'\`])${escaped}\\1`);
-  if (reference && parsed.scriptsAndStyles.some((text) => reference.test(text)))
-    throw new TimelineError(
-      "unsupported",
-      `Clip ${template.id} is styled or animated by its id, so a cut copy would lose that. Edit it in the source instead.`,
-    );
+  if (template.sourceRestrictions?.copy)
+    throw new TimelineError("unsupported", template.sourceRestrictions.copy);
   const source = parsed.html.slice(
     element.start,
     elementEnd(parsed, element, template.id),
   );
   const [first, ...inner] = scanHtmlOpeningTags(source);
-  if (inner.some((span) => span.attributes.some((item) => item.name === "id")))
-    throw new TimelineError(
-      "unsupported",
-      `Clip ${template.id} contains elements with ids, which a cut copy would duplicate. Edit it in the source instead.`,
-    );
   const origin = element.attrs["data-sync-origin"];
   return applyEdits(source, [
     ...attributeEdits(first!, source, [

@@ -33,12 +33,15 @@ interface Batch {
   /** Every inserted `src` known to hold no audio stream. */
   silentMedia: ReadonlySet<string>;
   newId: NewId;
+  onSkip: (clip: Clip, reason: string) => void;
 }
 /**
  * Options for applying commands; `mediaLengths` holds measured source lengths by `src`, and
  * `silentMedia` every `src` known to hold no audio stream.
  */
 interface ApplyOptions {
+  /** Source-restricted auto-select clips left whole by this batch. */
+  onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
   silentMedia?: ReadonlySet<string>;
@@ -135,11 +138,12 @@ function applyIn(timeline: Timeline, command: Command, batch: Batch) {
   return next === timeline ? timeline : settle(timeline, next);
 }
 
-/** Applies one command. Commands that cannot apply exactly throw a TimelineError; nothing is clamped. */
+/** Applies one command. Auto-select skips source-restricted clips; other failures throw a TimelineError. */
 export function apply(
   timeline: Timeline,
   command: Command,
   {
+    onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
@@ -150,6 +154,7 @@ export function apply(
   return applyIn(timeline, command, {
     reserved: usedNames(timeline, retired),
     retired,
+    onSkip,
     onCreate,
     mediaLengths,
     silentMedia,
@@ -162,6 +167,7 @@ export function applyAll(
   timeline: Timeline,
   commands: readonly Command[],
   {
+    onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
     silentMedia = new Set(),
@@ -173,6 +179,7 @@ export function applyAll(
   const batch: Batch = {
     reserved: usedNames(timeline, retired),
     retired,
+    onSkip,
     mediaLengths,
     silentMedia,
     newId,
@@ -354,8 +361,18 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               fps,
               mint,
               ids,
+              batch.onSkip,
             )
-          : insertTime(trimmed, tracks, editPoint, change, fps, mint, ids);
+          : insertTime(
+              trimmed,
+              tracks,
+              editPoint,
+              change,
+              fps,
+              mint,
+              ids,
+              batch.onSkip,
+            );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -383,13 +400,39 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "nothing_to_split",
           `No clip on an unlocked auto-select track spans frame ${at}.`,
         );
+      const skipped = skipAutoClips(
+        clips,
+        new Map(
+          targets.flatMap((clip) =>
+            clip.sourceRestrictions?.copy
+              ? [[clip, clip.sourceRestrictions.copy] as const]
+              : [],
+          ),
+        ),
+        command.clipIds && !command.autoSelect
+          ? new Set(targets.map((clip) => clip.id))
+          : new Set(),
+        batch.onSkip,
+      );
       return {
         ...timeline,
-        clips: splitClips(clips, targets, at, fps, mint),
+        clips: splitClips(
+          clips,
+          targets.filter((clip) => !skipped.has(clip.id)),
+          at,
+          fps,
+          mint,
+        ),
       };
     }
     case "remove": {
       const removing = withPartners(clips, command.clipIds.map(find));
+      for (const clip of removing)
+        if (clip.sourceRestrictions?.remove)
+          throw new TimelineError(
+            "unsupported",
+            clip.sourceRestrictions.remove,
+          );
       const ids = new Set(removing.map((clip) => clip.id));
       const remaining = clips.filter((clip) => !ids.has(clip.id));
       if (!command.ripple) return { ...timeline, clips: remaining };
@@ -403,7 +446,16 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
       ).toReversed())
-        next = removeTime(next, tracks, () => from, to - from, fps, mint);
+        next = removeTime(
+          next,
+          tracks,
+          () => from,
+          to - from,
+          fps,
+          mint,
+          new Set(),
+          batch.onSkip,
+        );
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -858,6 +910,27 @@ function withPartners(clips: Clip[], selected: Clip[]): Clip[] {
   );
 }
 
+/** Auto-select may leave a source-restricted clip whole, including its linked group. */
+function skipAutoClips(
+  clips: Clip[],
+  reasons: ReadonlyMap<Clip, string>,
+  explicit: ReadonlySet<string>,
+  onSkip: Batch["onSkip"],
+): Set<string> {
+  const skipped = new Set<string>();
+  for (const [clip, reason] of reasons) {
+    const group = withPartners(clips, [clip]);
+    if (group.some((member) => explicit.has(member.id)))
+      throw new TimelineError("unsupported", reason);
+    for (const member of group) {
+      if (skipped.has(member.id)) continue;
+      skipped.add(member.id);
+      onSkip(member, reason);
+    }
+  }
+  return skipped;
+}
+
 /** Ripple edits reach the edited tracks and every auto-select track, never a locked one. */
 function rippleTracks(timeline: Timeline, own: number[]): Set<number> {
   const locked = new Set(
@@ -917,7 +990,7 @@ function shiftAfter(
   return next;
 }
 
-/** Remove an exact interval on each participating track, then close it. */
+/** Remove an interval on participating tracks, leaving restricted auto-select clips whole. */
 function removeTime(
   clips: Clip[],
   tracks: ReadonlySet<number>,
@@ -926,7 +999,28 @@ function removeTime(
   fps: Fps,
   mint: Minting,
   fixed: ReadonlySet<string> = new Set(),
+  onSkip: Batch["onSkip"] = () => {},
 ): Clip[] {
+  const reasons = new Map<Clip, string>();
+  for (const clip of clips) {
+    const start = from(clip.track),
+      end = start + duration;
+    if (
+      fixed.has(clip.id) ||
+      !tracks.has(clip.track) ||
+      clip.start >= end ||
+      clipEnd(clip) <= start
+    )
+      continue;
+    const reason =
+      clip.start < start && clipEnd(clip) > end
+        ? clip.sourceRestrictions?.copy
+        : clip.start >= start && clipEnd(clip) <= end
+          ? clip.sourceRestrictions?.remove
+          : undefined;
+    if (reason) reasons.set(clip, reason);
+  }
+  fixed = new Set([...fixed, ...skipAutoClips(clips, reasons, fixed, onSkip)]);
   const fixedClips = clips.filter((clip) => fixed.has(clip.id));
   let next = clips.filter((clip) => !fixed.has(clip.id));
   for (const track of tracks)
@@ -957,7 +1051,20 @@ function insertTime(
   fps: Fps,
   mint: Minting,
   fixed: ReadonlySet<string>,
+  onSkip: Batch["onSkip"],
 ): Clip[] {
+  const reasons = new Map(
+    clips.flatMap((clip) =>
+      !fixed.has(clip.id) &&
+      tracks.has(clip.track) &&
+      clip.start < at(clip.track) &&
+      at(clip.track) < clipEnd(clip) &&
+      clip.sourceRestrictions?.copy
+        ? [[clip, clip.sourceRestrictions.copy] as const]
+        : [],
+    ),
+  );
+  fixed = new Set([...fixed, ...skipAutoClips(clips, reasons, fixed, onSkip)]);
   let next = clips;
   for (const track of tracks)
     next = splitClips(
@@ -1080,6 +1187,9 @@ function splitClips(
   { taken, onCreate, name }: Minting,
 ): Clip[] {
   if (!targets.length) return clips;
+  for (const clip of targets)
+    if (clip.sourceRestrictions?.copy)
+      throw new TimelineError("unsupported", clip.sourceRestrictions.copy);
   const rights = targets.map((clip): Clip => {
     const id = name(clip.id, clip.id);
     onCreate(id, { copyOf: clip.id });
@@ -1155,6 +1265,13 @@ function clearRange(
   const hits = (list: Clip[]) =>
     list.filter((clip) => clip.track === track && overlaps(clip));
   const targets = hits(clips);
+  for (const clip of targets)
+    if (
+      clip.start >= from &&
+      clipEnd(clip) <= to &&
+      clip.sourceRestrictions?.remove
+    )
+      throw new TimelineError("unsupported", clip.sourceRestrictions.remove);
   // Only a clip with surviving material on both sides needs a copy.
   const next = splitClips(
     clips,

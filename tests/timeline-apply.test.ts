@@ -80,6 +80,71 @@ const positions = (state: Timeline) =>
     ]),
   );
 
+test("auto-select razor cuts supported clips and reports the title it leaves whole", () => {
+  const title = clip("lower", 1, 0, 180, {
+    kind: "element",
+    label: "Lower third",
+    src: null,
+    mediaStart: null,
+    sourceRestrictions: {
+      copy: "Clip lower is animated by its id. Edit it in the source instead.",
+    },
+  });
+  const state = timeline([clip("picture", 0, 0, 180), title]);
+  const skipped: string[] = [];
+  const result = applyAll(
+    state,
+    [
+      CommandSchema.parse({
+        type: "split",
+        at: 90,
+        clipIds: ["picture", "lower"],
+        autoSelect: true,
+      }),
+    ],
+    {
+      newId: countingIds,
+      onSkip: (clip, reason) => {
+        skipped.push(clip.id);
+        expect(reason).toContain("animated by its id");
+      },
+    },
+  );
+  expect(positions(result)).toEqual({
+    picture: [0, 0, 90],
+    "picture-2": [0, 90, 90],
+    lower: [1, 0, 180],
+  });
+  expect(result.clips.find((clip) => clip.id === "lower")).toEqual(title);
+  expect(skipped).toEqual(["lower"]);
+  for (const clipIds of [["lower"], ["picture", "lower"]])
+    expect(() => run(state, { type: "split", at: 90, clipIds })).toThrow(
+      "Edit it in the source instead.",
+    );
+  expect(run(timeline([title]), { type: "split", at: 90 }).clips).toEqual([
+    title,
+  ]);
+});
+
+test("auto-select leaves a restricted clip's linked group whole", () => {
+  const state = timeline([
+    clip("picture", 0, 0, 180, { link: "pair" }),
+    clip("sound", 1, 0, 180, {
+      kind: "audio",
+      link: "pair",
+      sourceRestrictions: { copy: "Cannot copy sound." },
+    }),
+    clip("other", 2, 0, 180),
+  ]);
+  const result = run(state, { type: "split", at: 90 });
+  expect(positions(result)).toEqual({
+    picture: [0, 0, 180],
+    sound: [1, 0, 180],
+    other: [2, 0, 90],
+    "other-2": [2, 90, 90],
+  });
+});
+
 const failure = (action: () => unknown) => {
   try {
     action();

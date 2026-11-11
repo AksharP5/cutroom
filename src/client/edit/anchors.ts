@@ -14,6 +14,11 @@ function sameClip(seen: Clip, clip: Clip | undefined) {
         ? seen.mediaStart === clip.mediaStart
         : Math.abs(seen.mediaStart - clip.mediaStart) <= 1e-6;
     }
+    if (key === "sourceRestrictions")
+      return (
+        seen.sourceRestrictions?.copy === clip.sourceRestrictions?.copy &&
+        seen.sourceRestrictions?.remove === clip.sourceRestrictions?.remove
+      );
     if (key === "startRef")
       return (
         seen.startRef?.clipId === clip.startRef?.clipId &&
@@ -68,8 +73,15 @@ export function editAnchors(
       destinations.push({ range: moved, clips: occupants(before, moved) });
     }
   }
+  const targets = new Set(
+    commands.flatMap((command) =>
+      command.type === "split" ? (command.clipIds ?? []) : [],
+    ),
+  );
   return {
-    clips: before.clips.filter((clip) => !sameClip(clip, clips.get(clip.id))),
+    clips: before.clips.filter(
+      (clip) => targets.has(clip.id) || !sameClip(clip, clips.get(clip.id)),
+    ),
     destinations,
   };
 }
