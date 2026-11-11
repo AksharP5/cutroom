@@ -262,6 +262,14 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
     await fixture.request(`${path}/review/changes/accept`, "POST", {
       editId: pending[1]!.id,
     });
+    // A second surface accepting the same change (stale view) succeeds without an error.
+    expect(
+      (
+        await fixture.request(`${path}/review/changes/accept`, "POST", {
+          editId: pending[0]!.id,
+        })
+      ).status,
+    ).toBe(200);
     const accepted = await read();
     expect(accepted.agentChanges).toEqual(["caption"]);
     expect(
