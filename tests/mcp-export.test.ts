@@ -112,7 +112,7 @@ test("MCP exports share dialog defaults, frame ranges, naming and cancel cleanup
       expect(status.fps).toEqual({ num: 30, den: 1 });
       expect(status.estimate).toBeNull();
       const active: unknown = await (
-        await f.app.request(`/api/projects/${p.id}/export-jobs`)
+        await f.app.request("/api/export-jobs")
       ).json();
       expect(
         z

@@ -594,13 +594,11 @@ export function createHyperframesApi(
     quality: job.quality,
     range: job.range,
   });
-  api.get("/projects/:id/export-jobs", async (c) => {
-    const project = await store.get(c.req.param("id"));
+  // One export runs at a time across projects, so any editor can find and control it.
+  api.get("/export-jobs", (c) => {
     c.header("Cache-Control", "no-store");
     const job = renders.active();
-    return c.json({
-      jobs: job?.projectId === project.id ? [snapshot(job)] : [],
-    });
+    return c.json({ jobs: job ? [snapshot(job)] : [] });
   });
   api.get("/render/:jobId", (c) => {
     const job = renders.get(c.req.param("jobId"));

@@ -15,7 +15,8 @@ export interface ExportJob {
   outputPath: string;
   fps: Fps;
   size: { width: number; height: number } | null;
-  frames: { start: number; end: number };
+  /** Null for a whole-timeline export of a project that is not open. */
+  frames: { start: number; end: number } | null;
   quality: ExportQuality;
   status:
     | "starting"
@@ -67,13 +68,13 @@ function receiveExport(job: z.infer<typeof ExportJobSchema>) {
   const current = useExport.getState().job;
   const sameJob = current?.jobId === job.jobId;
   if (current?.status === "starting") return;
-  if (!sameJob && useTimeline.getState().projectId !== job.projectId) return;
-  const timeline = useTimeline.getState().view?.timeline;
+  const open = useTimeline.getState();
+  const timeline =
+    open.projectId === job.projectId ? open.view?.timeline : undefined;
   const frames = sameJob
     ? current.frames
-    : (job.range ?? (timeline && { start: 0, end: timeline.duration }));
-  if (!frames) return;
-  const size = useWorkspace.getState().composition;
+    : (job.range ?? (timeline ? { start: 0, end: timeline.duration } : null));
+  const size = timeline ? useWorkspace.getState().composition : null;
   let notice = sameJob ? current.notice : "";
   if (job.audioLoweredDb !== undefined) {
     const lowered = `Audio lowered ${job.audioLoweredDb.toFixed(1)} dB to prevent clipping.`;
@@ -128,7 +129,7 @@ export function observeExports(projectId: string) {
       return;
     }
     const { jobs } = await renderApi(
-      `/projects/${encodeURIComponent(projectId)}/export-jobs`,
+      "/export-jobs",
       z.object({ jobs: z.array(ExportJobSchema) }),
       { signal: closing.signal },
     );

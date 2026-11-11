@@ -331,3 +331,61 @@ test("switching projects keeps export cancellation live and allows the next edit
     await client.close();
   }
 });
+
+test("a reload in another project finds the running export and can cancel it", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const [alpha, beta] = await Promise.all(
+    ["Reload Alpha", "Reload Beta"].map(async (name, index) =>
+      ProjectSchema.parse(
+        await (
+          await request.post("/api/cutroom/projects", {
+            data: { name, duration: index ? 2 : 600, width: 320, height: 240 },
+          })
+        ).json(),
+      ),
+    ),
+  );
+  const client = new Client({ name: "reload-export-test", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: new URL(baseURL!).origin } },
+      }),
+    );
+    await page.goto(`/#project/${beta.id}`);
+    await expect(page.locator("iframe[data-live]")).toHaveCount(1);
+    const started = result(
+      Started,
+      await client.callTool({
+        name: "export_start",
+        arguments: { projectId: alpha.id },
+      }),
+    );
+    await page.reload();
+    await expect(page.locator(".project-switcher")).toHaveText(beta.name);
+    await expect(page.locator(".export-indicator")).toHaveText(/^Exporting/);
+    await page.locator(".export-indicator").click();
+    await expect(page.getByRole("dialog")).toContainText(alpha.name);
+    await expect(page.getByRole("dialog")).toContainText(started.outputPath);
+    await page
+      .getByRole("button", { name: "Cancel export", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Export cancelled. Partial output removed.",
+    );
+    expect(
+      result(
+        ExportJobSchema,
+        await client.callTool({
+          name: "export_status",
+          arguments: { jobId: started.jobId },
+        }),
+      ).status,
+    ).toBe("cancelled");
+  } finally {
+    await client.close();
+  }
+});

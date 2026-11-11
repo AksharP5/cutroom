@@ -82,7 +82,7 @@ The response includes `jobId` and `outputPath`. `export_status` takes `jobId` an
 
 `export_cancel` takes `jobId` and waits for worker shutdown and partial-output cleanup before returning `cancelled`. Cleanup failure returns an error and leaves the job `failed`. Cancellation after publication keeps the completed file. A native Cutroom agent can start and cancel jobs only for its active run's project. `export_status` is read-only. Start and cancel require separate native approval, including when **Always allow Cutroom edits** is enabled, because exports create output files beyond editable project source.
 
-Agent jobs appear in the open editor's Export indicator. The dialog follows the running job through completion or cancellation even if you switch projects, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
+Agent jobs appear in the open editor's Export indicator. The dialog follows the running job through completion or cancellation even if you switch projects or reload in another one, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
 
 For example, after `projects_list` and `timeline_read`:
 
