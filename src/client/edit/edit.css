@@ -207,6 +207,62 @@
 .edit-edge-labels > div + div {
   border-left: var(--stroke-hair) solid var(--line);
 }
+/*
+ * Selection on the picture. The outline is one-pixel edges (a dark casing around the selection
+ * line, so it reads on any footage) stretched by transform, just outside the clip's box. It may
+ * run past the picture, so this layer lies over the picture instead of inside its clip.
+ * Nothing here animates.
+ */
+.edit-select {
+  position: absolute;
+  pointer-events: none;
+  touch-action: none;
+  cursor: default;
+}
+.edit-select[data-active] {
+  pointer-events: auto;
+}
+.edit-select:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+/* Focus given by a grab shows as the clip's handles, not a ring around the picture. */
+.edit-select[data-grabbed]:focus-visible {
+  outline: none;
+}
+.edit-select-outline,
+.edit-select-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+:is(.edit-select-outline, .edit-select-guides) :is(i, b) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--stroke-selection);
+  height: var(--stroke-selection);
+  transform-origin: 0 0;
+  background: var(--selection);
+}
+.edit-select-outline i:nth-child(-n + 4) {
+  background: var(--pencil-casing);
+}
+/* Corner handles mean the arrow keys move this clip. */
+.edit-select-outline b {
+  display: none;
+  width: calc(var(--space-1) + var(--stroke-selection));
+  height: calc(var(--space-1) + var(--stroke-selection));
+  box-shadow: 0 0 0 var(--stroke-hair) var(--pencil-casing);
+}
+.edit-select:focus .edit-select-outline b {
+  display: block;
+}
+.edit-select-guides i[data-axis="x"] {
+  height: 100%;
+}
+.edit-select-guides i[data-axis="y"] {
+  width: 100%;
+}
 /* Notes on the picture: pins, pencil strokes, and the open note's popover */
 .edit-notes {
   position: absolute;

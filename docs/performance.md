@@ -244,3 +244,9 @@ The same `bun run test:perf` invocation passed all five performance tests, inclu
 |   500 |      20.5 ms | 72.7 ms |           42.4 ms | 64.9 ms |
 
 The screenshot and raw timing evidence is on the `pr-assets` branch under `track-heights/`.
+
+## Selection on the picture
+
+The outline needs the selected clip's box at every frame it is shown. The bridge reads it for that one clip: after a seek, pause, paint or Position draft, and once per animation frame while playing. Nothing is read with no clip selected, and a box that has not moved is not sent. The editor places the outline with eight transform writes outside React, so playback adds no layout or style work in the editor. A press on the picture costs one `elementsFromPoint` in the preview and style reads for the few elements under the pointer; inactive clips are not laid out and are never visited.
+
+`bun run test:perf` collects `cutroom:clip-box` and `cutroom:picture-hit` measures on the 500-clip workload, beside the Position observation above. Every box read must finish within 5 ms and the usual playback read within 0.5 ms; an unselected run must make none; the selected condition's late-frame rate may not rise by five percentage points; and each of ten hit tests must finish within 8 ms.

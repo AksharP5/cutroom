@@ -61,6 +61,14 @@ Video with sound becomes a muted picture and a linked audio clip. Overwrite rout
 
 `setClip.x` and `setClip.y` are additive offsets in composition pixels, canonical to six decimals, not absolute canvas coordinates. Positive X moves right and positive Y moves down. Null or zero clears that axis; reads return null when an axis has no offset. `{type:"setClip", clipId:"title", x:null, y:null}` resets both in one undo step. Only the named visual clip moves; linked audio has no position and rejects position edits.
 
+`clip.text` is a text element's words: its text nodes, with `<br>` read as a line break and whitespace collapsed as HTML renders it by default. It is null for media and for elements with no text. `setClip.text` replaces those words in the source, HTML-escaped, with each newline written as `<br>`; the whitespace around them stays as authored. One call is one undo step, named "Set text to …" in history, and the editor's inspector uses the same command:
+
+```json
+{ "type": "setClip", "clipId": "headline", "text": "Spring\nlaunch" }
+```
+
+The edit is refused with `unsupported`, and nothing is written, when the clip's `sourceRestrictions.text` gives a reason: the text has markup inside it (the read still returns the flattened words), it is preformatted, the element has no closing tag, or a script in the composition writes it by id. That last check finds `textContent`, `innerText`, `innerHTML` and similar writes on the element, directly or through a variable it was read into, and GSAP `text` tweens. A script that reaches the element another way is not detected, and the edit then changes source text the script overwrites. Empty text is refused; remove the clip instead.
+
 The pinned HyperFrames 0.9.26 runtime composes `data-x`/`data-y` minus captured `data-hf-edit-base-x`/`data-hf-edit-base-y` with authored CSS position, transforms and GSAP animation. Cutroom captures both existing baselines on the first edit. The runtime reapplies offsets after seeks in preview and render.
 
 A composition's own animation can override Position. Commands still save the offset. Use `timeline_view` frames to verify the result. In the editor, Transform warns at the displayed timecode when the selected clip's translate differs from the runtime's composed value, or scale, rotation or zoom changes the offset's composition-pixel size. The warning clears when Position holds again and never blocks editing.

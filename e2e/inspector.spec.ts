@@ -531,7 +531,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(autoRow).toHaveCount(0);
   await expect(opacity).toHaveValue("30%");
-  for (const name of ["Changes", "Composite", "Timing"])
+  for (const name of ["Text", "Changes", "Composite", "Timing"])
     await inspector
       .locator("summary")
       .filter({ hasText: new RegExp(`^${name}(?:\\s*\\d+)?$`) })

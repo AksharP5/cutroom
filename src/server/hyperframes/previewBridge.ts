@@ -95,6 +95,7 @@ function installPreviewBridge() {
         .get(element)
         ?.canvas.style.setProperty("translate", translate, original.priority);
     if (draft.x === null) positions.delete(element);
+    postBox();
     clearTimeout(observationTimer);
     if (observedClip)
       observationTimer = window.setTimeout(scheduleObservation, 350);
@@ -279,8 +280,9 @@ function installPreviewBridge() {
         () => {
           if (observationFrame !== frame) return;
           observationFrame = 0;
-          // A newer seek owns the displayed picture. Check only after it settles.
-          if (version !== pictureVersion) {
+          // Check again after a newer seek settles, or after a draft still waiting for its
+          // frame reaches the picture: until then the draft and the picture disagree.
+          if (version !== pictureVersion || positionFrame) {
             scheduleObservation();
             return;
           }
@@ -303,6 +305,130 @@ function installPreviewBridge() {
     observationTimer = window.setTimeout(() => {
       scheduleObservation();
     }, 350);
+  };
+  type Box = { x: number; y: number; width: number; height: number };
+  /** A clip's box in composition pixels: the iframe's viewport is the composition's frame. */
+  const boxOf = (element: Element): Box | null => {
+    const picture =
+      element instanceof HTMLVideoElement
+        ? (holds.get(element)?.canvas ?? element)
+        : element;
+    if (!picture.checkVisibility({ checkVisibilityCSS: true })) return null;
+    let { left, top, right, bottom } = picture.getBoundingClientRect();
+    if (right <= left || bottom <= top) {
+      // A clip that only positions its children has no box of its own.
+      left = top = Infinity;
+      right = bottom = -Infinity;
+      for (const child of picture.querySelectorAll("*")) {
+        const rect = child.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        left = Math.min(left, rect.left);
+        top = Math.min(top, rect.top);
+        right = Math.max(right, rect.right);
+        bottom = Math.max(bottom, rect.bottom);
+      }
+      if (right <= left) return null;
+    }
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  };
+  let postedBox = "";
+  /** Tells the editor where the observed clip is. Only a moved or resized box is sent. */
+  const postBox = () => {
+    if (!observedClip) return;
+    const start = performance.now();
+    const element = document.querySelector(`#${CSS.escape(observedClip)}`);
+    const box = element ? boxOf(element) : null;
+    performance.measure("cutroom:clip-box", { start, end: performance.now() });
+    performance.clearMeasures("cutroom:clip-box");
+    const key = box
+      ? `${observedClip} ${box.x} ${box.y} ${box.width} ${box.height}`
+      : observedClip;
+    if (key === postedBox) return;
+    postedBox = key;
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "clip-box",
+        clipId: observedClip,
+        box,
+      },
+      "*",
+    );
+  };
+  let boxFrame = 0;
+  /** Playback reads one clip's box per frame, and nothing when no clip is observed. */
+  const followBox = () => {
+    boxFrame = 0;
+    postBox();
+    if (observedClip && win.__player?.isPlaying())
+      boxFrame = requestAnimationFrame(followBox);
+  };
+  const paintsAt = (element: Element, x: number, y: number) => {
+    if (!element.checkVisibility({ checkOpacity: true })) return false;
+    if (
+      element instanceof HTMLImageElement ||
+      element instanceof HTMLVideoElement ||
+      element instanceof HTMLCanvasElement ||
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLButtonElement ||
+      (element instanceof SVGElement && !(element instanceof SVGSVGElement))
+    )
+      return true;
+    for (const pseudo of [undefined, "::before", "::after"]) {
+      const style = getComputedStyle(element, pseudo);
+      if (pseudo && (style.content === "none" || style.content === "normal"))
+        continue;
+      if (
+        style.backgroundImage !== "none" ||
+        !/^(?:transparent|rgba\(.+,\s*0\)|.+\/\s*0\))$/.test(
+          style.backgroundColor,
+        )
+      )
+        return true;
+    }
+    const range = document.createRange();
+    for (const node of element.childNodes) {
+      if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue?.trim()) continue;
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects())
+        if (
+          x >= rect.left &&
+          x < rect.right &&
+          y >= rect.top &&
+          y < rect.bottom
+        )
+          return true;
+    }
+    return false;
+  };
+  /**
+   * The clips under a point, topmost first, as the timeline names them: the outermost timed
+   * element inside the root. `painted` is false where only a clip's empty box covers the point.
+   */
+  const clipsAt = (x: number, y: number) => {
+    const root = document.querySelector("[data-composition-id]");
+    const hits = new Map<Element, boolean>();
+    for (const element of document.elementsFromPoint(x, y)) {
+      if (!root?.contains(element) || element === root) continue;
+      if (element.hasAttribute("data-cutroom-edit-frame")) continue;
+      const source = element.hasAttribute("data-cutroom-video-hold")
+        ? element.previousElementSibling
+        : element;
+      let clip: Element | null = null;
+      for (let node = source; node && node !== root; node = node.parentElement)
+        if (
+          node.matches(
+            "[data-start],[data-composition-src],[data-composition-id],[data-track-index][data-duration],video,audio,img",
+          )
+        )
+          clip = node;
+      if (!clip?.id || !clip.hasAttribute("data-start")) continue;
+      hits.set(clip, hits.get(clip) || paintsAt(element, x, y));
+    }
+    return [...hits].flatMap(([clip, painted]) => {
+      const box = boxOf(clip);
+      return box ? [{ clipId: clip.id, painted, box }] : [];
+    });
   };
   let metering = false;
   let animation = 0;
@@ -354,9 +480,13 @@ function installPreviewBridge() {
       playing: Boolean(win.__player?.isPlaying()),
     };
   };
-  const reply = (id?: string, error?: string) =>
+  const reply = (
+    id?: string,
+    error?: string,
+    hits?: ReturnType<typeof clipsAt>,
+  ) =>
     parent.postMessage(
-      { source: "cutroom-preview", id, state: state(), error },
+      { source: "cutroom-preview", id, state: state(), error, hits },
       "*",
     );
   const paint = () =>
@@ -513,7 +643,10 @@ function installPreviewBridge() {
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
     "video[data-cutroom-held] { visibility: hidden !important; }" +
-    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }";
+    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }" +
+    // The editor never forwards pointer events here. Hit tests must still find overlays
+    // authored with pointer-events: none, and the canvases that hold paused video.
+    "* { pointer-events: auto !important; }";
   document.head.append(holdStyle);
   const cancelRelease = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
@@ -731,6 +864,7 @@ function installPreviewBridge() {
     clearTimeout(observationTimer);
     cancelAnimationFrame(observationFrame);
     observationFrame = 0;
+    cancelAnimationFrame(boxFrame);
     // The parent compositor can still show this document while retiring its iframe.
     // Release decoding resources without erasing the last painted picture.
     for (const frame of editFrames) frame.close();
@@ -775,8 +909,32 @@ function installPreviewBridge() {
           )
             return;
           observedClip = data.clipId;
+          postedBox = "";
           scheduleObservation();
+          if (!boxFrame && win.__player?.isPlaying())
+            boxFrame = requestAnimationFrame(followBox);
           break;
+        case "hit":
+          if (
+            !("x" in data) ||
+            typeof data.x !== "number" ||
+            !Number.isFinite(data.x) ||
+            !("y" in data) ||
+            typeof data.y !== "number" ||
+            !Number.isFinite(data.y)
+          )
+            return;
+          {
+            const start = performance.now();
+            const hits = clipsAt(data.x, data.y);
+            performance.measure("cutroom:picture-hit", {
+              start,
+              end: performance.now(),
+            });
+            performance.clearMeasures("cutroom:picture-hit");
+            reply(id, undefined, hits);
+          }
+          return;
         case "position-fold":
           if (
             "hfId" in data &&
@@ -825,6 +983,7 @@ function installPreviewBridge() {
           for (const video of holds.keys()) releasePlaying(video);
           win.__player?.play();
           observePlaying();
+          if (!boxFrame) boxFrame = requestAnimationFrame(followBox);
           if (metering && !animation) levels();
           break;
         case "pause":
@@ -896,6 +1055,7 @@ function installPreviewBridge() {
         default:
           return;
       }
+      postBox();
       reply(id);
     })().catch((error: unknown) =>
       reply(id, error instanceof Error ? error.message : String(error)),

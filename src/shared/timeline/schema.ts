@@ -31,6 +31,17 @@ const position = z
     "Additive offset in composition CSS pixels, not an absolute coordinate. A composition's own animation can override Position. Verify with timeline_view frames. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
   );
 
+/**
+ * Plain clip text as HTML lays it out by default: lines break only at `\n` (a `<br>` in the source),
+ * whitespace runs collapse to one space, and each line is trimmed. No-break spaces are content.
+ */
+export const canonicalText = (text: string) =>
+  text
+    .split(/\r\n?|\n/)
+    .map((line) => line.replace(/[\t\f ]+/g, " ").replace(/^ | $/g, ""))
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+
 export const FpsSchema = z.object({
   num: z.number().int().positive(),
   den: z.number().int().positive(),
@@ -72,6 +83,13 @@ export const ClipSchema = z.object({
   opacity: opacity.nullable(),
   x: position.default(null),
   y: position.default(null),
+  text: z
+    .string()
+    .nullable()
+    .default(null)
+    .describe(
+      "The words of a text element, with line breaks at <br>; null for media and elements without text. setClip.text replaces them unless sourceRestrictions.text says why it cannot.",
+    ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
     .default(0)
@@ -97,7 +115,11 @@ export const ClipSchema = z.object({
   startRef: z.object({ clipId, offset: z.number().int() }).nullable(),
   /** Source restrictions are projected by the parser, never persisted in clip attributes. */
   sourceRestrictions: z
-    .object({ copy: z.string().optional(), remove: z.string().optional() })
+    .object({
+      copy: z.string().optional(),
+      remove: z.string().optional(),
+      text: z.string().optional(),
+    })
     .optional(),
 });
 
@@ -338,6 +360,15 @@ export const CommandSchema = z.discriminatedUnion("type", [
       opacity: opacity.nullable().optional(),
       x: position.optional(),
       y: position.optional(),
+      text: z
+        .string()
+        .max(20_000)
+        .overwrite(canonicalText)
+        .refine((text) => text.length > 0, "Text cannot be empty.")
+        .optional()
+        .describe(
+          "Replace a text element's words. Newlines become <br>; other whitespace collapses as HTML renders it. Refused for media, elements without text, and text with nested markup or a script that writes it.",
+        ),
       enabled: z
         .boolean()
         .optional()

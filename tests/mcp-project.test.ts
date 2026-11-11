@@ -415,3 +415,77 @@ test("review_list gives an agent every stroke, the pin, and the range of a note 
     await fixture.close();
   }
 });
+
+test("title text edits through MCP write the source, undo in one step, and refuse nested markup", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Launch cut" });
+  const file = join(project.path, "index.html");
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "text-test", version: "1" });
+  const resultSchema = z.object({
+    structuredContent: z.object({ result: TimelineViewSchema }),
+  });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${server.port}/mcp`),
+      ),
+    );
+    const read = async () =>
+      resultSchema.parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: project.id },
+        }),
+      ).structuredContent.result;
+    const text = (view: Awaited<ReturnType<typeof read>>) =>
+      view.timeline.clips.find((clip) => clip.id === "headline")?.text;
+    const setText = async (words: string) =>
+      client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: project.id,
+          expectedRevision: (await read()).revision,
+          commands: [{ type: "setClip", clipId: "headline", text: words }],
+        },
+      });
+    expect(text(await read())).toBe("Launch cut");
+    const edited = resultSchema.parse(await setText("Spring\nlaunch"))
+      .structuredContent.result;
+    expect(text(edited)).toBe("Spring\nlaunch");
+    expect(await Bun.file(file).text()).toContain(">Spring<br>launch</div>");
+    expect(edited.clipEdits?.[0]?.label).toBe("Set text to “Spring launch”");
+    await client.callTool({
+      name: "history_undo",
+      arguments: { projectId: project.id },
+    });
+    expect(text(await read())).toBe("Launch cut");
+    expect(await Bun.file(file).text()).toContain(">Launch cut</div>");
+
+    const source = await Bun.file(file).text();
+    await writeFile(
+      file,
+      source.replace(">Launch cut</div>", "><em>Launch</em> cut</div>"),
+    );
+    const refused = await setText("Flattened");
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain(
+      "This text has markup inside it. Edit it in the source.",
+    );
+    expect(await Bun.file(file).text()).toContain("<em>Launch</em> cut");
+  } finally {
+    await client.close();
+    await server.stop(true);
+    await fixture.close();
+  }
+});
