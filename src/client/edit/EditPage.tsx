@@ -107,12 +107,12 @@ export function EditPage({
   const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
-    openTimeline(projectId);
+    const closing = new AbortController();
+    openTimeline(projectId, closing.signal);
     transport.seek(0);
     const unsubscribe = useTimeline.subscribe(({ view }) => {
       if (view) transport.setTimeline(view.timeline);
     });
-    const closing = new AbortController();
     const fail = (error: unknown) => {
       if (!closing.signal.aborted) report(error);
     };

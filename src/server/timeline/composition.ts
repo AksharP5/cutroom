@@ -68,6 +68,7 @@ interface SourceElement {
   tag: string;
   attrs: Record<string, string>;
   children: SourceElement[];
+  text: string;
   /** A `<template>`'s inert content, outside the live tree. */
   content: SourceElement[];
   start: number;
@@ -108,8 +109,10 @@ function parseElements(html: string) {
   const nodes: SourceRange[] = [];
   const visit = (children: DefaultTreeAdapterTypes.ChildNode[]) => {
     const elements: SourceElement[] = [];
+    let text = "";
     for (const node of children) {
       if (defaultTreeAdapter.isTextNode(node)) {
+        text += node.value;
         const location = node.sourceCodeLocation;
         if (location)
           nodes.push({
@@ -122,7 +125,9 @@ function parseElements(html: string) {
       if (!defaultTreeAdapter.isElementNode(node)) continue;
       const location = node.sourceCodeLocation;
       if (!location?.startTag) {
-        elements.push(...visit(node.childNodes));
+        const implied = visit(node.childNodes);
+        elements.push(...implied.elements);
+        text += implied.text;
         continue;
       }
       const index = nodes.length;
@@ -139,13 +144,23 @@ function parseElements(html: string) {
       });
       const inert = "content" in node;
       const inside = visit(inert ? node.content.childNodes : node.childNodes);
+      const contentText =
+        inert || node.tagName === "script" || node.tagName === "style"
+          ? ""
+          : node.tagName === "br"
+            ? "\n"
+            : inside.text;
+      text += /^(?:div|p|h[1-6]|li|section|article)$/.test(node.tagName)
+        ? `\n${contentText}\n`
+        : contentText;
       elements.push({
+        text: contentText,
         tag: node.tagName,
         attrs: Object.fromEntries(
           node.attrs.map((attribute) => [attribute.name, attribute.value]),
         ),
-        children: inert ? [] : inside,
-        content: inert ? inside : [],
+        children: inert ? [] : inside.elements,
+        content: inert ? inside.elements : [],
         start: location.startOffset,
         openEnd: location.startTag.endOffset,
         end: location.endOffset,
@@ -153,9 +168,11 @@ function parseElements(html: string) {
         inner: nodes.length - index - 1,
       });
     }
-    return elements;
+    return { elements, text };
   };
-  const roots = visit(parse(html, { sourceCodeLocationInfo: true }).childNodes);
+  const { elements: roots } = visit(
+    parse(html, { sourceCodeLocationInfo: true }).childNodes,
+  );
   let reach = 0;
   const owned = nodes
     .flatMap((node, index) =>
@@ -449,6 +466,14 @@ export function parseComposition(
         element.attrs["data-timeline-label"] ??
         element.attrs["data-label"] ??
         null,
+      ...(kind === "element" && {
+        text:
+          element.text
+            .split(/\r?\n/)
+            .map((line) => line.replace(/\s+/g, " ").trim())
+            .find(Boolean)
+            ?.slice(0, 500) ?? "",
+      }),
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),

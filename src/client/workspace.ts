@@ -1,3 +1,4 @@
+import { cssMilliseconds } from "./timeline/math";
 import { create } from "zustand";
 
 const NEW_EDITOR_KEY = "cutroom.newEditor";
@@ -55,23 +56,40 @@ export const useWorkspace = create(() => ({
   >,
   /** The header toast's message, empty when none shows. */
   toast: "",
+  toastTone: "error" as "error" | "info",
   toastAction: null as { label: string; run(): void } | null,
 }));
 
 let toastVersion = 0;
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** The returned dismiss function clears only this toast, leaving later messages alone. */
 export const showToast = (
   message: string,
   action: { label: string; run(): void } | null = null,
+  options: { tone?: "error" | "info"; transient?: boolean } = {},
 ) => {
   const version = ++toastVersion;
-  useWorkspace.setState({ toast: message, toastAction: action });
-  return () => {
+  clearTimeout(toastTimer);
+  useWorkspace.setState({
+    toast: message,
+    toastAction: action,
+    toastTone: options.tone ?? "error",
+  });
+  const dismiss = () => {
     if (version !== toastVersion) return;
     ++toastVersion;
     useWorkspace.setState({ toast: "", toastAction: null });
   };
+  if (options.transient) {
+    const duration = cssMilliseconds(
+      getComputedStyle(document.documentElement).getPropertyValue(
+        "--duration-toast-hold",
+      ),
+    );
+    toastTimer = setTimeout(dismiss, duration);
+  }
+  return dismiss;
 };
 
 type EditorErrorSide = "viewer" | "timeline";

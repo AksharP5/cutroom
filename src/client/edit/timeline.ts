@@ -27,13 +27,18 @@ import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
+import { outsideChanges, outsideMessage, rippleFeedback } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
 
 const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
 let clipboardTask = Promise.resolve();
 
-const HistorySchema = z.object({ canUndo: z.boolean(), canRedo: z.boolean() });
+const HistorySchema = z.object({
+  canUndo: z.boolean(),
+  canRedo: z.boolean(),
+  entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
+});
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
 export const useTimeline = create(() => ({
@@ -79,12 +84,67 @@ let confirmed: { projectId: string; view: TimelineView } | null = null;
 let pending: Edit[] = [];
 /** The header toast this queue last showed, cleared by the next edit that lands. */
 let lastToast = "";
+let dismissRipple = () => {};
+let dismissOutside = () => {};
+let rippleRevision: string | null = null;
+let historyHead: string | undefined;
+let rippleHistory: string | undefined;
+let outsideTimer: ReturnType<typeof setTimeout> | undefined;
+let outsideStarted = 0;
+let outsideClips = new Map<string, string>();
+let outsideActors = new Set<string>();
+
+function clearOutsideNotice() {
+  clearTimeout(outsideTimer);
+  outsideStarted = 0;
+  outsideClips = new Map();
+  outsideActors = new Set();
+}
+
+function noticeOutside(before: TimelineView, after: TimelineView) {
+  const change = outsideChanges(before, after);
+  if (!change.timelineChanged) return;
+  if (!outsideStarted) outsideStarted = Date.now();
+  for (const [id, kind] of change.changes) outsideClips.set(id, kind);
+  outsideActors.add(change.actor);
+  clearTimeout(outsideTimer);
+  // Wait for 700 ms of quiet, but report a continuous stream at least every two seconds.
+  outsideTimer = setTimeout(
+    () => {
+      dismissOutside = showToast(
+        outsideMessage(outsideClips, outsideActors),
+        null,
+        { tone: "info", transient: true },
+      );
+      clearOutsideNotice();
+    },
+    Math.max(0, Math.min(700, 2000 - (Date.now() - outsideStarted))),
+  );
+}
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
-export function openTimeline(projectId: string) {
+export function openTimeline(projectId: string, signal?: AbortSignal) {
   confirmed = null;
   pending = [];
+  clearOutsideNotice();
+  dismissRipple();
+  dismissOutside();
+  rippleRevision = null;
   useTimeline.setState({ projectId, view: null, selection: emptySelection });
+  signal?.addEventListener(
+    "abort",
+    () => {
+      clearOutsideNotice();
+      dismissRipple();
+      dismissOutside();
+      useTimeline.setState({
+        projectId: null,
+        view: null,
+        selection: emptySelection,
+      });
+    },
+    { once: true },
+  );
 }
 
 /**
@@ -189,12 +249,26 @@ function shown(projectId: string): TimelineView | null {
   return timeline === view.timeline ? view : { ...view, timeline };
 }
 
-async function read(projectId: string, signal?: AbortSignal) {
+async function read(projectId: string, signal?: AbortSignal, notify = true) {
   const [view, history] = await Promise.all([
     api(`${project(projectId)}/timeline`, TimelineViewSchema, { signal }),
     api(`${project(projectId)}/history`, HistorySchema, { signal }),
   ]);
   if (useTimeline.getState().projectId !== projectId) return view;
+  if (
+    confirmed?.projectId === projectId &&
+    confirmed.view.revision !== view.revision &&
+    notify
+  )
+    noticeOutside(confirmed.view, view);
+  historyHead = history.entries.findLast((entry) => !entry.undone)?.id;
+  if (
+    rippleRevision &&
+    (rippleRevision !== view.revision || rippleHistory !== historyHead)
+  ) {
+    dismissRipple();
+    rippleRevision = null;
+  }
   confirmed = { projectId, view };
   useTimeline.setState({ view: shown(projectId), history });
   // The engine read this timeline, so an earlier refusal no longer stands.
@@ -236,6 +310,8 @@ async function send(edit: Edit) {
           commands: edit.commands,
         }),
       );
+      if (useTimeline.getState().projectId === edit.projectId)
+        confirmed = { projectId: edit.projectId, view: result };
       return result;
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
@@ -389,15 +465,29 @@ export async function editTimeline(
       dropped: false,
     };
     const made = edit;
+    dismissRipple();
+    rippleRevision = null;
+    const feedback = rippleFeedback(
+      view.timeline,
+      timeline,
+      commands,
+      clipboards,
+    );
     useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
     onApply?.(timeline, commands, named.origins);
     let report = "";
+    let revision: string | undefined;
+    let historyId: string | undefined;
     await enqueue(async () => {
       // An edit that made a clip this one names was refused, and both were taken back.
       if (made.dropped) return;
       try {
         const result = await send(made);
+        revision = result?.revision;
+        historyId = result?.clipEdits
+          ?.filter((edit) => edit.label === made.label)
+          .at(-1)?.historyId;
         if (result?.skippedClips?.length) {
           const current = new Map(
             result.timeline.clips.map((clip) => [clip.id, clip]),
@@ -437,10 +527,40 @@ export async function editTimeline(
       pending = pending.filter((item) => item !== made);
       await read(projectId);
     });
-    if (!made.dropped) {
+    if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {
         lastToast = report;
         showToast(report);
+      } else if (
+        feedback &&
+        revision === confirmed?.view.revision &&
+        !pending.length &&
+        historyId === historyHead
+      ) {
+        rippleRevision = revision ?? null;
+        rippleHistory = historyId;
+        dismissRipple = showToast(
+          feedback,
+          {
+            label: "Undo",
+            run: () => {
+              dismissRipple();
+              if (
+                confirmed?.view.revision !== revision ||
+                historyHead !== historyId ||
+                pending.length
+              )
+                return;
+              void stepHistory(projectId, "undo", historyId).catch(
+                (error: unknown) =>
+                  showToast(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+              );
+            },
+          },
+          { tone: "info", transient: true },
+        );
       } else if (lastToast && useWorkspace.getState().toast === lastToast) {
         showToast("");
       }
@@ -460,15 +580,26 @@ export async function editTimeline(
   }
 }
 
-export const stepHistory = (projectId: string, step: "undo" | "redo") =>
+export const stepHistory = (
+  projectId: string,
+  step: "undo" | "redo",
+  expectedHistoryId?: string,
+) =>
   clipboardTask.then(() =>
     enqueue(async () => {
+      if (expectedHistoryId) {
+        await read(projectId);
+        if (historyHead !== expectedHistoryId)
+          throw new Error("The history changed. Use Undo in the toolbar.");
+      }
+      dismissRipple();
+      rippleRevision = null;
       await api(
         `${project(projectId)}/history/${step}`,
         z.unknown(),
         json("POST"),
       );
-      await read(projectId);
+      await read(projectId, undefined, false);
     }),
   );
 

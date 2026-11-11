@@ -61,6 +61,8 @@ export const ClipSchema = z.object({
   hasAudio: z.boolean(),
   link: z.string().nullable(),
   label: z.string().nullable(),
+  /** First authored line of text, projected from the parsed composition for timeline labels. */
+  text: z.string().max(500).optional(),
   volume: z
     .number()
     .nonnegative()
