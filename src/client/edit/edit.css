@@ -179,6 +179,34 @@
 .edit-frame:not([data-live]):not([data-held]) {
   opacity: 0.01;
 }
+.edit-edge-labels {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  pointer-events: none;
+  font: var(--type-xs) / var(--leading-body) var(--font-mono);
+  color: var(--text-secondary);
+}
+.edit-edge-labels[hidden] {
+  display: none;
+}
+.edit-edge-labels > div {
+  container-type: inline-size;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--space-2);
+}
+.edit-edge-labels span {
+  font-size: min(var(--type-xs), 13cqi);
+  text-align: center;
+  white-space: pre;
+}
+.edit-edge-labels > div + div {
+  border-left: var(--stroke-hair) solid var(--line);
+}
 /* Notes on the picture: pins, pencil strokes, and the open note's popover */
 .edit-notes {
   position: absolute;

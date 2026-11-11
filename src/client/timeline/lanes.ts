@@ -12,6 +12,7 @@ import type {
 import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
+import { clearEditFrame, previewEditFrame } from "../edit/editFrame";
 import type { Bodies } from "./bodies";
 import {
   SNAP_PX,
@@ -353,6 +354,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   /** Takes every trace of a preview away and returns where it held the clips. */
   function clear() {
+    clearEditFrame();
     const { timeline, lanes } = latest.current;
     const offsets = placed.current;
     if (preview.current) place(timeline, timeline);
@@ -458,6 +460,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const next = dragPreview(active, input);
       render(active.timeline, next);
       if (!drag.current) return;
+      previewEditFrame(next.shown, active.intent);
       const { intent } = active;
       if (intent.kind === "blade") {
         const clip = active.timeline.clips.find(
@@ -705,6 +708,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   // Esc cancels before any other shortcut hears it. Modifier changes redraw a stationary drag.
   useEffect(() => {
+    const cancel = () => end("cancel");
     const key = (event: KeyboardEvent) => {
       if (gesture.current.phase === "idle") return;
       if (event.key === "Escape" && event.type === "keydown") {
@@ -718,9 +722,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     };
     document.addEventListener("keydown", key, true);
     document.addEventListener("keyup", key, true);
+    window.addEventListener("blur", cancel);
     return () => {
       document.removeEventListener("keydown", key, true);
       document.removeEventListener("keyup", key, true);
+      window.removeEventListener("blur", cancel);
       end("cancel");
     };
   }, []);
@@ -841,6 +847,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         end("release");
       },
       onPointerCancel: () => end("cancel"),
+      onLostPointerCapture: () => end("cancel"),
       onPointerLeave: () => {
         if (gesture.current.phase === "idle") {
           hoveredMix.current?.removeAttribute("data-hover");

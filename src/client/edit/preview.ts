@@ -12,6 +12,11 @@ import {
 } from "../../shared/preview";
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
+import { useTransport } from "./transport";
+import { frameTime } from "../../shared/timeline/apply";
+import { editPicture, followEditPicture } from "./editFrame";
+import type { EditPicture } from "./editFrame";
+import { seekQueue } from "./seekQueue";
 
 export const usePositionWarning = create<{
   warning: { clipId: string; time: number } | null;
@@ -138,10 +143,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       );
     return id;
   };
-  const request = (action: string) =>
+  const request = (action: string, payload: object = {}) =>
     new Promise<void>((resolve, reject) => {
       closing.signal.throwIfAborted();
-      const id = send(action);
+      const id = send(action, payload);
       const timer = window.setTimeout(() => {
         pending.delete(id);
         reject(new Error("The preview did not draw the frame in time."));
@@ -174,7 +179,24 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const observe = (clipId: string | null) =>
     send("observe-position", { clipId });
+  const edit = seekQueue<EditPicture | null>(
+    async (picture) => {
+      const { frame, fps } = useTransport.getState();
+      await request(
+        "seek",
+        picture
+          ? { time: picture.time, edit: picture.frames }
+          : { time: frameTime(frame, fps) },
+      );
+    },
+    (error) => {
+      if (!closing.signal.aborted) reportEditorError("viewer", error);
+    },
+  );
+  let unfollowEdit = () => {};
   const dispose = () => {
+    unfollowEdit();
+    edit.dispose();
     if (positionTargets.delete(position) && !positionTargets.size)
       positionDraft = null;
     observers.delete(observe);
@@ -207,6 +229,28 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         await request("paint");
         closing.signal.throwIfAborted();
       } while (shown !== positionDraft);
+      // A candidate follows a drag already under way before it can replace the picture.
+      let editing: EditPicture | null;
+      let hadEdit = false;
+      do {
+        editing = editPicture();
+        if (editing)
+          await request("seek", { time: editing.time, edit: editing.frames });
+        else if (hadEdit) {
+          const { frame, fps } = useTransport.getState();
+          await request("seek", { time: frameTime(frame, fps) });
+        }
+        hadEdit = editing !== null;
+        closing.signal.throwIfAborted();
+        if (editing !== editPicture())
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+      } while (editing !== editPicture());
+      unfollowEdit = followEditPicture((picture) => {
+        if (!picture) send("cancel-edit");
+        edit.push(picture);
+      });
       active = true;
       warningSource = frame;
       observers.add(observe);
