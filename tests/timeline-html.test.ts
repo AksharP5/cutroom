@@ -73,12 +73,7 @@ const withoutStacking = (html: string) =>
       "",
     );
 
-for (const command of [
-  { type: "split", at: 90 },
-  { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
-  { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
-  { type: "remove", clipIds: ["shot"], ripple: true },
-] satisfies CommandInput[]) {
+for (const command of [{ type: "split", at: 90 }] satisfies CommandInput[]) {
   test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} leaves an auto-select id-animated title whole`, () => {
     const title = `<div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1">Lower third</div>`;
     const html = composition(

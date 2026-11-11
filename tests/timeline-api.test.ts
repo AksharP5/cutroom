@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
+import type { CommandInput } from "../src/shared/timeline/schema";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -1163,7 +1164,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
 );
 
-test("MCP reports clips left whole by auto-select edits and refuses an explicit razor", async () => {
+test("MCP reports clips left whole by auto-select razor and refuses an explicit razor", async () => {
   const fixture = await timelineFixture();
   const handler = createMcpHttpHandler({
     fetch: (url, init) => fixture.app.request(url, init),
@@ -1190,12 +1191,7 @@ test("MCP reports clips left whole by auto-select edits and refuses an explicit 
           arguments: { projectId: fixture.project.id },
         }),
       ).structuredContent.result;
-    for (const command of [
-      { type: "split", at: 90 },
-      { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
-      { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
-      { type: "remove", clipIds: ["shot"], ripple: true },
-    ]) {
+    for (const command of [{ type: "split", at: 90 }]) {
       const before = await read();
       const edited = result.parse(
         await client.callTool({
@@ -1247,3 +1243,143 @@ test("MCP reports clips left whole by auto-select edits and refuses an explicit 
     await fixture.close();
   }
 });
+
+for (const [name, command, expectedPicture] of [
+  [
+    "Q",
+    { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
+    [
+      ["shot", 60, 30],
+      ["later", 90, 360],
+    ],
+  ],
+  [
+    "W",
+    { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
+    [
+      ["shot", 60, 30],
+      ["later", 90, 360],
+    ],
+  ],
+  [
+    "Shift+X",
+    { type: "remove", clipIds: ["shot"], ripple: true },
+    [["later", 60, 360]],
+  ],
+  [
+    "ripple extension",
+    { type: "trim", clipId: "shot", edge: "start", to: 30, ripple: true },
+    [
+      ["shot", 60, 90],
+      ["later", 150, 360],
+    ],
+  ],
+  [
+    "insert ripple",
+    {
+      type: "insert",
+      track: 0,
+      at: 120,
+      mode: "insert",
+      clip: { id: "inserted", kind: "image", src: "still.png", duration: 30 },
+    },
+    [
+      ["shot", 60, 60],
+      ["inserted", 120, 30],
+      ["later", 150, 360],
+    ],
+  ],
+] satisfies [string, CommandInput, (string | number)[][]][]) {
+  test(`${name} returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks`, async () => {
+    const fixture = await timelineFixture();
+    const { project } = fixture;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({ name: "ripple-sync", version: "1" });
+    const api = `/projects/${project.id}`;
+    const index = join(project.path, "index.html");
+    const html = `<main data-composition-id="main" data-duration="16" data-fps="30"><video id="shot" src="shot.mp4" muted data-start="2" data-duration="2" data-media-start="2" data-track-index="0"></video><video id="later" src="shot.mp4" muted data-start="4" data-duration="12" data-track-index="0"></video><div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1">Lower third</div><div id="later-title" class="clip" data-start="14" data-duration="2" data-track-index="1">Later cue</div><script>gsap.to("#lower", {opacity:1});</script></main>`;
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (await fixture.request(`${api}/timeline`)).json(),
+      );
+    const result = z.object({
+      structuredContent: z.object({ result: TimelineViewSchema }),
+    });
+    try {
+      await writeFile(index, html);
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const before = await read();
+      const files = await fixture.files();
+      const reason = `Command 1 (${command.type}): Lower third on V2 can't be cut here. Turn off auto-select on V2 to ripple without it.`;
+      const response = await fixture.request(`${api}/commands`, "POST", {
+        expectedRevision: before.revision,
+        commands: [command],
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: reason,
+        code: "unsupported",
+        command: 0,
+      });
+      const refused = await client.callTool({
+        name: "timeline_edit",
+        arguments: {
+          projectId: project.id,
+          expectedRevision: before.revision,
+          commands: [command],
+        },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toEqual([
+        { type: "text", text: expect.stringContaining(reason) },
+      ]);
+      expect(await read()).toEqual(before);
+      expect(await fixture.files()).toEqual(files);
+      const optOut = await fixture.request(`${api}/commands`, "POST", {
+        expectedRevision: before.revision,
+        commands: [{ type: "setTrack", index: 1, autoSelect: false }],
+      });
+      expect(optOut.status).toBe(200);
+      const optedOut = await read();
+      const edited = result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: project.id,
+            expectedRevision: optedOut.revision,
+            commands: [command],
+          },
+        }),
+      ).structuredContent.result;
+      expect(edited.skippedClips ?? []).toEqual([]);
+      expect(
+        edited.timeline.clips
+          .filter((clip) => clip.track === 0)
+          .map((clip) => [clip.id, clip.start, clip.duration]),
+      ).toEqual(expectedPicture);
+      expect(edited.timeline.clips.filter((clip) => clip.track === 1)).toEqual(
+        before.timeline.clips.filter((clip) => clip.track === 1),
+      );
+      expect((await read()).timeline).toEqual(edited.timeline);
+      await fixture.request(`${api}/history/undo`, "POST", {});
+      expect((await read()).timeline).toEqual(optedOut.timeline);
+      await fixture.request(`${api}/history/undo`, "POST", {});
+      expect((await read()).timeline).toEqual(before.timeline);
+      expect(await readFile(index, "utf8")).toBe(html);
+    } finally {
+      await client.close();
+      await server.stop(true);
+      await fixture.close();
+    }
+  });
+}

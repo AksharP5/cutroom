@@ -40,7 +40,7 @@ interface Batch {
  * `silentMedia` every `src` known to hold no audio stream.
  */
 interface ApplyOptions {
-  /** Source-restricted auto-select clips left whole by this batch. */
+  /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
   mediaLengths?: ReadonlyMap<string, number>;
@@ -138,7 +138,7 @@ function applyIn(timeline: Timeline, command: Command, batch: Batch) {
   return next === timeline ? timeline : settle(timeline, next);
 }
 
-/** Applies one command. Auto-select skips source-restricted clips; other failures throw a TimelineError. */
+/** Applies one command. Auto-select razor skips source-restricted clips; other failures throw a TimelineError. */
 export function apply(
   timeline: Timeline,
   command: Command,
@@ -358,21 +358,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               (track) =>
                 editPoint(track) + (command.edge === "end" ? change : 0),
               -change,
-              fps,
+              timeline,
               mint,
               ids,
-              batch.onSkip,
             )
-          : insertTime(
-              trimmed,
-              tracks,
-              editPoint,
-              change,
-              fps,
-              mint,
-              ids,
-              batch.onSkip,
-            );
+          : insertTime(trimmed, tracks, editPoint, change, timeline, mint, ids);
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -446,16 +436,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       for (const [from, to] of mergeRanges(
         removing.map((clip) => [clip.start, clipEnd(clip)] as const),
       ).toReversed())
-        next = removeTime(
-          next,
-          tracks,
-          () => from,
-          to - from,
-          fps,
-          mint,
-          new Set(),
-          batch.onSkip,
-        );
+        next = removeTime(next, tracks, () => from, to - from, timeline, mint);
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
@@ -479,16 +460,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       if (mode === "insert") {
         const tracks = rippleTracks(timeline, [track]);
         const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
-        next = splitClips(
+        const targets = withPartners(
           next,
-          withPartners(
-            next,
-            next.filter((clip) => tracks.has(clip.track) && spans(clip)),
-          ).filter(spans),
-          at,
-          fps,
-          mint,
-        );
+          next.filter((clip) => tracks.has(clip.track) && spans(clip)),
+        ).filter(spans);
+        for (const clip of targets)
+          if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
+        next = splitClips(next, targets, at, fps, mint);
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
       const separate =
@@ -910,7 +888,7 @@ function withPartners(clips: Clip[], selected: Clip[]): Clip[] {
   );
 }
 
-/** Auto-select may leave a source-restricted clip whole, including its linked group. */
+/** Auto-select razor may leave a source-restricted clip whole, including its linked group. */
 function skipAutoClips(
   clips: Clip[],
   reasons: ReadonlyMap<Clip, string>,
@@ -990,18 +968,31 @@ function shiftAfter(
   return next;
 }
 
-/** Remove an interval on participating tracks, leaving restricted auto-select clips whole. */
+function refuseRippleCut(clip: Clip, timeline: Timeline): never {
+  const kind = timeline.tracks.find(
+    (track) => track.index === clip.track,
+  )!.kind;
+  const number = timeline.tracks.filter(
+    (track) => track.kind === kind && track.index <= clip.track,
+  ).length;
+  const track = `${kind === "audio" ? "A" : "V"}${number}`;
+  const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+  throw new TimelineError(
+    "unsupported",
+    `${name} on ${track} can't be cut here. Turn off auto-select on ${track} to ripple without it.`,
+  );
+}
+
+/** Remove an interval on participating tracks, refusing cuts the source cannot represent. */
 function removeTime(
   clips: Clip[],
   tracks: ReadonlySet<number>,
   from: (track: number) => number,
   duration: number,
-  fps: Fps,
+  timeline: Timeline,
   mint: Minting,
   fixed: ReadonlySet<string> = new Set(),
-  onSkip: Batch["onSkip"] = () => {},
 ): Clip[] {
-  const reasons = new Map<Clip, string>();
   for (const clip of clips) {
     const start = from(clip.track),
       end = start + duration;
@@ -1018,9 +1009,8 @@ function removeTime(
         : clip.start >= start && clipEnd(clip) <= end
           ? clip.sourceRestrictions?.remove
           : undefined;
-    if (reason) reasons.set(clip, reason);
+    if (reason) refuseRippleCut(clip, timeline);
   }
-  fixed = new Set([...fixed, ...skipAutoClips(clips, reasons, fixed, onSkip)]);
   const fixedClips = clips.filter((clip) => fixed.has(clip.id));
   let next = clips.filter((clip) => !fixed.has(clip.id));
   for (const track of tracks)
@@ -1029,7 +1019,7 @@ function removeTime(
       track,
       from(track),
       from(track) + duration,
-      fps,
+      timeline.fps,
       mint,
     );
   return [
@@ -1048,23 +1038,19 @@ function insertTime(
   tracks: ReadonlySet<number>,
   at: (track: number) => number,
   duration: number,
-  fps: Fps,
+  timeline: Timeline,
   mint: Minting,
   fixed: ReadonlySet<string>,
-  onSkip: Batch["onSkip"],
 ): Clip[] {
-  const reasons = new Map(
-    clips.flatMap((clip) =>
+  for (const clip of clips)
+    if (
       !fixed.has(clip.id) &&
       tracks.has(clip.track) &&
       clip.start < at(clip.track) &&
       at(clip.track) < clipEnd(clip) &&
       clip.sourceRestrictions?.copy
-        ? [[clip, clip.sourceRestrictions.copy] as const]
-        : [],
-    ),
-  );
-  fixed = new Set([...fixed, ...skipAutoClips(clips, reasons, fixed, onSkip)]);
+    )
+      refuseRippleCut(clip, timeline);
   let next = clips;
   for (const track of tracks)
     next = splitClips(
@@ -1077,7 +1063,7 @@ function insertTime(
           at(track) < clipEnd(clip),
       ),
       at(track),
-      fps,
+      timeline.fps,
       mint,
     );
   return next.map((clip) =>
