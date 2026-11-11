@@ -709,7 +709,7 @@ test("the blade cuts the clip under it at that frame, snapped only inside the cl
   });
 });
 
-test("dropped media is placed in free space, inserted over a clip, and refused on the wrong kind of track", () => {
+test("media drops overwrite by default, insert explicitly, and refuse the wrong kind of track", () => {
   const timeline = sequence();
   const [video, , audio] = timeline.tracks as [Track, Track, Track];
   const media = { kind: "video", src: "assets/new.mp4", frames: 60 } as const;
@@ -719,7 +719,7 @@ test("dropped media is placed in free space, inserted over a clip, and refused o
   };
 
   const free = dropPreview(timeline, media, video, 420, 0, 0);
-  expect(insert(free)).toEqual(["place", 420]);
+  expect(insert(free)).toEqual(["overwrite", 420]);
   expect(free.valid).toBe(true);
   // Its end takes c's start when dropped a little short of it.
   expect(dropPreview(timeline, media, video, 238, 0, 5)).toMatchObject({
@@ -727,11 +727,18 @@ test("dropped media is placed in free space, inserted over a clip, and refused o
     snap: 300,
   });
 
-  // On the cut between a and b it is inserted, and every track opens 60 frames there.
+  // Overwrite leaves every other clip in place, including the linked sound.
   const over = dropPreview(timeline, media, video, 102, 0, 5);
-  expect(insert(over)).toEqual(["insert", 100]);
+  expect(insert(over)).toEqual(["overwrite", 100]);
   expect(places(over.shown)).toMatchObject({
     a: [0, 0, 100],
+    b: [0, 160, 40],
+    c: [0, 300, 100],
+  });
+
+  const pushed = dropPreview(timeline, media, video, 102, 0, 5, [], "insert");
+  expect(insert(pushed)).toEqual(["insert", 100]);
+  expect(places(pushed.shown)).toMatchObject({
     b: [0, 160, 100],
     c: [0, 360, 100],
   });

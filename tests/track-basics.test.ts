@@ -178,7 +178,7 @@ test("a linked insert reuses free picture-sound tracks, or creates one, and expo
   );
 });
 
-test("picture sound never fills gaps on Music or VO tracks", () => {
+test("overwrite reuses picture sound tracks while leaving Music and VO alone", () => {
   const parsed = parseComposition(
     `<main id="main" data-composition-id="main" data-duration="12">
     <video id="interview" src="interview.mp4" muted data-link="interview" data-start="0" data-duration="3" data-track-index="0"></video>
@@ -203,8 +203,11 @@ test("picture sound never fills gaps on Music or VO tracks", () => {
   expect(
     added.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
       ?.track,
-  ).toBe(4);
-  expect(added.tracks.at(-1)).toMatchObject({ index: 4, kind: "audio" });
+  ).toBe(1);
+  expect(added.tracks).toEqual(named.tracks);
+  expect(added.clips.find((clip) => clip.id === "music")).toEqual(
+    named.clips.find((clip) => clip.id === "music"),
+  );
   const empty = applyAll(named, [
     CommandSchema.parse({ type: "setTrack", index: 5, kind: "audio" }),
     insert,
@@ -212,7 +215,7 @@ test("picture sound never fills gaps on Music or VO tracks", () => {
   expect(
     empty.clips.find((clip) => clip.link === "second" && clip.kind === "audio")
       ?.track,
-  ).toBe(5);
+  ).toBe(1);
 });
 
 test("adding an empty track and a clip on it is an exact command batch, including a muted destination", () => {

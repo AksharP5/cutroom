@@ -535,18 +535,20 @@ export function Timeline({
 
   const { fps } = timeline;
   const frames = timelineFrames(timeline);
+  const [trackDrag, setTrackDrag] = useState(false);
   const draggingMedia =
     useSyncExternalStore(subscribeMediaDrag, mediaDrag) !== null;
   const layout = useMemo(
     () =>
       trackRows(timeline.tracks, {
         ...sizes.rows,
-        // A new-track preview fits in the band only while media is being dragged.
-        padding: draggingMedia
-          ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
-          : 0,
+        // Clip moves reveal the bands when the pointer reaches an edge.
+        padding:
+          draggingMedia || trackDrag
+            ? Math.max(sizes.rows.video, sizes.rows.audio) + sizes.rows.seam
+            : 0,
       }),
-    [timeline.tracks, sizes, draggingMedia],
+    [timeline.tracks, sizes, draggingMedia, trackDrag],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
   const gestures = useLaneGestures({
@@ -563,6 +565,7 @@ export function Timeline({
     onSelect,
     onEdit,
     onGesture,
+    onTrackDrag: setTrackDrag,
   });
   const refreshDrag = useRef(gestures.refresh);
   refreshDrag.current = gestures.refresh;

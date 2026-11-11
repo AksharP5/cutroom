@@ -476,8 +476,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
       if (separate) {
+        // Overwrite may have removed a linked video entirely; classify sound from the input.
         const pictureLinks = new Set(
-          next
+          clips
             .filter((clip) => clip.kind === "video" && clip.link !== null)
             .map((clip) => clip.link),
         );
@@ -489,17 +490,18 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           (candidate) =>
             candidate.kind === "audio" &&
             !candidate.locked &&
-            next.every(
+            clips.every(
               (clip) =>
                 clip.track !== candidate.index ||
                 (clip.link !== null && pictureLinks.has(clip.link)),
             ) &&
-            !next.some(
-              (clip) =>
-                clip.track === candidate.index &&
-                clip.start < end &&
-                clipEnd(clip) > at,
-            ),
+            (mode === "overwrite" ||
+              !next.some(
+                (clip) =>
+                  clip.track === candidate.index &&
+                  clip.start < end &&
+                  clipEnd(clip) > at,
+              )),
         );
         if (!destination) {
           destination = newTrack(
@@ -508,6 +510,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           );
           tracks = [...tracks, destination];
         }
+        if (mode === "overwrite")
+          next = clearRange(next, destination.index, at, end, fps, mint);
         onCreate(audioId, { insert: { ...input, kind: "audio", id: audioId } });
         audio = [
           {

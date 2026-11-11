@@ -4,7 +4,11 @@ import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
-import type { CommandInput, Timeline } from "../../shared/timeline/schema";
+import type {
+  Clip,
+  CommandInput,
+  Timeline,
+} from "../../shared/timeline/schema";
 import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
@@ -48,6 +52,7 @@ export interface LaneGestureOptions {
   onEdit(label: string, commands: CommandInput[], basis?: Timeline): boolean;
   /** A press began or ended. While one is under way, Esc cancels it and does nothing else. */
   onGesture(active: boolean): void;
+  onTrackDrag(active: boolean): void;
 }
 
 const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
@@ -94,6 +99,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const readout = useRef<HTMLDivElement>(null);
   const marquee = useRef<HTMLDivElement>(null);
   const pieces = useRef<HTMLDivElement>(null);
+  const destinationRow = useRef<Row | null>(null);
 
   const view = () => latest.current.viewport.current?.state();
   const frameAt = (clientX: number) =>
@@ -107,7 +113,61 @@ export function useLaneGestures(options: LaneGestureOptions) {
     return rowsBetween(latest.current.rows, y, y + 1)[0];
   };
   const rowOf = (track: number | undefined) =>
-    latest.current.rows.find((row) => row.track.index === track);
+    latest.current.rows.find((row) => row.track.index === track) ??
+    (destinationRow.current && destinationRow.current.track.index === track
+      ? destinationRow.current
+      : undefined);
+
+  /** Both kinds of drag use the same edge bands; incompatible edges reach track-kind refusal. */
+  function destination(kind: Clip["kind"], clientY: number) {
+    const { rows, timeline } = latest.current;
+    const first = rows[0]!;
+    const last = rows.at(-1)!;
+    const { y } = local(0, clientY);
+    const above = y < first.top;
+    const below = y >= last.top + last.height;
+    const creating = (above && !isAudioKind(kind)) || (below && isAudioKind(kind));
+    const row = creating
+      ? {
+          track: newTrack(
+            nextTrackIndex(rows.map((row) => row.track)),
+            above ? "video" : "audio",
+          ),
+          id: above ? "New video track" : "New audio track",
+          top: above ? 0 : last.top + last.height + 1,
+          height: above ? first.height : last.height,
+        }
+      : (rowAt(clientY) ?? (above ? first : last));
+    return {
+      row,
+      create: creating
+        ? [...rows.map((row) => row.track), row.track].filter(
+            (track) =>
+              !timeline.tracks.some((item) => item.index === track.index),
+          )
+        : [],
+    };
+  }
+
+  function dragInput(active: Drag) {
+    const { x, y, bypass } = pointer.current;
+    const { intent } = active;
+    const grabbed =
+      intent.kind === "move"
+        ? active.timeline.clips.find((clip) => clip.id === intent.clipId)
+        : undefined;
+    const target = grabbed ? destination(grabbed.kind, y) : null;
+    destinationRow.current = target?.create.length ? target.row : null;
+    if (destinationRow.current) latest.current.onTrackDrag(true);
+    return {
+      frame: frameAt(x),
+      track: target?.row.track.index ?? rowAt(y)?.track.index ?? null,
+      create: target?.create,
+      reach: reach(bypass),
+      dy: intent.kind === "gain" ? pointer.current.dy : 0,
+      gainHeight: gainHeight.current,
+    };
+  }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
   const reach = (bypass: boolean) => {
     const ppf = view()?.ppf;
@@ -138,7 +198,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const root = lanes.current;
     const ppf = view()?.ppf;
     if (!root || !ppf) return;
-    const top = new Map(rows.map((row) => [row.track.index, row.top]));
+    const shownRows = destinationRow.current
+      ? [...rows, destinationRow.current].toSorted((a, b) => a.top - b.top)
+      : rows;
+    const top = new Map(shownRows.map((row) => [row.track.index, row.top]));
     const before = new Map(base.clips.map((clip) => [clip.id, clip]));
     const surviving = new Set(shown.clips.map((clip) => clip.id));
     const next = new Map<string, Offset & { scale: number }>();
@@ -252,7 +315,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         box.style.transform = `translate(${piece.start * ppf}px, ${row.top}px) scaleX(${Math.max(1, piece.duration * ppf - 1)})`;
       }
     bodies.current?.scene({
-      rows,
+      rows: shownRows,
       tracks: shown === timeline ? tracks : clipsByTrack(shown.clips),
       fps: shown.fps,
     });
@@ -302,6 +365,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       if (element) element.hidden = true;
     lanes.current?.removeAttribute("data-refused");
     preview.current = null;
+    destinationRow.current = null;
     drawn.current = "";
     return offsets;
   }
@@ -375,7 +439,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       end("cancel");
       return;
     }
-    const { x, y, bypass } = pointer.current;
+    const { x, y } = pointer.current;
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
     const scroller = latest.current.lanes.current
@@ -386,13 +450,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       : { x: Infinity, y: Infinity };
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
-    const input = {
-      frame: frameAt(x),
-      track: rowAt(y)?.track.index ?? null,
-      reach: reach(bypass),
-      dy: active.intent.kind === "gain" ? pointer.current.dy : 0,
-      gainHeight: gainHeight.current,
-    };
+    const input = dragInput(active);
     const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.dy}`;
     if (key !== drawn.current) {
       drawn.current = key;
@@ -433,6 +491,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     kept.current = null;
     lanes.current?.removeAttribute("data-cursor");
     latest.current.onGesture(false);
+    latest.current.onTrackDrag(false);
 
     if (!active) {
       // A marquee: a click on an empty lane without a modifier deselects.
@@ -467,14 +526,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const result =
       outcome === "cancel" || conflict
         ? null
-        : dragPreview(active, {
-            frame: frameAt(pointer.current.x),
-            track: rowAt(pointer.current.y)?.track.index ?? null,
-            reach: reach(pointer.current.bypass),
-            dy: pointer.current.dy,
-            gainHeight: gainHeight.current,
-          });
+        : dragPreview(active, dragInput(active));
     settle(result, active.timeline);
+    latest.current.onTrackDrag(false);
   }
 
   /** Ends a preview: with its edit when it has one the editor takes, otherwise by going back. */
@@ -673,31 +727,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
   useLayoutEffect(() => {
     drawn.current = "";
     update();
-  }, [options.timeline, options.snapping]);
+  }, [options.timeline, options.snapping, options.rows]);
 
   /** Media over the lanes, as `dropPreview` reads it; null when the drag is not project media. */
   function dropAt(event: DragEvent) {
     const media = mediaDrag();
     if (!media || !event.dataTransfer.types.includes(MEDIA_DRAG_TYPE))
       return null;
-    let row = rowAt(event.clientY);
-    const rows = latest.current.rows;
-    const { y } = local(event.clientX, event.clientY);
-    const first = rows[0];
-    const last = rows.at(-1);
-    const above = first && y < first.top && !isAudioKind(media.kind);
-    const below =
-      last && y >= last.top + last.height && isAudioKind(media.kind);
-    const creating = above || below;
-    if (creating) {
-      const kind = above ? "video" : "audio";
-      row = {
-        track: newTrack(nextTrackIndex(rows.map((row) => row.track)), kind),
-        id: kind === "video" ? "New video track" : "New audio track",
-        top: above ? 0 : last!.top + last!.height + 1,
-        height: above ? first!.height : last!.height,
-      };
-    }
+    const { row, create } = destination(media.kind, event.clientY);
     const { timeline, playhead } = latest.current;
     const { fps } = timeline;
     const dragged = {
@@ -709,26 +746,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     return {
       media: dragged,
       row,
-      preview:
-        row &&
-        dropPreview(
-          timeline,
-          dragged,
-          row.track,
-          frameAt(event.clientX),
-          playhead(),
-          reach(event.ctrlKey || event.metaKey),
-          creating
-            ? rows
-                .filter(
-                  (row) =>
-                    !timeline.tracks.some(
-                      (track) => track.index === row.track.index,
-                    ),
-                )
-                .map((row) => row.track)
-            : [],
-        ),
+      preview: dropPreview(
+        timeline,
+        dragged,
+        row.track,
+        frameAt(event.clientX),
+        playhead(),
+        reach(event.ctrlKey || event.metaKey),
+        create,
+        event.shiftKey && (event.ctrlKey || event.metaKey)
+          ? "insert"
+          : "overwrite",
+      ),
     };
   }
 
@@ -742,7 +771,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const box = ghost.current;
     const ppf = view()?.ppf;
     if (!drop || !row || !box || !ppf) return;
-    const key = `${drop.at}:${row.track.index}:${ppf}`;
+    const key = `${drop.at}:${row.track.index}:${ppf}:${event.shiftKey}:${event.ctrlKey}:${event.metaKey}`;
     if (key === drawn.current) return;
     drawn.current = key;
     render(latest.current.timeline, drop);

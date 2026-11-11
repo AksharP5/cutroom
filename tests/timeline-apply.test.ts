@@ -1181,3 +1181,54 @@ test("every piece a command cuts takes the caller's ids in order, and spent ids 
     }),
   ).toThrow("Id old was used earlier in this project.");
 });
+
+test("video overwrite clears matching picture-sound ranges, including fully covered picture, without rippling music", () => {
+  for (const duration of [60, 180]) {
+    const state = timeline([
+      clip("interview", 0, 30, 120, { link: "interview" }),
+      clip("dialogue", 1, 0, 180, { kind: "audio", link: "interview" }),
+      clip("music", 2, 0, 300, { kind: "audio" }),
+      clip("later", 0, 240, 30),
+    ]);
+    const next = run(state, {
+      type: "insert",
+      mode: "overwrite",
+      track: 0,
+      at: 0,
+      clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration },
+      linkedAudio: { id: "b-roll-audio" },
+    });
+    expect(next.clips.find((clip) => clip.id === "b-roll-audio")).toMatchObject(
+      {
+        track: 1,
+        start: 0,
+        duration,
+        link: "b-roll",
+      },
+    );
+    expect(next.clips.find((clip) => clip.id === "music")).toEqual(
+      state.clips.find((clip) => clip.id === "music"),
+    );
+    expect(next.clips.find((clip) => clip.id === "later")).toEqual(
+      state.clips.find((clip) => clip.id === "later"),
+    );
+    if (duration === 180) {
+      expect(
+        next.clips.some(
+          (clip) => clip.id === "interview" || clip.id === "dialogue",
+        ),
+      ).toBe(false);
+    } else {
+      expect(next.clips.find((clip) => clip.id === "interview")).toMatchObject({
+        start: 60,
+        duration: 90,
+        mediaStart: 1,
+      });
+      expect(next.clips.find((clip) => clip.id === "dialogue")).toMatchObject({
+        start: 60,
+        duration: 120,
+        mediaStart: 2,
+      });
+    }
+  }
+});
