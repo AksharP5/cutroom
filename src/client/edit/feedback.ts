@@ -109,6 +109,13 @@ function clipContent({ sourceRestrictions, ...clip }: Clip) {
 
 /** Compare confirmed projections, never the optimistic preview or the playback clock. */
 export function outsideChanges(before: TimelineView, after: TimelineView) {
+  const known = new Set(before.clipEdits?.map((edit) => edit.id));
+  const edits = after.clipEdits?.filter((edit) => !known.has(edit.id)) ?? [];
+  const authors = new Map(
+    edits
+      .filter((edit) => edit.composition === after.composition)
+      .map((edit) => [edit.clipId, edit.by]),
+  );
   const previous = new Map(
     before.timeline.clips.map((clip) => [clip.id, clip]),
   );
@@ -126,14 +133,21 @@ export function outsideChanges(before: TimelineView, after: TimelineView) {
       );
   }
   for (const id of next.keys()) if (!previous.has(id)) changes.set(id, "added");
-  const timelineChanged =
-    changes.size > 0 ||
+  // Watcher reads can observe an owner source save or import before its UI receipt arrives.
+  // Keep those attributed edits silent without dropping unrelated agent or disk changes.
+  for (const id of changes.keys())
+    if (authors.get(id) === "human") changes.delete(id);
+  const settingsChanged =
+    authors.get(null) !== "human" &&
     JSON.stringify({ ...before.timeline, clips: [] }) !==
       JSON.stringify({ ...after.timeline, clips: [] });
-  const known = new Set(before.clipEdits?.map((edit) => edit.id));
-  const edits = after.clipEdits?.filter((edit) => !known.has(edit.id)) ?? [];
+  const timelineChanged = changes.size > 0 || settingsChanged;
+  const changedAuthors = [
+    ...[...changes.keys()].map((id) => authors.get(id)),
+    ...(settingsChanged ? [authors.get(null)] : []),
+  ];
   const actor =
-    edits.length && edits.every((edit) => edit.by === "agent")
+    changedAuthors.length && changedAuthors.every((by) => by === "agent")
       ? "Agent"
       : "Outside edit";
   return { changes, timelineChanged, actor };

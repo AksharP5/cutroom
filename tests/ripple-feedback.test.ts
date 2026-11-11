@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { parseComposition } from "../src/server/timeline/composition";
+import { readSource } from "../src/server/projects/store";
+import { projectFixture } from "./project-fixture";
 import { applyAll } from "../src/shared/timeline/apply";
 import {
   CommandSchema,
@@ -138,6 +141,15 @@ test("outside edits ignore attribution-only refreshes and distinguish moves, tit
         by: "agent",
         accepted: false,
       },
+      {
+        id: "agent-title-edit",
+        clipId: "title",
+        composition: "index.html",
+        label: "Moved",
+        at: "now",
+        by: "agent",
+        accepted: false,
+      },
     ],
   };
   const change = outsideChanges(before, after);
@@ -165,4 +177,100 @@ test("the existing HTML parse supplies decoded first-line title text without scr
     '<div id="title" data-start="0" data-duration="3"><script>wrong()</script><style>.bad{}</style><template>not live</template><b>Hello &amp; welcome</b><br>Second line</div>',
   ).clips;
   expect(clip?.text).toBe("Hello & welcome");
+});
+
+test("owner history rows stay silent while unrelated agent and disk edits are reported", () => {
+  const before: TimelineView = {
+    composition: "index.html",
+    revision: "before",
+    timeline: parsed(shot + title),
+  };
+  const owner = {
+    id: "owner-edit",
+    clipId: "shot",
+    composition: "index.html",
+    label: "Edited title",
+    at: "now",
+    by: "human" as const,
+    accepted: true,
+  };
+  const after: TimelineView = {
+    ...before,
+    revision: "after",
+    timeline: parsed(shot.replace("A title", "Owner title") + title),
+    clipEdits: [owner],
+  };
+  expect(outsideChanges(before, after).timelineChanged).toBe(false);
+  const mixed: TimelineView = {
+    ...after,
+    timeline: parsed(
+      shot.replace("A title", "Owner title") +
+        title.replace('data-start="2"', 'data-start="3"'),
+    ),
+    clipEdits: [
+      owner,
+      {
+        ...owner,
+        id: "agent-edit",
+        clipId: "title",
+        by: "agent",
+        accepted: false,
+      },
+    ],
+  };
+  const agent = outsideChanges(before, mixed);
+  expect([...agent.changes]).toEqual([["title", "moved"]]);
+  expect(agent.actor).toBe("Agent");
+  const disk = outsideChanges(before, { ...mixed, clipEdits: [owner] });
+  expect([...disk.changes]).toEqual([["title", "moved"]]);
+  expect(disk.actor).toBe("Outside edit");
+});
+
+test("composition reads wait for an admitted edit and return its source with its attribution", async () => {
+  const fixture = await projectFixture();
+  const project = await fixture.store.create({
+    name: "Consistent attribution",
+  });
+  const original = await readSource(project, "index.html");
+  const changed = original.content.replaceAll(
+    "Consistent attribution",
+    "Owner title",
+  );
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const writing = fixture.review.editComposition(
+    project,
+    "index.html",
+    undefined,
+    () =>
+      fixture.store.mutate(project, "Owner source save", async () => {
+        entered.resolve();
+        await release.promise;
+        await writeFile(`${project.path}/index.html`, changed);
+      }),
+  );
+  try {
+    await entered.promise;
+    const reading = fixture.review.readComposition(
+      project,
+      "index.html",
+      async () => ({
+        source: await readSource(project, "index.html"),
+      }),
+    );
+    release.resolve();
+    const view = await reading;
+    expect(view.source.content).toBe(changed);
+    expect(view.clipEdits).toContainEqual(
+      expect.objectContaining({
+        clipId: "headline",
+        by: "human",
+        label: "Owner source save",
+      }),
+    );
+  } finally {
+    release.resolve();
+    await writing;
+    await fixture.close();
+  }
 });

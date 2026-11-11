@@ -610,6 +610,57 @@ export function createReviewService(store: ProjectStore) {
     });
   };
 
+  const clipChanges = async (project: Project, composition: string) => {
+    try {
+      await reconcile(project);
+      const path = posix.normalize(composition.replaceAll("\\", "/"));
+      const edits = await currentEdits(project);
+      const clipEdits = edits.filter((edit) => edit.composition === path);
+      // Another file's clip bytes belong to a composition row in this view. Keep one
+      // row per history entry and file, choosing pending work so it cannot be hidden.
+      const compositions = new Map<string, (typeof edits)[number]>();
+      for (const edit of edits) {
+        if (edit.composition === path) continue;
+        const key = JSON.stringify([
+          edit.historyId ?? edit.id,
+          edit.composition,
+        ]);
+        const previous = compositions.get(key);
+        if (
+          !previous ||
+          (edit.by === "agent" && !edit.accepted && !edit.resolution)
+        )
+          compositions.set(key, {
+            ...edit,
+            clipId: null,
+            label: `Edited ${edit.composition} composition`,
+          });
+      }
+      clipEdits.push(...compositions.values());
+      return {
+        clipEdits,
+        agentChanges: [
+          ...new Set(
+            clipEdits
+              .filter(
+                (edit) =>
+                  edit.by === "agent" && !edit.accepted && !edit.resolution,
+              )
+              .flatMap((edit) =>
+                edit.clipId === null || edit.composition !== path
+                  ? []
+                  : [edit.clipId],
+              ),
+          ),
+        ],
+      };
+    } catch (error) {
+      if (error instanceof ReviewFileError)
+        return { clipEdits: [], agentChanges: [] };
+      throw error;
+    }
+  };
+
   return {
     agent,
     authorize,
@@ -713,56 +764,17 @@ export function createReviewService(store: ProjectStore) {
         return result;
       }),
     clipChanges: (project: Project, composition: string) =>
-      serialize(project, async () => {
-        try {
-          await reconcile(project);
-          const path = posix.normalize(composition.replaceAll("\\", "/"));
-          const edits = await currentEdits(project);
-          const clipEdits = edits.filter((edit) => edit.composition === path);
-          // Another file's clip bytes belong to a composition row in this view. Keep one
-          // row per history entry and file, choosing pending work so it cannot be hidden.
-          const compositions = new Map<string, (typeof edits)[number]>();
-          for (const edit of edits) {
-            if (edit.composition === path) continue;
-            const key = JSON.stringify([
-              edit.historyId ?? edit.id,
-              edit.composition,
-            ]);
-            const previous = compositions.get(key);
-            if (
-              !previous ||
-              (edit.by === "agent" && !edit.accepted && !edit.resolution)
-            )
-              compositions.set(key, {
-                ...edit,
-                clipId: null,
-                label: `Edited ${edit.composition} composition`,
-              });
-          }
-          clipEdits.push(...compositions.values());
-          return {
-            clipEdits,
-            agentChanges: [
-              ...new Set(
-                clipEdits
-                  .filter(
-                    (edit) =>
-                      edit.by === "agent" && !edit.accepted && !edit.resolution,
-                  )
-                  .flatMap((edit) =>
-                    edit.clipId === null || edit.composition !== path
-                      ? []
-                      : [edit.clipId],
-                  ),
-              ),
-            ],
-          };
-        } catch (error) {
-          if (error instanceof ReviewFileError)
-            return { clipEdits: [], agentChanges: [] };
-          throw error;
-        }
-      }),
+      serialize(project, () => clipChanges(project, composition)),
+    /** The projection and its attribution must describe the same admitted source edits. */
+    readComposition: <T extends object>(
+      project: Project,
+      composition: string,
+      read: () => Promise<T>,
+    ) =>
+      serialize(project, async () => ({
+        ...(await read()),
+        ...(await clipChanges(project, composition)),
+      })),
     acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
         await reconcile(project);

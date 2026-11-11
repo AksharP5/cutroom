@@ -1,9 +1,10 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { startMediaDrag } from "./media-drag";
 
 async function open(page: Page, request: APIRequestContext, extra = "") {
   const project = ProjectSchema.parse(
@@ -104,6 +105,125 @@ test("a simple same-track Q stays silent", async ({ page, request }) => {
     )
     .toBe(870);
   await page.waitForTimeout(1000);
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
+
+test("an outside notice waits behind ripple Undo without resetting its hold", async ({
+  page,
+  request,
+}) => {
+  const { project, read, seek } = await open(page, request, otherTracks);
+  await seek("2717");
+  await page.clock.install();
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "Every edit has a consequence",
+      "Changed on disk",
+    ),
+  );
+  await expect(page.locator('[data-clip-label="shot"] .tl-text')).toHaveText(
+    "Changed on disk",
+  );
+  const before = (await read()).timeline;
+  await page.keyboard.press("q");
+  const ripple = page.getByRole("status").filter({ hasText: "Removed 27:17" });
+  await expect(
+    ripple.getByRole("button", { name: "Undo", exact: true }),
+  ).toBeVisible();
+  await page.clock.fastForward(1000);
+  await expect(
+    ripple.getByRole("button", { name: "Undo", exact: true }),
+  ).toBeVisible();
+  await ripple.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(async () => (await read()).timeline).toEqual(before);
+  const outside = page
+    .getByRole("status")
+    .filter({ hasText: "Outside edit updated 1 clip." });
+  await expect(outside).toBeVisible();
+  await page.clock.fastForward(1000);
+  await expect(outside).toBeVisible();
+  await page.clock.fastForward(4000);
+  await expect(outside).toHaveCount(0);
+});
+
+test("owner imports, media drops, view preferences and source saves stay silent", async ({
+  page,
+  request,
+}) => {
+  const { base, read } = await open(
+    page,
+    request,
+    '<div id="other" class="clip" data-start="2" data-duration="2" data-track-index="1">Another title</div>',
+  );
+  await page.evaluate(() => {
+    const notices: string[] = [];
+    Reflect.set(window, "ownerNotices", notices);
+    new MutationObserver(() => {
+      const text = document.querySelector(
+        '.toast[role="status"] span',
+      )?.textContent;
+      if (text) notices.push(text);
+    }).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  });
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  await media.locator('input[type="file"]').setInputFiles({
+    name: "owner.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="red"/></svg>',
+    ),
+  });
+  const row = media.getByRole("listitem").filter({ hasText: "owner.svg" });
+  await startMediaDrag(page, row);
+  const lane = (await page.locator('.tl-lane[data-row="1"]').boundingBox())!;
+  const ppf = await page
+    .locator(".tl-grid")
+    .evaluate((grid) => Number(grid.style.getPropertyValue("--ppf")));
+  await page.mouse.move(lane.x + 300 * ppf, lane.y + lane.height / 2, {
+    steps: 10,
+  });
+  await page.mouse.move(lane.x + 300 * ppf, lane.y + lane.height / 2);
+  await page.mouse.up();
+  await expect
+    .poll(async () =>
+      (await read()).timeline.clips.some(
+        (clip) => clip.src === "assets/owner.svg",
+      ),
+    )
+    .toBe(true);
+  await page
+    .getByRole("combobox", { name: "Track density" })
+    .selectOption("compact");
+  const source = SourceSchema.parse(
+    await (await request.get(`${base}/source`)).json(),
+  );
+  expect(
+    (
+      await request.put(`${base}/source`, {
+        data: {
+          path: "index.html",
+          expectedVersion: source.version,
+          content: source.content.replace(
+            "Every edit has a consequence",
+            "Owner source save",
+          ),
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await expect(page.locator('[data-clip-label="shot"] .tl-text')).toHaveText(
+    "Owner source save",
+  );
+  await page.waitForTimeout(1000);
+  expect(
+    await page.evaluate(() => Reflect.get(window, "ownerNotices")),
+  ).toEqual([]);
   await expect(page.locator(".toast")).toHaveCount(0);
 });
 

@@ -114,7 +114,7 @@ function noticeOutside(before: TimelineView, after: TimelineView) {
       dismissOutside = showToast(
         outsideMessage(outsideClips, outsideActors),
         null,
-        { tone: "info", transient: true },
+        { tone: "info", transient: true, priority: "background" },
       );
       clearOutsideNotice();
     },
