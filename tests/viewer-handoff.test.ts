@@ -74,3 +74,33 @@ test("promotion keeps the navigation deadline and failure reports only once with
     reported,
   );
 });
+
+test("a reload of the confirmed document is prepared and painted again; other loads change nothing", () => {
+  const reloading = transitionHandoff(showing, {
+    type: "loaded",
+    gen: 1,
+    deadline: 15_000,
+  });
+  expect(reloading).toEqual({
+    kind: "loading",
+    confirmed,
+    candidate: { gen: 1, deadline: 15_000 },
+  });
+  const reloaded = { ...confirmed, shown: 102 };
+  const promoting = transitionHandoff(reloading, {
+    type: "prepared",
+    picture: reloaded,
+  });
+  expect(
+    transitionHandoff(promoting, { type: "painted", gen: 1 }),
+  ).toMatchObject({ kind: "showing", confirmed: reloaded });
+  // A candidate's own first load is already loading; it keeps its deadline.
+  const loading = transitionHandoff(showing, {
+    type: "navigate",
+    gen: 2,
+    deadline: 15_000,
+  });
+  expect(
+    transitionHandoff(loading, { type: "loaded", gen: 2, deadline: 20_000 }),
+  ).toBe(loading);
+});

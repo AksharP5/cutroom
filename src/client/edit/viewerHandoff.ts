@@ -23,6 +23,7 @@ export type Handoff =
 
 type Event =
   | { type: "navigate"; gen: number; deadline: number }
+  | { type: "loaded"; gen: number; deadline: number }
   | { type: "prepared"; picture: Picture }
   | { type: "painted"; gen: number }
   | { type: "failed"; gen: number; reason: unknown }
@@ -36,6 +37,16 @@ export function transitionHandoff(state: Handoff, event: Event): Handoff {
       confirmed: state.confirmed,
       candidate: { gen: event.gen, deadline: event.deadline },
     };
+  // The confirmed document reloading itself (not a new edit) starts its lifecycle again, so
+  // the reloaded document is prepared, painted and reattached to the transport like any other.
+  if (event.type === "loaded")
+    return state.kind === "showing" && state.confirmed?.gen === event.gen
+      ? {
+          kind: "loading",
+          confirmed: state.confirmed,
+          candidate: { gen: event.gen, deadline: event.deadline },
+        }
+      : state;
   if (event.type === "reported")
     return state.kind === "failed"
       ? { kind: "showing", confirmed: state.confirmed }

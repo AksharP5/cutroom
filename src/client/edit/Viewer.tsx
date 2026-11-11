@@ -268,7 +268,14 @@ export function Viewer({
                 height: size.height,
                 transform: `scale(${width / size.width}, ${height / size.height})`,
               }}
-              onLoad={(event) => void load(gen, event.currentTarget)}
+              onLoad={(event) => {
+                transition({
+                  type: "loaded",
+                  gen,
+                  deadline: performance.now() + READY_TIMEOUT,
+                });
+                void load(gen, event.currentTarget);
+              }}
             />
           );
         })}

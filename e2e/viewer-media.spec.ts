@@ -1408,3 +1408,34 @@ test("stalled candidate replacements never expose the viewer background", async 
     await capture.stop();
   }
 });
+
+test("a reload of the live preview reconnects playback to the editor clock", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await openMedia(page, request);
+  await seek("0311");
+  const frame = (await (await page
+    .locator("iframe[data-live]")
+    .elementHandle())!.contentFrame())!;
+  const navigated = page.waitForEvent("framenavigated", {
+    predicate: (navigation) => navigation === frame,
+  });
+  await frame.evaluate(() => location.reload());
+  await navigated;
+  await expect(frame.locator("[data-cutroom-video-hold]")).toHaveCount(1);
+  await page.getByRole("region", { name: "Viewer" }).click();
+  await page.keyboard.press("Space");
+  await expect
+    .poll(() =>
+      frame
+        .locator("video")
+        .evaluate((video: HTMLVideoElement) => video.paused),
+    )
+    .toBe(false);
+  // Before the fix the video kept playing while the editor's timecode stayed put.
+  await expect(
+    page.getByRole("button", { name: /^Current time/ }),
+  ).not.toHaveText("00:00:03:11");
+  await page.keyboard.press("Space");
+});
