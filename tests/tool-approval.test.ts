@@ -30,6 +30,9 @@ beforeAll(async () => {
 <div id="lt-7f3a" class="clip" data-start="0" data-duration="5" data-track-index="1" data-label="Lower third"></div>
 <div id="kicker-9c1e" class="clip" data-start="5" data-duration="3" data-track-index="2" data-label="Kicker"></div>
 <video id="broll-2b8d" class="clip" src="assets/broll.mp4" data-start="0" data-duration="8" data-track-index="0" muted></video>
+<div id="9833c4fb-2f39-49af-bab0-30d39bfda8ed" class="clip" data-start="0" data-duration="5" data-track-index="3">Hello</div>
+<div id="text-2" class="clip" data-start="5" data-duration="3" data-track-index="3">World</div>
+<div id="text-3" class="clip" data-start="8" data-duration="3" data-track-index="3">Again</div>
 </main></body></html>`,
   );
   noteId = (
@@ -194,7 +197,7 @@ test("a transcript row and its approval name the same thing, from the project as
   expect(calls.finish("a", "{}", false).target).toBe("Lower third");
   expect(calls.start("b", tool("timeline_edit"), input).target).toBeUndefined();
   // Without a project to read, the call still describes itself without ids.
-  expect(await toolSubject(tool("timeline_edit"), input)).toBeUndefined();
+  expect(await toolSubject(tool("timeline_edit"), input)).toBe("a clip");
   expect(
     await toolSubject(tool("review_claim"), { noteId: "missing" }, names),
   ).toBeUndefined();
@@ -203,6 +206,59 @@ test("a transcript row and its approval name the same thing, from the project as
   ).toBeUndefined();
   expect(quoteNote("  Fix   the\ncolor ")).toBe("“Fix the color”");
   expect(quoteNote("")).toBeUndefined();
+});
+
+test("unnamed text clips use their kind or count, keeping raw ids inside Details", async () => {
+  const id = "9833c4fb-2f39-49af-bab0-30d39bfda8ed";
+  for (const [ids, target] of [
+    [[id], "a text clip"],
+    [[id, "text-2", "text-3"], "3 clips"],
+    [[id, "lt-7f3a"], "Lower third and 1 more clip"],
+  ] as const) {
+    const input = {
+      projectId: project.id,
+      expectedRevision: "r",
+      commands: [{ type: "remove", clipIds: [...ids] }],
+    };
+    const approval = await toolApproval(
+      tool("timeline_edit"),
+      input,
+      project.path,
+      names,
+    );
+    expect(approval.title).toBe(`Edit ${target}?`);
+    expect(approval.target).toBe(target);
+    expect(await toolSubject(tool("timeline_edit"), input, names)).toBe(target);
+    expect(approval.input).toMatchObject({
+      ...input,
+      composition: "index.html",
+    });
+  }
+});
+
+test("a stuck name lookup falls back within a bounded approval wait and aborts immediately", async () => {
+  const stuck: ToolNames = { ...names, clips: () => new Promise(() => {}) };
+  const input = {
+    projectId: project.id,
+    expectedRevision: "r",
+    commands: [{ type: "remove", clipIds: ["text-2", "text-3"] }],
+  };
+  const started = performance.now();
+  expect(
+    (await toolApproval(tool("timeline_edit"), input, project.path, stuck))
+      .title,
+  ).toBe("Edit 2 clips?");
+  expect(performance.now() - started).toBeLessThan(1000);
+  const abort = new AbortController();
+  const pending = toolApproval(
+    tool("timeline_edit"),
+    input,
+    project.path,
+    stuck,
+    abort.signal,
+  );
+  abort.abort();
+  expect((await pending).title).toBe("Edit 2 clips?");
 });
 
 test("every Cutroom tool has its own wording", () => {

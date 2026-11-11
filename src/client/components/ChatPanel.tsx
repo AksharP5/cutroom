@@ -164,8 +164,11 @@ const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
  */
 function StepGroup({ steps }: { steps: AgentMessage[] }) {
   const [open, setOpen] = useState(false);
+  const [grouped, setGrouped] = useState(false);
   const rows = useId();
-  const { summary, running, shown } = summarizeSteps(steps);
+  const { summary, running, shown } = summarizeSteps(steps, grouped);
+  // Once formed, keep the disclosure and its focus even if every routine call fails.
+  if (summary && !grouped) setGrouped(true);
   return (
     <div className="chat-tools" role="group" aria-label="Agent steps">
       {summary && (

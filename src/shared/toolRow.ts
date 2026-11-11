@@ -336,14 +336,17 @@ const NAMED_KINDS = 2;
  * "Read 6 files, ran 3 commands, 2 more"; failures and project edits stay visible as rows.
  * A lone routine step needs no summary and shows as its row.
  */
-export function summarizeSteps(steps: readonly AgentMessage[]) {
+export function summarizeSteps(
+  steps: readonly AgentMessage[],
+  grouped = false,
+) {
   const shown: AgentMessage[] = [];
   const folded: AgentMessage[] = [];
   for (const step of steps)
     (step.status === "failed" || editsProject(step.tool) ? shown : folded).push(
       step,
     );
-  if (folded.length < 2)
+  if (folded.length < 2 && !grouped)
     return { summary: "", running: false, shown: [...steps] };
   const present = foldedKinds.flatMap((kind) => {
     const of = folded.filter((step) => stepKind(step.tool) === kind);
@@ -362,10 +365,11 @@ export function summarizeSteps(steps: readonly AgentMessage[]) {
   const rest = present
     .slice(NAMED_KINDS)
     .reduce((sum, kind) => sum + kind.total, 0);
-  const text = [
-    ...present.slice(0, NAMED_KINDS).map((kind) => kind.text),
-    ...(rest ? [`${rest} more`] : []),
-  ].join(", ");
+  const text =
+    [
+      ...present.slice(0, NAMED_KINDS).map((kind) => kind.text),
+      ...(rest ? [`${rest} more`] : []),
+    ].join(", ") || count(steps.length, "step");
   return {
     summary: text.charAt(0).toUpperCase() + text.slice(1),
     running: folded.some((step) => step.status === "streaming"),

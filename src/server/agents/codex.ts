@@ -8,7 +8,6 @@ import type {
 import { toolTarget } from "../../shared/agent";
 import { toolApproval } from "./tool-approval";
 import { toolSubject } from "./tool-subject";
-import { CUTROOM_SERVER } from "../../shared/toolRow";
 import {
   codexAsks,
   codexPermissionConfigSchema,
@@ -18,7 +17,7 @@ import {
 import type { CodexToolConfig } from "./tool-permissions";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
-import { agentPrompt, completeMessage } from "./runtime";
+import { agentPrompt, completeMessage, toolCalls } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const threadResultSchema = z.object({ thread: z.object({ id: z.string() }) });
@@ -162,8 +161,8 @@ export class CodexRuntime implements AgentRuntime {
     string,
     { command: string; output: string }
   >();
-  /** What each running Cutroom tool call acts on, named when it starts and kept for its result. */
-  private readonly subjects = new Map<string, string | undefined>();
+  private readonly tools: ReturnType<typeof toolCalls>;
+  private naming?: AbortController;
   private readonly unlisten;
 
   constructor(
@@ -171,16 +170,15 @@ export class CodexRuntime implements AgentRuntime {
     private readonly options: RuntimeOptions,
     private readonly threadConfig: Record<string, string> = {},
   ) {
-    // One at a time: naming a tool call reads the project, and rows must keep their order.
-    let received = Promise.resolve();
+    this.tools = toolCalls(options.cwd);
     this.unlisten = client.subscribe((message) => {
-      received = received
-        .then(() => this.receive(message))
-        .catch((error: unknown) => {
-          this.active?.reject(
-            error instanceof Error ? error : new Error(String(error)),
-          );
-        });
+      try {
+        this.receive(message);
+      } catch (error) {
+        this.active?.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
     });
   }
 
@@ -256,6 +254,7 @@ export class CodexRuntime implements AgentRuntime {
     const completed = new Promise<void>((resolve, reject) => {
       this.active = { resolve, reject };
     });
+    this.naming = new AbortController();
     try {
       await Promise.all([
         completed,
@@ -282,12 +281,13 @@ export class CodexRuntime implements AgentRuntime {
       this.active = undefined;
       this.turnId = undefined;
       this.commands.clear();
-      this.subjects.clear();
+      this.naming.abort();
+      this.tools.clear();
       this.seen.clear();
     }
   }
 
-  private async receive(message: RpcMessage) {
+  private receive(message: RpcMessage) {
     const params = message.params ?? {};
     if (message.method === "cutroom/disconnected") {
       const error = new Error(
@@ -414,41 +414,39 @@ export class CodexRuntime implements AgentRuntime {
       if (item.type === "mcpToolCall") {
         const tool = `${item.server ?? "MCP"}: ${item.tool ?? "tool"}`;
         const completed = message.method === "item/completed";
-        if (!this.subjects.has(item.id))
-          this.subjects.set(
-            item.id,
-            item.server === CUTROOM_SERVER
-              ? await toolSubject(tool, item.arguments, this.options.names)
-              : toolTarget(item.arguments, this.options.cwd),
-          );
-        const target = this.subjects.get(item.id);
-        if (completed) this.subjects.delete(item.id);
+        const previous = this.tools.get(item.id);
+        const started =
+          previous ?? this.tools.start(item.id, tool, item.arguments ?? {});
         const failed = item.status === "failed" || Boolean(item.error);
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              completed && item.error && !item.result
-                ? item.error.message
-                : JSON.stringify(
-                    completed ? (item.result ?? {}) : (item.arguments ?? {}),
-                    null,
-                    2,
-                  ).slice(-32_000),
-              "tool",
-              item.id,
-              tool,
-              target,
-            ),
-            status: !completed ? "streaming" : failed ? "failed" : "complete",
-          },
+          message: completed
+            ? this.tools.finish(
+                item.id,
+                item.error && !item.result
+                  ? item.error.message
+                  : JSON.stringify(item.result ?? {}, null, 2),
+                failed,
+              )
+            : started,
         });
+        if (!previous) {
+          const signal = this.naming?.signal;
+          void toolSubject(tool, item.arguments, this.options.names).then(
+            (target) => {
+              if (!target || !signal || signal.aborted) return;
+              const message = this.tools.rename(item.id, target);
+              if (message) this.options.emit({ type: "message", message });
+            },
+          );
+        }
       }
       return;
     }
     if (message.method === "turn/completed") {
       const result = turnCompletedSchema.parse(params).turn;
       this.turnFinished = true;
+      this.naming?.abort();
       if (result.status === "failed")
         this.active?.reject(
           new Error(
@@ -517,12 +515,18 @@ export class CodexRuntime implements AgentRuntime {
           ? "Files"
           : method;
     const input = approval?._meta.tool_params ?? params;
+    const signal = this.naming?.signal;
     const details = await toolApproval(
       tool,
       input,
       this.options.cwd,
       this.options.names,
+      signal,
     );
+    if (signal?.aborted) {
+      this.client.reject(id, "The turn has ended.");
+      return;
+    }
     const canAllowCutroomEdits =
       isCutroomEdit(tool) &&
       !codexAsks(this.permissionConfigs, approval?._meta.tool_name ?? "");
@@ -605,6 +609,7 @@ export class CodexRuntime implements AgentRuntime {
 
   async interrupt() {
     this.stopRequested = true;
+    this.naming?.abort();
     if (this.threadId && this.turnId && !this.turnFinished)
       await this.client.call("turn/interrupt", {
         threadId: this.threadId,
@@ -613,6 +618,7 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   dispose() {
+    this.naming?.abort();
     this.unlisten();
     this.active?.reject(new Error("The conversation was closed."));
   }

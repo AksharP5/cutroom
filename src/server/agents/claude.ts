@@ -155,6 +155,7 @@ export class ClaudeRuntime implements AgentRuntime {
   private hasAssistantText = false;
   private disposed = false;
   private stopRequested = false;
+  private naming?: AbortController;
 
   constructor(
     private readonly options: RuntimeOptions,
@@ -202,7 +203,10 @@ export class ClaudeRuntime implements AgentRuntime {
       input,
       this.options.cwd,
       this.options.names,
+      context.signal,
     );
+    if (context.signal.aborted)
+      return { behavior: "deny", message: "The turn has ended." };
     const target = approval.target;
     const questions =
       tool === "AskUserQuestion"
@@ -289,6 +293,7 @@ export class ClaudeRuntime implements AgentRuntime {
     const completed = new Promise<void>((resolve, reject) => {
       this.active = { resolve, reject };
     });
+    this.naming = new AbortController();
     try {
       this.input.push({
         type: "user",
@@ -299,6 +304,7 @@ export class ClaudeRuntime implements AgentRuntime {
       });
       await completed;
     } finally {
+      this.naming.abort();
       this.active = undefined;
       this.currentMessageId = undefined;
       this.text.clear();
@@ -307,8 +313,7 @@ export class ClaudeRuntime implements AgentRuntime {
   }
 
   private async read(session: Query) {
-    // One at a time: naming a tool call reads the project, and rows must keep their order.
-    for await (const message of session) await this.receive(message);
+    for await (const message of session) this.receive(message);
     if (!this.disposed) {
       const error = new Error(
         "The Claude Code connection closed. Send a message to reconnect.",
@@ -318,7 +323,7 @@ export class ClaudeRuntime implements AgentRuntime {
     }
   }
 
-  private async receive(message: SDKMessage) {
+  private receive(message: SDKMessage) {
     if (
       "session_id" in message &&
       message.session_id &&
@@ -383,13 +388,16 @@ export class ClaudeRuntime implements AgentRuntime {
         if (block.type !== "tool_use") continue;
         this.options.emit({
           type: "message",
-          message: this.tools.start(
-            block.id,
-            block.name,
-            block.input,
-            await toolSubject(block.name, block.input, this.options.names),
-          ),
+          message: this.tools.start(block.id, block.name, block.input),
         });
+        const signal = this.naming?.signal;
+        void toolSubject(block.name, block.input, this.options.names).then(
+          (target) => {
+            if (!target || !signal || signal.aborted) return;
+            const message = this.tools.rename(block.id, target);
+            if (message) this.options.emit({ type: "message", message });
+          },
+        );
       }
       return;
     }
@@ -415,6 +423,7 @@ export class ClaudeRuntime implements AgentRuntime {
       return;
     }
     if (message.type === "result") {
+      this.naming?.abort();
       if (message.is_error || message.subtype !== "success") {
         this.active?.reject(
           new Error(
@@ -436,9 +445,11 @@ export class ClaudeRuntime implements AgentRuntime {
 
   async interrupt() {
     this.stopRequested = true;
+    this.naming?.abort();
     if (this.query) await this.query.interrupt();
   }
   dispose() {
+    this.naming?.abort();
     this.disposed = true;
     this.input.close();
     this.query?.close();

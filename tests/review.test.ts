@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -30,6 +38,7 @@ import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectRoutes } from "../src/server/projects/routes";
 import { createProjectStore } from "../src/server/projects/store";
+import { projectFixture } from "./project-fixture";
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
@@ -73,6 +82,85 @@ const withdraw: ReviewAction = { type: "withdraw", reason: "Never mind." };
 const claim: ReviewAction = { type: "claim" };
 const answered: ReviewAction = { type: "claim", answer: "The white one." };
 const complete: ReviewAction = { type: "complete", note: "Done." };
+
+test("claim, complete, block, and release only write review.json on a project with no history", async () => {
+  const fixture = await projectFixture();
+  cleanup.push(() => fixture.close());
+  const project = await fixture.store.create({ name: "Fresh bookkeeping" });
+  const id = crypto.randomUUID();
+  // An imported note has not opened history, unlike adding one through the editor.
+  await writeFile(
+    join(project.path, "cutroom.json"),
+    JSON.stringify({
+      ...(await fixture.store.document(project)),
+      annotations: [
+        AnnotationSchema.parse({
+          id,
+          kind: "comment",
+          body: "Make the title bigger",
+          time: 0,
+          strokes: [],
+          createdAt: at,
+          updatedAt: at,
+        }),
+      ],
+    }),
+  );
+  const files = async () => {
+    const paths = await readdir(fixture.directory, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    return Object.fromEntries(
+      await Promise.all(
+        paths
+          .filter(
+            (path) =>
+              path.isFile() &&
+              join(path.parentPath, path.name) !==
+                join(project.path, ".cutroom/review.json"),
+          )
+          .map(async (path) => {
+            const file = join(path.parentPath, path.name);
+            const info = await stat(file);
+            return [
+              file,
+              {
+                content: (await readFile(file)).toString("base64"),
+                ino: info.ino,
+                mtime: info.mtimeMs,
+              },
+            ];
+          }),
+      ),
+    );
+  };
+  const before = await files();
+  const actions: ReviewAction[] = [
+    claim,
+    { type: "block", question: "Which title?" },
+    answered,
+    { type: "release" },
+    claim,
+    complete,
+  ];
+  for (const action of actions) {
+    await fixture.review.act(
+      project,
+      id,
+      action,
+      fixture.review.agent(project, undefined),
+    );
+    expect(await files()).toEqual(before);
+  }
+  expect((await fixture.review.list(project))[0]?.review).toMatchObject({
+    status: "done",
+    revision: null,
+  });
+  expect(
+    await Bun.file(join(project.path, ".cutroom/review.json")).exists(),
+  ).toBe(true);
+});
 
 describe("review transitions", () => {
   test.each<[ReviewStatus, ReviewAction, ReviewActor, ReviewStatus]>([

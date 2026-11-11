@@ -32,6 +32,58 @@ const place = (page: Page) =>
     };
   });
 
+test("a formed group keeps its focused disclosure when running calls fail", async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request, "Group failure focus");
+  const turn = agentTurn(project.id);
+  const first = { ...turn.steps[3]!, status: "streaming" as const };
+  const second = { ...turn.steps[4]!, status: "streaming" as const };
+  const failed = {
+    ...second,
+    status: "failed" as const,
+    text: "Could not read the file",
+  };
+  const session = await playSession(page, [
+    turn.session([turn.ask, turn.plan, first, second], "running"),
+    turn.session([turn.ask, turn.plan, first, failed], "running"),
+    turn.session(
+      [
+        turn.ask,
+        turn.plan,
+        { ...first, status: "failed", text: "File missing" },
+        failed,
+      ],
+      "idle",
+    ),
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  const summary = page
+    .getByRole("group", { name: "Agent steps" })
+    .getByRole("button");
+  await expect(summary).toHaveText("Reading 2 files");
+  await summary.evaluate((element) =>
+    element.setAttribute("data-probe", "same-disclosure"),
+  );
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await session.advance();
+  await expect(summary).toHaveText("Reading 1 file");
+  await expect(summary).toBeFocused();
+  await expect(summary).toHaveAttribute("aria-expanded", "true");
+  await expect(summary).toHaveAttribute("data-probe", "same-disclosure");
+  await expect(rows(page)).toHaveCount(2);
+  await session.advance();
+  await expect(summary).toHaveText("2 steps");
+  await expect(summary).toBeFocused();
+  await expect(summary).toHaveAttribute("aria-expanded", "true");
+  await expect(summary).toHaveAttribute("data-probe", "same-disclosure");
+  await page.keyboard.press("Enter");
+  await expect(summary).toHaveAttribute("aria-expanded", "false");
+  await expect(rows(page)).toHaveCount(2);
+});
+
 test("a turn's tool calls fold into one step group that counts in place, with failures and edits kept in view", async ({
   page,
   request,

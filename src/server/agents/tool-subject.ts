@@ -1,11 +1,10 @@
 import { z } from "zod";
 import type { Project } from "../../shared/project";
-import { clipName } from "../../shared/timeline/labels";
 import {
   CommandBatchSchema,
   emptyTimelineSettings,
 } from "../../shared/timeline/schema";
-import type { Command } from "../../shared/timeline/schema";
+import type { Clip, Command } from "../../shared/timeline/schema";
 import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
 import type { ReviewService } from "../projects/review";
 import { readSource } from "../projects/store";
@@ -17,7 +16,9 @@ export interface ToolNames {
   /** A review note, as its first words in quotes. */
   note(id: string): Promise<string | undefined>;
   /** A composition's clips by id, named as the timeline shows them. */
-  clips(composition: string): Promise<ReadonlyMap<string, string>>;
+  clips(
+    composition: string,
+  ): Promise<ReadonlyMap<string, Pick<Clip, "label" | "src" | "kind">>>;
   /** The media file a transcript was made from. */
   transcript(id: string): Promise<string | undefined>;
 }
@@ -62,9 +63,9 @@ export function projectNames(
           new Map(
             parseComposition(source.content, emptyTimelineSettings(), {
               scope: compositionScope(composition),
-            }).timeline.clips.map((clip) => [clip.id, clipName(clip)]),
+            }).timeline.clips.map((clip) => [clip.id, clip]),
           ),
-        () => new Map<string, string>(),
+        () => new Map(),
       ),
     transcript: (id) =>
       store.document(project).then(
@@ -104,10 +105,16 @@ async function editedClips(input: unknown, names?: ToolNames) {
   if (!batch.success) return undefined;
   const { commands, composition } = batch.data;
   const ids = [...new Set(commands.flatMap(clipsOf))];
-  const known = ids.length ? await names?.clips(composition) : undefined;
+  const known = ids.length
+    ? await names?.clips(composition).catch(() => undefined)
+    : undefined;
+  const labels = ids.map((id) => {
+    const clip = known?.get(id);
+    return clip?.label?.trim() || (clip?.src ? fileName(clip.src) : undefined);
+  });
   const named = [
     ...new Set([
-      ...ids.flatMap((id) => known?.get(id) ?? []),
+      ...labels.flatMap((label) => label ?? []),
       ...commands.flatMap((command) =>
         command.type === "insert"
           ? [command.clip.label ?? fileName(command.clip.src)]
@@ -116,9 +123,15 @@ async function editedClips(input: unknown, names?: ToolNames) {
     ]),
   ];
   // A clip the timeline cannot name is counted, never shown by its id.
-  const unnamed = ids.filter((id) => !known?.has(id)).length;
+  const unnamed = labels.filter((label) => !label).length;
   const [first, second] = named;
-  if (!first) return undefined;
+  if (!first) {
+    if (!ids.length) return undefined;
+    if (ids.length > 1) return `${ids.length} clips`;
+    const kind = known?.get(ids[0])?.kind;
+    if (!kind) return "a clip";
+    return `a ${kind === "element" ? "text" : kind} clip`;
+  }
   const more = named.length - 1 + unnamed;
   if (!more) return first;
   if (second && more === 1) return `${first} and ${second}`;
@@ -159,13 +172,13 @@ export async function toolSubject(
     }
     case "transcript_edit": {
       const id = text("transcriptId");
-      return id ? names?.transcript(id) : undefined;
+      return id ? names?.transcript(id).catch(() => undefined) : undefined;
     }
     case "timeline_edit":
       return editedClips(args, names);
     default: {
       const id = text("noteId") ?? text("annotationId");
-      return id ? names?.note(id) : undefined;
+      return id ? names?.note(id).catch(() => undefined) : undefined;
     }
   }
 }

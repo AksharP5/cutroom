@@ -78,8 +78,9 @@ export function completeMessage(
  * keeps the name and project-relative target so the row still says what the call touched.
  */
 export function toolCalls(cwd: string) {
-  const calls = new Map<string, { name: string; target?: string }>();
+  const calls = new Map<string, AgentMessage>();
   return {
+    get: (id: string) => calls.get(id),
     /** `subject` names what one of Cutroom's own tools acts on; native tools name a file or command. */
     start(
       id: string,
@@ -91,8 +92,7 @@ export function toolCalls(cwd: string) {
         parseTool(name).server === CUTROOM_SERVER
           ? subject
           : toolTarget(input, cwd);
-      calls.set(id, { name, target });
-      return {
+      const message: AgentMessage = {
         ...completeMessage(
           JSON.stringify(input, null, 2).slice(-32_000),
           "tool",
@@ -102,20 +102,26 @@ export function toolCalls(cwd: string) {
         ),
         status: "streaming",
       };
+      calls.set(id, message);
+      return message;
     },
     finish(id: string, text: string, failed: boolean): AgentMessage {
       const call = calls.get(id);
-      calls.delete(id);
-      return {
-        ...completeMessage(
-          text.slice(-32_000),
-          "tool",
-          id,
-          call?.name ?? "Tool",
-          call?.target,
-        ),
+      const message: AgentMessage = {
+        ...(call ?? completeMessage("", "tool", id, "Tool")),
+        text: text.slice(-32_000),
         status: failed ? "failed" : "complete",
       };
+      calls.set(id, message);
+      return message;
+    },
+    /** Upgrade the latest row, including its result, without replaying stale input or status. */
+    rename(id: string, target: string) {
+      const call = calls.get(id);
+      if (!call) return undefined;
+      const message = { ...call, target };
+      calls.set(id, message);
+      return message;
     },
     clear: () => calls.clear(),
   };

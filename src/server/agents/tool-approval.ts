@@ -81,6 +81,7 @@ export async function toolApproval(
   input: Record<string, unknown>,
   cwd: string,
   names?: ToolNames,
+  signal?: AbortSignal,
 ): Promise<{
   title: string;
   detail?: string;
@@ -97,7 +98,22 @@ export async function toolApproval(
         `Invalid arguments for ${tool}: ${getParseErrorMessage(parsed.error)}`,
       );
     const args = z.record(z.string(), z.unknown()).parse(parsed.data);
-    const target = await toolSubject(tool, args, names);
+    // Names are presentation only. A stuck read must never hide an approval or Stop.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+    const target =
+      (await Promise.race([
+        toolSubject(tool, args, names),
+        new Promise<undefined>((resolve) => {
+          abort = () => resolve(undefined);
+          timeout = setTimeout(abort, 250);
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        }),
+      ]).finally(() => {
+        clearTimeout(timeout);
+        if (abort) signal?.removeEventListener("abort", abort);
+      })) ?? (await toolSubject(tool, args));
     const { verb, object } = describeTool({ tool, target }, "ask");
     const detail = approvalDetail(name, args);
     return {

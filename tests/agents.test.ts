@@ -772,7 +772,7 @@ test("Codex accepts nullable running command output and streams it before comple
   });
 });
 
-test("Codex rows name the clips a Cutroom edit touches, keep their order, and mark a failed call", async () => {
+test("Codex emits tool rows and failures in order without waiting for late clip names", async () => {
   const directory = await mkdtemp(join(tmpdir(), "cutroom-tool-protocol-"));
   cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const script = join(directory, "provider.mjs");
@@ -791,10 +791,15 @@ test("Codex rows name the clips a Cutroom edit touches, keep their order, and ma
     names: {
       note: async () => undefined,
       transcript: async () => undefined,
-      // Slower than the events behind it: the result must still wait for the name.
+      // Slower than the turn: naming must not delay the result or completion.
       clips: async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
-        return new Map([["lt-7f3a", "Lower third"]]);
+        return new Map([
+          [
+            "lt-7f3a",
+            { label: "Lower third", src: null, kind: "element" as const },
+          ],
+        ]);
       },
     },
   });
@@ -814,8 +819,8 @@ test("Codex rows name the clips a Cutroom edit touches, keep their order, and ma
         : [],
     ),
   ).toEqual([
-    ["edit", "streaming", "cutroom_studio: timeline_edit", "Lower third"],
-    ["edit", "failed", "cutroom_studio: timeline_edit", "Lower third"],
+    ["edit", "streaming", "cutroom_studio: timeline_edit", undefined],
+    ["edit", "failed", "cutroom_studio: timeline_edit", undefined],
     ["list", "streaming", "github: issues_list", "open"],
     ["list", "complete", "github: issues_list", "open"],
     // The login shell Codex wraps every command in is not part of the row.
@@ -983,7 +988,7 @@ for await(const line of createInterface({input:process.stdin})) {
       await runtime.send({ text: "Edit", skills: [], attachments: [] });
       // No project names are available here, so the edit is unnamed rather than shown by id.
       expect(requests[0]).toMatchObject({
-        title: "Edit the timeline?",
+        title: "Edit 3 clips?",
         detail: "3 changes",
       });
       expect(requests[0]?.canAllowCutroomEdits).toBe(true);
