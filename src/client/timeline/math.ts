@@ -50,9 +50,7 @@ export function cssEasing(easing: string): (time: number) => number {
   };
 }
 
-/** A clip's name as the timeline shows it. */
-export const clipName = (clip: Clip) =>
-  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+export { clipName } from "../../shared/timeline/labels";
 
 /** The closest zoom: one frame is this many pixels wide. */
 export const MAX_PPF = 32;

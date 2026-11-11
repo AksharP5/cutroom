@@ -3,37 +3,17 @@ import {
   getParseErrorMessage,
 } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { z } from "zod";
-import { describeTool } from "../../shared/toolRow";
+import {
+  CUTROOM_SERVER,
+  describeTool,
+  parseTool,
+  runsCommand,
+} from "../../shared/toolRow";
 import { cutroomToolRegistry } from "./tool-permissions";
+import { toolSubject } from "./tool-subject";
+import type { ToolNames } from "./tool-subject";
 
-// These are the fields each registered tool actually consumes as its target.
-const targets: Record<string, string> = {
-  project_create: "name",
-  project_import: "path",
-  source_read: "path",
-  source_write: "path",
-  annotation_add: "compositionPath",
-  annotation_update: "annotationId",
-  annotation_remove: "annotationId",
-  transcript_import: "mediaPath",
-  transcript_edit: "transcriptId",
-  transcription_start: "mediaPath",
-  transcription_status: "jobId",
-  timeline_read: "composition",
-  timeline_edit: "composition",
-  timeline_view: "composition",
-  review_add: "compositionPath",
-  review_claim: "noteId",
-  review_complete: "noteId",
-  review_block: "noteId",
-  review_withdraw: "noteId",
-  review_accept: "noteId",
-  review_send_back: "noteId",
-  review_reply: "noteId",
-  review_restore: "noteId",
-  review_release: "noteId",
-  review_reorder: "noteId",
-};
+// The field of each native tool's input that names what it acts on.
 const nativeTargets: Record<string, string> = {
   Bash: "command",
   Shell: "command",
@@ -42,53 +22,118 @@ const nativeTargets: Record<string, string> = {
   Write: "file_path",
   MultiEdit: "file_path",
   NotebookEdit: "notebook_path",
+  WebFetch: "url",
 };
 
-/** Presentation and execution use the same MCP schema, including defaults and stripped extras. */
-export function toolApproval(
+const oneLine = (value: unknown, limit = 200) => {
+  if (typeof value !== "string") return undefined;
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (!flat) return undefined;
+  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+};
+const plural = (total: number, one: string) =>
+  `${total} ${total === 1 ? one : `${one}s`}`;
+
+/** The one more line an owner needs to decide on a Cutroom tool call, from its own arguments. */
+function approvalDetail(name: string, args: Record<string, unknown>) {
+  switch (name) {
+    case "timeline_edit":
+      return Array.isArray(args.commands) && args.commands.length > 1
+        ? plural(args.commands.length, "change")
+        : undefined;
+    case "transcript_edit":
+      return Array.isArray(args.wordIds)
+        ? `${args.action === "restore" ? "Restore" : "Cut"} ${plural(args.wordIds.length, "word")}`
+        : undefined;
+    case "review_complete":
+    case "review_send_back":
+    case "review_reply":
+      return oneLine(args.note);
+    case "review_block":
+      return oneLine(args.question);
+    case "review_withdraw":
+      return oneLine(args.reason);
+    case "review_claim":
+      return oneLine(args.answer);
+    case "review_add":
+    case "annotation_add":
+      return oneLine(args.body);
+    case "export_start": {
+      const folder = oneLine(args.directory);
+      return (
+        [oneLine(args.filename), folder && `in ${folder}`]
+          .filter(Boolean)
+          .join(" ") || undefined
+      );
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * An approval as a short question in the editor's words: "Edit Lower third?", never a tool
+ * identifier or a raw id. Presentation and execution use the same MCP schema, including
+ * defaults and stripped extras, so the question names exactly what would run.
+ */
+export async function toolApproval(
   tool: string,
   input: Record<string, unknown>,
   cwd: string,
-) {
-  const prefix = "mcp__cutroom_studio__";
-  const name = tool.startsWith(prefix) ? tool.slice(prefix.length) : undefined;
+  names?: ToolNames,
+  signal?: AbortSignal,
+): Promise<{
+  title: string;
+  detail?: string;
+  target?: string;
+  input: Record<string, unknown>;
+}> {
+  const { server, name } = parseTool(tool);
   const registered =
-    name === undefined ? undefined : cutroomToolRegistry.get(name);
-  let args = input;
+    server === CUTROOM_SERVER ? cutroomToolRegistry.get(name) : undefined;
   if (registered) {
     const parsed = safeParse(registered.inputSchema ?? z.object({}), input);
     if (!parsed.success)
       throw new Error(
         `Invalid arguments for ${tool}: ${getParseErrorMessage(parsed.error)}`,
       );
-    args = z.record(z.string(), z.unknown()).parse(parsed.data);
+    const args = z.record(z.string(), z.unknown()).parse(parsed.data);
+    // Names are presentation only. A stuck read must never hide an approval or Stop.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+    const target =
+      (await Promise.race([
+        toolSubject(tool, args, names),
+        new Promise<undefined>((resolve) => {
+          abort = () => resolve(undefined);
+          timeout = setTimeout(abort, 250);
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort, { once: true });
+        }),
+      ]).finally(() => {
+        clearTimeout(timeout);
+        if (abort) signal?.removeEventListener("abort", abort);
+      })) ?? (await toolSubject(tool, args));
+    const { verb, object } = describeTool({ tool, target }, "ask");
+    const detail = approvalDetail(name, args);
+    return {
+      title: `${verb} ${object}?`,
+      ...(detail && { detail }),
+      ...(target && { target }),
+      input: args,
+    };
   }
-  const field = registered && name ? targets[name] : nativeTargets[tool];
-  const value = field ? args[field] : undefined;
+  const { verb, object } = describeTool({ tool }, "ask");
+  // Another server's tool is named with its server, so it cannot pass for one of Cutroom's.
+  if (server) return { title: `${verb} ${object} from ${server}?`, input };
+  const field = nativeTargets[tool];
+  const value = field ? input[field] : undefined;
+  if (typeof value !== "string") return { title: `Use ${tool}?`, input };
   const root = cwd.replace(/\/+$/, "");
-  const target =
-    typeof value === "string"
-      ? registered || !value.startsWith(`${root}/`)
-        ? value
-        : value.slice(root.length + 1)
-      : undefined;
-  if (!registered && !field) return { title: `Use ${tool}?`, input: args };
-  const separateTarget =
-    registered &&
-    name &&
-    (name.startsWith("timeline_") || name.startsWith("review_"));
-  const { verb, object } = describeTool(
-    { tool, target: separateTarget ? undefined : target },
-    "ask",
-  );
-  const extraTarget = separateTarget && target ? ` (${target})` : "";
-  const count =
-    name === "timeline_edit" && Array.isArray(args.commands)
-      ? ` (${args.commands.length} ${args.commands.length === 1 ? "change" : "changes"})`
-      : "";
-  return {
-    title: `${verb} ${object}${extraTarget}${count}?`,
-    target,
-    input: args,
-  };
+  const target = value.startsWith(`${root}/`)
+    ? value.slice(root.length + 1)
+    : value;
+  // A command is read in full below the question, not squeezed into it.
+  if (runsCommand(tool)) return { title: "Run this command?", target, input };
+  return { title: `${verb} ${target}?`, target, input };
 }

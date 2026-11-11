@@ -8,12 +8,16 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
+import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
+import type { ToolNames } from "./tool-subject";
 
 export interface RuntimeOptions {
   cwd: string;
   /** Identifies this conversation's review actions; its MCP bridge sends it with every call. */
   agentToken: string;
   allowCutroomEdits?: () => boolean;
+  /** What the editor calls the notes, clips, and transcripts a tool call names by id. */
+  names?: ToolNames;
   model?: string;
   nativeSessionId?: string;
   emit: (event: AgentEvent) => void;
@@ -74,12 +78,21 @@ export function completeMessage(
  * keeps the name and project-relative target so the row still says what the call touched.
  */
 export function toolCalls(cwd: string) {
-  const calls = new Map<string, { name: string; target?: string }>();
+  const calls = new Map<string, AgentMessage>();
   return {
-    start(id: string, name: string, input: unknown): AgentMessage {
-      const target = toolTarget(input, cwd);
-      calls.set(id, { name, target });
-      return {
+    get: (id: string) => calls.get(id),
+    /** `subject` names what one of Cutroom's own tools acts on; native tools name a file or command. */
+    start(
+      id: string,
+      name: string,
+      input: unknown,
+      subject?: string,
+    ): AgentMessage {
+      const target =
+        parseTool(name).server === CUTROOM_SERVER
+          ? subject
+          : toolTarget(input, cwd);
+      const message: AgentMessage = {
         ...completeMessage(
           JSON.stringify(input, null, 2).slice(-32_000),
           "tool",
@@ -89,20 +102,26 @@ export function toolCalls(cwd: string) {
         ),
         status: "streaming",
       };
+      calls.set(id, message);
+      return message;
     },
     finish(id: string, text: string, failed: boolean): AgentMessage {
       const call = calls.get(id);
-      calls.delete(id);
-      return {
-        ...completeMessage(
-          text.slice(-32_000),
-          "tool",
-          id,
-          call?.name ?? "Tool",
-          call?.target,
-        ),
+      const message: AgentMessage = {
+        ...(call ?? completeMessage("", "tool", id, "Tool")),
+        text: text.slice(-32_000),
         status: failed ? "failed" : "complete",
       };
+      calls.set(id, message);
+      return message;
+    },
+    /** Upgrade the latest row, including its result, without replaying stale input or status. */
+    rename(id: string, target: string) {
+      const call = calls.get(id);
+      if (!call) return undefined;
+      const message = { ...call, target };
+      calls.set(id, message);
+      return message;
     },
     clear: () => calls.clear(),
   };

@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { RefObject } from "react";
 import {
   ArrowClockwise,
@@ -27,7 +35,15 @@ import {
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
-import { describeTool, hiddenTools, targetsFile } from "../../shared/toolRow";
+import {
+  describeTool,
+  editsProject,
+  failureReason,
+  hiddenTools,
+  runsCommand,
+  summarizeSteps,
+  targetsFile,
+} from "../../shared/toolRow";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
 import { waitForNoteCaptures } from "../edit/noteStore";
@@ -107,30 +123,80 @@ const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
     message,
     message.status === "streaming" ? "active" : "done",
   );
+  const reason = message.status === "failed" ? failureReason(message) : "";
   return (
-    <details className="chat-tool" data-status={message.status}>
-      <summary title={message.tool}>
-        {message.status === "streaming" ? (
-          <span className="chat-tool-now" />
-        ) : (
-          <CaretRight className="chat-tool-caret" size={10} weight="bold" />
-        )}
-        <span className="chat-tool-verb">{verb}</span>
-        {/* Long file paths lose their start, so the file name stays visible. */}
-        <span
-          className="chat-tool-target"
-          data-path={targetsFile(message.tool) || undefined}
-        >
-          <bdi>{object}</bdi>
-        </span>
-        {message.status === "failed" && (
-          <span className="chat-tool-note">Failed</span>
-        )}
-      </summary>
-      <pre>{message.text}</pre>
-    </details>
+    <div
+      className="chat-step"
+      data-status={message.status}
+      data-edit={editsProject(message.tool) || undefined}
+    >
+      <details className="chat-tool" data-status={message.status}>
+        <summary title={`${verb} ${object}`.trim()}>
+          {message.status === "streaming" ? (
+            <span className="chat-tool-now" />
+          ) : (
+            <CaretRight className="chat-tool-caret" size={10} weight="bold" />
+          )}
+          {/* The spaces are for screen readers and copying; the grid ignores them. */}
+          <span className="chat-tool-verb">{verb}</span>{" "}
+          {/* Long file paths lose their start, so the file name stays visible. */}
+          <span
+            className="chat-tool-target"
+            data-path={targetsFile(message.tool) || undefined}
+          >
+            <bdi>{object}</bdi>
+          </span>{" "}
+          {message.status === "failed" && (
+            <span className="chat-tool-note">Failed</span>
+          )}
+        </summary>
+        <pre>{message.text}</pre>
+      </details>
+      {/* A failure says why without being opened; the open row shows the whole output. */}
+      {reason && <p className="chat-tool-reason">{reason}</p>}
+    </div>
   );
 });
+
+/**
+ * One turn segment's tool calls. Routine steps fold into a single summary line whose counts
+ * grow in place while the turn runs; failures and project edits keep their own rows.
+ */
+function StepGroup({ steps }: { steps: AgentMessage[] }) {
+  const [open, setOpen] = useState(false);
+  const [grouped, setGrouped] = useState(false);
+  const rows = useId();
+  const { summary, running, shown } = summarizeSteps(steps, grouped);
+  // Once formed, keep the disclosure and its focus even if every routine call fails.
+  if (summary && !grouped) setGrouped(true);
+  return (
+    <div className="chat-tools" role="group" aria-label="Agent steps">
+      {summary && (
+        <button
+          type="button"
+          className="chat-steps"
+          data-running={running || undefined}
+          aria-expanded={open}
+          aria-controls={rows}
+          title={summary}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {running ? (
+            <span className="chat-tool-now" />
+          ) : (
+            <CaretRight className="chat-tool-caret" size={10} weight="bold" />
+          )}
+          <span className="chat-steps-summary">{summary}</span>
+        </button>
+      )}
+      <div id={rows}>
+        {(open || !summary ? steps : shown).map((message) => (
+          <ToolRow key={message.id} message={message} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const Message = memo(function Message({
   message,
@@ -172,6 +238,8 @@ function RequestCard({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [showInput, setShowInput] = useState(false);
+  const title = useId();
+  const raw = useId();
   async function respond(decision: "allow" | "deny", always = false) {
     setSending(true);
     setError("");
@@ -183,30 +251,22 @@ function RequestCard({
       setSending(false);
     }
   }
-  const actions = (
+  const question = request.kind === "question";
+  const decide = (
     <>
       <button
-        className="text-button"
+        className={question ? "text-button" : "secondary-button"}
         disabled={sending}
         onClick={() => void respond("allow")}
       >
-        {request.kind === "question" ? "Answer" : "Allow once"}
+        {question ? "Answer" : "Allow once"}
       </button>
-      {request.canAllowCutroomEdits && (
-        <button
-          className="text-button"
-          disabled={sending}
-          onClick={() => void respond("allow", true)}
-        >
-          Always allow Cutroom edits
-        </button>
-      )}
       <button
         className="text-button quiet"
         disabled={sending}
         onClick={() => void respond("deny")}
       >
-        {request.kind === "question" ? "Decline" : "Deny"}
+        {question ? "Decline" : "Deny"}
       </button>
     </>
   );
@@ -216,29 +276,51 @@ function RequestCard({
       aria-label={
         request.kind === "question" ? "Agent question" : "Permission request"
       }
+      aria-describedby={request.kind === "approval" ? title : undefined}
     >
       {request.kind === "approval" ? (
         <>
-          <div className="agent-request-line">
+          <p className="agent-request-title" id={title}>
+            {request.title}
+          </p>
+          {/* A command is the thing being approved, so it is read in full. */}
+          {runsCommand(request.tool) && request.target && (
+            <pre className="agent-request-command">{request.target}</pre>
+          )}
+          {request.detail && (
+            <p className="agent-request-detail">{request.detail}</p>
+          )}
+          <div className="agent-request-actions">
+            {decide}
             <button
-              className="agent-request-title"
-              title={request.title}
-              aria-label={request.title}
+              className="text-button quiet agent-request-more"
               aria-expanded={showInput}
+              aria-controls={raw}
               onClick={() => setShowInput((value) => !value)}
             >
-              {request.title}
+              Details
             </button>
-            <code className="agent-request-tool">{request.tool}</code>
-            {actions}
-            {request.canAllowCutroomEdits && (
-              <p className="agent-request-scope">
-                This project's Cutroom edits, every conversation, until you
-                revoke. Shell and native file changes still ask.
-              </p>
-            )}
           </div>
-          {showInput && <pre>{JSON.stringify(request.input, null, 2)}</pre>}
+          {/* The lasting grant reads as one sentence with everything it covers. */}
+          {request.canAllowCutroomEdits && (
+            <p className="agent-request-scope">
+              <button
+                className="text-button"
+                disabled={sending}
+                onClick={() => void respond("allow", true)}
+              >
+                Always allow Cutroom edits
+              </button>{" "}
+              for this project, in every conversation, until you revoke. Shell
+              and native file changes still ask.
+            </p>
+          )}
+          {/* The exact request stays one click away for anyone who wants to check it. */}
+          {showInput && (
+            <pre id={raw}>
+              {`${request.tool}\n${JSON.stringify(request.input, null, 2)}`}
+            </pre>
+          )}
         </>
       ) : (
         <strong className="agent-question-title">{request.title}</strong>
@@ -293,7 +375,7 @@ function RequestCard({
         </fieldset>
       ))}
       {request.kind === "question" && (
-        <div className="agent-question-actions">{actions}</div>
+        <div className="agent-question-actions">{decide}</div>
       )}
       {error && (
         <p className="inline-error" role="alert">
@@ -323,8 +405,8 @@ const ConversationMessages = memo(function ConversationMessages({
     alwaysAllowCutroomEdits?: boolean,
   ) => Promise<void>;
 }) {
-  // Consecutive tool calls read as one block of verb rows. Empty replies and tool
-  // lookups say nothing, so they neither show nor split a block.
+  // Consecutive tool calls read as one step group. Empty replies and tool
+  // lookups say nothing, so they neither show nor split a group.
   const blocks: AgentMessage[][] = [];
   for (const message of session?.messages ?? []) {
     if (message.role === "tool" && hiddenTools.has(message.tool ?? ""))
@@ -364,11 +446,7 @@ const ConversationMessages = memo(function ConversationMessages({
       {session &&
         blocks.map((block) =>
           block[0]?.role === "tool" ? (
-            <div className="chat-tools" key={block[0].id}>
-              {block.map((message) => (
-                <ToolRow key={message.id} message={message} />
-              ))}
-            </div>
+            <StepGroup key={block[0].id} steps={block} />
           ) : (
             block.map((message) => (
               <Message

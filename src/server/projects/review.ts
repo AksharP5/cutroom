@@ -811,7 +811,7 @@ export function createReviewService(store: ProjectStore) {
         action.type === "complete" && action.revision === undefined
           ? {
               ...action,
-              revision: (await store.history(project)).list().at(-1)?.id,
+              revision: store.readHistory(project).list().at(-1)?.id,
             }
           : action;
       const items = await update(project, (items, document) => {

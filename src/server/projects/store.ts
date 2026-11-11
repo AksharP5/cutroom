@@ -14,6 +14,7 @@ import {
   fileContentVersion,
   historyCache,
   openProjectHistory,
+  readProjectHistory,
 } from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import { z } from "zod";
@@ -293,6 +294,11 @@ export async function createProjectStore(options: {
       [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     get,
     history,
+    readHistory: (project: Project) =>
+      readProjectHistory({
+        projectDir: project.path,
+        historyRoot: join(dataDir, "history"),
+      }),
     historyForDir: (dir: string) => histories.get(dir),
     mutate,
     document,

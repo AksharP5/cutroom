@@ -93,7 +93,11 @@ export type AgentQuestion = z.infer<typeof agentQuestionSchema>;
 export const agentRequestSchema = z.object({
   id: z.string(),
   kind: z.enum(["approval", "question"]),
+  /** The request as a short question, naming what it acts on the way the editor does. */
   title: z.string(),
+  /** One more line the owner needs to decide, such as how many changes an edit makes. */
+  detail: z.string().optional(),
+  /** The tool's own identifier. Shown only with the raw request, never in the question. */
   tool: z.string(),
   input: z.record(z.string(), z.unknown()),
   /** What the tool would act on, relative to the project, as on tool rows. */

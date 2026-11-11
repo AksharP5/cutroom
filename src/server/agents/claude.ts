@@ -12,6 +12,7 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolApproval } from "./tool-approval";
+import { toolSubject } from "./tool-subject";
 import {
   claudeToolPermissions,
   claudeEditPermission,
@@ -154,6 +155,7 @@ export class ClaudeRuntime implements AgentRuntime {
   private hasAssistantText = false;
   private disposed = false;
   private stopRequested = false;
+  private naming?: AbortController;
 
   constructor(
     private readonly options: RuntimeOptions,
@@ -196,7 +198,15 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private canUseTool: CanUseTool = async (tool, input, context) => {
     // "Write index.html?" rather than the tool's internal name.
-    const approval = toolApproval(tool, input, this.options.cwd);
+    const approval = await toolApproval(
+      tool,
+      input,
+      this.options.cwd,
+      this.options.names,
+      context.signal,
+    );
+    if (context.signal.aborted)
+      return { behavior: "deny", message: "The turn has ended." };
     const target = approval.target;
     const questions =
       tool === "AskUserQuestion"
@@ -211,6 +221,7 @@ export class ClaudeRuntime implements AgentRuntime {
       title:
         tool === "AskUserQuestion" ? "Claude has a question" : approval.title,
       input: approval.input,
+      ...(approval.detail ? { detail: approval.detail } : {}),
       ...(target ? { target } : {}),
       ...(questions?.success
         ? {
@@ -282,6 +293,7 @@ export class ClaudeRuntime implements AgentRuntime {
     const completed = new Promise<void>((resolve, reject) => {
       this.active = { resolve, reject };
     });
+    this.naming = new AbortController();
     try {
       this.input.push({
         type: "user",
@@ -292,6 +304,7 @@ export class ClaudeRuntime implements AgentRuntime {
       });
       await completed;
     } finally {
+      this.naming.abort();
       this.active = undefined;
       this.currentMessageId = undefined;
       this.text.clear();
@@ -377,6 +390,14 @@ export class ClaudeRuntime implements AgentRuntime {
           type: "message",
           message: this.tools.start(block.id, block.name, block.input),
         });
+        const signal = this.naming?.signal;
+        void toolSubject(block.name, block.input, this.options.names).then(
+          (target) => {
+            if (!target || !signal || signal.aborted) return;
+            const message = this.tools.rename(block.id, target);
+            if (message) this.options.emit({ type: "message", message });
+          },
+        );
       }
       return;
     }
@@ -402,6 +423,7 @@ export class ClaudeRuntime implements AgentRuntime {
       return;
     }
     if (message.type === "result") {
+      this.naming?.abort();
       if (message.is_error || message.subtype !== "success") {
         this.active?.reject(
           new Error(
@@ -423,9 +445,11 @@ export class ClaudeRuntime implements AgentRuntime {
 
   async interrupt() {
     this.stopRequested = true;
+    this.naming?.abort();
     if (this.query) await this.query.interrupt();
   }
   dispose() {
+    this.naming?.abort();
     this.disposed = true;
     this.input.close();
     this.query?.close();

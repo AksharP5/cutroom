@@ -7,6 +7,7 @@ import type {
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
 import { toolApproval } from "./tool-approval";
+import { toolSubject } from "./tool-subject";
 import {
   codexAsks,
   codexPermissionConfigSchema,
@@ -16,7 +17,7 @@ import {
 import type { CodexToolConfig } from "./tool-permissions";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
-import { agentPrompt, completeMessage } from "./runtime";
+import { agentPrompt, completeMessage, toolCalls } from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const threadResultSchema = z.object({ thread: z.object({ id: z.string() }) });
@@ -66,6 +67,7 @@ const itemSchema = z
     server: z.string().optional(),
     arguments: z.unknown().optional(),
     result: z.unknown().optional(),
+    error: z.object({ message: z.string() }).nullish(),
     changes: z.array(z.object({ path: z.string() }).passthrough()).optional(),
     status: z.string().optional(),
   })
@@ -102,6 +104,16 @@ const nativeQuestionsSchema = z.array(
     })
     .passthrough(),
 );
+
+/** Codex runs every command through a login shell; a row names the command inside it. */
+function shellCommand(command: string) {
+  const wrapped = /^\S*sh -lc (['"])([\s\S]*)\1$/.exec(command);
+  const inner = wrapped?.[2];
+  if (inner === undefined) return command;
+  return wrapped?.[1] === "'"
+    ? inner.replaceAll(`'\\''`, "'")
+    : inner.replaceAll('\\"', '"');
+}
 
 export async function codexCapabilities(
   client: CodexClient,
@@ -149,6 +161,8 @@ export class CodexRuntime implements AgentRuntime {
     string,
     { command: string; output: string }
   >();
+  private readonly tools: ReturnType<typeof toolCalls>;
+  private naming?: AbortController;
   private readonly unlisten;
 
   constructor(
@@ -156,6 +170,7 @@ export class CodexRuntime implements AgentRuntime {
     private readonly options: RuntimeOptions,
     private readonly threadConfig: Record<string, string> = {},
   ) {
+    this.tools = toolCalls(options.cwd);
     this.unlisten = client.subscribe((message) => {
       try {
         this.receive(message);
@@ -239,6 +254,7 @@ export class CodexRuntime implements AgentRuntime {
     const completed = new Promise<void>((resolve, reject) => {
       this.active = { resolve, reject };
     });
+    this.naming = new AbortController();
     try {
       await Promise.all([
         completed,
@@ -265,6 +281,8 @@ export class CodexRuntime implements AgentRuntime {
       this.active = undefined;
       this.turnId = undefined;
       this.commands.clear();
+      this.naming.abort();
+      this.tools.clear();
       this.seen.clear();
     }
   }
@@ -322,7 +340,10 @@ export class CodexRuntime implements AgentRuntime {
               "tool",
               delta.itemId,
               "Shell",
-              toolTarget({ command: command.command }, this.options.cwd),
+              toolTarget(
+                { command: shellCommand(command.command) },
+                this.options.cwd,
+              ),
             ),
             status: "streaming",
           },
@@ -366,7 +387,7 @@ export class CodexRuntime implements AgentRuntime {
               "tool",
               item.id,
               "Shell",
-              toolTarget({ command }, this.options.cwd),
+              toolTarget({ command: shellCommand(command) }, this.options.cwd),
             ),
             status: !completed
               ? "streaming"
@@ -390,32 +411,42 @@ export class CodexRuntime implements AgentRuntime {
               .join(", "),
           ),
         });
-      if (item.type === "mcpToolCall")
+      if (item.type === "mcpToolCall") {
+        const tool = `${item.server ?? "MCP"}: ${item.tool ?? "tool"}`;
+        const completed = message.method === "item/completed";
+        const previous = this.tools.get(item.id);
+        const started =
+          previous ?? this.tools.start(item.id, tool, item.arguments ?? {});
+        const failed = item.status === "failed" || Boolean(item.error);
         this.options.emit({
           type: "message",
-          message: {
-            ...completeMessage(
-              JSON.stringify(
-                message.method === "item/completed"
-                  ? (item.result ?? {})
-                  : (item.arguments ?? {}),
-                null,
-                2,
-              ).slice(-32_000),
-              "tool",
-              item.id,
-              `${item.server ?? "MCP"}: ${item.tool ?? "tool"}`,
-              toolTarget(item.arguments, this.options.cwd),
-            ),
-            status:
-              message.method === "item/completed" ? "complete" : "streaming",
-          },
+          message: completed
+            ? this.tools.finish(
+                item.id,
+                item.error && !item.result
+                  ? item.error.message
+                  : JSON.stringify(item.result ?? {}, null, 2),
+                failed,
+              )
+            : started,
         });
+        if (!previous) {
+          const signal = this.naming?.signal;
+          void toolSubject(tool, item.arguments, this.options.names).then(
+            (target) => {
+              if (!target || !signal || signal.aborted) return;
+              const message = this.tools.rename(item.id, target);
+              if (message) this.options.emit({ type: "message", message });
+            },
+          );
+        }
+      }
       return;
     }
     if (message.method === "turn/completed") {
       const result = turnCompletedSchema.parse(params).turn;
       this.turnFinished = true;
+      this.naming?.abort();
       if (result.status === "failed")
         this.active?.reject(
           new Error(
@@ -484,7 +515,18 @@ export class CodexRuntime implements AgentRuntime {
           ? "Files"
           : method;
     const input = approval?._meta.tool_params ?? params;
-    const details = toolApproval(tool, input, this.options.cwd);
+    const signal = this.naming?.signal;
+    const details = await toolApproval(
+      tool,
+      input,
+      this.options.cwd,
+      this.options.names,
+      signal,
+    );
+    if (signal?.aborted) {
+      this.client.reject(id, "The turn has ended.");
+      return;
+    }
     const canAllowCutroomEdits =
       isCutroomEdit(tool) &&
       !codexAsks(this.permissionConfigs, approval?._meta.tool_name ?? "");
@@ -493,6 +535,13 @@ export class CodexRuntime implements AgentRuntime {
       return;
     }
     const target = details.target;
+    // Codex says why a command needs approval, such as leaving its sandbox.
+    const detail =
+      method === "item/commandExecution/requestApproval" &&
+      target &&
+      typeof params.reason === "string"
+        ? params.reason
+        : details.detail;
     const request: AgentRequest = {
       id: String(id),
       kind: questions ? "question" : "approval",
@@ -510,6 +559,7 @@ export class CodexRuntime implements AgentRuntime {
                 ? params.message
                 : "Codex needs your permission",
       input: details.input,
+      ...(detail ? { detail } : {}),
       ...(questions ? { questions } : {}),
     };
     const response = await this.options.request(request);
@@ -559,6 +609,7 @@ export class CodexRuntime implements AgentRuntime {
 
   async interrupt() {
     this.stopRequested = true;
+    this.naming?.abort();
     if (this.threadId && this.turnId && !this.turnFinished)
       await this.client.call("turn/interrupt", {
         threadId: this.threadId,
@@ -567,6 +618,7 @@ export class CodexRuntime implements AgentRuntime {
   }
 
   dispose() {
+    this.naming?.abort();
     this.unlisten();
     this.active?.reject(new Error("The conversation was closed."));
   }

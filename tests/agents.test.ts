@@ -614,6 +614,20 @@ for await (const line of createInterface({input:process.stdin})) {
       reply({method:"turn/completed",params:{threadId:"native-session",turn:{id:"native-turn",status:"completed",error:null}}});
       continue;
     }
+    if (input.params.input[0].text.includes("Tool check")) {
+      const event = (method, item) => reply({method,params:{threadId:"native-session",turnId:"native-turn",item}});
+      const edit={id:"edit",type:"mcpToolCall",server:"cutroom_studio",tool:"timeline_edit",arguments:{projectId:"p",expectedRevision:"r",composition:"index.html",commands:[{type:"setClip",clipId:"lt-7f3a",fadeIn:9}]},status:"inProgress"};
+      event("item/started",edit);
+      event("item/completed",{...edit,status:"failed",error:{message:"The timeline changed since it was read."}});
+      const list={id:"list",type:"mcpToolCall",server:"github",tool:"issues_list",arguments:{query:"open"},status:"inProgress"};
+      event("item/started",list);
+      event("item/completed",{...list,status:"completed",result:{content:[]}});
+      const shell={id:"shell",type:"commandExecution",command:"/usr/bin/bash -lc 'cat '\\''my notes.txt'\\'''",status:"inProgress",aggregatedOutput:null};
+      event("item/started",shell);
+      event("item/completed",{...shell,status:"completed",aggregatedOutput:"ok"});
+      reply({method:"turn/completed",params:{threadId:"native-session",turn:{id:"native-turn",status:"completed",error:null}}});
+      continue;
+    }
     if (input.params.input[0].text.includes("Question check")) {
       reply({id:"question",method:"item/tool/requestUserInput",params:{threadId:"native-session",questions:[{id:"formats",header:"Formats",question:"Output formats?",multiSelect:true,options:input.params.input[0].text.includes("free")?null:[{label:"MP4"},{label:"MOV"}]}]}});
     } else {
@@ -694,6 +708,13 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
     name: "editing",
     path: "/native/skills/editing/SKILL.md",
   });
+  // A command is asked about in plain words, with Codex's reason and the command in full.
+  expect(requests[0]).toMatchObject({
+    kind: "approval",
+    title: "Run this command?",
+    target: "touch title.txt",
+    detail: "Edit project",
+  });
   await runtime.send({ text: "Question check", skills: [], attachments: [] });
   expect(JSON.parse(await readFile(`${recording}.answers`, "utf8"))).toEqual({
     answers: { formats: { answers: ["MP4", "MOV"] } },
@@ -748,6 +769,70 @@ test("Codex accepts nullable running command output and streams it before comple
     text: "printf checked\nfirst second",
     status: "complete",
     target: "printf checked",
+  });
+});
+
+test("Codex emits tool rows and failures in order without waiting for late clip names", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-tool-protocol-"));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const script = join(directory, "provider.mjs");
+  await writeFile(script, nativeFixture);
+  const client = new CodexClient({
+    executable: process.execPath,
+    args: [script, join(directory, "turns.jsonl")],
+  });
+  cleanup.push(() => client.dispose());
+  const events: AgentEvent[] = [];
+  const runtime = new CodexRuntime(client, {
+    cwd: directory,
+    agentToken: "test-token",
+    emit: (event) => events.push(event),
+    request: async (request) => ({ requestId: request.id, decision: "deny" }),
+    names: {
+      note: async () => undefined,
+      transcript: async () => undefined,
+      // Slower than the turn: naming must not delay the result or completion.
+      clips: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return new Map([
+          [
+            "lt-7f3a",
+            { label: "Lower third", src: null, kind: "element" as const },
+          ],
+        ]);
+      },
+    },
+  });
+  cleanup.push(() => runtime.dispose());
+  await runtime.send({ text: "Tool check", skills: [], attachments: [] });
+  expect(
+    events.flatMap((event) =>
+      event.type === "message"
+        ? [
+            [
+              event.message.id,
+              event.message.status,
+              event.message.tool,
+              event.message.target,
+            ],
+          ]
+        : [],
+    ),
+  ).toEqual([
+    ["edit", "streaming", "cutroom_studio: timeline_edit", undefined],
+    ["edit", "failed", "cutroom_studio: timeline_edit", undefined],
+    ["list", "streaming", "github: issues_list", "open"],
+    ["list", "complete", "github: issues_list", "open"],
+    // The login shell Codex wraps every command in is not part of the row.
+    ["shell", "streaming", "Shell", "cat 'my notes.txt'"],
+    ["shell", "complete", "Shell", "cat 'my notes.txt'"],
+  ]);
+  expect(
+    events.find(
+      (event) => event.type === "message" && event.message.status === "failed",
+    ),
+  ).toMatchObject({
+    message: { text: "The timeline changed since it was read." },
   });
 });
 
@@ -901,9 +986,11 @@ for await(const line of createInterface({input:process.stdin})) {
     });
     try {
       await runtime.send({ text: "Edit", skills: [], attachments: [] });
-      expect(requests[0]?.title).toBe(
-        "Edit the timeline (index.html) (3 changes)?",
-      );
+      // No project names are available here, so the edit is unnamed rather than shown by id.
+      expect(requests[0]).toMatchObject({
+        title: "Edit 3 clips?",
+        detail: "3 changes",
+      });
       expect(requests[0]?.canAllowCutroomEdits).toBe(true);
       if (prompt) {
         const source = requests.find(

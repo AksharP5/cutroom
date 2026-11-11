@@ -170,6 +170,7 @@ kbd,
   .note-seek,
   .note-thumb,
   .chat-tool summary,
+  .chat-steps,
   .project-row,
   .file-row,
   .skill-picker button,
@@ -189,6 +190,7 @@ kbd,
   .note-seek,
   .note-thumb,
   .chat-tool summary,
+  .chat-steps,
   .project-row,
   .file-row,
   .skill-picker button,
@@ -215,6 +217,7 @@ kbd,
     .note-seek,
     .note-thumb,
     .chat-tool summary,
+    .chat-steps,
     .project-row,
     .file-row,
     .skill-picker button,
@@ -915,12 +918,19 @@ option {
   text-align: left;
 }
 
-/* Tool calls: one quiet verb row each, expanded on click. */
+/*
+ * Tool calls: one step group per turn segment. Routine steps fold into a single summary line;
+ * failures and project edits keep a row. Every line is 22px, so a group grows by whole rows
+ * and its summary changes in place while a turn streams.
+ */
 .chat-tools {
   display: flex;
   flex-direction: column;
   margin: -4px 0;
+  color: var(--text-secondary);
+  font-size: var(--type-sm);
 }
+.chat-steps,
 .chat-tool summary {
   display: grid;
   grid-template-columns: 14px auto minmax(0, 1fr) auto;
@@ -930,10 +940,23 @@ option {
   margin: 0 -4px;
   padding: 0 4px;
   border-radius: var(--radius-control);
-  color: var(--text-secondary);
+  color: inherit;
   white-space: nowrap;
   list-style: none;
   cursor: pointer;
+}
+.chat-steps {
+  grid-template-columns: 14px minmax(0, 1fr);
+  width: calc(100% + 8px);
+  text-align: left;
+}
+.chat-steps-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.chat-steps[data-running] .chat-steps-summary {
+  color: var(--text-primary);
 }
 .chat-tool summary::-webkit-details-marker {
   display: none;
@@ -942,7 +965,7 @@ option {
   color: var(--text-tertiary);
   transition: transform var(--duration-hover) var(--ease-out);
 }
-.chat-tool[open] .chat-tool-caret {
+:is(.chat-tool[open], .chat-steps[aria-expanded="true"]) .chat-tool-caret {
   transform: rotate(90deg);
 }
 .chat-tool-now {
@@ -953,10 +976,14 @@ option {
   background: var(--agent);
 }
 .chat-tool-verb {
-  color: var(--text-primary);
   font-weight: var(--weight-medium);
 }
-.chat-tool[data-status="streaming"] .chat-tool-verb {
+/* What changed the project reads at full strength; routine steps stay quiet. */
+.chat-step[data-edit] .chat-tool-verb,
+.chat-step[data-edit] .chat-tool-target {
+  color: var(--text-primary);
+}
+.chat-step[data-status="streaming"] .chat-tool-verb {
   color: var(--agent);
 }
 .chat-tool-target {
@@ -974,6 +1001,22 @@ option {
 .chat-tool[data-status="failed"] .chat-tool-note {
   color: var(--danger);
 }
+.chat-tool-reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0 0 4px 20px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-size: var(--type-2xs);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+.chat-tool[open] + .chat-tool-reason {
+  display: none;
+}
 .chat-tool pre,
 .agent-request pre {
   max-height: 220px;
@@ -989,19 +1032,18 @@ option {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.chat-tool pre {
+  margin: 2px 0 6px 20px;
+}
 
-/* An approval is one unboxed line pinned above the composer. */
+/* An approval is an unboxed question pinned above the composer. */
 .agent-request[aria-label="Permission request"] {
   flex: none;
-  padding: 4px 6px 4px 14px;
-  border-top: var(--stroke-hair) solid var(--line-subtle);
-}
-.agent-request-line {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  min-height: 28px;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 14px;
+  border-top: var(--stroke-hair) solid var(--line-subtle);
 }
 .agent-permissions {
   display: flex;
@@ -1011,39 +1053,53 @@ option {
   color: var(--agent);
 }
 .agent-request-title {
-  flex: 1 0 100%;
-  min-width: 0;
-  padding-block: var(--space-2);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--type-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-chat);
+  overflow-wrap: anywhere;
+}
+.agent-request-detail {
+  margin: calc(var(--space-1) * -1) 0 0;
   color: var(--text-secondary);
   line-height: var(--leading-body);
-  text-align: left;
   overflow-wrap: anywhere;
-  white-space: normal;
 }
-.agent-request-tool {
-  flex: 1 0 100%;
-  min-width: 0;
-  margin-bottom: var(--space-1);
-  color: var(--text-secondary);
-  font: var(--type-micro) / var(--leading-body) var(--font-mono);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+.agent-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
 }
-.agent-request-title:hover {
-  color: var(--text-primary);
+.agent-request-actions .secondary-button {
+  height: 24px;
+  padding: 0 10px;
+}
+.agent-request-more {
+  margin-left: auto;
 }
 .agent-request-scope {
-  flex: 1 0 100%;
-  margin: var(--space-1) 0 0;
-  color: var(--text-secondary);
-  font-size: var(--type-micro);
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
   line-height: var(--leading-body);
 }
-.chat-tool pre {
-  margin: 2px 0 6px 20px;
+/* The grant's button opens its own sentence, set in the sentence's line. */
+.agent-request-scope .text-button {
+  display: inline-block;
+  height: auto;
+  margin-left: -3px;
+  padding: 1px 3px;
+  font-size: inherit;
+  line-height: inherit;
 }
 .agent-request pre {
-  margin: 0 8px 6px 0;
+  margin: 0;
+}
+.agent-request-command {
+  max-height: 96px;
+  color: var(--text-primary);
 }
 /* A question lives in the transcript, so a long one scrolls instead of hiding its actions. */
 .agent-request[aria-label="Agent question"] {

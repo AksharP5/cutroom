@@ -1,8 +1,12 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { toFrames } from "./apply";
 import { isAudioKind } from "./schema";
-import type { Command, Timeline } from "./schema";
+import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
+
+/** A clip's name as the timeline shows it. */
+export const clipName = (clip: Pick<Clip, "id" | "label" | "src">) =>
+  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
 
 /** Percentages keep every digit the engine stores (six decimals of the fraction). */
 export const formatPercent = (value: number) =>

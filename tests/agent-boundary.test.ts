@@ -65,7 +65,8 @@ test("an active conversation cannot write another project's JavaScript or add it
       ),
     };
     expect(
-      toolApproval("mcp__cutroom_studio__source_write", args, own.path).title,
+      (await toolApproval("mcp__cutroom_studio__source_write", args, own.path))
+        .title,
     ).toBe("Write index.html?");
     expect(
       (await client.callTool({ name: "source_write", arguments: args }))
@@ -110,8 +111,8 @@ test("an active conversation cannot write another project's JavaScript or add it
   }
 });
 
-test("a source-write approval ignores a spoofed file_path and names the path MCP writes", () => {
-  const approval = toolApproval(
+test("a source-write approval ignores a spoofed file_path and names the path MCP writes", async () => {
+  const approval = await toolApproval(
     "mcp__cutroom_studio__source_write",
     {
       projectId: "project",

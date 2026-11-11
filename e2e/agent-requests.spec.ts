@@ -120,20 +120,16 @@ test("an approval shows the full target and scoped Always allow in a short windo
   const approval = page.getByRole("region", { name: "Permission request" });
   const allow = approval.getByRole("button", { name: "Allow once" });
   await expectInWindow(allow, page);
-  await expect(approval.locator(".agent-request-tool")).toHaveText(
-    "mcp__cutroom_studio__source_write",
-  );
-  expect(
-    await approval
-      .locator(".agent-request-tool")
-      .evaluate((element) => element.scrollWidth <= element.clientWidth),
-  ).toBe(true);
-  const title = approval.getByRole("button", { name: /^Write / });
+  await expectInWindow(approval.getByRole("button", { name: "Deny" }), page);
+  // The long target wraps in full above the controls, with no tool identifier beside it.
+  const title = approval.locator(".agent-request-title");
+  await expect(title).toHaveText(`Write ${target}?`);
+  await expect(approval).not.toContainText("mcp__");
   const [titleBox, allowBox] = [
     await title.boundingBox(),
     await allow.boundingBox(),
   ];
-  expect(titleBox?.height).toBeGreaterThan(16);
+  expect(titleBox?.height).toBeGreaterThan(20);
   expect((titleBox?.y ?? 0) + (titleBox?.height ?? 0)).toBeLessThanOrEqual(
     allowBox?.y ?? 0,
   );
