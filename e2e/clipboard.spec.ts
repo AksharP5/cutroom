@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectSchema } from "../src/shared/project";
@@ -15,31 +17,26 @@ test("clipboard keys overwrite, lift and insert linked clips, each edit undoing 
       })
     ).json(),
   );
-  const made = Bun.spawnSync(
-    [
-      "ffmpeg",
-      "-v",
-      "error",
-      "-f",
-      "lavfi",
-      "-i",
-      "testsrc2=s=320x180:r=30:d=12",
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=440:duration=12",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-      "-c:a",
-      "aac",
-      "-shortest",
-      join(project.path, "source.mp4"),
-    ],
-    { stderr: "pipe" },
-  );
-  expect(made.exitCode, made.stderr.toString()).toBe(0);
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=320x180:r=30:d=12",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=12",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    join(project.path, "source.mp4"),
+  ]);
   const path = join(project.path, "index.html");
   await writeFile(
     path,
