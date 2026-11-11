@@ -289,7 +289,9 @@ export function ReviewPanel({
             >
               {timecode(item)}
             </button>
-            <span className="note-element">{name}</span>
+            <span className="note-element" title={name}>
+              {name}
+            </span>
             <div className="review-row-actions">
               {at >= 0 && (
                 <>

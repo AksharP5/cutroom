@@ -100,6 +100,23 @@ test("queue names stay whole and agent replies expand while MCP works a note", a
     ).toBe(true);
     await expect(summary).toHaveText(reply);
     await row.getByRole("button", { name: "Less", exact: true }).click();
+    // Space on the reply toggle reached by keyboard expands it instead of playing.
+    const time = await page
+      .getByRole("button", { name: /^Current time/ })
+      .textContent();
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(
+      row.getByRole("button", { name: "More", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(
+      row.getByRole("button", { name: "Less", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Current time/ }),
+    ).toHaveText(time!);
+    await row.getByRole("button", { name: "Less", exact: true }).click();
     const accept = page.getByRole("button", {
       name: "Accept agent changes",
       exact: true,
@@ -118,6 +135,26 @@ test("queue names stay whole and agent replies expand while MCP works a note", a
       .filter({ hasText: "Keep the final frame." });
     await expect(pictureNote.locator(".note-element")).toHaveText("Picture");
     await expect(pictureNote.getByLabel("Frame unavailable")).toBeVisible();
+    // A name too long for the row ends in an ellipsis on one line; the tooltip holds all of it.
+    const long =
+      "Opening_title_card_with_a_name_far_too_long_for_any_queue_row";
+    const latest = result.parse(await call("timeline_read", {}))
+      .structuredContent.result;
+    await call("timeline_edit", {
+      expectedRevision: latest.revision,
+      commands: [{ type: "setClip", clipId: "headline", label: long }],
+    });
+    await expect(row.locator(".note-element")).toHaveAttribute("title", long);
+    expect(
+      await row
+        .locator(".review-row-meta")
+        .evaluate((meta) => meta.getBoundingClientRect().height),
+    ).toBeLessThanOrEqual(18);
+    expect(
+      await row
+        .locator(".note-element")
+        .evaluate((name) => getComputedStyle(name).textOverflow),
+    ).toBe("ellipsis");
   } finally {
     await client.close();
   }
@@ -231,6 +268,56 @@ test("marker names and token colours edit in place and remain readable through M
     await expect.poll(async () => (await read()).timeline.markers).toEqual([]);
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(drop).toBeVisible();
+
+    // An agent's edit made while the editor is open survives a rename from the UI.
+    await drop.dblclick();
+    await expect(editor).toBeVisible();
+    const open = await read();
+    const moved = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: project.id,
+        expectedRevision: open.revision,
+        commands: [
+          {
+            type: "setMarker",
+            id: "beat",
+            frame: 90,
+            duration: 30,
+            name: "Drop",
+            color: "yellow",
+            note: "Agent moved this",
+          },
+        ],
+      },
+    });
+    expect(moved.isError).not.toBe(true);
+    // Space on a colour reached by keyboard picks it, and never starts playback.
+    const time = await page
+      .getByRole("button", { name: /^Current time/ })
+      .textContent();
+    await page.getByLabel("Marker name", { exact: true }).fill("Renamed");
+    // Keyboard modality, then the Rose swatch: it matches :focus-visible like a tabbed control.
+    await page.keyboard.press("Tab");
+    await editor.getByRole("button", { name: "Rose", exact: true }).focus();
+    await page.keyboard.press("Space");
+    await expect(
+      editor.getByRole("button", { name: "Rose", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("button", { name: /^Current time/ }),
+    ).toHaveText(time!);
+    await editor.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .poll(async () => (await read()).timeline.markers[0])
+      .toEqual({
+        id: "beat",
+        frame: 90,
+        duration: 30,
+        name: "Renamed",
+        color: "pink",
+        note: "Agent moved this",
+      });
   } finally {
     await client.close();
   }

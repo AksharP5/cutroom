@@ -22,7 +22,8 @@ export function MarkerEditor({
   marker: Marker;
   anchor: { x: number; y: number };
   onClose(): void;
-  onSave(marker: Marker): Promise<boolean>;
+  /** Only the fields this editor changed; the rest stay as the marker now is. */
+  onSave(changes: Partial<Pick<Marker, "name" | "color">>): Promise<boolean>;
   onDelete(): Promise<boolean>;
 }) {
   const popover = useRef<HTMLDivElement>(null);
@@ -50,7 +51,10 @@ export function MarkerEditor({
     setSaving(true);
     const accepted = remove
       ? await onDelete()
-      : await onSave({ ...marker, name, color });
+      : await onSave({
+          ...(name !== marker.name && { name }),
+          ...(color !== marker.color && { color }),
+        });
     if (accepted) onClose();
     else setSaving(false);
   }

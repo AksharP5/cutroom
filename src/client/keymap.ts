@@ -147,11 +147,23 @@ export const isTyping = (target: EventTarget | null) =>
   target instanceof Element &&
   (!!target.ownerDocument.querySelector("dialog[open]") ||
     !!target.closest(
-      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
+      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog, [role=dialog]",
     ));
 
+/**
+ * A control reached by keyboard keeps Space and Enter for its own activation. One that only took
+ * focus from a mouse click does not match :focus-visible, so Space still plays after clicking a tool.
+ */
+const activates = (event: KeyboardEvent) =>
+  (event.code === "Space" || event.code === "Enter") &&
+  event.target instanceof Element &&
+  event.target.matches(":focus-visible") &&
+  !!event.target.closest(
+    "button, summary, a[href], [role=button], [role=option], [role=menuitem], [role=menuitemradio], [role=checkbox], [role=radio], [role=switch], [role=tab]",
+  );
+
 export function actionFor(event: KeyboardEvent): Action | null {
-  if (isTyping(event.target)) return null;
+  if (isTyping(event.target) || activates(event)) return null;
   const combo = comboOf(event);
   const action = combo ? bindings.get(combo) : undefined;
   if (!action) return null;

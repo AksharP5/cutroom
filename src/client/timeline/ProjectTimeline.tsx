@@ -230,10 +230,15 @@ export function ProjectTimeline({
             key={editingMarker.marker.id}
             {...editingMarker}
             onClose={() => setEditingMarker(null)}
-            onSave={(marker) =>
-              editTimeline(projectId, "Edit marker", () => [
-                { type: "setMarker", ...marker },
-              ])
+            onSave={(changes) =>
+              // Built on the marker as it is now, so an agent's newer edit to its other fields stays.
+              editTimeline(projectId, "Edit marker", (timeline) => {
+                const current = timeline.markers.find(
+                  ({ id }) => id === editingMarker.marker.id,
+                );
+                if (!current) throw new Error("This marker was removed.");
+                return [{ type: "setMarker", ...current, ...changes }];
+              })
             }
             onDelete={() =>
               editTimeline(projectId, "Remove marker", () => [

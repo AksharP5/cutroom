@@ -1419,10 +1419,9 @@ option {
 }
 .review-row-meta {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  min-height: 18px;
+  height: 18px;
   margin-top: -1px;
   color: var(--text-tertiary);
   font-size: var(--type-xs);
@@ -1435,10 +1434,14 @@ option {
   border-radius: var(--radius-control);
   font-size: var(--type-2xs);
 }
+/* One line, ending in an ellipsis at a word or character; the full name is in the tooltip. */
 .note-element {
   min-width: 0;
+  overflow: hidden;
   color: var(--text-secondary);
   font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Secondary actions float over the meta line on hover, so they never take its space. */
 .review-row-actions {
