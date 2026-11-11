@@ -12,6 +12,7 @@ import {
   keymap,
   useKeymap,
 } from "../keymap";
+import { Modal } from "../components/Modal";
 import { SelectMenu } from "../components/SelectMenu";
 import { useWorkspace } from "../workspace";
 import { createVoiceoverSession } from "./session";
@@ -81,21 +82,75 @@ function InputLevel({ session }: { session: VoiceoverSession }) {
 export function VoiceoverTransport({ session }: { session: VoiceoverSession }) {
   const state = useStore(session.store, ({ state }) => state);
   const recording = state.kind === "recording";
+  const discard = useStore(session.store, ({ discard }) => discard);
+  const button = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+  useEffect(() => {
+    if (discard === "recording") returnFocus.current = true;
+    if (state.kind === "save-failed") returnFocus.current = false;
+    if (
+      returnFocus.current &&
+      (state.kind === "armed" || state.kind === "idle")
+    ) {
+      returnFocus.current = false;
+      button.current?.focus({ preventScroll: true });
+    }
+  }, [discard, state.kind]);
   return (
-    <button
-      className={`edit-icon vo-record${recording ? " recording" : ""}`}
-      aria-label={recording ? "Stop voiceover" : "Record voiceover"}
-      aria-pressed={recording}
-      disabled={state.kind === "arming" || state.kind === "saving"}
-      title={hint("cutroomRecordVoiceover")}
-      onClick={session.toggleRecord}
-    >
-      {recording ? (
-        <Stop size={14} weight="fill" />
-      ) : (
-        <Record size={16} weight="fill" />
-      )}
-    </button>
+    <>
+      <button
+        ref={button}
+        className={`edit-icon vo-record${recording ? " recording" : ""}`}
+        aria-label={recording ? "Stop voiceover" : "Record voiceover"}
+        aria-pressed={recording}
+        disabled={state.kind === "arming" || state.kind === "saving"}
+        title={hint("cutroomRecordVoiceover")}
+        onClick={session.toggleRecord}
+      >
+        {recording ? (
+          <Stop size={14} weight="fill" />
+        ) : (
+          <Record size={16} weight="fill" />
+        )}
+      </button>
+      <DiscardTake session={session} source="recording" />
+    </>
+  );
+}
+
+function DiscardTake({
+  session,
+  source,
+}: {
+  session: VoiceoverSession;
+  source: "recording" | "unsaved";
+}) {
+  const discard = useStore(session.store, ({ discard }) => discard);
+  const keepButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (discard === source) keepButton.current?.focus({ preventScroll: true });
+  }, [discard, source]);
+  if (discard !== source) return null;
+  const keep = () => session.answerDiscard(false);
+  return (
+    <Modal title="Discard voiceover take?" onClose={keep}>
+      <p className="vo-discard-message">
+        {source === "recording"
+          ? "Discard this recording or save it to the timeline."
+          : "This take has not been saved. Discarding it cannot be undone."}
+      </p>
+      <footer className="modal-actions">
+        <button ref={keepButton} className="secondary-button" onClick={keep}>
+          {source === "recording" ? "Save take" : "Keep take"}
+        </button>
+        <button
+          className="secondary-button vo-discard"
+          onClick={() => session.answerDiscard(true)}
+        >
+          Discard take
+        </button>
+      </footer>
+    </Modal>
   );
 }
 
@@ -144,6 +199,10 @@ export function VoiceoverHeader({
     if (!box) return;
     setPosition({ left: box.right, top: Math.max(4, box.top - 240) });
     panel.current?.showPopover();
+    const target = panel.current?.querySelector<HTMLButtonElement>(
+      ".select-trigger:not(:disabled), .primary-button:not(:disabled)",
+    );
+    (target ?? panel.current)?.focus({ preventScroll: true });
     void session.refreshDevices().catch(() => {});
   };
   useEffect(() => {
@@ -167,7 +226,7 @@ export function VoiceoverHeader({
       {active && <InputLevel session={session} />}
       <button
         ref={input}
-        className="vo-input"
+        className={`vo-input${active && state.kind === "save-failed" ? " vo-recover" : ""}`}
         aria-label={`Microphone input ${id}`}
         title={
           state.kind === "save-failed" && active
@@ -181,6 +240,9 @@ export function VoiceoverHeader({
       <div
         ref={panel}
         popover="auto"
+        role="dialog"
+        aria-label={`Voiceover ${id}`}
+        tabIndex={-1}
         className="vo-input-panel"
         style={position}
       >
@@ -219,7 +281,10 @@ export function VoiceoverHeader({
             Latency compensation {Math.round(compensation * 1000)} ms
           </p>
         )}
-        <p>Overlaps go on a new audio track. Esc asks to discard the take.</p>
+        <p>
+          Overlaps use the first audio track with room. Esc asks to discard the
+          take.
+        </p>
         {error && <p role="alert">{error}</p>}
         {active && state.kind === "save-failed" ? (
           <div className="vo-actions">
@@ -252,6 +317,7 @@ export function VoiceoverHeader({
             )}
           </button>
         )}
+        {active && <DiscardTake session={session} source="unsaved" />}
       </div>
     </>
   );

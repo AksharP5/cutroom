@@ -5,9 +5,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
-import { voiceoverCommands, voiceoverWav } from "../src/shared/voiceover";
+import {
+  voiceoverCommands,
+  voiceoverTrack,
+  voiceoverWav,
+} from "../src/shared/voiceover";
 import { desktopPermission } from "../src/desktop/permissions";
-import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { applyAll } from "../src/shared/timeline/apply";
+import {
+  CommandSchema,
+  TimelineSchema,
+  TimelineViewSchema,
+} from "../src/shared/timeline/schema";
 import { newTrack } from "../src/shared/timeline/tracks";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
@@ -228,4 +237,57 @@ test("desktop microphone permission is audio-only and restricted to the editor m
   expect(
     desktopPermission("media", "https://example.com", origin, true, ["audio"]),
   ).toBe(false);
+});
+
+test("non-overlapping takes reuse the first free audio lane and overlaps preserve earlier work", () => {
+  let timeline = TimelineSchema.parse({
+    fps: { num: 30, den: 1 },
+    duration: 300,
+    tracks: [newTrack(0, "video"), newTrack(1, "audio")],
+    clips: [],
+    markers: [],
+    range: { in: null, out: null },
+  });
+  timeline = applyAll(timeline, [
+    CommandSchema.parse({
+      type: "insert",
+      mode: "place",
+      track: 1,
+      at: 0,
+      clip: { id: "music", kind: "audio", src: "music.wav", duration: 300 },
+    }),
+  ]);
+  const music = timeline.clips[0];
+  const armed = timeline.tracks[1]!;
+  for (const at of [30, 100, 180]) {
+    const commands = voiceoverCommands(timeline, armed, at, 30, "take.wav");
+    timeline = applyAll(
+      timeline,
+      commands.map((command) => CommandSchema.parse(command)),
+    );
+  }
+  expect(
+    timeline.clips
+      .filter((clip) => clip.kind === "voiceover")
+      .map((clip) => clip.track),
+  ).toEqual([2, 2, 2]);
+  expect(timeline.tracks.map((track) => track.index)).toEqual([0, 1, 2]);
+  expect(timeline.clips.find((clip) => clip.id === "music")).toEqual(music);
+  // Touching an edge fits; extending into the next take moves to a new lane.
+  expect(voiceoverTrack(timeline, armed, 60, 40).index).toBe(2);
+  expect(voiceoverTrack(timeline, armed, 60, 41).index).toBe(3);
+  const locked = {
+    ...timeline,
+    tracks: timeline.tracks.map((track) =>
+      track.index === 2 ? { ...track, locked: true } : track,
+    ),
+  };
+  expect(voiceoverTrack(locked, armed, 60, 30).index).toBe(3);
+  const repurposed = {
+    ...timeline,
+    tracks: timeline.tracks.map((track) =>
+      track.index === 1 ? { ...track, kind: "video" as const } : track,
+    ),
+  };
+  expect(voiceoverTrack(repurposed, armed, 60, 30).index).toBe(2);
 });

@@ -58,10 +58,21 @@ export const useWorkspace = create(() => ({
   toastAction: null as { label: string; run(): void } | null,
 }));
 
+let toastVersion = 0;
+
+/** The returned dismiss function clears only this toast, leaving later messages alone. */
 export const showToast = (
   message: string,
   action: { label: string; run(): void } | null = null,
-) => useWorkspace.setState({ toast: message, toastAction: action });
+) => {
+  const version = ++toastVersion;
+  useWorkspace.setState({ toast: message, toastAction: action });
+  return () => {
+    if (version !== toastVersion) return;
+    ++toastVersion;
+    useWorkspace.setState({ toast: "", toastAction: null });
+  };
+};
 
 type EditorErrorSide = "viewer" | "timeline";
 

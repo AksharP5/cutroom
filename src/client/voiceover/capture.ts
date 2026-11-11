@@ -161,10 +161,6 @@ export async function openMicrophone(
           blocks = blocks.slice(-8);
         }
       },
-      discard() {
-        recording = false;
-        blocks = blocks.slice(-8);
-      },
       close() {
         if (end) {
           clearTimeout(end.timer);
