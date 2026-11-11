@@ -953,6 +953,10 @@ test("a ruler scrub holds a pending Fit until pointer release", async ({
     )
     .toBe(0);
   expect(await scale()).toBe(before);
+  // Switching windows mid-scrub keeps the press, so the scale stays held.
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  expect(await scale()).toBe(before);
   await page.mouse.move(target.x, target.y);
   await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
     "00:00:04:10",
@@ -960,7 +964,15 @@ test("a ruler scrub holds a pending Fit until pointer release", async ({
   await page.mouse.up();
   await expect(grid).not.toHaveAttribute("data-gesturing", "");
   await expect(grid).toHaveAttribute("data-refit", "settled");
-  expect(await scale()).toBeLessThan(before);
+  const fitted = await scale();
+  expect(fitted).toBeLessThan(before);
+
+  // Only automatic Fit waits: an explicit zoom during a press still applies.
+  await page.mouse.down();
+  await expect(grid).toHaveAttribute("data-gesturing", "");
+  await page.keyboard.press("Control+=");
+  await expect.poll(scale).toBeGreaterThan(fitted);
+  await page.mouse.up();
 });
 
 test("an external file drag freezes Fit while over the timeline and releases on exit", async ({

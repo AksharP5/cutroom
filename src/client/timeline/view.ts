@@ -191,7 +191,6 @@ export function createViewport(
   }
 
   function zoom(target: number, anchor: number, animate: boolean) {
-    if (gesturing) return;
     cancelRefit();
     const next = clampPpf(target, fit);
     fitted = next === fit;
@@ -221,7 +220,6 @@ export function createViewport(
   function onWheel(event: WheelEvent) {
     if (!event.ctrlKey && !event.altKey) return;
     event.preventDefault();
-    if (gesturing) return;
     // Chromium reports a pinch as Ctrl+wheel steps of -100 * ln(scale), so this follows the
     // fingers exactly. A mouse wheel notch is 100 or more; capping it makes a notch about 1.27x.
     const delta = Math.max(
@@ -254,7 +252,11 @@ export function createViewport(
     onChange(false);
   }
 
-  /** Freeze before an input on the lanes or ruler measures timeline coordinates. */
+  /**
+   * Freeze before an input on the lanes or ruler measures timeline coordinates. Only automatic
+   * Fit waits; an explicit zoom still applies. The freeze ends with the press or drag itself, not
+   * window focus, because a held drag keeps its pointer across a blur.
+   */
   function gesture(active: boolean) {
     if (gesturing === active) return;
     gesturing = active;
@@ -320,10 +322,6 @@ export function createViewport(
     )
       onDragEnd();
   }
-  function onBlur() {
-    pointer = null;
-    onDragEnd();
-  }
   const resized = new ResizeObserver(() => measure(extent));
   const events = new AbortController();
   const { signal } = events;
@@ -345,7 +343,6 @@ export function createViewport(
   scroller.addEventListener("dragleave", onDragLeave, { signal });
   document.addEventListener("dragend", onDragEnd, { signal });
   document.addEventListener("drop", onDragEnd, { signal });
-  window.addEventListener("blur", onBlur, { signal });
   refitState();
 
   /** Let an edit close its gap at the old scale before easing back to Fit. */
