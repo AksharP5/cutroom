@@ -104,3 +104,57 @@ test("a reload of the confirmed document is prepared and painted again; other lo
     transitionHandoff(loading, { type: "loaded", gen: 2, deadline: 20_000 }),
   ).toBe(loading);
 });
+
+test("document teardown starts the reload deadline before load and stale teardown cannot restart a handoff", () => {
+  const reloading = transitionHandoff(showing, {
+    type: "unloaded",
+    gen: 1,
+    deadline: 15_000,
+  });
+  expect(reloading).toMatchObject({
+    kind: "loading",
+    candidate: { gen: 1, deadline: 15_000 },
+  });
+  expect(
+    transitionHandoff(reloading, { type: "loaded", gen: 1, deadline: 20_000 }),
+  ).toBe(reloading);
+  const navigating = transitionHandoff(showing, {
+    type: "navigate",
+    gen: 2,
+    deadline: 15_000,
+  });
+  expect(
+    transitionHandoff(navigating, {
+      type: "unloaded",
+      gen: 1,
+      deadline: 20_000,
+    }),
+  ).toBe(navigating);
+});
+
+test("a document reloading during promotion must prepare again within its original deadline", () => {
+  const loading = transitionHandoff(showing, {
+    type: "navigate",
+    gen: 2,
+    deadline: 15_000,
+  });
+  const promoting = transitionHandoff(loading, {
+    type: "prepared",
+    picture: { ...confirmed, gen: 2 },
+  });
+  const reloading = transitionHandoff(promoting, {
+    type: "unloaded",
+    gen: 2,
+    deadline: 20_000,
+  });
+  expect(reloading).toEqual(loading);
+  expect(transitionHandoff(reloading, { type: "painted", gen: 2 })).toBe(
+    reloading,
+  );
+  expect(
+    transitionHandoff(reloading, {
+      type: "prepared",
+      picture: { ...confirmed, gen: 2 },
+    }).kind,
+  ).toBe("promoting");
+});

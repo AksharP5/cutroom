@@ -1437,5 +1437,112 @@ test("a reload of the live preview reconnects playback to the editor clock", asy
   await expect(
     page.getByRole("button", { name: /^Current time/ }),
   ).not.toHaveText("00:00:03:11");
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-handoff",
+    "showing",
+  );
+  await expect(page.locator(".edit-frame")).toHaveCount(1);
+  await expect(page.locator(".status-error")).toHaveCount(0);
   await page.keyboard.press("Space");
 });
+
+for (const action of ["play", "resume", "pause"] as const) {
+  test(`a live preview reload preserves ${action} intent while preparing`, async ({
+    page,
+    request,
+  }, testInfo) => {
+    const { seek } = await openMedia(page, request);
+    await seek("0311");
+    const stage = page.locator(".edit-stage");
+    const timecode = page.getByRole("button", { name: /^Current time/ });
+    await expect(stage).toHaveAttribute("data-handoff", "showing");
+    await page.getByRole("region", { name: "Viewer" }).click();
+    if (action !== "play") {
+      await page.keyboard.press("Space");
+      await expect(timecode).not.toHaveText("00:00:03:11");
+    }
+    const frame = (await (await page
+      .locator("iframe[data-live]")
+      .elementHandle())!.contentFrame())!;
+    const channel = `reload-gate-${action}`;
+    await page.addInitScript((channel) => {
+      if (parent === window) return;
+      let blocked = true;
+      const waiting: unknown[] = [];
+      addEventListener("message", (event) => {
+        if (event.data?.channel === channel) {
+          blocked = false;
+          for (const data of waiting)
+            dispatchEvent(
+              new MessageEvent("message", { source: parent, data }),
+            );
+          waiting.length = 0;
+          return;
+        }
+        if (
+          blocked &&
+          event.source === parent &&
+          event.data?.source === "cutroom-viewer"
+        ) {
+          event.stopImmediatePropagation();
+          waiting.push(event.data);
+        }
+      });
+    }, channel);
+    try {
+      const navigated = page.waitForEvent("framenavigated", {
+        predicate: (navigation) => navigation === frame,
+      });
+      await frame.evaluate(() => location.reload());
+      await navigated;
+      await expect(stage).toHaveAttribute("data-handoff", "loading");
+      await expect(frame.locator("[data-cutroom-video-hold]")).toHaveCount(0);
+      await expect(page.locator(".edit-frame")).toHaveCount(1);
+      const parked = await timecode.textContent();
+      if (action !== "resume") await page.keyboard.press("Space");
+      // The replacement stays paused until it has supplied a confirmed picture.
+      await expect
+        .poll(() =>
+          frame
+            .locator("video")
+            .evaluate((video: HTMLVideoElement) => video.paused),
+        )
+        .toBe(true);
+      await frame.evaluate(
+        (channel) => window.postMessage({ channel }, "*"),
+        channel,
+      );
+      await expect(stage).toHaveAttribute("data-handoff", "showing");
+      if (action === "pause") {
+        await expect(frame.locator("[data-cutroom-video-hold]")).toHaveCount(1);
+        await expect(frame.locator("video")).toHaveJSProperty("paused", true);
+        await expect(timecode).toHaveText(parked!);
+      } else {
+        await expect(frame.locator("video")).toHaveJSProperty("paused", false);
+        await expect(timecode).not.toHaveText(parked!);
+      }
+      await expect(page.locator(".edit-frame")).toHaveCount(1);
+      await expect(page.locator(".status-error")).toHaveCount(0);
+      await testInfo.attach("reload confirmed", {
+        body: JSON.stringify({
+          action,
+          parked,
+          current: await timecode.textContent(),
+          video: await frame
+            .locator("video")
+            .evaluate((video: HTMLVideoElement) => ({
+              paused: video.paused,
+              time: video.currentTime,
+            })),
+        }),
+        contentType: "application/json",
+      });
+      if (action !== "pause") await page.keyboard.press("Space");
+    } finally {
+      await frame.evaluate(
+        (channel) => window.postMessage({ channel }, "*"),
+        channel,
+      );
+    }
+  });
+}

@@ -189,7 +189,7 @@ function run(next: TransportState) {
         ? first
         : end - 1;
   restart(start);
-  tick = requestAnimationFrame(advance);
+  if (player) tick = requestAnimationFrame(advance);
 }
 
 export const transport = {
@@ -229,6 +229,11 @@ export const transport = {
     set({ fps, duration, range });
     if (get().frame >= duration) transport.seek(duration - 1);
   },
+  /** The document is gone. Keep the latest playback intent until its replacement attaches. */
+  suspend() {
+    cancelAnimationFrame(tick);
+    player = null;
+  },
   /** Hands the playhead to a newly loaded preview, which already shows frame `shown`. */
   attach(next: RuntimePlayer | null, shown?: number) {
     player?.pause();
@@ -237,5 +242,9 @@ export const transport = {
     next.setMuted(get().muted);
     const { state, frame } = get();
     if (velocity(state) || shown !== frame) restart(frame);
+    if (velocity(state)) {
+      cancelAnimationFrame(tick);
+      tick = requestAnimationFrame(advance);
+    }
   },
 };

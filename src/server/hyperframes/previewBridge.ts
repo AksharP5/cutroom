@@ -592,6 +592,7 @@ function installPreviewBridge() {
   );
   addEventListener("pagehide", () => {
     retired = true;
+    parent.postMessage({ source: "cutroom-preview", type: "unloaded" }, "*");
     pictureVersion += 1;
     clearTimeout(observationTimer);
     cancelAnimationFrame(observationFrame);

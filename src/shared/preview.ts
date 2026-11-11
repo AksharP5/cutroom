@@ -21,6 +21,11 @@ export const PlaybackClockSchema = z.object({
 });
 export type PlaybackClock = z.infer<typeof PlaybackClockSchema>;
 
+export const PreviewUnloadedSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("unloaded"),
+});
+
 export const PreviewReplySchema = z.object({
   source: z.literal("cutroom-preview"),
   id: z.string().optional(),

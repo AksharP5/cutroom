@@ -120,6 +120,11 @@ export function Viewer({
     transition({ type: "reported" });
   }, [handoff]);
 
+  const reloading = !!candidate && candidate.gen === handoff.confirmed?.gen;
+  useLayoutEffect(() => {
+    if (reloading) transport.suspend();
+  }, [reloading]);
+
   useLayoutEffect(() => {
     if (handoff.kind !== "promoting") return;
     const { candidate } = handoff;
@@ -171,7 +176,13 @@ export function Viewer({
 
   const load = async (gen: number, frame: HTMLIFrameElement) => {
     if (gen !== latest.current || !frame.isConnected) return;
-    const preview = connectPreview(frame);
+    const preview = connectPreview(frame, () => {
+      transition({
+        type: "unloaded",
+        gen,
+        deadline: performance.now() + READY_TIMEOUT,
+      });
+    });
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
@@ -203,7 +214,10 @@ export function Viewer({
       preview.signal.throwIfAborted();
       if (gen !== latest.current) return;
       const { width, height } = preview.state;
-      transition({ type: "prepared", picture: { gen, revision, width, height, shown } });
+      transition({
+        type: "prepared",
+        picture: { gen, revision, width, height, shown },
+      });
     } catch (reason) {
       if (preview.signal.aborted || gen !== latest.current) return;
       transition({ type: "failed", gen, reason });
@@ -228,7 +242,7 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
-  const slots = [handoff.confirmed?.gen, candidate?.gen].filter(
+  const slots = [...new Set([handoff.confirmed?.gen, candidate?.gen])].filter(
     (gen): gen is number => gen != null,
   );
 
@@ -236,6 +250,7 @@ export function Viewer({
     <div
       ref={stage}
       className="edit-stage"
+      data-handoff={handoff.kind}
       data-preview-ready={
         handoff.kind === "showing" && handoff.confirmed?.revision === revision
           ? revision
@@ -250,7 +265,9 @@ export function Viewer({
       >
         {slots.map((gen) => {
           const retained =
-            handoff.kind === "promoting" && gen === handoff.confirmed?.gen;
+            handoff.kind === "promoting" &&
+            gen === handoff.confirmed?.gen &&
+            gen !== candidate?.gen;
           const size = gen === handoff.confirmed?.gen ? handoff.confirmed : fit;
           return (
             <iframe

@@ -158,3 +158,39 @@ test("a looped shuttle wraps inside the in and out range", () => {
   elapse(0.25);
   expect(state().frame).toBe(30);
 });
+
+test("suspending a reloading document parks the frame and resumes the latest playback intent on attach", () => {
+  const previous = open(thirty, 12);
+  transport.seek(101);
+  transport.dispatch({ type: "toggle" });
+  transport.suspend();
+  const seeks = previous.seeks.length;
+  previous.elapse(2);
+  expect(state()).toMatchObject({ state: { kind: "playing" }, frame: 101 });
+
+  // A pause followed by a play while detached changes intent without commanding the old document.
+  transport.dispatch({ type: "toggle" });
+  transport.dispatch({ type: "toggle" });
+  previous.elapse(2);
+  expect(state().frame).toBe(101);
+  expect(previous.seeks).toHaveLength(seeks);
+
+  const replacement = runtime(12);
+  transport.attach(replacement.player, 101);
+  expect(replacement.player.playing()).toBe(true);
+  replacement.elapse(1);
+  expect(state().frame).toBe(131);
+});
+
+test("a stop during reload stays stopped when the prepared document attaches", () => {
+  const previous = open(thirty, 12);
+  transport.seek(101);
+  transport.dispatch({ type: "toggle" });
+  transport.suspend();
+  transport.dispatch({ type: "stop" });
+  const replacement = runtime(12);
+  transport.attach(replacement.player, 101);
+  replacement.elapse(1);
+  expect(state()).toMatchObject({ state: { kind: "stopped" }, frame: 101 });
+  expect(replacement.player.playing()).toBe(false);
+});
