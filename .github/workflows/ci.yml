@@ -9,9 +9,20 @@ permissions:
 
 jobs:
   verify:
+    name: verify (${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    # Leave room for three performance passes after the functional suite.
+    # The browser suite runs in two shards beside the three-pass performance budget, so no
+    # leg comes near the limit as the suite grows.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: browser 1 of 2
+            shard: 1/2
+          - suite: browser 2 of 2
+            shard: 2/2
+          - suite: performance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,15 +55,20 @@ jobs:
           browser=$(bun -e 'import { chromium } from "@playwright/test"; process.stdout.write(chromium.executablePath())')
           echo "CUTROOM_BROWSER_PATH=$browser" >> "$GITHUB_ENV"
           echo "HYPERFRAMES_BROWSER_PATH=$browser" >> "$GITHUB_ENV"
-      - run: bun run format:check
-      - run: bun run check
-      - run: bun test
-      - run: bun run test:e2e
-      - run: bun run test:perf
+      - if: matrix.shard == '2/2'
+        run: bun run format:check
+      - if: matrix.shard == '2/2'
+        run: bun run check
+      - if: matrix.shard == '2/2'
+        run: bun test
+      - if: matrix.shard
+        run: bun run test:e2e --shard=${{ matrix.shard }}
+      - if: matrix.suite == 'performance'
+        run: bun run test:perf
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: browser-failure
+          name: browser-failure-${{ strategy.job-index }}
           path: |
             test-results/
             playwright-report/
