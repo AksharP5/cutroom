@@ -44,7 +44,7 @@ export function observePosition(
   observedText = text;
   useTextWarning.setState({ warning: null });
   usePositionWarning.setState({ warning: null });
-  pictureBox.publish(null);
+  if (pictureBox.current()?.clipId !== clipId) pictureBox.publish(null);
   for (const observe of observers) observe(clipId);
 }
 

@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import { parse } from "parse5";
+import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import type { DefaultTreeAdapterTypes } from "parse5";
-import { withPreviewBridge } from "../src/server/hyperframes/previewBridge";
+import { parseComposition } from "../src/server/timeline/composition";
+import { emptyTimelineSettings } from "../src/shared/timeline/schema";
+import {
+  withPreviewBridge,
+  withPreviewClipIdentities,
+} from "../src/server/hyperframes/previewBridge";
 
 function videoAttributes(source: string) {
   const visit = (
@@ -39,4 +45,68 @@ test("preview boundaries follow the composition's rational frame rate and explic
     </main>`);
   expect(Number(video!.get("data-start"))).toBe((76 * 1001) / 30000);
   expect(Number(video!.get("data-end"))).toBe((77 * 1001) / 30000);
+});
+
+test("preview clip markers match the timeline for named, anonymous and colliding identities", () => {
+  const html = `<main data-composition-id="main" data-duration="4">
+    <div data-hf-id="front" data-start="0" data-duration="4">Front</div>
+    <div data-start="0" data-duration="0">Never shown</div>
+    <div data-start="0" data-duration="4">Generated</div>
+    <div id="clip-1" data-start="0" data-duration="4">Reserved</div>
+    <div data-hf-id="front" data-start="0" data-duration="4"><span data-start="0" data-duration="4">Nested</span></div>
+  </main>`;
+  const timeline = parseComposition(html, emptyTimelineSettings()).timeline;
+  const markers: string[] = [];
+  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+    for (const node of nodes) {
+      if (!("tagName" in node)) continue;
+      const marker = node.attrs.find(
+        ({ name }) => name === "data-hf-cutroom-clip-id",
+      );
+      if (marker) markers.push(marker.value);
+      visit(node.childNodes);
+    }
+  };
+  visit(parse(withPreviewBridge(html)).childNodes);
+  expect(markers).toEqual(["front", "clip-2", "clip-1", "clip-3"]);
+  expect(markers.toSorted()).toEqual(
+    timeline.clips.map((clip) => clip.id).toSorted(),
+  );
+  const compiled = withPreviewClipIdentities(ensureHfIds(html), html);
+  markers.length = 0;
+  visit(parse(withPreviewBridge(compiled)).childNodes);
+  expect(markers).toEqual(["front", "clip-2", "clip-1", "clip-3"]);
+});
+
+test("standalone template previews keep the scoped timeline's generated identities", () => {
+  const source = `<template><main data-composition-id="scene" data-duration="4"><div data-start="0" data-duration="4">Words</div></main></template>`;
+  const compiled = ensureHfIds(
+    `<html><body><main data-composition-id="scene" data-duration="4"><div data-start="0" data-duration="4">Words</div></main></body></html>`,
+  );
+  const marked = withPreviewClipIdentities(compiled, source, "sub-composition");
+  expect(marked).toContain('data-hf-cutroom-clip-id="clip-1"');
+  expect(
+    parseComposition(source, emptyTimelineSettings(), {
+      scope: "sub-composition",
+    }).timeline.clips[0]!.id,
+  ).toBe("clip-1");
+});
+
+test("measured media windows filter the same clips before assigning generated names", () => {
+  const source = `<html><body><main data-composition-id="main" data-duration="4"><audio data-start="0.01" src="click.wav"></audio><div data-start="0" data-duration="4">Words</div></main></body></html>`;
+  const lengths = new Map([["click.wav", 0.001]]);
+  const marked = withPreviewClipIdentities(
+    ensureHfIds(source),
+    source,
+    "document",
+    lengths,
+  );
+  expect(
+    parseComposition(source, emptyTimelineSettings(), {
+      mediaLengths: lengths,
+    }).timeline.clips.map((clip) => clip.id),
+  ).toEqual(["clip-1"]);
+  expect(marked).toContain('data-hf-cutroom-clip-id="clip-1"');
+  expect(marked).not.toContain('data-hf-cutroom-clip-id="clip-2"');
+  expect(marked.match(/data-hf-cutroom-clip-id=/g)).toHaveLength(1);
 });

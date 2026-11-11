@@ -1,6 +1,10 @@
 import { parse } from "parse5";
+import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
+import { compositionClipLocations } from "../timeline/composition";
+import type { CompositionScope } from "../timeline/composition";
+import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
 import type { EditFrame } from "../../shared/preview";
 
@@ -32,6 +36,8 @@ interface PreviewWindow extends Window {
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(texts: [string, string[]][] = []) {
   const sourceTexts = new Map(texts);
+  const clipElement = (id: string) =>
+    document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
   const positions = new Map<
     HTMLElement | SVGElement,
@@ -62,7 +68,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     positionFrame = 0;
     const draft = positionDraft;
     if (!draft) return;
-    const element = document.querySelector(`#${CSS.escape(draft.clipId)}`);
+    const element = clipElement(draft.clipId);
     if (!(element instanceof HTMLElement || element instanceof SVGElement))
       return;
     let original = positions.get(element);
@@ -109,7 +115,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     // A saved edit can be observed before its replacement document is promoted. Only compare
     // against the document containing that source, never the held picture of an earlier edit.
     if (!sourceTexts.get(observedClip)?.includes(observedText)) return;
-    const element = document.getElementById(observedClip);
+    const element = clipElement(observedClip);
     if (!element) return;
     // Read the painted text nodes rather than innerText's CSS text-transform result: a
     // capitalized title still contains the committed words. Keep authored <br> boundaries.
@@ -196,7 +202,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     if (!observedClip) return;
     performance.mark("cutroom:position-observation:start");
     try {
-      const element = document.querySelector(`#${CSS.escape(observedClip)}`);
+      const element = clipElement(observedClip);
       if (!(element instanceof HTMLElement || element instanceof SVGElement))
         return;
       const number = (name: string) =>
@@ -383,7 +389,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
   const postBox = () => {
     if (!observedClip) return;
     const start = performance.now();
-    const element = document.querySelector(`#${CSS.escape(observedClip)}`);
+    const element = clipElement(observedClip);
     const box = element ? boxOf(element) : null;
     performance.measure("cutroom:clip-box", { start, end: performance.now() });
     performance.clearMeasures("cutroom:clip-box");
@@ -410,7 +416,89 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     if (observedClip && win.__player?.isPlaying())
       boxFrame = requestAnimationFrame(followBox);
   };
-  const paintsAt = (element: Element, x: number, y: number) => {
+  /** Recover local border coordinates from the complete affine transform, including ancestors.
+   * Layout offsets and transform origins only translate the quad; its bounding box anchors it.
+   */
+  const localPoint = (
+    element: Element,
+    x: number,
+    y: number,
+    styleOf: (element: Element) => CSSStyleDeclaration,
+  ) => {
+    const style = styleOf(element);
+    const number = (name: string) =>
+      Number.parseFloat(style.getPropertyValue(name)) || 0;
+    const extra = (axis: "width" | "height") =>
+      style.boxSizing === "border-box"
+        ? 0
+        : (axis === "width" ? ["left", "right"] : ["top", "bottom"]).reduce(
+            (sum, side) =>
+              sum + number(`padding-${side}`) + number(`border-${side}-width`),
+            0,
+          );
+    const width = number("width") + extra("width");
+    const height = number("height") + extra("height");
+    let matrix = new DOMMatrix();
+    for (let node: Element | null = element; node; node = node.parentElement) {
+      const css = styleOf(node);
+      let transform = new DOMMatrix(
+        css.transform === "none" ? undefined : css.transform,
+      );
+      if (css.scale !== "none") {
+        const scales = css.scale
+          .split(/\s+/)
+          .map(
+            (value) =>
+              Number.parseFloat(value) / (value.endsWith("%") ? 100 : 1),
+          );
+        transform = new DOMMatrix()
+          .scale(scales[0]!, scales[1] ?? scales[0]!)
+          .multiply(transform);
+      }
+      if (css.rotate !== "none") {
+        const angle = css.rotate.split(/\s+/).at(-1)!;
+        const degrees =
+          Number.parseFloat(angle) *
+          (angle.endsWith("grad")
+            ? 0.9
+            : angle.endsWith("rad")
+              ? 180 / Math.PI
+              : angle.endsWith("turn")
+                ? 360
+                : 1);
+        transform = new DOMMatrix().rotate(degrees).multiply(transform);
+      }
+      const zoom = css.zoom === "normal" ? 1 : Number.parseFloat(css.zoom);
+      matrix = new DOMMatrix().scale(zoom).multiply(transform).multiply(matrix);
+    }
+    // Translations are supplied by the painted rect, so retain only the combined linear part.
+    const linear = new DOMMatrix([
+      matrix.a,
+      matrix.b,
+      matrix.c,
+      matrix.d,
+      0,
+      0,
+    ]);
+    const corners = [
+      [0, 0],
+      [width, 0],
+      [0, height],
+      [width, height],
+    ].map(([x, y]) => linear.transformPoint({ x, y }));
+    const rect = element.getBoundingClientRect();
+    const point = linear.inverse().transformPoint({
+      x: x - rect.left + Math.min(...corners.map((point) => point.x)),
+      y: y - rect.top + Math.min(...corners.map((point) => point.y)),
+    });
+    return { x: point.x, y: point.y, width, height };
+  };
+  const paintsAt = (
+    element: Element,
+    x: number,
+    y: number,
+    styleOf: (element: Element) => CSSStyleDeclaration,
+  ) => {
     if (!element.checkVisibility({ checkOpacity: true })) return false;
     if (
       element instanceof HTMLImageElement ||
@@ -422,7 +510,9 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     )
       return true;
     for (const pseudo of [undefined, "::before", "::after"]) {
-      const style = getComputedStyle(element, pseudo);
+      const style = pseudo
+        ? getComputedStyle(element, pseudo)
+        : styleOf(element);
       if (pseudo && (style.content === "none" || style.content === "normal"))
         continue;
       if (
@@ -434,28 +524,39 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
         return true;
       // A transparent box can still paint its border. Its empty centre stays click-through.
       if (!pseudo) {
-        const rect = element.getBoundingClientRect();
-        for (const [side, distance] of [
-          ["Left", x - rect.left],
-          ["Right", rect.right - x],
-          ["Top", y - rect.top],
-          ["Bottom", rect.bottom - y],
-        ] as const) {
-          const edge = side.toLowerCase();
+        const borders = ["left", "right", "top", "bottom"].flatMap((side) => {
           const width = Number.parseFloat(
-            style.getPropertyValue(`border-${edge}-width`),
+            style.getPropertyValue(`border-${side}-width`),
           );
-          if (
-            distance >= 0 &&
-            distance <= width &&
+          return width > 0 &&
             !["none", "hidden"].includes(
-              style.getPropertyValue(`border-${edge}-style`),
+              style.getPropertyValue(`border-${side}-style`),
             ) &&
             !/^(?:transparent|rgba\(.+,\s*0\)|.+\/\s*0\))$/.test(
-              style.getPropertyValue(`border-${edge}-color`),
+              style.getPropertyValue(`border-${side}-color`),
             )
+            ? [{ side, width }]
+            : [];
+        });
+        if (borders.length) {
+          const point = localPoint(element, x, y, styleOf);
+          if (
+            point.x >= 0 &&
+            point.x <= point.width &&
+            point.y >= 0 &&
+            point.y <= point.height
           )
-            return true;
+            for (const { side, width } of borders) {
+              const distance =
+                side === "left"
+                  ? point.x
+                  : side === "right"
+                    ? point.width - point.x
+                    : side === "top"
+                      ? point.y
+                      : point.height - point.y;
+              if (distance <= width) return true;
+            }
         }
       }
     }
@@ -481,40 +582,65 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
   const clipsAt = (x: number, y: number) => {
     const root = document.querySelector("[data-composition-id]");
     const hits = new Map<Element, boolean>();
+    const styles = new Map<Element, CSSStyleDeclaration>();
+    const styleOf = (element: Element) => {
+      let style = styles.get(element);
+      if (!style) {
+        style = getComputedStyle(element);
+        styles.set(element, style);
+      }
+      return style;
+    };
     // Only the editor requests hits. Restore authored styles synchronously, before any
     // composition script, observer, paint or capture can see a different pointer-events value.
-    const style = document.createElement("style");
-    style.textContent = "* { pointer-events: auto !important; }";
-    document.head.append(style);
+    const overrides: {
+      element: HTMLElement | SVGElement;
+      style: string | null;
+    }[] = [];
     try {
-      // Classify before restoring the rule so these reads share the hit test's style pass.
+      // Most timeline clips are display:none. Only inspect styles on the visible tree, and
+      // override only elements whose authored pointer-events would hide them from the hit test.
+      // This avoids invalidating styles on all 500 clips twice for every press.
+      for (const element of root?.querySelectorAll("*") ?? []) {
+        if (
+          !(element instanceof HTMLElement || element instanceof SVGElement) ||
+          !element.checkVisibility({ checkVisibilityCSS: true }) ||
+          styleOf(element).pointerEvents !== "none"
+        )
+          continue;
+        overrides.push({
+          element,
+          style: element.getAttribute("style"),
+        });
+      }
+      for (const { element } of overrides)
+        element.style.setProperty("pointer-events", "auto", "important");
       for (const element of document.elementsFromPoint(x, y)) {
         if (!root?.contains(element) || element === root) continue;
         if (element.hasAttribute("data-cutroom-edit-frame")) continue;
         const source = element.hasAttribute("data-cutroom-video-hold")
           ? element.previousElementSibling
           : element;
-        let clip: Element | null = null;
-        for (
-          let node = source;
-          node && node !== root;
-          node = node.parentElement
-        )
-          if (
-            node.matches(
-              "[data-start],[data-composition-src],[data-composition-id],[data-track-index][data-duration],video,audio,img",
-            )
-          )
-            clip = node;
-        if (!clip?.id || !clip.hasAttribute("data-start")) continue;
-        hits.set(clip, hits.get(clip) || paintsAt(element, x, y));
+        const clip = source?.closest("[data-hf-cutroom-clip-id]");
+        if (!clip) continue;
+        hits.set(clip, hits.get(clip) || paintsAt(element, x, y, styleOf));
       }
       return [...hits].flatMap(([clip, painted]) => {
         const box = boxOf(clip);
-        return box ? [{ clipId: clip.id, painted, box }] : [];
+        return box
+          ? [
+              {
+                clipId: clip.getAttribute("data-hf-cutroom-clip-id")!,
+                painted,
+                box,
+              },
+            ]
+          : [];
       });
     } finally {
-      style.remove();
+      for (const { element, style } of overrides)
+        if (style === null) element.removeAttribute("style");
+        else element.setAttribute("style", style);
     }
   };
   let metering = false;
@@ -615,7 +741,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     const deadline = performance.now() + FRAME_TIMEOUT;
     const sources = await Promise.all(
       edges.map(async (edge) => {
-        const element = document.getElementById(edge.clipId);
+        const element = clipElement(edge.clipId);
         if (!(
           element instanceof HTMLVideoElement ||
           element instanceof HTMLImageElement
@@ -1153,7 +1279,90 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
   });
 }
 
+/** Bind the source timeline's identities before compilation's generated HF ids can rename them.
+ * The compiler and this adapter use the same HF stamping function. Our data-hf marker is excluded
+ * from its content hash, so it cannot change the runtime's identities or animation targets.
+ */
+export function withPreviewClipIdentities(
+  html: string,
+  source = html,
+  scope: CompositionScope = "document",
+  mediaLengths: ReadonlyMap<string, number> = new Map(),
+) {
+  let locations: Map<number, string>;
+  try {
+    locations = compositionClipLocations(source, scope, mediaLengths);
+  } catch (error) {
+    // Unsupported timelines still have a viewable picture, but no selectable timeline clips.
+    if (!(error instanceof TimelineError)) throw error;
+    return html;
+  }
+  const visit = (
+    nodes: DefaultTreeAdapterTypes.ChildNode[],
+    read: (node: DefaultTreeAdapterTypes.Element) => void,
+  ) => {
+    for (const node of nodes) {
+      if (!("tagName" in node)) continue;
+      read(node);
+      visit(node.childNodes, read);
+      if ("content" in node) visit(node.content.childNodes, read);
+    }
+  };
+  const mark = (
+    html: string,
+    identify: (node: DefaultTreeAdapterTypes.Element) => string | undefined,
+  ) => {
+    const edits: { at: number; end: number; text: string }[] = [];
+    visit(parse(html, { sourceCodeLocationInfo: true }).childNodes, (node) => {
+      const id = identify(node);
+      const start = node.sourceCodeLocation?.startTag;
+      if (!id || !start) return;
+      const existing =
+        node.sourceCodeLocation?.attrs?.["data-hf-cutroom-clip-id"];
+      const at = start.startOffset + node.tagName.length + 1;
+      const value = id
+        .replaceAll("&", "&amp;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("<", "&lt;");
+      edits.push({
+        at: existing?.startOffset ?? at,
+        end: existing?.endOffset ?? at,
+        text: `${existing ? "" : " "}data-hf-cutroom-clip-id="${value}"`,
+      });
+    });
+    return edits
+      .sort((a, b) => b.at - a.at)
+      .reduce(
+        (html, edit) =>
+          html.slice(0, edit.at) + edit.text + html.slice(edit.end),
+        html,
+      );
+  };
+  const marked = mark(source, (node) =>
+    locations.get(node.sourceCodeLocation?.startOffset ?? -1),
+  );
+  if (source === html) return marked;
+  const identities = new Map<string, (string | undefined)[]>();
+  visit(parse(ensureHfIds(marked)).childNodes, (node) => {
+    const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
+    const id = attrs.get("data-hf-cutroom-clip-id");
+    const hfId = attrs.get("data-hf-id");
+    if (hfId) {
+      const matches = identities.get(hfId) ?? [];
+      matches.push(id);
+      identities.set(hfId, matches);
+    }
+  });
+  return mark(ensureHfIds(html), (node) =>
+    identities
+      .get(node.attrs.find(({ name }) => name === "data-hf-id")?.value ?? "")
+      ?.shift(),
+  );
+}
+
 export function withPreviewBridge(html: string) {
+  if (!html.includes("data-hf-cutroom-clip-id="))
+    html = withPreviewClipIdentities(html);
   const document = parse(html, { sourceCodeLocationInfo: true });
   const root = document.childNodes.find((node) => node.nodeName === "html");
   const head =
@@ -1178,7 +1387,7 @@ export function withPreviewBridge(html: string) {
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
-      const id = timing.get("id");
+      const id = timing.get("data-hf-cutroom-clip-id");
       if (id && timing.has("data-start")) {
         const text = node.childNodes
           .map((child) =>

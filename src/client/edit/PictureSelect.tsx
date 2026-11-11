@@ -102,7 +102,11 @@ export function PictureSelect({
     const element = outline.current;
     if (!element) return;
     const shown = pictureBox.current();
-    const { clip, scale } = latest.current;
+    const { scale } = latest.current;
+    // A picture hit publishes before React renders the new selection. Read the same store now
+    // so the outline can join that paint rather than waiting for the inspector to render.
+    const { view, selection } = useTimeline.getState();
+    const clip = view ? inspectorSubject(view.timeline, selection)?.clip : null;
     const box = shown?.clipId === clip?.id ? shown?.box : null;
     element.hidden = !box;
     if (!box || !shown) return;
@@ -198,15 +202,18 @@ export function PictureSelect({
     const { view, selection } = useTimeline.getState();
     // Ctrl on nothing keeps what is selected, as on the timeline.
     if (!view || (!hit && toggle)) return;
-    useTimeline.setState({
-      selection: hit
-        ? clickSelection(view.timeline, [], selection, hit.clipId, {
-            toggle,
-            range: false,
-            alone: false,
-          })
-        : emptySelection,
-    });
+    const next = hit
+      ? clickSelection(view.timeline, [], selection, hit.clipId, {
+          toggle,
+          range: false,
+          alone: false,
+        })
+      : emptySelection;
+    useTimeline.setState({ selection: next });
+    // The promoted preview just measured this box. Draw it with selection rather than waiting
+    // for a second bridge round trip; ordinary observation keeps following it afterward.
+    if (hit && inspectorSubject(view.timeline, next)?.clip?.id === hit.clipId)
+      pictureBox.publish({ clipId: hit.clipId, box: hit.box });
   };
 
   /** Runs on every pointer event and when the preview answers, whichever comes last. */

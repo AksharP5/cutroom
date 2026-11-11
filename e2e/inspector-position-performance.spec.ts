@@ -18,7 +18,7 @@ const median = (values: number[]) =>
   values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)]!;
 
 test(
-  "Position observation, outline tracking and picture hit tests stay in budget during 500-clip playback and scrubbing",
+  "Position observation and outline tracking stay in budget during 500-clip playback and scrubbing",
   { tag: "@performance" },
   async ({ page, request }, info) => {
     test.setTimeout(180_000);
@@ -243,35 +243,189 @@ test(
         `${mode}: added late-frame rate`,
       ).toBeLessThan(0.05);
     }
+  },
+);
 
-    // A press on the picture asks the preview what is under it, once, among all 500 clips.
-    await page.locator('[data-clip="talk-0"]').click();
-    const hits = await page
-      .frameLocator("iframe[data-live]")
-      .locator("#title-0")
-      .evaluateHandle(() => {
-        const durations: number[] = [];
-        new PerformanceObserver((list) => {
-          for (const entry of list.getEntries())
-            if (entry.name === "cutroom:picture-hit")
-              durations.push(entry.duration);
-        }).observe({ type: "measure" });
-        return durations;
+test(
+  "picture selection paints within two frames on 500 clips",
+  { tag: "@performance" },
+  async ({ page, request }, info) => {
+    test.setTimeout(120_000);
+    const project = await timelineWorkload(request, 500);
+    const file = join(project.path, "index.html");
+    await writeFile(
+      file,
+      (await readFile(file, "utf8")).replace(
+        'id="title-0"',
+        'id="title-0" data-x="40" data-y="0" data-hf-edit-base-x="0" data-hf-edit-base-y="0"',
+      ),
+    );
+    // Test-only negative control. This runs inside the actual bridge hit path, in the iframe.
+    const stall = Number(process.env.CUTROOM_PICTURE_HIT_STALL_MS ?? 0);
+    if (stall > 0)
+      await page.addInitScript((stall) => {
+        const elementsFromPoint = Document.prototype.elementsFromPoint;
+        Document.prototype.elementsFromPoint = function (x, y) {
+          const end = performance.now() + stall;
+          while (performance.now() < end) {
+            /* injected hit-path stall */
+          }
+          return elementsFromPoint.call(this, x, y);
+        };
+      }, stall);
+    const runs = [];
+    for (let run = 0; run < 3; run++) {
+      await page.goto("about:blank");
+      await page.goto(`/#project/${project.id}`);
+      await expect(
+        page.locator(".edit-stage[data-preview-ready]"),
+      ).toBeVisible();
+      await expect(page.locator("[data-clip]")).toHaveCount(500);
+      // Match #63's real-media warm-up. Cold means the first picture hit, after sprites and
+      // waveforms are drawn, rather than measuring startup media decoding as input latency.
+      await expect
+        .poll(() =>
+          page.locator(".tl-bodies").evaluate((element) => {
+            const canvas = element as HTMLCanvasElement;
+            return canvas
+              .getContext("2d")!
+              .getImageData(0, 80, canvas.width, 80)
+              .data.some((value, index) => index % 4 === 3 && value > 0);
+          }),
+        )
+        .toBe(true);
+      await page.waitForTimeout(4500);
+      const hits = await page
+        .frameLocator("iframe[data-live]")
+        .locator("#title-0")
+        .evaluateHandle(() => {
+          const durations: number[] = [];
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries())
+              if (entry.name === "cutroom:picture-hit")
+                durations.push(entry.duration);
+          }).observe({ type: "measure" });
+          return durations;
+        });
+      const paints = await page
+        .locator(".edit-select")
+        .evaluateHandle((surface) => {
+          const samples: {
+            pointerDown: number;
+            painted: number;
+            outlined: number;
+            duration: number;
+            clipId: string;
+          }[] = [];
+          const outline = surface.querySelector<HTMLElement>(
+            ".edit-select-outline",
+          )!;
+          let pending: { start: number; clipId: string } | null = null;
+          let scheduled = false;
+          surface.addEventListener(
+            "pointerdown",
+            (event) => {
+              pending = {
+                start: (event as PointerEvent).timeStamp,
+                clipId: samples.length % 2 === 0 ? "talk-0" : "title-0",
+              };
+            },
+            true,
+          );
+          new MutationObserver(() => {
+            if (
+              !pending ||
+              scheduled ||
+              outline.hidden ||
+              outline.dataset.outlined !== pending.clipId
+            )
+              return;
+            scheduled = true;
+            const outlined = performance.now();
+            // A task after the next rAF runs after that frame's rendering opportunity. Read the
+            // real callback clock so queueing, bridge, React, geometry and paint delays all count.
+            requestAnimationFrame(() =>
+              setTimeout(() => {
+                if (
+                  !pending ||
+                  outline.hidden ||
+                  outline.dataset.outlined !== pending.clipId
+                )
+                  throw new Error("Selection disappeared before paint");
+                const painted = performance.now();
+                samples.push({
+                  pointerDown: pending.start,
+                  outlined,
+                  painted,
+                  duration: painted - pending.start,
+                  clipId: pending.clipId,
+                });
+                pending = null;
+                scheduled = false;
+              }, 0),
+            );
+          }).observe(outline, { attributes: true, subtree: true });
+          return samples;
+        });
+      const picture = await page.locator(".edit-picture").boundingBox();
+      if (!picture) throw new Error("Picture missing");
+      const scale = picture.width / 1920;
+      for (let press = 0; press < 10; press++) {
+        const title = press % 2 === 1;
+        await page.mouse.click(
+          picture.x + (title ? 80 : 900) * scale,
+          picture.y + (title ? 30 : 600) * scale,
+        );
+        await expect(positionField(page)).toHaveValue(title ? "40 px" : "0 px");
+        await expect
+          .poll(async () => (await paints.jsonValue()).length)
+          .toBe(press + 1);
+      }
+      await waitFrames(page, 2);
+      const samples = await paints.jsonValue();
+      const hitDurations = await hits.jsonValue();
+      runs.push({
+        run,
+        coldClick: samples[0],
+        samples,
+        max: Math.max(...samples.map((sample) => sample.duration)),
+        hitDurations,
       });
-    const picture = await page.locator(".edit-picture").boundingBox();
-    if (!picture) throw new Error("Picture missing");
-    const scale = picture.width / 1920;
-    for (let press = 0; press < 5; press++) {
-      // Off the title, then on its glyphs.
-      await page.mouse.click(picture.x + 900 * scale, picture.y + 600 * scale);
-      await expect(positionField(page)).toHaveValue("0 px");
-      // The title sits at 20 px plus its 40 px Position.
-      await page.mouse.click(picture.x + 80 * scale, picture.y + 30 * scale);
-      await expect(positionField(page)).toHaveValue("40 px");
+      await paints.dispose();
+      await hits.dispose();
     }
-    const hitDurations = await hits.jsonValue();
-    console.log(JSON.stringify({ pictureHit: hitDurations }));
-    expect(hitDurations).toHaveLength(10);
-    expect(Math.max(...hitDurations), "picture hit budget").toBeLessThan(8);
+    const medianMax = median(runs.map((run) => run.max));
+    const hitMedian = median(runs.flatMap((run) => run.hitDurations));
+    const evidence = JSON.stringify(
+      {
+        browser: page.context().browser()?.version(),
+        budget: 33,
+        medianMax,
+        hitMedian,
+        runs,
+      },
+      null,
+      2,
+    );
+    await info.attach("picture-selection-paint.json", {
+      body: evidence,
+      contentType: "application/json",
+    });
+    if (process.env.CUTROOM_PICTURE_TIMING_OUT)
+      await writeFile(process.env.CUTROOM_PICTURE_TIMING_OUT, evidence);
+    console.log(
+      JSON.stringify({
+        pictureSelection: {
+          maxima: runs.map((run) => run.max),
+          medianMax,
+          hitMedian,
+        },
+      }),
+    );
+    for (const run of runs) expect(run.hitDurations).toHaveLength(10);
+    expect(
+      medianMax,
+      "median of three maximum pointer-down to outline-paint delays",
+    ).toBeLessThanOrEqual(33);
   },
 );

@@ -363,10 +363,9 @@ function compositionFps(raw: string | undefined): Fps {
   );
 }
 
-/** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
-export function parseComposition(
+/** Shared source-to-clip projection for the timeline and isolated picture bridge. */
+function projectComposition(
   html: string,
-  settings: TimelineSettings,
   {
     scope = "document",
     mediaLengths = new Map(),
@@ -378,7 +377,7 @@ export function parseComposition(
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
-): ParsedComposition {
+) {
   const { roots, nodes, owned } = parseElements(html);
   const rootOf = (elements: SourceElement[]) =>
     elements.find(
@@ -461,7 +460,7 @@ export function parseComposition(
     element: SourceElement;
     read: Timing;
     start: number;
-    end: number;
+    end: number | null;
   }[] = [];
   const clipIds = new Map<SourceElement, string>();
   const used = new Set<string>();
@@ -470,23 +469,15 @@ export function parseComposition(
   for (const element of topLevelElements(root)) {
     if (element.attrs["data-start"] === undefined) continue;
     const read = timing(element);
-    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
-    if (read.finish === null)
-      throw new TimelineError(
-        "unsupported",
-        element.tag === "video" || element.tag === "audio"
-          ? `Clip ${name} has no data-duration and its media length could not be measured.`
-          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
-      );
     if (read.trackIndex < 0)
       throw new TimelineError(
         "unsupported",
-        `Clip ${name} has a negative data-track-index.`,
+        `Clip ${element.attrs.id || element.attrs["data-hf-id"] || "clip"} has a negative data-track-index.`,
       );
     const start = toFrames(read.begin, fps);
-    const end = toFrames(read.finish, fps);
+    const end = read.finish === null ? null : toFrames(read.finish, fps);
     // Shorter than a frame is never on screen, and the editor cannot address it.
-    if (end <= start) continue;
+    if (end !== null && end <= start) continue;
     // Clips without a unique id get a positional stand-in; edits locate them by offset, not id.
     let id = element.attrs.id || element.attrs["data-hf-id"];
     while (!id || used.has(id) || (id !== element.attrs.id && byId.has(id)))
@@ -496,6 +487,77 @@ export function parseComposition(
     clipIds.set(element, id);
     rows.push({ id, element, read, start, end });
   }
+
+  return {
+    roots,
+    nodes,
+    owned,
+    all,
+    root,
+    fps,
+    byId,
+    rows,
+    anonymous,
+    clipIds,
+    timing,
+    lengthOf,
+  };
+}
+
+/** Timeline identities keyed by source offset; the preview never invents its own clip names. */
+export function compositionClipLocations(
+  html: string,
+  scope: CompositionScope = "document",
+  mediaLengths: ReadonlyMap<string, number> = new Map(),
+) {
+  return new Map(
+    projectComposition(html, { scope, mediaLengths }).rows.map(
+      ({ id, element }) => [element.start, id],
+    ),
+  );
+}
+
+/** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
+export function parseComposition(
+  html: string,
+  settings: TimelineSettings,
+  {
+    scope = "document",
+    mediaLengths = new Map(),
+    rootId,
+  }: {
+    scope?: CompositionScope;
+    /** A bundled scene instance whose tracks are mixed independently of its parent. */
+    rootId?: string;
+    /** Measured source lengths in seconds, by `src`. */
+    mediaLengths?: ReadonlyMap<string, number>;
+  } = {},
+): ParsedComposition {
+  const {
+    roots,
+    nodes,
+    owned,
+    all,
+    root,
+    fps,
+    byId,
+    rows: projected,
+    anonymous,
+    clipIds,
+    timing,
+    lengthOf,
+  } = projectComposition(html, { scope, mediaLengths, rootId });
+  const rows = projected.map(({ id, element, read, start, end }) => {
+    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
+    if (end === null)
+      throw new TimelineError(
+        "unsupported",
+        element.tag === "video" || element.tag === "audio"
+          ? `Clip ${name} has no data-duration and its media length could not be measured.`
+          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
+      );
+    return { id, element, read, start, end };
+  });
 
   // CSS selectors, inheritance and external sheets are not a CSS cascade we
   // can resolve in this parser. Keep multiline source visible and refuse uncertain rewrites.

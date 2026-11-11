@@ -160,8 +160,8 @@ export function Inspector({ projectId }: { projectId: string }) {
       clip && !isAudioKind(clip.kind) ? clip.id : null,
       clip?.sourceRestrictions?.text ? null : (clip?.text ?? null),
     );
-    return () => observePosition(null);
   }, [projectId, clip?.id, clip?.text, clip?.sourceRestrictions?.text]);
+  useEffect(() => () => observePosition(null), [projectId]);
   const textWarning = useTextWarning((state) => state.warning);
   const textWarningFrame =
     textWarning &&

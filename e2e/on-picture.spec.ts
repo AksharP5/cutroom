@@ -578,11 +578,13 @@ test("pointer-events stays authored in editor, thumbnail, timeline_view and MP4"
   await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
   const painted = page.frameLocator("iframe[data-live]").locator("#paint");
   await expect(painted).toHaveCSS("pointer-events", "none");
+  const authoredStyle = await painted.getAttribute("style");
   // Hit-testing still selects the pointer-transparent clip, without changing its paint.
   await page.locator(".edit-select").click({ position: { x: 100, y: 100 } });
   await expect(page.locator(".inspector-clip strong")).toHaveText("Paint");
   await expect(painted).toHaveCSS("pointer-events", "none");
   await expect(painted).toHaveCSS("background-color", "rgb(0, 255, 0)");
+  expect(await painted.getAttribute("style")).toBe(authoredStyle);
   const editor = info.outputPath("editor.png");
   await painted.screenshot({ path: editor });
   const thumb = await request.get(
@@ -653,3 +655,112 @@ test("pointer-events stays authored in editor, thumbnail, timeline_view and MP4"
     expect(stdout[2], file).toBeLessThan(10);
   }
 });
+
+for (const identity of ["data-hf-id", "generated"] as const) {
+  test(`${identity} clips use their timeline identity for picture picks, outlines and drafts`, async ({
+    page,
+    request,
+  }, info) => {
+    const html = composition.replace(
+      'id="badge"',
+      `${identity === "data-hf-id" ? 'data-hf-id="front"' : ""} style="left:200px;top:110px;width:80px;height:30px;background:#3bd16f"`,
+    );
+    const { at, selected, scale, outlined } = await open(page, request, html);
+    const id = identity === "data-hf-id" ? "front" : "clip-1";
+    await page.locator(`[data-clip="${id}"]`).click();
+    await expect(page.locator(".edit-select-outline")).toHaveAttribute(
+      "data-outlined",
+      id,
+    );
+    near(
+      await outlined(),
+      { left: 200, top: 110, width: 80, height: 30 },
+      scale,
+    );
+    await page.locator('[data-clip="shot"]').click();
+    await page.mouse.click(...at(240, 125));
+    await expect(selected).toHaveText("Badge");
+    await expect(page.locator(`[data-clip="${id}"]`)).toHaveClass(/selected/);
+    await expect(page.locator(".edit-select-outline")).toHaveAttribute(
+      "data-outlined",
+      id,
+    );
+    await page.mouse.move(...at(240, 125));
+    await page.mouse.down();
+    await page.keyboard.down("Control");
+    await page.mouse.move(...at(260, 135));
+    await expect.poll(async () => (await outlined())?.left).toBeCloseTo(220, 0);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await page.keyboard.up("Control");
+    await expect.poll(async () => (await outlined())?.left).toBeCloseTo(200, 0);
+    await page.screenshot({
+      path: info.outputPath(`${identity}-selected.png`),
+    });
+  });
+}
+
+for (const transform of [
+  "scale(2)",
+  "rotate(30deg)",
+  "ancestor scale and rotate",
+] as const) {
+  test(`${transform} border picks its painted edge and leaves the centre empty`, async ({
+    page,
+    request,
+  }) => {
+    const css =
+      transform === "ancestor scale and rotate"
+        ? ""
+        : `transform:${transform};`;
+    let html = composition
+      .replace(
+        "#words{left:340px;top:200px;",
+        `#words{border:15px solid white;box-sizing:border-box;transform-origin:top left;${css}left:100px;top:100px;`,
+      )
+      .replace(">Small words</div>", "></div>");
+    if (transform === "ancestor scale and rotate")
+      html = html
+        .replace(
+          '<div id="words"',
+          '<section style="position:absolute;left:80px;top:0;transform:rotate(20deg) scale(1.5);transform-origin:top left"><div id="words"',
+        )
+        .replace('<div id="slide"', '</section><div id="slide"');
+    const { at, selected } = await open(page, request, html);
+    const point = async (x: number, y: number) =>
+      page
+        .frameLocator("iframe[data-live]")
+        .locator("#words")
+        .evaluate(
+          (element, { x, y }) => {
+            // Independent fixture geometry: multiply known transforms, anchored at the authored origin.
+            const own = new DOMMatrix(
+              getComputedStyle(element).transform === "none"
+                ? undefined
+                : getComputedStyle(element).transform,
+            );
+            let point = own.transformPoint({ x, y });
+            point.x += 100;
+            point.y += 100;
+            const ancestor = element.parentElement!;
+            if (ancestor.tagName === "SECTION") {
+              point = new DOMMatrix(
+                getComputedStyle(ancestor).transform,
+              ).transformPoint(point);
+              point.x += 80;
+            }
+            return { x: point.x, y: point.y };
+          },
+          { x, y },
+        );
+    // 10 local px is 20 composition px into the scale(2) border.
+    const edge = await point(10, 50);
+    await page.mouse.click(...at(edge.x, edge.y));
+    await expect(selected).toHaveText("Words");
+    // Clear the selection so its box cannot intentionally own the transparent centre.
+    await page.keyboard.press("Escape");
+    const centre = await point(120, 50);
+    await page.mouse.click(...at(centre.x, centre.y));
+    await expect(selected).toHaveText("Shot");
+  });
+}
