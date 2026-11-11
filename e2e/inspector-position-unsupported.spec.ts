@@ -16,8 +16,20 @@ for (const fixture of [
   {
     name: "authored translate with GSAP",
     style: "#title{translate:20px 10px}",
-    script: `<script src="gsap.min.js"></script><script>window.__timelines.main=gsap.timeline({paused:true}).to('#title',{x:100,y:140,duration:1});</script>`,
+    script: `<script src="gsap.min.js"></script><script>window.__timelines.main=gsap.timeline({paused:true}).to('#title',{opacity:.5,duration:1});</script>`,
     reason: /CSS translate and GSAP/,
+  },
+  {
+    name: "GSAP translate",
+    style: "",
+    script: `<script src="gsap.min.js"></script><script>const tl=gsap.timeline({paused:true});tl.to('#title',{translate:'100px 20px',duration:1});window.__timelines.main=tl;</script>`,
+    reason: /coordinate animations/,
+  },
+  {
+    name: "chained ancestor scale",
+    style: "",
+    script: `<script src="gsap.min.js"></script><script>window.__timelines.main=gsap.timeline({paused:true}).to('#main',{scale:.5,duration:1});</script>`,
+    reason: /transformed container/,
   },
   {
     name: "scaled ancestor",

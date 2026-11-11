@@ -141,6 +141,9 @@ export function Viewer({
         if (gen !== latest.current) return;
         if (useTransport.getState().state.kind !== "stopped") break;
       }
+      await preview.activate();
+      preview.signal.throwIfAborted();
+      if (gen !== latest.current) return;
       const { width, height, fps } = preview.state;
       const size = { width, height };
       setHeld(live);
@@ -153,7 +156,6 @@ export function Viewer({
           ...size,
         },
       });
-      preview.activate();
       transport.attach(player, shown);
       reportEditorError("viewer", null);
     } catch (error) {

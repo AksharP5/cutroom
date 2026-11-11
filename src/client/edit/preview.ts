@@ -9,15 +9,31 @@ import {
 import type { PlaybackClock, PreviewState } from "../../shared/preview";
 import type { RuntimePlayer } from "./transport";
 
-let positionTarget:
-  ((clipId: string, x: number | null, y: number | null) => void) | null = null;
-/** Drafts go only to the live document, never through timeline state or the server. */
+type PositionDraft = { clipId: string; x: number | null; y: number | null };
+const positionTargets = new Set<(draft: PositionDraft) => void>();
+let positionDraft: PositionDraft | null = null;
+/** Drafts go only to preview documents, never through timeline state or the server. */
 export function previewPosition(
   clipId: string,
   x: number | null,
   y: number | null,
 ) {
-  positionTarget?.(clipId, x, y);
+  positionDraft = { clipId, x, y };
+  for (const target of positionTargets) target(positionDraft);
+}
+
+export function cancelPositionPreview(clipId: string, x: number, y: number) {
+  previewPosition(clipId, x, y);
+  positionDraft = null;
+}
+
+export async function commitPositionPreview(commit: () => Promise<boolean>) {
+  const draft = positionDraft;
+  const accepted = await commit();
+  // An earlier commit must never clear a subsequent gesture's draft.
+  if (positionDraft !== draft) return;
+  if (!accepted && draft) previewPosition(draft.clipId, null, null);
+  positionDraft = null;
 }
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
@@ -115,15 +131,24 @@ export function connectPreview(frame: HTMLIFrameElement) {
       send("mute", { muted });
     },
   };
-  const position = (clipId: string, x: number | null, y: number | null) => {
-    send("position", { clipId, x, y });
+  const position = (draft: PositionDraft) => {
+    send("position", draft);
   };
   return {
     player,
     signal: closing.signal,
-    activate() {
+    async activate() {
+      positionTargets.add(position);
+      // Keep both documents following the gesture until the new one has painted its latest
+      // draft. Promotion runs immediately after this resolves, before another event can edit it.
+      let shown: PositionDraft | null;
+      do {
+        shown = positionDraft;
+        if (shown) position(shown);
+        await request("paint");
+        closing.signal.throwIfAborted();
+      } while (shown !== positionDraft);
       active = true;
-      positionTarget = position;
       send("meter", { enabled: true });
     },
     get state() {
@@ -132,7 +157,8 @@ export function connectPreview(frame: HTMLIFrameElement) {
     inspect: () => request("inspect"),
     painted: () => request("paint"),
     dispose() {
-      if (positionTarget === position) positionTarget = null;
+      if (positionTargets.delete(position) && !positionTargets.size)
+        positionDraft = null;
       closing.abort();
       send("meter", { enabled: false });
       if (active) audioLevels.publish({ l: 0, r: 0, playing: false });

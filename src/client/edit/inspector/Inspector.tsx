@@ -19,7 +19,11 @@ import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { pendingEdit, shownChanges } from "./changes";
-import { previewPosition } from "../preview";
+import {
+  previewPosition,
+  cancelPositionPreview,
+  commitPositionPreview,
+} from "../preview";
 
 export function InspectorToggle() {
   const open = useWorkspace((state) => state.inspector);
@@ -275,17 +279,14 @@ export function Inspector({ projectId }: { projectId: string }) {
                     )
                   }
                   onCancel={() =>
-                    previewPosition(clip.id, clip.x ?? 0, clip.y ?? 0)
+                    cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
                   }
                   onCommit={async (value) => {
-                    const accepted = await editTimeline(
-                      projectId,
-                      "Edit position",
-                      () => [
+                    await commitPositionPreview(() =>
+                      editTimeline(projectId, "Edit position", () => [
                         { type: "setClip", clipId: clip.id, [axis]: value },
-                      ],
+                      ]),
                     );
-                    if (!accepted) previewPosition(clip.id, null, null);
                   }}
                 />
               ))}

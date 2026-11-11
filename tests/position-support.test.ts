@@ -8,6 +8,97 @@ import { parseComposition } from "../src/server/timeline/composition";
 import { unsupportedPositions } from "../src/server/timeline/positionSupport";
 import { emptyTimelineSettings } from "../src/shared/timeline/schema";
 
+const support = (script: string) =>
+  unsupportedPositions(
+    parseComposition(
+      `<html><head><script src="gsap.min.js"></script></head><body><main id="main" data-composition-id="main" data-duration="2"><video id="video" data-start="0" data-duration="2"></video><img id="image" data-start="0" data-duration="2"><p id="text" data-start="0" data-duration="2">Text</p><div id="title" data-start="0" data-duration="2">Title</div></main><script>${script}</script></body></html>`,
+      emptyTimelineSettings(),
+    ),
+  );
+
+const forms = [
+  (target: string, vars: string) => `gsap.to("${target}",${vars});`,
+  (target: string, vars: string) =>
+    `const tl=gsap.timeline({paused:true});tl.to("${target}",${vars});window.__timelines.main=tl;`,
+  (target: string, vars: string) =>
+    `window.__timelines.main=gsap.timeline({paused:true}).to("${target}",${vars}).to("#title",{opacity:1});`,
+];
+for (const [i, form] of forms.entries()) {
+  test(`GSAP form ${i}: CSS translate on a clip refuses Position`, () => {
+    expect(
+      support(form("#title", '{translate:"100px 20px",duration:1}')).title,
+    ).toMatch(/coordinate animations/);
+  });
+  test(`GSAP form ${i}: ancestor scale refuses, opacity and colour stay supported`, () => {
+    const scaled = support(form("#main", "{scale:.5,duration:1}"));
+    for (const id of ["video", "image", "text", "title"])
+      expect(scaled[id]).toMatch(/transformed container/);
+    expect(support(form("#main", "{opacity:.5,duration:1}"))).toEqual({});
+    expect(
+      support(
+        form(
+          "#main",
+          '{opacity:.5,color:"red",filter:"blur(1px)",clipPath:"inset(0)",duration:1}',
+        ),
+      ),
+    ).toEqual({});
+    expect(
+      support(form("#title", '{opacity:.5,color:"red",duration:1}')),
+    ).toEqual({});
+    expect(
+      support(form("#main", '{transformOrigin:"0 0",duration:1}')),
+    ).toEqual({});
+    expect(support("")).toEqual({});
+  });
+}
+
+test("coordinate properties in from/fromTo/set, nested CSS, keyframes and defaults refuse", () => {
+  for (const script of [
+    'gsap.from("#title",{x:40})',
+    'gsap.fromTo("#title",{left:10},{left:20})',
+    'gsap.set("#title",{transform:"translate(20px)"})',
+    'gsap.to("#title",{css:{translate:"20px"}})',
+    'gsap.to("#title",{keyframes:[{y:10},{y:20}]})',
+    'const tl=gsap.timeline({defaults:{x:40}});tl.to("#title",{opacity:1})',
+    'gsap.to("#title",{clearProps:"all"})',
+    'gsap.to("#title",{attr:{style:"translate:20px"}})',
+  ])
+    expect(support(script).title).toMatch(/coordinate animations/);
+  expect(support('gsap.to("#image",{x:20})').title).toBeUndefined();
+});
+
+test("GSAP transform aliases follow the same coordinate refusal rule", () => {
+  expect(support('gsap.to("#title",{translateX:40})').title).toMatch(
+    /coordinate animations/,
+  );
+  expect(support('gsap.to("#title",{translateY:40})').title).toMatch(
+    /coordinate animations/,
+  );
+  expect(support('gsap.to("#main",{rotateZ:45})').title).toMatch(
+    /transformed container/,
+  );
+});
+
+test("unknown script syntax never silently enables Position", () => {
+  for (const script of [
+    "gsap.to(target,{opacity:0})",
+    'gsap.to("#title",{["translate"]:"20px"})',
+    'gsap.to("#title",{...vars})',
+    'gsap.to("#title",{x:()=>20})',
+    'gsap["to"]("#title",{opacity:0})',
+    'gsap.to("#title",{opacity:0}).to("#main",{scale:.5})',
+    'const tl=gsap.timeline();const alias=tl;alias.to("#main",{scale:.5})',
+    'gsap.timeline().add(()=>gsap.to("#title",{x:20}))',
+    'const tl=gsap.timeline();tl.add(gsap.to("#main",{scale:.5}))',
+    `eval("gsap.to('#title',{x:20})")`,
+    `new Function("gsap.to('#title',{x:20})")()`,
+    'const animate=gsap.to;animate("#title",{x:20})',
+    'window["__timelines"].main=gsap.timeline()',
+    "not valid javascript",
+  ])
+    expect(support(script).title).toMatch(/unrecognised/);
+});
+
 test("position support refuses source shapes that cannot keep a draft and its committed offset exact", () => {
   const support = (body: string, head = "") =>
     unsupportedPositions(

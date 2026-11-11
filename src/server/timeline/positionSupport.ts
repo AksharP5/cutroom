@@ -1,6 +1,6 @@
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Selector } from "lightningcss";
-import { parseGsapScriptAcorn } from "@hyperframes/parsers/gsap-parser-acorn";
+import { positionAnimations } from "./positionAnimations";
 import type { ParsedComposition } from "./composition";
 
 type Element = ParsedComposition["root"];
@@ -18,6 +18,53 @@ const affectsCoordinates = (declaration: Declaration) =>
     "zoom",
     "offset-path",
   ].includes(propertyOf(declaration));
+
+// GSAP properties which can consume a saved offset on the clip, or change the coordinate
+// system on an ancestor. Include setters/plugins that can write these properties indirectly.
+const animationCoordinates = {
+  x: "clip",
+  y: "clip",
+  translateX: "clip",
+  translateY: "clip",
+  xPercent: "clip",
+  yPercent: "clip",
+  left: "clip",
+  top: "clip",
+  right: "clip",
+  bottom: "clip",
+  translate: "clip",
+  transform: "clip",
+  clearProps: "clip",
+  cssText: "clip",
+  style: "clip",
+  motionPath: "clip",
+  bezier: "clip",
+  physics2D: "clip",
+  physicsProps: "clip",
+  scale: "ancestor",
+  scaleX: "ancestor",
+  scaleY: "ancestor",
+  rotate: "ancestor",
+  rotation: "ancestor",
+  rotationX: "ancestor",
+  rotationY: "ancestor",
+  rotationZ: "ancestor",
+  rotateX: "ancestor",
+  rotateY: "ancestor",
+  rotateZ: "ancestor",
+  z: "ancestor",
+  translateZ: "ancestor",
+  skew: "ancestor",
+  skewX: "ancestor",
+  skewY: "ancestor",
+  // Origin alone does not change coordinates; accompanying transforms already conflict.
+  transformOrigin: "combined",
+  svgOrigin: "combined",
+  zoom: "ancestor",
+  perspective: "ancestor",
+  transformPerspective: "ancestor",
+  matrix: "ancestor",
+} as const;
 
 /** Unknown selectors conservatively match. Only simple compounds can exclude an ancestor. */
 function couldMatch(selector: Selector, element: Element) {
@@ -57,18 +104,16 @@ export function unsupportedPositions(
     translate: boolean;
     important?: boolean;
   }[] = [];
+  const animations: { selectors: Selector[]; clip: boolean }[] = [];
   const inline = new Map<
     Element,
     { coordinates: boolean; translate: boolean }
   >();
   let reason = "";
   let gsap = false;
-  // Source-only support contract: classic synchronous GSAP, no delayed/event code or other
-  // external scripts/styles. Inline DOM access or async/event/scheduling tokens count as custom
-  // scripts: they can change transforms after bind, which 0.9.26 cannot compose.
-  // Live drafts also need a unique source id. CSS selectors we cannot resolve conservatively
-  // match; any ancestor coordinate declaration
-  // or GSAP target is refused. This deliberately prefers a disabled field to a false success.
+  // Source-only support: unknown scripts refuse all clips they could affect. Only the closed
+  // synchronous GSAP grammar below can establish which targets/properties an animation writes.
+  // CSS selectors we cannot resolve conservatively match. Live drafts need a unique source id.
   for (const element of elements) {
     if (element.tag === "link" && /stylesheet/i.test(element.attrs.rel ?? ""))
       reason = "Position is unavailable with external stylesheets.";
@@ -107,28 +152,30 @@ export function unsupportedPositions(
         reason = "Position is unavailable with custom or delayed scripts.";
       if (!reason && /\bgsap\b/.test(script) && !gsap)
         reason = "Position requires GSAP to load before animation scripts.";
-      const animations = parseGsapScriptAcorn(script).animations;
-      for (const animation of animations) {
-        if (animation.hasUnresolvedSelector || animation.hasPartialSelector)
-          reason = "Position is unavailable with dynamic animation targets.";
-        // Even a translation on an ancestor may later acquire scale through its tween cache.
-        try {
+      try {
+        for (const animation of positionAnimations(script)) {
+          const conflicts = Object.entries(animationCoordinates).filter(
+            ([property, scope]) =>
+              scope !== "combined" && animation.properties.has(property),
+          );
+          if (!conflicts.length) continue;
           transform({
             filename: "position.css",
-            code: Buffer.from(`${animation.targetSelector}{}`),
+            code: Buffer.from(`${animation.selector}{}`),
             visitor: {
               Rule(rule) {
                 if (rule.type === "style")
-                  rules.push({
+                  animations.push({
                     selectors: rule.value.selectors,
-                    translate: false,
+                    clip: conflicts.some(([, scope]) => scope === "clip"),
                   });
               },
             },
           });
-        } catch {
-          reason = "Position is unavailable with dynamic animation targets.";
         }
+      } catch {
+        reason ||=
+          "Position is unavailable with custom or unrecognised animation scripts.";
       }
     }
     if (element.attrs.style) {
@@ -208,6 +255,17 @@ export function unsupportedPositions(
       continue;
     }
     if (
+      animations.some(
+        (animation) =>
+          animation.clip &&
+          animation.selectors.some((selector) => couldMatch(selector, element)),
+      )
+    ) {
+      unsupported[id] =
+        "Position is unavailable with coordinate animations on this clip.";
+      continue;
+    }
+    if (
       gsap &&
       (inline.get(element)?.translate ||
         rules.some(
@@ -228,6 +286,9 @@ export function unsupportedPositions(
         parent.attrs.transform !== undefined ||
         (parent.tag === "svg" && parent.attrs.viewBox !== undefined) ||
         inline.get(parent)?.coordinates ||
+        animations.some((animation) =>
+          animation.selectors.some((selector) => couldMatch(selector, parent)),
+        ) ||
         rules.some((rule) =>
           rule.selectors.some((selector) => couldMatch(selector, parent)),
         )

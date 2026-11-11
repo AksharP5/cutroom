@@ -75,6 +75,7 @@ export function ValueField({
           `${label} must be between ${formatField(min, unit, fps)} and ${formatField(max, unit, fps)}.`,
         );
       if (next !== value) onCommit(next);
+      else onCancel?.();
     } catch (error) {
       onCancel?.();
       showToast(error instanceof Error ? error.message : String(error));
