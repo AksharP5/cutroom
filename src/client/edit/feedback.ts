@@ -199,7 +199,7 @@ export function outsideMessage(
 /** Known-good tween offsets survive commands, undo, and redo. Only source edits redefine intent. */
 export type AnimationBaseline = ReadonlyMap<
   string,
-  ReadonlyMap<number, number>
+  ReadonlyMap<string, number>
 >;
 
 export function animationOffsets(timeline: Timeline, windows: TweenWindows) {
@@ -235,7 +235,7 @@ export function animationFeedback(
     ).find(([id]) => {
       const offset = known?.get(id);
       return (
-        offset === undefined ||
+        offset !== undefined &&
         Math.abs(offsets.get(clip.id)!.get(id)! - offset) > 0.002
       );
     });

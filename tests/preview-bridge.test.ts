@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { browserExecutable } from "../src/server/hyperframes/render";
-import type { TweenWindows } from "../src/shared/preview";
 import { AnimationWindowsSchema } from "../src/shared/preview";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
@@ -177,19 +176,21 @@ test.skipIf(!browserExecutable())(
       const report = AnimationWindowsSchema.parse(
         await page.evaluate("window.reports[0]"),
       );
-      const expected: TweenWindows = {
-        literal: [[0, 36]],
-        loop: [
-          [0, 6],
-          [1, 6.15],
-        ],
-        helper: [
-          [0, 12],
-          [1, 13.25],
-        ],
-        constructor: [[0, 18] satisfies [number, number]],
-      };
-      expect(report.windows).toEqual(expected);
+      expect(
+        Object.fromEntries(
+          Object.entries(report.windows).map(([id, pairs]) => [
+            id,
+            pairs.map(([, start]) => start),
+          ]),
+        ),
+      ).toEqual({
+        literal: [36],
+        loop: [6, 6.15],
+        helper: [12, 13.25],
+        constructor: [18],
+      });
+      for (const pairs of Object.values(report.windows))
+        expect(new Set(pairs.map(([id]) => id)).size).toBe(pairs.length);
       await page.evaluate(() =>
         window.postMessage(
           {

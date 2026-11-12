@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { TweenWindowsSchema } from "../../shared/preview";
 import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
 import { createTimelineViewStore } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
@@ -279,6 +281,30 @@ export function createTimelineRoutes(
     } catch (error) {
       return refused(c, error);
     }
+  });
+  api.post("/projects/:id/animation-windows", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(
+      z.object({
+        composition: z.string(),
+        revision: z.string(),
+        windows: TweenWindowsSchema,
+      }),
+      await c.req.json(),
+    );
+    const composition = canonical(input.composition);
+    return c.json(
+      await reviews.animationReport(
+        project,
+        composition,
+        input.revision,
+        input.windows,
+        async () => {
+          const { parsed, revision } = await read(project, composition);
+          return { revision, timeline: parsed.timeline };
+        },
+      ),
+    );
   });
   api.get("/projects/:id/summary", async (c) => {
     const project = await store.get(c.req.param("id"));

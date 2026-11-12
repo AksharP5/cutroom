@@ -28,11 +28,16 @@ import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import {
   animationFeedback,
-  animationOffsets,
   animationMessage,
   animationReview,
 } from "./feedback";
-import type { AnimationBaseline } from "./feedback";
+import { z } from "zod";
+import { api, json } from "../api";
+import {
+  AnimationWindowsSchema,
+  TweenWindowsSchema,
+} from "../../shared/preview";
+import { TimelineSchema } from "../../shared/timeline/schema";
 import { connectPreview, useAnimationWarnings } from "./preview";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
@@ -64,10 +69,6 @@ export function Viewer({
   onSaveNote: SaveNote;
 }) {
   const dismissAnimation = useRef(() => {});
-  const animationBaseline = useRef<{
-    intent: string | undefined;
-    offsets: AnimationBaseline;
-  } | null>(null);
   const toastedClips = useRef(new Set<string>());
   const saveNote = useRef(onSaveNote);
   saveNote.current = onSaveNote;
@@ -214,40 +215,43 @@ export function Viewer({
     const preview = connections.current.get(picture.gen);
     if (!preview) return;
     let cancelled = false;
-    let timer = 0;
     const current = () =>
       !cancelled && latest.current === picture.gen && !preview.signal.aborted;
-    void afterTimelineEdits(projectId, async () => {
-      if (!current()) return;
-      const view = confirmedTimelineView(projectId);
-      if (!view) return;
-      const { timeline, animationIntent } = view;
-      const baseline = animationBaseline.current;
-      const loading = !baseline || baseline.intent !== animationIntent;
-      if (loading) {
-        animationBaseline.current = {
-          intent: animationIntent,
-          offsets: new Map(),
-        };
-        dismissAnimation.current();
-        toastedClips.current.clear();
-      }
-      let previousReport = "";
-      let samples = 0;
-      const sample = async () => {
+    const sample = async (report: z.infer<typeof AnimationWindowsSchema>) => {
+      if (!current() || !report.revision) return;
+      await afterTimelineEdits(projectId, async () => {
         if (!current()) return;
-        const windows = await preview.animationWindows();
-        if (!current()) return;
-        if (loading)
-          animationBaseline.current!.offsets = animationOffsets(
-            timeline,
-            windows,
-          );
-        const warnings = animationFeedback(
-          timeline,
-          windows,
-          animationBaseline.current!.offsets,
+        const view = confirmedTimelineView(projectId);
+        if (!view) return;
+        const result = await api(
+          `/projects/${encodeURIComponent(projectId)}/animation-windows`,
+          z
+            .object({
+              revision: z.string(),
+              timeline: TimelineSchema,
+              offsets: TweenWindowsSchema,
+            })
+            .nullable(),
+          json("POST", {
+            composition: view.composition,
+            revision: report.revision,
+            windows: report.windows,
+          }),
         );
+        if (
+          !current() ||
+          !result ||
+          confirmedTimelineView(projectId)?.revision !== result.revision
+        )
+          return;
+        const { timeline } = result;
+        const baseline = new Map(
+          Object.entries(result.offsets).map(([id, pairs]) => [
+            id,
+            new Map(pairs),
+          ]),
+        );
+        const warnings = animationFeedback(timeline, report.windows, baseline);
         const previous = useAnimationWarnings.getState().report?.warnings ?? [];
         useAnimationWarnings.setState({ report: { timeline, warnings } });
         const ids = new Set(warnings.map(({ clip }) => clip.id));
@@ -258,7 +262,7 @@ export function Viewer({
         const clips = warnings.filter(
           ({ clip }) => !previous.some((item) => item.clip.id === clip.id),
         );
-        if (!loading && clips.length) {
+        if (clips.length) {
           dismissAnimation.current();
           toastedClips.current = new Set(clips.map(({ clip }) => clip.id));
           dismissAnimation.current = showToast(
@@ -286,27 +290,18 @@ export function Viewer({
             { tone: "info", priority: "attention" },
           );
         }
-        const report = JSON.stringify(windows);
-        samples++;
-        // Always sample through one second, even if early reports agree: authors may
-        // register or construct timelines in a timer after runtime readiness.
-        if (samples < 3 || report !== previousReport)
-          timer = window.setTimeout(
-            () => void sample().catch(fail),
-            samples === 1 ? 300 : 1000,
-          );
-        previousReport = report;
-      };
-      const fail = (error: unknown) => {
-        if (current()) reportEditorError("viewer", error);
-      };
-      await sample();
-    }).catch((error: unknown) => {
+      });
+    };
+    const fail = (error: unknown) => {
       if (current()) reportEditorError("viewer", error);
-    });
+    };
+    const unsubscribe = preview.followAnimationWindows(
+      (report) => void sample(report).catch(fail),
+    );
+    void preview.animationWindows().catch(fail);
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      unsubscribe();
     };
   }, [handoff.confirmed, projectId]);
 

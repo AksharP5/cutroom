@@ -95,14 +95,15 @@ export const TextWarningSchema = PositionWarningSchema.extend({
   text: z.string(),
 });
 
-/** Clip-local tween ordinals and starts in composition seconds; registered children are excluded. */
+/** Stable clip-local tween identities and starts in composition seconds; registered children are excluded. */
 export const TweenWindowsSchema = z.record(
   z.string(),
-  z.array(z.tuple([z.number().int().nonnegative(), z.number().finite()])),
+  z.array(z.tuple([z.string(), z.number().finite()])),
 );
 export type TweenWindows = z.infer<typeof TweenWindowsSchema>;
 export const AnimationWindowsSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("animation-windows"),
+  revision: z.string().nullable(),
   windows: TweenWindowsSchema,
 });

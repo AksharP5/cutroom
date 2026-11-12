@@ -288,6 +288,8 @@ export async function createProjectStore(options: {
     documentReads.set(value, mutation.after);
   };
   return {
+    /** Drain app-owned sidecar writes on shutdown without adding content history. */
+    persistState: track,
     dataDir,
     projectsDir,
     list: async () =>

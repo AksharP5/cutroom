@@ -469,6 +469,7 @@ export function createHyperframesApi(
     if (!target) return c.notFound();
     let response: Response;
     let assetContentType: string | undefined;
+    let animationRevision: string | null = null;
     try {
       if (path.startsWith("preview/")) {
         const project = await store.get(projectId);
@@ -486,9 +487,22 @@ export function createHyperframesApi(
         if (!composition && !url.searchParams.has("hf-proxy"))
           assetContentType = getMimeType(file);
       }
-      response = await api.request(`${url.origin}${target}${url.search}`, {
-        headers: c.req.raw.headers,
-      });
+      const request = () =>
+        api.request(`${url.origin}${target}${url.search}`, {
+          headers: c.req.raw.headers,
+        });
+      if (path === "preview" || path.startsWith("preview/comp/")) {
+        const rendered = await reviews.animationDocument(
+          await store.get(projectId),
+          async () => {
+            const response = await request();
+            // Consume the document inside the queue that owns its revision.
+            return new Response(await response.arrayBuffer(), response);
+          },
+        );
+        response = rendered.document;
+        animationRevision = rendered.revision;
+      } else response = await request();
     } catch (error) {
       if (!(error instanceof HttpError)) throw error;
       response = c.text(error.message, error.status);
@@ -518,7 +532,7 @@ export function createHyperframesApi(
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
     // The HTTP CSP applies before any authored markup, including malformed documents.
-    return new Response(withPreviewBridge(html), {
+    return new Response(withPreviewBridge(html, animationRevision), {
       status: response.status,
       headers,
     });

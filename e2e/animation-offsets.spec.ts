@@ -43,7 +43,7 @@ async function open(
     "data-refit",
     "settled",
   );
-  // The initial baseline includes timer-built tweens, through the one-second settle sample.
+  // Allow the timer-built fixture to register and report its known-good offsets.
   await page.waitForTimeout(1500);
   const base = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
@@ -386,7 +386,7 @@ test("500 clips and 10000 tweens produce an indexed compact report", async ({
     .evaluate((root, compiled) => {
       const read = new Function(`${compiled};return animationWindows;`)();
       const times: number[] = [];
-      let result: Record<string, [number, number][]> = {};
+      let result: Record<string, [string, number][]> = {};
       for (let i = 0; i < 5; i++) {
         const start = performance.now();
         result = read(root, Reflect.get(window, "__timelines"));
@@ -413,6 +413,6 @@ test("500 clips and 10000 tweens produce an indexed compact report", async ({
   );
   expect(measurement.clips).toBe(500);
   expect(measurement.tweens).toBe(10000);
-  expect(Math.min(...measurement.times)).toBeLessThan(20);
-  expect(measurement.bytes).toBeLessThan(160000);
+  expect(measurement.times.toSorted((a, b) => a - b)[2]).toBeLessThan(10);
+  expect(measurement.bytes).toBeLessThan(300000);
 });

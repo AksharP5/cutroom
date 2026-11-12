@@ -1,3 +1,6 @@
+import { createAnimationBaselines } from "./animation";
+import type { TweenWindows } from "../../shared/preview";
+import type { Timeline } from "../../shared/timeline/schema";
 import { randomUUID } from "node:crypto";
 import type { ProjectHistory } from "@hyperframes/studio-server";
 import {
@@ -549,23 +552,9 @@ export function createReviewService(store: ProjectStore) {
     return snapshot;
   };
   // The review queue serializes source observations with commands and history restores.
-  const animationSources = new Map<
-    string,
-    { source: string; intent: string }
-  >();
-  const animationIntent = async (project: Project, preserve = false) => {
-    const sources = await readAssets(project);
-    const source = JSON.stringify(
-      [...sources].map(([path, value]) => [path, value.sourceVersion]).sort(),
-    );
-    const previous = animationSources.get(project.id);
-    const intent =
-      previous && (preserve || previous.source === source)
-        ? previous.intent
-        : randomUUID();
-    animationSources.set(project.id, { source, intent });
-    return intent;
-  };
+  const animationBaselines = createAnimationBaselines(store.persistState);
+  const observeAnimations = async (project: Project, preserve = false) =>
+    animationBaselines.observe(project, await readAssets(project), preserve);
   const recordAssets = async (
     project: Project,
     before: AssetSnapshot,
@@ -725,7 +714,7 @@ export function createReviewService(store: ProjectStore) {
         authorize(token, project.id);
         await projectWritePath(project, composition);
         composition = posix.normalize(composition.replaceAll("\\", "/"));
-        await animationIntent(project);
+        await observeAnimations(project);
         let items: ReviewItem[];
         let before: ClipVersions;
         try {
@@ -738,7 +727,7 @@ export function createReviewService(store: ProjectStore) {
             error instanceof ProjectDocumentError
           ) {
             const result = await work();
-            await animationIntent(project, timelineCommand);
+            await observeAnimations(project, timelineCommand);
             return result;
           }
           throw error;
@@ -767,7 +756,7 @@ export function createReviewService(store: ProjectStore) {
           (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
         );
         const result = await work();
-        await animationIntent(project, timelineCommand);
+        await observeAnimations(project, timelineCommand);
         const after = await clipVersions(project, composition);
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
@@ -787,10 +776,41 @@ export function createReviewService(store: ProjectStore) {
         );
         return result;
       }),
+    animationDocument: <T>(project: Project, render: () => Promise<T>) =>
+      serialize(project, async () => {
+        const { revision } = await observeAnimations(project);
+        const document = await render();
+        const after = await observeAnimations(project);
+        return {
+          document,
+          revision: after.revision === revision ? revision : null,
+        };
+      }),
+    animationReport: <T extends { timeline: Timeline }>(
+      project: Project,
+      composition: string,
+      revision: string,
+      windows: TweenWindows,
+      read: () => Promise<T>,
+    ) =>
+      serialize(project, async () => {
+        if ((await observeAnimations(project)).revision !== revision)
+          return null;
+        const view = await read();
+        return {
+          ...view,
+          offsets: await animationBaselines.report(
+            project,
+            composition,
+            view.timeline,
+            windows,
+          ),
+        };
+      }),
     clipChanges: (project: Project, composition: string) =>
       serialize(project, async () => ({
         ...(await clipChanges(project, composition)),
-        animationIntent: await animationIntent(project),
+        animationIntent: (await observeAnimations(project)).intent,
       })),
     /** The projection and its attribution must describe the same admitted source edits. */
     readComposition: <T extends object>(
@@ -801,7 +821,7 @@ export function createReviewService(store: ProjectStore) {
       serialize(project, async () => ({
         ...(await read()),
         ...(await clipChanges(project, composition)),
-        animationIntent: await animationIntent(project),
+        animationIntent: (await observeAnimations(project)).intent,
       })),
     acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
@@ -989,9 +1009,9 @@ export function createReviewService(store: ProjectStore) {
               allowMissing: true,
             });
           }
-          await animationIntent(project);
+          await observeAnimations(project);
           const result = await change();
-          await animationIntent(project, true);
+          await observeAnimations(project, true);
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });

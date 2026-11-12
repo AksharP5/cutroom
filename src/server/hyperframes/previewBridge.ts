@@ -16,7 +16,7 @@ interface PreviewWindow extends Window {
       toSum(): { values: Iterable<{ unit: string; value: number }> };
     };
   };
-  gsap?: { getProperty(element: Element, property: string): unknown };
+  gsap?: Pick<typeof gsap, "getProperty" | "core">;
   __hf?: Window["__hf"] & {
     audioMeter?: {
       start(): void;
@@ -39,49 +39,153 @@ interface PreviewWindow extends Window {
 function animationWindows(
   root: Element,
   registry: Record<string, gsap.core.Timeline | undefined>,
+  creation = new WeakMap<object, number>(),
 ): TweenWindows {
-  const timeline = registry[root.getAttribute("data-composition-id") ?? ""];
+  const rootId = root.getAttribute("data-composition-id") ?? "";
+  const timeline = registry[rootId];
+  const windows: TweenWindows = Object.create(null);
+  if (!timeline) return windows;
   const clips = new Map<Element, string>();
   for (const clip of root.querySelectorAll("[data-hf-cutroom-clip-id]"))
     clips.set(clip, clip.getAttribute("data-hf-cutroom-clip-id")!);
-  const windows: TweenWindows = Object.create(null);
-  if (!timeline) return windows;
-  const owners = new Map<Element, string | null>();
-  const owner = (target: Element): string | null => {
+  const owners = new Map<
+    Element,
+    { id: string; path: string; paths: string[] } | null
+  >();
+  const siblings = new Map<Element, number>();
+  const owner = (
+    target: Element,
+  ): { id: string; path: string; paths: string[] } | null => {
     if (owners.has(target)) return owners.get(target)!;
-    const id =
-      clips.get(target) ??
-      (target.parentElement && target !== root
-        ? owner(target.parentElement)
-        : null);
-    owners.set(target, id);
-    return id;
+    const id = clips.get(target);
+    let result = id ? { id, path: ".", paths: ["."] } : null;
+    if (!result && target !== root && target.parentElement) {
+      const parent = owner(target.parentElement);
+      if (parent) {
+        if (!siblings.has(target))
+          Array.from(target.parentElement.children).forEach((child, index) =>
+            siblings.set(child, index),
+          );
+        const path = `${parent.path}/${siblings.get(target)}`;
+        result = { id: parent.id, path, paths: [path] };
+      }
+    }
+    owners.set(target, result);
+    return result;
   };
+  const reserved = new Set(
+    "duration,delay,ease,repeat,repeatDelay,yoyo,yoyoEase,paused,reversed,immediateRender,lazy,overwrite,runBackwards,startAt,stagger,keyframes,defaults,inherit,id,data,parent,repeatRefresh,autoRevert,callbackScope,scrollTrigger,onStart,onStartParams,onUpdate,onUpdateParams,onComplete,onCompleteParams,onRepeat,onRepeatParams,onReverseComplete,onReverseCompleteParams,onInterrupt,onInterruptParams".split(
+      ",",
+    ),
+  );
+  const identity = (content: string) => {
+    let a = 0xdeadbeef;
+    let b = 0x41c6ce57;
+    for (let i = 0; i < content.length; i++) {
+      const c = content.charCodeAt(i);
+      a = Math.imul(a ^ c, 2654435761);
+      b = Math.imul(b ^ c, 1597334677);
+    }
+    a =
+      Math.imul(a ^ (a >>> 16), 2246822507) ^
+      Math.imul(b ^ (b >>> 13), 3266489909);
+    b =
+      Math.imul(b ^ (b >>> 16), 2246822507) ^
+      Math.imul(a ^ (a >>> 13), 3266489909);
+    return (4294967296 * (b & 2097151) + (a >>> 0)).toString(36);
+  };
+  const groups = new Map<
+    string,
+    Map<string, { start: number; order: number }[]>
+  >();
   const registered = new Set(Object.values(registry));
-  const visit = (parent: gsap.core.Timeline, offset: number, rate: number) => {
+  let nextOrder = 0;
+  const visit = (
+    parent: gsap.core.Timeline,
+    offset: number,
+    rate: number,
+    timelineId: string,
+  ) => {
+    const descriptors = new Map<string, Map<number, Map<string, string>>>();
+    const record = (
+      id: string,
+      paths: string[],
+      properties: string[],
+      child: gsap.core.Tween,
+      start: number,
+    ) => {
+      const propertyKey = JSON.stringify(properties);
+      const duration = child.duration();
+      const durations =
+        descriptors.get(propertyKey) ?? new Map<number, Map<string, string>>();
+      const targets = durations.get(duration) ?? new Map<string, string>();
+      // Clip-local paths start with '.', so a single path cannot alias a JSON array of paths.
+      const targetKey = paths.length === 1 ? paths[0]! : JSON.stringify(paths);
+      let key = targets.get(targetKey);
+      if (!key) {
+        key = identity(
+          JSON.stringify([timelineId, paths, properties, duration]),
+        );
+        targets.set(targetKey, key);
+        durations.set(duration, targets);
+        descriptors.set(propertyKey, durations);
+      }
+      const clip = groups.get(id) ?? new Map();
+      const matches = clip.get(key) ?? [];
+      matches.push({ start, order: creation.get(child)! });
+      clip.set(key, matches);
+      groups.set(id, clip);
+    };
     for (const child of parent.getChildren(false, true, true)) {
       const start = offset + child.startTime() / rate;
       const childRate = rate * child.timeScale();
       if (!Number.isFinite(start) || childRate <= 0) continue;
       if ("getChildren" in child) {
-        if (!registered.has(child)) visit(child, start, childRate);
+        if (!registered.has(child))
+          visit(
+            child,
+            start,
+            childRate,
+            `${timelineId}/${child.vars.id ?? ""}`,
+          );
         continue;
       }
       if (child.duration() <= 0) continue;
       const targets: unknown[] = child.targets();
-      const ids = new Set<string>();
+      const properties = Object.keys(child.vars).filter(
+        (key) => !reserved.has(key) && key !== "css",
+      );
+      if (child.vars.css) properties.push(...Object.keys(child.vars.css));
+      properties.sort();
+      if (!creation.has(child)) creation.set(child, nextOrder++);
+      const first = targets[0] instanceof Element ? owner(targets[0]) : null;
+      if (targets.length === 1) {
+        if (first) record(first.id, first.paths, properties, child, start);
+        continue;
+      }
+      const paths = new Map<string, Set<string>>();
       for (const target of targets) {
-        const id = target instanceof Element ? owner(target) : null;
-        if (id) ids.add(id);
+        const value = target instanceof Element ? owner(target) : null;
+        if (value) {
+          const set = paths.get(value.id) ?? new Set();
+          set.add(value.path);
+          paths.set(value.id, set);
+        }
       }
-      for (const id of ids) {
-        const values = (windows[id] ??= []);
-        // Ordinals are clip-local: moving a DOM-timed clip may reorder root tweens.
-        values.push([values.length, start]);
-      }
+      for (const [id, targets] of paths)
+        record(id, [...targets].sort(), properties, child, start);
     }
   };
-  visit(timeline, 0, 1);
+  visit(timeline, 0, 1, rootId);
+  for (const [id, clip] of groups) {
+    windows[id] = [];
+    for (const [key, matches] of clip) {
+      if (matches.length > 1) matches.sort((a, b) => a.order - b.order);
+      matches.forEach(({ start }, index) =>
+        windows[id]!.push([index ? `${key}:${index}` : key, start]),
+      );
+    }
+  }
   return windows;
 }
 
@@ -89,35 +193,142 @@ function animationWindows(
 function installPreviewBridge(
   texts: [string, string[]][] = [],
   readWindows = animationWindows,
+  revision: string | null = null,
 ) {
   const sourceTexts = new Map(texts);
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
-  const reportWindows = async () => {
-    // Fonts can build timelines in a microtask after the runtime's first binding attempt.
-    await document.fonts.ready;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const runtime = win as PreviewWindow & {
-      __renderReady?: boolean;
-      __hfTimelinesBuilding?: boolean;
-      __timelines?: Record<string, gsap.core.Timeline | undefined>;
-    };
-    while (!runtime.__renderReady || runtime.__hfTimelinesBuilding) {
+  const creation = new WeakMap<object, number>();
+  let creationOrder = 0;
+  let windowReport: Promise<void> | null = null;
+  const reportWindows = () => {
+    if (windowReport) return windowReport;
+    windowReport = (async () => {
+      // Fonts can build timelines in a microtask after the runtime's first binding attempt.
+      await document.fonts.ready;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const runtime = win as PreviewWindow & {
+        __renderReady?: boolean;
+        __hfTimelinesBuilding?: boolean;
+        __timelines?: Record<string, gsap.core.Timeline | undefined>;
+      };
+      while (!runtime.__renderReady || runtime.__hfTimelinesBuilding) {
+        if (retired) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       if (retired) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (retired) return;
-    const root = document.querySelector("[data-composition-id]");
-    parent.postMessage(
-      {
-        source: "cutroom-preview",
-        type: "animation-windows",
-        windows: root ? readWindows(root, runtime.__timelines ?? {}) : {},
-      },
-      "*",
-    );
+      const root = document.querySelector("[data-composition-id]");
+      parent.postMessage(
+        {
+          source: "cutroom-preview",
+          type: "animation-windows",
+          revision,
+          windows: root
+            ? readWindows(root, runtime.__timelines ?? {}, creation)
+            : {},
+        },
+        "*",
+      );
+    })().finally(() => {
+      windowReport = null;
+    });
+    return windowReport;
   };
+  let windowsTimer = 0;
+  let watchingWindows = false;
+  const changedWindows = () => {
+    if (!watchingWindows || retired || windowsTimer) return;
+    windowsTimer = window.setTimeout(() => {
+      windowsTimer = 0;
+      void reportWindows();
+    }, 0);
+  };
+  const wrapped = new WeakSet<object>();
+  const remember = (
+    child: ReturnType<gsap.core.Timeline["recent"]> | undefined,
+  ) => {
+    if (!child || typeof child === "function" || creation.has(child)) return;
+    creation.set(child, creationOrder++);
+    if ("getChildren" in child) watchTimeline(child as gsap.core.Timeline);
+  };
+  const wrapMethods = (target: gsap.core.Timeline) => {
+    if (wrapped.has(target)) return;
+    wrapped.add(target);
+    for (const method of [
+      "add",
+      "to",
+      "from",
+      "fromTo",
+      "set",
+      "remove",
+      "clear",
+    ] as const) {
+      const original = target[method];
+      Object.defineProperty(target, method, {
+        configurable: true,
+        writable: true,
+        value: function (this: gsap.core.Timeline, ...args: unknown[]) {
+          const result: unknown = Reflect.apply(original, this, args);
+          remember(this.recent());
+          changedWindows();
+          return result;
+        },
+      });
+    }
+  };
+  const watchTimeline = (timeline: gsap.core.Timeline) => {
+    wrapMethods(Object.getPrototypeOf(timeline));
+    for (const child of timeline.getChildren(false, true, true))
+      remember(child);
+  };
+  let gsapLibrary = win.gsap;
+  if (gsapLibrary) wrapMethods(gsapLibrary.core.Timeline.prototype);
+  Object.defineProperty(win, "gsap", {
+    configurable: true,
+    get: () => gsapLibrary,
+    set(value: PreviewWindow["gsap"]) {
+      gsapLibrary = value;
+      if (value) wrapMethods(value.core.Timeline.prototype);
+    },
+  });
+  const register = (
+    registry: Record<string, gsap.core.Timeline | undefined>,
+  ) => {
+    for (const timeline of Object.values(registry))
+      if (timeline) watchTimeline(timeline);
+    return new Proxy(registry, {
+      set(target, key, value: unknown) {
+        const success = Reflect.set(target, key, value);
+        if (
+          value &&
+          typeof value === "object" &&
+          "getChildren" in value &&
+          typeof value.getChildren === "function"
+        )
+          watchTimeline(value as gsap.core.Timeline);
+        changedWindows();
+        return success;
+      },
+      deleteProperty(target, key) {
+        const success = Reflect.deleteProperty(target, key);
+        changedWindows();
+        return success;
+      },
+    });
+  };
+  const runtime = win as PreviewWindow & {
+    __timelines?: Record<string, gsap.core.Timeline | undefined>;
+  };
+  let timelines = register(runtime.__timelines ?? {});
+  Object.defineProperty(win, "__timelines", {
+    configurable: true,
+    get: () => timelines,
+    set(value: Record<string, gsap.core.Timeline | undefined>) {
+      timelines = register(value);
+      changedWindows();
+    },
+  });
   const positions = new Map<
     HTMLElement | SVGElement,
     { translate: string; priority: string; base: string; x: number; y: number }
@@ -1250,6 +1461,7 @@ function installPreviewBridge(
     parent.postMessage({ source: "cutroom-preview", type: "unloaded" }, "*");
     pictureVersion += 1;
     clearTimeout(observationTimer);
+    clearTimeout(windowsTimer);
     cancelAnimationFrame(observationFrame);
     observationFrame = 0;
     cancelAnimationFrame(boxFrame);
@@ -1359,6 +1571,7 @@ function installPreviewBridge(
             positionFrame = requestAnimationFrame(writePosition);
           return;
         case "animation-windows":
+          watchingWindows = true;
           await reportWindows();
           break;
         case "inspect":
@@ -1545,7 +1758,10 @@ export function withPreviewClipIdentities(
   );
 }
 
-export function withPreviewBridge(html: string) {
+export function withPreviewBridge(
+  html: string,
+  revision: string | null = null,
+) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
   const document = parse(html, { sourceCodeLocationInfo: true });
@@ -1649,7 +1865,7 @@ export function withPreviewBridge(html: string) {
   edits.push({
     offset,
     end: offset,
-    text: `<script>(${installPreviewBridge.toString()})(${texts}, ${animationWindows.toString()});</script>`,
+    text: `<script>(${installPreviewBridge.toString()})(${texts}, ${animationWindows.toString()}, ${JSON.stringify(revision).replaceAll("<", "\\u003c")});</script>`,
   });
   return edits
     .sort((a, b) => b.offset - a.offset)

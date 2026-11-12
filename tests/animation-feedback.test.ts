@@ -14,7 +14,7 @@ const timeline = parseComposition(
   `<main data-composition-id="main" data-duration="48" data-fps="30"><div id="title" data-label="Title" data-start="6" data-duration="4"></div><div id="still" data-start="6" data-duration="4" data-track-index="1"></div></main>`,
   emptyTimelineSettings(),
 ).timeline;
-const report: TweenWindows = { title: [[0, 6]], still: [[0, 6]] };
+const report: TweenWindows = { title: [["x", 6]], still: [["x", 6]] };
 const baseline = animationOffsets(timeline, report);
 const edit = (changes: Partial<Timeline["clips"][number]>): Timeline => ({
   ...timeline,
@@ -62,22 +62,22 @@ test("head and tail trims preserve origin, including nonzero in points and playb
 test("a following tween stays silent, a changed start warns beyond 2 ms", () => {
   const moved = edit({ start: 240 });
   expect(
-    animationFeedback(moved, { ...report, title: [[0, 8.0019]] }, baseline),
+    animationFeedback(moved, { ...report, title: [["x", 8.0019]] }, baseline),
   ).toEqual([]);
   expect(
-    animationFeedback(moved, { ...report, title: [[0, 8.0021]] }, baseline),
+    animationFeedback(moved, { ...report, title: [["x", 8.0021]] }, baseline),
   ).toHaveLength(1);
 });
 
-test("new pairs after a command cannot silently establish intent; source rebaseline clears", () => {
+test("unknown pairs never warn; source rebaseline establishes their offsets", () => {
   const late: TweenWindows = {
     ...report,
     title: [
-      [0, 6],
-      [1, 7],
+      ["x", 6],
+      ["y", 7],
     ],
   };
-  expect(animationFeedback(timeline, late, baseline)).toHaveLength(1);
+  expect(animationFeedback(timeline, late, baseline)).toEqual([]);
   expect(
     animationFeedback(timeline, late, animationOffsets(timeline, late)),
   ).toEqual([]);
@@ -94,7 +94,7 @@ test("razor pieces inherit intent, moved pieces and pasted copies warn", () => {
     animationInPoint: 2,
   };
   const split = { ...timeline, clips: [...timeline.clips, piece] };
-  const shared: TweenWindows = { ...report, piece: [[0, 6]] };
+  const shared: TweenWindows = { ...report, piece: [["x", 6]] };
   expect(animationFeedback(split, shared, baseline)).toEqual([]);
   expect(
     animationFeedback(
@@ -106,7 +106,7 @@ test("razor pieces inherit intent, moved pieces and pasted copies warn", () => {
   expect(
     animationFeedback(
       { ...timeline, clips: [{ ...piece, start: 600, animationInPoint: 0 }] },
-      { piece: [[0, 6]] },
+      { piece: [["x", 6]] },
       baseline,
     ),
   ).toHaveLength(1);
@@ -116,7 +116,7 @@ test("legal clip ids do not read inherited properties when the compact report om
   const clip = { ...timeline.clips[0]!, id: "constructor" };
   const source = { ...timeline, clips: [clip] };
   const windows: TweenWindows = {
-    constructor: [[0, 6] satisfies [number, number]],
+    constructor: [["x", 6] satisfies [string, number]],
   };
   const known = animationOffsets(source, windows);
   expect(animationFeedback(source, {}, known)).toEqual([]);

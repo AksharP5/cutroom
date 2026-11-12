@@ -18,7 +18,6 @@ import type {
   PictureHit,
   PlaybackClock,
   PreviewState,
-  TweenWindows,
 } from "../../shared/preview";
 import type { Timeline } from "../../shared/timeline/schema";
 import type { animationFeedback } from "./feedback";
@@ -131,7 +130,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const closing = new AbortController();
   let active = false;
-  let windows: TweenWindows | null = null;
+  const windowListeners = new Set<
+    (report: z.infer<typeof AnimationWindowsSchema>) => void
+  >();
   let clock: PlaybackClock | null = null;
   type Reply = z.infer<typeof PreviewReplySchema>;
   const pending = new Map<
@@ -192,7 +193,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       event.data.type === "animation-windows"
     ) {
       const report = AnimationWindowsSchema.safeParse(event.data);
-      if (report.success) windows = report.data.windows;
+      if (report.success)
+        for (const listener of windowListeners) listener(report.data);
       return;
     }
     const runtime = RuntimeStateSchema.safeParse(event.data);
@@ -358,9 +360,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       observe(observedClip);
       send("meter", { enabled: true });
     },
+    followAnimationWindows(
+      listener: (report: z.infer<typeof AnimationWindowsSchema>) => void,
+    ) {
+      windowListeners.add(listener);
+      return () => {
+        windowListeners.delete(listener);
+      };
+    },
     async animationWindows() {
       await request("animation-windows");
-      return windows ?? {};
     },
     get state() {
       return state;
