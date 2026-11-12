@@ -12,6 +12,7 @@ import type { CommandInput, TimelineView } from "../src/shared/timeline/schema";
 import {
   outsideChanges,
   outsideMessage,
+  overwriteFeedback,
   rippleFeedback,
 } from "../src/client/edit/feedback";
 
@@ -274,4 +275,56 @@ test("composition reads wait for an admitted edit and return its source with its
     await writing;
     await fixture.close();
   }
+});
+
+test("overwrite feedback names whole replacements once, while partial cuts and insert stay silent", () => {
+  const before = parsed(shot + follower);
+  const report = (input: CommandInput) => {
+    const command = CommandSchema.parse(input);
+    return overwriteFeedback(before, applyAll(before, [command]), [command]);
+  };
+  expect(
+    report({
+      type: "insert",
+      track: 0,
+      at: 0,
+      mode: "overwrite",
+      clip: { kind: "image", src: "still.png", duration: 900 },
+    }),
+  ).toBe("Replaced shot.");
+  for (const [at, duration] of [
+    [0, 30],
+    [30, 30],
+    [870, 30],
+  ] as const)
+    expect(
+      report({
+        type: "insert",
+        track: 0,
+        at,
+        mode: "overwrite",
+        clip: { kind: "image", src: "still.png", duration },
+      }),
+    ).toBe("");
+  expect(
+    report({
+      type: "insert",
+      track: 0,
+      at: 0,
+      mode: "insert",
+      clip: { kind: "image", src: "still.png", duration: 900 },
+    }),
+  ).toBe("");
+  expect(report({ type: "remove", clipIds: ["shot"] })).toBe("");
+  expect(report({ type: "move", clipIds: ["next"], by: -900 })).toBe("");
+  // The later title is entirely covered when the picture moves onto its track.
+  const stacked = parsed(shot + title);
+  const command = CommandSchema.parse({
+    type: "move",
+    clipIds: ["shot"],
+    trackBy: 1,
+  });
+  expect(
+    overwriteFeedback(stacked, applyAll(stacked, [command]), [command]),
+  ).toBe("Replaced title.");
 });

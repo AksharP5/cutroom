@@ -47,6 +47,10 @@ An approval names what it acts on the way the editor does: a note by its first w
 
 Timeline edits use frames at the composition's fps. Pass the `revision` from `timeline_read` to `timeline_edit`; each successful edit returns the next revision. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
 
+`timeline_read.timeline.tracks` includes empty tracks. Lifting, cutting, moving or overwriting their last clips keeps those tracks and their settings. Edits save the track list in `cutroom.json`, so reload and undo/redo preserve it. Use each track's `index` to target an empty row with `insert` or `setTrack`; V1/A1 labels are display numbers within each kind. To remove an unlocked empty track, send `{ "type": "removeTrack", "index": 0 }` through `timeline_edit`. Occupied tracks refuse removal with `unsupported`; locked tracks refuse with `locked`. Remove clips first if you intend to remove their track. Track removal is undoable and leaves other tracks' indices unchanged. The editor offers the same command as Remove empty track in a track header's context menu.
+
+In the editor, drops, moves and overwrite pastes that remove a whole clip show one short notice naming the replaced clip, with Undo. Partial trims stay silent.
+
 ### Animated titles
 
 Moves, trims, ripples, razor cuts and paste change a clip's `data-start`. Animation written at absolute seconds on the root timeline, such as `tl.fromTo("#cta", {opacity: 0}, {opacity: 1}, 36)`, stays at 36 seconds, so the title can play at the wrong time or not at all. Give each animated title its own sub-composition file instead. The HyperFrames runtime places a nested composition's timeline at its host clip's start, so every edit carries the animation with it.
