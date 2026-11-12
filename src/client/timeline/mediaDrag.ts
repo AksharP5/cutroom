@@ -9,12 +9,15 @@ export interface MediaDrag {
   kind: InsertClip["kind"];
   /** The file's project-relative path. */
   path: string;
+  /** How long it runs on the timeline: the whole file, or the part marked in the source viewer. */
   seconds: number;
+  /** Seconds into the file where that part begins. */
+  start?: number;
   hasAudio: boolean;
 }
 
 /**
- * The Media panel row being dragged. A browser hides a drag's data until the drop, and the
+ * The Media panel row or source viewer range being dragged. A browser hides a drag's data until the drop, and the
  * timeline needs the file's kind and length while it is still over a track.
  */
 let dragged: MediaDrag | null = null;

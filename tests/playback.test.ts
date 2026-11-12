@@ -74,9 +74,6 @@ function open(fps: Fps, seconds: number, length = seconds) {
   transport.setTimeline({
     fps,
     duration: toFrames(seconds, fps),
-    tracks: [],
-    clips: [],
-    markers: [],
     range: { in: null, out: null },
   });
   transport.attach(fake.player);

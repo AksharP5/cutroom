@@ -2,13 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
-import { isAudioKind } from "../../shared/timeline/schema";
-import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
-import { frameTimecode } from "../api";
-import { editTimeline, useTimeline } from "../edit/timeline";
-import { useTransport } from "../edit/transport";
+import { frameTimecode, mediaUrl } from "../api";
+import { placeAtPlayhead } from "../edit/placeMedia";
+import { openSource } from "../edit/source";
+import { useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
-import { dropPreview, placedMedia } from "../timeline/gesture";
 import {
   MEDIA_DRAG_TYPE,
   STILL_SECONDS,
@@ -136,7 +134,7 @@ function MediaRow({
     });
     return () => closing.abort();
   }, [seen, kind, projectId, path, changed]);
-  const src = `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${changed ? `?v=${encodeURIComponent(changed)}` : ""}`;
+  const src = mediaUrl(projectId, path, changed);
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
   };
@@ -150,30 +148,12 @@ function MediaRow({
     seconds: duration ?? STILL_SECONDS,
     hasAudio: hasAudio ?? kind === "audio",
   });
-  /**
-   * Places the file at the playhead with the edit a drop makes, on the first unlocked track of
-   * its kind, which is V1 or A1 unless that is locked. With none unlocked it gets a new track.
-   */
-  const place = (mode: "insert" | "overwrite") => {
-    const { frame } = useTransport.getState();
-    void editTimeline(projectId, "Add media", (timeline) => {
-      const audio = isAudioKind(kind);
-      const track =
-        timeline.tracks.find(
-          (track) => (track.kind === "audio") === audio && !track.locked,
-        ) ??
-        newTrack(nextTrackIndex(timeline.tracks), audio ? "audio" : "video");
-      return dropPreview(
-        timeline,
-        placedMedia(dragged(), timeline.fps),
-        track,
-        frame,
-        frame,
-        0,
-        [],
-        mode,
-      ).commands;
-    });
+  // The source viewer needs a timeline: its playhead counts the timeline's frames.
+  const open = () => {
+    if (!placeable || !useTimeline.getState().view) return;
+    openSource(dragged());
+    // The transport keys go to the source now, not to moving through the list.
+    row.current?.blur();
   };
   return (
     <li
@@ -191,6 +171,11 @@ function MediaRow({
         setMediaDrag(dragged());
       }}
       onDragEnd={() => setMediaDrag(null)}
+      onDoubleClick={open}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget)
+          open();
+      }}
       onContextMenu={(event) => {
         // Needs the file's length and a timeline to put it on.
         const unplaceable = !placeable || !useTimeline.getState().view;
@@ -200,14 +185,21 @@ function MediaRow({
           path,
           [
             {
+              label: "Open in source viewer",
+              disabled: unplaceable,
+              run: open,
+            },
+            "separator",
+            {
               label: "Insert at playhead",
               disabled: unplaceable,
-              run: () => place("insert"),
+              run: () => void placeAtPlayhead(projectId, dragged(), "insert"),
             },
             {
               label: "Overwrite at playhead",
               disabled: unplaceable,
-              run: () => place("overwrite"),
+              run: () =>
+                void placeAtPlayhead(projectId, dragged(), "overwrite"),
             },
             ...(reveal.length ? ["separator" as const, ...reveal] : []),
           ],

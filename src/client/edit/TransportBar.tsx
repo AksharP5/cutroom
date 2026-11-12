@@ -23,17 +23,19 @@ import {
   parseTimecode,
   timecodeDigits,
 } from "../../shared/timeline/timecode";
-import { transport, useTransport, velocity } from "./transport";
+import { transport, velocity } from "./transport";
+import type { Transport } from "./transport";
 
 /** Writes the frame-driven parts of the bar straight to the DOM on every frame, without React. */
 function useFrameText(
-  write: (state: ReturnType<typeof useTransport.getState>) => void,
+  player: Transport,
+  write: (state: ReturnType<Transport["use"]["getState"]>) => void,
 ) {
   const latest = useRef(write);
   latest.current = write;
   useEffect(() => {
-    latest.current(useTransport.getState());
-    return useTransport.subscribe((state, previous) => {
+    latest.current(player.use.getState());
+    return player.use.subscribe((state, previous) => {
       if (
         state.frame !== previous.frame ||
         state.fps !== previous.fps ||
@@ -41,16 +43,22 @@ function useFrameText(
       )
         latest.current(state);
     });
-  }, []);
+  }, [player]);
 }
 
-function Timecode({ voiceover }: { voiceover: VoiceoverSession }) {
+function Timecode({
+  player,
+  voiceover,
+}: {
+  player: Transport;
+  voiceover?: VoiceoverSession;
+}) {
   const head = useRef<HTMLSpanElement>(null);
   const frames = useRef<HTMLSpanElement>(null);
   const [digits, setDigits] = useState<string | null>(null);
-  const fps = useTransport((state) => state.fps);
-  const duration = useTransport((state) => state.duration);
-  useFrameText(({ frame, fps }) => {
+  const fps = player.use((state) => state.fps);
+  const duration = player.use((state) => state.duration);
+  useFrameText(player, ({ frame, fps }) => {
     if (!head.current || !frames.current) return;
     const text = formatTimecode(frame, fps);
     head.current.textContent = text.slice(0, 9);
@@ -60,7 +68,7 @@ function Timecode({ voiceover }: { voiceover: VoiceoverSession }) {
   const finish = (seek: boolean) => {
     const frame = seek && digits ? parseTimecode(digits, fps) : null;
     setDigits(null);
-    if (frame !== null) transport.seek(frame);
+    if (frame !== null) player.seek(frame);
   };
 
   return (
@@ -97,28 +105,47 @@ function Timecode({ voiceover }: { voiceover: VoiceoverSession }) {
       )}
       <span className="edit-duration">{formatTimecode(duration, fps)}</span>
       {/* After the clock, so starting a take never moves the timecode. */}
-      <VoiceoverRecordMark session={voiceover} />
+      {voiceover && <VoiceoverRecordMark session={voiceover} />}
     </div>
   );
 }
 
-/** Fullscreen only: a thin scrub track with the range shaded. */
-function ScrubTrack() {
+/** The marked range and the playhead across the width of a size container. */
+export function ScrubMarks({ player }: { player: Transport }) {
   const playhead = useRef<HTMLSpanElement>(null);
-  const { duration, range } = useTransport(
+  const { duration, range } = player.use(
     useShallow(({ duration, range }) => ({ duration, range })),
   );
-  useFrameText(({ frame, duration }) => {
+  useFrameText(player, ({ frame, duration }) => {
     if (playhead.current)
       playhead.current.style.transform = `translateX(${(frame / Math.max(1, duration)) * 100}cqw)`;
   });
+  const share = (frame: number) => `${(frame / Math.max(1, duration)) * 100}%`;
+  return (
+    <>
+      {(range.in !== null || range.out !== null) && (
+        <span
+          className="edit-scrub-range"
+          style={{
+            left: share(range.in ?? 0),
+            right: `calc(100% - ${share(range.out ?? duration)})`,
+          }}
+        />
+      )}
+      <span ref={playhead} className="edit-scrub-head" />
+    </>
+  );
+}
+
+/** A scrub track with the range shaded: thin in the fullscreen viewer, taller under a source. */
+export function ScrubTrack({ player }: { player: Transport }) {
+  const duration = player.use((state) => state.duration);
   const scrub = (event: PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
-    transport.scrub(
+    player.scrub(
       Math.floor(((event.clientX - bounds.left) / bounds.width) * duration),
     );
   };
-  const share = (frame: number) => `${(frame / Math.max(1, duration)) * 100}%`;
   return (
     <div
       className="edit-scrub"
@@ -134,34 +161,29 @@ function ScrubTrack() {
         if (event.currentTarget.hasPointerCapture(event.pointerId))
           scrub(event);
       }}
-      onPointerUp={() => transport.release()}
-      onPointerCancel={() => transport.release()}
+      onPointerUp={() => player.release()}
+      onPointerCancel={() => player.release()}
     >
-      {(range.in !== null || range.out !== null) && (
-        <span
-          className="edit-scrub-range"
-          style={{
-            left: share(range.in ?? 0),
-            right: `calc(100% - ${share(range.out ?? duration)})`,
-          }}
-        />
-      )}
-      <span ref={playhead} className="edit-scrub-head" />
+      <ScrubMarks player={player} />
     </div>
   );
 }
 
+/** Drives `player`: the timeline's playhead, or the source's while the viewer shows one. */
 export function TransportBar({
+  player,
   voiceover,
   fullscreen,
   onFullscreen,
 }: {
-  voiceover: VoiceoverSession;
+  player: Transport;
+  /** Recording belongs to the timeline, so the source's bar has none. */
+  voiceover?: VoiceoverSession;
   fullscreen: boolean;
   onFullscreen: () => void;
 }) {
   // Everything but the frame, so playback does not re-render the bar.
-  const { state, range, fps, loop, muted, duration } = useTransport(
+  const { state, range, fps, loop, muted, duration } = player.use(
     useShallow(({ frame: _, ...rest }) => rest),
   );
   const speed = velocity(state);
@@ -171,20 +193,21 @@ export function TransportBar({
       : "";
   return (
     <>
-      {fullscreen && <ScrubTrack />}
+      {/* A source has its own scrub track under its picture. */}
+      {fullscreen && player === transport && <ScrubTrack player={player} />}
       <div
         className="edit-transport"
         aria-label="Transport"
         onClick={blurPointerButton}
       >
-        <Timecode voiceover={voiceover} />
+        <Timecode player={player} voiceover={voiceover} />
         <div className="edit-transport-controls">
           <span className="edit-shuttle" />
           <button
             className="edit-icon"
             aria-label="First frame"
             title={hint("controlFirstFrame")}
-            onClick={() => transport.seek(0)}
+            onClick={() => player.seek(0)}
           >
             <SkipBack size={16} />
           </button>
@@ -194,7 +217,7 @@ export function TransportBar({
             aria-pressed={speed < 0}
             title={hint("controlPlayReverse")}
             onClick={() =>
-              transport.dispatch({
+              player.dispatch({
                 type: "shuttle",
                 dir: "reverse",
                 fast: false,
@@ -212,7 +235,7 @@ export function TransportBar({
             aria-label="Stop"
             aria-pressed={state.kind === "stopped"}
             title={hint("controlStop")}
-            onClick={() => transport.dispatch({ type: "stop" })}
+            onClick={() => player.dispatch({ type: "stop" })}
           >
             <Stop size={14} weight="fill" />
           </button>
@@ -222,7 +245,7 @@ export function TransportBar({
             aria-pressed={speed > 0}
             title={hint("controlPlayForward")}
             onClick={() =>
-              transport.dispatch({
+              player.dispatch({
                 type: "shuttle",
                 dir: "forward",
                 fast: false,
@@ -235,11 +258,11 @@ export function TransportBar({
             className="edit-icon"
             aria-label="Last frame"
             title={hint("controlLastFrame")}
-            onClick={() => transport.seek(duration - 1)}
+            onClick={() => player.seek(duration - 1)}
           >
             <SkipForward size={16} />
           </button>
-          <VoiceoverTransport session={voiceover} />
+          {voiceover && <VoiceoverTransport session={voiceover} />}
           <span className="edit-shuttle" aria-label="Shuttle speed">
             {shuttle}
           </span>
@@ -264,7 +287,7 @@ export function TransportBar({
             aria-label="Mute"
             aria-pressed={muted}
             title="Mute"
-            onClick={() => transport.toggleMute()}
+            onClick={() => player.toggleMute()}
           >
             {muted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}
           </button>
@@ -273,7 +296,7 @@ export function TransportBar({
             aria-label="Loop"
             aria-pressed={loop}
             title={hint("controlLoop")}
-            onClick={() => transport.toggleLoop()}
+            onClick={() => player.toggleLoop()}
           >
             <Repeat size={16} weight={loop ? "fill" : "regular"} />
           </button>

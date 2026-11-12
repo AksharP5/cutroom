@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
+import {
+  applyAll,
+  frameTime,
+  normalizeTimeline,
+} from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
@@ -8,6 +12,7 @@ import {
   bladePreview,
   dragPreview,
   dropPreview,
+  placedMedia,
   idle,
   intentAt,
   snap,
@@ -849,4 +854,40 @@ test("media drops overwrite by default, insert explicitly, and refuse the wrong 
       0,
     ).valid,
   ).toBe(true);
+});
+
+test("a range marked in the source viewer lands with its start and every one of its frames", () => {
+  // Marks are whole frames; the drag carries them as seconds, which must not lose a frame.
+  for (const fps of [
+    { num: 30000, den: 1001 },
+    { num: 24000, den: 1001 },
+    { num: 30, den: 1 },
+  ])
+    for (const frames of [1, 15, 91, 1799])
+      expect(
+        placedMedia(
+          {
+            kind: "video",
+            path: "assets/talk.mp4",
+            start: frameTime(60, fps),
+            seconds: frameTime(frames, fps),
+            hasAudio: true,
+          },
+          fps,
+        ),
+      ).toMatchObject({ frames, mediaStart: frameTime(60, fps) });
+
+  const timeline = sequence();
+  const [video] = timeline.tracks as [Track];
+  const drop = dropPreview(
+    timeline,
+    { kind: "video", src: "assets/talk.mp4", frames: 91, mediaStart: 2 },
+    video,
+    420,
+    0,
+    0,
+  );
+  expect(
+    drop.shown.clips.find((clip) => clip.src === "assets/talk.mp4"),
+  ).toMatchObject({ start: 420, duration: 91, mediaStart: 2 });
 });

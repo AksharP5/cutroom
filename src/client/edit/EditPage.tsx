@@ -40,6 +40,15 @@ import {
   useTimeline,
 } from "./timeline";
 import { useVoiceover } from "../voiceover/Voiceover";
+import {
+  closeSource,
+  markSource,
+  placeSource,
+  showSource,
+  sourcePlayer,
+  useSource,
+} from "./source";
+import { SourceViewer } from "./SourceViewer";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
@@ -100,7 +109,11 @@ export function EditPage({
   const voiceover = useVoiceover(projectId);
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
-  const setMode = (next: typeof mode) => editorTools?.setMode(next);
+  const setMode = (next: typeof mode) => {
+    // Notes go on the timeline's picture.
+    if (next === "draw" || next === "comment") showSource(false);
+    editorTools?.setMode(next);
+  };
   const page = useRef<HTMLDivElement>(null);
   const viewer = useRef<HTMLElement>(null);
   const [revision, setRevision] = useState(0);
@@ -108,6 +121,10 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const snapping = useTimeline((state) => state.snapping);
+  const source = useSource((state) => state.file !== null);
+  const sourceShown = useSource((state) => state.shown);
+  /** The transport keys and bar drive what the viewer shows. */
+  const player = sourceShown ? sourcePlayer : transport;
 
   useEffect(() => {
     const closing = new AbortController();
@@ -145,6 +162,8 @@ export function EditPage({
     );
     return () => {
       closing.abort();
+      closeSource();
+      useSource.setState({ marks: {} });
       reportEditorError("timeline", null);
       stopProject();
       stopPreview();
@@ -216,26 +235,38 @@ export function EditPage({
   const step = (direction: "undo" | "redo") => {
     void stepHistory(projectId, direction).catch(report);
   };
+  const playing = player.use.getState;
+  /** A source keeps its own marks; the timeline's are an edit, so undo takes them back. */
   const mark = (
     label: string,
     range: (frame: number, current: Timeline["range"]) => Timeline["range"],
   ) => {
-    const { frame } = useTransport.getState();
+    const { frame, range: marks } = playing();
+    if (sourceShown) return markSource(range(frame, marks));
     void editTimeline(projectId, label, (timeline) => [
       { type: "setRange", ...range(frame, timeline.range) },
     ]);
   };
-  const jump = (to: (timeline: Timeline, frame: number) => number | null) => {
+  /** Where Up and Down stop: the timeline's clip boundaries, or a source's marks. */
+  const jump = (to: (stops: number[], frame: number) => number) => {
+    const { frame, range } = playing();
     const view = useTimeline.getState().view;
-    if (!view) return;
-    const frame = to(view.timeline, useTransport.getState().frame);
-    if (frame !== null) transport.seek(frame);
+    if (sourceShown)
+      player.seek(
+        to(
+          [range.in, range.out === null ? null : range.out - 1].filter(
+            (stop) => stop !== null,
+          ),
+          frame,
+        ),
+      );
+    else if (view) player.seek(to(edits(view.timeline), frame));
   };
   const second = () => {
-    const { fps } = useTransport.getState();
+    const { fps } = playing();
     return Math.round(fps.num / fps.den);
   };
-  const last = () => useTransport.getState().duration - 1;
+  const last = () => playing().duration - 1;
 
   const handlers: Partial<Record<Action, () => void>> = {
     editPointer: () => setMode("select"),
@@ -243,34 +274,28 @@ export function EditPage({
     editBlade: () => setMode("blade"),
     cutroomDraw: () => setMode("draw"),
     cutroomComment: () => setMode("comment"),
-    controlPlayToggle: () => transport.dispatch({ type: "toggle" }),
+    controlPlayToggle: () => player.dispatch({ type: "toggle" }),
     controlPlayForward: () =>
-      transport.dispatch({ type: "shuttle", dir: "forward", fast: false }),
+      player.dispatch({ type: "shuttle", dir: "forward", fast: false }),
     controlPlayReverse: () =>
-      transport.dispatch({ type: "shuttle", dir: "reverse", fast: false }),
+      player.dispatch({ type: "shuttle", dir: "reverse", fast: false }),
     controlFastForward: () =>
-      transport.dispatch({ type: "shuttle", dir: "forward", fast: true }),
+      player.dispatch({ type: "shuttle", dir: "forward", fast: true }),
     controlFastReverse: () =>
-      transport.dispatch({ type: "shuttle", dir: "reverse", fast: true }),
-    controlStop: () => transport.dispatch({ type: "stop" }),
-    controlStepReverse: () => transport.step(-1),
-    controlStepForward: () => transport.step(1),
-    controlLargeStepReverse: () => transport.step(-second()),
-    controlLargeStepForward: () => transport.step(second()),
+      player.dispatch({ type: "shuttle", dir: "reverse", fast: true }),
+    controlStop: () => player.dispatch({ type: "stop" }),
+    controlStepReverse: () => player.step(-1),
+    controlStepForward: () => player.step(1),
+    controlLargeStepReverse: () => player.step(-second()),
+    controlLargeStepForward: () => player.step(second()),
     controlClipPrev: () =>
-      jump(
-        (timeline, frame) =>
-          edits(timeline).findLast((edit) => edit < frame) ?? 0,
-      ),
+      jump((stops, frame) => stops.findLast((stop) => stop < frame) ?? 0),
     controlClipNext: () =>
-      jump(
-        (timeline, frame) =>
-          edits(timeline).find((edit) => edit > frame) ?? last(),
-      ),
-    controlTimelineStart: () => transport.seek(0),
-    controlTimelineEnd: () => transport.seek(last()),
-    controlFirstFrame: () => transport.seek(0),
-    controlLastFrame: () => transport.seek(last()),
+      jump((stops, frame) => stops.find((stop) => stop > frame) ?? last()),
+    controlTimelineStart: () => player.seek(0),
+    controlTimelineEnd: () => player.seek(last()),
+    controlFirstFrame: () => player.seek(0),
+    controlLastFrame: () => player.seek(last()),
     // Out is exclusive, so O keeps the frame under the playhead. A mark past the other one clears it.
     markIn: () =>
       mark("Mark in", (frame, { out }) => ({
@@ -287,10 +312,19 @@ export function EditPage({
       mark("Clear out", (_, range) => ({ in: range.in, out: null })),
     markResetInOut: () =>
       mark("Clear in and out", () => ({ in: null, out: null })),
-    controlGotoIn: () => jump(({ range }) => range.in),
-    controlGotoOut: () =>
-      jump(({ range }) => (range.out === null ? null : range.out - 1)),
-    controlLoop: () => transport.toggleLoop(),
+    controlGotoIn: () => {
+      const { range } = playing();
+      if (range.in !== null) player.seek(range.in);
+    },
+    controlGotoOut: () => {
+      const { range } = playing();
+      if (range.out !== null) player.seek(range.out - 1);
+    },
+    controlLoop: () => player.toggleLoop(),
+    editInsertOverwriteActionInsert: () => placeSource(projectId, "insert"),
+    editInsertOverwriteActionOverwrite: () =>
+      placeSource(projectId, "overwrite"),
+    viewToggleSourceTimeline: () => showSource(!sourceShown),
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),
     workspaceViewerModeCinemaViewer: toggleFullscreen,
@@ -333,6 +367,24 @@ export function EditPage({
             <kbd>{keymap[tool.action].keys[0]}</kbd>
           </button>
         ))}
+        {source && (
+          <>
+            <span className="edit-separator" />
+            <div className="edit-views" role="group" aria-label="Viewer">
+              {(["Source", "Timeline"] as const).map((view) => (
+                <button
+                  key={view}
+                  className="edit-tool"
+                  aria-pressed={sourceShown === (view === "Source")}
+                  title={hint("viewToggleSourceTimeline")}
+                  onClick={() => showSource(view === "Source")}
+                >
+                  {view}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         <span className="edit-grow" />
         <button
           className="edit-icon"
@@ -396,10 +448,13 @@ export function EditPage({
           onOpenNote={onOpenNote}
           onSaveNote={onSaveNote}
         />
+        <SourceViewer projectId={projectId} />
         <TransportBar
+          key={sourceShown ? "source" : "timeline"}
+          player={player}
           fullscreen={fullscreen}
           onFullscreen={toggleFullscreen}
-          voiceover={voiceover}
+          voiceover={sourceShown ? undefined : voiceover}
         />
       </section>
       <Inspector projectId={projectId} />

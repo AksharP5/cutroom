@@ -76,175 +76,189 @@ export interface RuntimePlayer {
   setMuted(muted: boolean): void;
 }
 
+/** What a transport plays: a timeline, or one source file. */
+export type Playable = Pick<Timeline, "fps" | "duration" | "range">;
+
 /**
- * The one playhead. React reads `state`, `loop`, and `muted`; anything that follows the frame
- * (playhead, timecode) subscribes with `useTransport.subscribe` and writes to the DOM directly.
+ * A playhead over one thing that plays. React reads `state`, `loop`, and `muted` through `use`;
+ * anything that follows the frame (playhead, timecode) subscribes with `use.subscribe` and writes
+ * to the DOM directly.
  */
-export const useTransport = create(() => ({
-  state: stopped as TransportState,
-  frame: 0,
-  fps: { num: 30, den: 1 } as Fps,
-  /** Frames in the timeline; the last frame is `duration - 1`. */
-  duration: 0,
-  /** In and out marks; out is exclusive. */
-  range: { in: null, out: null } as Timeline["range"],
-  loop: false,
-  muted: false,
-}));
+export function createTransport() {
+  const use = create(() => ({
+    state: stopped as TransportState,
+    frame: 0,
+    fps: { num: 30, den: 1 } as Fps,
+    /** Frames in what plays; the last frame is `duration - 1`. */
+    duration: 0,
+    /** In and out marks; out is exclusive. */
+    range: { in: null, out: null } as Timeline["range"],
+    loop: false,
+    muted: false,
+  }));
 
-const get = useTransport.getState;
-const set = useTransport.setState;
-let player: RuntimePlayer | null = null;
-let tick = 0;
-let origin = { frame: 0, at: 0 };
+  const get = use.getState;
+  const set = use.setState;
+  let player: RuntimePlayer | null = null;
+  let tick = 0;
+  let origin = { frame: 0, at: 0 };
 
-const clamp = (frame: number) =>
-  Math.max(0, Math.min(get().duration - 1, frame));
-const show = (frame: number) => player?.seek(frameTime(frame, get().fps));
-/** The frame on screen at a runtime time. */
-const frameAt = (seconds: number) => {
-  const { fps } = get();
-  return Math.floor((seconds * fps.num) / fps.den + 1e-6);
-};
+  const clamp = (frame: number) =>
+    Math.max(0, Math.min(get().duration - 1, frame));
+  const show = (frame: number) => player?.seek(frameTime(frame, get().fps));
+  /** The frame on screen at a runtime time. */
+  const frameAt = (seconds: number) => {
+    const { fps } = get();
+    return Math.floor((seconds * fps.num) / fps.den + 1e-6);
+  };
 
-/** Playback wraps inside the range while loop is on, and otherwise runs the whole timeline. */
-function bounds() {
-  const { loop, range, duration } = get();
-  return loop
-    ? { first: range.in ?? 0, end: Math.min(range.out ?? duration, duration) }
-    : { first: 0, end: duration };
-}
-
-function park(frame: number) {
-  cancelAnimationFrame(tick);
-  player?.pause();
-  set({ state: stopped, frame });
-  show(frame);
-}
-
-function restart(frame: number) {
-  origin = { frame, at: performance.now() };
-  set({ frame });
-  show(frame);
-  if (get().state.kind === "playing") player?.play();
-}
-
-function advance(now: number) {
-  const { state, fps } = get();
-  const speed = velocity(state);
-  if (!speed) return;
-  const { first, end } = bounds();
-  // At 1x the runtime plays its media and its clock leads; shuttles step frames on ours.
-  let frame =
-    state.kind === "playing" && player
-      ? frameAt(player.time())
-      : origin.frame +
-        Math.trunc((((now - origin.at) / 1000) * speed * fps.num) / fps.den);
-  // At 23.976 and 29.97 the runtime's end time floors to the last frame, one short of the
-  // engine's exclusive end, so the runtime stopping by itself there is the end.
-  if (
-    state.kind === "playing" &&
-    player &&
-    !player.playing() &&
-    frame >= end - 1
-  )
-    frame = end;
-  if (frame >= end) {
-    if (get().loop) restart(first);
-    else return park(end - 1);
-  } else if (frame < first) {
-    if (get().loop) restart(end - 1);
-    else return park(first);
-  } else if (frame !== get().frame) {
-    set({ frame });
-    if (state.kind !== "playing") show(frame);
+  /** Playback wraps inside the range while loop is on, and otherwise runs the whole length. */
+  function bounds() {
+    const { loop, range, duration } = get();
+    return loop
+      ? { first: range.in ?? 0, end: Math.min(range.out ?? duration, duration) }
+      : { first: 0, end: duration };
   }
-  tick = requestAnimationFrame(advance);
-}
 
-function run(next: TransportState) {
-  if (!get().duration) return;
-  const previous = get().state;
-  cancelAnimationFrame(tick);
-  player?.pause();
-  // The runtime's clock runs between frames at 1x; settle on the frame it reached, exactly.
-  const frame =
-    previous.kind === "playing" && player
-      ? clamp(frameAt(player.time()))
-      : get().frame;
-  set({ state: next, frame });
-  const speed = velocity(next);
-  if (!speed) {
+  function park(frame: number) {
+    cancelAnimationFrame(tick);
+    player?.pause();
+    set({ state: stopped, frame });
     show(frame);
-    return;
   }
-  const { first, end } = bounds();
-  // Playing forward from the last frame starts over; outside a looped range, play enters it.
-  const start =
-    frame >= first && frame < end
-      ? speed > 0 && frame === end - 1
-        ? first
-        : frame
-      : speed > 0
-        ? first
-        : end - 1;
-  restart(start);
-  if (player) tick = requestAnimationFrame(advance);
-}
 
-export const transport = {
-  clock: () => player?.clock() ?? null,
-  dispatch(event: TransportEvent) {
-    run(transition(get().state, event));
-  },
-  /** Moves the playhead and stops playback; the latest seek wins. */
-  seek(frame: number) {
-    if (get().state.kind === "scrubbing") {
-      set({ frame: clamp(frame) });
-      show(get().frame);
+  function restart(frame: number) {
+    origin = { frame, at: performance.now() };
+    set({ frame });
+    show(frame);
+    if (get().state.kind === "playing") player?.play();
+  }
+
+  function advance(now: number) {
+    const { state, fps } = get();
+    const speed = velocity(state);
+    if (!speed) return;
+    const { first, end } = bounds();
+    // At 1x the runtime plays its media and its clock leads; shuttles step frames on ours.
+    let frame =
+      state.kind === "playing" && player
+        ? frameAt(player.time())
+        : origin.frame +
+          Math.trunc((((now - origin.at) / 1000) * speed * fps.num) / fps.den);
+    // At 23.976 and 29.97 the runtime's end time floors to the last frame, one short of the
+    // engine's exclusive end, so the runtime stopping by itself there is the end.
+    if (
+      state.kind === "playing" &&
+      player &&
+      !player.playing() &&
+      frame >= end - 1
+    )
+      frame = end;
+    if (frame >= end) {
+      if (get().loop) restart(first);
+      else return park(end - 1);
+    } else if (frame < first) {
+      if (get().loop) restart(end - 1);
+      else return park(first);
+    } else if (frame !== get().frame) {
+      set({ frame });
+      if (state.kind !== "playing") show(frame);
+    }
+    tick = requestAnimationFrame(advance);
+  }
+
+  function run(next: TransportState) {
+    if (!get().duration) return;
+    const previous = get().state;
+    cancelAnimationFrame(tick);
+    player?.pause();
+    // The runtime's clock runs between frames at 1x; settle on the frame it reached, exactly.
+    const frame =
+      previous.kind === "playing" && player
+        ? clamp(frameAt(player.time()))
+        : get().frame;
+    set({ state: next, frame });
+    const speed = velocity(next);
+    if (!speed) {
+      show(frame);
       return;
     }
-    park(clamp(frame));
-  },
-  step(frames: number) {
-    transport.seek(get().frame + frames);
-  },
-  /** Seeks while a pointer drags the playhead; `release` ends it. */
-  scrub(frame: number) {
-    if (get().state.kind !== "scrubbing") transport.dispatch({ type: "scrub" });
-    transport.seek(frame);
-  },
-  release() {
-    transport.dispatch({ type: "release" });
-  },
-  toggleLoop() {
-    set({ loop: !get().loop });
-  },
-  toggleMute() {
-    set({ muted: !get().muted });
-    player?.setMuted(get().muted);
-  },
-  /** Takes the engine's frame rate, length, and marks; keeps the playhead inside the new length. */
-  setTimeline({ fps, duration, range }: Timeline) {
-    set({ fps, duration, range });
-    if (get().frame >= duration) transport.seek(duration - 1);
-  },
-  /** The document is gone. Keep the latest playback intent until its replacement attaches. */
-  suspend() {
-    cancelAnimationFrame(tick);
-    player = null;
-  },
-  /** Hands the playhead to a newly loaded preview, which already shows frame `shown`. */
-  attach(next: RuntimePlayer | null, shown?: number) {
-    player?.pause();
-    player = next;
-    if (!next) return park(get().frame);
-    next.setMuted(get().muted);
-    const { state, frame } = get();
-    if (velocity(state) || shown !== frame) restart(frame);
-    if (velocity(state)) {
+    const { first, end } = bounds();
+    // Playing forward from the last frame starts over; outside a looped range, play enters it.
+    const start =
+      frame >= first && frame < end
+        ? speed > 0 && frame === end - 1
+          ? first
+          : frame
+        : speed > 0
+          ? first
+          : end - 1;
+    restart(start);
+    if (player) tick = requestAnimationFrame(advance);
+  }
+
+  const transport = {
+    use,
+    clock: () => player?.clock() ?? null,
+    dispatch(event: TransportEvent) {
+      run(transition(get().state, event));
+    },
+    /** Moves the playhead and stops playback; the latest seek wins. */
+    seek(frame: number) {
+      if (get().state.kind === "scrubbing") {
+        set({ frame: clamp(frame) });
+        show(get().frame);
+        return;
+      }
+      park(clamp(frame));
+    },
+    step(frames: number) {
+      transport.seek(get().frame + frames);
+    },
+    /** Seeks while a pointer drags the playhead; `release` ends it. */
+    scrub(frame: number) {
+      if (get().state.kind !== "scrubbing")
+        transport.dispatch({ type: "scrub" });
+      transport.seek(frame);
+    },
+    release() {
+      transport.dispatch({ type: "release" });
+    },
+    toggleLoop() {
+      set({ loop: !get().loop });
+    },
+    toggleMute() {
+      set({ muted: !get().muted });
+      player?.setMuted(get().muted);
+    },
+    /** Takes the frame rate, length, and marks; keeps the playhead inside the new length. */
+    setTimeline({ fps, duration, range }: Playable) {
+      set({ fps, duration, range });
+      if (get().frame >= duration) transport.seek(duration - 1);
+    },
+    /** The document is gone. Keep the latest playback intent until its replacement attaches. */
+    suspend() {
       cancelAnimationFrame(tick);
-      tick = requestAnimationFrame(advance);
-    }
-  },
-};
+      player = null;
+    },
+    /** Hands the playhead to a newly loaded player, which already shows frame `shown`. */
+    attach(next: RuntimePlayer | null, shown?: number) {
+      player?.pause();
+      player = next;
+      if (!next) return park(get().frame);
+      next.setMuted(get().muted);
+      const { state, frame } = get();
+      if (velocity(state) || shown !== frame) restart(frame);
+      if (velocity(state)) {
+        cancelAnimationFrame(tick);
+        tick = requestAnimationFrame(advance);
+      }
+    },
+  };
+  return transport;
+}
+export type Transport = ReturnType<typeof createTransport>;
+
+/** The timeline's playhead. */
+export const transport = createTransport();
+export const useTransport = transport.use;

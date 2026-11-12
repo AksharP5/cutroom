@@ -80,6 +80,14 @@ export function json(
   };
 }
 
+/** A project file as the browser loads it; `version` changes when the file is replaced. */
+export const mediaUrl = (
+  projectId: string,
+  path: string,
+  version?: string | null,
+) =>
+  `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
+
 /** `HH:MM:SS:FF` at the composition's nominal frame rate. */
 export function frameTimecode(seconds: number, fps: number): string {
   const rate = Math.round(fps);
