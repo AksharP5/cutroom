@@ -1,8 +1,10 @@
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 test("Fit returns a scrolled timeline to frame zero with whole ruler labels", async ({
   page,
@@ -275,6 +277,10 @@ for (const seconds of [4, 12_000])
     await page.goto(`/#project/${project.id}`);
     const last = page.locator('[data-clip="last"]');
     const aligned = async (start: number) => {
+      // The edit's slide holds clips by transforms until it ends.
+      await expect(page.locator(".tl-lanes")).not.toHaveAttribute(
+        "data-sliding",
+      );
       await expect(page.locator(".tl-grid")).toHaveAttribute(
         "data-refit",
         "settled",
@@ -313,14 +319,14 @@ for (const seconds of [4, 12_000])
     await aligned(seconds);
   });
 
-test("Fit lets a ripple close its gap before rescaling, and a zoom key takes over", async ({
+test("edits, history and agent changes keep the timeline's zoom, and only Fit rescales it", async ({
   page,
   request,
 }) => {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
-        data: { name: "Fit ripple motion" },
+        data: { name: "Edits keep zoom" },
       })
     ).json(),
   );
@@ -332,126 +338,124 @@ test("Fit lets a ripple close its gap before rescaling, and a zoom key takes ove
     <div id="last" class="clip" data-start="8" data-duration="4" data-track-index="0">Last</div>
   </main>`,
   );
+  // A music bed seven times as long as the cut.
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=90",
+    join(project.path, "music.wav"),
+  ]);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto(`/#project/${project.id}`);
   const grid = page.locator(".tl-grid");
-  const scale = () =>
-    grid.evaluate((element) =>
+  const slider = page.getByRole("slider", { name: "Zoom", exact: true });
+  const first = page.locator('[data-clip="first"]');
+  /** The scale once any slide and zoom has finished. */
+  const scale = async () => {
+    await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
+    await expect(grid).toHaveAttribute("data-refit", "settled");
+    return grid.evaluate((element) =>
       Number(getComputedStyle(element).getPropertyValue("--ppf")),
     );
-  const old = await scale();
-  const last = page.locator('[data-clip="last"]');
-  await page.locator('[data-clip="middle"]').click();
-  const slide = last.evaluate(
-    (element) =>
-      new Promise<{ scale: number; distance: number }>((resolve, reject) => {
-        const deadline = performance.now() + 3000;
-        const read = () => {
-          if (element.closest("[data-sliding]")) {
-            const grid = element.closest(".tl-grid")!;
-            const scale = Number(
-              getComputedStyle(grid).getPropertyValue("--ppf"),
-            );
-            return resolve({
-              scale,
-              distance:
-                element.getBoundingClientRect().left -
-                element.closest(".tl-lanes")!.getBoundingClientRect().left -
-                120 * scale,
-            });
-          }
-          if (performance.now() > deadline)
-            return reject(new Error("The gap never slid closed."));
-          requestAnimationFrame(read);
-        };
-        read();
-      }),
-  );
-  await page.keyboard.press("Delete");
-  const moving = await slide;
-  expect(moving.scale).toBe(old);
-  expect(moving.distance).toBeGreaterThan(120 * old * 0.5);
-  await expect.poll(scale).toBeGreaterThan(old * 1.4);
-  await expect(
-    page.getByRole("slider", { name: "Zoom", exact: true }),
-  ).toHaveAttribute("aria-valuenow", "0");
-  await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
+  };
+  const length = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline.duration;
 
+  // Opening fits the whole twelve seconds.
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  const opened = await scale();
+  const width = (await first.boundingBox())!.width;
+
+  // The long clip lands and the ruler stays: the cut's clips keep their size.
+  const row = page.locator('.media-row[data-path="music.wav"]');
+  await expect(row).toHaveAttribute("draggable", "true");
+  await row.click({ button: "right" });
+  await page
+    .getByRole("menuitem", { name: "Overwrite at playhead", exact: true })
+    .click();
+  await expect.poll(length).toBe(2700);
+  expect(await scale()).toBe(opened);
+  expect((await first.boundingBox())!.width).toBe(width);
+  await expect(slider).not.toHaveAttribute("aria-valuenow", "0");
+
+  // Fit is asked for, and the same key returns to the zoom it left.
+  await page.keyboard.press("Shift+Z");
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  const fitted = await scale();
+  expect(fitted).toBeLessThan(opened / 5);
+  await page.keyboard.press("Shift+Z");
+  expect(await scale()).toBe(opened);
+
+  // Undo and redo change the length and leave the scale, fitted or not.
+  await page.keyboard.press("Shift+Z");
+  expect(await scale()).toBe(fitted);
   await page.keyboard.press("Control+z");
-  await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
-  await expect.poll(scale).toBeCloseTo(old);
-  await page.waitForTimeout(250);
-  // Undo while the gap is still closing must add to that motion, without a jump.
-  await grid.evaluate((element: HTMLElement) =>
-    element.style.setProperty("--duration-edit", "1200ms"),
-  );
+  await expect.poll(length).toBe(360);
+  expect(await scale()).toBe(fitted);
+  // The view is now wider than Fit. Zooming out has nowhere to go; zooming in works.
+  await page.keyboard.press("Control+-");
+  expect(await scale()).toBe(fitted);
+  await page.keyboard.press("Control+Shift+z");
+  await expect.poll(length).toBe(2700);
+  expect(await scale()).toBe(fitted);
+  await page.keyboard.press("Control+z");
+  await expect.poll(length).toBe(360);
+  await page.keyboard.press("Shift+Z");
+  expect(await scale()).toBe(opened);
+
+  // A ripple delete closes its gap at the same scale, and so does its undo.
   await page.locator('[data-clip="middle"]').click();
   await page.keyboard.press("Shift+X");
-  await expect(page.locator(".tl-lanes")).toHaveAttribute("data-sliding", "");
-  await page.waitForTimeout(150);
-  const beforeUndo = (await last.boundingBox())!.x;
+  await expect.poll(length).toBe(240);
+  expect(await scale()).toBe(opened);
   await page.keyboard.press("Control+z");
-  await expect(page.locator('[data-clip="middle"]')).toHaveCount(1);
-  expect(Math.abs((await last.boundingBox())!.x - beforeUndo)).toBeLessThan(
-    120 * old * 0.2,
-  );
-  await expect(page.locator(".tl-lanes")).not.toHaveAttribute("data-sliding");
-  await expect(grid).toHaveAttribute("data-refit", "settled");
-  await grid.evaluate((element: HTMLElement) =>
-    element.style.removeProperty("--duration-edit"),
-  );
-  await page.locator('[data-clip="middle"]').click();
-  await page.keyboard.press("Delete");
-  await expect(page.locator('[data-clip="middle"]')).toHaveCount(0);
-  await page.keyboard.press("Control+=");
-  await page.keyboard.press("Control+=");
-  const chosen = await scale();
-  await page.waitForTimeout(500);
-  expect(await scale()).toBe(chosen);
-  await expect(
-    page.getByRole("slider", { name: "Zoom", exact: true }),
-  ).not.toHaveAttribute("aria-valuenow", "0");
-});
+  await expect.poll(length).toBe(360);
+  expect(await scale()).toBe(opened);
 
-test("scrolling while Fit waits to rescale after a ripple keeps the view where you scrolled", async ({
-  page,
-  request,
-}) => {
-  const project = ProjectSchema.parse(
+  // A paste past the end lengthens the timeline.
+  await page.locator('[data-clip="last"]').click();
+  await page.keyboard.press("Control+c");
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Control+v");
+  await expect.poll(length).toBeGreaterThan(360);
+  expect(await scale()).toBe(opened);
+
+  // An edit made outside the editor, as an agent's is, through the same commands.
+  const view = TimelineViewSchema.parse(
     await (
-      await request.post("/api/cutroom/projects", {
-        data: { name: "Fit ripple scroll" },
-      })
+      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
     ).json(),
   );
-  await writeFile(
-    join(project.path, "index.html"),
-    `<main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="12">
-    <div id="first" class="clip" data-start="0" data-duration="4" data-track-index="0">First</div>
-    <div id="middle" class="clip" data-start="4" data-duration="4" data-track-index="0">Middle</div>
-    <div id="last" class="clip" data-start="8" data-duration="4" data-track-index="0">Last</div>
-  </main>`,
-  );
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  await page.goto(`/#project/${project.id}`);
-  const grid = page.locator(".tl-grid");
-  const scroller = page.locator(".tl-scroll");
-  const scale = () =>
-    grid.evaluate((element) =>
-      Number(getComputedStyle(element).getPropertyValue("--ppf")),
-    );
-  const old = await scale();
-  await page.locator('[data-clip="middle"]').click();
-  await page.keyboard.press("Delete");
-  // During the slide, before Fit would rescale, the user scrolls the timeline.
-  const scrolled = await scroller.evaluate((element) => {
-    element.scrollLeft = 120;
-    return element.scrollLeft;
-  });
-  expect(scrolled).toBeGreaterThan(0);
-  await page.waitForTimeout(800);
-  expect(await scroller.evaluate((element) => element.scrollLeft)).toBe(
-    scrolled,
-  );
-  expect(await scale()).toBe(old);
+  const before = view.timeline.duration;
+  const position = await slider.getAttribute("aria-valuenow");
+  expect(
+    (
+      await request.post(`/api/cutroom/projects/${project.id}/commands`, {
+        data: {
+          expectedRevision: view.revision,
+          commands: [{ type: "move", clipIds: ["first"], by: before + 600 }],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await expect.poll(length).toBeGreaterThan(before);
+  // The slider moves when the editor has the longer timeline: Fit is further away.
+  await expect(slider).not.toHaveAttribute("aria-valuenow", position!);
+  expect(await scale()).toBe(opened);
+
+  // A fitted view stays fitted when only its width changes.
+  await page.keyboard.press("Shift+Z");
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  const wide = await scale();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect.poll(scale).toBeLessThan(wide);
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
 });

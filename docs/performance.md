@@ -146,7 +146,7 @@ All frame times are milliseconds. Long tasks are count/longest milliseconds, acr
 | Redo          |       16.7 | 49.6 | 136.8 |      16.7 | 57.3 |  69.6 | 1/82 → 0/0                |
 | Fit           |       16.7 | 17.0 |  43.9 |      16.7 | 16.8 |  34.7 | 0/0 → 0/0                 |
 
-The 400-clip maximum key-zoom frame fell from 121.0 to 66.9 ms, and ripple from 171.4 to 78.2 ms. At 500 clips, ripple p95 rose from 53.7 to 60.7 ms and maximum from 116.5 to 126.8 ms. Fit now has a separate finite rescale after the gap closes. These measurements do not establish a steady 60 fps during edits.
+The 400-clip maximum key-zoom frame fell from 121.0 to 66.9 ms, and ripple from 171.4 to 78.2 ms. At 500 clips, ripple p95 rose from 53.7 to 60.7 ms and maximum from 116.5 to 126.8 ms. Fit now has a separate finite rescale after the gap closes. (Since November 12, 2026 an edit no longer changes the scale at all, so a fitted ripple is only the gap closing and that rescale is gone.) These measurements do not establish a steady 60 fps during edits.
 
 Tracing found synchronous style/layout under viewport geometry reads and repeated whole-lane selector scans in edit motion. The viewport now reads size and offsets on resize/scroll, reads animation tokens before writes, and skips an unchanged scroll write. Motion finds moved clip nodes in one pass. Clip bodies were already memoized, canvas drawing was a smaller part of these stalls, and the 500-clip engine batch still applies in about 2 ms; neither the canvas representation nor engine normalization changed.
 
