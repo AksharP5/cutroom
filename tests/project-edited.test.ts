@@ -60,3 +60,29 @@ test("Home dates follow linked authoring sources without counting media, private
     await f.close();
   }
 });
+
+test("Home dates follow a link added to a file that was already read", async () => {
+  const f = await projectFixture();
+  try {
+    const project = await f.store.create({ name: "New link" });
+    const old = new Date("2020-01-01");
+    const index = join(project.path, "index.html");
+    await writeFile(index, "<main></main>");
+    for (const path of ["index.html", "cutroom.json"])
+      await utimes(join(project.path, path), old, old);
+    expect((await f.store.list())[0]?.updatedAt).toBe(old.toISOString());
+
+    const late = new Date("2025-01-01");
+    await writeFile(join(project.path, "late.html"), "<div></div>");
+    await utimes(join(project.path, "late.html"), late, late);
+    // Same timestamp, new content: the link must still be found.
+    await writeFile(
+      index,
+      '<main><div data-composition-src="late.html"></div></main>',
+    );
+    await utimes(index, old, old);
+    expect((await f.store.list())[0]?.updatedAt).toBe(late.toISOString());
+  } finally {
+    await f.close();
+  }
+});

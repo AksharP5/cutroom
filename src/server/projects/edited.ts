@@ -48,6 +48,12 @@ function sourceReferences(source: string, path: string): string[] {
   return references;
 }
 
+// Home lists every project; an unchanged file's references are not parsed again.
+const parsed = new Map<
+  string,
+  { mtimeMs: number; size: number; references: string[] }
+>();
+
 /** Follow authoring dependencies, never directory listings or media bytes. */
 export async function projectEditedAt(project: Project) {
   const pending = new Set(["index.html", "cutroom.json"]);
@@ -63,8 +69,17 @@ export async function projectEditedAt(project: Project) {
       if (!info.isFile()) continue;
       newest = Math.max(newest ?? -Infinity, info.mtimeMs);
       if (info.size > 10 * 1024 * 1024) continue;
-      const source = await readFile(absolute, "utf8");
-      for (const url of sourceReferences(source, path)) {
+      const cached = parsed.get(absolute);
+      const references =
+        cached?.mtimeMs === info.mtimeMs && cached.size === info.size
+          ? cached.references
+          : sourceReferences(await readFile(absolute, "utf8"), path);
+      parsed.set(absolute, {
+        mtimeMs: info.mtimeMs,
+        size: info.size,
+        references,
+      });
+      for (const url of references) {
         const linked = localMediaPath(path, url.trim());
         if (!linked || !projectSourceTypes.has(extname(linked).toLowerCase()))
           continue;
