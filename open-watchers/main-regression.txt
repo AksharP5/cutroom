@@ -1,0 +1,22 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/project-watchers.test.ts:
+18 |   try {
+19 |     const projects = await Promise.all(Array.from({length:20}, (_, i) => f.store.create({name:`Watch ${i}`})));
+20 |     const before = await watches();
+21 |     await api.request("/projects");
+22 |     for (const project of projects) await api.request(`/projects/${project.id}`);
+23 |     expect(await watches()).toBe(before);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 60
+
+      at <anonymous> (/home/akshar/.cache/open-project-watchers/tests/project-watchers.test.ts:23:29)
+(fail) listing and resolving closed projects keeps no watches; editor subscriptions share and release them [65.21ms]
+
+ 0 pass
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [254.00ms]

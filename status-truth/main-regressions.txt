@@ -1,0 +1,54 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/project-store.test.ts:
+(pass) a removed project folder refuses paths that allow missing files [6.00ms]
+(pass) new projects ship a valid, self-contained Instrument Sans composition [33.52ms]
+(pass) projects list most recently edited first [38.77ms]
+(pass) source writes require the exact version and remain undoable [24.10ms]
+(pass) annotations persist with source history and metadata rejects stale replacement [27.27ms]
+(pass) project APIs reject traversal and symlinks outside the registered folder [2.63ms]
+(pass) project shutdown drains admitted edits and refuses new mutations [5.91ms]
+308 |     const p = await f.store.create({ name: "File dates" });
+309 |     const html = join(p.path, "index.html");
+310 |     const document = join(p.path, "cutroom.json");
+311 |     await utimes(html, new Date("2024-01-01"), new Date("2024-01-01"));
+312 |     await utimes(document, new Date("2024-02-01"), new Date("2024-02-01"));
+313 |     expect((await f.store.list())[0]?.updatedAt).toBe("2024-02-01T00:00:00.000Z");
+                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "2024-02-01T00:00:00.000Z"
+Received: "2026-11-12T12:17:18.651Z"
+
+      at <anonymous> (/home/akshar/.cache/truthful-status/tests/project-store.test.ts:313:50)
+(fail) last edited uses the newest composition or document mtime, not registry activity [0.90ms]
+
+tests/ripple-feedback.test.ts:
+(pass) ripple reports use the edit interval even when an unrelated longer track determines duration [4.69ms]
+(pass) ripple delete reports deletions, while lift stays silent [2.04ms]
+(pass) ripple drops and Paste Insert report time opened on other tracks [2.19ms]
+(pass) ripple drops include a newly created destination track in the affected count [0.94ms]
+(pass) outside edits ignore attribution-only refreshes and distinguish moves, title updates and removal [0.63ms]
+(pass) the existing HTML parse supplies decoded first-line title text without scripts or inert templates [1.32ms]
+(pass) owner history rows stay silent while unrelated agent and disk edits are reported [0.90ms]
+(pass) composition reads wait for an admitted edit and return its source with its attribution [8.87ms]
+(pass) overwrite feedback names whole replacements once, while partial cuts and insert stay silent [2.19ms]
+336 |     ...before, revision: "two",
+337 |     timeline: { ...before.timeline, clips: before.timeline.clips.map(clip => ({...clip, start: 30})) },
+338 |     clipEdits: [{ id: "new", clipId: "shot", composition: "index.html", label: "Moved", by: "agent", agentName: "Checkpoint", at: "now", accepted: false }],
+339 |   };
+340 |   const change = outsideChanges(before, after);
+341 |   expect(outsideMessage(change.changes, new Set([change.actor]))).toBe("Checkpoint moved 1 clip.");
+                                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "Checkpoint moved 1 clip."
+Received: "Agent moved 1 clip."
+
+      at <anonymous> (/home/akshar/.cache/truthful-status/tests/ripple-feedback.test.ts:341:67)
+(fail) outside notices retain the caller name [0.37ms]
+
+ 16 pass
+ 2 fail
+ 68 expect() calls
+Ran 18 tests across 2 files. [338.00ms]

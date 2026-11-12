@@ -1,0 +1,50 @@
+[
+  {
+    "step": "20 closed",
+    "watches": 0,
+    "handles": 0,
+    "fds": 28
+  },
+  {
+    "step": "one open tab",
+    "watches": 6,
+    "handles": 1,
+    "fds": 40
+  },
+  {
+    "step": "two tabs, same project",
+    "watches": 6,
+    "handles": 1,
+    "fds": 41
+  },
+  {
+    "step": "one tab remains",
+    "watches": 6,
+    "handles": 1,
+    "fds": 40
+  },
+  {
+    "step": "back home",
+    "watches": 0,
+    "handles": 0,
+    "fds": 45
+  },
+  {
+    "step": "MCP edited closed project",
+    "watches": 0,
+    "handles": 0,
+    "fds": 50
+  },
+  {
+    "step": "reopened after MCP edit",
+    "watches": 8,
+    "handles": 1,
+    "fds": 50
+  },
+  {
+    "step": "all tabs closed",
+    "watches": 0,
+    "handles": 0,
+    "fds": 44
+  }
+]

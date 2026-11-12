@@ -1,0 +1,3 @@
+1720x1050 Chromium. Before: pressing Record on main 3ae36b1 shows an arm-track error and captures nothing. After: one click on a project without audio tracks opens the microphone, arms the destination, and starts recording. The new track and WAV clip appear together when stopped. Tests use a generated microphone WAV and Chromium's real audio-capture path. No live microphone or user media is recorded.
+
+The button and shortcut tests also read the saved timeline and undo the take through the real HTTP MCP client. Browser microphone permission remains browser-owned; saved takes use the existing upload and timeline commands.
