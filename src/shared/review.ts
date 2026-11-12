@@ -14,6 +14,8 @@ const by = z.enum(["human", "agent", "external"]);
  * Review panel carry no header.
  */
 export const AGENT_HEADER = "x-cutroom-agent";
+export const AGENT_NAME_HEADER = "x-cutroom-agent-name";
+export const AgentNameSchema = z.string().trim().min(1).max(200);
 
 /** Outside project history and the preview watcher, so status changes are never undone. */
 export const REVIEW_STATE_PATH = ".cutroom/review.json";
@@ -74,8 +76,8 @@ export type ReviewState = z.infer<typeof ReviewStateSchema>;
  * conversation's MCP bridge carries, or an outside MCP client.
  */
 export type ReviewTurn =
-  | { kind: "message"; id: string; token: string }
-  | { kind: "external"; id: string };
+  | { kind: "message"; id: string; token: string; name?: string }
+  | { kind: "external"; id: string; name?: string };
 export type ReviewActor =
   { kind: "human" } | { kind: "agent"; turn: ReviewTurn };
 

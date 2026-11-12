@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { version } from "../../shared/version";
-import { AGENT_HEADER } from "../../shared/review";
+import {
+  AGENT_HEADER,
+  AGENT_NAME_HEADER,
+  AgentNameSchema,
+} from "../../shared/review";
 import { registerReviewTools } from "./reviewTools";
 import {
   AnnotationInputSchema,
@@ -72,6 +77,11 @@ export function createMcpServer(options: McpOptions = {}) {
         headers: {
           origin: baseUrl,
           [AGENT_HEADER]: options.agentToken ?? "external",
+          [AGENT_NAME_HEADER]: encodeURIComponent(
+            AgentNameSchema.parse(
+              server.server.getClientVersion()?.name ?? "Agent",
+            ),
+          ),
           ...(body !== undefined && { "content-type": "application/json" }),
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -317,23 +327,77 @@ export function createMcpServer(options: McpOptions = {}) {
   return Object.assign(server, { toolRegistry });
 }
 
-export function createMcpHttpHandler(options: McpOptions = {}) {
-  return async (request: Request): Promise<Response> => {
-    const server = createMcpServer(options);
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    await server.connect(transport);
-    try {
-      const response = await transport.handleRequest(request);
-      const body = response.body ? await response.arrayBuffer() : null;
-      return new Response(body, {
-        status: response.status,
-        headers: response.headers,
+// Allow long gaps between agent calls. A request in flight never counts as idle.
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+const sessionClock = {
+  after(delay: number, run: () => void) {
+    const timer = setTimeout(run, delay);
+    timer.unref();
+    return () => clearTimeout(timer);
+  },
+};
+
+export function createMcpHttpHandler(
+  options: McpOptions = {},
+  clock = sessionClock,
+) {
+  const sessions = new Map<
+    string,
+    {
+      server: ReturnType<typeof createMcpServer>;
+      transport: WebStandardStreamableHTTPServerTransport;
+      active: number;
+      cancelExpiry(): void;
+    }
+  >();
+  const handler = async (request: Request): Promise<Response> => {
+    const id = request.headers.get("mcp-session-id");
+    let session = id ? sessions.get(id) : undefined;
+    if (id && !session)
+      return new Response("MCP session not found.", { status: 404 });
+    if (!session) {
+      const server = createMcpServer(options);
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: randomUUID,
+        enableJsonResponse: true,
+        onsessioninitialized: (id) => {
+          sessions.set(id, created);
+        },
       });
+      const created = { server, transport, active: 0, cancelExpiry: () => {} };
+      transport.onclose = () => {
+        created.cancelExpiry();
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      session = created;
+    }
+    const current = session;
+    current.cancelExpiry();
+    current.active++;
+    try {
+      const response = await current.transport.handleRequest(request);
+      if (!current.transport.sessionId || request.method === "DELETE")
+        await current.server.close();
+      return response;
     } finally {
-      await server.close();
+      current.active--;
+      if (
+        !current.active &&
+        sessions.get(current.transport.sessionId ?? "") === current
+      ) {
+        current.cancelExpiry = clock.after(SESSION_IDLE_MS, () => {
+          void current.server
+            .close()
+            .catch((error: unknown) =>
+              console.error("MCP session expiry failed:", error),
+            );
+        });
+      }
     }
   };
+  return Object.assign(handler, {
+    dispose: () =>
+      Promise.all([...sessions.values()].map(({ server }) => server.close())),
+  });
 }

@@ -1,3 +1,4 @@
+import { projectEditedAt } from "./edited";
 import { randomUUID } from "node:crypto";
 import {
   copyFile,
@@ -290,8 +291,15 @@ export async function createProjectStore(options: {
   return {
     dataDir,
     projectsDir,
-    list: async () =>
-      [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    list: async () => {
+      const current = await Promise.all(
+        projects.map(async (project) => ({
+          ...project,
+          updatedAt: await projectEditedAt(project),
+        })),
+      );
+      return current.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    },
     get,
     history,
     readHistory: (project: Project) =>

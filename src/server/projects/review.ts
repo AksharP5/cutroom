@@ -508,6 +508,11 @@ export function createReviewService(store: ProjectStore) {
           noteIds,
           at,
           by: actor ? ("agent" as const) : ("human" as const),
+          ...(actor && {
+            agentName:
+              (actor.kind === "agent" ? actor.turn.name : undefined) ??
+              (entry?.who.kind === "agent" ? entry.who.name : "Agent"),
+          }),
           accepted: !actor,
         })),
     );

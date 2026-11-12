@@ -69,7 +69,8 @@ test("E cuts video under an id-animated title, reports the skip, and undoes in o
   });
   await page.keyboard.press("e");
   await expect.poll(async () => (await read()).timeline.clips.length).toBe(3);
-  await expect(page.getByRole("alert").locator("span")).toHaveText(
+  await page.screenshot({ path: info.outputPath("partial-notice.png") });
+  await expect(page.getByRole("status").locator("span")).toHaveText(
     "Cut 1 clip. Lower third left whole.",
   );
   await expect(page.locator("[data-clip]")).toHaveCount(3);
