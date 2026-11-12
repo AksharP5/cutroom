@@ -1,0 +1,23 @@
+{
+  "runtime": "Bun 1.4.4",
+  "clips": 500,
+  "bytes": 74761,
+  "medianMs": {
+    "parse": 6.19,
+    "apply": 2.01,
+    "multiRangeApply": 3.33,
+    "patch": 2.28,
+    "request": 54.81,
+    "bulkApply": 1.45,
+    "bulkPatch": 5.62
+  },
+  "budgetMs": {
+    "parse": 10,
+    "apply": 5,
+    "multiRangeApply": 15,
+    "patch": 5,
+    "request": 50,
+    "bulkApply": 20,
+    "bulkPatch": 20
+  }
+}

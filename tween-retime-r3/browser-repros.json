@@ -1,0 +1,97 @@
+[
+  {
+    "r3": "nested",
+    "before": {
+      "mode": "CSS1Compat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 4
+        },
+        {
+          "id": "cta",
+          "host": "child",
+          "at": 4
+        }
+      ]
+    },
+    "after": {
+      "mode": "CSS1Compat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 4
+        },
+        {
+          "id": "cta",
+          "host": "child",
+          "at": 4
+        }
+      ]
+    },
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r3": "quirks",
+    "before": {
+      "mode": "BackCompat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 4
+        },
+        {
+          "id": "CTA",
+          "host": "main",
+          "at": 4
+        }
+      ]
+    },
+    "after": {
+      "mode": "BackCompat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 4
+        },
+        {
+          "id": "CTA",
+          "host": "main",
+          "at": 4
+        }
+      ]
+    },
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r3": "precision",
+    "before": {
+      "mode": "CSS1Compat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 10000000000000000
+        }
+      ]
+    },
+    "after": {
+      "mode": "CSS1Compat",
+      "tweens": [
+        {
+          "id": "cta",
+          "host": "main",
+          "at": 10000000000000000
+        }
+      ]
+    },
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  }
+]

@@ -1,0 +1,130 @@
+{
+  "head": "ce0fa40af1bdf0100a3859a7859d748174e88699",
+  "base": "259cb24037ee4d08ecd5a6c082b6e61299a1e405",
+  "reviewedHead": "b5dc0e53a2e0760b7d0ee2fedb4631dce94fc9d5",
+  "reviewedHeadRepros": {
+    "unitPassed": 3,
+    "unitFailed": 7,
+    "browserFailed": 3
+  },
+  "final": {
+    "unitPassed": 702,
+    "unitSkipped": 5,
+    "unitFailed": 0,
+    "browserPassed": 332,
+    "browserFailed": 0,
+    "performancePassed": 7,
+    "performanceFailed": 0,
+    "types": "pass",
+    "format": "pass",
+    "build": "pass",
+    "diff": "pass"
+  },
+  "performanceOrder": "Full unit, full browser, sequential Bun benchmarks, then test:perf alone",
+  "densePatch": {
+    "clips": 500,
+    "tweens": 500,
+    "rewrites": 499,
+    "bytes": 71657,
+    "medianMs": 11.256150000001071,
+    "budgetMs": 20,
+    "runtime": "v26.13.0",
+    "times": [
+      17.003395999985514,
+      13.559020999993663,
+      11.280079999996815,
+      14.175800999975763,
+      9.380364000011468,
+      13.535952000005636,
+      9.576444000005722,
+      9.397434999991674,
+      11.52105599999777,
+      9.00313900000765,
+      12.1946750000061,
+      11.625697000010405,
+      12.016969000018435,
+      9.50328500001342,
+      9.08609600001364,
+      14.832334000006085,
+      9.19230600001174,
+      11.256150000001071,
+      8.619169000012334,
+      11.460158000001684,
+      8.867194999998901,
+      8.444370999990497,
+      11.044938999984879,
+      13.77793300000485,
+      11.513506000017514,
+      8.91308100000606,
+      8.446731000003638,
+      12.219920000003185,
+      8.557337000005646,
+      11.259095000015805,
+      8.652797999995528
+    ]
+  },
+  "browserRippleMedianMaxMs": {
+    "400": 62.599999994039536,
+    "500": 66.40000000596046
+  },
+  "benchmarkMain": {
+    "runtime": "Bun 1.4.4",
+    "clips": 500,
+    "bytes": 74761,
+    "medianMs": {
+      "parse": 6.19,
+      "apply": 2.01,
+      "multiRangeApply": 3.33,
+      "patch": 2.28,
+      "request": 54.81,
+      "bulkApply": 1.45,
+      "bulkPatch": 5.62
+    },
+    "budgetMs": {
+      "parse": 10,
+      "apply": 5,
+      "multiRangeApply": 15,
+      "patch": 5,
+      "request": 50,
+      "bulkApply": 20,
+      "bulkPatch": 20
+    }
+  },
+  "benchmarkHead": {
+    "runtime": "Bun 1.4.4",
+    "clips": 500,
+    "bytes": 74761,
+    "animatedBytes": 112648,
+    "animationScriptBytes": 37870,
+    "medianMs": {
+      "parse": 5.88,
+      "apply": 1.93,
+      "multiRangeApply": 3.2,
+      "patch": 2.32,
+      "animatedPatch": 7.91,
+      "animatedMove": 4.1,
+      "denseTweenPatch": 6.13,
+      "request": 55.36,
+      "bulkApply": 1.45,
+      "bulkPatch": 6.07
+    },
+    "budgetMs": {
+      "parse": 10,
+      "apply": 5,
+      "multiRangeApply": 15,
+      "patch": 5,
+      "animatedPatch": 20,
+      "animatedMove": 15,
+      "denseTweenPatch": 20,
+      "request": 50,
+      "bulkApply": 20,
+      "bulkPatch": 20
+    }
+  },
+  "knownBenchmarkFailure": "Request exceeds 50 ms on both main (54.81 ms) and head (55.36 ms). All other Bun benchmark budgets and all CI performance gates pass.",
+  "exportEvidence": {
+    "before": "Supplied R3 review 11-after-export.png at five seconds after parent move 4 to 6",
+    "after": "Fresh full-suite MP4 export at five seconds, child retains half opacity",
+    "checkpoint": "Fresh full-suite editor and exported frame after W ripple moves CTA from 36 to 24:11"
+  }
+}
