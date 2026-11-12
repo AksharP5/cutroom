@@ -494,6 +494,11 @@ export function createHyperframesApi(
       if (path === "preview" || path.startsWith("preview/comp/")) {
         const rendered = await reviews.animationDocument(
           await store.get(projectId),
+          path === "preview"
+            ? "index.html"
+            : decodeURIComponent(
+                path.slice("preview/comp/".length).split("?")[0]!,
+              ),
           async () => {
             const response = await request();
             // Consume the document inside the queue that owns its revision.

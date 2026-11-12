@@ -1,8 +1,20 @@
-import { createAnimationBaselines } from "./animation";
+import {
+  AnimationEditSchema,
+  checkAnimationEdit,
+  animationWarnings,
+} from "./animation";
+import type {
+  AnimationCheck,
+  AnimationResult,
+  AnimationSnapshot,
+} from "./animation";
 import type { TweenWindows } from "../../shared/preview";
 import type { Timeline } from "../../shared/timeline/schema";
 import { randomUUID } from "node:crypto";
-import type { ProjectHistory } from "@hyperframes/studio-server";
+import type {
+  HistoryListItem,
+  ProjectHistory,
+} from "@hyperframes/studio-server";
 import {
   mkdir,
   readdir,
@@ -48,6 +60,7 @@ import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
+  animationEdits: z.array(AnimationEditSchema).default([]),
   clipEdits: z
     .array(
       ClipEditSchema.omit({ resolution: true }).extend({
@@ -148,6 +161,40 @@ function find(items: ReviewItem[], id: string) {
  * note's content that could race one (delete, edit, undo, redo), runs in one queue per project.
  */
 export function createReviewService(store: ProjectStore) {
+  const animationReports = new Map<string, TweenWindows>();
+  const pendingAnimations = new Map<
+    string,
+    { historyId: string; checks: AnimationCheck[] }
+  >();
+  const reportingAnimations = new Map<
+    string,
+    Promise<{
+      revision: string;
+      timeline: Timeline;
+      warnings: { clipId: string; time: number }[];
+    } | null>
+  >();
+  const reportKey = (project: Project, composition: string, revision: string) =>
+    JSON.stringify([project.id, composition, revision]);
+  const activeAnimationResults = (
+    state: ReviewFile,
+    history: HistoryListItem[],
+    composition: string,
+    before?: string,
+  ): AnimationResult[] => {
+    const results = new Map<string, AnimationResult>();
+    for (const entry of history) {
+      if (entry.id === before) break;
+      if (entry.undone) continue;
+      const edit = state.animationEdits.find(
+        (edit) =>
+          edit.historyId === entry.id && edit.composition === composition,
+      );
+      for (const result of edit?.results ?? [])
+        results.set(result.clipId, result);
+    }
+    return [...results.values()];
+  };
   const turns = new Map<string, ReviewTurn>();
   const queues = new Map<string, Promise<unknown>>();
   // Outside MCP clients act in this server's lifetime; their claims return to the queue after a restart.
@@ -182,7 +229,13 @@ export function createReviewService(store: ProjectStore) {
         throw error;
       });
     if (raw === null)
-      return { schemaVersion: 1, items: [], changes: [], clipEdits: [] };
+      return {
+        schemaVersion: 1,
+        items: [],
+        changes: [],
+        clipEdits: [],
+        animationEdits: [],
+      };
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -327,6 +380,7 @@ export function createReviewService(store: ProjectStore) {
     const visible = new Set(next.map((item) => item.id));
     const written: ReviewFile = {
       schemaVersion: 1,
+      animationEdits: state.animationEdits,
       clipEdits: acceptEdits(
         state.clipEdits,
         new Set(
@@ -551,10 +605,6 @@ export function createReviewService(store: ProjectStore) {
     }
     return snapshot;
   };
-  // The review queue serializes source observations with commands and history restores.
-  const animationBaselines = createAnimationBaselines(store.persistState);
-  const observeAnimations = async (project: Project, preserve = false) =>
-    animationBaselines.observe(project, await readAssets(project), preserve);
   const recordAssets = async (
     project: Project,
     before: AssetSnapshot,
@@ -708,13 +758,11 @@ export function createReviewService(store: ProjectStore) {
       token: string | undefined,
       work: () => Promise<T>,
       noteId?: string,
-      timelineCommand = false,
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
         await projectWritePath(project, composition);
         composition = posix.normalize(composition.replaceAll("\\", "/"));
-        await observeAnimations(project);
         let items: ReviewItem[];
         let before: ClipVersions;
         try {
@@ -727,7 +775,6 @@ export function createReviewService(store: ProjectStore) {
             error instanceof ProjectDocumentError
           ) {
             const result = await work();
-            await observeAnimations(project, timelineCommand);
             return result;
           }
           throw error;
@@ -756,7 +803,6 @@ export function createReviewService(store: ProjectStore) {
           (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
         );
         const result = await work();
-        await observeAnimations(project, timelineCommand);
         const after = await clipVersions(project, composition);
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
@@ -776,41 +822,125 @@ export function createReviewService(store: ProjectStore) {
         );
         return result;
       }),
-    animationDocument: <T>(project: Project, render: () => Promise<T>) =>
+    animationSnapshot: async (
+      project: Project,
+      composition: string,
+      timeline: Timeline,
+    ): Promise<AnimationSnapshot | undefined> => {
+      const { sourceVersion } = await compositionVersions(project, composition);
+      const windows = animationReports.get(
+        reportKey(project, composition, sourceVersion),
+      );
+      return windows ? { timeline, windows } : undefined;
+    },
+    /** Called inside editComposition, after the content history window has closed. */
+    recordAnimationEdit: async (
+      project: Project,
+      composition: string,
+      checks: AnimationCheck[],
+    ) => {
+      if (!checks.length) return;
+      const entry = (await store.history(project)).list().at(-1);
+      if (!entry || entry.undoes || entry.restoredTo) return;
+      const { sourceVersion } = await compositionVersions(project, composition);
+      pendingAnimations.set(reportKey(project, composition, sourceVersion), {
+        historyId: entry.id,
+        checks,
+      });
+      if (pendingAnimations.size > 8)
+        pendingAnimations.delete(pendingAnimations.keys().next().value!);
+    },
+    animationDocument: <T>(
+      project: Project,
+      composition: string,
+      render: () => Promise<T>,
+    ) =>
       serialize(project, async () => {
-        const { revision } = await observeAnimations(project);
+        const before = (await compositionVersions(project, composition))
+          .sourceVersion;
         const document = await render();
-        const after = await observeAnimations(project);
-        return {
-          document,
-          revision: after.revision === revision ? revision : null,
-        };
+        const after = (await compositionVersions(project, composition))
+          .sourceVersion;
+        return { document, revision: before === after ? before : null };
       }),
-    animationReport: <T extends { timeline: Timeline }>(
+    animationReport: (
       project: Project,
       composition: string,
       revision: string,
       windows: TweenWindows,
-      read: () => Promise<T>,
-    ) =>
-      serialize(project, async () => {
-        if ((await observeAnimations(project)).revision !== revision)
+      read: () => Promise<{ revision: string; timeline: Timeline }>,
+    ) => {
+      const key = reportKey(project, composition, revision);
+      // Cache immediately. Reports never join the client's command queue or wait on a debounce.
+      animationReports.delete(key);
+      animationReports.set(key, windows);
+      if (animationReports.size > 8) {
+        const oldest = animationReports.keys().next().value!;
+        animationReports.delete(oldest);
+        pendingAnimations.delete(oldest);
+      }
+      const pending = reportingAnimations.get(key);
+      if (pending) return pending;
+      const work = serialize(project, async () => {
+        if (
+          (await compositionVersions(project, composition)).sourceVersion !==
+          revision
+        )
           return null;
         const view = await read();
+        const history = (await store.history(project)).list();
+        const state = await readState(project);
+        const check = pendingAnimations.get(key);
+        const entry = check
+          ? history.find((entry) => entry.id === check.historyId)
+          : history.at(-1);
+        const previous = activeAnimationResults(
+          state,
+          history,
+          composition,
+          entry?.id,
+        );
+        if (entry && !entry.undone && !entry.undoes && !entry.restoredTo) {
+          const results = checkAnimationEdit(
+            { timeline: view.timeline, windows: animationReports.get(key)! },
+            check?.historyId === entry.id ? check.checks : [],
+            previous,
+          );
+          const saved = state.animationEdits.find(
+            (edit) =>
+              edit.historyId === entry.id && edit.composition === composition,
+          );
+          if (
+            JSON.stringify(saved?.results ?? previous) !==
+            JSON.stringify(results)
+          ) {
+            if (saved) saved.results = results;
+            else
+              state.animationEdits.push({
+                historyId: entry.id,
+                composition,
+                results,
+              });
+            await writeState(project, state);
+          }
+        }
         return {
           ...view,
-          offsets: await animationBaselines.report(
-            project,
-            composition,
-            view.timeline,
-            windows,
+          warnings: animationWarnings(
+            checkAnimationEdit(
+              { timeline: view.timeline, windows: animationReports.get(key)! },
+              [],
+              activeAnimationResults(state, history, composition),
+            ),
           ),
         };
-      }),
+      }).finally(() => reportingAnimations.delete(key));
+      reportingAnimations.set(key, work);
+      return work;
+    },
     clipChanges: (project: Project, composition: string) =>
       serialize(project, async () => ({
         ...(await clipChanges(project, composition)),
-        animationIntent: (await observeAnimations(project)).intent,
       })),
     /** The projection and its attribution must describe the same admitted source edits. */
     readComposition: <T extends object>(
@@ -821,7 +951,6 @@ export function createReviewService(store: ProjectStore) {
       serialize(project, async () => ({
         ...(await read()),
         ...(await clipChanges(project, composition)),
-        animationIntent: (await observeAnimations(project)).intent,
       })),
     acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
@@ -1009,9 +1138,7 @@ export function createReviewService(store: ProjectStore) {
               allowMissing: true,
             });
           }
-          await observeAnimations(project);
           const result = await change();
-          await observeAnimations(project, true);
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });

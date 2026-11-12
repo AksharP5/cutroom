@@ -4,7 +4,6 @@ import type {
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
-import type { TweenWindows } from "../../shared/preview";
 import type { EditorReviewDraft } from "../../shared/editor";
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
@@ -196,55 +195,8 @@ export function outsideMessage(
     : `${actor} updated timeline.`;
 }
 
-/** Known-good tween offsets survive commands, undo, and redo. Only source edits redefine intent. */
-export type AnimationBaseline = ReadonlyMap<
-  string,
-  ReadonlyMap<string, number>
->;
-
-export function animationOffsets(timeline: Timeline, windows: TweenWindows) {
-  return new Map(
-    timeline.clips.map((clip) => {
-      const origin =
-        toSeconds(clip.start, timeline.fps) -
-        (clip.mediaStart ?? clip.animationInPoint ?? 0) / clip.playbackRate;
-      return [
-        clip.id,
-        new Map(
-          (Object.hasOwn(windows, clip.id) ? windows[clip.id]! : []).map(
-            ([id, start]) => [id, start - origin],
-          ),
-        ),
-      ];
-    }),
-  );
-}
-
-export function animationFeedback(
-  timeline: Timeline,
-  windows: TweenWindows,
-  baseline: AnimationBaseline,
-) {
-  const offsets = animationOffsets(timeline, windows);
-  return timeline.clips.flatMap((clip) => {
-    const known =
-      baseline.get(clip.id) ??
-      (clip.animationSource ? baseline.get(clip.animationSource) : undefined);
-    const changed = (
-      Object.hasOwn(windows, clip.id) ? windows[clip.id]! : []
-    ).find(([id]) => {
-      const offset = known?.get(id);
-      return (
-        offset !== undefined &&
-        Math.abs(offsets.get(clip.id)!.get(id)! - offset) > 0.002
-      );
-    });
-    return changed ? [{ clip, time: changed[1] }] : [];
-  });
-}
-
 export function animationMessage(
-  clips: ReturnType<typeof animationFeedback>,
+  clips: { clip: Clip; time: number }[],
   fps: Timeline["fps"],
 ) {
   const first = clips[0]!;

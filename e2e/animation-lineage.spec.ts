@@ -19,7 +19,7 @@ async function open(
 ) {
   const project = await (
     await request.post("/api/cutroom/projects", {
-      data: { name: "Animation baseline regressions" },
+      data: { name: "Animation document regressions" },
     })
   ).json();
   await writeFile(join(project.path, "index.html"), html(script, attrs));
@@ -70,7 +70,7 @@ async function open(
   return { command, edit, warning, select, source };
 }
 
-test("unobserved source then command stays unverified until a clean source revision", async ({
+test("unobserved source move stays silent; a later move uses its own before report", async ({
   page,
   request,
 }) => {
@@ -96,8 +96,7 @@ test("unobserved source then command stays unverified until a clean source revis
   await page.waitForTimeout(1000);
   await expect(p.warning).toHaveCount(0);
   await p.edit([{ type: "move", clipIds: ["title"], by: 30 }]);
-  await page.waitForTimeout(700);
-  await expect(p.warning).toHaveCount(0);
+  await expect(p.warning).toBeVisible();
   await afterPaint(page, () =>
     p.source((s) => s.replace("duration:1},7)", "duration:1},9)")),
   );

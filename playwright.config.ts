@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig } from "@playwright/test";
 
-const port = 4321;
+const port = Number(process.env.CUTROOM_E2E_PORT ?? 4321);
 const testRoot = process.env.CUTROOM_E2E_DIR ?? resolve(".cutroom-dev/e2e");
 const executablePath =
   process.env.CUTROOM_BROWSER_PATH ||

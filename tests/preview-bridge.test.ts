@@ -180,11 +180,11 @@ test.skipIf(!browserExecutable())(
         Object.fromEntries(
           Object.entries(report.windows).map(([id, pairs]) => [
             id,
-            pairs.map(([, start]) => start),
+            pairs.flatMap(([, starts]) => starts),
           ]),
         ),
       ).toEqual({
-        literal: [36],
+        literal: [36, 40],
         loop: [6, 6.15],
         helper: [12, 13.25],
         constructor: [18],

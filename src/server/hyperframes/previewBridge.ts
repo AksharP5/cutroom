@@ -39,7 +39,6 @@ interface PreviewWindow extends Window {
 function animationWindows(
   root: Element,
   registry: Record<string, gsap.core.Timeline | undefined>,
-  creation = new WeakMap<object, number>(),
 ): TweenWindows {
   const rootId = root.getAttribute("data-composition-id") ?? "";
   const timeline = registry[rootId];
@@ -78,89 +77,40 @@ function animationWindows(
       ",",
     ),
   );
-  const identity = (content: string) => {
-    let a = 0xdeadbeef;
-    let b = 0x41c6ce57;
-    for (let i = 0; i < content.length; i++) {
-      const c = content.charCodeAt(i);
-      a = Math.imul(a ^ c, 2654435761);
-      b = Math.imul(b ^ c, 1597334677);
-    }
-    a =
-      Math.imul(a ^ (a >>> 16), 2246822507) ^
-      Math.imul(b ^ (b >>> 13), 3266489909);
-    b =
-      Math.imul(b ^ (b >>> 16), 2246822507) ^
-      Math.imul(a ^ (a >>> 13), 3266489909);
-    return (4294967296 * (b & 2097151) + (a >>> 0)).toString(36);
-  };
-  const groups = new Map<
-    string,
-    Map<string, { start: number; order: number }[]>
-  >();
+  const groups = new Map<string, Map<string, number[]>>();
   const registered = new Set(Object.values(registry));
-  let nextOrder = 0;
-  const visit = (
-    parent: gsap.core.Timeline,
-    offset: number,
-    rate: number,
-    timelineId: string,
-  ) => {
-    const descriptors = new Map<string, Map<number, Map<string, string>>>();
+  const visit = (parent: gsap.core.Timeline, offset: number, rate: number) => {
     const record = (
       id: string,
       paths: string[],
       properties: string[],
-      child: gsap.core.Tween,
       start: number,
     ) => {
-      const propertyKey = JSON.stringify(properties);
-      const duration = child.duration();
-      const durations =
-        descriptors.get(propertyKey) ?? new Map<number, Map<string, string>>();
-      const targets = durations.get(duration) ?? new Map<string, string>();
-      // Clip-local paths start with '.', so a single path cannot alias a JSON array of paths.
-      const targetKey = paths.length === 1 ? paths[0]! : JSON.stringify(paths);
-      let key = targets.get(targetKey);
-      if (!key) {
-        key = identity(
-          JSON.stringify([timelineId, paths, properties, duration]),
-        );
-        targets.set(targetKey, key);
-        durations.set(duration, targets);
-        descriptors.set(propertyKey, durations);
-      }
-      const clip = groups.get(id) ?? new Map();
-      const matches = clip.get(key) ?? [];
-      matches.push({ start, order: creation.get(child)! });
-      clip.set(key, matches);
-      groups.set(id, clip);
+      const key = JSON.stringify([paths, properties]);
+      let clip = groups.get(id);
+      if (!clip) groups.set(id, (clip = new Map()));
+      let starts = clip.get(key);
+      if (!starts) clip.set(key, (starts = []));
+      starts.push(start);
     };
     for (const child of parent.getChildren(false, true, true)) {
       const start = offset + child.startTime() / rate;
       const childRate = rate * child.timeScale();
       if (!Number.isFinite(start) || childRate <= 0) continue;
       if ("getChildren" in child) {
-        if (!registered.has(child))
-          visit(
-            child,
-            start,
-            childRate,
-            `${timelineId}/${child.vars.id ?? ""}`,
-          );
+        if (!registered.has(child)) visit(child, start, childRate);
         continue;
       }
-      if (child.duration() <= 0) continue;
       const targets: unknown[] = child.targets();
       const properties = Object.keys(child.vars).filter(
         (key) => !reserved.has(key) && key !== "css",
       );
       if (child.vars.css) properties.push(...Object.keys(child.vars.css));
       properties.sort();
-      if (!creation.has(child)) creation.set(child, nextOrder++);
+      if (!properties.length) continue;
       const first = targets[0] instanceof Element ? owner(targets[0]) : null;
       if (targets.length === 1) {
-        if (first) record(first.id, first.paths, properties, child, start);
+        if (first) record(first.id, first.paths, properties, start);
         continue;
       }
       const paths = new Map<string, Set<string>>();
@@ -173,19 +123,11 @@ function animationWindows(
         }
       }
       for (const [id, targets] of paths)
-        record(id, [...targets].sort(), properties, child, start);
+        record(id, [...targets].sort(), properties, start);
     }
   };
-  visit(timeline, 0, 1, rootId);
-  for (const [id, clip] of groups) {
-    windows[id] = [];
-    for (const [key, matches] of clip) {
-      if (matches.length > 1) matches.sort((a, b) => a.order - b.order);
-      matches.forEach(({ start }, index) =>
-        windows[id]!.push([index ? `${key}:${index}` : key, start]),
-      );
-    }
-  }
+  visit(timeline, 0, 1);
+  for (const [id, clip] of groups) windows[id] = [...clip];
   return windows;
 }
 
@@ -199,8 +141,6 @@ function installPreviewBridge(
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
-  const creation = new WeakMap<object, number>();
-  let creationOrder = 0;
   let windowReport: Promise<void> | null = null;
   const reportWindows = () => {
     if (windowReport) return windowReport;
@@ -224,9 +164,7 @@ function installPreviewBridge(
           source: "cutroom-preview",
           type: "animation-windows",
           revision,
-          windows: root
-            ? readWindows(root, runtime.__timelines ?? {}, creation)
-            : {},
+          windows: root ? readWindows(root, runtime.__timelines ?? {}) : {},
         },
         "*",
       );
@@ -248,8 +186,7 @@ function installPreviewBridge(
   const remember = (
     child: ReturnType<gsap.core.Timeline["recent"]> | undefined,
   ) => {
-    if (!child || typeof child === "function" || creation.has(child)) return;
-    creation.set(child, creationOrder++);
+    if (!child || typeof child === "function") return;
     if ("getChildren" in child) watchTimeline(child as gsap.core.Timeline);
   };
   const wrapMethods = (target: gsap.core.Timeline) => {

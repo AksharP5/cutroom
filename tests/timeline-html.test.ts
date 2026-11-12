@@ -203,19 +203,11 @@ test("split, ripple delete, and insert round-trip without touching other markup"
           .replace(`id="talk"`, `id="talk-2"`)
           .replaceAll(`"lk-1"`, `"lk-2"`)
           .replace(`data-duration="6"`, `data-duration="4"`)
-          .replace(`data-media-start="1"`, `data-media-start="3"`)
-          .replace(
-            `></video>`,
-            ` data-cutroom-animation-source="talk"></video>`,
-          )}\n  ${voice
+          .replace(`data-media-start="1"`, `data-media-start="3"`)}\n  ${voice
           .replace(`id="voice"`, `id="voice-2"`)
           .replaceAll(`"lk-1"`, `"lk-2"`)
           .replace(`data-duration="6"`, `data-duration="4"`)
-          .replace(`data-media-start="1"`, `data-media-start="3"`)
-          .replace(
-            `></audio>`,
-            ` data-cutroom-animation-source="voice"></audio>`,
-          )}`,
+          .replace(`data-media-start="1"`, `data-media-start="3"`)}`,
       )
       .replace(
         title,
@@ -224,7 +216,7 @@ test("split, ripple delete, and insert round-trip without touching other markup"
           .replace(
             `data-duration="4"`,
             `data-duration="0.5"`,
-          )}\n  <DIV id='title-2' class=clip data-start=4.5 data-duration="3.5" data-track-index="1" data-playback-start="0.5" data-cutroom-animation-source="title"><b>Hi</b></DIV>`,
+          )}\n  <DIV id='title-2' class=clip data-start=4.5 data-duration="3.5" data-track-index="1" data-playback-start="0.5"><b>Hi</b></DIV>`,
       )
       .replace(
         `${after}\n`,
@@ -708,9 +700,9 @@ ${target}
       .toBe(`<main data-composition-id="main" data-duration="9.009" data-fps="30000/1001">
 ${kept}  <video id="next" src="next.mp4" data-start="2.002" data-duration="1.001" data-track-index="0"></video>
   <video id="span" src="span.mp4" data-link="av" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="1"></video>
-  <video id="span-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="1" data-cutroom-animation-source="span"></video>
+  <video id="span-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="1"></video>
   <audio id="sound" src="span.mp4" data-link="av" data-start="0" data-duration="1.001" data-media-start="1" data-track-index="2"></audio>
-  <audio id="sound-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="2" data-cutroom-animation-source="sound"></audio>
+  <audio id="sound-2" src="span.mp4" data-link="lk-1" data-start="1.001" data-duration="1.001" data-media-start="3.002" data-track-index="2"></audio>
   <video id="starts" src="starts.mp4" data-start="1.001" data-duration="1.001" data-media-start="3.001" data-playback-rate="2" data-track-index="3"></video>
   <video id="ends" src="ends.mp4" data-start="0" data-duration="1.001" data-track-index="4"></video>
 </main>

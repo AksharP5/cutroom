@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { clipOrigin } from "../projects/animation";
+import type { AnimationCheck, AnimationSnapshot } from "../projects/animation";
 import { TweenWindowsSchema } from "../../shared/preview";
 import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
 import { createTimelineViewStore } from "../projects/view";
@@ -81,6 +83,7 @@ export function createTimelineRoutes(
       composition: string;
       clipIds: string[];
       parsed: ParsedComposition;
+      animation?: AnimationSnapshot;
     }
   >();
   const views = createTimelineViewStore();
@@ -110,10 +113,7 @@ export function createTimelineRoutes(
     };
   };
 
-  const edit = async (
-    project: Project,
-    batch: CommandBatch,
-  ): Promise<TimelineView> => {
+  const edit = async (project: Project, batch: CommandBatch) => {
     const { composition } = batch;
     const current = await read(project, composition);
     if (current.revision !== batch.expectedRevision)
@@ -191,6 +191,36 @@ export function createTimelineRoutes(
         retired: await usedClipIds(project),
       }),
     );
+    const animation = await reviews.animationSnapshot(
+      project,
+      composition,
+      current.parsed.timeline,
+    );
+    const animationChecks: AnimationCheck[] = [];
+    for (const clip of timeline.clips) {
+      const origin = origins.get(clip.id);
+      const source =
+        origin && "clipboardId" in origin
+          ? clipboards.get(origin.clipboardId)?.animation
+          : animation;
+      const sourceId =
+        origin && "clipboardId" in origin
+          ? origin.clipId
+          : origin && "copyOf" in origin
+            ? origin.copyOf
+            : clip.id;
+      const before = source?.timeline.clips.find(
+        (clip) => clip.id === sourceId,
+      );
+      if (
+        source &&
+        before &&
+        Math.abs(
+          clipOrigin(clip, timeline) - clipOrigin(before, source.timeline),
+        ) > 0.002
+      )
+        animationChecks.push({ clipId: clip.id, sourceId, source });
+    }
     const html = patchComposition(current.parsed, timeline, origins, snapshots);
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
@@ -252,6 +282,7 @@ export function createTimelineRoutes(
       await store.writeDocument(project, current.document, files);
     } else if (files.length) store.writeFiles(project, files);
     return {
+      animationChecks,
       composition,
       revision: revisionOf(
         fileContentVersion(html),
@@ -338,6 +369,11 @@ export function createTimelineRoutes(
         composition: canonical(input.composition),
         clipIds: clips.map((clip) => clip.id),
         parsed: current.parsed,
+        animation: await reviews.animationSnapshot(
+          project,
+          canonical(input.composition),
+          current.parsed.timeline,
+        ),
       });
       return c.json({ id, clips });
     } catch (error) {
@@ -377,17 +413,23 @@ export function createTimelineRoutes(
           project,
           batch.composition,
           c.req.header(AGENT_HEADER),
-          () =>
-            store.mutate(
+          async () => {
+            const { animationChecks, ...view } = await store.mutate(
               project,
               batch.label,
               () => edit(project, batch),
               c.req.header(AGENT_HEADER)
                 ? { kind: "agent", name: "Agent" }
                 : undefined,
-            ),
+            );
+            await reviews.recordAnimationEdit(
+              project,
+              composition,
+              animationChecks,
+            );
+            return view;
+          },
           batch.noteId,
-          true,
         )),
         ...(await reviews.clipChanges(project, batch.composition)),
       });

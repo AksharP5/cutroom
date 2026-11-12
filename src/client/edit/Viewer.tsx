@@ -18,25 +18,14 @@ import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import { PictureSelect } from "./PictureSelect";
-import {
-  useTimeline,
-  afterTimelineEdits,
-  confirmedTimelineView,
-} from "./timeline";
+import { useTimeline, confirmedTimelineView } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
-import {
-  animationFeedback,
-  animationMessage,
-  animationReview,
-} from "./feedback";
+import { animationMessage, animationReview } from "./feedback";
 import { z } from "zod";
 import { api, json } from "../api";
-import {
-  AnimationWindowsSchema,
-  TweenWindowsSchema,
-} from "../../shared/preview";
+import { AnimationWindowsSchema } from "../../shared/preview";
 import { TimelineSchema } from "../../shared/timeline/schema";
 import { connectPreview, useAnimationWarnings } from "./preview";
 import { transitionHandoff } from "./viewerHandoff";
@@ -219,84 +208,96 @@ export function Viewer({
       !cancelled && latest.current === picture.gen && !preview.signal.aborted;
     const sample = async (report: z.infer<typeof AnimationWindowsSchema>) => {
       if (!current() || !report.revision) return;
-      await afterTimelineEdits(projectId, async () => {
-        if (!current()) return;
-        const view = confirmedTimelineView(projectId);
-        if (!view) return;
-        const result = await api(
-          `/projects/${encodeURIComponent(projectId)}/animation-windows`,
-          z
-            .object({
-              revision: z.string(),
-              timeline: TimelineSchema,
-              offsets: TweenWindowsSchema,
-            })
-            .nullable(),
-          json("POST", {
-            composition: view.composition,
-            revision: report.revision,
-            windows: report.windows,
-          }),
-        );
-        if (
-          !current() ||
-          !result ||
-          confirmedTimelineView(projectId)?.revision !== result.revision
-        )
-          return;
-        const { timeline } = result;
-        const baseline = new Map(
-          Object.entries(result.offsets).map(([id, pairs]) => [
-            id,
-            new Map(pairs),
-          ]),
-        );
-        const warnings = animationFeedback(timeline, report.windows, baseline);
-        const previous = useAnimationWarnings.getState().report?.warnings ?? [];
-        useAnimationWarnings.setState({ report: { timeline, warnings } });
-        const ids = new Set(warnings.map(({ clip }) => clip.id));
-        if ([...toastedClips.current].some((id) => !ids.has(id))) {
-          dismissAnimation.current();
-          toastedClips.current.clear();
-        }
-        const clips = warnings.filter(
-          ({ clip }) => !previous.some((item) => item.clip.id === clip.id),
-        );
-        if (clips.length) {
-          dismissAnimation.current();
-          toastedClips.current = new Set(clips.map(({ clip }) => clip.id));
-          dismissAnimation.current = showToast(
-            animationMessage(clips, timeline.fps),
-            {
-              label: "Ask agent",
-              run() {
-                dismissAnimation.current();
-                void (async () => {
-                  for (const { clip, time } of clips) {
-                    const { draft, body } = animationReview(
-                      clip,
-                      time,
-                      timeline.fps,
-                    );
-                    await saveNote.current(draft, body);
-                  }
-                })().catch((error: unknown) =>
-                  showToast(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                );
-              },
-            },
-            { tone: "info", priority: "attention" },
-          );
-        }
+      const view = confirmedTimelineView(projectId);
+      if (!view) return;
+      const result = await api(
+        `/projects/${encodeURIComponent(projectId)}/animation-windows`,
+        z
+          .object({
+            revision: z.string(),
+            timeline: TimelineSchema,
+            warnings: z.array(
+              z.object({ clipId: z.string(), time: z.number() }),
+            ),
+          })
+          .nullable(),
+        json("POST", {
+          composition: view.composition,
+          revision: report.revision,
+          windows: report.windows,
+        }),
+      );
+      if (
+        !current() ||
+        !result ||
+        confirmedTimelineView(projectId)?.revision !== result.revision
+      )
+        return;
+      const { timeline } = result;
+      const warnings = result.warnings.flatMap(({ clipId, time }) => {
+        const clip = timeline.clips.find((clip) => clip.id === clipId);
+        return clip ? [{ clip, time }] : [];
       });
+      const previous = useAnimationWarnings.getState().report?.warnings ?? [];
+      useAnimationWarnings.setState({ report: { timeline, warnings } });
+      const ids = new Set(warnings.map(({ clip }) => clip.id));
+      if ([...toastedClips.current].some((id) => !ids.has(id))) {
+        dismissAnimation.current();
+        toastedClips.current.clear();
+      }
+      const clips = warnings.filter(
+        ({ clip }) => !previous.some((item) => item.clip.id === clip.id),
+      );
+      if (clips.length) {
+        dismissAnimation.current();
+        toastedClips.current = new Set(clips.map(({ clip }) => clip.id));
+        dismissAnimation.current = showToast(
+          animationMessage(clips, timeline.fps),
+          {
+            label: "Ask agent",
+            run() {
+              dismissAnimation.current();
+              void (async () => {
+                for (const { clip, time } of clips) {
+                  const { draft, body } = animationReview(
+                    clip,
+                    time,
+                    timeline.fps,
+                  );
+                  await saveNote.current(draft, body);
+                }
+              })().catch((error: unknown) =>
+                showToast(
+                  error instanceof Error ? error.message : String(error),
+                ),
+              );
+            },
+          },
+          { tone: "info", priority: "attention" },
+        );
+      }
     };
     const fail = (error: unknown) => {
       if (current()) reportEditorError("viewer", error);
     };
+    let pending: z.infer<typeof AnimationWindowsSchema> | null = null;
+    let sending = false;
+    const follow = async (report: z.infer<typeof AnimationWindowsSchema>) => {
+      pending = report;
+      if (sending) return;
+      sending = true;
+      try {
+        while (pending && current()) {
+          const next = pending;
+          pending = null;
+          await sample(next);
+        }
+      } finally {
+        sending = false;
+      }
+    };
     const unsubscribe = preview.followAnimationWindows(
-      (report) => void sample(report).catch(fail),
+      (report) => void follow(report).catch(fail),
     );
     void preview.animationWindows().catch(fail);
     return () => {

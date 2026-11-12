@@ -630,9 +630,6 @@ export function parseComposition(
               playbackRate,
             )
           : null,
-      ...(element.attrs["data-cutroom-animation-source"] && {
-        animationSource: element.attrs["data-cutroom-animation-source"],
-      }),
       ...(animationInPoint !== null && { animationInPoint }),
       playbackRate,
       src:
@@ -939,11 +936,6 @@ function clipChanges(
     changes.push([
       "data-playback-start",
       String(canonicalSeconds(after.animationInPoint ?? 0)),
-    ]);
-  if (before.animationSource !== after.animationSource)
-    changes.push([
-      "data-cutroom-animation-source",
-      after.animationSource ?? null,
     ]);
   const mediaStart =
     after.mediaStart === null ? null : canonicalSeconds(after.mediaStart) + 0;

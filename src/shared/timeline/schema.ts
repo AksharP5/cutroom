@@ -74,8 +74,6 @@ export const ClipSchema = z.object({
   mediaStart: z.number().nonnegative().nullable(),
   /** In point for non-media clips, preserved by trims and cuts. */
   animationInPoint: z.number().finite().optional(),
-  /** Original clip whose known-good animation timing a cut or copy inherits. */
-  animationSource: clipId.optional(),
   playbackRate: z.number().positive(),
   src: z.string().nullable(),
   /** Length of the source media in seconds when it could be probed; video and audio only. */
@@ -500,7 +498,6 @@ export const TimelineViewSchema = z.object({
     .optional(),
   agentChanges: z.array(z.string()).optional(),
   clipEdits: z.array(ClipEditSchema).optional(),
-  animationIntent: z.string().optional(),
   composition: z.string(),
   revision: z.string(),
   timeline: TimelineSchema,

@@ -19,8 +19,7 @@ import type {
   PlaybackClock,
   PreviewState,
 } from "../../shared/preview";
-import type { Timeline } from "../../shared/timeline/schema";
-import type { animationFeedback } from "./feedback";
+import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
@@ -32,7 +31,7 @@ import { seekQueue } from "./seekQueue";
 export const useAnimationWarnings = create<{
   report: {
     timeline: Timeline;
-    warnings: ReturnType<typeof animationFeedback>;
+    warnings: { clip: Clip; time: number }[];
   } | null;
 }>(() => ({ report: null }));
 

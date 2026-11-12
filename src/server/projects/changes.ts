@@ -17,7 +17,6 @@ const signature = (content: string) =>
 type SourceVersions = {
   source: string;
   versions: ClipVersions;
-  animationClips: ReadonlyMap<string, string>;
   references: Map<string | null, Set<string>>;
 };
 // Reads dominate edits. Retain only the latest parse for eight compositions.
@@ -37,7 +36,6 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
   const previous = cache.get(cacheKey);
   if (previous?.source === source) return previous;
   const versions: ClipVersions = new Map();
-  const animationClips = new Map<string, string>();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
     if (!value.trim() || value.startsWith("#")) return;
@@ -51,13 +49,6 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     const parsed = parseComposition(source, emptyTimelineSettings(), {
       scope: compositionScope(composition),
     });
-    for (const clip of parsed.timeline.clips) {
-      const element = parsed.elements.get(clip.id)!;
-      animationClips.set(
-        clip.id,
-        signature(source.slice(element.start, element.end)),
-      );
-    }
     const clips = parsed.timeline.clips
       .filter((clip) => !parsed.anonymous.has(clip.id))
       .map((clip) => ({ ...clip, element: parsed.elements.get(clip.id)! }))
@@ -115,7 +106,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, animationClips, references: media };
+  const result = { source, versions, references: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);
@@ -226,7 +217,6 @@ export async function compositionVersions(
   );
   return {
     versions,
-    animationClips: parsed.animationClips,
     mediaFiles,
     references: paths,
     sourceVersion: signature(

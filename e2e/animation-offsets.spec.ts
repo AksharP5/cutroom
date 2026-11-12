@@ -43,7 +43,7 @@ async function open(
     "data-refit",
     "settled",
   );
-  // Allow the timer-built fixture to register and report its known-good offsets.
+  // Allow the timer-built fixture to register its before-edit report.
   await page.waitForTimeout(1500);
   const base = `/api/cutroom/projects/${project.id}`;
   const read = async () =>
@@ -171,7 +171,7 @@ test("head trim, tail trim and an infinite repeat stay silent; a later move stil
   await expect(p.warning).toBeVisible();
 });
 
-test("razor and paste keep shared class attribution and inherit the original offsets", async ({
+test("razor and paste compare shared class targets with their source clips", async ({
   page,
   request,
 }) => {
@@ -208,7 +208,7 @@ test("razor and paste keep shared class attribution and inherit the original off
   await expect(p.warning).toBeVisible();
 });
 
-test("source edits redefine intent, and the next command still warns", async ({
+test("source fixes clear warnings, and the next move is checked independently", async ({
   page,
   request,
 }) => {
@@ -386,7 +386,7 @@ test("500 clips and 10000 tweens produce an indexed compact report", async ({
     .evaluate((root, compiled) => {
       const read = new Function(`${compiled};return animationWindows;`)();
       const times: number[] = [];
-      let result: Record<string, [string, number][]> = {};
+      let result: Record<string, [string, number[]][]> = {};
       for (let i = 0; i < 5; i++) {
         const start = performance.now();
         result = read(root, Reflect.get(window, "__timelines"));
@@ -401,7 +401,8 @@ test("500 clips and 10000 tweens produce an indexed compact report", async ({
         }).length,
         clips: Object.keys(result).length,
         tweens: Object.values(result).reduce(
-          (n, values) => n + values.length,
+          (n, values) =>
+            n + values.reduce((sum, [, starts]) => sum + starts.length, 0),
           0,
         ),
       };

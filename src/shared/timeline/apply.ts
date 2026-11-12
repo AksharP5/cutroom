@@ -581,7 +581,6 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         return {
           ...clip,
           id,
-          animationSource: clip.animationSource ?? clip.id,
           start: command.at + clip.start - start,
           link: clip.link ? links.get(clip.link)! : null,
           startRef: null,
@@ -1389,7 +1388,6 @@ function splitClips(
     onCreate(id, { copyOf: clip.id });
     return {
       ...windowClip(clip, at, clipEnd(clip), fps),
-      animationSource: clip.animationSource ?? clip.id,
       id,
       startRef: null,
     };
