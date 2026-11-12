@@ -421,16 +421,23 @@ const TrackHeads = memo(function TrackHeads({
 }) {
   return rows.map((row) => {
     const { track, id, top, height } = row;
+    const name =
+      track.name ??
+      `${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`;
     return (
       <div
         key={track.index}
         className={`tl-head ${track.kind}`}
+        role="group"
+        aria-label={`${id}: ${name}`}
         data-row={track.index}
         data-compact={height < 40 ? "" : undefined}
         style={{ top, height: height + 1 }}
       >
         <div className="tl-head-title">
-          <span className="tl-head-id">{id}</span>
+          <span className="tl-head-id" title={name}>
+            {id}
+          </span>
           <input
             key={`${track.index}:${track.name}`}
             className="tl-head-name"

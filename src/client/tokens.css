@@ -193,13 +193,14 @@
   --ruler-pin-top: 2px;
   --ruler-label-top: 10px;
   --ruler-flag-top: 19px;
-  --size-track-head: 224px; /* compact names, meters and audio controls share one row */
+  --size-track-head: 132px;
   --size-track-video: 56px;
   --size-track-audio: 44px;
   --size-track-compact: 32px;
   --size-track-video-tall: 96px;
   --size-track-audio-tall: 80px;
   --size-track-button: 20px;
+  --size-track-button-compact: 18px;
   --size-clip-name: 14px;
   --size-filmstrip: 40px;
   --size-meter: 36px;

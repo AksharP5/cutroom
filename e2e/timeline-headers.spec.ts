@@ -51,6 +51,23 @@ async function createProject(
       })
     ).ok(),
   ).toBe(true);
+  const api = `/api/cutroom/projects/${project.id}`;
+  const view = TimelineViewSchema.parse(
+    await (await request.get(`${api}/timeline`)).json(),
+  );
+  expect(
+    (
+      await request.post(`${api}/commands`, {
+        data: {
+          expectedRevision: view.revision,
+          commands: [
+            { type: "setTrack", index: 0, name: "Interview picture" },
+            { type: "setTrack", index: 1, name: "Dialogue and voiceover" },
+          ],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
   return project;
 }
 
@@ -65,7 +82,7 @@ for (const [width, height] of [
         deviceScaleFactor: dpr,
         permissions: ["microphone"],
       });
-      test("names, icons and armed audio controls fit on one row", async ({
+      test("132 px headers show short codes and every toggle without overflow", async ({
         page,
         request,
       }) => {
@@ -84,6 +101,29 @@ for (const [width, height] of [
         });
         await page.goto(`/#project/${project.id}`);
         await expect(page.locator(".tl-head")).toHaveCount(8);
+        expect((await page.locator(".tl-heads").boundingBox())!.width).toBe(
+          132,
+        );
+        const picture = page.getByRole("group", {
+          name: "V1: Interview picture",
+          exact: true,
+        });
+        const audio = page.getByRole("group", {
+          name: "A1: Dialogue and voiceover",
+          exact: true,
+        });
+        await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+        await expect(picture.locator(".tl-head-id")).toHaveAttribute(
+          "title",
+          "Interview picture",
+        );
+        await expect(audio.locator(".tl-head-id")).toHaveAttribute(
+          "title",
+          "Dialogue and voiceover",
+        );
+        await expect(page.locator(".tl-head-name:visible")).toHaveCount(0);
+        await expect(picture.locator("button:visible")).toHaveCount(3);
+        await expect(audio.locator("button:visible")).toHaveCount(6);
         for (const armed of [false, true]) {
           if (armed) {
             await page
@@ -94,17 +134,17 @@ for (const [width, height] of [
             ).toHaveAttribute("aria-pressed", "true");
             await expect(
               page.locator(".tl-head-title > .tl-meters-compact"),
-            ).toHaveCount(1);
+            ).toBeHidden();
           }
           const controls = await page.locator(".tl-head").evaluateAll((rows) =>
             rows.flatMap((row) => {
               const bounds = row.getBoundingClientRect();
-              const name = row
-                .querySelector(".tl-head-name")!
+              const code = row
+                .querySelector(".tl-head-id")!
                 .getBoundingClientRect();
               return [
                 ...row.querySelectorAll(
-                  ".tl-track-button, .vo-input, .tl-head-name, .tl-head-title > .tl-meters-compact, .tl-track-button > svg, .vo-input > svg",
+                  ".tl-track-button, .vo-input, .tl-head-id, .tl-track-button > svg, .vo-input > svg",
                 ),
               ].map((element) => {
                 const box = element.getBoundingClientRect();
@@ -120,7 +160,7 @@ for (const [width, height] of [
                   height: box.height,
                   width: box.width,
                   centerOffset: Math.abs(
-                    box.top + box.height / 2 - name.top - name.height / 2,
+                    box.top + box.height / 2 - code.top - code.height / 2,
                   ),
                   button: element.matches("button"),
                 };
@@ -138,8 +178,7 @@ for (const [width, height] of [
               0.5,
             );
             expect(control.width, control.label).toBeGreaterThan(10);
-            if (control.button)
-              expect(control.height, control.label).toBeGreaterThanOrEqual(20);
+            if (control.button) expect(control.height, control.label).toBe(18);
           }
           await page.screenshot({
             path: test
@@ -266,4 +305,46 @@ test("track density uses the shared menu keyboard controls", async ({
   await expect(
     page.getByRole("separator", { name: "Height V1", exact: true }),
   ).toHaveAttribute("aria-valuenow", "56");
+});
+
+test("Normal and Tall keep the 132 px name row, meter and separate controls", async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request, {
+    density: "normal",
+    heights: {},
+  });
+  await page.context().grantPermissions(["microphone"]);
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Arm A1", exact: true }).click();
+  const audio = page.getByRole("group", {
+    name: "A1: Dialogue and voiceover",
+    exact: true,
+  });
+  for (const density of ["Normal", "Tall", "Compact", "Normal"]) {
+    await page
+      .getByRole("combobox", { name: "Track density", exact: true })
+      .click();
+    await page.getByRole("option", { name: density, exact: true }).click();
+    expect((await page.locator(".tl-heads").boundingBox())!.width).toBe(132);
+    const name = audio.getByRole("textbox", { name: "Name A1", exact: true });
+    const meter = audio.locator(".tl-head-title > .tl-meters-compact");
+    if (density === "Compact") {
+      await expect(name).toBeHidden();
+      await expect(meter).toBeHidden();
+      continue;
+    }
+    await expect(name).toBeVisible();
+    await expect(name).toHaveValue("Dialogue and voiceover");
+    await expect(meter).toBeVisible();
+    const title = (await audio.locator(".tl-head-title").boundingBox())!;
+    const controls = (await audio.locator(".tl-head-buttons").boundingBox())!;
+    expect(controls.y).toBeGreaterThanOrEqual(title.y + title.height);
+    expect(
+      (await audio
+        .getByRole("button", { name: "Lock A1", exact: true })
+        .boundingBox())!.height,
+    ).toBe(20);
+  }
 });

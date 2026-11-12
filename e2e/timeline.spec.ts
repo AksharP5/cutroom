@@ -107,10 +107,7 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
   await expect(timeline.getByText("V3", { exact: true })).toBeVisible();
 
   // A press on the ruler seeks to that frame, and a drag scrubs.
-  // The wider track headers can make Fit label every two seconds.
-  const four = await tick("00:00:04:00");
-  const six = await tick("00:00:06:00");
-  const five = { x: (four.x + six.x) / 2, y: four.y };
+  const five = await tick("00:00:05:00");
   const eight = await tick("00:00:08:00");
   await page.mouse.move(five.x, five.y);
   await page.mouse.down();
@@ -179,14 +176,14 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
 
   // Ctrl+wheel zooms around the cursor: the frame under it stays put while the ruler spreads.
   const before = await tick("00:00:08:00");
-  const apart = before.x - (await tick("00:00:06:00")).x;
+  const apart = before.x - (await tick("00:00:07:00")).x;
   await page.mouse.move(before.x, before.y + 80);
   await page.keyboard.down("Control");
   for (let notch = 0; notch < 3; notch++) await page.mouse.wheel(0, -100);
   await page.keyboard.up("Control");
   await expect
     .poll(
-      async () => (await tick("00:00:08:00")).x - (await tick("00:00:06:00")).x,
+      async () => (await tick("00:00:08:00")).x - (await tick("00:00:07:00")).x,
     )
     .toBeGreaterThan(apart * 1.5);
   expect(Math.abs((await tick("00:00:08:00")).x - before.x)).toBeLessThan(2);
