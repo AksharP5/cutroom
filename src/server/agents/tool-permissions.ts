@@ -24,9 +24,10 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
   };
 });
 /**
- * Review bookkeeping: these only move a note between queue states in `.cutroom/review.json`,
- * outside project content and its undo history. Nothing a render, the timeline, or a file
- * outside the project shows can change, so they run without approval, as reads do.
+ * Bookkeeping: review tools that only move a note between queue states in
+ * `.cutroom/review.json`, and the destination tracks in `.cutroom/view.json`. Both sit outside
+ * project content and its undo history. Nothing a render, the timeline, or a file outside the
+ * project shows can change, so they run without approval, as reads do.
  * Withdrawing stays out: it cancels a request the owner made.
  */
 const bookkeepingTools = new Set([
@@ -34,6 +35,7 @@ const bookkeepingTools = new Set([
   "review_complete",
   "review_block",
   "review_release",
+  "timeline_destinations",
 ]);
 /** Whether a tool runs without asking: reads, bookkeeping, and edits the owner always allows. */
 const runsFreely = (tool: (typeof tools)[number], always: boolean) =>

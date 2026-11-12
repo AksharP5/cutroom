@@ -277,7 +277,7 @@ test("composition reads wait for an admitted edit and return its source with its
   }
 });
 
-test("overwrite feedback names whole replacements once, while partial cuts and insert stay silent", () => {
+test("overwrite feedback names whole and partial replacements once, while a moved clip's partial cut and insert stay silent", () => {
   const before = parsed(shot + follower);
   const report = (input: CommandInput) => {
     const command = CommandSchema.parse(input);
@@ -305,7 +305,17 @@ test("overwrite feedback names whole replacements once, while partial cuts and i
         mode: "overwrite",
         clip: { kind: "image", src: "still.png", duration },
       }),
-    ).toBe("");
+    ).toBe("Replaced part of shot.");
+  // The follower goes whole and the shot loses its tail: each is named for what it lost.
+  expect(
+    report({
+      type: "insert",
+      track: 0,
+      at: 870,
+      mode: "overwrite",
+      clip: { kind: "image", src: "still.png", duration: 330 },
+    }),
+  ).toBe("Replaced next and part of shot.");
   expect(
     report({
       type: "insert",
@@ -317,6 +327,9 @@ test("overwrite feedback names whole replacements once, while partial cuts and i
   ).toBe("");
   expect(report({ type: "remove", clipIds: ["shot"] })).toBe("");
   expect(report({ type: "move", clipIds: ["next"], by: -900 })).toBe("");
+  expect(
+    report({ type: "move", clipIds: ["next"], by: -30, mode: "overwrite" }),
+  ).toBe("");
   // The later title is entirely covered when the picture moves onto its track.
   const stacked = parsed(shot + title);
   const command = CommandSchema.parse({

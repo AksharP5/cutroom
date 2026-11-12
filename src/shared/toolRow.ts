@@ -157,6 +157,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => target ?? "the timeline",
   },
+  timeline_destinations: {
+    verb: ["Checked", "Checking", "Check"],
+    kind: "project",
+    object: () => "the destination tracks",
+  },
   timeline_copy: {
     verb: ["Copied", "Copying", "Copy"],
     kind: "project",

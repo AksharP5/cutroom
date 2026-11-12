@@ -7,26 +7,45 @@ import type {
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { clipName } from "../../shared/timeline/labels";
 
-/** Partial overwrites retain the original id; only completely replaced clips need a warning. */
+/**
+ * Names what an overwrite took. A clip replaced whole is always named. One that lost only part
+ * of itself is named when new material was placed over it; a moved clip's drag showed where it
+ * was going.
+ */
 export function overwriteFeedback(
   before: Timeline,
   after: Timeline,
   commands: readonly Command[],
 ) {
-  if (
-    !commands.some(
-      (command) =>
-        (command.type === "insert" ||
-          command.type === "paste" ||
-          command.type === "move") &&
-        command.mode === "overwrite",
-    )
-  )
-    return "";
-  const retained = new Set(after.clips.map((clip) => clip.id));
-  const removed = before.clips.filter((clip) => !retained.has(clip.id));
-  if (!removed.length) return "";
-  const names = [...new Set(removed.map(clipName))];
+  const overwrites = commands.filter(
+    (command) =>
+      (command.type === "insert" ||
+        command.type === "paste" ||
+        command.type === "move") &&
+      command.mode === "overwrite",
+  );
+  if (!overwrites.length) return "";
+  const kept = new Map(after.clips.map((clip) => [clip.id, clip]));
+  const whole = new Set(
+    before.clips.filter((clip) => !kept.has(clip.id)).map(clipName),
+  );
+  // Whichever side survives a cut keeps the clip's id, so a shorter clip lost material.
+  const cut = overwrites.some((command) => command.type !== "move")
+    ? before.clips.filter(
+        (clip) =>
+          (kept.get(clip.id)?.duration ?? clip.duration) < clip.duration,
+      )
+    : [];
+  const names = [
+    ...whole,
+    ...new Set(
+      cut
+        .map(clipName)
+        .filter((name) => !whole.has(name))
+        .map((name) => `part of ${name}`),
+    ),
+  ];
+  if (!names.length) return "";
   const detail =
     names.length < 3
       ? names.join(" and ")
@@ -79,6 +98,8 @@ export function rippleFeedback(
     if (command.type === "insert" && command.mode === "insert") {
       ripple = true;
       targetTracks.add(command.track);
+      if (command.linkedAudio?.track !== undefined)
+        targetTracks.add(command.linkedAudio.track);
       frames += command.clip.duration;
     }
     if (command.type === "paste" && command.mode === "insert") {

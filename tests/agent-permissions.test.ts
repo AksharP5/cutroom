@@ -33,15 +33,16 @@ const reads = [
   "timeline_view",
 ];
 
-// Queue status only: nothing in the project or outside it can change.
+// Queue status and view preferences only: nothing in the project's content or outside it can change.
 const bookkeeping = [
   "review_claim",
   "review_complete",
   "review_block",
   "review_release",
+  "timeline_destinations",
 ];
 
-test("claiming, finishing, blocking, and releasing a note never ask, while edits, withdrawals, and exports still do", () => {
+test("claiming, finishing, blocking, and releasing a note and choosing destination tracks never ask, while edits, withdrawals, and exports still do", () => {
   const asks = (name: string, always = false) => ({
     claude: !claudeToolPermissions(always).allowedTools.includes(
       `mcp__cutroom_studio__${name}`,

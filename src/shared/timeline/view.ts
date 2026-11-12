@@ -11,9 +11,21 @@ export const TimelineViewSettingsSchema = z.object({
       z.number().int().min(MIN_TRACK_HEIGHT).max(MAX_TRACK_HEIGHT),
     )
     .default({}),
+  /** Track indexes chosen as the destination of each kind. A kind left out uses its first track. */
+  destinations: z
+    .object({
+      video: z.number().int().nonnegative().optional(),
+      audio: z.number().int().nonnegative().optional(),
+    })
+    .default({}),
 });
 export type TimelineViewSettings = z.infer<typeof TimelineViewSettingsSchema>;
+/** Settings as a client may send them: anything left out takes its default. */
+export type TimelineViewSettingsInput = z.input<
+  typeof TimelineViewSettingsSchema
+>;
 export const emptyTimelineViewSettings = (): TimelineViewSettings => ({
   density: "normal",
   heights: {},
+  destinations: {},
 });

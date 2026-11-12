@@ -375,13 +375,23 @@
   height: 16px;
   min-width: 0;
 }
+/* The code is the destination control. It fills the id slot but for a hair before the name. */
 .tl-head-id {
-  padding-left: var(--space-2);
+  position: relative;
   flex: none;
-  width: var(--size-track-id);
+  width: calc(var(--size-track-id) - var(--space-1) - var(--stroke-rail));
+  height: 100%;
+  margin: 0 var(--stroke-rail) 0 var(--space-1);
+  border-radius: var(--radius-control);
   color: var(--text-secondary);
   font: var(--weight-medium) var(--type-2xs) var(--font-mono);
   font-stretch: var(--stretch-mono);
+  text-align: center;
+}
+/* One track of each kind takes placed media. It reads as an armed tool does. */
+.tl-head-id[aria-pressed="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
 }
 .tl-head-name {
   width: 100%;
@@ -431,6 +441,7 @@
 /* Hover fades in a 7% white overlay. It exists only while hovered, so idle clips cost nothing. */
 @media (hover: hover) and (pointer: fine) {
   .tl-track-button:hover::before,
+  .tl-head-id:hover::before,
   .tl-zoom-step:hover::before,
   .tl-clip:hover::before {
     content: "";
@@ -1115,7 +1126,8 @@
   padding-right: 0;
 }
 .tl-head[data-compact] .tl-head-id {
-  padding-left: var(--space-1);
+  width: calc(var(--size-track-id) - 2 * var(--stroke-rail));
+  margin-left: var(--stroke-rail);
 }
 .tl-head[data-compact] .tl-head-name,
 .tl-head[data-compact] .tl-head-title > .tl-meters-compact {

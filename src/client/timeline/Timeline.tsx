@@ -99,6 +99,10 @@ export interface TimelineProps {
   timeline: TimelineData;
   viewSettings: TimelineViewSettings;
   onViewSettings(settings: TimelineViewSettings): void;
+  /** The index of the track of each kind that media placed without a drag goes to. */
+  destinations: Record<Track["kind"], number>;
+  /** A track's code was clicked: it becomes the destination for its kind. */
+  onDestination(track: Track): void;
   /** Where the clips' media is read from: filmstrips and waveforms come from this project's cache. */
   source: { projectId: string; composition: string };
   clock: TimelineClock;
@@ -418,6 +422,8 @@ const Ruler = memo(function Ruler({
 
 const TrackHeads = memo(function TrackHeads({
   rows,
+  destinations,
+  onDestination,
   onToggleTrack,
   onRenameTrack,
   audioControls,
@@ -425,6 +431,8 @@ const TrackHeads = memo(function TrackHeads({
   onHeight,
 }: {
   rows: readonly Row[];
+  destinations: TimelineProps["destinations"];
+  onDestination: TimelineProps["onDestination"];
   onToggleTrack: TimelineProps["onToggleTrack"];
   onRenameTrack: TimelineProps["onRenameTrack"];
   audioControls: TimelineProps["audioControls"];
@@ -436,6 +444,7 @@ const TrackHeads = memo(function TrackHeads({
     const name =
       track.name ??
       `${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`;
+    const destination = destinations[track.kind] === track.index;
     return (
       <div
         key={track.index}
@@ -447,9 +456,15 @@ const TrackHeads = memo(function TrackHeads({
         style={{ top, height: height + 1 }}
       >
         <div className="tl-head-title">
-          <span className="tl-head-id" title={name}>
+          <button
+            className="tl-head-id"
+            aria-label={`${id} destination`}
+            aria-pressed={destination}
+            title={`${name}: ${destination ? "" : "make this the "}destination for Insert and Overwrite`}
+            onClick={() => onDestination(track)}
+          >
             {id}
-          </span>
+          </button>
           <input
             key={`${track.index}:${track.name}`}
             className="tl-head-name"
@@ -588,6 +603,8 @@ export function Timeline({
   timeline,
   viewSettings,
   onViewSettings,
+  destinations,
+  onDestination,
   source,
   clock,
   pins,
@@ -978,7 +995,8 @@ export function Timeline({
               ]}
               onChange={(value) => {
                 const density = trackDensities.find((item) => item === value);
-                if (density) onViewSettings({ density, heights: {} });
+                if (density)
+                  onViewSettings({ ...viewSettings, density, heights: {} });
               }}
             />
           </div>
@@ -1047,6 +1065,8 @@ export function Timeline({
           >
             <TrackHeads
               rows={headRows}
+              destinations={destinations}
+              onDestination={onDestination}
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
               audioControls={audioControls}

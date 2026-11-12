@@ -1,14 +1,17 @@
 import { isAudioKind } from "../../shared/timeline/schema";
-import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
+import type { CommandInput } from "../../shared/timeline/schema";
+import { destinationTracks } from "../../shared/timeline/tracks";
 import { dropPreview, placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
+import { useViewSettings } from "../timeline/viewSettings";
 import { editTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
 
 /**
- * Places media at the playhead with the edit a drop makes, on the first unlocked track of its
- * kind, which is V1 or A1 unless that is locked. With none unlocked it gets a new track. The
- * playhead then moves to the end of the new clip, so the next placement follows it.
+ * Places media at the playhead on the destination tracks the headers show: picture on the video
+ * destination, sound on the audio one, a video's own sound included. A locked destination
+ * refuses the edit. The playhead then moves to the end of the new clip, so the next placement
+ * follows it.
  */
 export function placeAtPlayhead(
   projectId: string,
@@ -25,15 +28,32 @@ export function placeAtPlayhead(
     projectId,
     "Add media",
     (timeline) => {
-      const audio = isAudioKind(media.kind);
-      const track =
-        timeline.tracks.find(
-          (track) => (track.kind === "audio") === audio && !track.locked,
-        ) ??
-        newTrack(nextTrackIndex(timeline.tracks), audio ? "audio" : "video");
+      const { video, audio } = destinationTracks(
+        timeline.tracks,
+        useViewSettings.getState().destinations,
+      );
       const placed = placedMedia(media, timeline.fps);
       end = at + placed.frames;
-      return dropPreview(timeline, placed, track, at, at, 0, [], mode).commands;
+      if (isAudioKind(media.kind))
+        return dropPreview(timeline, placed, audio, at, at, 0, [], mode)
+          .commands;
+      const sound = placed.kind === "video" && placed.hasAudio;
+      const missing =
+        sound && !timeline.tracks.some((track) => track.index === audio.index);
+      return dropPreview(
+        timeline,
+        placed,
+        video,
+        at,
+        at,
+        0,
+        missing ? [audio] : [],
+        mode,
+      ).commands.map((command): CommandInput =>
+        sound && command.type === "insert"
+          ? { ...command, linkedAudio: { track: audio.index } }
+          : command,
+      );
     },
     undefined,
     () => {

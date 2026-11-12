@@ -314,10 +314,17 @@ export const CommandSchema = z.discriminatedUnion("type", [
       at: frame,
       clip: InsertClipSchema,
       linkedAudio: z
-        .object({ id: clipId.optional() })
+        .object({
+          id: clipId.optional(),
+          track: frame
+            .optional()
+            .describe(
+              "Audio track index for the sound. Overwrite replaces what is there; place and insert need room. Omit to route automatically.",
+            ),
+        })
         .optional()
         .describe(
-          "Optional id for video's linked audio clip. Overwrite routes sound to the overwritten picture's linked audio track, refusing locked or multiple partner destinations. With no overwritten partner, use the first unlocked audio track that contains only linked picture sound and is free over the whole interval, creating one if needed; that fallback never cuts existing audio. place and insert also require room for the full interval after any ripple. Silent sources and clip.muted=true stay video-only.",
+          "Optional id and track for video's linked audio clip. Without a track, overwrite routes sound to the overwritten picture's linked audio track, refusing locked or multiple partner destinations. With no overwritten partner, use the first unlocked audio track that contains only linked picture sound and is free over the whole interval, creating one if needed; that fallback never cuts existing audio. place and insert also require room for the full interval after any ripple. Silent sources and clip.muted=true stay video-only.",
         ),
       ids: pieceIds,
     })

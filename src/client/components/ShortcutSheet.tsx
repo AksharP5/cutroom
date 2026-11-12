@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { keymap, keymapAreas } from "../keymap";
+import type { Action, Binding } from "../keymap";
 import { Modal } from "./Modal";
 import "./shortcuts.css";
+
+/** A run of keys is shown by its ends, as one entry. */
+function shownKeys(action: Action) {
+  const binding: Binding = keymap[action];
+  return binding.series
+    ? [`${binding.keys[0]} to ${binding.keys.at(-1)}`]
+    : binding.keys;
+}
 
 /** Every shortcut in the keymap, by area, with a search over names and keys. */
 export function ShortcutSheet({ onClose }: { onClose: () => void }) {
@@ -42,7 +51,7 @@ export function ShortcutSheet({ onClose }: { onClose: () => void }) {
                     <div key={action}>
                       <dt>{keymap[action].label}</dt>
                       <dd>
-                        {keymap[action].keys.map((key) => (
+                        {shownKeys(action).map((key) => (
                           <kbd key={key}>{key}</kbd>
                         ))}
                       </dd>

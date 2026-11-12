@@ -4,13 +4,13 @@ import { audioGainToDb, MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import type { APIRequestContext } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
-import type { TimelineViewSettings } from "../src/shared/timeline/view";
+import type { TimelineViewSettingsInput } from "../src/shared/timeline/view";
 import { test, expect } from "./fixtures";
 
 async function createHeightProject(
   request: APIRequestContext,
   clips: string,
-  settings: TimelineViewSettings,
+  settings: TimelineViewSettingsInput,
 ) {
   const project = ProjectSchema.parse(
     await (

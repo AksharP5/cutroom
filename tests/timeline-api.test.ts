@@ -1762,7 +1762,11 @@ test("track view settings stay outside history and survive real-edit undo and re
   const { project, store } = fixture;
   const ledger = await store.history(project);
   const endpoint = `/projects/${project.id}`;
-  const settings = { density: "compact", heights: { "0": 120 } };
+  const settings = {
+    density: "compact",
+    heights: { "0": 120 },
+    destinations: {},
+  };
   const save = (view: unknown, composition = "index.html") =>
     fixture.request(
       `${endpoint}/timeline-view?composition=${composition}`,
@@ -1791,7 +1795,7 @@ test("track view settings stay outside history and survive real-edit undo and re
       ).status,
     ).toBe(200);
     expect(ledger.list()).toHaveLength(initial + 1);
-    const tall = { density: "tall", heights: {} };
+    const tall = { density: "tall", heights: {}, destinations: {} };
     expect((await save(tall)).status).toBe(200);
     await ledger.checkpoint();
     expect(ledger.list()).toHaveLength(initial + 1);
@@ -1823,9 +1827,82 @@ test("track view settings stay outside history and survive real-edit undo and re
     ).toEqual({
       timelines: {
         "index.html": settings,
-        "second.html": { density: "normal", heights: { "1": 80 } },
+        "second.html": {
+          density: "normal",
+          heights: { "1": 80 },
+          destinations: {},
+        },
       },
     });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("destination tracks are read and set by themselves, outside history and other view preferences", async () => {
+  const fixture = await timelineFixture();
+  const { project, store } = fixture;
+  const ledger = await store.history(project);
+  const endpoint = `/projects/${project.id}`;
+  const destinations = async (method = "GET", body?: unknown) => {
+    const response = await fixture.request(
+      `${endpoint}/timeline-destinations`,
+      method,
+      body,
+    );
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    const { timeline, revision } = TimelineViewSchema.parse(
+      await (await fixture.request(`${endpoint}/timeline`)).json(),
+    );
+    // Nothing chosen: the first video track, and the empty audio row the headers show as A1.
+    expect(timeline.tracks.map(({ index, kind }) => [index, kind])).toEqual([
+      [0, "video"],
+      [1, "video"],
+      [2, "video"],
+    ]);
+    const initial = { video: 0, audio: 3 };
+    expect((await destinations()).body).toEqual(initial);
+    const spare = 4;
+    expect(
+      (
+        await fixture.request(`${endpoint}/commands`, "POST", {
+          expectedRevision: revision,
+          commands: [{ type: "setTrack", index: spare, kind: "video" }],
+        })
+      ).status,
+    ).toBe(200);
+    await fixture.request(`${endpoint}/timeline-view`, "PUT", {
+      density: "compact",
+      heights: { "0": 120 },
+    });
+    await ledger.checkpoint();
+    const entries = ledger.list().length;
+    const files = await fixture.files();
+    expect(await destinations("PUT", { video: spare })).toEqual({
+      status: 200,
+      body: { video: spare, audio: initial.audio },
+    });
+    await ledger.checkpoint();
+    expect(ledger.list()).toHaveLength(entries);
+    expect(await fixture.files()).toEqual(files);
+    expect(
+      await (await fixture.request(`${endpoint}/timeline-view`)).json(),
+    ).toEqual({
+      density: "compact",
+      heights: { "0": 120 },
+      destinations: { video: spare },
+    });
+    // A track of the other kind, or one the timeline lacks, is refused and nothing changes.
+    for (const wrong of [{ audio: spare }, { video: spare + 5 }])
+      expect((await destinations("PUT", wrong)).status).toBe(422);
+    expect((await destinations()).body.video).toBe(spare);
+    // Undo removes the chosen track, so placement falls back to the first one.
+    expect(
+      (await fixture.request(`${endpoint}/history/undo`, "POST", {})).status,
+    ).toBe(200);
+    expect((await destinations()).body).toEqual(initial);
   } finally {
     await fixture.close();
   }
@@ -1835,7 +1912,7 @@ test("missing or malformed view preferences use defaults and do not block timeli
   const fixture = await timelineFixture();
   const { project } = fixture;
   const endpoint = `/projects/${project.id}`;
-  const defaults = { density: "normal", heights: {} };
+  const defaults = { density: "normal", heights: {}, destinations: {} };
   try {
     expect(
       await (await fixture.request(`${endpoint}/timeline-view`)).json(),
@@ -1875,7 +1952,7 @@ test("missing or malformed view preferences use defaults and do not block timeli
     ).toBe(200);
     expect(
       await (await fixture.request(`${endpoint}/timeline-view`)).json(),
-    ).toEqual({ density: "compact", heights: {} });
+    ).toEqual({ density: "compact", heights: {}, destinations: {} });
   } finally {
     await fixture.close();
   }
