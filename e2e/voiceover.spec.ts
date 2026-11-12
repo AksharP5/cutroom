@@ -138,7 +138,7 @@ declare global {
 }
 
 for (const removal of ["header", "MCP"] as const)
-  test(`removing an armed track through ${removal} releases the microphone and cannot recreate it`, async ({
+  test(`removing an armed track through ${removal} releases the microphone and Record uses the surviving track`, async ({
     page,
     request,
     baseURL,
@@ -236,14 +236,32 @@ for (const removal of ["header", "MCP"] as const)
     await page
       .getByRole("button", { name: "Record voiceover", exact: true })
       .click();
-    await expect(page.locator(".toast")).toContainText(
-      "Arm an audio track to record voiceover.",
-    );
-    await expect(page.getByLabel("Recording voiceover take")).toHaveCount(0);
+    await expect(page.locator(".toast")).toContainText("Recording on A1.");
+    await expect.poll(streamStates).toEqual(["ended", "live"]);
+    await expect(
+      page.getByRole("button", { name: "Stop voiceover", exact: true }),
+    ).toBeVisible();
     expect((await read()).timeline).toEqual(removed);
     await page.screenshot({
-      path: info.outputPath("removed-track-disarmed.png"),
+      path: info.outputPath("surviving-track-recording.png"),
     });
+    await page.waitForTimeout(700);
+    await page
+      .getByRole("button", { name: "Stop voiceover", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await read()).timeline.clips.find(
+            (clip) => clip.kind === "voiceover",
+          )?.track,
+      )
+      .toBe(index + 1);
+    expect(
+      (await read()).timeline.tracks.some((track) => track.index === index),
+    ).toBe(false);
+    await page.keyboard.press("Control+z");
+    await expect.poll(async () => (await read()).timeline).toEqual(removed);
   });
 
 test("fake microphone records over the cut, preserves audio, undoes once, and exports in sync", async ({
@@ -1612,4 +1630,154 @@ test("recording region follows live row resizing at 28 and 200px before release"
     .getByRole("button", { name: "Stop voiceover", exact: true })
     .click();
   await expect(region).toHaveCount(0);
+});
+
+for (const trigger of ["button", "shortcut"] as const) {
+  test(`unarmed Record via ${trigger} starts a take and creates its audio track in one undo step`, async ({
+    page,
+    request,
+  }, info) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: "One press voiceover" },
+        })
+      ).json(),
+    );
+    const api = `/api/cutroom/projects/${project.id}`;
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (await request.get(`${api}/timeline`)).json(),
+      );
+    const before = (await read()).timeline;
+    expect(before.tracks.some((track) => track.kind === "audio")).toBe(false);
+    await page.goto(`/#project/${project.id}`);
+    await expect(
+      page.getByRole("button", { name: "Record voiceover", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Microphone input A1", exact: true })
+      .click();
+    await page.screenshot({ path: info.outputPath("microphone-panel.png") });
+    await page.keyboard.press("Escape");
+    if (trigger === "button")
+      await page
+        .getByRole("button", { name: "Record voiceover", exact: true })
+        .click();
+    else await page.keyboard.press("Control+Alt+Shift+v");
+    await expect(
+      page.getByRole("button", { name: "Stop voiceover", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".toast")).toContainText(
+      "Recording on a new audio track.",
+    );
+    await page.screenshot({ path: info.outputPath("one-press-recording.png") });
+    await page.waitForTimeout(1200);
+    await page
+      .getByRole("button", { name: "Stop voiceover", exact: true })
+      .click();
+    await expect
+      .poll(
+        async () =>
+          (await read()).timeline.clips.filter(
+            (clip) => clip.kind === "voiceover",
+          ).length,
+      )
+      .toBe(1);
+    await page.screenshot({ path: info.outputPath("one-press-saved.png") });
+    const client = new Client({ name: "one-press-recording", version: "1" });
+    const base = new URL(page.url()).origin;
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("/mcp", base), {
+          requestInit: { headers: { origin: base } },
+        }),
+      );
+      const result = z
+        .object({ structuredContent: z.object({ result: TimelineViewSchema }) })
+        .parse(
+          await client.callTool({
+            name: "timeline_read",
+            arguments: { projectId: project.id },
+          }),
+        ).structuredContent.result;
+      expect(result.timeline).toEqual((await read()).timeline);
+      expect(
+        (
+          await client.callTool({
+            name: "history_undo",
+            arguments: { projectId: project.id },
+          })
+        ).isError,
+      ).not.toBe(true);
+      await expect.poll(async () => (await read()).timeline).toEqual(before);
+    } finally {
+      await client.close();
+    }
+  });
+}
+
+test("unarmed Record skips locked and occupied audio tracks", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Free audio lane" },
+      })
+    ).json(),
+  );
+  await writeFile(join(project.path, "occupied.wav"), await readFile(input));
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const before = await read();
+  expect(
+    (
+      await request.post(`${api}/commands`, {
+        data: {
+          expectedRevision: before.revision,
+          commands: [
+            { type: "setTrack", index: 3, kind: "audio", locked: true },
+            { type: "setTrack", index: 4, kind: "audio" },
+            { type: "setTrack", index: 5, kind: "audio" },
+            {
+              type: "insert",
+              track: 5,
+              at: 120,
+              clip: { kind: "audio", src: "occupied.wav", duration: 60 },
+            },
+            {
+              type: "insert",
+              track: 4,
+              at: 0,
+              clip: { kind: "audio", src: "occupied.wav", duration: 60 },
+            },
+          ],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.goto(`/#project/${project.id}`);
+  await page
+    .getByRole("button", { name: "Record voiceover", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Arm A3", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".toast")).toContainText("Recording on A3.");
+  await page.waitForTimeout(1000);
+  await page
+    .getByRole("button", { name: "Stop voiceover", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.find((clip) => clip.kind === "voiceover")
+          ?.track,
+    )
+    .toBe(5);
 });
