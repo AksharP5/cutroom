@@ -1,0 +1,47 @@
+
+Running 1 test using 1 worker
+
+  ✘  1 ../status-regression/e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition (15.5s)
+
+
+  1) ../status-regression/e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition 
+
+    Error: expect(locator).toHaveText(expected) failed
+
+    Locator:  locator('.home-project').filter({ has: locator('.home-name').getByText('Linked composition date', { exact: true }) }).locator('time')
+    Expected: "Just now"
+    Received: "3 d ago"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveText" locator('.home-project').filter({ has: locator('.home-name').getByText('Linked composition date', { exact: true }) }).locator('time') with timeout 15000ms
+      - waiting for locator('.home-project').filter({ has: locator('.home-name').getByText('Linked composition date', { exact: true }) }).locator('time')
+        34 × locator resolved to <time datetime="2026-11-09T16:15:16.028Z">3 d ago</time>
+           - unexpected value "3 d ago"
+
+
+      27 |     expect(await readFile(join(project.path,"card.html"),"utf8")).toContain("Fresh child title");
+      28 |     await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    > 29 |     await expect(date).toHaveText("Just now");
+         |                        ^
+      30 |     await page.screenshot({path:info.outputPath("after-child-edit.png")});
+      31 |     const listed=await client.callTool({name:"projects_list",arguments:{}});
+      32 |     const listing=z.object({structuredContent:z.object({result:z.object({projects:z.array(ProjectSchema)})})}).parse(listed).structuredContent.result;
+        at <anonymous> (/home/akshar/.cache/status-regression/e2e/home-linked.spec.ts:29:24)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../cutroom-91-revision/before/results/home-linked-Home-refreshes-d11ae--edits-a-linked-composition/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../cutroom-91-revision/before/results/home-linked-Home-refreshes-d11ae--edits-a-linked-composition/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../cutroom-91-revision/before/results/home-linked-Home-refreshes-d11ae--edits-a-linked-composition/trace.zip
+    Usage:
+
+        npx playwright show-trace ../cutroom-91-revision/before/results/home-linked-Home-refreshes-d11ae--edits-a-linked-composition/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    ../status-regression/e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition 

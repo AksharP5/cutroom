@@ -1,0 +1,66 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/mcp-sessions.test.ts:
+90 |       request(initialized.headers.get("mcp-session-id")!, "GET"),
+91 |     );
+92 |     expect(stream.status).toBe(200);
+93 |     const reader = stream.body!.getReader();
+94 |     clock.advance(idle);
+95 |     expect((await handler(request(ids[0]!))).status).toBe(404);
+                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: 404
+Received: 200
+
+      at <anonymous> (/home/akshar/.cache/status-regression/tests/mcp-sessions.test.ts:95:54)
+(fail) 150 disconnected SDK clients expire and server.close ends their streams [166.33ms]
+110 |     await a.client.close();
+111 |     await b.client.close();
+112 |     clock.advance(idle - 1);
+113 |     expect((await handler(request(a.id))).status).toBe(200);
+114 |     clock.advance(1);
+115 |     expect((await handler(request(b.id))).status).toBe(404);
+                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: 404
+Received: 200
+
+      at <anonymous> (/home/akshar/.cache/status-regression/tests/mcp-sessions.test.ts:115:51)
+(fail) activity refreshes only that session's idle deadline and disposal cancels expiry [8.57ms]
+144 |     expect(clock.pending()).toBe(0);
+145 |     release.resolve();
+146 |     expect((await working).isError).not.toBe(true);
+147 |     await client.close();
+148 |     clock.advance(idle);
+149 |     expect((await handler(request(id))).status).toBe(404);
+                                                      ^
+error: expect(received).toBe(expected)
+
+Expected: 404
+Received: 200
+
+      at <anonymous> (/home/akshar/.cache/status-regression/tests/mcp-sessions.test.ts:149:49)
+(fail) a running tool cannot expire, and its completion starts a fresh idle period [6.68ms]
+
+tests/project-edited.test.ts:
+52 |     for (const [i, path] of [...sources.keys()]
+53 |       .filter((path) => path !== "index.html")
+54 |       .entries()) {
+55 |       const edited = new Date(Date.UTC(2024, 0, 1, 0, 0, i));
+56 |       await utimes(join(project.path, path), edited, edited);
+57 |       expect((await f.store.list())[0]?.updatedAt).toBe(edited.toISOString());
+                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "2024-01-01T00:00:00.000Z"
+Received: "2020-01-01T00:00:00.000Z"
+
+      at <anonymous> (/home/akshar/.cache/status-regression/tests/project-edited.test.ts:57:52)
+(fail) Home dates follow linked authoring sources without counting media, private state or unrelated files [4.10ms]
+
+ 0 pass
+ 4 fail
+ 8 expect() calls
+Ran 4 tests across 2 files. [388.00ms]

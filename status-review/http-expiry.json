@@ -1,0 +1,9 @@
+{
+  "sdkClientsConnectedAndClosed": 150,
+  "beforeExpiryStatus": 200,
+  "virtualIdleMinutes": 30,
+  "expiredSessionsReturning404": 150,
+  "unexpectedStatuses": [],
+  "freshClientWorks": true,
+  "expiryTimersAfterDispose": 0
+}
