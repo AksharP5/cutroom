@@ -14,7 +14,7 @@ export const AnimationResultSchema = z.object({
   clipId: z.string(),
   evidence: z.array(AnimationEvidenceSchema),
 });
-const AnimationCheckSchema = z.object({
+export const AnimationCheckSchema = z.object({
   clipId: z.string(),
   origin: z.number().finite(),
   windows: TweenWindowsSchema.valueType,
@@ -24,6 +24,8 @@ export const AnimationEditSchema = z.object({
   historyId: z.string(),
   composition: z.string(),
   revision: z.string().optional(),
+  inputId: z.string().optional(),
+  clipIds: z.array(z.string()).optional(),
   checks: z.array(AnimationCheckSchema).default([]),
   reported: z.boolean().default(false),
   results: z.array(AnimationResultSchema),
@@ -33,6 +35,7 @@ export type AnimationCheck = z.infer<typeof AnimationCheckSchema>;
 export type AnimationSnapshot = {
   timeline: Timeline;
   windows: TweenWindows;
+  inputId?: string;
   pending?: AnimationCheck[];
   evidence?: AnimationResult[];
 };

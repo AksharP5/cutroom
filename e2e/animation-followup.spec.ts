@@ -90,6 +90,39 @@ async function holdPreviews(page: Page, action: () => Promise<void>) {
   }
 }
 
+for (const registration of [
+  "window.__timelines.main=late",
+  "window.__timelines={main:late}",
+]) {
+  test(`R6 a registered subclass reports late direct Tween construction: ${registration}`, async ({
+    page,
+    request,
+  }, info) => {
+    const p = await open(
+      page,
+      request,
+      `
+      class DirectTimeline extends gsap.core.Timeline {
+        to(targets, vars, at) {new gsap.core.Tween(targets,{...vars,parent:this},at);return this;}
+      }
+      const late=new DirectTimeline({paused:true});${registration};
+      if(+document.querySelector('.one').dataset.start===8)setTimeout(()=>late.to('.one',{x:100,duration:1},6),1200);
+      else late.to('.one',{x:100,duration:1},6);
+    `,
+    );
+    await p.settled([{ type: "move", clipIds: ["title"], by: 60 }]);
+    await expect(p.warning).toContainText("00:00:06:00");
+    await seekFrame(page, 255);
+    expect(
+      await page
+        .frameLocator("iframe[data-live]")
+        .locator("#title")
+        .evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m41),
+    ).toBe(100);
+    await page.screenshot({ path: info.outputPath("registered-subclass.png") });
+  });
+}
+
 test("R5 interleaved moves retain the first report for both clips and each undo step", async ({
   page,
   request,

@@ -1,5 +1,7 @@
 import {
   AnimationEditSchema,
+  AnimationCheckSchema,
+  clipOrigin,
   checkAnimationEdit,
   animationWarnings,
 } from "./animation";
@@ -61,6 +63,9 @@ import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 const ReviewFileSchema = z.object({
   schemaVersion: z.literal(1),
   animationEdits: z.array(AnimationEditSchema).default([]),
+  animationInputs: z
+    .record(z.string(), z.array(AnimationCheckSchema))
+    .default({}),
   clipEdits: z
     .array(
       ClipEditSchema.omit({ resolution: true }).extend({
@@ -231,6 +236,7 @@ export function createReviewService(store: ProjectStore) {
         changes: [],
         clipEdits: [],
         animationEdits: [],
+        animationInputs: {},
       };
     let json: unknown;
     try {
@@ -243,7 +249,7 @@ export function createReviewService(store: ProjectStore) {
     const state = parsed.data;
     // Earlier edit-scoped records saved only the proven result. Keep that evidence recheckable.
     for (const edit of state.animationEdits) {
-      if (edit.revision || edit.checks.length) continue;
+      if (edit.revision || edit.inputId || edit.checks.length) continue;
       edit.checks = edit.results.flatMap(({ clipId, evidence }) => {
         const first = evidence[0];
         return first
@@ -283,6 +289,79 @@ export function createReviewService(store: ProjectStore) {
     }
     state.changes = [];
     return state;
+  };
+
+  const inputsFor = (
+    state: ReviewFile,
+    edit: ReviewFile["animationEdits"][number],
+  ) => {
+    if (!edit.inputId) return edit.checks;
+    return Object.hasOwn(state.animationInputs, edit.inputId)
+      ? state.animationInputs[edit.inputId]!
+      : [];
+  };
+
+  const checksFor = (
+    state: ReviewFile,
+    edit: ReviewFile["animationEdits"][number],
+  ) => {
+    const inputs = inputsFor(state, edit);
+    if (!edit.clipIds) return inputs;
+    const ids = new Set(edit.clipIds);
+    return inputs.filter((check) => ids.has(check.clipId));
+  };
+
+  /** Convert older per-edit copies once, sharing only byte-identical inputs. */
+  const shareAnimationInputs = (state: ReviewFile) => {
+    if (!state.animationEdits.some((edit) => edit.checks.length)) return false;
+    const shared = new Map<string, string>();
+    for (const edit of state.animationEdits) {
+      if (!edit.checks.length) continue;
+      const key = JSON.stringify([edit.composition, edit.checks]);
+      const id = shared.get(key) ?? randomUUID();
+      shared.set(key, id);
+      state.animationInputs[id] ??= edit.checks;
+      edit.inputId = id;
+      edit.checks = [];
+    }
+    return true;
+  };
+
+  /** A settled chain retains only comparisons that a retained history state can reveal. */
+  const pruneAnimationInputs = (
+    state: ReviewFile,
+    history: HistoryListItem[],
+    composition: string,
+  ) => {
+    let changed = false;
+    const retained = new Set(history.map((entry) => entry.id));
+    const edits = state.animationEdits.filter((edit) =>
+      retained.has(edit.historyId),
+    );
+    if (edits.length !== state.animationEdits.length) {
+      state.animationEdits = edits;
+      changed = true;
+    }
+    for (const [id, inputs] of Object.entries(state.animationInputs)) {
+      const references = edits.filter((edit) => edit.inputId === id);
+      if (!references.length) {
+        delete state.animationInputs[id];
+        changed = true;
+        continue;
+      }
+      if (
+        references[0]!.composition !== composition ||
+        references.some((edit) => !edit.clipIds)
+      )
+        continue;
+      const needed = new Set(references.flatMap((edit) => edit.clipIds ?? []));
+      const kept = inputs.filter((check) => needed.has(check.clipId));
+      if (kept.length !== inputs.length) {
+        state.animationInputs[id] = kept;
+        changed = true;
+      }
+    }
+    return changed;
   };
 
   const writeState = async (project: Project, state: ReviewFile) => {
@@ -387,6 +466,7 @@ export function createReviewService(store: ProjectStore) {
     const written: ReviewFile = {
       schemaVersion: 1,
       animationEdits: state.animationEdits,
+      animationInputs: state.animationInputs,
       clipEdits: acceptEdits(
         state.clipEdits,
         new Set(
@@ -852,12 +932,20 @@ export function createReviewService(store: ProjectStore) {
           edit.revision === sourceVersion &&
           active.has(edit.historyId),
       );
-      const pending = previous && !previous.reported ? previous.checks : [];
+      const pending =
+        previous && !previous.reported ? inputsFor(state, previous) : [];
       const evidence = activeAnimationResults(state, history, composition);
       return windows ||
         pending.length ||
         evidence.some((result) => result.evidence.length)
-        ? { timeline, windows: windows ?? {}, pending, evidence }
+        ? {
+            timeline,
+            windows: windows ?? {},
+            pending,
+            evidence,
+            inputId:
+              previous && !previous.reported ? previous.inputId : undefined,
+          }
         : undefined;
     },
     /** Called inside editComposition, after the content history window has closed. */
@@ -865,6 +953,8 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       composition: string,
       checks: AnimationCheck[],
+      timeline: Timeline,
+      inputId?: string,
     ) => {
       if (!checks.length) return;
       const entry = (await store.history(project)).list().at(-1);
@@ -882,11 +972,33 @@ export function createReviewService(store: ProjectStore) {
         )
       )
         return;
+      shareAnimationInputs(state);
+      inputId =
+        inputId && Object.hasOwn(state.animationInputs, inputId)
+          ? inputId
+          : randomUUID();
+      const inputs = (state.animationInputs[inputId] ??= []);
+      const known = new Set(inputs.map((check) => check.clipId));
+      for (const check of checks)
+        if (!known.has(check.clipId)) inputs.push(check);
+      const clips = new Map(timeline.clips.map((clip) => [clip.id, clip]));
+      const clipIds = checks
+        .filter((check) => {
+          const clip = clips.get(check.clipId);
+          return (
+            clip &&
+            (check.inherited.length ||
+              Math.abs(clipOrigin(clip, timeline) - check.origin) > 0.002)
+          );
+        })
+        .map((check) => check.clipId);
       state.animationEdits.push({
         historyId: entry.id,
         composition,
         revision: sourceVersion,
-        checks,
+        inputId,
+        clipIds,
+        checks: [],
         reported: false,
         results: [],
       });
@@ -931,6 +1043,7 @@ export function createReviewService(store: ProjectStore) {
         const view = await read();
         const history = (await store.history(project)).list();
         const state = await readState(project);
+        let changed = shareAnimationInputs(state);
         const active = new Set(
           history.filter((entry) => !entry.undone).map((entry) => entry.id),
         );
@@ -956,7 +1069,11 @@ export function createReviewService(store: ProjectStore) {
           );
           const results = checkAnimationEdit(
             { timeline: view.timeline, windows: animationReports.get(key)! },
-            comparison?.checks ?? saved?.checks ?? [],
+            comparison
+              ? checksFor(state, comparison)
+              : saved
+                ? checksFor(state, saved)
+                : [],
             previous,
           );
           if (
@@ -976,9 +1093,11 @@ export function createReviewService(store: ProjectStore) {
                 checks: [],
                 reported: true,
               });
-            await writeState(project, state);
+            changed = true;
           }
         }
+        changed = pruneAnimationInputs(state, history, composition) || changed;
+        if (changed) await writeState(project, state);
         return {
           ...view,
           warnings: animationWarnings(

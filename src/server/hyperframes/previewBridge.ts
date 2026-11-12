@@ -313,10 +313,26 @@ function installPreviewBridge(
       if (value) watchLibrary(value);
     },
   });
-  const register = (registry: Record<string, gsap.core.Timeline | undefined>) =>
-    new Proxy(registry, {
+  const watchRegistered = (timeline: gsap.core.Timeline) => {
+    const prototype = Object.getPrototypeOf(timeline);
+    wrapMethods(prototype);
+    watchTiming(prototype);
+  };
+  const register = (
+    registry: Record<string, gsap.core.Timeline | undefined>,
+  ) => {
+    for (const timeline of Object.values(registry))
+      if (timeline) watchRegistered(timeline);
+    return new Proxy(registry, {
       set(target, key, value: unknown) {
         const success = Reflect.set(target, key, value);
+        if (
+          value &&
+          typeof value === "object" &&
+          "getChildren" in value &&
+          typeof value.getChildren === "function"
+        )
+          watchRegistered(value as gsap.core.Timeline);
         changedWindows();
         return success;
       },
@@ -326,6 +342,7 @@ function installPreviewBridge(
         return success;
       },
     });
+  };
   const runtime = win as PreviewWindow & {
     __timelines?: Record<string, gsap.core.Timeline | undefined>;
   };

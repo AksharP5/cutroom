@@ -276,6 +276,7 @@ export function createTimelineRoutes(
     } else if (files.length) store.writeFiles(project, files);
     return {
       animationChecks,
+      animationInputId: animation?.inputId,
       composition,
       revision: revisionOf(
         fileContentVersion(html),
@@ -407,18 +408,21 @@ export function createTimelineRoutes(
           batch.composition,
           c.req.header(AGENT_HEADER),
           async () => {
-            const { animationChecks, ...view } = await store.mutate(
-              project,
-              batch.label,
-              () => edit(project, batch),
-              c.req.header(AGENT_HEADER)
-                ? { kind: "agent", name: "Agent" }
-                : undefined,
-            );
+            const { animationChecks, animationInputId, ...view } =
+              await store.mutate(
+                project,
+                batch.label,
+                () => edit(project, batch),
+                c.req.header(AGENT_HEADER)
+                  ? { kind: "agent", name: "Agent" }
+                  : undefined,
+              );
             await reviews.recordAnimationEdit(
               project,
               composition,
               animationChecks,
+              view.timeline,
+              animationInputId,
             );
             return view;
           },
