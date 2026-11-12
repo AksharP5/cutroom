@@ -218,7 +218,8 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       await rm(root, { recursive: true, force: true });
     }
   },
-  120000,
+  // Captures four Chromium renders, encodes MP4s, and decodes their video and audio edges.
+  120_000,
 );
 
 test("marked export planning refuses links outside the project before copying them", async () => {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { lintProject } from "@hyperframes/core/lint";
-import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AnnotationSchema,
@@ -8,7 +8,21 @@ import {
   ProjectSchema,
   SourceSchema,
 } from "../src/shared/project";
+import { projectPath } from "../src/server/projects/path";
 import { projectFixture } from "./project-fixture";
+
+test("a removed project folder refuses paths that allow missing files", async () => {
+  const fixture = await projectFixture();
+  try {
+    const project = await fixture.store.create({ name: "Removed folder" });
+    await rm(project.path, { recursive: true });
+    await expect(
+      projectPath(project, "scenes/new.html", true),
+    ).rejects.toMatchObject({ status: 404 });
+  } finally {
+    await fixture.close();
+  }
+});
 
 test("new projects ship a valid, self-contained Instrument Sans composition", async () => {
   const fixture = await projectFixture();

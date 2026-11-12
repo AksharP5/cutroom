@@ -250,6 +250,8 @@ test.skipIf(!Bun.which("ffmpeg"))(
       await f.close();
     }
   },
+  // FFmpeg encodes the shot, a worker extracts the frame, and FFmpeg decodes its pixels.
+  30_000,
 );
 
 test.skipIf(!Bun.which("ffmpeg"))(

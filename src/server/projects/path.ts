@@ -25,7 +25,9 @@ export async function projectPath(
     throw new HttpError(403, "That path is outside the project.");
   const canonical = await realpath(target).catch(async (error: unknown) => {
     if (!isMissing(error)) throw error;
-    if (!allowMissing) throw new HttpError(404, "Project file not found.");
+    // dirname(".") cannot make progress once the project folder itself is gone.
+    if (!allowMissing || rel === "")
+      throw new HttpError(404, "Project file not found.");
     return join(
       await projectPath(project, dirname(path), true),
       basename(target),

@@ -55,11 +55,14 @@ export async function captureFixture() {
       HYPERFRAMES_NO_TELEMETRY: "1",
     },
     async capture() {
-      await waitForCaptureState(async () =>
-        fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(700) }).then(
-          (response) => response.ok,
-          () => false,
-        ),
+      // Starting a real Bun server imports the renderer before health becomes available.
+      await waitForCaptureState(
+        async () =>
+          fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(700) }).then(
+            (response) => response.ok,
+            () => false,
+          ),
+        30_000,
       );
       const response = await fetch(`${baseUrl}/api/cutroom/projects`, {
         method: "POST",
