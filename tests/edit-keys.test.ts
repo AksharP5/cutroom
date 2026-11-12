@@ -205,3 +205,43 @@ test("D turns each selected clip on or off, and M adds one marker at the playhea
   });
   expect(press("markMarkerAdd", marked, 45)).toEqual([]);
 });
+
+test("a cut belongs to the incoming V1 clip, never the spanning music", () => {
+  const timeline = sequence();
+  expect(press("trimRippleStartToPlayhead", timeline, 100)).toEqual([
+    { type: "trim", clipId: "b", edge: "start", to: 100, ripple: true },
+  ]);
+  expect(
+    apply(timeline, press("trimRippleStartToPlayhead", timeline, 100)),
+  ).toEqual(timeline);
+  expect(press("trimRippleEndToPlayhead", timeline, 100)).toEqual([
+    { type: "trim", clipId: "b", edge: "end", to: 100, ripple: true },
+  ]);
+  // Razor still needs an interior frame. A selected incoming clip never falls back to music.
+  expect(press("editBladeRazor", timeline, 100, ["b"])).toEqual([]);
+  expect(press("editBladeRazor", timeline, 100)).toEqual([
+    { type: "split", at: 100, autoSelect: true, clipIds: ["music"] },
+  ]);
+  for (const action of ["editBackspace", "editDelete"] as const) {
+    expect(press(action, timeline, 100)).toEqual([]);
+    expect(press(action, timeline, 100, ["b"])).toEqual([
+      { type: "remove", clipIds: ["b"], ripple: action === "editDelete" },
+    ]);
+  }
+});
+
+test("trim targets use track order even when the input clips are unordered", () => {
+  const timeline = sequence();
+  timeline.clips = [clip("v2", 1, 0, 300), ...timeline.clips.toReversed()];
+  expect(press("trimRippleEndToPlayhead", timeline, 50)[0]).toMatchObject({
+    clipId: "a",
+  });
+  timeline.tracks[0]!.autoSelect = false;
+  expect(press("trimRippleEndToPlayhead", timeline, 50)[0]).toMatchObject({
+    clipId: "v2",
+  });
+  timeline.tracks[1]!.locked = true;
+  expect(press("trimRippleEndToPlayhead", timeline, 50)[0]).toMatchObject({
+    clipId: "a-sound",
+  });
+});
