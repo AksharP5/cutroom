@@ -1,6 +1,6 @@
 # Timeline headers
 
-Matched screenshots of the same generated video project, before and after the timeline header fixes. Compact captures include video, audio, and an armed microphone with its live input meter. Track heights are 28, 32, 36, and 39 px.
+Matched screenshots of the same generated video project, freshly captured from main at 1284735 and from the updated timeline header branch. Both keep the 132 px header column. Compact captures include video, audio, and an armed microphone at 28, 32, 36, and 39 px track heights.
 
 | Scenario | Before | After |
 | --- | --- | --- |
@@ -15,4 +15,4 @@ Matched screenshots of the same generated video project, before and after the ti
 
 Resting screenshots accompany each drag capture. The first video lane starts at y=467 at 1280×800 and y=717 at 1720×1050. Before the fix, starting a media drag moves it down 57 px. After the fix, every lane keeps its resting position. The new video target overlays the ruler's bottom edge and previews the full track at its eventual position.
 
-The header column grows from 132 to 224 px so compact rows can retain the name, 20 px buttons, microphone, and input meter on one line. Density uses the app's shared keyboard-operated SelectMenu.
+Compact rows show short track codes and every toggle with 18 px targets. The full track name stays in the code tooltip and accessible group label. The inline input meter is hidden only in Compact; Normal and Tall retain the name row, meter, and separate 20 px control row. Density uses the app's shared keyboard-operated SelectMenu.
