@@ -183,7 +183,7 @@ for (const height of [28, 200]) {
         steps: 6,
       });
       await expect(page.locator(".tl-readout")).toHaveText(
-        volume === 0 ? "-∞ dB" : "12.00 dB",
+        volume === 0 ? "-∞ dB" : "+12.0 dB",
       );
       await page.screenshot({ path: info.outputPath("gain-limit.png") });
       await page.mouse.up();
@@ -194,7 +194,7 @@ for (const height of [28, 200]) {
   }
 }
 
-test("track height and density survive reload, keep gain travel fixed, and leave undo to edits", async ({
+test("track height and density survive reload, gain follows the pointer at each, and view changes leave undo to edits", async ({
   page,
   request,
 }) => {
@@ -258,18 +258,9 @@ test("track height and density survive reload, keep gain travel fixed, and leave
   await page.reload();
   await expect(density).toHaveText("Compact");
   const before = await clip();
-  for (const [densityValue, shift, pixels, db] of [
-    ["compact", false, 20, -5],
-    ["tall", false, 20, -5],
-    ["compact", true, 20, -1],
-    ["tall", true, 20, -1],
-  ] as const) {
-    await chooseDensity(densityValue === "compact" ? "Compact" : "Tall");
-    await expect(page.locator(".tl-grid")).toHaveAttribute(
-      "data-refit",
-      "settled",
-    );
-    const point = await page
+  const readout = page.locator(".tl-readout");
+  const line = () =>
+    page
       .locator('[data-clip-mix="sound"] path')
       .first()
       .evaluate((path: SVGPathElement) => {
@@ -278,13 +269,30 @@ test("track height and density survive reload, keep gain travel fixed, and leave
           .matrixTransform(path.getScreenCTM()!);
         return { x: at.x, y: at.y };
       });
+  for (const [densityValue, shift] of [
+    ["compact", false],
+    ["tall", false],
+    ["compact", true],
+    ["tall", true],
+  ] as const) {
+    await chooseDensity(densityValue === "compact" ? "Compact" : "Tall");
+    await expect(page.locator(".tl-grid")).toHaveAttribute(
+      "data-refit",
+      "settled",
+    );
+    const point = await line();
     if (shift) await page.keyboard.down("Shift");
     await page.mouse.move(point.x, point.y);
     await page.mouse.down();
-    await page.mouse.move(point.x, point.y + pixels, { steps: 10 });
-    await expect(page.locator(".tl-readout")).toContainText(
-      `${db.toFixed(2)} dB`,
-    );
+    await page.mouse.move(point.x, point.y + 6, { steps: 10 });
+    // The line stays under the pointer on a short row and a tall one; Shift holds it back.
+    if (shift) await expect(readout).toHaveText("-0.6 dB");
+    else
+      await expect
+        .poll(async () => Math.abs((await line()).y - (point.y + 6)))
+        .toBeLessThanOrEqual(0.5);
+    const db = parseFloat(await readout.innerText());
+    expect(db).toBeLessThan(0);
     await page.mouse.up();
     if (shift) await page.keyboard.up("Shift");
     await expect

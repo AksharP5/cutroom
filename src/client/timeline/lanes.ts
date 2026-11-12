@@ -1,5 +1,5 @@
 import { envelopeHeight, fadePath } from "./mix";
-import { audioGainToDb } from "@hyperframes/core/audio-gain";
+import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
@@ -7,6 +7,7 @@ import type { DragEvent, PointerEvent, RefObject } from "react";
 import type {
   Clip,
   CommandInput,
+  Fps,
   Timeline,
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
@@ -73,7 +74,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const drag = useRef<Drag | null>(null);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
-  const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0 });
+  const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0, fine: 0 });
+  /** The body a held gain line is drawn in: its top down the lanes and its height, in pixels. */
+  const gainBody = useRef<{ top: number; height: number } | null>(null);
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
@@ -158,7 +161,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
       track: target?.row.track.index ?? rowAt(y)?.track.index ?? null,
       create: target?.create,
       reach: reach(bypass),
-      dy: intent.kind === "gain" ? pointer.current.dy : 0,
+      gain:
+        intent.kind === "gain" && gainBody.current
+          ? {
+              dy: pointer.current.dy,
+              fine: pointer.current.fine,
+              body: gainBody.current.height,
+            }
+          : undefined,
     };
   }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
@@ -450,16 +460,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { x, y } = pointer.current;
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
-    const scroller = latest.current.lanes.current
-      ?.closest(".tl-scroll")
-      ?.getBoundingClientRect();
-    const bottomRight = scroller
-      ? local(scroller.right, scroller.bottom)
-      : { x: Infinity, y: Infinity };
+    const edge = scrollerEdge();
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.dy}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.dy}:${input.gain?.fine}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
@@ -478,11 +483,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
         );
       } else if (readout.current) {
         if (intent.kind === "gain") {
-          const volume =
+          readout.current.textContent = audioGainToText(
             next.shown.clips.find((clip) => clip.id === intent.clipId)!
-              .volume ?? 1;
-          readout.current.textContent =
-            volume === 0 ? "-∞ dB" : `${audioGainToDb(volume).toFixed(2)} dB`;
+              .volume ?? 1,
+          );
         } else {
           readout.current.textContent = `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
         }
@@ -490,8 +494,79 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     }
     if (readout.current && !readout.current.hidden) {
-      readout.current.style.transform = `translate(${Math.min(at.x + 14, bottomRight.x - readoutWidth - 8)}px, ${Math.min(at.y + 18, bottomRight.y - readoutHeight - 8)}px)`;
+      const { intent } = active;
+      const held =
+        intent.kind === "gain"
+          ? (preview.current?.shown ?? active.timeline).clips.find(
+              (clip) => clip.id === intent.clipId,
+            )
+          : undefined;
+      placeReadout(
+        readout.current,
+        at,
+        edge,
+        readoutWidth,
+        readoutHeight,
+        held ? gainLineAt(held, active.timeline.fps) : null,
+      );
     }
+  }
+
+  /** The scroller's bottom right corner in the lanes, which the readout stays inside. */
+  function scrollerEdge() {
+    const scroller = latest.current.lanes.current
+      ?.closest(".tl-scroll")
+      ?.getBoundingClientRect();
+    return scroller
+      ? local(scroller.right, scroller.bottom)
+      : { x: Infinity, y: Infinity };
+  }
+
+  /** A gain readout sits on the line it reports, `line` pixels down; any other follows the pointer. */
+  function placeReadout(
+    label: HTMLElement,
+    at: { x: number; y: number },
+    edge: { x: number; y: number },
+    width: number,
+    height: number,
+    line: number | null,
+  ) {
+    const top = line === null ? at.y + 18 : line - height / 2;
+    label.style.transform = `translate(${Math.min(at.x + 14, edge.x - width - 8)}px, ${Math.min(top, edge.y - height - 8)}px)`;
+  }
+
+  /** How far down the lanes a held clip's gain line is under the pointer, in pixels. */
+  function gainLineAt(clip: Clip, fps: Fps) {
+    const body = gainBody.current;
+    if (!body) return null;
+    const time = Math.max(
+      0,
+      Math.min(clip.duration, frameAt(pointer.current.x) - clip.start),
+    );
+    return body.top + (envelopeHeight(clip, fps, time) / 100) * body.height;
+  }
+
+  /** A press on a gain line names its level there at once, before the pointer moves. */
+  function holdGain(clip: Clip, fps: Fps) {
+    const curve = latest.current.lanes.current
+      ?.querySelector(`[data-clip-mix="${CSS.escape(clip.id)}"] .tl-fade-curve`)
+      ?.getBoundingClientRect();
+    const label = readout.current;
+    gainBody.current = curve
+      ? { top: local(0, curve.top).y, height: curve.height }
+      : null;
+    const line = gainLineAt(clip, fps);
+    if (!label || line === null) return;
+    label.textContent = audioGainToText(clip.volume ?? 1);
+    label.hidden = false;
+    placeReadout(
+      label,
+      local(pointer.current.x, pointer.current.y),
+      scrollerEdge(),
+      label.offsetWidth,
+      label.offsetHeight,
+      line,
+    );
   }
 
   function finish(outcome: Outcome) {
@@ -668,6 +743,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       y: event.clientY,
       bypass: toggle,
       dy: 0,
+      fine: 0,
     };
     gesture.current = step(gesture.current, {
       type: "press",
@@ -689,6 +765,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frameAt(event.clientX),
       playhead(),
     );
+    if (intent.kind === "gain" && hit) holdGain(hit.clip, timeline.fps);
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -706,9 +783,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
       x: event.clientX,
       y: event.clientY,
       bypass: event.ctrlKey || event.metaKey,
+      // Shift holds the line back for fine adjustment, so its travel is counted apart.
       dy:
         pointer.current.dy +
-        (event.clientY - pointer.current.y) * (event.shiftKey ? 0.2 : 1),
+        (event.shiftKey ? 0 : event.clientY - pointer.current.y),
+      fine:
+        pointer.current.fine +
+        (event.shiftKey ? event.clientY - pointer.current.y : 0),
     };
   }
 

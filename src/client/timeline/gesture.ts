@@ -1,5 +1,6 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { gainFromDrag } from "./mix";
+import type { GainDrag } from "./mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { z } from "zod";
 import {
@@ -340,8 +341,8 @@ export function beginDrag(
 export interface DragInput {
   /** Tracks created with this move, in the same undo step. */
   create?: readonly Track[];
-  /** Vertical pointer travel in pixels, for gain. */
-  dy?: number;
+  /** How far the pointer has taken a gain line. */
+  gain?: GainDrag;
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -388,9 +389,10 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
 
   switch (intent.kind) {
     case "gain": {
-      if (!input.dy) return still("Clip gain");
+      const { gain } = input;
+      if (!gain || (!gain.dy && !gain.fine)) return still("Clip gain");
       const clip = find(intent.clipId);
-      const volume = gainFromDrag(clip, input.dy);
+      const volume = gainFromDrag(clip, gain);
       return edit(
         "Clip gain",
         volume === (clip.volume ?? 1)

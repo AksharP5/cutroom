@@ -12,10 +12,11 @@ import {
 import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
 import {
+  envelopeGain,
   envelopeHeight,
   fadePath,
   gainFromDrag,
-  gainHeight,
+  gainLevel,
 } from "../src/client/timeline/mix";
 import { emptyMeter, meterSample } from "../src/client/timeline/meters";
 import {
@@ -60,25 +61,42 @@ test("clearing a split's automation removes its baked ramp with exact HTML readb
   ).toBe(false);
 });
 
-test("gain uses a fixed quarter dB per pixel, with a recoverable silence floor and +12 dB ceiling", () => {
+test("a gain drag leaves the line under the pointer, lands on unity, and recovers from silence", () => {
   const clip = parseComposition(html, emptyTimelineSettings()).timeline
     .clips[0]!;
-  for (const [start, pixels, expected] of [
-    [0, 9, -2.25],
-    [-24, -20, -19],
-    [6, 20, 1],
-    [0, 4 * 0.2, -0.2],
-  ] as const) {
-    expect(
-      gainFromDrag({ ...clip, volume: audioDbToGain(start) }, pixels),
-    ).toBeCloseTo(audioDbToGain(expected), 10);
-  }
-  expect(gainFromDrag(clip, 240)).toBe(0);
-  expect(gainFromDrag(clip, -100)).toBe(MAX_AUDIO_GAIN);
-  expect(gainFromDrag({ ...clip, volume: 0 }, -4)).toBeCloseTo(
-    audioDbToGain(-59),
+  const at = (db: number) => ({ ...clip, volume: audioDbToGain(db) });
+  // The line is drawn at gainLevel, so the gain a drag leaves must draw it where the pointer went.
+  for (const body of [13, 25, 61, 101])
+    for (const start of [6, 0, -7, -24])
+      for (const dy of [-9, -2, 1, 4, 11]) {
+        const from = gainLevel(at(start).volume);
+        const to = gainLevel(gainFromDrag(at(start), { dy, fine: 0, body }));
+        const pointer = Math.max(0, Math.min(body, (from * body) / 100 + dy));
+        expect(Math.abs((to * body) / 100 - pointer)).toBeLessThanOrEqual(0.51);
+      }
+  // At the default height a pixel is 3 dB of cut; from -7 dB the pixel nearest unity is unity.
+  expect(gainFromDrag(at(-7), { dy: -2, fine: 0, body: 25 })).toBe(1);
+  expect(gainFromDrag(at(-7), { dy: -1, fine: 0, body: 25 })).toBeCloseTo(
+    audioDbToGain(-4),
     10,
   );
+  // A clip already inside that pixel is never pulled against the drag.
+  expect(gainFromDrag(at(-0.5), { dy: 0.2, fine: 0, body: 25 })).toBeLessThan(
+    audioDbToGain(-0.5),
+  );
+  // Shift is a tenth of a dB per pixel at every height.
+  for (const body of [13, 101])
+    expect(gainFromDrag(at(-6), { dy: 0, fine: 5, body })).toBeCloseTo(
+      audioDbToGain(-6.5),
+      10,
+    );
+  expect(gainFromDrag(clip, { dy: 25, fine: 0, body: 25 })).toBe(0);
+  expect(gainFromDrag(clip, { dy: -25, fine: 0, body: 25 })).toBe(
+    MAX_AUDIO_GAIN,
+  );
+  expect(
+    gainFromDrag({ ...clip, volume: 0 }, { dy: -2, fine: 0, body: 25 }),
+  ).toBeCloseTo(audioDbToGain(-36), 10);
 });
 
 test("meters latch clipping through silence and stop, reset peaks on stop and clear on restart", () => {
@@ -592,13 +610,18 @@ test("the drawn fade follows core's linear amplitude ramp and reaches its knee a
       const [x1, y1] = points[next]!;
       const [x0, y0] = points[Math.max(0, next - 1)]!;
       const y = x0 === x1 ? y1 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
-      const fraction = (100 - y) / (100 - gainHeight(volume));
-      expect(fraction).toBeCloseTo(fadeGain(elapsed, clip.duration, clip), 3);
+      const fraction = (100 - y) / (100 - gainLevel(volume));
+      const fade = fadeGain(elapsed, clip.duration, clip);
+      expect(fraction).toBeCloseTo(fade, 3);
+      // The waveform is scaled by the same envelope the line draws.
+      expect(
+        envelopeGain(clip, timeline.fps, elapsed, undefined, clipFades(clip)),
+      ).toBeCloseTo(volume * fade, 10);
     }
-    expect(points).toContainEqual([70, Number(gainHeight(volume).toFixed(2))]);
+    expect(points).toContainEqual([70, Number(gainLevel(volume).toFixed(2))]);
     expect(points.at(-1)).toEqual([100, 100]);
     expect(envelopeHeight(clip, timeline.fps, 255)).toBeCloseTo(
-      (100 + gainHeight(volume)) / 2,
+      (100 + gainLevel(volume)) / 2,
       6,
     );
   }

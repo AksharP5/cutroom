@@ -856,6 +856,11 @@
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+/* A dark edge under the line keeps it readable where it crosses the waveform. */
+.tl-fade-curve .tl-envelope-edge {
+  stroke: var(--scrim);
+  stroke-width: 3;
+}
 .tl-fade-curve .tl-gain {
   stroke: transparent;
   stroke-width: 7;

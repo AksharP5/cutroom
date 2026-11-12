@@ -10,6 +10,8 @@ import {
 } from "./math";
 import type { FrameRange, Row, TrackClips } from "./math";
 import { PEAK_CHUNK, createTimelineMedia } from "./media";
+import { envelopeGain, volumeLane } from "./mix";
+import { clipFades } from "../../shared/timeline/mix";
 import type { ViewState } from "./view";
 import { clipVisible, trackMix } from "../../shared/timeline/tracks";
 
@@ -40,6 +42,7 @@ const SETTLE_MS = 150;
 /** Height of the sound strip along the bottom of a video clip's filmstrip. */
 const BAND = 12;
 const BAND_SCRIM = 0.82;
+const NO_FADES = { fadeIn: 0, fadeOut: 0 };
 const bucketSeconds = (level: number) =>
   peakLevels[level]! / mediaSettings.peakSampleRate;
 
@@ -228,6 +231,11 @@ export function createBodies(
             loaded(other, false),
           );
       if (level === undefined) return;
+      // Peaks are drawn on a square-root scale, so the envelope's gain scales them by its root:
+      // the wave grows and shrinks with the gain line and tapers under a fade.
+      const fades = clip.fadeIn || clip.fadeOut ? clipFades(clip) : NO_FADES;
+      const lane = volumeLane(clip);
+      const framesPerPixel = 1 / (ppf * dpr);
       const perBucket = perPixel / bucketSeconds(level);
       const first = start / bucketSeconds(level);
       const span = y1 - y0;
@@ -267,14 +275,20 @@ export function createBodies(
           if (pairs[at + 1]! > high) high = pairs[at + 1]!;
         }
         if (high < low) continue;
+        const gain = Math.sqrt(
+          envelopeGain(clip, fps, (x - x0) * framesPerPixel, lane, fades),
+        );
+        // A boosted peak stops at the body's edge.
+        const top = Math.min(1, high * gain);
+        const bottom = Math.max(-1, low * gain);
         if (strip) {
           // Too short for a centred wave: loudness rises from the bottom edge.
-          const tall = Math.round(Math.max(-low, high) * span);
+          const tall = Math.round(Math.max(-bottom, top) * span);
           bars.rect(x, y1 - Math.max(1, tall), 1, Math.max(1, tall));
           continue;
         }
-        const upper = Math.round(middle - high * (span / 2));
-        const lower = Math.round(middle - low * (span / 2));
+        const upper = Math.round(middle - top * (span / 2));
+        const lower = Math.round(middle - bottom * (span / 2));
         bars.rect(x, upper, 1, Math.max(1, lower - upper));
       }
     }
