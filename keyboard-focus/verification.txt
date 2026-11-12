@@ -1,0 +1,13 @@
+Cutroom Chromium, 1720x1050, generated project:
+Main 259cb24: Shift+8 focuses Close, not Export MP4. The focused export regression fails on that focus assertion.
+Fix: Shift+8 focuses Export MP4 even while the export-defaults response is held. Enter during loading leaves the dialog open; release defaults, then Enter creates a completed one-second 320x240 MP4. Closing restores the opener.
+Main 259cb24: F9 from Source inserts the marked range, but Source stays visible; the focus regression fails there.
+Fix: F9 and F10 from Source reveal Timeline with the accepted local edit, while their command replies are deliberately held. After release, the placed range is committed. One undo restores the original timeline. Existing source mark, audio, still, button, drag and MCP flows also pass.
+
+Native Resolve Studio 21.1.2.10 with the owner's AP preset, silent generated media in an owned scratch project:
+Source viewer showed source.mov at 00:00:00:00; Timeline was at 00:00:02:00, with V1 shots [start,duration] = [0,90], [90,90], [180,90] and A1 bed [0,270]. No clips selected.
+Press Q: V1 becomes [0,30], [30,90], [120,90], A1 becomes [0,210], and the timeline playhead becomes zero. Source stays visible. Native Resolve does edit the timeline immediately while Source is shown.
+Press F9: the full 270-frame source is inserted at the timeline playhead and the viewer shows Timeline at 00:00:09:00. This confirms the manual's default Switch focus to timeline after edit.
+
+The PR retains Resolve's immediate timeline editing while Source is shown. It fixes Export focus and the source-placement focus difference.
+The native scratch project was closed and deleted, Resolve was quit, and the temporary Cua Driver daemon was stopped.
