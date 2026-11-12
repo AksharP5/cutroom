@@ -1,0 +1,188 @@
+{
+  "head": "81de1df9d100b7193834f118c5f278eafa63b19a",
+  "base": "259cb24037ee4d08ecd5a6c082b6e61299a1e405",
+  "reviewedHead": "ce0fa40af1bdf0100a3859a7859d748174e88699",
+  "suppliedRegressions": {
+    "reviewedHeadFailed": 6,
+    "fixedPassed": 6
+  },
+  "maintainedR4UnitTests": {
+    "reviewedHeadPassed": 2,
+    "reviewedHeadFailed": 15,
+    "finalPassed": 17
+  },
+  "maintainedBrowserRepros": {
+    "reviewedHeadFailed": 6,
+    "finalPassed": 6
+  },
+  "final": {
+    "unitPassed": 719,
+    "unitSkipped": 5,
+    "unitFailed": 0,
+    "browserPassed": 338,
+    "browserFailed": 0,
+    "performancePassed": 7,
+    "performanceFailed": 0,
+    "types": "pass",
+    "format": "pass",
+    "build": "pass",
+    "diff": "pass"
+  },
+  "performanceOrder": "Full unit and browser on final head; sequential Bun benchmarks; then test:perf alone",
+  "densePatch": {
+    "clips": 500,
+    "tweens": 500,
+    "rewrites": 499,
+    "bytes": 71657,
+    "medianMs": 6.283537000010256,
+    "budgetMs": 20,
+    "runtime": "v26.13.0",
+    "times": [
+      13.792311999975936,
+      9.349917000014102,
+      8.067408000002615,
+      6.949447999999393,
+      8.380514000018593,
+      7.322336000012001,
+      6.125190999999177,
+      7.0327199999883305,
+      6.435918999981368,
+      6.109710999997333,
+      6.667169000022113,
+      5.898989999986952,
+      5.918195000005653,
+      6.9416349999955855,
+      5.961409999988973,
+      7.158964000002015,
+      6.159767000004649,
+      5.848097999987658,
+      6.551497000007657,
+      5.936135999974795,
+      5.868059999978868,
+      6.283537000010256,
+      5.771941999992123,
+      5.967059999995399,
+      6.533258999988902,
+      5.986013000016101,
+      5.6904149999900255,
+      6.59721300000092,
+      5.808084999996936,
+      5.790412000002107,
+      7.200066999997944
+    ]
+  },
+  "rippleMedianMaxMs": {
+    "400": 71.59999999403954,
+    "500": 71.59999999403954
+  },
+  "benchmarkMain": {
+    "runtime": "Bun 1.4.4",
+    "clips": 500,
+    "bytes": 74761,
+    "medianMs": {
+      "parse": 6.21,
+      "apply": 1.93,
+      "multiRangeApply": 3.25,
+      "patch": 2.31,
+      "request": 57.34,
+      "bulkApply": 1.55,
+      "bulkPatch": 5.97
+    },
+    "budgetMs": {
+      "parse": 10,
+      "apply": 5,
+      "multiRangeApply": 15,
+      "patch": 5,
+      "request": 50,
+      "bulkApply": 20,
+      "bulkPatch": 20
+    }
+  },
+  "benchmarkHead": {
+    "runtime": "Bun 1.4.4",
+    "clips": 500,
+    "bytes": 74761,
+    "animatedBytes": 112648,
+    "animationScriptBytes": 37870,
+    "medianMs": {
+      "parse": 7.49,
+      "apply": 2.8,
+      "multiRangeApply": 6.74,
+      "patch": 2.85,
+      "animatedPatch": 8.12,
+      "animatedMove": 3.02,
+      "denseTweenPatch": 5.02,
+      "request": 56.78,
+      "bulkApply": 1.66,
+      "bulkPatch": 6.57
+    },
+    "budgetMs": {
+      "parse": 10,
+      "apply": 5,
+      "multiRangeApply": 15,
+      "patch": 5,
+      "animatedPatch": 20,
+      "animatedMove": 15,
+      "denseTweenPatch": 20,
+      "request": 50,
+      "bulkApply": 20,
+      "bulkPatch": 20
+    }
+  },
+  "benchmarkOverBudget": {
+    "main": [
+      "request"
+    ],
+    "head": [
+      "request"
+    ]
+  },
+  "documentAllowlist": {
+    "plainTags": [
+      "div",
+      "span",
+      "p",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "b",
+      "i",
+      "em",
+      "strong",
+      "br",
+      "img",
+      "video",
+      "audio",
+      "section",
+      "main",
+      "header",
+      "footer",
+      "figure",
+      "figcaption"
+    ],
+    "containers": [
+      "html",
+      "head",
+      "body",
+      "script",
+      "style",
+      "template"
+    ],
+    "headOrSelectedTemplateMetadata": [
+      "title",
+      "link",
+      "meta"
+    ],
+    "reservedPrefixes": [
+      "hf-",
+      "__hf",
+      "__render_frame_"
+    ],
+    "reservedSuffix": "__hfN",
+    "parser": "parse5 8.1.1, source tree reused; css-select 7 queries that tree"
+  },
+  "exports": "Fresh final-head full-suite MP4 exports for all six repros and positive 24:11 checkpoint. Reviewed-head SVG frame supplied by R4 review evidence."
+}

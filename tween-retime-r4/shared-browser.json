@@ -1,0 +1,19 @@
+{
+  "scriptUnchanged": true,
+  "note": {
+    "id": "44338012-1401-420a-ae23-fe7a7192f372",
+    "kind": "comment",
+    "compositionPath": "index.html",
+    "body": "Make this clip's animation follow the clip. Its tweens are at absolute timeline seconds (4.00 s) and the clip now starts at 6.00 s. Move the title into its own sub-composition file with a timeline in clip-local seconds. Keep the look and the timing relative to the clip's start. Check the first second of the clip with timeline_view.",
+    "time": 6,
+    "elementId": "cta",
+    "strokes": [],
+    "createdAt": "2026-11-12T22:19:10.511Z",
+    "updatedAt": "2026-11-12T22:19:10.511Z",
+    "review": {
+      "status": "open",
+      "updatedAt": "2026-11-12T22:19:10.511Z"
+    },
+    "instructions": []
+  }
+}

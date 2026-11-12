@@ -1,0 +1,157 @@
+[
+  {
+    "r4": "autoVideoFront",
+    "before": [
+      {
+        "id": "hf-video-0",
+        "tag": "VIDEO",
+        "at": 4
+      },
+      {
+        "id": "hf-video-0",
+        "tag": "SPAN",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "hf-video-0",
+        "tag": "VIDEO",
+        "at": 4
+      },
+      {
+        "id": "hf-video-0",
+        "tag": "SPAN",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 71200
+  },
+  {
+    "r4": "noscriptScript",
+    "before": [
+      {
+        "id": "cta",
+        "tag": "DIV",
+        "at": 4
+      },
+      {
+        "id": "other",
+        "tag": "DIV",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "tag": "DIV",
+        "at": 4
+      },
+      {
+        "id": "other",
+        "tag": "DIV",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 4222
+  },
+  {
+    "r4": "pastedExecutable",
+    "before": [
+      {
+        "id": "cta",
+        "tag": "DIV",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "tag": "DIV",
+        "at": 4
+      },
+      {
+        "id": "other",
+        "tag": "DIV",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 4222
+  },
+  {
+    "r4": "svgUse",
+    "before": [
+      {
+        "id": "word",
+        "tag": "text",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "word",
+        "tag": "text",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 3468
+  },
+  {
+    "r4": "smil",
+    "before": [
+      {
+        "id": "",
+        "tag": "text",
+        "at": 4
+      },
+      {
+        "id": "",
+        "tag": "text",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "",
+        "tag": "text",
+        "at": 4
+      },
+      {
+        "id": "",
+        "tag": "text",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 4222
+  },
+  {
+    "r4": "tableOwner",
+    "before": [
+      {
+        "id": "word",
+        "tag": "SPAN",
+        "at": 4
+      }
+    ],
+    "after": [
+      {
+        "id": "word",
+        "tag": "SPAN",
+        "at": 4
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:04:00.\nAsk agent\nDismiss",
+    "exportBrightPixels": 7860
+  }
+]
