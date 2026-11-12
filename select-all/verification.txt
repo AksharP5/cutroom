@@ -1,0 +1,11 @@
+Chromium, 1720x1050. Three clips: an unlocked V1 picture, its linked partner on locked V2, and a disabled clip on V3 with auto-select off.
+Main 259cb24, Ctrl+A: zero clips selected; native browser text selection highlights app labels.
+Fix, Ctrl+A: V1 and V3 selected; locked V2 remains unselected; browser selection empty.
+Shift+A: selection empty.
+Ctrl+A in the agent composer: selects the entered text and leaves clips unselected.
+Triple-click the chat paragraph then Ctrl+C: browser clipboard contains the selected paragraph, not timeline clips.
+The timeline itself is unchanged by these selection/copy operations.
+Bindings decoded from the owner's Resolve 21.1.2 AP preset: editSelectAll = Ctrl+A; editDeselectAll = Shift+A. Esc remains Cutroom's additional deselect key.
+
+Real Electron 45.2.3, ozone headless, bundled desktop main/preload built from this worktree, scratch project store on port 4933, media muted:
+Ctrl+A selected [off,picture], browser selection was empty; Shift+A cleared the clips; Ctrl+A in the composer selected its text. The locked linked partner remained unselected. The application and its owned server closed afterwards.
