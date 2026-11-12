@@ -485,11 +485,16 @@ test("linked Changes has one row per history entry and keeps review and session 
     .toBe(true);
   await page.locator('[data-clip="sound"]').click();
   await expect(history).toHaveAttribute("open", "");
+  // The section saves its state from the toggle event, which lands a task after the attribute.
+  const saved = () =>
+    page.evaluate(() => sessionStorage.getItem("cutroom.inspector.changes"));
+  await expect.poll(saved).toBe("true");
   await page.reload();
   await page.locator('[data-clip="picture"]').click();
   await expect(history).toHaveAttribute("open", "");
   await summary.click();
   await expect(history).not.toHaveAttribute("open", "");
+  await expect.poll(saved).toBe("false");
   await page.reload();
   await page.locator('[data-clip="picture"]').click();
   await expect(history).not.toHaveAttribute("open", "");
