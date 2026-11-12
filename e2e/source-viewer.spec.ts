@@ -255,7 +255,12 @@ test("a part marked in the source viewer goes on the timeline by key, button and
     ["video", 0, 240, 90, 2],
     ["audio", 1, 240, 90, 2],
   ]);
-  // The viewer stays on the source for the next mark.
+  // Resolve's default switches to the timeline after a source edit.
+  await expect(source).toBeHidden();
+  await expect(
+    views.getByRole("button", { name: "Timeline", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Alt+q");
   await expect(source).toBeVisible();
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(before);
@@ -406,4 +411,46 @@ test("audio shows its waveform and a still runs five seconds, each on a track of
     .getByRole("menuitem", { name: "Overwrite with source at playhead" })
     .click();
   await expect.poll(added).toEqual([["image", 0, 360, 150, null]]);
+});
+
+test("F9 and F10 from Source reveal Timeline after a successful placement", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { read, before, file, source } = await open(page, request);
+  const views = page.getByRole("group", { name: "Viewer" });
+  for (const key of ["F9", "F10"]) {
+    await seek(page, "200");
+    await (await file("talk.mp4")).dblclick();
+    await expect(source).toBeVisible();
+    await page.keyboard.press("i");
+    await page.keyboard.press("Shift+ArrowRight");
+    await page.keyboard.press("o");
+    expect(await read()).toEqual(before);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/cutroom/projects/*/commands", async (route) => {
+      await gate;
+      await route.fulfill({ response: await route.fetch() });
+    });
+    try {
+      await page.keyboard.press(key);
+      await expect(source).toBeHidden();
+      await expect(
+        views.getByRole("button", { name: "Timeline", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      release();
+    }
+    await expect.poll(read).not.toEqual(before);
+    await page.unroute("**/api/cutroom/projects/*/commands");
+    if (key === "F9")
+      await page.screenshot({
+        path: testInfo.outputPath("after-source-f9.png"),
+      });
+    await page.keyboard.press("Control+z");
+    await expect.poll(read).toEqual(before);
+  }
 });

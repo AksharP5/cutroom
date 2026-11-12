@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef } from "react";
+import type { ReactNode, RefObject } from "react";
 import { X } from "@phosphor-icons/react";
 
 export function Modal({
@@ -6,11 +7,13 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  initialFocus,
 }: {
   title: ReactNode;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  initialFocus?: RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -18,6 +21,7 @@ export function Modal({
     const dialog = ref.current;
     const opener = document.activeElement;
     dialog?.showModal();
+    initialFocus?.current?.focus({ preventScroll: true });
     return () => {
       dialog?.close();
       if (
@@ -27,7 +31,7 @@ export function Modal({
       )
         opener.focus({ preventScroll: true });
     };
-  }, []);
+  }, [initialFocus]);
   return (
     <dialog
       ref={ref}

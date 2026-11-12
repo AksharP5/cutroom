@@ -95,7 +95,10 @@ export function sourceRange(): MediaDrag | null {
 /** Puts the loaded file's range on the timeline at the playhead. */
 export function placeSource(projectId: string, mode: "insert" | "overwrite") {
   const media = sourceRange();
-  if (media) return void placeAtPlayhead(projectId, media, mode);
+  if (media)
+    return void placeAtPlayhead(projectId, media, mode, () =>
+      showSource(false),
+    );
   showToast("Open a file from Media to place it.", null, {
     tone: "info",
     transient: true,

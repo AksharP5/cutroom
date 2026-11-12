@@ -133,3 +133,9 @@
   background: var(--human);
   transform-origin: left;
 }
+
+.modal-actions button[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.4;
+  transform: none;
+}

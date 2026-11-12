@@ -14,6 +14,8 @@ export function placeAtPlayhead(
   projectId: string,
   media: MediaDrag,
   mode: "insert" | "overwrite",
+  /** Runs with the accepted preview, before the server replies. */
+  onPlace?: () => void,
 ) {
   const { frame, duration } = useTransport.getState();
   // The playhead stops on the last frame, so from there the clip goes after it, at the end.
@@ -34,6 +36,9 @@ export function placeAtPlayhead(
       return dropPreview(timeline, placed, track, at, at, 0, [], mode).commands;
     },
     undefined,
-    () => transport.seek(end),
+    () => {
+      transport.seek(end);
+      onPlace?.();
+    },
   );
 }
