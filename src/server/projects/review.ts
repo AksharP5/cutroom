@@ -548,6 +548,24 @@ export function createReviewService(store: ProjectStore) {
     }
     return snapshot;
   };
+  // The review queue serializes source observations with commands and history restores.
+  const animationSources = new Map<
+    string,
+    { source: string; intent: string }
+  >();
+  const animationIntent = async (project: Project, preserve = false) => {
+    const sources = await readAssets(project);
+    const source = JSON.stringify(
+      [...sources].map(([path, value]) => [path, value.sourceVersion]).sort(),
+    );
+    const previous = animationSources.get(project.id);
+    const intent =
+      previous && (preserve || previous.source === source)
+        ? previous.intent
+        : randomUUID();
+    animationSources.set(project.id, { source, intent });
+    return intent;
+  };
   const recordAssets = async (
     project: Project,
     before: AssetSnapshot,
@@ -701,11 +719,13 @@ export function createReviewService(store: ProjectStore) {
       token: string | undefined,
       work: () => Promise<T>,
       noteId?: string,
+      timelineCommand = false,
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
         await projectWritePath(project, composition);
         composition = posix.normalize(composition.replaceAll("\\", "/"));
+        await animationIntent(project);
         let items: ReviewItem[];
         let before: ClipVersions;
         try {
@@ -716,8 +736,11 @@ export function createReviewService(store: ProjectStore) {
           if (
             error instanceof ReviewFileError ||
             error instanceof ProjectDocumentError
-          )
-            return work();
+          ) {
+            const result = await work();
+            await animationIntent(project, timelineCommand);
+            return result;
+          }
           throw error;
         }
         const actor = token === undefined ? undefined : agent(project, token);
@@ -744,6 +767,7 @@ export function createReviewService(store: ProjectStore) {
           (edit) => edit.by === "agent" && !edit.accepted && !edit.resolution,
         );
         const result = await work();
+        await animationIntent(project, timelineCommand);
         const after = await clipVersions(project, composition);
         const changed = new Set(
           [...before.keys(), ...after.keys()].filter(
@@ -764,7 +788,10 @@ export function createReviewService(store: ProjectStore) {
         return result;
       }),
     clipChanges: (project: Project, composition: string) =>
-      serialize(project, () => clipChanges(project, composition)),
+      serialize(project, async () => ({
+        ...(await clipChanges(project, composition)),
+        animationIntent: await animationIntent(project),
+      })),
     /** The projection and its attribution must describe the same admitted source edits. */
     readComposition: <T extends object>(
       project: Project,
@@ -774,6 +801,7 @@ export function createReviewService(store: ProjectStore) {
       serialize(project, async () => ({
         ...(await read()),
         ...(await clipChanges(project, composition)),
+        animationIntent: await animationIntent(project),
       })),
     acceptChanges: (project: Project, editId?: string) =>
       serialize(project, async () => {
@@ -961,7 +989,9 @@ export function createReviewService(store: ProjectStore) {
               allowMissing: true,
             });
           }
+          await animationIntent(project);
           const result = await change();
+          await animationIntent(project, true);
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });

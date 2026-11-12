@@ -1,64 +1,131 @@
 import { expect, test } from "bun:test";
 import { parseComposition } from "../src/server/timeline/composition";
 import { emptyTimelineSettings } from "../src/shared/timeline/schema";
+import type { Timeline } from "../src/shared/timeline/schema";
+import type { TweenWindows } from "../src/shared/preview";
 import {
   animationFeedback,
+  animationOffsets,
   animationMessage,
   animationReview,
 } from "../src/client/edit/feedback";
 
-const before = parseComposition(
-  `<main data-composition-id="main" data-duration="48" data-fps="30000/1001"><div id="title" data-label="Lower third" data-start="36" data-duration="4"></div><div id="still" data-start="6" data-duration="4" data-track-index="1"></div></main>`,
+const timeline = parseComposition(
+  `<main data-composition-id="main" data-duration="48" data-fps="30"><div id="title" data-label="Title" data-start="6" data-duration="4"></div><div id="still" data-start="6" data-duration="4" data-track-index="1"></div></main>`,
   emptyTimelineSettings(),
 ).timeline;
-const after = {
-  ...before,
-  clips: before.clips.map((clip) =>
-    clip.id === "title" ? { ...clip, start: clip.start - 300 } : clip,
+const report: TweenWindows = { title: [[0, 6]], still: [[0, 6]] };
+const baseline = animationOffsets(timeline, report);
+const edit = (changes: Partial<Timeline["clips"][number]>): Timeline => ({
+  ...timeline,
+  clips: timeline.clips.map((clip) =>
+    clip.id === "title" ? { ...clip, ...changes } : clip,
   ),
-};
-const windows = {
-  title: [{ start: 36, end: 36.5 }],
-  still: [{ start: 6, end: 6.5 }],
-};
-
-test("moved clips must shift every tween by their frame delta; unmoved clips must keep theirs", () => {
-  const clips = animationFeedback(before, after, windows, {
-    ...windows,
-    still: [{ start: 5, end: 5.5 }],
-  });
-  expect(clips.map(({ clip }) => clip.id)).toEqual(["title", "still"]);
-  expect(animationMessage(clips, before.fps)).toBe(
-    "2 clips left their animation behind.",
-  );
-  expect(animationMessage(clips.slice(0, 1), { num: 30, den: 1 })).toBe(
-    "Lower third's animation stayed at 00:00:36:00.",
-  );
-  expect(animationReview(clips[0]!.clip, 36, before.fps).draft).toMatchObject({
-    time: 25.992633,
-    elementIds: ["title"],
-  });
 });
 
-test("the 2 ms tolerance works at fractional fps; changed lengths and source-only edits do not warn", () => {
-  const follows = { ...windows, title: [{ start: 25.991, end: 26.491 }] };
-  expect(animationFeedback(before, after, windows, follows)).toEqual([]);
+test("shared tween warns only the moved clip, undo clears, redo warns again", () => {
+  const moved = edit({ start: 240 });
+  const warnings = animationFeedback(moved, report, baseline);
+  expect(warnings.map(({ clip }) => clip.id)).toEqual(["title"]);
+  expect(animationFeedback(timeline, report, baseline)).toEqual([]);
+  expect(animationFeedback(moved, report, baseline)).toEqual(warnings);
+  expect(animationMessage(warnings, timeline.fps)).toBe(
+    "Title's animation stayed at 00:00:06:00.",
+  );
   expect(
-    animationFeedback(before, after, windows, {
-      ...follows,
-      title: [{ start: 25.993, end: 26.493 }],
-    }),
+    animationReview(warnings[0]!.clip, 6, timeline.fps).draft,
+  ).toMatchObject({ time: 8, elementIds: ["title"] });
+});
+
+test("head and tail trims preserve origin, including nonzero in points and playback rate", () => {
+  expect(
+    animationFeedback(
+      edit({ start: 210, duration: 90, animationInPoint: 1 }),
+      report,
+      baseline,
+    ),
+  ).toEqual([]);
+  expect(animationFeedback(edit({ duration: 8 }), report, baseline)).toEqual(
+    [],
+  );
+  expect(
+    animationFeedback(
+      edit({ start: 210, duration: 90, mediaStart: 2, playbackRate: 2 }),
+      report,
+      baseline,
+    ),
+  ).toEqual([]);
+  // Repeat duration and end times never enter the report or the rule.
+  expect(animationFeedback(timeline, report, baseline)).toEqual([]);
+});
+
+test("a following tween stays silent, a changed start warns beyond 2 ms", () => {
+  const moved = edit({ start: 240 });
+  expect(
+    animationFeedback(moved, { ...report, title: [[0, 8.0019]] }, baseline),
+  ).toEqual([]);
+  expect(
+    animationFeedback(moved, { ...report, title: [[0, 8.0021]] }, baseline),
   ).toHaveLength(1);
-  expect(animationFeedback(before, before, windows, follows)).toEqual([]);
-  const resized = {
-    ...after,
-    clips: after.clips.map((clip) => ({
-      ...clip,
-      duration: clip.duration - 1,
-    })),
+});
+
+test("new pairs after a command cannot silently establish intent; source rebaseline clears", () => {
+  const late: TweenWindows = {
+    ...report,
+    title: [
+      [0, 6],
+      [1, 7],
+    ],
   };
-  expect(animationFeedback(before, resized, windows, windows)).toEqual([]);
+  expect(animationFeedback(timeline, late, baseline)).toHaveLength(1);
   expect(
-    animationFeedback(before, after, windows, { ...windows, title: [] }),
+    animationFeedback(timeline, late, animationOffsets(timeline, late)),
+  ).toEqual([]);
+  expect(animationFeedback(timeline, {}, baseline)).toEqual([]);
+});
+
+test("razor pieces inherit intent, moved pieces and pasted copies warn", () => {
+  const piece = {
+    ...timeline.clips[0]!,
+    id: "piece",
+    animationSource: "title",
+    start: 240,
+    duration: 60,
+    animationInPoint: 2,
+  };
+  const split = { ...timeline, clips: [...timeline.clips, piece] };
+  const shared: TweenWindows = { ...report, piece: [[0, 6]] };
+  expect(animationFeedback(split, shared, baseline)).toEqual([]);
+  expect(
+    animationFeedback(
+      { ...split, clips: [...timeline.clips, { ...piece, start: 300 }] },
+      shared,
+      baseline,
+    ).map(({ clip }) => clip.id),
+  ).toEqual(["piece"]);
+  expect(
+    animationFeedback(
+      { ...timeline, clips: [{ ...piece, start: 600, animationInPoint: 0 }] },
+      { piece: [[0, 6]] },
+      baseline,
+    ),
+  ).toHaveLength(1);
+});
+
+test("legal clip ids do not read inherited properties when the compact report omits them", () => {
+  const clip = { ...timeline.clips[0]!, id: "constructor" };
+  const source = { ...timeline, clips: [clip] };
+  const windows: TweenWindows = {
+    constructor: [[0, 6] satisfies [number, number]],
+  };
+  const known = animationOffsets(source, windows);
+  expect(animationFeedback(source, {}, known)).toEqual([]);
+  expect(animationOffsets(source, {}).get("constructor")?.size).toBe(0);
+  expect(
+    animationFeedback(
+      { ...source, clips: [{ ...clip, start: 240 }] },
+      windows,
+      known,
+    ),
   ).toHaveLength(1);
 });

@@ -581,6 +581,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         return {
           ...clip,
           id,
+          animationSource: clip.animationSource ?? clip.id,
           start: command.at + clip.start - start,
           link: clip.link ? links.get(clip.link)! : null,
           startRef: null,
@@ -1342,6 +1343,12 @@ function windowClip(
     start,
     duration,
     mediaStart: advance(clip, start - clip.start, fps),
+    ...(clip.mediaStart === null &&
+      start !== clip.start && {
+        animationInPoint:
+          (clip.animationInPoint ?? 0) +
+          frameTime(start - clip.start, fps) * clip.playbackRate,
+      }),
   };
 }
 
@@ -1349,11 +1356,15 @@ function windowClip(
 export function canonicalTimeline(timeline: Timeline): Timeline {
   return {
     ...timeline,
-    clips: timeline.clips.map((clip) =>
-      clip.mediaStart === null
-        ? clip
-        : { ...clip, mediaStart: round6(clip.mediaStart) + 0 },
-    ),
+    clips: timeline.clips.map((clip) => ({
+      ...clip,
+      ...(clip.mediaStart !== null && {
+        mediaStart: round6(clip.mediaStart) + 0,
+      }),
+      ...(clip.animationInPoint !== undefined && {
+        animationInPoint: round6(clip.animationInPoint) + 0,
+      }),
+    })),
   };
 }
 
@@ -1378,6 +1389,7 @@ function splitClips(
     onCreate(id, { copyOf: clip.id });
     return {
       ...windowClip(clip, at, clipEnd(clip), fps),
+      animationSource: clip.animationSource ?? clip.id,
       id,
       startRef: null,
     };

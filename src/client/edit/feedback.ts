@@ -196,37 +196,50 @@ export function outsideMessage(
     : `${actor} updated timeline.`;
 }
 
+/** Known-good tween offsets survive commands, undo, and redo. Only source edits redefine intent. */
+export type AnimationBaseline = ReadonlyMap<
+  string,
+  ReadonlyMap<number, number>
+>;
+
+export function animationOffsets(timeline: Timeline, windows: TweenWindows) {
+  return new Map(
+    timeline.clips.map((clip) => {
+      const origin =
+        toSeconds(clip.start, timeline.fps) -
+        (clip.mediaStart ?? clip.animationInPoint ?? 0) / clip.playbackRate;
+      return [
+        clip.id,
+        new Map(
+          (Object.hasOwn(windows, clip.id) ? windows[clip.id]! : []).map(
+            ([id, start]) => [id, start - origin],
+          ),
+        ),
+      ];
+    }),
+  );
+}
+
 export function animationFeedback(
-  before: Timeline,
-  after: Timeline,
-  previous: TweenWindows,
-  next: TweenWindows,
+  timeline: Timeline,
+  windows: TweenWindows,
+  baseline: AnimationBaseline,
 ) {
-  const old = new Map(before.clips.map((clip) => [clip.id, clip]));
-  if (
-    !after.clips.some((clip) => {
-      const from = old.get(clip.id);
+  const offsets = animationOffsets(timeline, windows);
+  return timeline.clips.flatMap((clip) => {
+    const known =
+      baseline.get(clip.id) ??
+      (clip.animationSource ? baseline.get(clip.animationSource) : undefined);
+    const changed = (
+      Object.hasOwn(windows, clip.id) ? windows[clip.id]! : []
+    ).find(([id]) => {
+      const offset = known?.get(id);
       return (
-        from && from.duration === clip.duration && from.start !== clip.start
+        offset === undefined ||
+        Math.abs(offsets.get(clip.id)!.get(id)! - offset) > 0.002
       );
-    })
-  )
-    return [];
-  return after.clips.flatMap((clip) => {
-    const from = old.get(clip.id);
-    if (!from || from.duration !== clip.duration) return [];
-    const a = previous[clip.id] ?? [];
-    const b = next[clip.id] ?? [];
-    if (!a.length && !b.length) return [];
-    const delta = toSeconds(clip.start - from.start, after.fps);
-    const follows =
-      a.length === b.length &&
-      a.every(
-        (window, index) =>
-          Math.abs(b[index]!.start - window.start - delta) <= 0.002 &&
-          Math.abs(b[index]!.end - window.end - delta) <= 0.002,
-      );
-    return follows ? [] : [{ clip, time: b[0]?.start ?? a[0]!.start }];
+    });
+    return changed ? [{ clip, time: changed[1] }] : [];
   });
 }
 

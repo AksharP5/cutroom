@@ -25,7 +25,7 @@ import { TextField } from "./TextField";
 import { groupedChanges, pendingEdit, shownChanges } from "./changes";
 import { transport } from "../transport";
 import {
-  useAnimationWindows,
+  useAnimationWarnings,
   previewPosition,
   observePosition,
   usePositionWarning,
@@ -99,7 +99,7 @@ export function Inspector({
   projectId: string;
   onSaveNote: SaveNote;
 }) {
-  const animation = useAnimationWindows((state) => state.report);
+  const animation = useAnimationWarnings((state) => state.report);
   const [savingAnimation, setSavingAnimation] = useState(false);
   const mode = useContext(EditorToolsContext)?.mode;
   const open = useWorkspace((state) => state.inspector);
@@ -165,23 +165,9 @@ export function Inspector({
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
-  const animatedClip = animation?.timeline.clips.find(
-    (item) => item.id === clip?.id,
+  const animationWarning = animation?.warnings.find(
+    (item) => item.clip.id === clip?.id,
   );
-  const outsideAnimation =
-    animatedClip && animation
-      ? animation.windows[animatedClip.id]?.find(
-          (window) =>
-            window.start <
-              toSeconds(animatedClip.start, animation.timeline.fps) - 0.002 ||
-            window.end >
-              toSeconds(
-                animatedClip.start + animatedClip.duration,
-                animation.timeline.fps,
-              ) +
-                0.002,
-        )
-      : undefined;
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
     observePosition(
@@ -480,23 +466,23 @@ export function Inspector({
               <CaretRight size={10} aria-hidden />
               Timing
             </summary>
-            {outsideAnimation && animatedClip && animation && (
+            {animationWarning && animation && (
               <p className="inspector-warning" role="status">
                 <Warning size={14} aria-hidden />
                 <span>
                   Animation plays at{" "}
                   {formatTimecode(
-                    toFrames(outsideAnimation.start, animation.timeline.fps),
+                    toFrames(animationWarning.time, animation.timeline.fps),
                     animation.timeline.fps,
                   )}
-                  , outside this clip.{" "}
+                  {" after this clip moved. "}
                   <button
                     type="button"
                     disabled={savingAnimation}
                     onClick={() => {
                       const { draft, body } = animationReview(
-                        animatedClip,
-                        outsideAnimation.start,
+                        animationWarning.clip,
+                        animationWarning.time,
                         animation.timeline.fps,
                       );
                       setSavingAnimation(true);

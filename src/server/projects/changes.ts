@@ -215,7 +215,22 @@ export async function compositionVersions(
       versions.set(id, signature(JSON.stringify([versions.get(id), media])));
     }),
   );
-  return { versions, mediaFiles, references: paths };
+  return {
+    versions,
+    mediaFiles,
+    references: paths,
+    sourceVersion: signature(
+      JSON.stringify([
+        source.version,
+        ...(await Promise.all(
+          dependencies
+            .filter((path) => /\.(?:css|[cm]?[jt]sx?)$/i.test(path))
+            .sort()
+            .map(async (path) => [path, (await file(path)).content]),
+        )),
+      ]),
+    ),
+  };
 }
 
 /** A null id covers every authored byte outside addressable clip elements. */

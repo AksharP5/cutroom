@@ -18,16 +18,22 @@ import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import { PictureSelect } from "./PictureSelect";
-import { useTimeline, afterTimelineEdits, confirmedTimeline } from "./timeline";
+import {
+  useTimeline,
+  afterTimelineEdits,
+  confirmedTimelineView,
+} from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import {
   animationFeedback,
+  animationOffsets,
   animationMessage,
   animationReview,
 } from "./feedback";
-import { connectPreview, useAnimationWindows } from "./preview";
+import type { AnimationBaseline } from "./feedback";
+import { connectPreview, useAnimationWarnings } from "./preview";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 
@@ -58,6 +64,11 @@ export function Viewer({
   onSaveNote: SaveNote;
 }) {
   const dismissAnimation = useRef(() => {});
+  const animationBaseline = useRef<{
+    intent: string | undefined;
+    offsets: AnimationBaseline;
+  } | null>(null);
+  const toastedClips = useRef(new Set<string>());
   const saveNote = useRef(onSaveNote);
   saveNote.current = onSaveNote;
   const stage = useRef<HTMLDivElement>(null);
@@ -201,51 +212,101 @@ export function Viewer({
     const picture = handoff.confirmed;
     if (!picture) return;
     const preview = connections.current.get(picture.gen);
-    if (!preview?.windows) return;
+    if (!preview) return;
     let cancelled = false;
+    let timer = 0;
+    const current = () =>
+      !cancelled && latest.current === picture.gen && !preview.signal.aborted;
     void afterTimelineEdits(projectId, async () => {
-      if (cancelled) return;
-      const timeline = confirmedTimeline(projectId);
-      if (!timeline || !preview.windows) return;
-      const previous = useAnimationWindows.getState().report;
-      const windows = preview.windows;
-      useAnimationWindows.setState({ report: { timeline, windows } });
-      dismissAnimation.current();
-      if (!previous) return;
-      const clips = animationFeedback(
-        previous.timeline,
-        timeline,
-        previous.windows,
-        windows,
-      );
-      if (!clips.length) return;
-      dismissAnimation.current = showToast(
-        animationMessage(clips, timeline.fps),
-        {
-          label: "Ask agent",
-          run() {
-            dismissAnimation.current();
-            void (async () => {
-              for (const { clip, time } of clips) {
-                const { draft, body } = animationReview(
-                  clip,
-                  time,
-                  timeline.fps,
+      if (!current()) return;
+      const view = confirmedTimelineView(projectId);
+      if (!view) return;
+      const { timeline, animationIntent } = view;
+      const baseline = animationBaseline.current;
+      const loading = !baseline || baseline.intent !== animationIntent;
+      if (loading) {
+        animationBaseline.current = {
+          intent: animationIntent,
+          offsets: new Map(),
+        };
+        dismissAnimation.current();
+        toastedClips.current.clear();
+      }
+      let previousReport = "";
+      let samples = 0;
+      const sample = async () => {
+        if (!current()) return;
+        const windows = await preview.animationWindows();
+        if (!current()) return;
+        if (loading)
+          animationBaseline.current!.offsets = animationOffsets(
+            timeline,
+            windows,
+          );
+        const warnings = animationFeedback(
+          timeline,
+          windows,
+          animationBaseline.current!.offsets,
+        );
+        const previous = useAnimationWarnings.getState().report?.warnings ?? [];
+        useAnimationWarnings.setState({ report: { timeline, warnings } });
+        const ids = new Set(warnings.map(({ clip }) => clip.id));
+        if ([...toastedClips.current].some((id) => !ids.has(id))) {
+          dismissAnimation.current();
+          toastedClips.current.clear();
+        }
+        const clips = warnings.filter(
+          ({ clip }) => !previous.some((item) => item.clip.id === clip.id),
+        );
+        if (!loading && clips.length) {
+          dismissAnimation.current();
+          toastedClips.current = new Set(clips.map(({ clip }) => clip.id));
+          dismissAnimation.current = showToast(
+            animationMessage(clips, timeline.fps),
+            {
+              label: "Ask agent",
+              run() {
+                dismissAnimation.current();
+                void (async () => {
+                  for (const { clip, time } of clips) {
+                    const { draft, body } = animationReview(
+                      clip,
+                      time,
+                      timeline.fps,
+                    );
+                    await saveNote.current(draft, body);
+                  }
+                })().catch((error: unknown) =>
+                  showToast(
+                    error instanceof Error ? error.message : String(error),
+                  ),
                 );
-                await saveNote.current(draft, body);
-              }
-            })().catch((error: unknown) =>
-              showToast(error instanceof Error ? error.message : String(error)),
-            );
-          },
-        },
-        { tone: "info", priority: "attention" },
-      );
+              },
+            },
+            { tone: "info", priority: "attention" },
+          );
+        }
+        const report = JSON.stringify(windows);
+        samples++;
+        // Always sample through one second, even if early reports agree: authors may
+        // register or construct timelines in a timer after runtime readiness.
+        if (samples < 3 || report !== previousReport)
+          timer = window.setTimeout(
+            () => void sample().catch(fail),
+            samples === 1 ? 300 : 1000,
+          );
+        previousReport = report;
+      };
+      const fail = (error: unknown) => {
+        if (current()) reportEditorError("viewer", error);
+      };
+      await sample();
     }).catch((error: unknown) => {
-      if (!cancelled) reportEditorError("viewer", error);
+      if (current()) reportEditorError("viewer", error);
     });
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [handoff.confirmed, projectId]);
 
@@ -255,7 +316,7 @@ export function Viewer({
         connection.dispose();
       connections.current.clear();
       dismissAnimation.current();
-      useAnimationWindows.setState({ report: null });
+      useAnimationWarnings.setState({ report: null });
       transport.attach(null);
       reportEditorError("viewer", null);
       useWorkspace.setState({ composition: null });

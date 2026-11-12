@@ -361,6 +361,7 @@ export function createTimelineRoutes(
                 : undefined,
             ),
           batch.noteId,
+          true,
         )),
         ...(await reviews.clipChanges(project, batch.composition)),
       });

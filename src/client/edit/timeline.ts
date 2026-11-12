@@ -89,8 +89,8 @@ let queue = Promise.resolve();
 /** The engine's last answer, which the shown view starts from. */
 let confirmed: { projectId: string; view: TimelineView } | null = null;
 /** The confirmed projection, never the optimistic edits still waiting for the server. */
-export const confirmedTimeline = (projectId: string) =>
-  confirmed?.projectId === projectId ? confirmed.view.timeline : null;
+export const confirmedTimelineView = (projectId: string) =>
+  confirmed?.projectId === projectId ? confirmed.view : null;
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
 /** The header toast this queue last showed, cleared by the next edit that lands. */

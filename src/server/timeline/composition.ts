@@ -611,6 +611,11 @@ export function parseComposition(
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
     const playbackRate = readPlaybackRate(attribute);
+    const animationInPoint =
+      kind === "element" || kind === "image"
+        ? (parseNumeric(attribute("data-playback-start")) ??
+          parseNumeric(attribute("data-media-start")))
+        : null;
     return {
       id,
       track: read.trackIndex,
@@ -625,6 +630,10 @@ export function parseComposition(
               playbackRate,
             )
           : null,
+      ...(element.attrs["data-cutroom-animation-source"] && {
+        animationSource: element.attrs["data-cutroom-animation-source"],
+      }),
+      ...(animationInPoint !== null && { animationInPoint }),
       playbackRate,
       src:
         kind === "composition"
@@ -926,6 +935,16 @@ function clipChanges(
     changes.push(["data-track-index", String(after.track)]);
     if (has("data-layer")) changes.push(["data-layer", null]);
   }
+  if (before.animationInPoint !== after.animationInPoint)
+    changes.push([
+      "data-playback-start",
+      String(canonicalSeconds(after.animationInPoint ?? 0)),
+    ]);
+  if (before.animationSource !== after.animationSource)
+    changes.push([
+      "data-cutroom-animation-source",
+      after.animationSource ?? null,
+    ]);
   const mediaStart =
     after.mediaStart === null ? null : canonicalSeconds(after.mediaStart) + 0;
   const authoredMediaStart = canonicalSeconds(

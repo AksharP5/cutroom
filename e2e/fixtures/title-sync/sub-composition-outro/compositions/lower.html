@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        #root {
+          position: absolute;
+          inset: 0;
+        }
+        #lower-text {
+          position: absolute;
+          left: 8%;
+          bottom: 12%;
+          margin: 0;
+          padding: 18px 28px;
+          background: #111111;
+          color: #ededed;
+          font-size: 44px;
+          font-weight: 600;
+        }
+      </style>
+      <div
+        id="root"
+        data-composition-id="lower"
+        data-width="1920"
+        data-height="1080"
+      >
+        <p id="lower-text">Ada Lovelace, Founder</p>
+      </div>
+      <script>
+        {
+          // The clip this instance plays in: its length and the in-point a head trim or cut leaves behind.
+          const clip = document
+            .querySelector('[data-composition-id="lower"]')
+            .closest("[data-start]");
+          const inPoint = Number(
+            clip.getAttribute("data-playback-start") ??
+              clip.getAttribute("data-media-start") ??
+              0,
+          );
+          const out = inPoint + Number(clip.getAttribute("data-duration"));
+          const tl = gsap.timeline({ paused: true });
+          tl.fromTo(
+            "#lower-text",
+            { opacity: 0, x: -60 },
+            { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" },
+            0,
+          );
+          tl.to(
+            "#lower-text",
+            { opacity: 0, duration: 0.4, ease: "none" },
+            out - 0.4,
+          );
+          window.__timelines["lower"] = tl;
+        }
+      </script>
+    </template>
+  </body>
+</html>

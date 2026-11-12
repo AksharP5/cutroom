@@ -95,15 +95,10 @@ export const TextWarningSchema = PositionWarningSchema.extend({
   text: z.string(),
 });
 
-/** Tween windows in the owning composition's seconds, excluding registered child timelines. */
+/** Clip-local tween ordinals and starts in composition seconds; registered children are excluded. */
 export const TweenWindowsSchema = z.record(
   z.string(),
-  z.array(
-    z.object({
-      start: z.number().finite(),
-      end: z.number().finite(),
-    }),
-  ),
+  z.array(z.tuple([z.number().int().nonnegative(), z.number().finite()])),
 );
 export type TweenWindows = z.infer<typeof TweenWindowsSchema>;
 export const AnimationWindowsSchema = z.object({

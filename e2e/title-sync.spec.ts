@@ -83,7 +83,7 @@ test("Shift+X warns when a helper-built title leaves its animation behind and As
   await expect(warning).toBeVisible();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   await expect(inspector.locator(".inspector-timing")).toContainText(
-    "Animation plays at 00:00:36:00, outside this clip.",
+    "Animation plays at 00:00:36:00 after this clip moved.",
   );
   await expect(
     inspector.getByRole("button", { name: "Ask agent", exact: true }),
@@ -139,12 +139,18 @@ test("Shift+X keeps a sub-composition title attached without an animation warnin
   await expect(
     page.frameLocator("iframe[data-live]").locator("#cta-text"),
   ).toHaveCSS("opacity", "1");
-  // Confirm the negative result came from the new report, rather than a missing bridge.
-  // Playback must not publish more window reports.
-  await expect
-    .poll(() => page.evaluate(() => Reflect.get(window, "animationReports")))
-    .toEqual([
-      { "shot-a": [], "shot-b": [], "shot-c": [], cta: [] },
-      { "shot-a": [], "shot-c": [], cta: [] },
-    ]);
+  // Settle requests are finite and do not run on the playback clock.
+  await page.waitForTimeout(1400);
+  const count = await page.evaluate(
+    () => Reflect.get(window, "animationReports").length,
+  );
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await page.waitForTimeout(500);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  expect(
+    await page.evaluate(() => Reflect.get(window, "animationReports").length),
+  ).toBe(count);
+  expect(
+    await page.evaluate(() => Reflect.get(window, "animationReports").at(-1)),
+  ).toEqual({});
 });

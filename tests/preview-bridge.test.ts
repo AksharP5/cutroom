@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { browserExecutable } from "../src/server/hyperframes/render";
-import { z } from "zod";
+import type { TweenWindows } from "../src/shared/preview";
+import { AnimationWindowsSchema } from "../src/shared/preview";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import type { DefaultTreeAdapterTypes } from "parse5";
@@ -115,7 +116,7 @@ test("measured media windows filter the same clips before assigning generated na
 });
 
 test.skipIf(!browserExecutable())(
-  "bridge reports built literal, loop and helper tween windows once, excluding registered children",
+  "bridge reports built literal, loop and helper tween starts per request, excluding registered children",
   async () => {
     const { default: puppeteer } = await import("puppeteer-core");
     const browser = await puppeteer.launch({
@@ -132,6 +133,7 @@ test.skipIf(!browserExecutable())(
         <div id="literal" data-start="36" data-duration="4"></div>
         <div id="loop" data-start="6" data-duration="4"><span></span><span></span></div>
         <div id="helper" data-start="12" data-duration="4"></div>
+        <div id="constructor" data-start="18" data-duration="4"></div>
         <div id="nested" data-composition-id="nested" data-start="24" data-duration="4"><span></span></div>
       </main><script>${gsap}</script><script>
         window.reports = [];
@@ -146,6 +148,7 @@ test.skipIf(!browserExecutable())(
           document.querySelectorAll('#loop span').forEach((word, i) => tl.from(word, {opacity:0, duration:.4}, 6 + i * .15));
           function fade(target, time) {tl.fromTo(target, {opacity:0}, {opacity:1, duration:.5}, time);}
           fade('#helper', 12);
+          fade('#constructor', 18);
           const manual = gsap.timeline().to('#helper', {x:10, duration:.25}, .5);
           manual.timeScale(2);
           tl.add(manual, 13);
@@ -160,41 +163,45 @@ test.skipIf(!browserExecutable())(
       );
       await page.evaluate(() =>
         window.postMessage(
-          { source: "cutroom-viewer", id: "first", action: "inspect" },
+          {
+            source: "cutroom-viewer",
+            id: "first",
+            action: "animation-windows",
+          },
           "*",
         ),
       );
       await page.waitForFunction("window.reports.length === 1", {
         timeout: 2000,
       });
-      const report = z
-        .object({
-          windows: z.record(
-            z.string(),
-            z.array(z.object({ start: z.number(), end: z.number() })),
-          ),
-        })
-        .parse(await page.evaluate("window.reports[0]"));
-      expect(report.windows).toEqual({
-        literal: [{ start: 36, end: 36.5 }],
+      const report = AnimationWindowsSchema.parse(
+        await page.evaluate("window.reports[0]"),
+      );
+      const expected: TweenWindows = {
+        literal: [[0, 36]],
         loop: [
-          { start: 6, end: 6.4 },
-          { start: 6.15, end: expect.closeTo(6.55, 8) },
+          [0, 6],
+          [1, 6.15],
         ],
         helper: [
-          { start: 12, end: 12.5 },
-          { start: 13.25, end: 13.375 },
+          [0, 12],
+          [1, 13.25],
         ],
-        nested: [],
-      });
+        constructor: [[0, 18] satisfies [number, number]],
+      };
+      expect(report.windows).toEqual(expected);
       await page.evaluate(() =>
         window.postMessage(
-          { source: "cutroom-viewer", id: "second", action: "inspect" },
+          {
+            source: "cutroom-viewer",
+            id: "second",
+            action: "animation-windows",
+          },
           "*",
         ),
       );
       await page.waitForFunction("window.replies.includes('second')");
-      expect(await page.evaluate("window.reports.length")).toBe(1);
+      expect(await page.evaluate("window.reports.length")).toBe(2);
     } finally {
       await browser.close();
     }

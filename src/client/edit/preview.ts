@@ -21,6 +21,7 @@ import type {
   TweenWindows,
 } from "../../shared/preview";
 import type { Timeline } from "../../shared/timeline/schema";
+import type { animationFeedback } from "./feedback";
 import type { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
@@ -29,8 +30,11 @@ import { editPicture, followEditPicture } from "./editFrame";
 import type { EditPicture } from "./editFrame";
 import { seekQueue } from "./seekQueue";
 
-export const useAnimationWindows = create<{
-  report: { timeline: Timeline; windows: TweenWindows } | null;
+export const useAnimationWarnings = create<{
+  report: {
+    timeline: Timeline;
+    warnings: ReturnType<typeof animationFeedback>;
+  } | null;
 }>(() => ({ report: null }));
 
 export const usePositionWarning = create<{
@@ -354,8 +358,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       observe(observedClip);
       send("meter", { enabled: true });
     },
-    get windows() {
-      return windows;
+    async animationWindows() {
+      await request("animation-windows");
+      return windows ?? {};
     },
     get state() {
       return state;

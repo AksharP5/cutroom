@@ -41,11 +41,22 @@ function animationWindows(
   registry: Record<string, gsap.core.Timeline | undefined>,
 ): TweenWindows {
   const timeline = registry[root.getAttribute("data-composition-id") ?? ""];
-  const clips = [...root.querySelectorAll("[data-hf-cutroom-clip-id]")];
-  const windows: TweenWindows = Object.fromEntries(
-    clips.map((clip) => [clip.getAttribute("data-hf-cutroom-clip-id")!, []]),
-  );
+  const clips = new Map<Element, string>();
+  for (const clip of root.querySelectorAll("[data-hf-cutroom-clip-id]"))
+    clips.set(clip, clip.getAttribute("data-hf-cutroom-clip-id")!);
+  const windows: TweenWindows = Object.create(null);
   if (!timeline) return windows;
+  const owners = new Map<Element, string | null>();
+  const owner = (target: Element): string | null => {
+    if (owners.has(target)) return owners.get(target)!;
+    const id =
+      clips.get(target) ??
+      (target.parentElement && target !== root
+        ? owner(target.parentElement)
+        : null);
+    owners.set(target, id);
+    return id;
+  };
   const registered = new Set(Object.values(registry));
   const visit = (parent: gsap.core.Timeline, offset: number, rate: number) => {
     for (const child of parent.getChildren(false, true, true)) {
@@ -58,24 +69,19 @@ function animationWindows(
       }
       if (child.duration() <= 0) continue;
       const targets: unknown[] = child.targets();
-      const end = start + child.totalDuration() / childRate;
-      if (!targets.length || !Number.isFinite(end)) continue;
-      for (const clip of clips) {
-        if (
-          targets.every(
-            (target) => target instanceof Element && clip.contains(target),
-          )
-        )
-          windows[clip.getAttribute("data-hf-cutroom-clip-id")!]!.push({
-            start,
-            end,
-          });
+      const ids = new Set<string>();
+      for (const target of targets) {
+        const id = target instanceof Element ? owner(target) : null;
+        if (id) ids.add(id);
+      }
+      for (const id of ids) {
+        const values = (windows[id] ??= []);
+        // Ordinals are clip-local: moving a DOM-timed clip may reorder root tweens.
+        values.push([values.length, start]);
       }
     }
   };
   visit(timeline, 0, 1);
-  for (const values of Object.values(windows))
-    values.sort((a, b) => a.start - b.start || a.end - b.end);
   return windows;
 }
 
@@ -88,32 +94,30 @@ function installPreviewBridge(
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
-  let windowReport: Promise<void> | null = null;
-  const reportWindows = () =>
-    (windowReport ??= (async () => {
-      // Fonts can build timelines in a microtask after the runtime's first binding attempt.
-      await document.fonts.ready;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const runtime = win as PreviewWindow & {
-        __renderReady?: boolean;
-        __hfTimelinesBuilding?: boolean;
-        __timelines?: Record<string, gsap.core.Timeline | undefined>;
-      };
-      while (!runtime.__renderReady || runtime.__hfTimelinesBuilding) {
-        if (retired) return;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+  const reportWindows = async () => {
+    // Fonts can build timelines in a microtask after the runtime's first binding attempt.
+    await document.fonts.ready;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const runtime = win as PreviewWindow & {
+      __renderReady?: boolean;
+      __hfTimelinesBuilding?: boolean;
+      __timelines?: Record<string, gsap.core.Timeline | undefined>;
+    };
+    while (!runtime.__renderReady || runtime.__hfTimelinesBuilding) {
       if (retired) return;
-      const root = document.querySelector("[data-composition-id]");
-      parent.postMessage(
-        {
-          source: "cutroom-preview",
-          type: "animation-windows",
-          windows: root ? readWindows(root, runtime.__timelines ?? {}) : {},
-        },
-        "*",
-      );
-    })());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (retired) return;
+    const root = document.querySelector("[data-composition-id]");
+    parent.postMessage(
+      {
+        source: "cutroom-preview",
+        type: "animation-windows",
+        windows: root ? readWindows(root, runtime.__timelines ?? {}) : {},
+      },
+      "*",
+    );
+  };
   const positions = new Map<
     HTMLElement | SVGElement,
     { translate: string; priority: string; base: string; x: number; y: number }
@@ -1354,8 +1358,10 @@ function installPreviewBridge(
           if (!positionFrame)
             positionFrame = requestAnimationFrame(writePosition);
           return;
+        case "animation-windows":
+          await reportWindows();
+          break;
         case "inspect":
-          if (win.__player) await reportWindows();
           break;
         case "cancel-edit":
           // Let the one pending seek finish without painting a stale edge. The queued
