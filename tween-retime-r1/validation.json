@@ -1,0 +1,52 @@
+{
+  "head": "8f25b59bbd4807f548d613666984fb0b64bd9944",
+  "base": "f659dac819a7ece4b10fabeb968485958361e66e",
+  "reviewedHead": "14edb2d1a5e5429b9a8d7e72b8ba4317f7db12f7",
+  "before": {
+    "originalUnitRepros": {
+      "passed": 0,
+      "failed": 7
+    },
+    "acceptedRefusalUnitRepros": {
+      "passed": 0,
+      "failed": 7
+    },
+    "browserRepros": {
+      "passed": 0,
+      "failed": 6
+    }
+  },
+  "after": {
+    "focusedRetimerUnit": {
+      "passed": 57,
+      "failed": 0
+    },
+    "fullUnit": {
+      "passed": 657,
+      "skipped": 5,
+      "failed": 0
+    },
+    "functionalBrowserFull": {
+      "passed": 317,
+      "failed": 3,
+      "failureCause": "Reused scratch registry contained duplicate project names; strict selectors failed in home dates, project watchers, voiceover project switch."
+    },
+    "freshScratchTargetedRerun": {
+      "passed": 3,
+      "failed": 0
+    },
+    "retimerBrowser": {
+      "passed": 10,
+      "failed": 0
+    },
+    "performance": {
+      "passed": 7,
+      "failed": 0
+    }
+  },
+  "limitations": [
+    "Four optional native-window unit checks and the local Whisper integration were skipped.",
+    "bench:timeline request budget is over 50ms on main, reviewed head, and final head.",
+    "Browser verification used real muted headless Chromium."
+  ]
+}

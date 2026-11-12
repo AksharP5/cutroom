@@ -1,0 +1,112 @@
+[
+  {
+    "name": "relative",
+    "before": [
+      {
+        "id": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:36:00.\nAsk agent\nDismiss"
+  },
+  {
+    "name": "mutablePosition",
+    "before": [
+      {
+        "id": "cta",
+        "at": 40
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "at": 40
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "name": "mutableTarget",
+    "before": [
+      {
+        "id": "shot-b",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "shot-b",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "name": "nestedScaled",
+    "before": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "name": "helperMap",
+    "before": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "name": "wrongTimeline",
+    "before": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:36:00.\nAsk agent\nDismiss"
+  }
+]

@@ -1,0 +1,31 @@
+{
+  "runtime": "Bun 1.4.4",
+  "clips": 500,
+  "bytes": 74761,
+  "animatedBytes": 112633,
+  "animationScriptBytes": 37855,
+  "medianMs": {
+    "parse": 5.54,
+    "apply": 1.85,
+    "multiRangeApply": 3.12,
+    "patch": 2.29,
+    "animatedPatch": 2.38,
+    "animatedMove": 1.93,
+    "denseTweenPatch": 1.68,
+    "request": 58,
+    "bulkApply": 1.54,
+    "bulkPatch": 6.48
+  },
+  "budgetMs": {
+    "parse": 10,
+    "apply": 5,
+    "multiRangeApply": 15,
+    "patch": 5,
+    "animatedPatch": 20,
+    "animatedMove": 15,
+    "denseTweenPatch": 20,
+    "request": 50,
+    "bulkApply": 20,
+    "bulkPatch": 20
+  }
+}
