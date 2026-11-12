@@ -199,7 +199,8 @@ export function trackRows(
   const videoHeight = sizes.heights?.[nextIndex] ?? sizes.video;
   const audioHeight = sizes.heights?.[nextIndex] ?? sizes.audio;
   const rows: Row[] = [];
-  let top = sizes.dropZones ? videoHeight + sizes.seam : 0;
+  // The upper drop target overlays the ruler. Its preview occupies the future top row.
+  let top = 0;
   for (const [index, track] of video.toReversed().entries()) {
     rows.push({
       track,

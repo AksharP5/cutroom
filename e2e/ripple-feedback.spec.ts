@@ -197,9 +197,8 @@ test("owner imports, media drops, view preferences and source saves stay silent"
       ),
     )
     .toBe(true);
-  await page
-    .getByRole("combobox", { name: "Track density" })
-    .selectOption("compact");
+  await page.getByRole("combobox", { name: "Track density" }).click();
+  await page.getByRole("option", { name: "Compact", exact: true }).click();
   const source = SourceSchema.parse(
     await (await request.get(`${base}/source`)).json(),
   );
@@ -284,9 +283,8 @@ test("title text uses its first line at normal and compact heights and refreshes
   const text = page.locator('[data-clip-label="shot"] .tl-text');
   await expect(text).toHaveText("Every edit has a consequence");
   await page.screenshot({ path: info.outputPath("titles-normal.png") });
-  await page
-    .getByRole("combobox", { name: "Track density" })
-    .selectOption("compact");
+  await page.getByRole("combobox", { name: "Track density" }).click();
+  await page.getByRole("option", { name: "Compact", exact: true }).click();
   const height = page.getByRole("separator", { name: "Height V1" });
   await expect(height).toHaveAttribute("aria-valuenow", "32");
   await height.focus();

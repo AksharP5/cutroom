@@ -113,7 +113,7 @@ for (const height of [28, 200]) {
             (await page.locator(".tl-lane.video").first().boundingBox())!.y -
             (await page.locator(".tl-lanes").boundingBox())!.y,
         )
-        .toBe(density === "compact" ? 33 : 97);
+        .toBe(0);
       if (kind === "audio") {
         await page.locator(".tl-scroll").evaluate((element) => {
           element.scrollTop = element.scrollHeight;
@@ -129,8 +129,7 @@ for (const height of [28, 200]) {
       expect(held.height).toBe(expectedHeight - 2);
       if (kind === "video") {
         expect(held.y).toBe(lanes.y + 1);
-        expect(held.y + held.height).toBeLessThan(row.y);
-        expect(row.y - lanes.y).toBe(expectedHeight + 1);
+        expect(row.y).toBe(lanes.y);
       } else {
         expect(held.y).toBe(row.y + row.height + 1);
         expect(held.y + held.height).toBeLessThanOrEqual(
@@ -217,6 +216,10 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     ).timeline.clips.find((clip) => clip.id === "sound")!;
   await page.goto(`/#project/${project.id}`);
   const density = page.getByRole("combobox", { name: "Track density" });
+  const chooseDensity = async (value: string) => {
+    await density.click();
+    await page.getByRole("option", { name: value, exact: true }).click();
+  };
   const height = page.getByRole("separator", { name: "Height V1" });
   await expect(height).toHaveAttribute("aria-valuenow", "56");
   const titleTop = (await page.locator('[data-clip="title"]').boundingBox())!.y;
@@ -241,7 +244,7 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     .toEqual({ "0": 120 });
   await page.reload();
   await expect(height).toHaveAttribute("aria-valuenow", "120");
-  await density.selectOption("compact");
+  await chooseDensity("Compact");
   await expect(height).toHaveAttribute("aria-valuenow", "32");
   await expect(
     page.getByRole("separator", { name: "Height A1" }),
@@ -253,7 +256,7 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     )
     .toBe("compact");
   await page.reload();
-  await expect(density).toHaveValue("compact");
+  await expect(density).toHaveText("Compact");
   const before = await clip();
   for (const [densityValue, shift, pixels, db] of [
     ["compact", false, 20, -5],
@@ -261,7 +264,7 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     ["compact", true, 20, -1],
     ["tall", true, 20, -1],
   ] as const) {
-    await density.selectOption(densityValue);
+    await chooseDensity(densityValue === "compact" ? "Compact" : "Tall");
     await expect(page.locator(".tl-grid")).toHaveAttribute(
       "data-refit",
       "settled",
@@ -289,7 +292,9 @@ test("track height and density survive reload, keep gain travel fixed, and leave
       .toBeCloseTo(db, 5);
     await page.keyboard.press("Control+z");
     await expect.poll(clip).toEqual(before);
-    await expect(density).toHaveValue(densityValue);
+    await expect(density).toHaveText(
+      densityValue === "compact" ? "Compact" : "Tall",
+    );
   }
   // View changes never consume an undo. The only person edits are the four gain drags.
   const history = await (await request.get(`${api}/history`)).json();
@@ -300,7 +305,7 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     ),
   ).toHaveLength(4);
   for (const value of ["compact", "tall"] as const) {
-    await density.selectOption(value);
+    await chooseDensity(value === "compact" ? "Compact" : "Tall");
     const handle = page.locator('[data-clip-mix="sound"] [data-mix="fadeIn"]');
     const bounds = (await handle.boundingBox())!;
     const ppf = await page
@@ -323,7 +328,7 @@ test("track height and density survive reload, keep gain travel fixed, and leave
     await page.keyboard.press("Control+z");
     await expect.poll(clip).toEqual(before);
   }
-  await density.selectOption("compact");
+  await chooseDensity("Compact");
   await page.getByRole("separator", { name: "Height V2" }).focus();
   await page.keyboard.press("End");
   await expect(
@@ -350,6 +355,6 @@ test("track height and density survive reload, keep gain travel fixed, and leave
   await expect.poll(clip).toEqual(before);
   await writeFile(join(project.path, ".cutroom/view.json"), "{broken");
   await page.reload();
-  await expect(density).toHaveValue("normal");
+  await expect(density).toHaveText("Normal");
   await expect(height).toHaveAttribute("aria-valuenow", "56");
 });

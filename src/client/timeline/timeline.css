@@ -1081,35 +1081,24 @@
   right: 0;
 }
 .tl-density-control {
-  position: relative;
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: var(--size-track-button);
+  flex: 1;
   height: var(--size-track-button);
+  padding: 0 var(--space-1);
   color: var(--text-secondary);
   border-radius: var(--radius-control);
 }
 .tl-density-control:hover {
   background: var(--surface-active);
 }
-.tl-density-control:has(:focus-visible) {
-  outline: var(--focus-ring-width) solid var(--focus-ring-color);
-}
-.tl-density {
+.tl-drop-above {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: transparent;
-  cursor: pointer;
-}
-.tl-density option {
-  color: var(--text-primary);
-  background: var(--surface-panel);
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--space-2);
+  z-index: var(--z-clip-selected);
+  background: var(--surface-active);
+  border-bottom: var(--stroke-hair) solid var(--text-tertiary);
 }
 .tl-track-resize {
   position: absolute;
@@ -1126,13 +1115,22 @@
   background: var(--line-strong);
 }
 .tl-head[data-compact] {
+  flex-direction: row;
+  align-items: center;
   gap: 0;
+  padding-right: var(--space-1);
 }
 .tl-head[data-compact] .tl-head-title {
-  height: 14px;
+  flex: 1;
+  height: var(--size-track-button);
 }
-.tl-head[data-compact] .tl-track-button {
-  height: 14px;
+.tl-head[data-compact] .tl-head-buttons {
+  flex: none;
+  padding-left: 0;
+}
+.tl-head[data-compact] .vo-input {
+  width: var(--size-track-button);
+  height: var(--size-track-button);
 }
 .tl-grid[data-resizing] {
   cursor: ns-resize;
