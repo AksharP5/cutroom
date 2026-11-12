@@ -113,9 +113,8 @@ for (const dpr of [1, 2])
         expect(wave.green).toBeGreaterThan(wave.red);
         expect((await drawn(id, 3)).alpha).toBe(0);
       }
-      await page
-        .getByRole("combobox", { name: "Track density" })
-        .selectOption("compact");
+      await page.getByRole("combobox", { name: "Track density" }).click();
+      await page.getByRole("option", { name: "Compact", exact: true }).click();
       await expect.poll(async () => isRed(await drawn("sound", 3))).toBe(true);
       await expect
         .poll(async () => (await drawn("location", 8)).alpha)

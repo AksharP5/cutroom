@@ -228,7 +228,7 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
           .first()
           .evaluate((e) => (e as HTMLElement).offsetTop),
       )
-      .toBeGreaterThan(0);
+      .toBe(0);
     await expect.poll(filmstripAtClip).toBe(255);
     await page.screenshot({ path: info.outputPath("new-track-preview.png") });
     await page.mouse.up();

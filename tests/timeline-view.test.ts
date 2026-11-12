@@ -279,11 +279,8 @@ test("new-track bands use the same row geometry as the created tracks", () => {
       )!;
       expect(preview.height).toBe(created.height);
       expect(preview.top + preview.height).toBeLessThan(layout.height);
-      for (const row of layout.rows)
-        expect(
-          preview.top + preview.height <= row.top ||
-            preview.top >= row.top + row.height,
-        ).toBe(true);
+      expect(preview.top).toBe(created.top);
+      expect(layout.rows).toEqual(trackRows(tracks, sizes).rows);
     }
   }
 });

@@ -10,12 +10,5 @@ export async function startMediaDrag(page: Page, row: Locator) {
   await page.mouse.move(box.x + box.width / 2 + 12, box.y + box.height / 2, {
     steps: 2,
   });
-  await expect
-    .poll(() =>
-      page
-        .locator(".tl-lane")
-        .first()
-        .evaluate((row: HTMLElement) => row.offsetTop),
-    )
-    .toBeGreaterThan(0);
+  await expect(page.locator(".tl-drop-above")).toBeVisible();
 }

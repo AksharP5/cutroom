@@ -6,6 +6,7 @@ import {
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { useWorkspace } from "../workspace";
+import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix } from "./mix";
 import { AudioMeters } from "./meters";
@@ -28,7 +29,6 @@ import {
   LockSimpleOpen,
   Minus,
   Plus,
-  Rows,
 } from "@phosphor-icons/react";
 import type {
   Clip,
@@ -421,16 +421,23 @@ const TrackHeads = memo(function TrackHeads({
 }) {
   return rows.map((row) => {
     const { track, id, top, height } = row;
+    const name =
+      track.name ??
+      `${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`;
     return (
       <div
         key={track.index}
         className={`tl-head ${track.kind}`}
+        role="group"
+        aria-label={`${id}: ${name}`}
         data-row={track.index}
         data-compact={height < 40 ? "" : undefined}
         style={{ top, height: height + 1 }}
       >
         <div className="tl-head-title">
-          <span className="tl-head-id">{id}</span>
+          <span className="tl-head-id" title={name}>
+            {id}
+          </span>
           <input
             key={`${track.index}:${track.name}`}
             className="tl-head-name"
@@ -737,7 +744,7 @@ export function Timeline({
   }, [source.projectId, source.composition]);
   useLayoutEffect(() => {
     bodies.current?.scene({ rows: layout.rows, tracks, fps });
-    // Opening an edge band changes row positions; redraw the held filmstrip afterward.
+    // A newly available edge destination needs the held filmstrip redrawn.
     if (trackDrag) refreshDrag.current();
   }, [source.projectId, source.composition, layout, tracks, fps, trackDrag]);
 
@@ -954,39 +961,29 @@ export function Timeline({
             >
               <Plus size={12} />
             </button>
-            <label
+            <SelectMenu
               className="tl-density-control"
-              title={`Track density: ${Object.keys(viewSettings.heights).length ? "Custom" : viewSettings.density}`}
-            >
-              <Rows size={14} aria-hidden="true" />
-              <select
-                className="tl-density"
-                aria-label="Track density"
-                title="Set all track heights"
-                value={
-                  Object.keys(viewSettings.heights).length
-                    ? "custom"
-                    : viewSettings.density
-                }
-                onChange={(event) => {
-                  const density = trackDensities.find(
-                    (value) => value === event.target.value,
-                  );
-                  if (density) onViewSettings({ density, heights: {} });
-                }}
-              >
-                {Object.keys(viewSettings.heights).length > 0 && (
-                  <option value="custom" disabled>
-                    Custom
-                  </option>
-                )}
-                {trackDensities.map((density) => (
-                  <option key={density} value={density}>
-                    {density[0]!.toUpperCase() + density.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              label="Track density"
+              title="Set all track heights"
+              value={
+                Object.keys(viewSettings.heights).length
+                  ? "custom"
+                  : viewSettings.density
+              }
+              options={[
+                ...(Object.keys(viewSettings.heights).length
+                  ? [{ value: "custom", label: "Custom" }]
+                  : []),
+                ...trackDensities.map((value) => ({
+                  value,
+                  label: value[0]!.toUpperCase() + value.slice(1),
+                })),
+              ]}
+              onChange={(value) => {
+                const density = trackDensities.find((item) => item === value);
+                if (density) onViewSettings({ density, heights: {} });
+              }}
+            />
           </div>
           <div
             className="tl-ruler"
@@ -1007,6 +1004,16 @@ export function Timeline({
             onPointerUp={endScrub}
             onPointerCancel={endScrub}
           >
+            {(draggingMedia || trackDrag) && (
+              <div
+                className="tl-drop-above"
+                aria-label="New video track"
+                onDragEnter={gestures.handlers.onDragEnter}
+                onDragOver={gestures.handlers.onDragOver}
+                onDragLeave={gestures.handlers.onDragLeave}
+                onDrop={gestures.handlers.onDrop}
+              />
+            )}
             {mounted && (
               <Ruler
                 frames={mounted.frames}

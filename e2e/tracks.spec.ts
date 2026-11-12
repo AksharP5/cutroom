@@ -167,8 +167,8 @@ test("starter layout keeps new-track drops inside the lanes at 1440 by 900", asy
   await expect(page.locator(".tl-lane.video")).toHaveCount(3);
   // Add picture above the starter's V1–V3. The old layout then left only 17px below A1.
   await drop(page, "Picture.mp4", async () => {
-    const box = (await page.locator(".tl-lanes").boundingBox())!;
-    return { x: box.x + 2, y: box.y + 7 };
+    const box = (await page.locator(".tl-drop-above").boundingBox())!;
+    return { x: box.x + 2, y: box.y + box.height / 2 };
   });
   await expect.poll(async () => (await read()).clips.length).toBe(5);
   const scroll = page.locator(".tl-scroll");
@@ -244,7 +244,7 @@ test("build and mix picture, voice and music with track drops, then export exact
     return { x: box.x + 2, y: box.y + offset };
   };
   // Above V1 creates V2. Sound gets the first free audio track, without a second UI action.
-  await drop(page, "Picture.mp4", () => point(".tl-lanes", 7));
+  await drop(page, "Picture.mp4", () => point(".tl-drop-above", 3));
   await expect.poll(async () => (await read()).clips.length).toBe(2);
   const picture = (await read()).clips.find((clip) => clip.kind === "video")!;
   const sound = (await read()).clips.find((clip) => clip.kind === "audio")!;
