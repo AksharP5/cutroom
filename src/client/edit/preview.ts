@@ -79,6 +79,11 @@ export const usePictureMove = create<{
   move: { clipId: string; x: number; y: number } | null;
 }>(() => ({ move: null }));
 
+/** A text clip whose words the inspector should take the keyboard for, asked from the picture. */
+export const useTextEdit = create<{ clipId: string | null }>(() => ({
+  clipId: null,
+}));
+
 type PositionDraft = { clipId: string; x: number | null; y: number | null };
 const positionTargets = new Set<(draft: PositionDraft) => void>();
 let positionDraft: PositionDraft | null = null;

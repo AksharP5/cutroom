@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import {
   createPositionProject,
@@ -86,8 +86,8 @@ async function open(
           return { left, top, width, height };
         }),
     /** The outline's box, back in composition pixels. */
-    outlined: async () => {
-      const edges = page.locator(".edit-select-outline i");
+    outlined: async (layer = ".edit-select-outline") => {
+      const edges = page.locator(`${layer} i`);
       const [top, left] = await Promise.all([
         edges.nth(4).boundingBox(),
         edges.nth(6).boundingBox(),
@@ -309,6 +309,221 @@ test("dragging on the picture moves Position live, commits one undo step, and Es
   await expect(guide).toBeHidden();
   await expect(x).toHaveValue("160 px");
 });
+
+test("a resting pointer outlines the clip a press would take and shows the move cursor", async ({
+  page,
+  request,
+}) => {
+  const { at, scale, selected, outlined } = await open(page, request);
+  const surface = page.getByRole("application", { name: "Picture" });
+  const hover = page.locator(".edit-select-hover");
+  await expect(hover).toBeHidden();
+
+  // Badge is drawn over Title, so a press here takes Badge.
+  await page.mouse.move(...at(240, 125));
+  await expect(hover).toHaveAttribute("data-outlined", "badge");
+  await expect(hover).toBeVisible();
+  near(
+    await outlined(".edit-select-hover"),
+    { left: 200, top: 110, width: 80, height: 30 },
+    scale,
+  );
+  await expect(surface).toHaveCSS("cursor", "move");
+  // Words is taken by its glyphs; the rest of its box shows the shot behind it.
+  await page.mouse.move(...at(360, 212));
+  await expect(hover).toHaveAttribute("data-outlined", "words");
+  await page.mouse.move(...at(560, 290));
+  await expect(hover).toHaveAttribute("data-outlined", "shot");
+
+  // The selection's outline already marks a selected clip.
+  await page.mouse.click(...at(100, 125));
+  await expect(selected).toHaveText("Title");
+  await page.mouse.move(...at(110, 130));
+  await expect(surface).toHaveCSS("cursor", "move");
+  await expect(hover).toBeHidden();
+  // Alt-click steps past the selected Title to Shot, and holding Alt says so.
+  await page.mouse.move(...at(240, 125));
+  await expect(hover).toHaveAttribute("data-outlined", "badge");
+  await page.keyboard.down("Alt");
+  await expect(hover).toHaveAttribute("data-outlined", "shot");
+  await page.keyboard.up("Alt");
+  await expect(hover).toHaveAttribute("data-outlined", "badge");
+
+  // A press takes over, and a playing picture would outrun the answer.
+  await page.mouse.down();
+  await expect(hover).toBeHidden();
+  await page.mouse.up();
+  await expect(selected).toHaveText("Badge");
+  await page.mouse.move(...at(360, 212));
+  await expect(hover).toHaveAttribute("data-outlined", "words");
+  await page.keyboard.press("Space");
+  await expect(hover).toBeHidden();
+  await page.mouse.move(...at(362, 213));
+  await page.mouse.move(...at(360, 212));
+  await expect(hover).toBeHidden();
+  await page.keyboard.press("Space");
+  await page.mouse.move(...at(362, 213));
+  await expect(hover).toHaveAttribute("data-outlined", "words");
+
+  // Other tools keep the picture to themselves.
+  await page.keyboard.press("n");
+  await expect(hover).toBeHidden();
+});
+
+test("a double-click on a text clip puts its words in the Text field", async ({
+  page,
+  request,
+}) => {
+  const { at, scale, commands, selected } = await open(page, request);
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const text = inspector.getByRole("textbox", { name: "Text", exact: true });
+  const words = () =>
+    page.frameLocator("iframe[data-live]").locator("#words").innerText();
+  /** The picture re-centres when the inspector closes, so measure it again. */
+  const now = async (x: number, y: number) => {
+    const box = (await page.locator(".edit-picture").boundingBox())!;
+    return [box.x + x * scale, box.y + y * scale] as const;
+  };
+
+  // The section is collapsed and the inspector closed: the double-click opens both.
+  await page.mouse.click(...at(360, 212));
+  await expect(selected).toHaveText("Words");
+  await inspector.locator("summary").filter({ hasText: "Text" }).click();
+  await expect(text).toBeHidden();
+  await inspector.getByRole("button", { name: "Close inspector" }).click();
+  await expect(inspector).toBeHidden();
+  await page.locator('[data-clip="shot"]').click();
+
+  await page.mouse.dblclick(...(await now(360, 212)), { delay: 40 });
+  await expect(selected).toHaveText("Words");
+  await expect(text).toBeFocused();
+  expect(
+    await text.evaluate((field: HTMLTextAreaElement) =>
+      field.value.slice(field.selectionStart, field.selectionEnd),
+    ),
+  ).toBe("Small words");
+  // Typing replaces the words, and Enter saves them as one step.
+  await page.keyboard.type("Big words");
+  await page.keyboard.press("Enter");
+  await expect(text).not.toBeFocused();
+  await expect.poll(words).toBe("Big words");
+  expect(commands.map((sent) => JSON.parse(sent).commands)).toEqual([
+    [{ type: "setClip", clipId: "words", text: "Big words" }],
+  ]);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(words).toBe("Small words");
+
+  // A shape has no words: the double-click only selects it.
+  await page.mouse.dblclick(...(await now(240, 125)), { delay: 40 });
+  await expect(selected).toHaveText("Badge");
+  await expect(text).toHaveCount(0);
+  await expect(
+    page.getByRole("application", { name: "Picture" }),
+  ).toBeFocused();
+});
+
+test("a drag leaves the clip on whole pixels and keeps a typed fraction on the axis it did not move", async ({
+  page,
+  request,
+}) => {
+  // Title is 201 px wide, so its centre sits on a half pixel and the frame's centre is 118.5 away.
+  const { at, commands, selected, drawn } = await open(
+    page,
+    request,
+    composition.replace(
+      "#title{left:60px;top:100px;width:200px",
+      "#title{left:101px;top:100px;width:201px",
+    ),
+  );
+  const x = positionField(page, "Position X");
+  const y = positionField(page, "Position Y");
+  const guide = page.locator('.edit-select-guides i[data-axis="x"]');
+  const sent = () => JSON.parse(commands.at(-1)!).commands;
+
+  await page.mouse.click(...at(110, 125));
+  await expect(selected).toHaveText("Title");
+  await y.fill("10.5");
+  await y.press("Enter");
+  await expect.poll(() => commands.length).toBe(1);
+  await expect.poll(async () => (await drawn("title")).top).toBe(110.5);
+
+  // Shift keeps the drag level; three pixels short of the centre it snaps there.
+  await page.mouse.move(...at(110, 135.5));
+  await page.mouse.down();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(...at(225.5, 137), { steps: 6 });
+  await expect(guide).toBeVisible();
+  // The fields and the picture show the whole pixel the release will save.
+  await expect(x).toHaveValue("119 px");
+  await expect(y).toHaveValue("10.5 px");
+  await expect.poll(async () => (await drawn("title")).left).toBe(220);
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(() => commands.length).toBe(2);
+  expect(sent()).toEqual([
+    { type: "setClip", clipId: "title", x: 119, y: 10.5 },
+  ]);
+  await expect(x).toHaveValue("119 px");
+  await expect.poll(async () => (await drawn("title")).left).toBe(220);
+
+  // One undo takes the whole drag back.
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(x).toHaveValue("0 px");
+  await expect(y).toHaveValue("10.5 px");
+});
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 1024, height: 700 },
+])
+  test(`the open inspector leaves the picture and transport whole at ${viewport.width}x${viewport.height}`, async ({
+    page,
+    request,
+  }) => {
+    await page.setViewportSize(viewport);
+    const { selected, commands } = await open(page, request);
+    const inspector = page.getByRole("complementary", { name: "Inspector" });
+    await page.locator(".tl-ruler").click({ position: { x: 40, y: 12 } });
+    await page.keyboard.press("i");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("o");
+    await page.locator('[data-clip="badge"]').click();
+    const toggle = page.getByRole("button", { name: "Inspector", exact: true });
+    if ((await toggle.getAttribute("aria-pressed")) !== "true")
+      await toggle.click();
+    await expect(selected).toHaveText("Badge");
+
+    const edge = (await inspector.boundingBox())!.x;
+    const right = async (target: Locator) => {
+      const box = (await target.boundingBox())!;
+      return box.x + box.width;
+    };
+    const picture = page.locator(".edit-picture");
+    await expect.poll(() => right(picture)).toBeLessThanOrEqual(edge);
+    expect((await picture.boundingBox())!.width).toBeGreaterThan(300);
+    for (const name of ["Mute", "Loop", "Fullscreen"])
+      expect(
+        await right(page.getByRole("button", { name, exact: true })),
+      ).toBeLessThanOrEqual(edge);
+    expect(
+      await page
+        .locator(".edit-tools")
+        .evaluate((row) => row.scrollWidth <= row.clientWidth),
+    ).toBe(true);
+
+    // The far corner of the picture still takes a press and a drag.
+    const box = (await picture.boundingBox())!;
+    const corner = [box.x + box.width - 12, box.y + 12] as const;
+    await page.mouse.click(...corner);
+    await expect(selected).toHaveText("Shot");
+    await page.mouse.move(...corner);
+    await page.mouse.down();
+    await page.mouse.move(corner[0] - 40, corner[1] + 20, { steps: 5 });
+    await page.mouse.up();
+    await expect
+      .poll(() => JSON.parse(commands.at(-1)!).commands)
+      .toMatchObject([{ type: "setClip", clipId: "shot" }]);
+  });
 
 test("arrow keys nudge the selected clip while the picture has focus", async ({
   page,

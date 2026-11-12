@@ -30,6 +30,7 @@ import {
   cancelPositionPreview,
   commitPositionPreview,
   usePictureMove,
+  useTextEdit,
 } from "../preview";
 
 export function InspectorToggle() {
@@ -162,6 +163,25 @@ export function Inspector({ projectId }: { projectId: string }) {
     );
   }, [projectId, clip?.id, clip?.text, clip?.sourceRestrictions?.text]);
   useEffect(() => () => observePosition(null), [projectId]);
+  const textEdit = useTextEdit((state) => state.clipId);
+  useEffect(() => {
+    if (!textEdit || !open) return;
+    // The section opens first; its field exists on the next pass.
+    if (textEdit === clip?.id && !textOpen) {
+      setTextOpen(true);
+      return;
+    }
+    useTextEdit.setState({ clipId: null });
+    if (textEdit !== clip?.id) return;
+    const field = root.current?.querySelector<HTMLTextAreaElement>(
+      ".inspector-text textarea",
+    );
+    // A field that cannot be edited still shows its reason; there is nothing to type into.
+    if (!field || field.disabled) return;
+    field.focus();
+    // Typing replaces the words, so retitling is double-click, type, Enter.
+    field.select();
+  }, [textEdit, open, clip?.id, textOpen]);
   const textWarning = useTextWarning((state) => state.warning);
   const textWarningFrame =
     textWarning &&

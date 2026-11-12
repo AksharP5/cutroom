@@ -15,7 +15,7 @@
   mirror them for script (panel resize, drawer logic). Change both together, here only.
 */
 
-@custom-media --drawer (max-width: 1303px); /* inspector becomes a drawer over the stage */
+@custom-media --drawer (max-width: 1303px); /* inspector opens under the tool row and starts closed */
 @custom-media --rail (max-width: 1023px); /* left column becomes a 44px icon rail */
 @custom-media --short (max-height: 959px); /* 6 media rows, Timing collapsed */
 
@@ -77,6 +77,7 @@
   --playhead: #ff4f3a; /* 5.7 on panel; playhead and meter clip only */
   --danger: #ff7a6b; /* 7.4 on panel; errors */
   --selection: #ededed; /* paper: selection outline, brackets, in/out */
+  --selection-hover: #a8a8a8; /* the clip a press on the picture would take */
   --range-band: rgb(237 237 237 / 0.08); /* in/out band in the ruler */
   --range-line: rgb(237 237 237 / 0.28); /* 1px in/out lines through tracks */
 
@@ -246,7 +247,6 @@
   --z-range-lines: 3;
   --z-playhead: 4;
   --z-track-heads: 5;
-  --z-drawer: 10;
   --z-popover: 20;
   --z-toast: 30;
   --z-scrim: 40;
