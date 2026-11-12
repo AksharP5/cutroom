@@ -651,6 +651,9 @@ export const stepHistory = (
     ),
   );
 
+/** Whether clips have been copied in this project, so a paste has something to place. */
+export const hasClipboard = (projectId: string) => clipboardIds.has(projectId);
+
 /** Clipboard keys serialize copy/cut/paste, including a paste pressed before copy has answered. */
 export function clipboardEdit(
   projectId: string,

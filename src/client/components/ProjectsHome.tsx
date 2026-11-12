@@ -10,6 +10,7 @@ import {
   gridStep,
   posterUrl,
 } from "../home";
+import { openContextMenu, revealRows } from "./ContextMenu";
 import "./home.css";
 
 /** A capture still rendering must not hold a connection the editor needs once its tile is gone. */
@@ -82,6 +83,14 @@ function ProjectTile({
       data-poster={unreadable ? "missing" : seen ? poster : undefined}
       onFocus={onFocus}
       onClick={onOpen}
+      onContextMenu={(event) =>
+        openContextMenu(
+          event,
+          project.name,
+          [{ label: "Open", run: onOpen }, ...revealRows(project.path)],
+          event.currentTarget,
+        )
+      }
     >
       <span className="home-well">
         <span

@@ -10,6 +10,7 @@ import {
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades } from "../../shared/timeline/mix";
+import type { MediaDrag } from "./mediaDrag";
 import type {
   Clip,
   CommandInput,
@@ -595,6 +596,17 @@ export interface DraggedMedia {
   frames: number;
   hasAudio?: boolean;
 }
+
+/** A Media row as the timeline places it: its length in whole frames at the timeline's rate. */
+export const placedMedia = (
+  media: MediaDrag,
+  { num, den }: Timeline["fps"],
+): DraggedMedia => ({
+  kind: media.kind,
+  src: media.path,
+  frames: Math.max(1, Math.floor((media.seconds * num) / den)),
+  hasAudio: media.hasAudio,
+});
 
 /**
  * Dropping media overwrites its destination. Explicit insert opens auto-select tracks instead.

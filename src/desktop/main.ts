@@ -3,6 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import { z } from "zod";
 import { desktopPermission } from "./permissions";
 import {
@@ -79,12 +80,19 @@ async function start() {
       autoplayPolicy: "user-gesture-required",
     },
   });
+  const fromCutroom = (event: IpcMainInvokeEvent) =>
+    event.sender === window?.webContents &&
+    event.senderFrame === window.webContents.mainFrame &&
+    isApplicationUrl(event.senderFrame.url, baseUrl);
+  ipcMain.handle("cutroom:reveal", async (event, value: unknown) => {
+    if (!fromCutroom(event)) throw new Error("Only Cutroom can reveal a file.");
+    // Showing a file opens nothing; a missing one is refused here by name.
+    shell.showItemInFolder(
+      await realpath(z.string().refine(isAbsolute).parse(value)),
+    );
+  });
   ipcMain.handle("cutroom:export-file", async (event, value: unknown) => {
-    if (
-      event.sender !== window?.webContents ||
-      event.senderFrame !== window.webContents.mainFrame ||
-      !isApplicationUrl(event.senderFrame.url, baseUrl)
-    )
+    if (!fromCutroom(event))
       throw new Error("Only Cutroom can open an export.");
     const input = z
       .object({

@@ -2,13 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
+import { isAudioKind } from "../../shared/timeline/schema";
+import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
 import { frameTimecode } from "../api";
+import { editTimeline, useTimeline } from "../edit/timeline";
+import { useTransport } from "../edit/transport";
+import { gridStep } from "../home";
+import { dropPreview, placedMedia } from "../timeline/gesture";
 import {
   MEDIA_DRAG_TYPE,
   STILL_SECONDS,
   setMediaDrag,
 } from "../timeline/mediaDrag";
+import type { MediaDrag } from "../timeline/mediaDrag";
 import { useFps, useWorkspace } from "../workspace";
+import { openContextMenu, revealRows } from "./ContextMenu";
 
 // Mirrors the formats the upload route validates. `.ts` transport streams are left out so
 // TypeScript files in a project are never listed as video.
@@ -67,12 +75,20 @@ const mediaKind = (path: string) => {
 /** One row: a thumbnail, the file name, and its length read from the file itself. */
 function MediaRow({
   projectId,
+  projectPath,
   path,
   kind,
+  tabbable,
+  onFocus,
 }: {
   projectId: string;
+  /** The project's folder on disk, for the desktop's file manager. */
+  projectPath: string;
   path: string;
   kind: (typeof mediaKinds)[number]["kind"];
+  /** One row is in the tab order; the arrow keys move between rows. */
+  tabbable: boolean;
+  onFocus(): void;
 }) {
   const fps = useFps();
   const [duration, setDuration] = useState<number | null>(null);
@@ -124,28 +140,80 @@ function MediaRow({
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
   };
+  // A row goes onto the timeline once its length is known.
+  const placeable =
+    kind === "image" ||
+    (duration !== null && (kind !== "video" || hasAudio !== null));
+  const dragged = (): MediaDrag => ({
+    kind,
+    path,
+    seconds: duration ?? STILL_SECONDS,
+    hasAudio: hasAudio ?? kind === "audio",
+  });
+  /**
+   * Places the file at the playhead with the edit a drop makes, on the first unlocked track of
+   * its kind, which is V1 or A1 unless that is locked. With none unlocked it gets a new track.
+   */
+  const place = (mode: "insert" | "overwrite") => {
+    const { frame } = useTransport.getState();
+    void editTimeline(projectId, "Add media", (timeline) => {
+      const audio = isAudioKind(kind);
+      const track =
+        timeline.tracks.find(
+          (track) => (track.kind === "audio") === audio && !track.locked,
+        ) ??
+        newTrack(nextTrackIndex(timeline.tracks), audio ? "audio" : "video");
+      return dropPreview(
+        timeline,
+        placedMedia(dragged(), timeline.fps),
+        track,
+        frame,
+        frame,
+        0,
+        [],
+        mode,
+      ).commands;
+    });
+  };
   return (
     <li
       className="media-row"
       title={path}
       data-kind={kind}
+      data-path={path}
       ref={row}
-      // A row drags onto a timeline track once its length is known.
-      draggable={
-        kind === "image" ||
-        (duration !== null && (kind !== "video" || hasAudio !== null))
-      }
+      tabIndex={tabbable ? 0 : -1}
+      onFocus={onFocus}
+      draggable={placeable}
       onDragStart={(event) => {
         event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
         event.dataTransfer.effectAllowed = "copy";
-        setMediaDrag({
-          kind,
-          path,
-          seconds: duration ?? STILL_SECONDS,
-          hasAudio: hasAudio ?? kind === "audio",
-        });
+        setMediaDrag(dragged());
       }}
       onDragEnd={() => setMediaDrag(null)}
+      onContextMenu={(event) => {
+        // Needs the file's length and a timeline to put it on.
+        const unplaceable = !placeable || !useTimeline.getState().view;
+        const reveal = revealRows(`${projectPath}/${path}`);
+        openContextMenu(
+          event,
+          path,
+          [
+            {
+              label: "Insert at playhead",
+              disabled: unplaceable,
+              run: () => place("insert"),
+            },
+            {
+              label: "Overwrite at playhead",
+              disabled: unplaceable,
+              run: () => place("overwrite"),
+            },
+            ...(reveal.length ? ["separator" as const, ...reveal] : []),
+          ],
+          event.currentTarget,
+        );
+      }}
     >
       <span className="media-thumb" aria-hidden="true">
         {seen && kind === "video" && (
@@ -183,9 +251,11 @@ function MediaRow({
 
 export function MediaPanel({
   projectId,
+  projectPath,
   hidden,
 }: {
   projectId: string;
+  projectPath: string;
   hidden: boolean;
 }) {
   // Read here rather than in the shell, so a burst of file events re-renders only this panel.
@@ -193,6 +263,10 @@ export function MediaPanel({
   const [media, setMedia] = useState<
     { path: string; kind: (typeof mediaKinds)[number]["kind"] }[] | null
   >(null);
+  const [focused, setFocused] = useState<string>();
+  const tabbable = media?.some((item) => item.path === focused)
+    ? focused
+    : media?.[0]?.path;
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState("");
@@ -355,13 +429,45 @@ export function MediaPanel({
             <span>Drop files here or import from your computer.</span>
           </div>
         ) : (
-          <ul className="media-list">
+          <ul
+            className="media-list"
+            onKeyDown={(event) => {
+              // A row reached by keyboard takes the arrows; after a click they stay the playhead's.
+              if (
+                !(event.target instanceof HTMLElement) ||
+                !event.target.matches(".media-row:focus-visible") ||
+                event.key === "ArrowLeft" ||
+                event.key === "ArrowRight" ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.altKey
+              )
+                return;
+              const rows = [
+                ...event.currentTarget.querySelectorAll<HTMLElement>(
+                  ".media-row",
+                ),
+              ];
+              const next = gridStep(
+                event.key,
+                rows.indexOf(event.target),
+                1,
+                rows.length,
+              );
+              if (next === null) return;
+              event.preventDefault();
+              rows[next]?.focus();
+            }}
+          >
             {media?.map(({ path, kind }) => (
               <MediaRow
                 key={path}
                 projectId={projectId}
+                projectPath={projectPath}
                 path={path}
                 kind={kind}
+                tabbable={path === tabbable}
+                onFocus={() => setFocused(path)}
               />
             ))}
           </ul>

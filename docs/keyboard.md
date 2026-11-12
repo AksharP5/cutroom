@@ -60,6 +60,9 @@ The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Reso
 | Turn clips on or off                         | `D`                      | `editClipEnabled`                  |
 | Add a marker                                 | `M`                      | `markMarkerAdd`                    |
 | Snapping                                     | `C`                      | `editSnapping`                     |
+| Keyboard shortcuts                           | `Ctrl+Alt+K`             | `resolveCustomizedActions`         |
+
+Ctrl+Alt+K opens a sheet of every shortcut by area, generated from this table. Type to search names and keys; Esc closes it. Settings has a button for it too. The key is the one the owner's Resolve preset gives Keyboard Customization, `resolveCustomizedActions`, which is also Resolve's default. The sheet lists the keys and does not change them.
 
 Ctrl+Alt+Shift+V is unused in the owner's Resolve preset and avoids the older KDE Klipper shortcut Ctrl+Alt+V. Its only recording-related action, `viewTimelineModeRecord`, has no assigned key. Shift+R remains reserved for Resolve's Freeze Frame.
 
@@ -78,6 +81,18 @@ Each press is one undo step. The timeline shows the edit as soon as you press th
 In the timeline, Ctrl+wheel, Alt+wheel, and a trackpad pinch zoom at the cursor, Shift+wheel scrolls through time, and the wheel scrolls tracks. Ctrl-click adds or removes a clip, Shift-click selects through to it, Alt-click leaves linked clips out, and dragging from an empty lane draws a marquee.
 
 On home, the arrow keys, Home, and End move between projects, and Enter opens the selected one. The most recently edited project is selected when home opens.
+
+## Menus
+
+Right-click a clip, a track header, a file in Media, the picture, or a project on home to open its menu. The menu key and Shift+F10 open the same menu from the keyboard: for the selected clips, or for the focused track header, Media file or project. Up and Down move between rows and wrap, Home and End jump, letters search by name, Enter or Space chooses, and Esc closes the menu and returns focus to where it was. A row with a shortcut shows its key and runs the same edit as that key, as one undo step. Rows that cannot act are dimmed.
+
+A right-click on a clip selects it with its linked partners, unless it is already selected, so the menu acts on the whole selection. A right-click on an empty lane clears the selection. On the picture, with the Select tool, a right-click picks the clip drawn under it and keeps the selection when nothing is. Split at the playhead needs the playhead inside a selected clip. Reveal media moves focus to the clip's file in Media, and Inspector opens or closes the inspector.
+
+A track header's menu holds its switches (Lock, Auto-select, and Enable on video or Mute, Solo and Arm on audio), the track density, Add video track, Add audio track, and Remove empty track.
+
+A Media file's Insert at playhead and Overwrite at playhead make the edit a drop makes, on the first unlocked track of the file's kind: V1 or A1 unless it is locked. When every track of that kind is locked the file gets a new track. In the desktop app, Reveal in folder shows the file, or a project's folder from home, in the file manager.
+
+Tab reaches the Media list. Once a file has keyboard focus, Up, Down, Home and End move between files; after a click those keys stay with the playhead.
 
 ## Mouse
 

@@ -87,3 +87,51 @@
     transition-duration: var(--duration-press);
   }
 }
+
+/* The same surface and rows at the pointer, with a column of key hints. */
+.context-menu {
+  top: 0;
+  left: 0;
+  position-try-fallbacks: none;
+  margin: 0;
+  min-width: 208px;
+  max-width: min(360px, calc(100vw - var(--space-4)));
+  max-height: calc(100dvh - var(--space-4));
+  outline: none;
+}
+.context-menu button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--space-5);
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+.context-menu[data-checks] button {
+  grid-template-columns: var(--icon-sm) 1fr auto;
+}
+.context-menu[data-checks] button > span:nth-child(2) {
+  margin-left: calc(var(--space-2) - var(--space-5));
+}
+.context-menu-check {
+  display: grid;
+  place-items: center;
+}
+.context-menu kbd {
+  font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  color: var(--text-tertiary);
+}
+.context-menu button:focus::before {
+  opacity: 1;
+}
+.context-menu button:disabled::before {
+  display: none;
+}
+.context-menu hr {
+  width: auto;
+  height: var(--stroke-hair);
+  margin: var(--space-1) calc(-1 * var(--space-1));
+  border: 0;
+  background: var(--line);
+}

@@ -2,7 +2,12 @@ import { api } from "../api";
 import {
   TimelineViewSettingsSchema,
   emptyTimelineViewSettings,
+  trackDensities,
 } from "../../shared/timeline/view";
+import type { TimelineViewSettings } from "../../shared/timeline/view";
+import { openContextMenu } from "../components/ContextMenu";
+import type { MenuItem } from "../components/menu";
+import { openClipMenu } from "../edit/openClipMenu";
 import { useStore } from "zustand";
 import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
@@ -16,16 +21,18 @@ import {
   useTimeline,
 } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
-import { useKeymap } from "../keymap";
+import { isTyping, useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
 import { reportEditorError, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
+import type { Row } from "./math";
 import { Timeline } from "./Timeline";
 import { MarkerEditor } from "./MarkerEditor";
-import type { Marker } from "../../shared/timeline/schema";
+import type { Marker, Track } from "../../shared/timeline/schema";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
 import {
+  clickSelection,
   emptySelection,
   pruneSelection,
   selectionAtPlayhead,
@@ -242,7 +249,114 @@ export function ProjectTimeline({
       },
     );
 
+  // The menu key and Shift+F10 open the clip menu for the selection, by its first clip. A focused
+  // control with a menu of its own, such as a track header, has taken the event already.
+  useEffect(() => {
+    const menuKey = (event: MouseEvent) => {
+      // With nothing focused the browser aims the event at the window's corner, so focus decides.
+      const focused = document.activeElement;
+      if (
+        event.button >= 0 ||
+        event.defaultPrevented ||
+        isTyping(focused) ||
+        (focused && focused !== document.body && !focused.closest(".edit-page"))
+      )
+        return;
+      const [id] = useTimeline.getState().selection.ids;
+      if (id === undefined) return;
+      // A selected clip scrolled out of the mounted range leaves the lanes to hang the menu from.
+      const anchor =
+        document.querySelector(`.tl-lanes [data-clip="${CSS.escape(id)}"]`) ??
+        document.querySelector(".tl-lanes");
+      if (anchor) openClipMenu(event, projectId, anchor);
+    };
+    window.addEventListener("contextmenu", menuKey);
+    return () => window.removeEventListener("contextmenu", menuKey);
+  }, [projectId]);
+
   if (!view) return null;
+  const saveViewSettings = (settings: TimelineViewSettings) => {
+    setViewSettings(settings);
+    void api(
+      `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(view.composition)}`,
+      TimelineViewSettingsSchema,
+      { method: "PUT", body: JSON.stringify(settings) },
+    ).catch((error: unknown) => reportEditorError("timeline", error));
+  };
+  const addTrack = (kind: Track["kind"]) =>
+    void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
+      { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
+    ]);
+  /** A header's switches, the track density, and adding or removing a track. */
+  const trackMenu = (row: Row | null): MenuItem[] => {
+    const track = row?.track;
+    const toggle = (
+      label: string,
+      setting: Parameters<typeof toggleTrack>[1],
+    ): MenuItem[] =>
+      track
+        ? [
+            {
+              label,
+              checked: track[setting],
+              run: () => toggleTrack(track, setting),
+            },
+          ]
+        : [];
+    const { state } = voiceover.store.getState();
+    const armed = state.kind !== "idle" && state.track.index === track?.index;
+    return [
+      ...toggle("Lock", "locked"),
+      ...toggle("Auto-select", "autoSelect"),
+      ...(track?.kind === "video" ? toggle("Enable", "enabled") : []),
+      ...(track?.kind === "audio"
+        ? [
+            ...toggle("Mute", "muted"),
+            ...toggle("Solo", "solo"),
+            {
+              label: "Arm",
+              checked: armed,
+              // As the header's R button: a take in progress holds the microphone where it is.
+              disabled:
+                (!armed && track.locked) ||
+                (state.kind !== "idle" && state.kind !== "armed"),
+              run: () => voiceover.toggleArm(track),
+            },
+          ]
+        : []),
+      ...(track ? ["separator" as const] : []),
+      ...trackDensities.map((density): MenuItem => ({
+        label: density[0]!.toUpperCase() + density.slice(1),
+        radio: true,
+        checked:
+          viewSettings.density === density &&
+          !Object.keys(viewSettings.heights).length,
+        run: () => saveViewSettings({ density, heights: {} }),
+      })),
+      "separator",
+      { label: "Add video track", run: () => addTrack("video") },
+      { label: "Add audio track", run: () => addTrack("audio") },
+      // A row the timeline does not hold yet has nothing to remove.
+      ...(track &&
+      view.timeline.tracks.some((item) => item.index === track.index)
+        ? [
+            {
+              label: "Remove empty track",
+              disabled:
+                track.locked ||
+                view.timeline.clips.some(
+                  (clip) => clip.track === track.index,
+                ) ||
+                recording?.track.index === track.index,
+              run: () =>
+                void editTimeline(projectId, "Remove empty track", () => [
+                  { type: "removeTrack", index: track.index },
+                ]),
+            },
+          ]
+        : []),
+    ];
+  };
   return (
     <>
       <Timeline
@@ -258,14 +372,7 @@ export function ProjectTimeline({
           />
         )}
         viewSettings={viewSettings}
-        onViewSettings={(settings) => {
-          setViewSettings(settings);
-          void api(
-            `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(view.composition)}`,
-            TimelineViewSettingsSchema,
-            { method: "PUT", body: JSON.stringify(settings) },
-          ).catch((error: unknown) => reportEditorError("timeline", error));
-        }}
+        onViewSettings={saveViewSettings}
         timeline={view.timeline}
         source={{ projectId, composition: view.composition }}
         clock={clock}
@@ -296,11 +403,33 @@ export function ProjectTimeline({
             },
           ])
         }
-        onAddTrack={(kind) =>
-          void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
-            { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
-          ])
+        onTrackMenu={(event, anchor, row) =>
+          openContextMenu(
+            event,
+            row ? `Track ${row.id}` : "Tracks",
+            trackMenu(row),
+            anchor,
+          )
         }
+        onClipMenu={(event, anchor, clip) => {
+          // A drag under way keeps the pointer; a second button does not interrupt it.
+          if (useWorkspace.getState().gesture) {
+            event.preventDefault();
+            return;
+          }
+          // A right-click selects as a click does, and the menu acts on the selection.
+          const current = useTimeline.getState().selection;
+          if (!clip) setSelection(emptySelection);
+          else if (!current.ids.has(clip.id))
+            setSelection(
+              clickSelection(view.timeline, [], current, clip.id, {
+                toggle: false,
+                range: false,
+                alone: false,
+              }),
+            );
+          openClipMenu(event, projectId, anchor, clip ?? undefined);
+        }}
         onOpenPin={onOpenNote}
         onOpenMarker={(marker, anchor) => setEditingMarker({ marker, anchor })}
       />
