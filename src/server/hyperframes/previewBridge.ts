@@ -103,7 +103,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
         .get(element)
         ?.canvas.style.setProperty("translate", translate, original.priority);
     if (draft.x === null) positions.delete(element);
-    postBox();
+    scheduleBox();
     clearTimeout(observationTimer);
     if (observedClip)
       observationTimer = window.setTimeout(scheduleObservation, 350);
@@ -389,8 +389,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
   const postBox = () => {
     if (!observedClip) return;
     const start = performance.now();
-    const element = clipElement(observedClip);
-    const box = element ? boxOf(element) : null;
+    const box = boxElement ? boxOf(boxElement) : null;
     performance.measure("cutroom:clip-box", { start, end: performance.now() });
     performance.clearMeasures("cutroom:clip-box");
     const key = box
@@ -409,13 +408,113 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     );
   };
   let boxFrame = 0;
-  /** Playback reads one clip's box per frame, and nothing when no clip is observed. */
-  const followBox = () => {
-    boxFrame = 0;
-    postBox();
-    if (observedClip && win.__player?.isPlaying())
-      boxFrame = requestAnimationFrame(followBox);
+  let boxElement: Element | null = null;
+  let boxAnimations: Animation[] = [];
+  const scheduleBox = () => {
+    if (observedClip && !boxFrame) boxFrame = requestAnimationFrame(followBox);
   };
+  // Only CSS/Web Animations need continuous reads. GSAP and script changes invalidate the
+  // cached box through mutations, so a stationary clip does no work per playback frame.
+  const refreshBoxAnimations = () => {
+    boxAnimations = boxElement?.getAnimations({ subtree: true }) ?? [];
+    for (
+      let ancestor = boxElement?.parentElement;
+      ancestor;
+      ancestor = ancestor.parentElement
+    )
+      boxAnimations.push(...ancestor.getAnimations());
+    scheduleBox();
+  };
+  const followBox = () => {
+    const frame = boxFrame;
+    const version = pictureVersion;
+    // A seek may still be replacing the held video. Read the settled picture once, with
+    // the other geometry reads, instead of flushing layout between its style writes.
+    void picture.then(
+      () => {
+        if (boxFrame !== frame) return;
+        boxFrame = 0;
+        if (version !== pictureVersion || positionFrame) {
+          scheduleBox();
+          return;
+        }
+        postBox();
+        if (
+          boxAnimations.some((animation) => animation.playState === "running")
+        )
+          scheduleBox();
+      },
+      () => {
+        // The owning seek/paint request reports picture failures.
+        if (boxFrame === frame) boxFrame = 0;
+      },
+    );
+  };
+  const boxMutations = new MutationObserver((records) => {
+    if (
+      records.some(
+        (record) =>
+          record.type !== "attributes" ||
+          record.oldValue !==
+            (record.target as Element).getAttribute(record.attributeName!),
+      )
+    )
+      scheduleBox();
+  });
+  const boxResize = new ResizeObserver(scheduleBox);
+  const observeBox = () => {
+    boxMutations.disconnect();
+    boxResize.disconnect();
+    cancelAnimationFrame(boxFrame);
+    boxFrame = 0;
+    boxAnimations = [];
+    boxElement = observedClip ? clipElement(observedClip) : null;
+    if (!boxElement) {
+      scheduleBox();
+      return;
+    }
+    boxMutations.observe(boxElement, {
+      subtree: true,
+      attributes: true,
+      attributeOldValue: true,
+      childList: true,
+      characterData: true,
+    });
+    boxResize.observe(boxElement);
+    for (
+      let ancestor = boxElement.parentElement;
+      ancestor;
+      ancestor = ancestor.parentElement
+    )
+      boxMutations.observe(ancestor, {
+        attributes: true,
+        attributeOldValue: true,
+      });
+    refreshBoxAnimations();
+  };
+  // Delayed CSS animations and transitions can start without changing an inline attribute.
+  for (const event of [
+    "animationstart",
+    "animationend",
+    "animationcancel",
+    "transitionrun",
+    "transitionend",
+    "transitioncancel",
+  ])
+    document.addEventListener(
+      event,
+      (event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          boxElement &&
+          (boxElement.contains(target) || target.contains(boxElement))
+        )
+          refreshBoxAnimations();
+      },
+      true,
+    );
+  addEventListener("resize", scheduleBox);
   /** Recover local border coordinates from the complete affine transform, including ancestors.
    * Layout offsets and transform origins only translate the quad; its bounding box anchors it.
    */
@@ -1075,6 +1174,9 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     cancelAnimationFrame(observationFrame);
     observationFrame = 0;
     cancelAnimationFrame(boxFrame);
+    boxFrame = 0;
+    boxMutations.disconnect();
+    boxResize.disconnect();
     // The parent compositor can still show this document while retiring its iframe.
     // Release decoding resources without erasing the last painted picture.
     for (const frame of editFrames) frame.close();
@@ -1126,9 +1228,8 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
           observedClip = data.clipId;
           observedText = data.text;
           postedBox = "";
+          observeBox();
           scheduleObservation();
-          if (!boxFrame && win.__player?.isPlaying())
-            boxFrame = requestAnimationFrame(followBox);
           break;
         case "hit":
           if (
@@ -1199,7 +1300,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
           for (const video of holds.keys()) releasePlaying(video);
           win.__player?.play();
           observePlaying();
-          if (!boxFrame) boxFrame = requestAnimationFrame(followBox);
+          refreshBoxAnimations();
           if (metering && !animation) levels();
           break;
         case "pause":
@@ -1210,6 +1311,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
           await refreshPicture();
           clearTimeout(observationTimer);
           scheduleObservation();
+          scheduleBox();
           break;
         case "seek":
           if (
@@ -1250,6 +1352,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
             if (version === pictureVersion) clearEditPicture();
           }
           scheduleObservation();
+          scheduleBox();
           break;
         case "mute":
           if (!("muted" in data) || typeof data.muted !== "boolean") return;
@@ -1267,11 +1370,11 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
           await picture;
           await paint();
           scheduleObservation();
+          scheduleBox();
           break;
         default:
           return;
       }
-      postBox();
       reply(id);
     })().catch((error: unknown) =>
       reply(id, error instanceof Error ? error.message : String(error)),

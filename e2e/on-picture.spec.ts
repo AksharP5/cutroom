@@ -191,6 +191,46 @@ test("the outline follows the selected clip through seeks and playback", async (
   near(await outlined(), await drawn("slide"), scale);
 });
 
+test("the cached outline follows ancestor CSS motion and text resizing", async ({
+  page,
+  request,
+}, info) => {
+  const html = composition.replace(
+    "</style>",
+    `
+    @keyframes move-frame { to { transform: translateX(140px) } }
+    .moving { animation: move-frame 2s .2s linear forwards }
+    </style>`,
+  );
+  const { at, selected, drawn, outlined, scale } = await open(
+    page,
+    request,
+    html,
+  );
+  await page.mouse.click(...at(75, 30));
+  await expect(selected).toHaveText("Lower");
+  const preview = page.frameLocator("iframe[data-live]");
+  await preview
+    .locator("#main")
+    .evaluate((element) => element.classList.add("moving"));
+  await expect.poll(async () => (await outlined())?.left).toBeGreaterThan(100);
+  const moving = await drawn("lower");
+  expect(moving.left).toBeLessThan(190);
+  expect(Math.abs((await outlined())!.left - moving.left)).toBeLessThan(5);
+  await expect.poll(async () => (await drawn("lower")).left).toBe(200);
+  await waitFrames(page, 3);
+  near(await outlined(), await drawn("lower"), scale);
+  const before = await drawn("lower");
+  await preview.locator("#lower").evaluate((element) => {
+    element.textContent = "A much longer replacement title";
+  });
+  await expect
+    .poll(async () => (await outlined())?.width)
+    .toBeGreaterThan(before.width + 50);
+  near(await outlined(), await drawn("lower"), scale);
+  await page.screenshot({ path: info.outputPath("cached-outline.png") });
+});
+
 test("dragging on the picture moves Position live, commits one undo step, and Escape restores", async ({
   page,
   request,
