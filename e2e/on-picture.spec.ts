@@ -354,6 +354,12 @@ test("a resting pointer outlines the clip a press would take and shows the move 
   await expect(hover).toBeHidden();
   await page.mouse.up();
   await expect(selected).toHaveText("Badge");
+  // A still pointer after the click still says where Alt would step next.
+  await page.keyboard.down("Alt");
+  await expect(hover).toHaveAttribute("data-outlined", "title");
+  await expect(hover).toBeVisible();
+  await page.keyboard.up("Alt");
+  await expect(hover).toBeHidden();
   await page.mouse.move(...at(360, 212));
   await expect(hover).toHaveAttribute("data-outlined", "words");
   await page.keyboard.press("Space");
@@ -368,6 +374,22 @@ test("a resting pointer outlines the clip a press would take and shows the move 
   // Other tools keep the picture to themselves.
   await page.keyboard.press("n");
   await expect(hover).toBeHidden();
+});
+
+test("a seek under a resting pointer drops the move cursor with the outline", async ({
+  page,
+  request,
+}) => {
+  const { at } = await open(page, request);
+  const surface = page.getByRole("application", { name: "Picture" });
+  const hover = page.locator(".edit-select-hover");
+  await page.mouse.move(...at(50, 315));
+  await expect(hover).toHaveAttribute("data-outlined", "slide");
+  await expect(surface).toHaveCSS("cursor", "move");
+  // Slide moves away by the last frame; nothing is known under the pointer until it moves.
+  await page.keyboard.press("End");
+  await expect(hover).toBeHidden();
+  await expect(surface).toHaveCSS("cursor", "default");
 });
 
 test("a double-click on a text clip puts its words in the Text field", async ({

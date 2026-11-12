@@ -221,6 +221,7 @@ export function PictureSelect({
     hover.current.hits = null;
     hover.current.pending = null;
     if (hoverOutline.current) hoverOutline.current.hidden = true;
+    aim();
   };
   /** One probe in flight at a time; a pointer that moved on is asked about again. */
   const probe = () => {
@@ -414,6 +415,8 @@ export function PictureSelect({
         current.released = true;
         act(current);
       }
+      // The press dropped the resting pointer's answer; a still pointer needs it for Alt.
+      probe();
       return;
     }
     useWorkspace.setState({ gesture: false });
@@ -436,7 +439,8 @@ export function PictureSelect({
       // Alt steps a click down the stack, so a resting pointer shows the clip it would reach.
       if (!current && hover.current.cycle !== event.altKey) {
         hover.current.cycle = event.altKey;
-        drawHover();
+        if (hover.current.hits) drawHover();
+        else probe();
       }
       if (!current?.drag) return;
       if (event.key === "Escape" && event.type === "keydown") {
