@@ -265,6 +265,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "sine=frequency=220:duration=8:sample_rate=48000",
         join(root, "tone.wav"),
       ]);
+      const references = new Map<string, Awaited<ReturnType<typeof render>>>();
       for (const [fadeIn, fadeOut, at, automated] of [
         [0, 4, 120],
         [2, 6, 30],
@@ -280,11 +281,14 @@ test.skipIf(!Bun.which("ffmpeg"))(
             ? `<audio data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0.3,"curve":1},{"t":8,"v":0.9}]}]}' `
             : "<audio ",
         );
-        const reference = await render(
-          root,
-          source,
-          `whole-${fadeIn}-${fadeOut}-${at}-${automated}`,
-        );
+        const reference =
+          references.get(source) ??
+          (await render(
+            root,
+            source,
+            `whole-${fadeIn}-${fadeOut}-${at}-${automated}`,
+          ));
+        references.set(source, reference);
         const split = edited(source, [
           { type: "split", clipIds: ["music"], at },
         ]);
@@ -308,6 +312,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       await rm(root, { recursive: true, force: true });
     }
   },
+  // Renders and decodes real audio for seven split/fade cases.
   60_000,
 );
 
@@ -415,6 +420,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
         join(root, "tone.wav"),
       ]);
       const source = faded(0, 4);
+      const references = new Map<string, Awaited<ReturnType<typeof render>>>();
       for (const mode of ["trim", "roll", "Q", "W", "split"] as const) {
         const original =
           mode === "roll"
@@ -474,12 +480,10 @@ test.skipIf(!Bun.which("ffmpeg"))(
         expect(restored.timeline).toEqual(
           parseComposition(original, emptyTimelineSettings()).timeline,
         );
-        const reference = await render(
-          root,
-          original,
-          `edge-reference-${mode}`,
-          16,
-        );
+        const reference =
+          references.get(original) ??
+          (await render(root, original, `edge-reference-${mode}`, 16));
+        references.set(original, reference);
         const actual = await render(
           root,
           restored.html,
@@ -507,6 +511,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       await rm(root, { recursive: true, force: true });
     }
   },
+  // Renders and decodes real audio for five edge-edit modes and a shortened reference.
   60_000,
 );
 

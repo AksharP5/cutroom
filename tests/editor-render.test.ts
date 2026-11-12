@@ -123,5 +123,6 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       await rm(root, { recursive: true, force: true });
     }
   },
+  // Captures Chromium frames, encodes an MP4, and decodes both outputs for pixel checks.
   90_000,
 );

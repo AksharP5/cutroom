@@ -13,7 +13,7 @@
     "start": "bun src/server/index.ts",
     "build": "vite build",
     "check": "tsc --noEmit",
-    "test": "bun test tests --timeout 30000",
+    "test": "bun test tests",
     "test:e2e": "bun run build && playwright test --grep-invert @performance",
     "test:perf": "bun run build && playwright test --grep @performance",
     "desktop": "bun scripts/desktop.ts",

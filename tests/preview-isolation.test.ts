@@ -226,6 +226,8 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       await new Promise((resolve) => setTimeout(resolve, 100));
       await unchanged(preview);
       await page.close();
+      // Release the preview browser before starting the capture and export browsers.
+      await browser.close();
 
       await client.connect(
         new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
@@ -298,5 +300,6 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       await rm(root, { recursive: true, force: true });
     }
   },
+  // Exercises real Chromium previews, frame captures, and an FFmpeg export.
   90_000,
 );

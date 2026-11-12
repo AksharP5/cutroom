@@ -43,7 +43,8 @@ for (const target of ["server process group", "owner"] as const) {
         await fixture.close();
       }
     },
-    30_000,
+    // Launches Chromium twice and recovers its owner and profile between captures.
+    50_000,
   );
 }
 
@@ -88,6 +89,7 @@ test.skipIf(!supported)(
       await fixture.close();
     }
   },
+  // Starts two real capture owners while preserving a live Chromium instance.
   30_000,
 );
 
@@ -121,6 +123,7 @@ for (const { signal, paused } of [
         await fixture.close();
       }
     },
+    // Starts real Chromium; an unresponsive browser needs the forced-cleanup grace period.
     30_000,
   );
 }
@@ -158,6 +161,7 @@ test.skipIf(!supported)(
       await fixture.close();
     }
   },
+  // Launches Chromium, takes a screenshot, and checks real process-exit cleanup.
   30_000,
 );
 
