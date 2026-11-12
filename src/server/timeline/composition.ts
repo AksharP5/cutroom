@@ -8,7 +8,11 @@ import {
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
-import { canonicalText, isAudioKind } from "../../shared/timeline/schema";
+import {
+  canonicalText,
+  firstTextLine,
+  isAudioKind,
+} from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
 import { readPosition, positionAttributes } from "./position";
@@ -640,14 +644,7 @@ export function parseComposition(
         element.attrs["data-timeline-label"] ??
         element.attrs["data-label"] ??
         null,
-      ...(kind === "element" && {
-        text:
-          element.text
-            .split(/\r?\n/)
-            .map((line) => line.replace(/\s+/g, " ").trim())
-            .find(Boolean)
-            ?.slice(0, 500) ?? "",
-      }),
+      ...(kind === "element" && { textPreview: firstTextLine(element.text) }),
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),

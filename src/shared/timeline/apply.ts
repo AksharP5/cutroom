@@ -1,4 +1,4 @@
-import { isAudioKind } from "./schema";
+import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
 import { TimelineError } from "./errors";
 import { windowMix } from "./mix";
@@ -734,7 +734,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 }),
                 ...(command.x !== undefined && { x: command.x }),
                 ...(command.y !== undefined && { y: command.y }),
-                ...(command.text !== undefined && { text: command.text }),
+                ...(command.text !== undefined && {
+                  text: command.text,
+                  textPreview: firstTextLine(command.text),
+                }),
                 ...(command.opacity !== undefined && {
                   opacity: command.opacity,
                 }),

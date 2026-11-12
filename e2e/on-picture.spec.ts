@@ -390,6 +390,8 @@ test("the inspector edits a title's words in one undo step and refuses text with
   await text.press("Enter");
   await expect(text).not.toBeFocused();
   await expect(text).toHaveValue("Ship & tell\ntoday");
+  const timelineText = page.locator('[data-clip-label="title"] .tl-text');
+  await expect(timelineText).toHaveText("Ship & tell");
   await expect.poll(words).toBe("Ship & tell\ntoday");
   expect(await source()).toContain(">Ship &amp; tell<br>today</div>");
   expect(commands).toHaveLength(1);
@@ -400,6 +402,7 @@ test("the inspector edits a title's words in one undo step and refuses text with
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(text).toHaveValue("Launch day");
   await expect.poll(words).toBe("Launch day");
+  await expect(timelineText).toHaveText("Launch day");
   expect(await source()).toContain(">Launch day</div>");
 
   // Escape drops what was typed.

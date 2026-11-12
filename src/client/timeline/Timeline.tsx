@@ -247,15 +247,15 @@ const ClipLabel = memo(function ClipLabel({
       >
         {clipName(clip)}
       </span>
-      {clip.text && (
+      {clip.textPreview && (
         <span className="tl-text-line">
           <span
             className="tl-name tl-text"
             data-unscaled
             style={{ "--f": clip.start, "--e": end }}
-            title={clip.text}
+            title={clip.textPreview}
           >
-            {clip.text}
+            {clip.textPreview}
           </span>
         </span>
       )}

@@ -42,6 +42,14 @@ export const canonicalText = (text: string) =>
     .join("\n")
     .replace(/^\n+|\n+$/g, "");
 
+/** Timeline labels show the first nonempty authored line, including text inside markup. */
+export const firstTextLine = (text: string) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .find(Boolean)
+    ?.slice(0, 500) ?? "";
+
 export const FpsSchema = z.object({
   num: z.number().int().positive(),
   den: z.number().int().positive(),
@@ -73,7 +81,7 @@ export const ClipSchema = z.object({
   link: z.string().nullable(),
   label: z.string().nullable(),
   /** First authored line of text, projected from the parsed composition for timeline labels. */
-  text: z.string().max(500).optional(),
+  textPreview: z.string().max(500).optional(),
   volume: z
     .number()
     .nonnegative()
