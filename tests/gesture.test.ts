@@ -149,6 +149,7 @@ test("a horizontal envelope press hands off to a move once, while a vertical dra
     type: "press",
     intent: { kind: "gain", clipId: "a", alone: true },
     point: { x: 0, y: 0 },
+    at: 0,
   }).gesture;
   const horizontal = step(press, {
     type: "move",
@@ -165,15 +166,68 @@ test("a horizontal envelope press hands off to a move once, while a vertical dra
     step(press, { type: "move", point: { x: 1, y: 4 } }).gesture,
   ).toMatchObject({ phase: "dragging", intent: { kind: "gain" } });
   // Gain answers the first vertical pixel; a diagonal or sideways pixel still waits.
-  expect(
-    step(press, { type: "move", point: { x: 0, y: -1 } }).gesture,
-  ).toMatchObject({ phase: "dragging", intent: { kind: "gain" } });
+  const wobble = step(press, { type: "move", point: { x: 0, y: -1 } }).gesture;
+  expect(wobble).toMatchObject({
+    phase: "dragging",
+    intent: { kind: "gain" },
+    loose: true,
+  });
   for (const point of [
     { x: 1, y: 1 },
     { x: 2, y: 0 },
     { x: 0, y: 0.4 },
   ])
     expect(step(press, { type: "move", point }).gesture.phase).toBe("armed");
+  // That first pixel does not choose the axis: going sideways still moves the clip.
+  expect(
+    step(wobble, { type: "move", point: { x: 60, y: -1 } }).gesture,
+  ).toMatchObject({
+    phase: "dragging",
+    intent: { kind: "move", clipId: "a", alone: true },
+    loose: false,
+  });
+});
+
+test("a quick click that wobbles on a gain line is a click, and anything more commits", () => {
+  const press = step(idle, {
+    type: "press",
+    intent: { kind: "gain", clipId: "a", alone: true },
+    point: { x: 0, y: 0 },
+    at: 1000,
+  }).gesture;
+  const after = (points: [number, number][], at: number) =>
+    step(
+      points.reduce(
+        (gesture, [x, y]) =>
+          step(gesture, { type: "move", point: { x, y } }).gesture,
+        press,
+      ),
+      { type: "release", at },
+    ).outcome;
+  expect(after([[0, 1]], 1100)).toBe("click");
+  // Held longer, the same pixel is a deliberate change.
+  expect(after([[0, 1]], 1400)).toBe("commit");
+  // The furthest the pointer went counts, not where it was released.
+  expect(
+    after(
+      [
+        [0, 2],
+        [0, 1],
+      ],
+      1100,
+    ),
+  ).toBe("commit");
+  // A line brought back to where it began has nothing to commit, so the click still selects.
+  expect(
+    after(
+      [
+        [0, 1],
+        [0, 0],
+      ],
+      1400,
+    ),
+  ).toBe("click");
+  expect(after([[0, 4]], 1050)).toBe("commit");
 });
 
 test("a fade drag leaves a clip's authored volume automation alone", () => {
@@ -341,16 +395,27 @@ test("destination snapshots include linked tracks, preserve selection gaps, and 
 
 test("a press arms, three pixels of travel start the drag, and a release commits it", () => {
   const intent = { kind: "move", clipId: "a", alone: false } as const;
-  const press = step(idle, { type: "press", intent, point: { x: 10, y: 10 } });
+  const press = step(idle, {
+    type: "press",
+    intent,
+    point: { x: 10, y: 10 },
+    at: 0,
+  });
   expect(press).toEqual({
-    gesture: { phase: "armed", intent, origin: { x: 10, y: 10 } },
+    gesture: {
+      phase: "armed",
+      intent,
+      origin: { x: 10, y: 10 },
+      since: 0,
+      reach: 0,
+    },
     outcome: null,
   });
 
   const near = step(press.gesture, { type: "move", point: { x: 12, y: 11 } });
   expect(near.gesture.phase).toBe("armed");
   // A press that never travelled is a click: it selects, and the blade cuts.
-  expect(step(near.gesture, { type: "release" })).toEqual({
+  expect(step(near.gesture, { type: "release", at: 50 })).toEqual({
     gesture: idle,
     outcome: "click",
   });
@@ -363,9 +428,12 @@ test("a press arms, three pixels of travel start the drag, and a release commits
     phase: "dragging",
     intent,
     origin: { x: 10, y: 10 },
+    since: 0,
+    reach: 3,
     point: { x: 10, y: 10 },
+    loose: false,
   });
-  expect(step(back.gesture, { type: "release" })).toEqual({
+  expect(step(back.gesture, { type: "release", at: 50 })).toEqual({
     gesture: idle,
     outcome: "commit",
   });
@@ -377,6 +445,7 @@ test("Esc cancels an armed press or a drag, and a second press never replaces th
     type: "press",
     intent: first,
     point: { x: 0, y: 0 },
+    at: 0,
   }).gesture;
   const dragging = step(armed, {
     type: "move",
@@ -392,11 +461,12 @@ test("Esc cancels an armed press or a drag, and a second press never replaces th
         type: "press",
         intent: { kind: "marquee" },
         point: { x: 50, y: 50 },
+        at: 0,
       }).gesture,
     ).toBe(gesture);
   }
   // Nothing is under way, so there is nothing to end.
-  expect(step(idle, { type: "release" }).outcome).toBeNull();
+  expect(step(idle, { type: "release", at: 0 }).outcome).toBeNull();
   expect(step(idle, { type: "cancel" }).outcome).toBeNull();
 });
 

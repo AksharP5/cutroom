@@ -900,6 +900,88 @@ test("a gain line answers its first pixel, and a press without a drag changes no
   expect(await read()).toMatchObject({ revision: before, timeline: initial });
 });
 
+test("a pixel of wobble on the gain line still lets a sideways drag move the clip", async ({
+  page,
+  request,
+}) => {
+  const { read, music, gainEdits } = await openTone(
+    page,
+    request,
+    "Gain wobble",
+  );
+  const initial = (await read()).timeline;
+  const readout = page.locator(".tl-readout");
+  const origin = await lineAt(page, 0.5);
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(origin.x, origin.y + 1);
+  // The first pixel shows its gain, but has not chosen the axis.
+  await expect(readout).toHaveText("-1.0 dB");
+  for (let dx = 6; dx <= 60; dx += 6) {
+    await page.mouse.move(origin.x + dx, origin.y + 1);
+    await page.waitForTimeout(16);
+  }
+  await expect(page.locator(".tl-lanes")).toHaveAttribute(
+    "data-cursor",
+    "move",
+  );
+  // The gain shown for that pixel is taken back while the clip is held.
+  await expect(readout).not.toContainText("dB");
+  expect(Math.abs((await lineAt(page, 0.5)).y - origin.y)).toBeLessThanOrEqual(
+    0.5,
+  );
+  await page.mouse.up();
+  await expect.poll(async () => (await music()).start).toBeGreaterThan(0);
+  expect((await music()).volume).toBeNull();
+  expect(await gainEdits()).toBe(0);
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await read()).timeline).toEqual(initial);
+});
+
+test("a quick click that wobbles on the gain line selects the clip and leaves the mix alone", async ({
+  page,
+  request,
+}) => {
+  const { read, music, gainEdits } = await openTone(
+    page,
+    request,
+    "Gain click",
+  );
+  const before = await read();
+  const readout = page.locator(".tl-readout");
+  const clip = page.locator('[data-clip="music"]');
+  await expect(clip).not.toHaveClass(/selected/);
+  const origin = await lineAt(page, 0.5);
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(origin.x, origin.y + 1);
+  await page.mouse.up();
+  await expect(clip).toHaveClass(/selected/);
+  await expect(readout).toBeHidden();
+  expect(Math.abs((await lineAt(page, 0.5)).y - origin.y)).toBeLessThanOrEqual(
+    0.5,
+  );
+  expect(await read()).toEqual(before);
+  expect(await gainEdits()).toBe(0);
+  // Held past a click, the same pixel is a change.
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(origin.x, origin.y + 1);
+  await expect(readout).toHaveText("-1.0 dB");
+  await page.waitForTimeout(350);
+  await page.mouse.up();
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1 / 20));
+  await page.keyboard.press("Control+z");
+  await expect.poll(read).toMatchObject({ timeline: before.timeline });
+  // A quick drag that went further and came back still commits where it was let go.
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(origin.x, origin.y + 3);
+  await page.mouse.move(origin.x, origin.y + 1);
+  await page.mouse.up();
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1 / 20));
+});
+
 test("releasing Shift mid-drag leaves the gain line where it is, under the pointer", async ({
   page,
   request,

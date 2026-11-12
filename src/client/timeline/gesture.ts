@@ -48,21 +48,43 @@ export type Intent =
   | { kind: "blade"; clipId: string }
   | { kind: "marquee" };
 
+/** What a press holds until it ends: where and when it began, and the furthest it has been on either axis. */
+interface Press {
+  intent: Intent;
+  origin: Point;
+  since: number;
+  reach: number;
+}
+
 /** One pointer gesture: idle > armed > dragging > commit or cancel. */
 export type Gesture =
   | { phase: "idle" }
-  | { phase: "armed"; intent: Intent; origin: Point }
-  | { phase: "dragging"; intent: Intent; origin: Point; point: Point };
+  | ({ phase: "armed" } & Press)
+  | ({
+      phase: "dragging";
+      point: Point;
+      /**
+       * A gain line shows its gain from the first vertical pixel, before the threshold settles
+       * whether the press is a gain drag, a clip move or a click.
+       */
+      loose: boolean;
+    } & Press);
 
+/** `at` is the event's time in milliseconds. */
 export type GestureEvent =
-  | { type: "press"; intent: Intent; point: Point }
+  | { type: "press"; intent: Intent; point: Point; at: number }
   | { type: "move"; point: Point }
-  | { type: "release" }
+  | { type: "release"; at: number }
   | { type: "cancel" };
+
+/** A gain press released this soon, having stayed this close on both axes, is a click. */
+const CLICK_MS = 250;
+const CLICK_REACH = 1;
 
 /**
  * How a gesture ended: `commit` after a drag, `click` when the press never travelled the
- * threshold, `cancel` on Esc or a lost pointer. Null while it goes on.
+ * threshold or only wobbled on a gain line, `cancel` on Esc or a lost pointer. Null while it
+ * goes on.
  */
 export type Outcome = "commit" | "click" | "cancel" | null;
 
@@ -80,6 +102,8 @@ export function step(
             phase: "armed",
             intent: event.intent,
             origin: event.point,
+            since: event.at,
+            reach: 0,
           },
           outcome: null,
         }
@@ -88,35 +112,54 @@ export function step(
     case "press":
       return { gesture, outcome: null };
     case "move": {
-      const { origin } = gesture;
-      let { intent } = gesture;
-      const across = Math.abs(event.point.x - origin.x);
-      const down = Math.abs(event.point.y - origin.y);
-      // A gain line answers its first pixel of vertical travel, so a small change is not skipped.
-      // A press that goes sideways waits out the threshold to become a move.
-      const travelled =
+      const { point } = event;
+      // Once the threshold has been passed, coming back inside it changes nothing.
+      if (gesture.phase === "dragging" && !gesture.loose)
+        return { gesture: { ...gesture, point }, outcome: null };
+      const { intent, origin, since } = gesture;
+      const across = Math.abs(point.x - origin.x);
+      const down = Math.abs(point.y - origin.y);
+      const held = {
+        intent,
+        origin,
+        since,
+        reach: Math.max(gesture.reach, across, down),
+      };
+      // At the threshold a gain press that went sideways becomes a move of its clip.
+      if (Math.hypot(across, down) >= DRAG_THRESHOLD)
+        return {
+          gesture: {
+            ...held,
+            phase: "dragging",
+            intent:
+              intent.kind === "gain" && across > down
+                ? { kind: "move", clipId: intent.clipId, alone: intent.alone }
+                : intent,
+            point,
+            loose: false,
+          },
+          outcome: null,
+        };
+      const loose =
         gesture.phase === "dragging" ||
-        Math.hypot(across, down) >= DRAG_THRESHOLD ||
         (intent.kind === "gain" && down >= 1 && down > across);
-      if (
-        travelled &&
-        gesture.phase === "armed" &&
-        intent.kind === "gain" &&
-        across > down
-      )
-        intent = { kind: "move", clipId: intent.clipId, alone: intent.alone };
       return {
-        gesture: travelled
-          ? { phase: "dragging", intent, origin, point: event.point }
-          : gesture,
+        gesture: loose
+          ? { ...held, phase: "dragging", point, loose }
+          : { ...held, phase: "armed" },
         outcome: null,
       };
     }
-    case "release":
-      return {
-        gesture: idle,
-        outcome: gesture.phase === "dragging" ? "commit" : "click",
-      };
+    case "release": {
+      if (gesture.phase === "armed") return { gesture: idle, outcome: "click" };
+      // A wobble during a click is not a mix change, and neither is a line left where it was.
+      const click =
+        gesture.loose &&
+        ((event.at - gesture.since <= CLICK_MS &&
+          gesture.reach <= CLICK_REACH) ||
+          gesture.point.y === gesture.origin.y);
+      return { gesture: idle, outcome: click ? "click" : "commit" };
+    }
     case "cancel":
       return { gesture: idle, outcome: "cancel" };
   }

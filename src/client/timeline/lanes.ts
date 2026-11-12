@@ -755,6 +755,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       type: "press",
       intent,
       point: local(event.clientX, event.clientY),
+      at: event.timeStamp,
     }).gesture;
     onGesture(true);
     if (intent.kind === "marquee") {
@@ -804,8 +805,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     };
   }
 
-  function end(type: "release" | "cancel") {
-    const next = step(gesture.current, { type });
+  function end(type: "release" | "cancel", at = 0) {
+    const next = step(
+      gesture.current,
+      type === "release" ? { type, at } : { type },
+    );
     gesture.current = next.gesture;
     if (next.outcome) finish(next.outcome);
   }
@@ -943,7 +947,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onPointerMove,
       onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
         movePointer(event);
-        end("release");
+        end("release", event.timeStamp);
       },
       onPointerCancel: () => end("cancel"),
       onLostPointerCapture: () => end("cancel"),
