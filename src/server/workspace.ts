@@ -40,7 +40,7 @@ export function createWorkspaceRoutes(options: {
   subscribePreview?: (
     projectId: string,
     listener: (change: FileChange) => void,
-  ) => () => void;
+  ) => Promise<() => void>;
   subscribeExports?: ReturnType<
     typeof createHyperframesApi
   >["subscribeExports"];
@@ -181,11 +181,14 @@ export function createWorkspaceRoutes(options: {
   app.get("/projects/:id/events", async (c) => {
     const project = await options.projects.get(c.req.param("id"));
     return streamSSE(c, async (stream) => {
-      const stopPreview = options.subscribePreview?.(project.id, (change) => {
-        void stream
-          .writeSSE({ event: "file-change", data: JSON.stringify(change) })
-          .catch(() => {});
-      });
+      const stopPreview = await options.subscribePreview?.(
+        project.id,
+        (change) => {
+          void stream
+            .writeSSE({ event: "file-change", data: JSON.stringify(change) })
+            .catch(() => {});
+        },
+      );
       const stopExports = options.subscribeExports?.(project.id, (job) => {
         void stream
           .writeSSE({ event: "export", data: JSON.stringify(job) })

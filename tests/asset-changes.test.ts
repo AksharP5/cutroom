@@ -190,23 +190,22 @@ test("watcher attributes direct media writes to the active turn, while owner upl
       expect(agent.status, await agent.text()).toBe(200);
       expect((await f.read()).agentChanges).toEqual(["title"]);
       await f.review.acceptChanges(f.project);
-      const changed = new Promise<void>((resolve) => {
-        const stop = api.subscribe(f.project.id, (change) => {
-          if (
-            change.path === "card.png" &&
-            change.version === fileContentVersion("direct agent blue")
-          ) {
-            stop();
-            resolve();
-          }
-        });
+      const changed = Promise.withResolvers<void>();
+      const stop = await api.subscribe(f.project.id, (change) => {
+        if (
+          change.path === "card.png" &&
+          change.version === fileContentVersion("direct agent blue")
+        ) {
+          stop();
+          changed.resolve();
+        }
       });
       await writeFile(
         `${f.project.path}/index.html`,
         document(image, "<script>const revision=2;</script>"),
       );
       await writeFile(`${f.project.path}/card.png`, "direct agent blue");
-      await changed;
+      await changed.promise;
       expect((await f.read()).agentChanges).toEqual(["title"]);
     } finally {
       await turn.end();
@@ -228,7 +227,7 @@ test("view writes under an active agent turn emit no project events, review rows
   f.app.route("/api/editor", api);
   f.app.route("/api/cutroom", createTimelineRoutes(f.store, f.review));
   const changes: string[] = [];
-  const stop = api.subscribe(f.project.id, (change) =>
+  const stop = await api.subscribe(f.project.id, (change) =>
     changes.push(change.path),
   );
   try {
@@ -253,16 +252,15 @@ test("view writes under an active agent turn emit no project events, review rows
       // Let the real watcher drain, then prove it still reports ordinary project files.
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(changes).toEqual([]);
-      const changed = new Promise<void>((resolve) => {
-        const unsubscribe = api.subscribe(f.project.id, (change) => {
-          if (change.path === "sentinel.txt") {
-            unsubscribe();
-            resolve();
-          }
-        });
+      const changed = Promise.withResolvers<void>();
+      const unsubscribe = await api.subscribe(f.project.id, (change) => {
+        if (change.path === "sentinel.txt") {
+          unsubscribe();
+          changed.resolve();
+        }
       });
       await writeFile(`${f.project.path}/sentinel.txt`, "watcher is live");
-      await changed;
+      await changed.promise;
       expect(changes).toEqual(["sentinel.txt"]);
       const after = await f.read();
       expect(after.agentChanges).toEqual(before.agentChanges);
