@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { clipOrigin } from "../projects/animation";
+import { animationCheck, clipOrigin } from "../projects/animation";
 import type { AnimationCheck, AnimationSnapshot } from "../projects/animation";
 import { TweenWindowsSchema } from "../../shared/preview";
 import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
@@ -212,14 +212,17 @@ export function createTimelineRoutes(
       const before = source?.timeline.clips.find(
         (clip) => clip.id === sourceId,
       );
+      if (!source || !before) continue;
+      const check = animationCheck(source, sourceId, clip.id);
       if (
-        source &&
-        before &&
-        Math.abs(
-          clipOrigin(clip, timeline) - clipOrigin(before, source.timeline),
-        ) > 0.002
+        check &&
+        (source.pending?.some((check) => check.clipId === sourceId) ||
+          (origin && check.inherited.length) ||
+          Math.abs(
+            clipOrigin(clip, timeline) - clipOrigin(before, source.timeline),
+          ) > 0.002)
       )
-        animationChecks.push({ clipId: clip.id, sourceId, source });
+        animationChecks.push(check);
     }
     const html = patchComposition(current.parsed, timeline, origins, snapshots);
     const settings = settingsOf(timeline);

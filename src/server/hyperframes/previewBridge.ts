@@ -16,7 +16,7 @@ interface PreviewWindow extends Window {
       toSum(): { values: Iterable<{ unit: string; value: number }> };
     };
   };
-  gsap?: Pick<typeof gsap, "getProperty" | "core">;
+  gsap?: Pick<typeof gsap, "getProperty" | "core" | "parseEase">;
   __hf?: Window["__hf"] & {
     audioMeter?: {
       start(): void;
@@ -47,17 +47,12 @@ function animationWindows(
   const clips = new Map<Element, string>();
   for (const clip of root.querySelectorAll("[data-hf-cutroom-clip-id]"))
     clips.set(clip, clip.getAttribute("data-hf-cutroom-clip-id")!);
-  const owners = new Map<
-    Element,
-    { id: string; path: string; paths: string[] } | null
-  >();
+  const owners = new Map<Element, { id: string; path: string } | null>();
   const siblings = new Map<Element, number>();
-  const owner = (
-    target: Element,
-  ): { id: string; path: string; paths: string[] } | null => {
+  const owner = (target: Element): { id: string; path: string } | null => {
     if (owners.has(target)) return owners.get(target)!;
     const id = clips.get(target);
-    let result = id ? { id, path: ".", paths: ["."] } : null;
+    let result = id ? { id, path: "." } : null;
     if (!result && target !== root && target.parentElement) {
       const parent = owner(target.parentElement);
       if (parent) {
@@ -66,7 +61,7 @@ function animationWindows(
             siblings.set(child, index),
           );
         const path = `${parent.path}/${siblings.get(target)}`;
-        result = { id: parent.id, path, paths: [path] };
+        result = { id: parent.id, path };
       }
     }
     owners.set(target, result);
@@ -79,7 +74,13 @@ function animationWindows(
   );
   const groups = new Map<string, Map<string, number[]>>();
   const registered = new Set(Object.values(registry));
-  const visit = (parent: gsap.core.Timeline, offset: number, rate: number) => {
+  const library = (window as PreviewWindow).gsap;
+  const linearEase = library?.parseEase("none");
+  let monotonicEases: Set<gsap.EaseFunction> | undefined;
+  const visit = (
+    parent: gsap.core.Timeline,
+    toComposition: (time: number) => number,
+  ) => {
     const record = (
       id: string,
       paths: string[],
@@ -94,11 +95,64 @@ function animationWindows(
       starts.push(start);
     };
     for (const child of parent.getChildren(false, true, true)) {
-      const start = offset + child.startTime() / rate;
-      const childRate = rate * child.timeScale();
-      if (!Number.isFinite(start) || childRate <= 0) continue;
+      const localStart = child.startTime();
+      const start = toComposition(localStart);
+      const scale = child.timeScale();
+      if (!Number.isFinite(start) || scale <= 0) continue;
       if ("getChildren" in child) {
-        if (!registered.has(child)) visit(child, start, childRate);
+        if (!registered.has(child))
+          visit(child, (time) => toComposition(localStart + time / scale));
+        continue;
+      }
+      // Pinned GSAP 3.15 renders stagger/keyframe children through Tween.timeline._ease.
+      // Its declared Tween type omits this internal timeline.
+      const nested = (
+        child as gsap.core.Tween & {
+          timeline?: gsap.core.Timeline & { _ease: gsap.EaseFunction };
+        }
+      ).timeline;
+      if (nested) {
+        if (!library || registered.has(nested)) continue;
+        const innerDuration = nested.duration();
+        const duration = child.duration();
+        if (innerDuration <= 0 || duration <= 0) continue;
+        const ease = nested._ease;
+        if (ease !== linearEase) {
+          monotonicEases ??= new Set(
+            [
+              "power1",
+              "power2",
+              "power3",
+              "power4",
+              "sine",
+              "expo",
+              "circ",
+            ].flatMap((name) =>
+              ["in", "out", "inOut"].map((direction) =>
+                library.parseEase(`${name}.${direction}`),
+              ),
+            ),
+          );
+          // A custom or non-monotonic time warp has no provable unique inverse.
+          if (!monotonicEases.has(ease)) continue;
+        }
+        const inverse = (progress: number) => {
+          if (ease === linearEase || progress <= 0 || progress >= 1)
+            return progress;
+          let low = 0;
+          let high = 1;
+          for (let i = 0; i < 40; i++) {
+            const middle = (low + high) / 2;
+            if (ease(middle) < progress) low = middle;
+            else high = middle;
+          }
+          return (low + high) / 2;
+        };
+        visit(nested, (time) =>
+          toComposition(
+            localStart + (inverse(time / innerDuration) * duration) / scale,
+          ),
+        );
         continue;
       }
       const targets: unknown[] = child.targets();
@@ -110,7 +164,7 @@ function animationWindows(
       if (!properties.length) continue;
       const first = targets[0] instanceof Element ? owner(targets[0]) : null;
       if (targets.length === 1) {
-        if (first) record(first.id, first.paths, properties, start);
+        if (first) record(first.id, [first.path], properties, start);
         continue;
       }
       const paths = new Map<string, Set<string>>();
@@ -126,7 +180,7 @@ function animationWindows(
         record(id, [...targets].sort(), properties, start);
     }
   };
-  visit(timeline, 0, 1);
+  visit(timeline, (time) => time);
   for (const [id, clip] of groups) windows[id] = [...clip];
   return windows;
 }
@@ -200,6 +254,7 @@ function installPreviewBridge(
       "set",
       "remove",
       "clear",
+      "shiftChildren",
     ] as const) {
       const original = target[method];
       Object.defineProperty(target, method, {
@@ -219,14 +274,51 @@ function installPreviewBridge(
     for (const child of timeline.getChildren(false, true, true))
       remember(child);
   };
+  const timed = new WeakSet<object>();
+  const watchTiming = (prototype: gsap.core.Animation) => {
+    if (timed.has(prototype)) return;
+    timed.add(prototype);
+    for (const method of [
+      "delay",
+      "duration",
+      "totalDuration",
+      "startTime",
+      "timeScale",
+      "repeat",
+      "repeatDelay",
+    ] as const) {
+      if (!Object.hasOwn(prototype, method)) continue;
+      const original = prototype[method];
+      Object.defineProperty(prototype, method, {
+        configurable: true,
+        writable: true,
+        value: function (this: gsap.core.Animation, ...args: unknown[]) {
+          const setting = watchingWindows && args.length > 0;
+          const before: unknown = setting
+            ? Reflect.apply(original, this, [])
+            : undefined;
+          const result: unknown = Reflect.apply(original, this, args);
+          if (setting && before !== Reflect.apply(original, this, []))
+            changedWindows();
+          return result;
+        },
+      });
+    }
+  };
+  const watchLibrary = (library: NonNullable<PreviewWindow["gsap"]>) => {
+    wrapMethods(library.core.Timeline.prototype);
+    watchTiming(library.core.Animation.prototype);
+    watchTiming(library.core.Timeline.prototype);
+    watchTiming(library.core.Tween.prototype);
+  };
   let gsapLibrary = win.gsap;
-  if (gsapLibrary) wrapMethods(gsapLibrary.core.Timeline.prototype);
+  if (gsapLibrary) watchLibrary(gsapLibrary);
   Object.defineProperty(win, "gsap", {
     configurable: true,
     get: () => gsapLibrary,
     set(value: PreviewWindow["gsap"]) {
       gsapLibrary = value;
-      if (value) wrapMethods(value.core.Timeline.prototype);
+      if (value) watchLibrary(value);
     },
   });
   const register = (

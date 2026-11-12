@@ -4,6 +4,7 @@ import { emptyTimelineSettings } from "../src/shared/timeline/schema";
 import type { Clip } from "../src/shared/timeline/schema";
 import { animationMessage, animationReview } from "../src/client/edit/feedback";
 import {
+  animationCheck,
   checkAnimationEdit,
   animationWarnings,
 } from "../src/server/projects/animation";
@@ -29,7 +30,7 @@ const edit = (
   },
   windows,
 });
-const checks = [{ clipId: "title", sourceId: "title", source: before }];
+const checks = [animationCheck(before, "title", "title")!];
 
 test("only an origin change whose starts stayed absolute creates a warning", () => {
   const result = checkAnimationEdit(edit({ start: 240 }), checks, []);
@@ -86,7 +87,7 @@ test("source fixes and moving back resolve evidence from the original edit", () 
     ),
   ).toEqual([]);
   const moved = edit({ start: 240 });
-  const back = [{ clipId: "title", sourceId: "title", source: moved }];
+  const back = [animationCheck(moved, "title", "title")!];
   expect(animationWarnings(checkAnimationEdit(before, back, previous))).toEqual(
     [],
   );

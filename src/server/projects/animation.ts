@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
+import { TweenWindowsSchema } from "../../shared/preview";
 import type { TweenWindows } from "../../shared/preview";
 import { toSeconds } from "../../shared/timeline/apply";
 
@@ -13,18 +14,51 @@ export const AnimationResultSchema = z.object({
   clipId: z.string(),
   evidence: z.array(AnimationEvidenceSchema),
 });
+const AnimationCheckSchema = z.object({
+  clipId: z.string(),
+  origin: z.number().finite(),
+  windows: TweenWindowsSchema.valueType,
+  inherited: z.array(AnimationEvidenceSchema).default([]),
+});
 export const AnimationEditSchema = z.object({
   historyId: z.string(),
   composition: z.string(),
+  revision: z.string().optional(),
+  checks: z.array(AnimationCheckSchema).default([]),
+  reported: z.boolean().default(false),
   results: z.array(AnimationResultSchema),
 });
 export type AnimationResult = z.infer<typeof AnimationResultSchema>;
-export type AnimationSnapshot = { timeline: Timeline; windows: TweenWindows };
-export type AnimationCheck = {
-  clipId: string;
-  sourceId: string;
-  source: AnimationSnapshot;
+export type AnimationCheck = z.infer<typeof AnimationCheckSchema>;
+export type AnimationSnapshot = {
+  timeline: Timeline;
+  windows: TweenWindows;
+  pending?: AnimationCheck[];
+  evidence?: AnimationResult[];
 };
+
+/** Copy only the compared clip's inputs; unresolved moves keep their first observed origin. */
+export function animationCheck(
+  source: AnimationSnapshot,
+  sourceId: string,
+  clipId: string,
+): AnimationCheck | undefined {
+  const clip = source.timeline.clips.find((clip) => clip.id === sourceId);
+  if (!clip) return;
+  const pending = source.pending?.find((check) => check.clipId === sourceId);
+  const windows = pending?.windows ?? pairs(source.windows, sourceId);
+  const inherited =
+    source.evidence?.find((result) => result.clipId === sourceId)?.evidence ??
+    pending?.inherited ??
+    [];
+  if (!windows.length && !inherited.length) return;
+  return {
+    clipId,
+    origin: pending?.origin ?? clipOrigin(clip, source.timeline),
+    windows,
+    inherited,
+  };
+}
 
 export function clipOrigin(clip: Clip, timeline: Timeline) {
   return (
@@ -52,7 +86,14 @@ export function checkAnimationEdit(
 ): AnimationResult[] {
   const results = new Map<string, AnimationResult>();
   const clips = new Map(after.timeline.clips.map((clip) => [clip.id, clip]));
-  for (const result of previous) {
+  const inherited = checks.flatMap((check) =>
+    check.inherited.length &&
+    !previous.some((result) => result.clipId === check.clipId)
+      ? [{ clipId: check.clipId, evidence: check.inherited }]
+      : [],
+  );
+  const knownResults = [...previous, ...inherited];
+  for (const result of knownResults) {
     const clip = clips.get(result.clipId);
     if (!clip) continue;
     const groups = new Map(pairs(after.windows, clip.id));
@@ -73,21 +114,18 @@ export function checkAnimationEdit(
   }
   for (const check of checks) {
     const clip = clips.get(check.clipId);
-    const source = check.source.timeline.clips.find(
-      (clip) => clip.id === check.sourceId,
-    );
-    if (!clip || !source) continue;
-    const origin = clipOrigin(source, check.source.timeline);
+    if (!clip) continue;
+    const origin = check.origin;
     const delta = clipOrigin(clip, after.timeline) - origin;
     if (Math.abs(delta) <= 0.002) continue;
     const groups = new Map(pairs(after.windows, clip.id));
     const known = new Set(
-      previous
+      knownResults
         .find((result) => result.clipId === clip.id)
         ?.evidence.map(({ key }) => key),
     );
     const result = results.get(clip.id) ?? { clipId: clip.id, evidence: [] };
-    for (const [key, starts] of pairs(check.source.windows, source.id)) {
+    for (const [key, starts] of check.windows) {
       const next = groups.get(key);
       if (
         !known.has(key) &&

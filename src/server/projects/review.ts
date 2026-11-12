@@ -162,10 +162,6 @@ function find(items: ReviewItem[], id: string) {
  */
 export function createReviewService(store: ProjectStore) {
   const animationReports = new Map<string, TweenWindows>();
-  const pendingAnimations = new Map<
-    string,
-    { historyId: string; checks: AnimationCheck[] }
-  >();
   const reportingAnimations = new Map<
     string,
     Promise<{
@@ -245,6 +241,16 @@ export function createReviewService(store: ProjectStore) {
     const parsed = ReviewFileSchema.safeParse(json);
     if (!parsed.success) throw new ReviewFileError();
     const state = parsed.data;
+    // Earlier edit-scoped records saved only the proven result. Keep that evidence recheckable.
+    for (const edit of state.animationEdits) {
+      if (edit.revision || edit.checks.length) continue;
+      edit.checks = edit.results.flatMap(({ clipId, evidence }) => {
+        const first = evidence[0];
+        return first
+          ? [{ clipId, origin: first.origin, windows: [], inherited: evidence }]
+          : [];
+      });
+    }
     // Move #30's marks into the ledger, keeping their note attribution and source signature.
     for (const change of state.changes) {
       const latest = state.clipEdits.findLast(
@@ -831,7 +837,29 @@ export function createReviewService(store: ProjectStore) {
       const windows = animationReports.get(
         reportKey(project, composition, sourceVersion),
       );
-      return windows ? { timeline, windows } : undefined;
+      const state = await readState(project).catch((error: unknown) => {
+        if (error instanceof ReviewFileError) return null;
+        throw error;
+      });
+      if (!state) return;
+      const history = (await store.history(project)).list();
+      const active = new Set(
+        history.filter((entry) => !entry.undone).map((entry) => entry.id),
+      );
+      const previous = state.animationEdits.findLast(
+        (edit) =>
+          edit.composition === composition &&
+          edit.revision === sourceVersion &&
+          active.has(edit.historyId),
+      );
+      const pending =
+        !windows && previous && !previous.reported ? previous.checks : [];
+      const evidence = activeAnimationResults(state, history, composition);
+      return windows ||
+        pending.length ||
+        evidence.some((result) => result.evidence.length)
+        ? { timeline, windows: windows ?? {}, pending, evidence }
+        : undefined;
     },
     /** Called inside editComposition, after the content history window has closed. */
     recordAnimationEdit: async (
@@ -843,12 +871,27 @@ export function createReviewService(store: ProjectStore) {
       const entry = (await store.history(project)).list().at(-1);
       if (!entry || entry.undoes || entry.restoredTo) return;
       const { sourceVersion } = await compositionVersions(project, composition);
-      pendingAnimations.set(reportKey(project, composition, sourceVersion), {
-        historyId: entry.id,
-        checks,
+      const state = await readState(project).catch((error: unknown) => {
+        if (error instanceof ReviewFileError) return null;
+        throw error;
       });
-      if (pendingAnimations.size > 8)
-        pendingAnimations.delete(pendingAnimations.keys().next().value!);
+      if (!state) return;
+      if (
+        state.animationEdits.some(
+          (edit) =>
+            edit.historyId === entry.id && edit.composition === composition,
+        )
+      )
+        return;
+      state.animationEdits.push({
+        historyId: entry.id,
+        composition,
+        revision: sourceVersion,
+        checks,
+        reported: false,
+        results: [],
+      });
+      await writeState(project, state);
     },
     animationDocument: <T>(
       project: Project,
@@ -877,7 +920,6 @@ export function createReviewService(store: ProjectStore) {
       if (animationReports.size > 8) {
         const oldest = animationReports.keys().next().value!;
         animationReports.delete(oldest);
-        pendingAnimations.delete(oldest);
       }
       const pending = reportingAnimations.get(key);
       if (pending) return pending;
@@ -890,9 +932,17 @@ export function createReviewService(store: ProjectStore) {
         const view = await read();
         const history = (await store.history(project)).list();
         const state = await readState(project);
-        const check = pendingAnimations.get(key);
-        const entry = check
-          ? history.find((entry) => entry.id === check.historyId)
+        const active = new Set(
+          history.filter((entry) => !entry.undone).map((entry) => entry.id),
+        );
+        const comparison = state.animationEdits.findLast(
+          (edit) =>
+            edit.composition === composition &&
+            edit.revision === revision &&
+            active.has(edit.historyId),
+        );
+        const entry = comparison
+          ? history.find((entry) => entry.id === comparison.historyId)
           : history.at(-1);
         const previous = activeAnimationResults(
           state,
@@ -901,25 +951,31 @@ export function createReviewService(store: ProjectStore) {
           entry?.id,
         );
         if (entry && !entry.undone && !entry.undoes && !entry.restoredTo) {
-          const results = checkAnimationEdit(
-            { timeline: view.timeline, windows: animationReports.get(key)! },
-            check?.historyId === entry.id ? check.checks : [],
-            previous,
-          );
           const saved = state.animationEdits.find(
             (edit) =>
               edit.historyId === entry.id && edit.composition === composition,
           );
+          const results = checkAnimationEdit(
+            { timeline: view.timeline, windows: animationReports.get(key)! },
+            comparison?.checks ?? saved?.checks ?? [],
+            previous,
+          );
           if (
+            (saved && !saved.reported) ||
             JSON.stringify(saved?.results ?? previous) !==
-            JSON.stringify(results)
+              JSON.stringify(results)
           ) {
-            if (saved) saved.results = results;
-            else
+            if (saved) {
+              saved.results = results;
+              saved.reported = true;
+            } else
               state.animationEdits.push({
                 historyId: entry.id,
                 composition,
+                revision,
                 results,
+                checks: [],
+                reported: true,
               });
             await writeState(project, state);
           }

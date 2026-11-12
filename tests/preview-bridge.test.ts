@@ -208,3 +208,70 @@ test.skipIf(!browserExecutable())(
     }
   },
 );
+
+test.skipIf(!browserExecutable())(
+  "internal stagger and keyframe starts include duration, easing and parent time scales; getters and seeks do not report",
+  async () => {
+    const { default: puppeteer } = await import("puppeteer-core");
+    const browser = await puppeteer.launch({
+      executablePath: browserExecutable(),
+      headless: true,
+      args: ["--no-sandbox", "--mute-audio"],
+    });
+    try {
+      const page = await browser.newPage();
+      const gsap = await readFile("node_modules/gsap/dist/gsap.min.js", "utf8");
+      await page.setContent(
+        withPreviewBridge(`<!doctype html><html><body><main data-composition-id="main" data-duration="40"><div id="title" class="shared" data-start="8" data-duration="4"></div><div id="still" class="shared" data-start="6" data-duration="4"></div><div id="framed" data-start="10" data-duration="8"></div><div id="nested" data-composition-id="nested" data-start="15" data-duration="4"></div></main><script>${gsap}</script><script>
+        window.reports=[];addEventListener('message',e=>{if(e.data.type==='animation-windows')reports.push(e.data)});
+        window.__player={getTime:()=>0,isPlaying:()=>false};window.__renderReady=true;
+        const tl=gsap.timeline({paused:true});
+        tl.to('.shared',{x:100,duration:1,stagger:(i,target)=>+target.dataset.start-6},6);
+        const timedParent=gsap.timeline();
+        timedParent.to('#framed',{duration:8,ease:'power2.in',keyframes:[{x:20,duration:1},{y:20,duration:1}]},2);
+        timedParent.timeScale(2);tl.add(timedParent,10);
+        const registered=gsap.timeline().to('#nested',{x:20,duration:1},0);tl.add(registered,15);
+        window.__timelines={main:tl,nested:registered};
+      </script></body></html>`),
+      );
+      await page.evaluate(() =>
+        window.postMessage(
+          { source: "cutroom-viewer", id: "read", action: "animation-windows" },
+          "*",
+        ),
+      );
+      await page.waitForFunction("window.reports.length>0");
+      const report = AnimationWindowsSchema.parse(
+        await page.evaluate("window.reports.at(-1)"),
+      );
+      expect(report.windows.title?.flatMap(([, starts]) => starts)).toEqual([
+        8,
+      ]);
+      expect(report.windows.still?.flatMap(([, starts]) => starts)).toEqual([
+        6,
+      ]);
+      const framed = report.windows.framed!.flatMap(([, starts]) => starts);
+      expect(framed[0]).toBe(11);
+      expect(framed[1]).toBeCloseTo(14.1748021, 6);
+      expect(report.windows.nested).toBeUndefined();
+      const count = await page.evaluate("window.reports.length");
+      await page.evaluate(
+        `void function(){for(let i=0;i<10;i++){const tl=window.__timelines.main;tl.startTime();tl.duration();tl.totalDuration();tl.delay();tl.timeScale();tl.seek(i/10);}}()`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(await page.evaluate("window.reports.length")).toBe(count);
+      await page.evaluate(
+        "void window.__timelines.main.getChildren(false,true,false)[0].startTime(8)",
+      );
+      await page.waitForFunction(`window.reports.length>${count}`);
+      const changed = AnimationWindowsSchema.parse(
+        await page.evaluate("window.reports.at(-1)"),
+      );
+      expect(changed.windows.title?.flatMap(([, starts]) => starts)).toEqual([
+        10,
+      ]);
+    } finally {
+      await browser.close();
+    }
+  },
+);
