@@ -69,17 +69,19 @@ interface Toast {
 
 let foregroundToast: Toast | null = null;
 let backgroundToast: Toast | null = null;
+let attentionToast: Toast | null = null;
 let visibleToast: Toast | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 function dismissToast(toast: Toast | null) {
   if (foregroundToast === toast) foregroundToast = null;
   if (backgroundToast === toast) backgroundToast = null;
+  if (attentionToast === toast) attentionToast = null;
   publishToast();
 }
 
 function publishToast() {
-  const toast = foregroundToast ?? backgroundToast;
+  const toast = foregroundToast ?? attentionToast ?? backgroundToast;
   if (toast === visibleToast) return;
   visibleToast = toast;
   clearTimeout(toastTimer);
@@ -105,7 +107,7 @@ export const showToast = (
   options: {
     tone?: "error" | "info";
     transient?: boolean;
-    priority?: "background";
+    priority?: "background" | "attention";
   } = {},
 ) => {
   if (!message) {
@@ -120,6 +122,7 @@ export const showToast = (
   };
   // Outside notices wait behind owner feedback, including while their hold timer runs.
   if (options.priority === "background") backgroundToast = toast;
+  else if (options.priority === "attention") attentionToast = toast;
   else foregroundToast = toast;
   publishToast();
   return () => dismissToast(toast);

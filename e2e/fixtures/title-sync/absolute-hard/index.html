@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>absolute-hard</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      body {
+        color: #ededed;
+        background: #111111;
+        font-family: system-ui, sans-serif;
+      }
+      .stage {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .shot {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 220px;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.3);
+      }
+      .lower {
+        position: absolute;
+        left: 8%;
+        bottom: 12%;
+        padding: 18px 28px;
+        background: #111111;
+        color: #ededed;
+        font-size: 44px;
+        font-weight: 600;
+      }
+      .cta {
+        position: absolute;
+        left: 12%;
+        right: 12%;
+        top: 40%;
+        margin: 0;
+        font-size: 84px;
+        font-weight: 600;
+        text-align: center;
+      }
+    </style>
+    <script src="gsap.min.js"></script>
+  </head>
+  <body>
+    <main
+      id="main"
+      data-composition-id="main"
+      data-width="1920"
+      data-height="1080"
+      data-fps="30"
+      data-duration="48"
+      class="stage"
+    >
+      <div
+        id="shot-a"
+        class="clip shot"
+        style="background: #7a1f1f"
+        data-start="0"
+        data-duration="12"
+        data-track-index="0"
+        data-label="Shot A"
+      >
+        A
+      </div>
+      <div
+        id="shot-b"
+        class="clip shot"
+        style="background: #1f5a7a"
+        data-start="12"
+        data-duration="18"
+        data-track-index="0"
+        data-label="Shot B"
+      >
+        B
+      </div>
+      <div
+        id="shot-c"
+        class="clip shot"
+        style="background: #2f6b2f"
+        data-start="30"
+        data-duration="18"
+        data-track-index="0"
+        data-label="Shot C"
+      >
+        C
+      </div>
+      <div
+        id="lower"
+        class="clip lower"
+        data-start="6"
+        data-duration="6"
+        data-track-index="2"
+        data-label="Lower third"
+      >
+        <span class="word">Ada</span> <span class="word">Lovelace,</span>
+        <span class="word">Founder</span>
+      </div>
+      <div
+        id="cta"
+        class="clip cta"
+        data-start="36"
+        data-duration="4"
+        data-track-index="2"
+        data-label="Call to action"
+      >
+        Try it today
+      </div>
+    </main>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      document
+        .querySelectorAll("#lower .word")
+        .forEach((word, i) =>
+          tl.from(word, { opacity: 0, y: 30, duration: 0.4 }, 6 + i * 0.15),
+        );
+      function fadeIn(selector, time) {
+        tl.fromTo(
+          selector,
+          { scale: 0.9, opacity: 0 },
+          { scale: 1, opacity: 1, duration: 0.5 },
+          time,
+        );
+      }
+      fadeIn("#cta", 36);
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -6,6 +6,8 @@ import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
+import type { gsap } from "gsap";
+import type { TweenWindows } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 
 interface PreviewWindow extends Window {
@@ -33,12 +35,85 @@ interface PreviewWindow extends Window {
   __hfStartupError?: unknown;
 }
 
+/** Read GSAP's built animations rather than interpreting authored script syntax. */
+function animationWindows(
+  root: Element,
+  registry: Record<string, gsap.core.Timeline | undefined>,
+): TweenWindows {
+  const timeline = registry[root.getAttribute("data-composition-id") ?? ""];
+  const clips = [...root.querySelectorAll("[data-hf-cutroom-clip-id]")];
+  const windows: TweenWindows = Object.fromEntries(
+    clips.map((clip) => [clip.getAttribute("data-hf-cutroom-clip-id")!, []]),
+  );
+  if (!timeline) return windows;
+  const registered = new Set(Object.values(registry));
+  const visit = (parent: gsap.core.Timeline, offset: number, rate: number) => {
+    for (const child of parent.getChildren(false, true, true)) {
+      const start = offset + child.startTime() / rate;
+      const childRate = rate * child.timeScale();
+      if (!Number.isFinite(start) || childRate <= 0) continue;
+      if ("getChildren" in child) {
+        if (!registered.has(child)) visit(child, start, childRate);
+        continue;
+      }
+      if (child.duration() <= 0) continue;
+      const targets: unknown[] = child.targets();
+      const end = start + child.totalDuration() / childRate;
+      if (!targets.length || !Number.isFinite(end)) continue;
+      for (const clip of clips) {
+        if (
+          targets.every(
+            (target) => target instanceof Element && clip.contains(target),
+          )
+        )
+          windows[clip.getAttribute("data-hf-cutroom-clip-id")!]!.push({
+            start,
+            end,
+          });
+      }
+    }
+  };
+  visit(timeline, 0, 1);
+  for (const values of Object.values(windows))
+    values.sort((a, b) => a.start - b.start || a.end - b.end);
+  return windows;
+}
+
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
-function installPreviewBridge(texts: [string, string[]][] = []) {
+function installPreviewBridge(
+  texts: [string, string[]][] = [],
+  readWindows = animationWindows,
+) {
   const sourceTexts = new Map(texts);
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
+  let windowReport: Promise<void> | null = null;
+  const reportWindows = () =>
+    (windowReport ??= (async () => {
+      // Fonts can build timelines in a microtask after the runtime's first binding attempt.
+      await document.fonts.ready;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const runtime = win as PreviewWindow & {
+        __renderReady?: boolean;
+        __hfTimelinesBuilding?: boolean;
+        __timelines?: Record<string, gsap.core.Timeline | undefined>;
+      };
+      while (!runtime.__renderReady || runtime.__hfTimelinesBuilding) {
+        if (retired) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (retired) return;
+      const root = document.querySelector("[data-composition-id]");
+      parent.postMessage(
+        {
+          source: "cutroom-preview",
+          type: "animation-windows",
+          windows: root ? readWindows(root, runtime.__timelines ?? {}) : {},
+        },
+        "*",
+      );
+    })());
   const positions = new Map<
     HTMLElement | SVGElement,
     { translate: string; priority: string; base: string; x: number; y: number }
@@ -1280,6 +1355,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
             positionFrame = requestAnimationFrame(writePosition);
           return;
         case "inspect":
+          if (win.__player) await reportWindows();
           break;
         case "cancel-edit":
           // Let the one pending seek finish without painting a stale edge. The queued
@@ -1567,7 +1643,7 @@ export function withPreviewBridge(html: string) {
   edits.push({
     offset,
     end: offset,
-    text: `<script>(${installPreviewBridge.toString()})(${texts});</script>`,
+    text: `<script>(${installPreviewBridge.toString()})(${texts}, ${animationWindows.toString()});</script>`,
   });
   return edits
     .sort((a, b) => b.offset - a.offset)

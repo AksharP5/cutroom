@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { reportEditorError } from "../workspace";
 import { audioLevels } from "./levels";
 import {
+  AnimationWindowsSchema,
   ClipBoxSchema,
   PositionWarningSchema,
   TextWarningSchema,
@@ -17,7 +18,9 @@ import type {
   PictureHit,
   PlaybackClock,
   PreviewState,
+  TweenWindows,
 } from "../../shared/preview";
+import type { Timeline } from "../../shared/timeline/schema";
 import type { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
@@ -25,6 +28,10 @@ import { frameTime } from "../../shared/timeline/apply";
 import { editPicture, followEditPicture } from "./editFrame";
 import type { EditPicture } from "./editFrame";
 import { seekQueue } from "./seekQueue";
+
+export const useAnimationWindows = create<{
+  report: { timeline: Timeline; windows: TweenWindows } | null;
+}>(() => ({ report: null }));
 
 export const usePositionWarning = create<{
   warning: { clipId: string; time: number } | null;
@@ -120,6 +127,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const closing = new AbortController();
   let active = false;
+  let windows: TweenWindows | null = null;
   let clock: PlaybackClock | null = null;
   type Reply = z.infer<typeof PreviewReplySchema>;
   const pending = new Map<
@@ -172,6 +180,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         send("position-fold", { hfId: fold.data.properties.hfId });
         return;
       }
+    }
+    if (
+      typeof event.data === "object" &&
+      event.data !== null &&
+      "type" in event.data &&
+      event.data.type === "animation-windows"
+    ) {
+      const report = AnimationWindowsSchema.safeParse(event.data);
+      if (report.success) windows = report.data.windows;
+      return;
     }
     const runtime = RuntimeStateSchema.safeParse(event.data);
     if (runtime.success) {
@@ -335,6 +353,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       observers.add(observe);
       observe(observedClip);
       send("meter", { enabled: true });
+    },
+    get windows() {
+      return windows;
     },
     get state() {
       return state;

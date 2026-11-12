@@ -402,7 +402,7 @@ export function EditPage({
           voiceover={voiceover}
         />
       </section>
-      <Inspector projectId={projectId} />
+      <Inspector projectId={projectId} onSaveNote={onSaveNote} />
       <div
         className="edit-split"
         role="separator"

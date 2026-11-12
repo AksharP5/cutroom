@@ -8,16 +8,26 @@ import {
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
-import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
+import {
+  compositionFps,
+  reportEditorError,
+  showToast,
+  useWorkspace,
+} from "../workspace";
 import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import { PictureSelect } from "./PictureSelect";
-import { useTimeline } from "./timeline";
+import { useTimeline, afterTimelineEdits, confirmedTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
-import { connectPreview } from "./preview";
+import {
+  animationFeedback,
+  animationMessage,
+  animationReview,
+} from "./feedback";
+import { connectPreview, useAnimationWindows } from "./preview";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 
@@ -47,6 +57,9 @@ export function Viewer({
   onOpenNote(id: string): void;
   onSaveNote: SaveNote;
 }) {
+  const dismissAnimation = useRef(() => {});
+  const saveNote = useRef(onSaveNote);
+  saveNote.current = onSaveNote;
   const stage = useRef<HTMLDivElement>(null);
   const editLabels = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -184,11 +197,65 @@ export function Viewer({
     reportEditorError("viewer", null);
   }, [handoff.confirmed]);
 
+  useEffect(() => {
+    const picture = handoff.confirmed;
+    if (!picture) return;
+    const preview = connections.current.get(picture.gen);
+    if (!preview?.windows) return;
+    let cancelled = false;
+    void afterTimelineEdits(projectId, async () => {
+      if (cancelled) return;
+      const timeline = confirmedTimeline(projectId);
+      if (!timeline || !preview.windows) return;
+      const previous = useAnimationWindows.getState().report;
+      const windows = preview.windows;
+      useAnimationWindows.setState({ report: { timeline, windows } });
+      dismissAnimation.current();
+      if (!previous) return;
+      const clips = animationFeedback(
+        previous.timeline,
+        timeline,
+        previous.windows,
+        windows,
+      );
+      if (!clips.length) return;
+      dismissAnimation.current = showToast(
+        animationMessage(clips, timeline.fps),
+        {
+          label: "Ask agent",
+          run() {
+            dismissAnimation.current();
+            void (async () => {
+              for (const { clip, time } of clips) {
+                const { draft, body } = animationReview(
+                  clip,
+                  time,
+                  timeline.fps,
+                );
+                await saveNote.current(draft, body);
+              }
+            })().catch((error: unknown) =>
+              showToast(error instanceof Error ? error.message : String(error)),
+            );
+          },
+        },
+        { tone: "info", priority: "attention" },
+      );
+    }).catch((error: unknown) => {
+      if (!cancelled) reportEditorError("viewer", error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [handoff.confirmed, projectId]);
+
   useEffect(
     () => () => {
       for (const connection of connections.current.values())
         connection.dispose();
       connections.current.clear();
+      dismissAnimation.current();
+      useAnimationWindows.setState({ report: null });
       transport.attach(null);
       reportEditorError("viewer", null);
       useWorkspace.setState({ composition: null });

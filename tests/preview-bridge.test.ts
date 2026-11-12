@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { browserExecutable } from "../src/server/hyperframes/render";
+import { z } from "zod";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import type { DefaultTreeAdapterTypes } from "parse5";
@@ -110,3 +113,90 @@ test("measured media windows filter the same clips before assigning generated na
   expect(marked).not.toContain('data-hf-cutroom-clip-id="clip-2"');
   expect(marked.match(/data-hf-cutroom-clip-id=/g)).toHaveLength(1);
 });
+
+test.skipIf(!browserExecutable())(
+  "bridge reports built literal, loop and helper tween windows once, excluding registered children",
+  async () => {
+    const { default: puppeteer } = await import("puppeteer-core");
+    const browser = await puppeteer.launch({
+      executablePath: browserExecutable(),
+      headless: true,
+      args: ["--no-sandbox", "--mute-audio"],
+    });
+    try {
+      const page = await browser.newPage();
+      const gsap = await readFile("node_modules/gsap/dist/gsap.min.js", "utf8");
+      await page.setContent(
+        withPreviewBridge(`<!doctype html><html><body>
+      <main data-composition-id="main" data-duration="48">
+        <div id="literal" data-start="36" data-duration="4"></div>
+        <div id="loop" data-start="6" data-duration="4"><span></span><span></span></div>
+        <div id="helper" data-start="12" data-duration="4"></div>
+        <div id="nested" data-composition-id="nested" data-start="24" data-duration="4"><span></span></div>
+      </main><script>${gsap}</script><script>
+        window.reports = [];
+        window.replies = [];
+        addEventListener('message', event => { if (event.data.type === 'animation-windows') reports.push(event.data); if (event.data.id) replies.push(event.data.id); });
+        window.__player = {getTime: () => 0, isPlaying: () => false};
+        window.__renderReady = false;
+        window.__hfTimelinesBuilding = true;
+        document.fonts.ready.then(() => setTimeout(() => {
+          const tl = gsap.timeline({paused:true});
+          tl.to('#literal', {opacity: 0, duration: .5}, 36);
+          document.querySelectorAll('#loop span').forEach((word, i) => tl.from(word, {opacity:0, duration:.4}, 6 + i * .15));
+          function fade(target, time) {tl.fromTo(target, {opacity:0}, {opacity:1, duration:.5}, time);}
+          fade('#helper', 12);
+          const manual = gsap.timeline().to('#helper', {x:10, duration:.25}, .5);
+          manual.timeScale(2);
+          tl.add(manual, 13);
+          tl.set('#literal', {x:20}, 40);
+          const child = gsap.timeline().to('#nested span', {opacity:0, duration:.5}, 0);
+          tl.add(child, 24);
+          window.__timelines = {main:tl, nested:child};
+          window.__hfTimelinesBuilding = false;
+          window.__renderReady = true;
+        }, 80));
+      </script></body></html>`),
+      );
+      await page.evaluate(() =>
+        window.postMessage(
+          { source: "cutroom-viewer", id: "first", action: "inspect" },
+          "*",
+        ),
+      );
+      await page.waitForFunction("window.reports.length === 1", {
+        timeout: 2000,
+      });
+      const report = z
+        .object({
+          windows: z.record(
+            z.string(),
+            z.array(z.object({ start: z.number(), end: z.number() })),
+          ),
+        })
+        .parse(await page.evaluate("window.reports[0]"));
+      expect(report.windows).toEqual({
+        literal: [{ start: 36, end: 36.5 }],
+        loop: [
+          { start: 6, end: 6.4 },
+          { start: 6.15, end: expect.closeTo(6.55, 8) },
+        ],
+        helper: [
+          { start: 12, end: 12.5 },
+          { start: 13.25, end: 13.375 },
+        ],
+        nested: [],
+      });
+      await page.evaluate(() =>
+        window.postMessage(
+          { source: "cutroom-viewer", id: "second", action: "inspect" },
+          "*",
+        ),
+      );
+      await page.waitForFunction("window.replies.includes('second')");
+      expect(await page.evaluate("window.reports.length")).toBe(1);
+    } finally {
+      await browser.close();
+    }
+  },
+);

@@ -4,6 +4,9 @@ import type {
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
+import type { TweenWindows } from "../../shared/preview";
+import type { EditorReviewDraft } from "../../shared/editor";
+import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { clipName } from "../../shared/timeline/labels";
 
@@ -191,4 +194,63 @@ export function outsideMessage(
   return changes.size
     ? `${actor} ${verb} ${changes.size} clip${changes.size === 1 ? "" : "s"}.`
     : `${actor} updated timeline.`;
+}
+
+export function animationFeedback(
+  before: Timeline,
+  after: Timeline,
+  previous: TweenWindows,
+  next: TweenWindows,
+) {
+  const old = new Map(before.clips.map((clip) => [clip.id, clip]));
+  if (
+    !after.clips.some((clip) => {
+      const from = old.get(clip.id);
+      return (
+        from && from.duration === clip.duration && from.start !== clip.start
+      );
+    })
+  )
+    return [];
+  return after.clips.flatMap((clip) => {
+    const from = old.get(clip.id);
+    if (!from || from.duration !== clip.duration) return [];
+    const a = previous[clip.id] ?? [];
+    const b = next[clip.id] ?? [];
+    if (!a.length && !b.length) return [];
+    const delta = toSeconds(clip.start - from.start, after.fps);
+    const follows =
+      a.length === b.length &&
+      a.every(
+        (window, index) =>
+          Math.abs(b[index]!.start - window.start - delta) <= 0.002 &&
+          Math.abs(b[index]!.end - window.end - delta) <= 0.002,
+      );
+    return follows ? [] : [{ clip, time: b[0]?.start ?? a[0]!.start }];
+  });
+}
+
+export function animationMessage(
+  clips: ReturnType<typeof animationFeedback>,
+  fps: Timeline["fps"],
+) {
+  const first = clips[0]!;
+  return clips.length === 1
+    ? `${clipName(first.clip)}'s animation stayed at ${formatTimecode(toFrames(first.time, fps), fps)}.`
+    : `${clips.length} clips left their animation behind.`;
+}
+
+export function animationReview(
+  clip: Clip,
+  time: number,
+  fps: Timeline["fps"],
+) {
+  const draft: EditorReviewDraft = {
+    time: toSeconds(clip.start, fps),
+    compositionPath: "index.html",
+    strokes: [],
+    elementIds: [clip.id],
+  };
+  const body = `Make this clip's animation follow the clip. Its tweens are at absolute timeline seconds (${time.toFixed(2)} s) and the clip now starts at ${draft.time.toFixed(2)} s. Move the title into its own sub-composition file with a timeline in clip-local seconds. Keep the look and the timing relative to the clip's start. Check the first second of the clip with timeline_view.`;
+  return { draft, body };
 }

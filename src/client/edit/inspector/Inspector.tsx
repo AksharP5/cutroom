@@ -1,4 +1,6 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
+import type { SaveNote } from "../NoteLayer";
+import { animationReview } from "../feedback";
 import type { Clip, Fps } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
@@ -9,7 +11,7 @@ import {
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
-import { toFrames } from "../../../shared/timeline/apply";
+import { toFrames, toSeconds } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
@@ -23,6 +25,7 @@ import { TextField } from "./TextField";
 import { groupedChanges, pendingEdit, shownChanges } from "./changes";
 import { transport } from "../transport";
 import {
+  useAnimationWindows,
   previewPosition,
   observePosition,
   usePositionWarning,
@@ -89,7 +92,15 @@ function PositionFields({
   ));
 }
 
-export function Inspector({ projectId }: { projectId: string }) {
+export function Inspector({
+  projectId,
+  onSaveNote,
+}: {
+  projectId: string;
+  onSaveNote: SaveNote;
+}) {
+  const animation = useAnimationWindows((state) => state.report);
+  const [savingAnimation, setSavingAnimation] = useState(false);
   const mode = useContext(EditorToolsContext)?.mode;
   const open = useWorkspace((state) => state.inspector);
   const view = useTimeline((state) => state.view);
@@ -154,6 +165,23 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  const animatedClip = animation?.timeline.clips.find(
+    (item) => item.id === clip?.id,
+  );
+  const outsideAnimation =
+    animatedClip && animation
+      ? animation.windows[animatedClip.id]?.find(
+          (window) =>
+            window.start <
+              toSeconds(animatedClip.start, animation.timeline.fps) - 0.002 ||
+            window.end >
+              toSeconds(
+                animatedClip.start + animatedClip.duration,
+                animation.timeline.fps,
+              ) +
+                0.002,
+        )
+      : undefined;
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
     observePosition(
@@ -452,6 +480,42 @@ export function Inspector({ projectId }: { projectId: string }) {
               <CaretRight size={10} aria-hidden />
               Timing
             </summary>
+            {outsideAnimation && animatedClip && animation && (
+              <p className="inspector-warning" role="status">
+                <Warning size={14} aria-hidden />
+                <span>
+                  Animation plays at{" "}
+                  {formatTimecode(
+                    toFrames(outsideAnimation.start, animation.timeline.fps),
+                    animation.timeline.fps,
+                  )}
+                  , outside this clip.{" "}
+                  <button
+                    type="button"
+                    disabled={savingAnimation}
+                    onClick={() => {
+                      const { draft, body } = animationReview(
+                        animatedClip,
+                        outsideAnimation.start,
+                        animation.timeline.fps,
+                      );
+                      setSavingAnimation(true);
+                      void onSaveNote(draft, body)
+                        .catch((error: unknown) =>
+                          showToast(
+                            error instanceof Error
+                              ? error.message
+                              : String(error),
+                          ),
+                        )
+                        .finally(() => setSavingAnimation(false));
+                    }}
+                  >
+                    Ask agent
+                  </button>
+                </span>
+              </p>
+            )}
             <ValueField
               key={`${clip.id}:start`}
               label="Start"

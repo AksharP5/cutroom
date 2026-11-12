@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        #root {
+          position: absolute;
+          inset: 0;
+        }
+        #cta-text {
+          position: absolute;
+          left: 12%;
+          right: 12%;
+          top: 40%;
+          margin: 0;
+          font-size: 84px;
+          font-weight: 600;
+          text-align: center;
+          color: #ededed;
+        }
+      </style>
+      <div
+        id="root"
+        data-composition-id="cta"
+        data-width="1920"
+        data-height="1080"
+      >
+        <p id="cta-text">Try it today</p>
+      </div>
+      <script>
+        {
+          const tl = gsap.timeline({ paused: true });
+          tl.fromTo(
+            "#cta-text",
+            { scale: 0.9, opacity: 0 },
+            { scale: 1, opacity: 1, duration: 0.5 },
+            0,
+          );
+          window.__timelines["cta"] = tl;
+        }
+      </script>
+    </template>
+  </body>
+</html>
