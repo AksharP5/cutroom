@@ -586,10 +586,10 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
     page.getByRole("button", { name: "Inspector", exact: true }),
   ).toBeFocused();
   const toggle = page.getByRole("button", { name: "Inspector", exact: true });
-  // The usual drawer entry point leaves focus on its toolbar toggle.
+  // Pointer activation releases toolbar focus; Escape returns keyboard focus to the toggle.
   await toggle.click();
   await expect(inspector).toHaveAttribute("data-open", "true");
-  await expect(toggle).toBeFocused();
+  await expect(toggle).not.toBeFocused();
   await page.keyboard.press("Escape");
   await expect(inspector).toHaveAttribute("data-open", "false");
   await expect(toggle).toBeFocused();

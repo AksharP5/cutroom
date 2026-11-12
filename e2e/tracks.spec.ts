@@ -97,6 +97,7 @@ async function exportAudio(page: Page, path: string, notice?: string) {
   );
   await writeFile(path, await output.body());
   await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
   const { stdout } = await exec(
     "ffmpeg",
     [

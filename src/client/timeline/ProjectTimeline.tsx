@@ -29,6 +29,7 @@ import {
   emptySelection,
   pruneSelection,
   selectionAtPlayhead,
+  selectionFromPlayhead,
 } from "./selection";
 import type { Selection } from "./selection";
 import type { VoiceoverSession } from "../voiceover/session";
@@ -167,6 +168,28 @@ export function ProjectTimeline({
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
     editSelectItemAtPlayhead: () => {
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));
+    },
+    editSelectClipsSelectTrackAfter: () => {
+      if (timeline)
+        setSelection(selectionFromPlayhead(timeline, clock.frame(), "forward"));
+    },
+    editSelectClipsSelectAllAfter: () => {
+      if (timeline)
+        setSelection(
+          selectionFromPlayhead(timeline, clock.frame(), "forward", true),
+        );
+    },
+    editSelectClipsSelectTrackBefore: () => {
+      if (timeline)
+        setSelection(
+          selectionFromPlayhead(timeline, clock.frame(), "backward"),
+        );
+    },
+    editSelectClipsSelectAllBefore: () => {
+      if (timeline)
+        setSelection(
+          selectionFromPlayhead(timeline, clock.frame(), "backward", true),
+        );
     },
     editDeselectAll: () => setSelection(emptySelection),
     // Pressed during a drag, it turns snapping off or on for the rest of it, as in Resolve.

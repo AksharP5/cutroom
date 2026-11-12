@@ -17,7 +17,7 @@ import {
   VoiceoverRecordMark,
 } from "../voiceover/Voiceover";
 import type { VoiceoverSession } from "../voiceover/session";
-import { hint } from "../keymap";
+import { blurPointerButton, hint } from "../keymap";
 import {
   formatTimecode,
   parseTimecode,
@@ -172,7 +172,11 @@ export function TransportBar({
   return (
     <>
       {fullscreen && <ScrubTrack />}
-      <div className="edit-transport" aria-label="Transport">
+      <div
+        className="edit-transport"
+        aria-label="Transport"
+        onClick={blurPointerButton}
+      >
         <Timecode voiceover={voiceover} />
         <div className="edit-transport-controls">
           <span className="edit-shuttle" />

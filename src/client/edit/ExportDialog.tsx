@@ -109,6 +109,7 @@ export function ExportControl({
     <>
       <button
         className="edit-export export-indicator"
+        aria-haspopup="dialog"
         title={hint("workspacePrimaryWorkspaceDeliver")}
         onClick={show}
       >

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { MouseEvent } from "react";
 
 type Binding = { label: string; keys: readonly string[]; repeat?: boolean };
 
@@ -84,6 +85,22 @@ export const keymap = {
     label: "Select clips at the playhead",
     keys: ["Shift+V"],
   },
+  editSelectClipsSelectTrackAfter: {
+    label: "Select clips forward on auto-select tracks",
+    keys: ["Y"],
+  },
+  editSelectClipsSelectAllAfter: {
+    label: "Select clips forward on all tracks",
+    keys: ["Alt+Y"],
+  },
+  editSelectClipsSelectTrackBefore: {
+    label: "Select clips backward on auto-select tracks",
+    keys: ["Ctrl+Y"],
+  },
+  editSelectClipsSelectAllBefore: {
+    label: "Select clips backward on all tracks",
+    keys: ["Ctrl+Alt+Y"],
+  },
   editDeselectAll: { label: "Deselect all", keys: ["Shift+A", "Esc"] },
   trimRippleStartToPlayhead: {
     label: "Ripple trim the start to the playhead",
@@ -158,8 +175,34 @@ export const isTyping = (target: EventTarget | null) =>
       "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
 
+/** Pointer clicks leave editor buttons ready for Space playback; keyboard activation keeps focus. */
+export function blurPointerButton(event: MouseEvent<HTMLElement>) {
+  if (
+    !event.detail ||
+    !(event.target instanceof Element) ||
+    isTyping(event.target) ||
+    event.target.closest("[role=dialog], [role=menu]")
+  )
+    return;
+  const button = event.target.closest("button");
+  if (
+    button &&
+    !button.hasAttribute("aria-haspopup") &&
+    button === button.ownerDocument.activeElement
+  )
+    button.blur();
+}
+
 export function actionFor(event: KeyboardEvent): Action | null {
   if (isTyping(event.target)) return null;
+  if (
+    event.code === "Space" &&
+    event.target instanceof Element &&
+    event.target.closest(
+      "button:focus-visible, [role=button]:focus-visible, [role=checkbox]:focus-visible, [role=switch]:focus-visible, [role=menuitem]:focus-visible, [role=menuitemcheckbox]:focus-visible, [role=menuitemradio]:focus-visible, [role=dialog], [role=menu]",
+    )
+  )
+    return null;
   const combo = comboOf(event);
   const action = combo ? bindings.get(combo) : undefined;
   if (!action) return null;

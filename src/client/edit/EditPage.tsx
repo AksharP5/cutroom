@@ -18,7 +18,13 @@ import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
-import { hint, isTyping, keymap, useKeymap } from "../keymap";
+import {
+  blurPointerButton,
+  hint,
+  isTyping,
+  keymap,
+  useKeymap,
+} from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { api, subscribeProjectEvents } from "../api";
@@ -328,7 +334,12 @@ export function EditPage({
 
   return (
     <div ref={page} className="edit-page">
-      <div className="edit-tools" role="toolbar" aria-label="Tools">
+      <div
+        className="edit-tools"
+        role="toolbar"
+        aria-label="Tools"
+        onClick={blurPointerButton}
+      >
         {tools.map((tool) => (
           <button
             key={tool.mode}
@@ -368,6 +379,7 @@ export function EditPage({
         <button
           className="edit-icon"
           aria-label="Project files"
+          aria-haspopup="dialog"
           title="Project files"
           onClick={onFiles}
         >
