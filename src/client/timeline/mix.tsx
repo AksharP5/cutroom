@@ -23,13 +23,15 @@ const UNITY = 50;
 /**
  * The gain scale of a clip body: how far down from its top, in percent, each dB level sits, in
  * straight runs between these stops. Unity stays at the middle, where a press on the middle of
- * the clip's box misses the line. The line is drawn on this scale and a drag reads it back, so
- * the line stays under the pointer.
+ * the clip's box misses the line. The 6 dB below unity get the same room per dB as the boost
+ * above it, for routine trims on a short track; deeper cuts share what is left. The line is
+ * drawn on this scale and a drag reads it back, so the line stays under the pointer.
  */
 const SCALE = [
   [0, MAX_AUDIO_GAIN_DB],
   [UNITY, 0],
-  [90, -30],
+  [75, -6],
+  [90, -24],
   [100, SILENCE_DB],
 ] as const;
 /** Shift moves the line a tenth of a dB per pixel at every track height. */
@@ -81,11 +83,8 @@ export function volumeLane({ automation }: Clip) {
 type Fades = ReturnType<typeof clipFades>;
 type Lane = HfAutomationLane | undefined;
 
-const laneGain = (clip: Clip, fps: Fps, time: number, lane: Lane) =>
-  gainTimesLane(
-    clip.volume ?? 1,
-    lane ? sampleAutomationLane(lane, (time * fps.den) / fps.num) : 1,
-  );
+const laneAt = (fps: Fps, time: number, lane: Lane) =>
+  lane ? sampleAutomationLane(lane, (time * fps.den) / fps.num) : 1;
 
 /** Core's linear fade ramps from already clamped fades, so a waveform column allocates nothing. */
 function fadeAt(clip: Clip, time: number, { fadeIn, fadeOut }: Fades) {
@@ -105,10 +104,19 @@ export function envelopeGain(
   lane: Lane,
   fades: Fades,
 ) {
-  return laneGain(clip, fps, time, lane) * fadeAt(clip, time, fades);
+  return (
+    gainTimesLane(clip.volume ?? 1, laneAt(fps, time, lane)) *
+    fadeAt(clip, time, fades)
+  );
 }
 
-/** Fades are linear amplitude ramps from the envelope to silence at the body's bottom. */
+/**
+ * Where the line is drawn, in percent down the body, for a clip gain on a volume lane's value
+ * through a fade. Fades are linear amplitude ramps from the gain's level to silence at the bottom.
+ */
+const drawn = (gain: number, lane: number, fade: number) =>
+  100 - (100 - gainLevel(gainTimesLane(gain, lane))) * fade;
+
 export function envelopeHeight(
   clip: Clip,
   fps: Fps,
@@ -116,36 +124,66 @@ export function envelopeHeight(
   lane: Lane = volumeLane(clip),
   fades = clipFades(clip),
 ) {
-  const level = gainLevel(laneGain(clip, fps, time, lane));
-  return 100 - (100 - level) * fadeAt(clip, time, fades);
+  return drawn(
+    clip.volume ?? 1,
+    laneAt(fps, time, lane),
+    fadeAt(clip, time, fades),
+  );
 }
+
+/** What shapes the line `time` frames in besides the clip's gain: the lane's value and the fades' gain. */
+export const envelopeAt = (clip: Clip, fps: Fps, time: number) => ({
+  lane: laneAt(fps, time, volumeLane(clip)),
+  fade: fadeAt(clip, time, clipFades(clip)),
+});
 
 export interface GainDrag {
-  /** Pointer travel down the body, in pixels. */
+  /** The clip's gain when the pointer, or a change of Shift, last took hold of the line. */
+  from: number;
+  /** Pointer travel since then, in pixels down. */
   dy: number;
-  /** Pointer travel with Shift held, in pixels. */
-  fine: number;
+  /** Shift is held: a tenth of a dB per pixel, whatever the line's shape. */
+  fine: boolean;
   /** Height of the clip body the line is drawn in, in pixels. */
   body: number;
+  /** The volume lane's value where the line is held. */
+  lane: number;
+  /** The fades' gain where the line is held. */
+  fade: number;
 }
 
-/**
- * The gain a drag leaves: the line moves with the pointer, in tenths of a dB. A line within half
- * a pixel of unity lands on it, so 0 dB can be reached at any track height. A clip that starts
- * inside that half pixel without being at unity is left to move freely.
- */
-export function gainFromDrag(clip: Clip, { dy, fine, body }: GainDrag) {
-  const pixel = 100 / body;
-  const from = gainLevel(clip.volume);
-  const reach = pixel / 2 + 1e-6;
-  const sticky = from === UNITY || Math.abs(from - UNITY) > reach;
-  const level = Math.max(0, Math.min(100, from + dy * pixel));
-  const coarse =
-    sticky && Math.abs(level - UNITY) <= reach ? 0 : onScale(level, 0);
-  const db = Math.min(MAX_AUDIO_GAIN_DB, coarse - fine * FINE_DB);
-  return db <= SILENCE_DB
+/** A dB level as the gain a drag writes: tenths of a dB, silent at the floor, capped at +12 dB. */
+const gainOf = (db: number) =>
+  db <= SILENCE_DB
     ? 0
     : Math.min(MAX_AUDIO_GAIN, audioDbToGain(Math.round(db * 10) / 10));
+
+/**
+ * The gain a drag leaves. The line stays under the pointer where it was taken hold of, so the
+ * drawn envelope is read back there: through the fade and the volume lane to the clip's gain,
+ * stopping at the gain that can be reached. A line within half a pixel of unity lands on it, so
+ * 0 dB can be reached at any track height; a clip that starts inside that half pixel without
+ * being at unity is left to move freely.
+ */
+export function gainFromDrag({ from, dy, fine, body, lane, fade }: GainDrag) {
+  if (!dy) return from;
+  if (fine)
+    return gainOf(
+      (from > 0 ? Math.max(SILENCE_DB, audioGainToDb(from)) : SILENCE_DB) -
+        dy * FINE_DB,
+    );
+  // A lane or a fade at nothing leaves no line to follow; the drag reads the plain scale there.
+  const on = lane > 0 ? lane : 1;
+  const through = fade > 0 ? fade : 1;
+  const pixel = 100 / body;
+  const reach = pixel / 2 + 1e-6;
+  const start = drawn(from, on, through);
+  const unity = drawn(1, on, through);
+  const sticky = from === 1 || Math.abs(start - unity) > reach;
+  const at = Math.max(0, Math.min(100, start + dy * pixel));
+  if (sticky && Math.abs(at - unity) <= reach) return 1;
+  const db = onScale(Math.max(0, 100 - (100 - at) / through), 0);
+  return db <= SILENCE_DB ? 0 : gainOf(db - audioGainToDb(on));
 }
 
 /** Draw native automation and fades at the clip's gain level. */

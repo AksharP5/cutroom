@@ -90,15 +90,19 @@ export function step(
     case "move": {
       const { origin } = gesture;
       let { intent } = gesture;
+      const across = Math.abs(event.point.x - origin.x);
+      const down = Math.abs(event.point.y - origin.y);
+      // A gain line answers its first pixel of vertical travel, so a small change is not skipped.
+      // A press that goes sideways waits out the threshold to become a move.
       const travelled =
         gesture.phase === "dragging" ||
-        Math.hypot(event.point.x - origin.x, event.point.y - origin.y) >=
-          DRAG_THRESHOLD;
+        Math.hypot(across, down) >= DRAG_THRESHOLD ||
+        (intent.kind === "gain" && down >= 1 && down > across);
       if (
         travelled &&
         gesture.phase === "armed" &&
         intent.kind === "gain" &&
-        Math.abs(event.point.x - origin.x) > Math.abs(event.point.y - origin.y)
+        across > down
       )
         intent = { kind: "move", clipId: intent.clipId, alone: intent.alone };
       return {
@@ -389,10 +393,8 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
 
   switch (intent.kind) {
     case "gain": {
-      const { gain } = input;
-      if (!gain || (!gain.dy && !gain.fine)) return still("Clip gain");
       const clip = find(intent.clipId);
-      const volume = gainFromDrag(clip, gain);
+      const volume = input.gain ? gainFromDrag(input.gain) : (clip.volume ?? 1);
       return edit(
         "Clip gain",
         volume === (clip.volume ?? 1)

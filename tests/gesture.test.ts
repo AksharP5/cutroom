@@ -144,7 +144,7 @@ test("the outer six pixels trim through the gain band, while the middle adjusts 
   ).toEqual({ kind: "fade", clipId: "music", edge: "fadeIn" });
 });
 
-test("a horizontal envelope press hands off to a move once, while a vertical drag keeps gain", () => {
+test("a horizontal envelope press hands off to a move once, while a vertical drag is gain from its first pixel", () => {
   const press = step(idle, {
     type: "press",
     intent: { kind: "gain", clipId: "a", alone: true },
@@ -164,6 +164,16 @@ test("a horizontal envelope press hands off to a move once, while a vertical dra
   expect(
     step(press, { type: "move", point: { x: 1, y: 4 } }).gesture,
   ).toMatchObject({ phase: "dragging", intent: { kind: "gain" } });
+  // Gain answers the first vertical pixel; a diagonal or sideways pixel still waits.
+  expect(
+    step(press, { type: "move", point: { x: 0, y: -1 } }).gesture,
+  ).toMatchObject({ phase: "dragging", intent: { kind: "gain" } });
+  for (const point of [
+    { x: 1, y: 1 },
+    { x: 2, y: 0 },
+    { x: 0, y: 0.4 },
+  ])
+    expect(step(press, { type: "move", point }).gesture.phase).toBe("armed");
 });
 
 test("a fade drag leaves a clip's authored volume automation alone", () => {

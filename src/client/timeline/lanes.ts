@@ -1,4 +1,5 @@
-import { envelopeHeight, fadePath } from "./mix";
+import { envelopeAt, envelopeHeight, fadePath, gainFromDrag } from "./mix";
+import type { GainDrag } from "./mix";
 import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
@@ -74,9 +75,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const drag = useRef<Drag | null>(null);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
-  const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0, fine: 0 });
-  /** The body a held gain line is drawn in: its top down the lanes and its height, in pixels. */
-  const gainBody = useRef<{ top: number; height: number } | null>(null);
+  const pointer = useRef({ x: 0, y: 0, bypass: false });
+  /** A held gain line: how far down the lanes its body starts, and the drag that moves it. */
+  const gain = useRef<(GainDrag & { top: number }) | null>(null);
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
@@ -161,14 +162,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       track: target?.row.track.index ?? rowAt(y)?.track.index ?? null,
       create: target?.create,
       reach: reach(bypass),
-      gain:
-        intent.kind === "gain" && gainBody.current
-          ? {
-              dy: pointer.current.dy,
-              fine: pointer.current.fine,
-              body: gainBody.current.height,
-            }
-          : undefined,
+      gain: (intent.kind === "gain" && gain.current) || undefined,
     };
   }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
@@ -384,6 +378,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     lanes.current?.removeAttribute("data-refused");
     preview.current = null;
     destinationRow.current = null;
+    gain.current = null;
     drawn.current = "";
     return offsets;
   }
@@ -451,6 +446,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         latest.current.playhead(),
       );
       drag.current = active;
+      gain.current = null;
       latest.current.lanes.current?.setAttribute("data-cursor", "move");
     }
     if (preview.current && refuseChanged(active.timeline, preview.current)) {
@@ -464,7 +460,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.dy}:${input.gain?.fine}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
@@ -537,23 +533,35 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   /** How far down the lanes a held clip's gain line is under the pointer, in pixels. */
   function gainLineAt(clip: Clip, fps: Fps) {
-    const body = gainBody.current;
-    if (!body) return null;
-    const time = Math.max(
+    const held = gain.current;
+    if (!held) return null;
+    return (
+      held.top + (envelopeHeight(clip, fps, clipTime(clip)) / 100) * held.body
+    );
+  }
+
+  /** How many frames into a clip the pointer is. */
+  const clipTime = (clip: Clip) =>
+    Math.max(
       0,
       Math.min(clip.duration, frameAt(pointer.current.x) - clip.start),
     );
-    return body.top + (envelopeHeight(clip, fps, time) / 100) * body.height;
-  }
 
   /** A press on a gain line names its level there at once, before the pointer moves. */
-  function holdGain(clip: Clip, fps: Fps) {
+  function holdGain(clip: Clip, fps: Fps, fine: boolean) {
     const curve = latest.current.lanes.current
       ?.querySelector(`[data-clip-mix="${CSS.escape(clip.id)}"] .tl-fade-curve`)
       ?.getBoundingClientRect();
     const label = readout.current;
-    gainBody.current = curve
-      ? { top: local(0, curve.top).y, height: curve.height }
+    gain.current = curve
+      ? {
+          top: local(0, curve.top).y,
+          body: curve.height,
+          from: clip.volume ?? 1,
+          dy: 0,
+          fine,
+          ...envelopeAt(clip, fps, clipTime(clip)),
+        }
       : null;
     const line = gainLineAt(clip, fps);
     if (!label || line === null) return;
@@ -742,8 +750,6 @@ export function useLaneGestures(options: LaneGestureOptions) {
       x: event.clientX,
       y: event.clientY,
       bypass: toggle,
-      dy: 0,
-      fine: 0,
     };
     gesture.current = step(gesture.current, {
       type: "press",
@@ -765,7 +771,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frameAt(event.clientX),
       playhead(),
     );
-    if (intent.kind === "gain" && hit) holdGain(hit.clip, timeline.fps);
+    if (intent.kind === "gain" && hit)
+      holdGain(hit.clip, timeline.fps, event.shiftKey);
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -779,17 +786,21 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function movePointer(event: PointerEvent<HTMLDivElement>) {
+    const held = gain.current;
+    if (held) {
+      // Shift changed: the line is taken up again where it is, at the gain it shows, so it
+      // neither jumps nor comes away from the pointer. The drag still undoes to where it began.
+      if (held.fine !== event.shiftKey) {
+        held.from = gainFromDrag(held);
+        held.dy = 0;
+        held.fine = event.shiftKey;
+      }
+      held.dy += event.clientY - pointer.current.y;
+    }
     pointer.current = {
       x: event.clientX,
       y: event.clientY,
       bypass: event.ctrlKey || event.metaKey,
-      // Shift holds the line back for fine adjustment, so its travel is counted apart.
-      dy:
-        pointer.current.dy +
-        (event.shiftKey ? 0 : event.clientY - pointer.current.y),
-      fine:
-        pointer.current.fine +
-        (event.shiftKey ? event.clientY - pointer.current.y : 0),
     };
   }
 
