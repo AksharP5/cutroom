@@ -115,7 +115,11 @@ export function createHyperframesApi(
     await next();
   });
   const subscribers = new Set<(change: FileChange) => void>();
-  const watchers = new Map<string, ReturnType<typeof watch>>();
+  const watchers = new Map<
+    string,
+    { users: number; ready: Promise<ReturnType<typeof watch>> }
+  >();
+  let disposed = false;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
@@ -262,9 +266,7 @@ export function createHyperframesApi(
   };
 
   const watchProject = async (project: ResolvedProject) => {
-    if (watchers.has(project.dir)) return;
     await reviews.observeAssets(await store.get(project.id));
-    if (watchers.has(project.dir)) return;
     const watcher = watch(
       project.dir,
       { recursive: true },
@@ -343,7 +345,7 @@ export function createHyperframesApi(
     watcher.on("error", (error) =>
       console.error(`Cannot watch ${project.title ?? project.id}:`, error),
     );
-    watchers.set(project.dir, watcher);
+    return watcher;
   };
 
   const resolveProject = async (
@@ -362,23 +364,16 @@ export function createHyperframesApi(
     ])
       await projectStatePath(project, path, true);
     const resolved = { id: project.id, dir: project.path, title: project.name };
-    await watchProject(resolved);
     return resolved;
   };
 
   const adapter: StudioApiAdapter = {
     async listProjects() {
-      return Promise.all(
-        (await store.list()).map(async (project) => {
-          const resolved = {
-            id: project.id,
-            dir: project.path,
-            title: project.name,
-          };
-          await watchProject(resolved);
-          return resolved;
-        }),
-      );
+      return (await store.list()).map((project) => ({
+        id: project.id,
+        dir: project.path,
+        title: project.name,
+      }));
     },
     resolveProject,
     // The editor's undo, redo, and restore are the owner's, and can remove sent review notes.
@@ -419,6 +414,8 @@ export function createHyperframesApi(
       );
     },
     async getProjectSignature(dir) {
+      // Closed projects have no watcher to invalidate cached signatures.
+      if (!watchers.has(dir)) return createProjectSignatureAsync(dir);
       let signature = signatures.get(dir);
       if (!signature) {
         signature = createProjectSignatureAsync(dir).catch((error: unknown) => {
@@ -710,15 +707,57 @@ export function createHyperframesApi(
         stop();
       };
     },
-    subscribe(projectId: string, listener: (change: FileChange) => void) {
+    async subscribe(projectId: string, listener: (change: FileChange) => void) {
+      const project = await store.get(projectId);
+      if (disposed) throw new HttpError(503, "The editor is shutting down.");
       const notify = (change: FileChange) => {
         if (change.projectId === projectId) listener(change);
       };
+      let entry = watchers.get(project.path);
+      if (!entry) {
+        entry = {
+          users: 0,
+          ready: watchProject({
+            id: project.id,
+            dir: project.path,
+            title: project.name,
+          }),
+        };
+        watchers.set(project.path, entry);
+      }
+      const shared = entry;
+      shared.users++;
+      const release = () => {
+        if (--shared.users) return;
+        watchers.delete(project.path);
+        signatures.delete(project.path);
+        for (const [key, timer] of timers) {
+          if (!key.startsWith(`${projectId}\0`)) continue;
+          clearTimeout(timer);
+          timers.delete(key);
+        }
+      };
+      let watcher: ReturnType<typeof watch>;
+      try {
+        watcher = await shared.ready;
+      } catch (error) {
+        release();
+        throw error;
+      }
       subscribers.add(notify);
-      return () => subscribers.delete(notify);
+      return () => {
+        if (!subscribers.delete(notify)) return;
+        release();
+        if (!shared.users) watcher.close();
+      };
     },
     async dispose() {
-      for (const watcher of watchers.values()) watcher.close();
+      disposed = true;
+      const opened = await Promise.allSettled(
+        [...watchers.values()].map((entry) => entry.ready),
+      );
+      for (const result of opened)
+        if (result.status === "fulfilled") result.value.close();
       for (const timer of timers.values()) clearTimeout(timer);
       watchers.clear();
       timers.clear();
