@@ -16,7 +16,7 @@ export function dispatchNote(projectId: string, event: NoteEvent) {
   }));
 }
 
-const saves = new Map<string, Promise<void>>();
+const changes = new Map<string, Promise<void>>();
 const captures = new Map<string, Set<Promise<unknown>>>();
 
 /** Track from the save's start until its frame has been attached, without holding later saves. */
@@ -53,17 +53,20 @@ export async function waitForNoteCaptures(
   }
 }
 
-/** Preserve annotation commit order. Captures stay outside this queue; failures reach the caller. */
-export function saveNoteInOrder<T>(projectId: string, save: () => Promise<T>) {
-  const result = (saves.get(projectId) ?? Promise.resolve()).then(save);
-  // A refused save must not block the next note in this project.
+/** Serialize note saves and history steps. Captures stay outside; failures reach the caller. */
+export function queueNoteChange<T>(
+  projectId: string,
+  change: () => Promise<T>,
+) {
+  const result = (changes.get(projectId) ?? Promise.resolve()).then(change);
+  // A refused change must not block the next one in this project.
   const settled = result.then(
     () => {},
     () => {},
   );
-  saves.set(projectId, settled);
+  changes.set(projectId, settled);
   void settled.then(() => {
-    if (saves.get(projectId) === settled) saves.delete(projectId);
+    if (changes.get(projectId) === settled) changes.delete(projectId);
   });
   return result;
 }

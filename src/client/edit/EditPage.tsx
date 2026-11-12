@@ -13,7 +13,6 @@ import {
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
-import { ReviewItemSchema } from "../../shared/review";
 import type { ReviewItem } from "../../shared/review";
 import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import type { Timeline } from "../../shared/timeline/schema";
@@ -27,9 +26,8 @@ import {
 } from "../keymap";
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
-import { api, subscribeProjectEvents } from "../api";
-import { noteNumbers } from "../review";
-import { reportEditorError, showToast, useWorkspace } from "../workspace";
+import { subscribeProjectEvents } from "../api";
+import { reportEditorError, useWorkspace } from "../workspace";
 import "./edit.css";
 import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { ExportControl } from "./ExportDialog";
@@ -110,7 +108,6 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const snapping = useTimeline((state) => state.snapping);
-  const base = `/projects/${encodeURIComponent(projectId)}`;
 
   useEffect(() => {
     const closing = new AbortController();
@@ -217,27 +214,7 @@ export function EditPage({
   };
 
   const step = (direction: "undo" | "redo") => {
-    const before = notes;
-    void stepHistory(projectId, direction)
-      .then(async () => {
-        if (direction !== "undo" || !before.length) return;
-        const after = await api(
-          `${base}/review`,
-          z.object({ items: z.array(ReviewItemSchema) }),
-        );
-        const removed = before.find(
-          (note) => !after.items.some((item) => item.id === note.id),
-        );
-        if (removed && useTimeline.getState().projectId === projectId)
-          showToast(`Note ${noteNumbers(before).get(removed.id)} removed ·`, {
-            label: "Redo",
-            run: () => {
-              showToast("");
-              void stepHistory(projectId, "redo").catch(report);
-            },
-          });
-      })
-      .catch(report);
+    void stepHistory(projectId, direction).catch(report);
   };
   const mark = (
     label: string,
