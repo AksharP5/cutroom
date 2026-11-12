@@ -275,16 +275,12 @@ export function VoiceoverHeader({
         {active && (
           <p title="Input delay plus playback output delay, removed from the beginning of the take.">
             {inputLatency === null
-              ? "Input delay not reported"
+              ? "Input delay unavailable"
               : `Input delay ${Math.round(inputLatency * 1000)} ms`}
             <br />
-            Latency compensation {Math.round(compensation * 1000)} ms
+            Sync offset {Math.round(compensation * 1000)} ms
           </p>
         )}
-        <p>
-          Overlaps use the first audio track with room. Esc asks to discard the
-          take.
-        </p>
         {error && <p role="alert">{error}</p>}
         {active && state.kind === "save-failed" ? (
           <div className="vo-actions">

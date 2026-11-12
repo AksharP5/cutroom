@@ -2,7 +2,8 @@ import { createStore } from "zustand/vanilla";
 import { z } from "zod";
 import { frameTime } from "../../shared/timeline/apply";
 import type { Track } from "../../shared/timeline/schema";
-import { voiceoverCommands } from "../../shared/voiceover";
+import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
+import { voiceoverCommands, voiceoverTrack } from "../../shared/voiceover";
 import {
   afterTimelineEdits,
   editTimeline,
@@ -113,8 +114,8 @@ export function createVoiceoverSession(projectId: string) {
     meters.forEach((listener) => listener(next));
   };
   let dismissToast = () => {};
-  const notify = (message: string) => {
-    dismissToast = showToast(message);
+  const notify = (message: string, tone: "error" | "info" = "error") => {
+    dismissToast = showToast(message, null, { tone });
   };
   const clearMessage = () => {
     dismissToast();
@@ -357,6 +358,29 @@ export function createVoiceoverSession(projectId: string) {
     }
   }
 
+  async function recordUnarmed() {
+    const view = useTimeline.getState().view;
+    if (!view || disposed) return;
+    const { timeline } = view;
+    const { frame } = useTransport.getState();
+    const first =
+      timeline.tracks.find(
+        (track) => track.kind === "audio" && !track.locked,
+      ) ?? newTrack(nextTrackIndex(timeline.tracks), "audio");
+    const track = voiceoverTrack(timeline, first, frame, 1);
+    await arm(track);
+    await start();
+    if (get().state.kind !== "recording") return;
+    const audio = timeline.tracks.filter((track) => track.kind === "audio");
+    const index = audio.findIndex((current) => current.index === track.index);
+    notify(
+      index < 0
+        ? "Recording on a new audio track."
+        : `Recording on A${index + 1}.`,
+      "info",
+    );
+  }
+
   return {
     store,
     arm,
@@ -408,8 +432,7 @@ export function createVoiceoverSession(projectId: string) {
     },
     toggleRecord() {
       if (get().state.kind === "recording") void stop();
-      else if (get().state.kind === "idle")
-        notify("Arm an audio track to record voiceover.");
+      else if (get().state.kind === "idle") void recordUnarmed();
       else if (get().state.kind === "save-failed")
         notify(
           "Save failed. Retry or download the take in the microphone panel before recording again.",
