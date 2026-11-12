@@ -327,12 +327,27 @@ export function createMcpServer(options: McpOptions = {}) {
   return Object.assign(server, { toolRegistry });
 }
 
-export function createMcpHttpHandler(options: McpOptions = {}) {
+// Allow long gaps between agent calls. A request in flight never counts as idle.
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+const sessionClock = {
+  after(delay: number, run: () => void) {
+    const timer = setTimeout(run, delay);
+    timer.unref();
+    return () => clearTimeout(timer);
+  },
+};
+
+export function createMcpHttpHandler(
+  options: McpOptions = {},
+  clock = sessionClock,
+) {
   const sessions = new Map<
     string,
     {
       server: ReturnType<typeof createMcpServer>;
       transport: WebStandardStreamableHTTPServerTransport;
+      active: number;
+      cancelExpiry(): void;
     }
   >();
   const handler = async (request: Request): Promise<Response> => {
@@ -346,19 +361,40 @@ export function createMcpHttpHandler(options: McpOptions = {}) {
         sessionIdGenerator: randomUUID,
         enableJsonResponse: true,
         onsessioninitialized: (id) => {
-          sessions.set(id, { server, transport });
+          sessions.set(id, created);
         },
       });
+      const created = { server, transport, active: 0, cancelExpiry: () => {} };
       transport.onclose = () => {
+        created.cancelExpiry();
         if (transport.sessionId) sessions.delete(transport.sessionId);
       };
       await server.connect(transport);
-      session = { server, transport };
+      session = created;
     }
-    const response = await session.transport.handleRequest(request);
-    if (!session.transport.sessionId || request.method === "DELETE")
-      await session.server.close();
-    return response;
+    const current = session;
+    current.cancelExpiry();
+    current.active++;
+    try {
+      const response = await current.transport.handleRequest(request);
+      if (!current.transport.sessionId || request.method === "DELETE")
+        await current.server.close();
+      return response;
+    } finally {
+      current.active--;
+      if (
+        !current.active &&
+        sessions.get(current.transport.sessionId ?? "") === current
+      ) {
+        current.cancelExpiry = clock.after(SESSION_IDLE_MS, () => {
+          void current.server
+            .close()
+            .catch((error: unknown) =>
+              console.error("MCP session expiry failed:", error),
+            );
+        });
+      }
+    }
   };
   return Object.assign(handler, {
     dispose: () =>

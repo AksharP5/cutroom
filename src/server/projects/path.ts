@@ -46,7 +46,7 @@ export async function projectPath(
 }
 
 // HyperFrames' authored text types, plus the editor's .htm alias.
-const sourceTypes = new Set([
+export const projectSourceTypes = new Set([
   ".html",
   ".htm",
   ".css",
@@ -89,7 +89,7 @@ export async function projectWritePath(
       ) ||
       /^(?:tsconfig|jsconfig)(?:\..+)?\.json$/.test(name) ||
       /(?:^|\.)config\.(?:[cm]?[jt]s|jsx|tsx|json)$/.test(name) ||
-      (options.sourceOnly !== false && !sourceTypes.has(extname(name)))
+      (options.sourceOnly !== false && !projectSourceTypes.has(extname(name)))
     )
       throw new HttpError(
         403,

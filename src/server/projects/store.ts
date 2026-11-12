@@ -1,3 +1,4 @@
+import { projectEditedAt } from "./edited";
 import { randomUUID } from "node:crypto";
 import {
   copyFile,
@@ -292,25 +293,10 @@ export async function createProjectStore(options: {
     projectsDir,
     list: async () => {
       const current = await Promise.all(
-        projects.map(async (project) => {
-          const times = await Promise.all(
-            ["index.html", DOCUMENT_PATH].map(async (path) =>
-              stat(join(project.path, path))
-                .then((info) => info.mtimeMs)
-                .catch((error: unknown) => {
-                  if (isMissing(error)) return null;
-                  throw error;
-                }),
-            ),
-          );
-          const newest = times.filter((time) => time !== null);
-          return {
-            ...project,
-            updatedAt: newest.length
-              ? new Date(Math.max(...newest)).toISOString()
-              : project.updatedAt,
-          };
-        }),
+        projects.map(async (project) => ({
+          ...project,
+          updatedAt: await projectEditedAt(project),
+        })),
       );
       return current.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     },
