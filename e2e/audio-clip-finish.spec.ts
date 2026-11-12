@@ -133,7 +133,7 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
   const y = svg.y + svg.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(x, y + 35, { steps: 8 });
+  await page.mouse.move(x, y + 4, { steps: 8 });
   await expect(page.locator(".tl-readout")).toBeVisible();
   const readout = (await page.locator(".tl-readout").boundingBox())!;
   expect(readout.y + readout.height).toBeLessThan(timeline.y + timeline.height);
@@ -143,6 +143,6 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
     .poll(
       async () => (await read()).clips.find((c) => c.id === "music")!.volume,
     )
-    .toBe(10 ** (-8.75 / 20));
+    .toBe(10 ** (-3.8 / 20));
   expect((await read()).clips.find((c) => c.id === "music")!.start).toBe(0);
 });

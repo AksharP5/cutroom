@@ -12,10 +12,12 @@ import {
 import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
 import {
+  envelopeAt,
+  envelopeGain,
   envelopeHeight,
   fadePath,
   gainFromDrag,
-  gainHeight,
+  gainLevel,
 } from "../src/client/timeline/mix";
 import { emptyMeter, meterSample } from "../src/client/timeline/meters";
 import {
@@ -60,25 +62,99 @@ test("clearing a split's automation removes its baked ramp with exact HTML readb
   ).toBe(false);
 });
 
-test("gain uses a fixed quarter dB per pixel, with a recoverable silence floor and +12 dB ceiling", () => {
-  const clip = parseComposition(html, emptyTimelineSettings()).timeline
-    .clips[0]!;
-  for (const [start, pixels, expected] of [
-    [0, 9, -2.25],
-    [-24, -20, -19],
-    [6, 20, 1],
-    [0, 4 * 0.2, -0.2],
-  ] as const) {
-    expect(
-      gainFromDrag({ ...clip, volume: audioDbToGain(start) }, pixels),
-    ).toBeCloseTo(audioDbToGain(expected), 10);
-  }
-  expect(gainFromDrag(clip, 240)).toBe(0);
-  expect(gainFromDrag(clip, -100)).toBe(MAX_AUDIO_GAIN);
-  expect(gainFromDrag({ ...clip, volume: 0 }, -4)).toBeCloseTo(
-    audioDbToGain(-59),
+test("a gain drag leaves the line under the pointer, lands on unity, and recovers from silence", () => {
+  const plain = { dy: 0, fine: false, body: 25, lane: 1, fade: 1 };
+  const at = (db: number) => audioDbToGain(db);
+  // The line is drawn at gainLevel, so the gain a drag leaves must draw it where the pointer went.
+  for (const body of [13, 25, 61, 101])
+    for (const start of [6, 0, -7, -24])
+      for (const dy of [-9, -2, 1, 4, 11]) {
+        const from = gainLevel(at(start));
+        const to = gainLevel(
+          gainFromDrag({ ...plain, from: at(start), dy, body }),
+        );
+        const pointer = Math.max(0, Math.min(body, (from * body) / 100 + dy));
+        expect(Math.abs((to * body) / 100 - pointer)).toBeLessThanOrEqual(0.51);
+      }
+  // Routine trims: a pixel beside unity is about 1 dB on a default row and under 2 dB on a compact one.
+  expect(gainFromDrag({ ...plain, from: 1, dy: 1 })).toBeCloseTo(at(-1), 10);
+  expect(gainFromDrag({ ...plain, from: 1, dy: -1 })).toBeCloseTo(at(1), 10);
+  expect(gainFromDrag({ ...plain, from: 1, dy: 1, body: 13 })).toBeCloseTo(
+    at(-1.8),
     10,
   );
+  // From -3.3 dB the pixel nearest unity is unity itself, and the one before it is not.
+  expect(gainFromDrag({ ...plain, from: at(-3.3), dy: -3 })).toBe(1);
+  expect(gainFromDrag({ ...plain, from: at(-3.3), dy: -2 })).toBeCloseTo(
+    at(-1.4),
+    10,
+  );
+  // A clip already inside that pixel is never pulled against the drag.
+  expect(gainFromDrag({ ...plain, from: at(-0.2), dy: 0.2 })).toBeLessThan(
+    at(-0.2),
+  );
+  // Shift is a tenth of a dB per pixel at every height.
+  for (const body of [13, 101])
+    expect(
+      gainFromDrag({ ...plain, from: at(-6), dy: 5, fine: true, body }),
+    ).toBeCloseTo(at(-6.5), 10);
+  expect(gainFromDrag({ ...plain, from: 1, dy: 25 })).toBe(0);
+  expect(gainFromDrag({ ...plain, from: 1, dy: -25 })).toBe(MAX_AUDIO_GAIN);
+  expect(gainFromDrag({ ...plain, from: 0, dy: -2 })).toBeCloseTo(
+    at(-31.2),
+    10,
+  );
+  // A press that returns to where it began leaves an off-grid gain as it was.
+  expect(gainFromDrag({ ...plain, from: at(-6.37) })).toBe(at(-6.37));
+});
+
+test("a drag inside a fade or over automation still keeps the line under the pointer", () => {
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "volume",
+        points: [
+          { t: 0, v: 1 },
+          { t: 10, v: 0.5 },
+        ],
+      },
+    ],
+  });
+  const body = 25;
+  for (const base of [
+    { ...timeline.clips[0]!, duration: 300, fadeIn: 60, fadeOut: 0 },
+    { ...timeline.clips[0]!, duration: 300, automation },
+  ])
+    for (const [time, dy] of [
+      [30, -6],
+      [30, 2],
+      [150, 3],
+    ] as const) {
+      const hold = envelopeAt(base, timeline.fps, time);
+      const volume = gainFromDrag({ from: 1, dy, fine: false, body, ...hold });
+      const moved =
+        ((envelopeHeight({ ...base, volume }, timeline.fps, time) -
+          envelopeHeight(base, timeline.fps, time)) *
+          body) /
+        100;
+      expect(Math.abs(moved - dy)).toBeLessThanOrEqual(0.51);
+    }
+  // Near a fade's start the line can only rise as far as +12 dB takes it.
+  expect(
+    gainFromDrag({
+      from: 1,
+      dy: -6,
+      fine: false,
+      body,
+      ...envelopeAt(
+        { ...timeline.clips[0]!, duration: 300, fadeIn: 60 },
+        timeline.fps,
+        6,
+      ),
+    }),
+  ).toBe(MAX_AUDIO_GAIN);
 });
 
 test("meters latch clipping through silence and stop, reset peaks on stop and clear on restart", () => {
@@ -592,13 +668,18 @@ test("the drawn fade follows core's linear amplitude ramp and reaches its knee a
       const [x1, y1] = points[next]!;
       const [x0, y0] = points[Math.max(0, next - 1)]!;
       const y = x0 === x1 ? y1 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
-      const fraction = (100 - y) / (100 - gainHeight(volume));
-      expect(fraction).toBeCloseTo(fadeGain(elapsed, clip.duration, clip), 3);
+      const fraction = (100 - y) / (100 - gainLevel(volume));
+      const fade = fadeGain(elapsed, clip.duration, clip);
+      expect(fraction).toBeCloseTo(fade, 3);
+      // The waveform is scaled by the same envelope the line draws.
+      expect(
+        envelopeGain(clip, timeline.fps, elapsed, undefined, clipFades(clip)),
+      ).toBeCloseTo(volume * fade, 10);
     }
-    expect(points).toContainEqual([70, Number(gainHeight(volume).toFixed(2))]);
+    expect(points).toContainEqual([70, Number(gainLevel(volume).toFixed(2))]);
     expect(points.at(-1)).toEqual([100, 100]);
     expect(envelopeHeight(clip, timeline.fps, 255)).toBeCloseTo(
-      (100 + gainHeight(volume)) / 2,
+      (100 + gainLevel(volume)) / 2,
       6,
     );
   }

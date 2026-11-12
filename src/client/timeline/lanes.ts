@@ -1,5 +1,6 @@
-import { envelopeHeight, fadePath } from "./mix";
-import { audioGainToDb } from "@hyperframes/core/audio-gain";
+import { envelopeAt, envelopeHeight, fadePath, gainFromDrag } from "./mix";
+import type { GainDrag } from "./mix";
+import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
@@ -7,6 +8,7 @@ import type { DragEvent, PointerEvent, RefObject } from "react";
 import type {
   Clip,
   CommandInput,
+  Fps,
   Timeline,
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
@@ -73,7 +75,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const drag = useRef<Drag | null>(null);
   const preview = useRef<Preview | null>(null);
   /** Where the pointer last was on screen, so a scroll or zoom under it redraws the drag. */
-  const pointer = useRef({ x: 0, y: 0, bypass: false, dy: 0 });
+  const pointer = useRef({ x: 0, y: 0, bypass: false });
+  /** A held gain line: how far down the lanes its body starts, and the drag that moves it. */
+  const gain = useRef<(GainDrag & { top: number }) | null>(null);
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
@@ -158,7 +162,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       track: target?.row.track.index ?? rowAt(y)?.track.index ?? null,
       create: target?.create,
       reach: reach(bypass),
-      dy: intent.kind === "gain" ? pointer.current.dy : 0,
+      gain: (intent.kind === "gain" && gain.current) || undefined,
     };
   }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
@@ -374,6 +378,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     lanes.current?.removeAttribute("data-refused");
     preview.current = null;
     destinationRow.current = null;
+    gain.current = null;
     drawn.current = "";
     return offsets;
   }
@@ -441,6 +446,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
         latest.current.playhead(),
       );
       drag.current = active;
+      gain.current = null;
       latest.current.lanes.current?.setAttribute("data-cursor", "move");
     }
     if (preview.current && refuseChanged(active.timeline, preview.current)) {
@@ -450,16 +456,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { x, y } = pointer.current;
     // Measure before the preview writes hundreds of transforms; reading after forces layout.
     const at = local(x, y);
-    const scroller = latest.current.lanes.current
-      ?.closest(".tl-scroll")
-      ?.getBoundingClientRect();
-    const bottomRight = scroller
-      ? local(scroller.right, scroller.bottom)
-      : { x: Infinity, y: Infinity };
+    const edge = scrollerEdge();
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.dy}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
@@ -478,11 +479,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
         );
       } else if (readout.current) {
         if (intent.kind === "gain") {
-          const volume =
+          readout.current.textContent = audioGainToText(
             next.shown.clips.find((clip) => clip.id === intent.clipId)!
-              .volume ?? 1;
-          readout.current.textContent =
-            volume === 0 ? "-∞ dB" : `${audioGainToDb(volume).toFixed(2)} dB`;
+              .volume ?? 1,
+          );
         } else {
           readout.current.textContent = `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
         }
@@ -490,8 +490,91 @@ export function useLaneGestures(options: LaneGestureOptions) {
       }
     }
     if (readout.current && !readout.current.hidden) {
-      readout.current.style.transform = `translate(${Math.min(at.x + 14, bottomRight.x - readoutWidth - 8)}px, ${Math.min(at.y + 18, bottomRight.y - readoutHeight - 8)}px)`;
+      const { intent } = active;
+      const held =
+        intent.kind === "gain"
+          ? (preview.current?.shown ?? active.timeline).clips.find(
+              (clip) => clip.id === intent.clipId,
+            )
+          : undefined;
+      placeReadout(
+        readout.current,
+        at,
+        edge,
+        readoutWidth,
+        readoutHeight,
+        held ? gainLineAt(held, active.timeline.fps) : null,
+      );
     }
+  }
+
+  /** The scroller's bottom right corner in the lanes, which the readout stays inside. */
+  function scrollerEdge() {
+    const scroller = latest.current.lanes.current
+      ?.closest(".tl-scroll")
+      ?.getBoundingClientRect();
+    return scroller
+      ? local(scroller.right, scroller.bottom)
+      : { x: Infinity, y: Infinity };
+  }
+
+  /** A gain readout sits on the line it reports, `line` pixels down; any other follows the pointer. */
+  function placeReadout(
+    label: HTMLElement,
+    at: { x: number; y: number },
+    edge: { x: number; y: number },
+    width: number,
+    height: number,
+    line: number | null,
+  ) {
+    const top = line === null ? at.y + 18 : line - height / 2;
+    label.style.transform = `translate(${Math.min(at.x + 14, edge.x - width - 8)}px, ${Math.min(top, edge.y - height - 8)}px)`;
+  }
+
+  /** How far down the lanes a held clip's gain line is under the pointer, in pixels. */
+  function gainLineAt(clip: Clip, fps: Fps) {
+    const held = gain.current;
+    if (!held) return null;
+    return (
+      held.top + (envelopeHeight(clip, fps, clipTime(clip)) / 100) * held.body
+    );
+  }
+
+  /** How many frames into a clip the pointer is. */
+  const clipTime = (clip: Clip) =>
+    Math.max(
+      0,
+      Math.min(clip.duration, frameAt(pointer.current.x) - clip.start),
+    );
+
+  /** A press on a gain line names its level there at once, before the pointer moves. */
+  function holdGain(clip: Clip, fps: Fps, fine: boolean) {
+    const curve = latest.current.lanes.current
+      ?.querySelector(`[data-clip-mix="${CSS.escape(clip.id)}"] .tl-fade-curve`)
+      ?.getBoundingClientRect();
+    const label = readout.current;
+    gain.current = curve
+      ? {
+          top: local(0, curve.top).y,
+          body: curve.height,
+          from: clip.volume ?? 1,
+          dy: 0,
+          fine,
+          ...envelopeAt(clip, fps, clipTime(clip)),
+        }
+      : null;
+    const line = gainLineAt(clip, fps);
+    if (!label || line === null) return;
+    label.textContent = audioGainToText(clip.volume ?? 1);
+    label.hidden = false;
+    placeReadout(
+      label,
+      local(pointer.current.x, pointer.current.y),
+      scrollerEdge(),
+      label.offsetWidth,
+      label.offsetHeight,
+      line,
+    );
   }
 
   function finish(outcome: Outcome) {
@@ -667,12 +750,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
       x: event.clientX,
       y: event.clientY,
       bypass: toggle,
-      dy: 0,
     };
     gesture.current = step(gesture.current, {
       type: "press",
       intent,
       point: local(event.clientX, event.clientY),
+      at: event.timeStamp,
     }).gesture;
     onGesture(true);
     if (intent.kind === "marquee") {
@@ -689,6 +772,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       frameAt(event.clientX),
       playhead(),
     );
+    if (intent.kind === "gain" && hit)
+      holdGain(hit.clip, timeline.fps, event.shiftKey);
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -702,18 +787,29 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function movePointer(event: PointerEvent<HTMLDivElement>) {
+    const held = gain.current;
+    if (held) {
+      // Shift changed: the line is taken up again where it is, at the gain it shows, so it
+      // neither jumps nor comes away from the pointer. The drag still undoes to where it began.
+      if (held.fine !== event.shiftKey) {
+        held.from = gainFromDrag(held);
+        held.dy = 0;
+        held.fine = event.shiftKey;
+      }
+      held.dy += event.clientY - pointer.current.y;
+    }
     pointer.current = {
       x: event.clientX,
       y: event.clientY,
       bypass: event.ctrlKey || event.metaKey,
-      dy:
-        pointer.current.dy +
-        (event.clientY - pointer.current.y) * (event.shiftKey ? 0.2 : 1),
     };
   }
 
-  function end(type: "release" | "cancel") {
-    const next = step(gesture.current, { type });
+  function end(type: "release" | "cancel", at = 0) {
+    const next = step(
+      gesture.current,
+      type === "release" ? { type, at } : { type },
+    );
     gesture.current = next.gesture;
     if (next.outcome) finish(next.outcome);
   }
@@ -851,7 +947,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onPointerMove,
       onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
         movePointer(event);
-        end("release");
+        end("release", event.timeStamp);
       },
       onPointerCancel: () => end("cancel"),
       onLostPointerCapture: () => end("cancel"),
