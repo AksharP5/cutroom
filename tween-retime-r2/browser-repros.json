@@ -1,0 +1,156 @@
+[
+  {
+    "r2": "external",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r2": "negativeDelay",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 0
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 6
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 0
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 6
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r2": "aliasedDefaults",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 37
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r2": "computedMethod",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 37
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  },
+  {
+    "r2": "duplicateId",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "cta",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "cta",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed at 00:00:36:00.\nAsk agent\nDismiss"
+  },
+  {
+    "r2": "membership",
+    "before": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "after": [
+      {
+        "id": "cta",
+        "owner": "cta",
+        "at": 36
+      },
+      {
+        "id": "shot-b",
+        "owner": "shot-b",
+        "at": 36
+      }
+    ],
+    "scriptUnchanged": true,
+    "toast": "cta's animation stayed behind.\nAsk agent\nDismiss"
+  }
+]

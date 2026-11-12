@@ -1,0 +1,43 @@
+{
+  "head": "b5dc0e53a2e0760b7d0ee2fedb4631dce94fc9d5",
+  "base": "04e7b5ee851657831ed2540384ccce1b98c955df",
+  "reviewedHead": "8f25b59bbd4807f548d613666984fb0b64bd9944",
+  "before": {
+    "initialUnit": {
+      "passed": 0,
+      "failed": 8
+    },
+    "browser": {
+      "passed": 0,
+      "failed": 7
+    }
+  },
+  "after": {
+    "fullUnit": {
+      "passed": 687,
+      "skipped": 5,
+      "failed": 0
+    },
+    "fullBrowser": {
+      "passed": 329,
+      "failed": 0
+    },
+    "retimerBrowser": {
+      "passed": 17,
+      "failed": 0
+    },
+    "performance": {
+      "passed": 7,
+      "failed": 0
+    }
+  },
+  "skipped": [
+    "Four optional native-window tests",
+    "Installed local Whisper integration"
+  ],
+  "limits": [
+    "Shared selectors and unresolved helpers/loops remain silent.",
+    "The existing 50ms request benchmark is over budget on main, R1 and R2.",
+    "Real muted headless Chromium used for browser verification."
+  ]
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "absolute",
+    "rewrites": 1,
+    "refusals": [],
+    "scriptUnchanged": false
+  },
+  {
+    "name": "absolute-hard",
+    "rewrites": 0,
+    "refusals": [],
+    "scriptUnchanged": true
+  }
+]
