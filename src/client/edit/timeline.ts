@@ -34,6 +34,9 @@ import {
   rippleFeedback,
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
+import { ReviewItemSchema } from "../../shared/review";
+import { noteNumbers } from "../review";
+import { dispatchNote, queueNoteChange } from "./noteStore";
 
 const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
@@ -587,22 +590,65 @@ export const stepHistory = (
   step: "undo" | "redo",
   expectedHistoryId?: string,
 ) =>
-  clipboardTask.then(() =>
-    enqueue(async () => {
-      if (expectedHistoryId) {
-        await read(projectId);
-        if (historyHead !== expectedHistoryId)
-          throw new Error("The history changed. Use Undo in the toolbar.");
-      }
-      dismissRipple();
-      rippleRevision = null;
-      await api(
-        `${project(projectId)}/history/${step}`,
-        z.unknown(),
-        json("POST"),
-      );
-      await read(projectId, undefined, false);
-    }),
+  queueNoteChange(projectId, () =>
+    clipboardTask.then(() =>
+      enqueue(async () => {
+        if (expectedHistoryId) {
+          await read(projectId);
+          if (historyHead !== expectedHistoryId)
+            throw new Error("The history changed. Use Undo in the toolbar.");
+        }
+        dismissRipple();
+        rippleRevision = null;
+        // React's notebook may still predate the save, even while its pin is visible.
+        const before =
+          step === "undo"
+            ? await api(
+                `${project(projectId)}/review`,
+                z.object({ items: z.array(ReviewItemSchema) }),
+              ).catch((error: unknown) => {
+                // Undo can repair unreadable note metadata; its own route still validates history.
+                if (error instanceof ApiError && error.status === 422)
+                  return null;
+                throw error;
+              })
+            : null;
+        await api(
+          `${project(projectId)}/history/${step}`,
+          z.unknown(),
+          json("POST"),
+        );
+        await read(projectId, undefined, false);
+        if (!before?.items.length) return;
+        const after = await api(
+          `${project(projectId)}/review`,
+          z.object({ items: z.array(ReviewItemSchema) }),
+        );
+        const removed = before.items.filter(
+          (note) => !after.items.some((item) => item.id === note.id),
+        );
+        const first = removed[0];
+        if (!first) return;
+        // A note undone before its first notebook refresh must also leave the optimistic layer.
+        dispatchNote(projectId, {
+          type: "landed",
+          ids: new Set(removed.map((note) => note.id)),
+        });
+        if (useTimeline.getState().projectId === projectId)
+          showToast(
+            `Note ${noteNumbers(before.items).get(first.id)} removed ·`,
+            {
+              label: "Redo",
+              run: () => {
+                showToast("");
+                void stepHistory(projectId, "redo").catch((error: unknown) =>
+                  reportEditorError("timeline", error),
+                );
+              },
+            },
+          );
+      }),
+    ),
   );
 
 /** Clipboard keys serialize copy/cut/paste, including a paste pressed before copy has answered. */

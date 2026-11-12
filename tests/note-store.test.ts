@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  saveNoteInOrder,
+  queueNoteChange,
   trackNoteCapture,
   waitForNoteCaptures,
 } from "../src/client/edit/noteStore";
@@ -57,16 +57,16 @@ test("a failed save reaches its caller, allows the next note, and never holds an
     release = resolve;
   });
   const calls: string[] = [];
-  const first = saveNoteInOrder(project, async () => {
+  const first = queueNoteChange(project, async () => {
     calls.push("first");
     await held;
     throw new Error("Not saved");
   });
-  const next = saveNoteInOrder(project, async () => {
+  const next = queueNoteChange(project, async () => {
     calls.push("next");
     return "next-id";
   });
-  const other = saveNoteInOrder(otherProject, async () => {
+  const other = queueNoteChange(otherProject, async () => {
     calls.push("other");
     return "other-id";
   });
@@ -76,4 +76,36 @@ test("a failed save reaches its caller, allows the next note, and never holds an
   await expect(first).rejects.toThrow("Not saved");
   expect(await next).toBe("next-id");
   expect(calls).toEqual(["first", "other", "next"]);
+});
+
+test("history waits for a pending note post and the next note waits for history", async () => {
+  const project = crypto.randomUUID();
+  const posted = Promise.withResolvers<void>();
+  const undone = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  const save = queueNoteChange(project, async () => {
+    calls.push("save");
+    await posted.promise;
+  });
+  const undo = queueNoteChange(project, async () => {
+    calls.push("undo");
+    await undone.promise;
+  });
+  const next = queueNoteChange(project, async () => {
+    calls.push("next note");
+  });
+  try {
+    await Promise.resolve();
+    expect(calls).toEqual(["save"]);
+    posted.resolve();
+    await save;
+    await Promise.resolve();
+    expect(calls).toEqual(["save", "undo"]);
+    undone.resolve();
+    await Promise.all([undo, next]);
+    expect(calls).toEqual(["save", "undo", "next note"]);
+  } finally {
+    posted.resolve();
+    undone.resolve();
+  }
 });

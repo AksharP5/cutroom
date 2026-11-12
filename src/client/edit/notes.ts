@@ -43,7 +43,7 @@ export type NoteEvent =
   | { type: "commit" }
   | { type: "saved"; key: number; id: string }
   | { type: "failed"; key: number; error: string }
-  /** The server's notes now hold these ids. */
+  /** These ids have reached history and no longer need pending pins. */
   | { type: "landed"; ids: ReadonlySet<string> };
 
 export const noNotes: Notes = { draft: null, saving: [], next: 1 };

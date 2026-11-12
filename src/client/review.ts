@@ -4,7 +4,7 @@ import type { EditorReviewDraft } from "../shared/editor";
 import type { ReviewItem, ReviewStatus } from "../shared/review";
 import { api, json } from "./api";
 import { strokePath } from "./edit/notes";
-import { saveNoteInOrder, trackNoteCapture } from "./edit/noteStore";
+import { queueNoteChange, trackNoteCapture } from "./edit/noteStore";
 
 /** Completed notes and agent questions wait on the owner in Review's To review group. */
 export const toReviewStatuses: readonly ReviewStatus[] = ["blocked", "done"];
@@ -38,7 +38,7 @@ export async function saveReviewNote(
 ) {
   const tokens = getComputedStyle(document.documentElement);
   const pencil = tokens.getPropertyValue("--human").trim();
-  const saved = saveNoteInOrder(projectId, () =>
+  const saved = queueNoteChange(projectId, () =>
     api(
       `/projects/${projectId}/annotations`,
       AnnotationSchema,

@@ -986,6 +986,95 @@ test("text undo precedes stroke undo, stroke redo returns it, and saved-note und
   await expect(strokes).toHaveCount(1);
 });
 
+for (const delayed of ["save request", "save acknowledgement"] as const) {
+  test(`saved-note undo waits for the ${delayed} and offers Redo before the notebook refreshes`, async ({
+    page,
+    request,
+  }, info) => {
+    const project = await openProject(page, request, "Undo before refresh");
+    await quickCapture(page, project.id);
+    const notebook = Promise.withResolvers<void>();
+    const acknowledge = Promise.withResolvers<void>();
+    const saved = Promise.withResolvers<void>();
+    await page.route(`**${project.base}/notebook`, async (route) => {
+      await notebook.promise;
+      await route.continue();
+    });
+    await page.route(`**${project.base}/annotations`, async (route) => {
+      if (delayed === "save request") {
+        saved.resolve();
+        await acknowledge.promise;
+      }
+      const response = await route.fetch();
+      saved.resolve();
+      await acknowledge.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.keyboard.press("Shift+n");
+      const from = await project.at(0.1, 0.5);
+      const to = await project.at(0.35, 0.5);
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 10 });
+      await page.mouse.up();
+      const field = page.getByLabel("What should change?");
+      await field.fill("Undo while this is still saving");
+      await field.press("Enter");
+      await saved.promise;
+      await expect(field).toBeHidden();
+      await expect(page.locator(".edit-note-pin")).toHaveCount(1);
+      await page.getByRole("button", { name: /^Select/ }).click();
+      await page.keyboard.press("Control+z");
+      acknowledge.resolve();
+      const toast = page.locator(".toast");
+      await expect(toast).toHaveText("Note 1 removed ·RedoDismiss");
+      await expect.poll(() => project.notes()).toEqual([]);
+      await expect(page.locator(".edit-note-pin")).toHaveCount(0);
+      await expect(
+        page.locator(".edit-note-pencil path[d]:not([data-live])"),
+      ).toHaveCount(0);
+      await page.screenshot({
+        path: info.outputPath("undo-before-refresh.png"),
+      });
+      notebook.resolve();
+      await toast.getByRole("button", { name: "Redo", exact: true }).click();
+      await expect.poll(async () => (await project.notes()).length).toBe(1);
+      await expect(
+        page.getByRole("button", { name: "Note 1", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.locator(".edit-note-pencil path[d]:not([data-live])"),
+      ).toHaveCount(1);
+    } finally {
+      acknowledge.resolve();
+      notebook.resolve();
+    }
+  });
+}
+
+test("undo still repairs unreadable note metadata when its review snapshot fails", async ({
+  page,
+  request,
+}) => {
+  const project = await openProject(page, request, "Repair note history");
+  const saved = await request.post(`${project.base}/annotations`, {
+    data: { kind: "comment", body: "Keep this note", time: 0 },
+  });
+  expect(saved.ok()).toBe(true);
+  await request.get(`${project.base}/history`);
+  await writeFile(join(project.path, "cutroom.json"), "{broken");
+  expect((await request.get(`${project.base}/review`)).status()).toBe(422);
+  await page.getByRole("button", { name: /^Select/ }).click();
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await request.get(`${project.base}/review`)).status())
+    .toBe(200);
+  expect((await project.notes()).map((note) => note.body)).toEqual([
+    "Keep this note",
+  ]);
+});
+
 test("single-frame notes stay readable in playback and acceptance removes both pin and strokes", async ({
   page,
   request,
