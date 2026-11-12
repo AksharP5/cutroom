@@ -142,7 +142,7 @@ export function outsideChanges(before: TimelineView, after: TimelineView) {
   const authors = new Map(
     edits
       .filter((edit) => edit.composition === after.composition)
-      .map((edit) => [edit.clipId, edit.by]),
+      .map((edit) => [edit.clipId, edit]),
   );
   const previous = new Map(
     before.timeline.clips.map((clip) => [clip.id, clip]),
@@ -164,9 +164,9 @@ export function outsideChanges(before: TimelineView, after: TimelineView) {
   // Watcher reads can observe an owner source save or import before its UI receipt arrives.
   // Keep those attributed edits silent without dropping unrelated agent or disk changes.
   for (const id of changes.keys())
-    if (authors.get(id) === "human") changes.delete(id);
+    if (authors.get(id)?.by === "human") changes.delete(id);
   const settingsChanged =
-    authors.get(null) !== "human" &&
+    authors.get(null)?.by !== "human" &&
     JSON.stringify({ ...before.timeline, clips: [] }) !==
       JSON.stringify({ ...after.timeline, clips: [] });
   const timelineChanged = changes.size > 0 || settingsChanged;
@@ -174,9 +174,12 @@ export function outsideChanges(before: TimelineView, after: TimelineView) {
     ...[...changes.keys()].map((id) => authors.get(id)),
     ...(settingsChanged ? [authors.get(null)] : []),
   ];
+  const names = changedAuthors.map((edit) =>
+    edit?.by === "agent" ? (edit.agentName ?? "Agent") : undefined,
+  );
   const actor =
-    changedAuthors.length && changedAuthors.every((by) => by === "agent")
-      ? "Agent"
+    names.length && names.every((name) => name && name === names[0])
+      ? names[0]!
       : "Outside edit";
   return { changes, timelineChanged, actor };
 }

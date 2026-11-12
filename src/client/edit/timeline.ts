@@ -535,7 +535,7 @@ export async function editTimeline(
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {
         lastToast = report;
-        showToast(report);
+        showToast(report, null, { tone: "info" });
       } else if (
         feedback &&
         revision === confirmed?.view.revision &&

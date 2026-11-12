@@ -484,6 +484,7 @@ export const ClipEditSchema = z.object({
   composition: z.string(),
   label: z.string(),
   by: z.enum(["human", "agent"]),
+  agentName: z.string().optional(),
   at: z.string(),
   accepted: z.boolean(),
   historyId: z.string().optional(),

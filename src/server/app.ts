@@ -138,6 +138,7 @@ export async function createApp(
         for (const cleanup of [
           () => agents.dispose(),
           () => transcripts.dispose(),
+          () => mcp.dispose(),
           () => editor.dispose(),
           () => media.dispose(),
           () => projects.close(),

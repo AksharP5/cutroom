@@ -328,3 +328,35 @@ test("overwrite feedback names whole replacements once, while partial cuts and i
     overwriteFeedback(stacked, applyAll(stacked, [command]), [command]),
   ).toBe("Replaced title.");
 });
+
+test("outside notices retain the caller name", () => {
+  const before: TimelineView = {
+    composition: "index.html",
+    revision: "one",
+    timeline: parsed(shot),
+  };
+  const after: TimelineView = {
+    ...before,
+    revision: "two",
+    timeline: {
+      ...before.timeline,
+      clips: before.timeline.clips.map((clip) => ({ ...clip, start: 30 })),
+    },
+    clipEdits: [
+      {
+        id: "new",
+        clipId: "shot",
+        composition: "index.html",
+        label: "Moved",
+        by: "agent",
+        agentName: "Checkpoint",
+        at: "now",
+        accepted: false,
+      },
+    ],
+  };
+  const change = outsideChanges(before, after);
+  expect(outsideMessage(change.changes, new Set([change.actor]))).toBe(
+    "Checkpoint moved 1 clip.",
+  );
+});

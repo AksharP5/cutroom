@@ -1,7 +1,11 @@
 import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
 import { createTimelineViewStore } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
-import { AGENT_HEADER } from "../../shared/review";
+import {
+  AGENT_HEADER,
+  AGENT_NAME_HEADER,
+  AgentNameSchema,
+} from "../../shared/review";
 import type { ReviewService } from "../projects/review";
 import { posix } from "node:path";
 import { Hono } from "hono";
@@ -357,7 +361,18 @@ export function createTimelineRoutes(
               batch.label,
               () => edit(project, batch),
               c.req.header(AGENT_HEADER)
-                ? { kind: "agent", name: "Agent" }
+                ? {
+                    kind: "agent",
+                    name:
+                      reviews.agent(project, c.req.header(AGENT_HEADER)).turn
+                        .name ??
+                      parseInput(
+                        AgentNameSchema,
+                        decodeURIComponent(
+                          c.req.header(AGENT_NAME_HEADER) ?? "Agent",
+                        ),
+                      ),
+                  }
                 : undefined,
             ),
           batch.noteId,

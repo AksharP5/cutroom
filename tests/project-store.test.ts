@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import { lintProject } from "@hyperframes/core/lint";
-import { readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  readFile,
+  rm,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
   AnnotationSchema,
@@ -298,5 +305,29 @@ test("project shutdown drains admitted edits and refuses new mutations", async (
   } finally {
     release();
     await fixture.close();
+  }
+});
+
+test("last edited uses the newest composition or document mtime, not registry activity", async () => {
+  const f = await projectFixture();
+  try {
+    const p = await f.store.create({ name: "File dates" });
+    const html = join(p.path, "index.html");
+    const document = join(p.path, "cutroom.json");
+    await utimes(html, new Date("2024-01-01"), new Date("2024-01-01"));
+    await utimes(document, new Date("2024-02-01"), new Date("2024-02-01"));
+    expect((await f.store.list())[0]?.updatedAt).toBe(
+      "2024-02-01T00:00:00.000Z",
+    );
+    await utimes(html, new Date("2024-03-01"), new Date("2024-03-01"));
+    expect((await f.store.list())[0]?.updatedAt).toBe(
+      "2024-03-01T00:00:00.000Z",
+    );
+    await unlink(document);
+    expect((await f.store.list())[0]?.updatedAt).toBe(
+      "2024-03-01T00:00:00.000Z",
+    );
+  } finally {
+    await f.close();
   }
 });

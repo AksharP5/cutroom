@@ -179,6 +179,14 @@ test("an external MCP client edits the same project and undo history as the UI",
       await (await fixture.request(`/projects/${project.id}/source`)).json(),
     );
     expect(visible.content).toContain("Changed through MCP.");
+    expect(
+      (await fixture.review.clipChanges(project, "index.html")).clipEdits,
+    ).toContainEqual(
+      expect.objectContaining({
+        by: "agent",
+        agentName: "cutroom-integration-test",
+      }),
+    );
     const stale = await client.callTool({
       name: "source_write",
       arguments: {

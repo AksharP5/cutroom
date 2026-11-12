@@ -19,6 +19,8 @@ import {
 } from "../../shared/project";
 import {
   AGENT_HEADER,
+  AGENT_NAME_HEADER,
+  AgentNameSchema,
   AgentReviewActionSchema,
   HumanReviewActionSchema,
   ReviewAddSchema,
@@ -171,7 +173,19 @@ export function createProjectRoutes(
             ]);
             return readSource(project, body.path);
           },
-          token ? { kind: "agent", name: "Agent" } : undefined,
+          token
+            ? {
+                kind: "agent",
+                name:
+                  reviews.agent(project, token).turn.name ??
+                  parseInput(
+                    AgentNameSchema,
+                    decodeURIComponent(
+                      c.req.header(AGENT_NAME_HEADER) ?? "Agent",
+                    ),
+                  ),
+              }
+            : undefined,
         ),
       body.noteId,
     );

@@ -1,3 +1,5 @@
+import { utimes } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
@@ -145,4 +147,23 @@ test("a poster is a placeholder until its frame has rendered", async ({
   ]);
   expect(frame!.height).toBeCloseTo(well!.height, 0);
   expect(frame!.width / frame!.height).toBeCloseTo(9 / 16, 2);
+});
+
+test("home dates direct composition and document edits", async ({
+  page,
+  request,
+}, info) => {
+  const project = await create(request, { name: "File date evidence" });
+  const html = join(project.path, "index.html");
+  const document = join(project.path, "cutroom.json");
+  const old = new Date(Date.now() - 3 * 86400000);
+  await utimes(html, old, old);
+  await utimes(document, old, old);
+  await page.goto("/");
+  const date = tile(page, project.name).locator("time");
+  await page.screenshot({ path: info.outputPath("file-date.png") });
+  await expect(date).toHaveText("3 d ago");
+  await utimes(document, new Date(), new Date());
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(date).toHaveText("Just now");
 });

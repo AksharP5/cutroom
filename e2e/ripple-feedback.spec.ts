@@ -251,7 +251,10 @@ test("outside agent moves coalesce by clip, preserve focus, and expire", async (
     expect(
       (
         await request.post(`${base}/commands`, {
-          headers: { "x-cutroom-agent": "external" },
+          headers: {
+            "x-cutroom-agent": "external",
+            "x-cutroom-agent-name": "Checkpoint",
+          },
           data: {
             expectedRevision: revision,
             label: "Moved title",
@@ -263,7 +266,7 @@ test("outside agent moves coalesce by clip, preserve focus, and expire", async (
   }
   const notice = page
     .getByRole("status")
-    .filter({ hasText: "Agent moved 3 clips." });
+    .filter({ hasText: "Checkpoint moved 3 clips." });
   await expect(notice).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Message your agent" }),
@@ -271,7 +274,7 @@ test("outside agent moves coalesce by clip, preserve focus, and expire", async (
   await page.screenshot({ path: info.outputPath("agent-notice.png") });
   expect(
     await page.evaluate(() => Reflect.get(window, "feedbackNotices")),
-  ).toEqual(["Agent moved 3 clips."]);
+  ).toEqual(["Checkpoint moved 3 clips."]);
   await expect(notice).toHaveCount(0, { timeout: 6000 });
 });
 

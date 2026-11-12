@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { version } from "../../shared/version";
-import { AGENT_HEADER } from "../../shared/review";
+import {
+  AGENT_HEADER,
+  AGENT_NAME_HEADER,
+  AgentNameSchema,
+} from "../../shared/review";
 import { registerReviewTools } from "./reviewTools";
 import {
   AnnotationInputSchema,
@@ -72,6 +77,11 @@ export function createMcpServer(options: McpOptions = {}) {
         headers: {
           origin: baseUrl,
           [AGENT_HEADER]: options.agentToken ?? "external",
+          [AGENT_NAME_HEADER]: encodeURIComponent(
+            AgentNameSchema.parse(
+              server.server.getClientVersion()?.name ?? "Agent",
+            ),
+          ),
           ...(body !== undefined && { "content-type": "application/json" }),
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
@@ -318,22 +328,40 @@ export function createMcpServer(options: McpOptions = {}) {
 }
 
 export function createMcpHttpHandler(options: McpOptions = {}) {
-  return async (request: Request): Promise<Response> => {
-    const server = createMcpServer(options);
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    await server.connect(transport);
-    try {
-      const response = await transport.handleRequest(request);
-      const body = response.body ? await response.arrayBuffer() : null;
-      return new Response(body, {
-        status: response.status,
-        headers: response.headers,
-      });
-    } finally {
-      await server.close();
+  const sessions = new Map<
+    string,
+    {
+      server: ReturnType<typeof createMcpServer>;
+      transport: WebStandardStreamableHTTPServerTransport;
     }
+  >();
+  const handler = async (request: Request): Promise<Response> => {
+    const id = request.headers.get("mcp-session-id");
+    let session = id ? sessions.get(id) : undefined;
+    if (id && !session)
+      return new Response("MCP session not found.", { status: 404 });
+    if (!session) {
+      const server = createMcpServer(options);
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: randomUUID,
+        enableJsonResponse: true,
+        onsessioninitialized: (id) => {
+          sessions.set(id, { server, transport });
+        },
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      session = { server, transport };
+    }
+    const response = await session.transport.handleRequest(request);
+    if (!session.transport.sessionId || request.method === "DELETE")
+      await session.server.close();
+    return response;
   };
+  return Object.assign(handler, {
+    dispose: () =>
+      Promise.all([...sessions.values()].map(({ server }) => server.close())),
+  });
 }

@@ -414,6 +414,7 @@ export class AgentService {
       id: message.id,
       kind: "message",
       token: this.agentToken(id),
+      name: session.provider === "codex" ? "Codex" : "Claude",
     });
     const endReview = (operation.endReview = () => {
       if (!this.disposed)
