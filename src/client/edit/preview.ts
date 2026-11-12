@@ -326,6 +326,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         edit.push(picture);
       });
       active = true;
+    },
+    /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */
+    present() {
+      if (closing.signal.aborted) return;
       warningSource = frame;
       hitTarget = hit;
       observers.add(observe);

@@ -115,6 +115,10 @@ export function Viewer({
     }
   }, [handoff.confirmed, candidate]);
 
+  useLayoutEffect(() => {
+    if (live) connections.current.get(live.gen)?.present();
+  }, [live]);
+
   useEffect(() => {
     if (!candidate) return;
     const timer = window.setTimeout(

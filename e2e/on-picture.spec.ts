@@ -370,6 +370,125 @@ test("arrow keys nudge the selected clip while the picture has focus", async ({
   expect(commands).toHaveLength(2);
 });
 
+for (const release of ["before", "after"] as const)
+  test(`a superseded handoff keeps a cancelled drag grabbed when pointerup is ${release} the restore`, async ({
+    page,
+    request,
+  }, info) => {
+    await page.addInitScript(() => {
+      window.addEventListener("message", (event) => {
+        const body = document.body;
+        if (
+          !body?.hasAttribute("data-hold-restore") ||
+          event.data?.source !== "cutroom-viewer" ||
+          event.data.action !== "position" ||
+          event.data.x !== 0
+        )
+          return;
+        event.stopImmediatePropagation();
+        body.removeAttribute("data-hold-restore");
+        body.dataset.restoreHeld = "";
+        window.addEventListener(
+          "release-restore",
+          () => {
+            window.dispatchEvent(
+              new MessageEvent("message", {
+                data: event.data,
+                source: event.source,
+                origin: event.origin,
+              }),
+            );
+          },
+          { once: true },
+        );
+      });
+    });
+    const { at, selected, drawn, commands } = await open(page, request);
+    const picture = page.getByRole("application", { name: "Picture" });
+    const handle = page.locator(".edit-select-outline b").first();
+    await page.mouse.click(...at(100, 125));
+    await expect(selected).toHaveText("Title");
+    await page.mouse.click(...at(100, 125));
+    await expect(handle).toBeVisible();
+
+    // Hold the next document's fully visible paint so another edit supersedes its promotion.
+    await page.addInitScript(() => {
+      if (window === window.top) return;
+      let observing = false;
+      window.addEventListener(
+        "message",
+        (event) => {
+          if (event.data?.source !== "cutroom-viewer") return;
+          if (event.data.action === "observe-position") observing = true;
+          if (observing && event.data.action === "paint")
+            event.stopImmediatePropagation();
+        },
+        true,
+      );
+    });
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => commands.length).toBe(1);
+    await expect(
+      page.locator('.edit-stage[data-handoff="promoting"]'),
+    ).toBeVisible();
+
+    let resume = () => {};
+    const loading = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    await page.route("**/isolated-preview?*", async (route) => {
+      await loading;
+      await route.continue();
+    });
+    try {
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      await expect(
+        page.locator('.edit-stage[data-handoff="loading"]'),
+      ).toBeVisible();
+      // The retained picture is now the live document again. It must still answer hits.
+      await expect(positionField(page)).toHaveValue("0 px");
+      expect((await drawn("title")).left).toBe(61);
+      await page.mouse.move(...at(100, 125));
+      await page.mouse.down();
+      await page.mouse.move(...at(104, 125), { steps: 2 });
+      await expect.poll(async () => (await drawn("title")).left).toBe(64);
+      await expect(handle).toBeVisible();
+
+      // Delay the actual restore write, independently of Escape and the physical release.
+      const body = page.frameLocator("iframe[data-live]").locator("body");
+      await body.evaluate((body) => {
+        body.dataset.holdRestore = "";
+      });
+      await page.keyboard.press("Escape");
+      await expect(body).toHaveAttribute("data-restore-held", "");
+      expect((await drawn("title")).left).toBe(64);
+      if (release === "before") await page.mouse.up();
+      await body.evaluate(() =>
+        window.dispatchEvent(new Event("release-restore")),
+      );
+      await expect.poll(async () => (await drawn("title")).left).toBe(60);
+      if (release === "after") await page.mouse.up();
+
+      await expect(selected).toHaveText("Title");
+      await expect(picture).toBeFocused();
+      await expect(handle).toBeVisible();
+      await page.screenshot({ path: info.outputPath("cancelled-drag.png") });
+      expect(commands).toHaveLength(1);
+      await page.keyboard.press("ArrowRight");
+      await expect(positionField(page)).toHaveValue("1 px");
+      await expect.poll(() => commands.length).toBe(2);
+      await expect(
+        page.getByRole("button", {
+          name: "Current time. Click to type a time.",
+          exact: true,
+        }),
+      ).toHaveText("00:00:00:00");
+    } finally {
+      resume();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
 test("the inspector edits a title's words in one undo step and refuses text with markup", async ({
   page,
   request,
