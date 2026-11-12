@@ -459,7 +459,11 @@ test(
         },
       }),
     );
-    for (const run of runs) expect(run.hitDurations).toHaveLength(10);
+    // One hit per press, and at most one more for the pointer coming to rest before it.
+    for (const run of runs) {
+      expect(run.hitDurations.length).toBeGreaterThanOrEqual(10);
+      expect(run.hitDurations.length).toBeLessThanOrEqual(20);
+    }
     // CI Chromium 158 / SwiftShader measured 35.2 ms with a 33 ms ceiling. Allow three
     // 60 Hz frames, still well below the ~100 ms instant-response threshold. A 60 ms hit
     // stall must fail this same pointer-down-to-visible-outline gate.

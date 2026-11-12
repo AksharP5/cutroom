@@ -360,7 +360,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   expect(errors).toEqual([]);
 });
 
-test("the inspector starts closed where it would cover the stage", async ({
+test("the inspector starts closed in a narrow window", async ({
   page,
   request,
 }) => {
@@ -581,7 +581,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
     .filter({ hasText: /^Changes/ })
     .focus();
   await page.keyboard.press("Escape");
-  await expect(inspector).toHaveAttribute("data-open", "false");
+  await expect(inspector).toBeHidden();
   await expect(
     page.getByRole("button", { name: "Inspector", exact: true }),
   ).toBeFocused();
@@ -591,9 +591,8 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await expect(inspector).toHaveAttribute("data-open", "true");
   await expect(toggle).not.toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(inspector).toHaveAttribute("data-open", "false");
+  await expect(inspector).toBeHidden();
   await expect(toggle).toBeFocused();
-  await expect(inspector).toHaveCSS("opacity", "0");
   await expect(page.locator('[data-clip="opening-title"]')).toHaveClass(
     /selected/,
   );
@@ -608,6 +607,6 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await expect(opacity).toHaveValue("30%");
   await expect(inspector).toHaveAttribute("data-open", "true");
   await page.keyboard.press("Escape");
-  await expect(inspector).toHaveAttribute("data-open", "false");
+  await expect(inspector).toBeHidden();
   await expect(toggle).toBeFocused();
 });

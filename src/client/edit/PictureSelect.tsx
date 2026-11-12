@@ -15,9 +15,11 @@ import {
   previewPosition,
   usePictureMove,
   usePositionWarning,
+  useTextEdit,
 } from "./preview";
 import { openClipMenu } from "./openClipMenu";
 import { editTimeline, useTimeline } from "./timeline";
+import { useTransport } from "./transport";
 
 /** Travel before a press becomes a drag, as on the timeline. */
 const DRAG_PX = 3;
@@ -44,12 +46,55 @@ const pickable = (timeline: Timeline, hits: readonly PictureHit[]) =>
     );
   });
 
+/**
+ * Places an outline around a box: one-pixel edges stretched by transform, so nothing lays out as
+ * the box follows playback. They sit just outside the box and never cover the clip's own pixels.
+ */
+function placeOutline(element: HTMLElement, box: PictureBox, scale: Offset) {
+  const left = Math.round(box.x * scale.x);
+  const top = Math.round(box.y * scale.y);
+  const width = Math.max(1, Math.round((box.x + box.width) * scale.x) - left);
+  const height = Math.max(1, Math.round((box.y + box.height) * scale.y) - top);
+  const marks = element.children as HTMLCollectionOf<HTMLElement>;
+  const place = (at: number, l: number, t: number, w: number, h: number) => {
+    marks[at]!.style.transform = `translate(${l}px, ${t}px) scaleX(${w})`;
+    marks[at + 1]!.style.transform =
+      `translate(${l}px, ${t + h - 1}px) scaleX(${w})`;
+    marks[at + 2]!.style.transform = `translate(${l}px, ${t}px) scaleY(${h})`;
+    marks[at + 3]!.style.transform =
+      `translate(${l + w - 1}px, ${t}px) scaleY(${h})`;
+  };
+  place(0, left - 2, top - 2, width + 4, height + 4);
+  place(4, left - 1, top - 1, width + 2, height + 2);
+  // Corner handles, centred on the line; only the selection's outline has them.
+  if (marks.length < 12) return;
+  for (const [at, x, y] of [
+    [8, left - 1, top - 1],
+    [9, left + width, top - 1],
+    [10, left - 1, top + height],
+    [11, left + width, top + height],
+  ] as const)
+    marks[at]!.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
+}
+
 /** One Position change in flight: where the clip was and where the gesture has put it. */
 interface Move {
   timeline: Timeline;
   clip: Clip;
   from: Offset;
   to: Offset;
+}
+
+/** The pointer at rest over the picture, and what the preview says lies under it. */
+interface Hover {
+  over: boolean;
+  /** Composition pixels. */
+  x: number;
+  y: number;
+  cycle: boolean;
+  /** The one question in flight. A press at the same point takes its answer. */
+  pending: { x: number; y: number; hits: Promise<PictureHit[]> } | null;
+  hits: readonly PictureHit[] | null;
 }
 
 interface Press {
@@ -107,7 +152,16 @@ export function PictureSelect({
   const surface = useRef<HTMLDivElement>(null);
   const outline = useRef<HTMLDivElement>(null);
   const guides = useRef<HTMLDivElement>(null);
+  const hoverOutline = useRef<HTMLDivElement>(null);
   const press = useRef<Press | null>(null);
+  const hover = useRef<Hover>({
+    over: false,
+    x: 0,
+    y: 0,
+    cycle: false,
+    pending: null,
+    hits: null,
+  });
   const nudge = useRef<(Move & { keys: Set<string> }) | null>(null);
 
   const draw = () => {
@@ -123,39 +177,87 @@ export function PictureSelect({
     element.hidden = !box;
     if (!box || !shown) return;
     element.dataset.outlined = shown.clipId;
-    const left = Math.round(box.x * scale.x);
-    const top = Math.round(box.y * scale.y);
-    const width = Math.max(1, Math.round((box.x + box.width) * scale.x) - left);
-    const height = Math.max(
-      1,
-      Math.round((box.y + box.height) * scale.y) - top,
-    );
-    // One-pixel edges stretched by transform: no layout as the box follows playback. They sit
-    // just outside the box, so the outline never covers the clip's own pixels.
-    const marks = [...element.children] as HTMLElement[];
-    const place = (at: number, l: number, t: number, w: number, h: number) => {
-      marks[at]!.style.transform = `translate(${l}px, ${t}px) scaleX(${w})`;
-      marks[at + 1]!.style.transform =
-        `translate(${l}px, ${t + h - 1}px) scaleX(${w})`;
-      marks[at + 2]!.style.transform = `translate(${l}px, ${t}px) scaleY(${h})`;
-      marks[at + 3]!.style.transform =
-        `translate(${l + w - 1}px, ${t}px) scaleY(${h})`;
+    placeOutline(element, box, scale);
+  };
+
+  /** What a press at the resting pointer would act on, or null. */
+  const hovered = () => {
+    const { over, hits, cycle } = hover.current;
+    const { view } = useTimeline.getState();
+    const { active, clip } = latest.current;
+    if (!active || !over || !hits || !view) return null;
+    return pickHit(pickable(view.timeline, hits), clip?.id ?? null, cycle);
+  };
+  /** Outlines that clip, unless the selection's outline already marks it. */
+  const drawHover = () => {
+    const element = hoverOutline.current;
+    if (!element) return;
+    const hit = hovered();
+    const { view, selection } = useTimeline.getState();
+    const selected = view
+      ? inspectorSubject(view.timeline, selection)?.clip?.id
+      : null;
+    element.hidden = !hit || hit.clipId === selected;
+    if (!hit || element.hidden) return;
+    element.dataset.outlined = hit.clipId;
+    placeOutline(element, hit.box, latest.current.scale);
+  };
+  /** The move cursor says a drag from here moves a clip: the selected one, or the one outlined. */
+  const aim = () => {
+    const element = surface.current;
+    if (!element || press.current) return;
+    const shown = pictureBox.current();
+    const { clip, locked } = latest.current;
+    // The selected clip's box is already known; any other clip waits for the preview's answer.
+    const selected =
+      !locked &&
+      shown?.box &&
+      shown.clipId === clip?.id &&
+      contains(shown.box, hover.current);
+    element.style.cursor = selected || hovered() ? "move" : "";
+  };
+  /** The picture under a resting pointer changed, or a press took over: its answer is stale. */
+  const dropHover = () => {
+    hover.current.hits = null;
+    hover.current.pending = null;
+    if (hoverOutline.current) hoverOutline.current.hidden = true;
+    aim();
+  };
+  /** One probe in flight at a time; a pointer that moved on is asked about again. */
+  const probe = () => {
+    const state = hover.current;
+    if (!state.over || state.pending) return;
+    const pending = {
+      x: state.x,
+      y: state.y,
+      hits: hitPicture(state.x, state.y),
     };
-    place(0, left - 2, top - 2, width + 4, height + 4);
-    place(4, left - 1, top - 1, width + 2, height + 2);
-    // Corner handles, centred on the line; shown only while the picture has the arrow keys.
-    for (const [at, x, y] of [
-      [8, left - 1, top - 1],
-      [9, left + width, top - 1],
-      [10, left - 1, top + height],
-      [11, left + width, top + height],
-    ] as const)
-      marks[at]!.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
+    state.pending = pending;
+    const answer = (hits: PictureHit[] | null) => {
+      if (state.pending !== pending) return;
+      state.pending = null;
+      state.hits = hits;
+      drawHover();
+      aim();
+      if (state.x !== pending.x || state.y !== pending.y) probe();
+    };
+    void pending.hits.then(answer, () => answer(null));
   };
   useLayoutEffect(() => {
     draw();
+    drawHover();
     return pictureBox.subscribe(draw);
   }, [clip?.id, scale.x, scale.y]);
+  // A box found under the pointer is only good for the frame and the edit it was found in.
+  useEffect(() => dropHover, [view, frame]);
+  useEffect(
+    () =>
+      useTransport.subscribe((state, before) => {
+        if (state.frame !== before.frame || state.state !== before.state)
+          dropHover();
+      }),
+    [],
+  );
 
   const showGuides = (lines: { x: number | null; y: number | null } | null) => {
     const [vertical, horizontal] = [
@@ -293,9 +395,10 @@ export function PictureSelect({
         reach: snapping ? SNAP_PX / scale.x : 0,
       },
     );
+    // A drag leaves the clip on a whole pixel. An axis it did not move keeps a typed fraction.
     drag.to = {
-      x: Number((drag.from.x + dx).toFixed(6)),
-      y: Number((drag.from.y + dy).toFixed(6)),
+      x: dx ? Math.round(drag.from.x + dx) : drag.from.x,
+      y: dy ? Math.round(drag.from.y + dy) : drag.from.y,
     };
     show(drag);
     showGuides(guides);
@@ -312,6 +415,8 @@ export function PictureSelect({
         current.released = true;
         act(current);
       }
+      // The press dropped the resting pointer's answer; a still pointer needs it for Alt.
+      probe();
       return;
     }
     useWorkspace.setState({ gesture: false });
@@ -331,6 +436,12 @@ export function PictureSelect({
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const current = press.current;
+      // Alt steps a click down the stack, so a resting pointer shows the clip it would reach.
+      if (!current && hover.current.cycle !== event.altKey) {
+        hover.current.cycle = event.altKey;
+        if (hover.current.hits) drawHover();
+        else probe();
+      }
       if (!current?.drag) return;
       if (event.key === "Escape" && event.type === "keydown") {
         event.preventDefault();
@@ -374,8 +485,12 @@ export function PictureSelect({
     if (active) return;
     end(true);
     endNudge(false);
+    dropHover();
     surface.current?.blur();
-    if (surface.current) delete surface.current.dataset.grabbed;
+    if (surface.current) {
+      delete surface.current.dataset.grabbed;
+      surface.current.style.cursor = "";
+    }
   }, [active]);
   useEffect(() => () => endNudge(false), [clip?.id]);
 
@@ -389,7 +504,7 @@ export function PictureSelect({
       aria-describedby="edit-select-help"
       title={
         active && clip
-          ? "Drag to move. Click the selected clip again to nudge with arrow keys."
+          ? `Drag to move. Click the selected clip again to nudge with arrow keys.${clip.text === null ? "" : " Double-click to edit its text."}`
           : undefined
       }
       data-active={active || undefined}
@@ -427,7 +542,14 @@ export function PictureSelect({
           idle: false,
         };
         press.current = current;
-        void hitPicture(at.x, at.y).then(
+        // The pointer rested here first, so its question may already be on the way.
+        const asked = hover.current.pending;
+        dropHover();
+        void (
+          asked?.x === at.x && asked.y === at.y
+            ? asked.hits
+            : hitPicture(at.x, at.y)
+        ).then(
           (hits) => {
             current.hits = hits;
             act(current);
@@ -442,18 +564,17 @@ export function PictureSelect({
       onPointerMove={(event) => {
         const current = press.current;
         if (!current) {
-          const shown = pictureBox.current();
+          if (!active) return;
           const bounds = event.currentTarget.getBoundingClientRect();
-          const over =
-            active &&
-            !locked &&
-            shown?.box &&
-            shown.clipId === clip?.id &&
-            contains(shown.box, {
-              x: (event.clientX - bounds.left) / scale.x,
-              y: (event.clientY - bounds.top) / scale.y,
-            });
-          event.currentTarget.style.cursor = over ? "move" : "";
+          const state = hover.current;
+          state.x = (event.clientX - bounds.left) / scale.x;
+          state.y = (event.clientY - bounds.top) / scale.y;
+          state.cycle = event.altKey;
+          // A playing picture would outrun the preview's answer, so only a still one is asked.
+          state.over = useTransport.getState().state.kind === "stopped";
+          if (state.over) probe();
+          else dropHover();
+          aim();
           return;
         }
         current.latest = {
@@ -462,6 +583,45 @@ export function PictureSelect({
           bypass: event.ctrlKey || event.metaKey,
         };
         act(current);
+      }}
+      onPointerLeave={(event) => {
+        if (press.current) return;
+        hover.current.over = false;
+        dropHover();
+        event.currentTarget.style.cursor = "";
+      }}
+      onDoubleClick={(event) => {
+        if (
+          !active ||
+          event.button !== 0 ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey
+        )
+          return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        // The two clicks selected a clip; when its words are what was clicked, edit them.
+        void hitPicture(
+          (event.clientX - bounds.left) / scale.x,
+          (event.clientY - bounds.top) / scale.y,
+        ).then(
+          (hits) => {
+            const { view, selection } = useTimeline.getState();
+            const selected = view
+              ? inspectorSubject(view.timeline, selection)?.clip
+              : null;
+            if (
+              !selected ||
+              selected.text === null ||
+              !hits.some((hit) => hit.clipId === selected.id)
+            )
+              return;
+            useWorkspace.setState({ inspector: true });
+            useTextEdit.setState({ clipId: selected.id });
+          },
+          // A preview replaced mid-click cannot say what was under it; the clicks still selected.
+          () => {},
+        );
       }}
       onPointerUp={() => end(false)}
       onPointerCancel={() => end(true)}
@@ -573,11 +733,26 @@ export function PictureSelect({
     >
       <span id="edit-select-help" hidden>
         Click a clip to select it. Drag it, or click it again and use the arrow
-        keys, to move it.
+        keys, to move it. Double-click a text clip to edit its words.
       </span>
       <div ref={guides} className="edit-select-guides" aria-hidden="true">
         <i data-axis="x" hidden />
         <i data-axis="y" hidden />
+      </div>
+      <div
+        ref={hoverOutline}
+        className="edit-select-hover"
+        aria-hidden="true"
+        hidden
+      >
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
       </div>
       <div
         ref={outline}

@@ -20,7 +20,7 @@ export function compositionFps(value: string | null | undefined) {
 export const useWorkspace = create(() => ({
   /** Compositions, assets, and source files beside the preview. */
   files: false,
-  /** Starts closed where it would be a drawer over the stage (tokens.css --breakpoint-drawer). */
+  /** Starts closed where it would take width from a narrow viewer (tokens.css --breakpoint-drawer). */
   inspector:
     localStorage.getItem("cutroom.inspector") === null
       ? !matchMedia("(max-width: 1303px)").matches

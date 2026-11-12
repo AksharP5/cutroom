@@ -1,7 +1,4 @@
 .edit-page {
-  position: relative;
-  /* An offscreen drawer must not let focus scroll the whole editor. */
-  overflow: clip;
   grid-template-columns: minmax(0, 1fr) var(--width-inspector);
 }
 .edit-page:has(.clip-inspector[data-open="false"]) {
@@ -234,44 +231,16 @@
   color: var(--text-tertiary);
   background: var(--surface-panel);
 }
+/*
+ * A narrow editor keeps the tool row whole, so the inspector opens under it. The viewer narrows
+ * beside it and the picture refits: nothing covers the picture or the transport.
+ */
 @media (--drawer) {
-  .edit-page,
-  .edit-page:has(.clip-inspector[data-open="false"]) {
-    grid-template-columns: minmax(0, 1fr);
+  .edit-tools {
+    grid-area: 1 / 1 / 2 / -1;
   }
   .clip-inspector {
-    grid-area: auto;
-    position: absolute;
-    top: var(--size-tool-row);
-    right: 0;
-    bottom: calc(var(--edit-timeline-height) + var(--space-1));
-    width: min(var(--width-inspector), 100%);
-    z-index: var(--z-drawer);
-    transform: translateX(0);
-    opacity: 1;
-    visibility: visible;
-    transition:
-      transform var(--duration-panel-in) var(--ease-out),
-      opacity var(--duration-panel-in) var(--ease-out);
-  }
-  .clip-inspector[data-open="false"] {
-    visibility: visible;
-    transform: translateX(100%);
-    opacity: 0;
-    pointer-events: none;
-    transition-duration: var(--duration-panel-out);
-    transition-timing-function: var(--ease-exit);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .clip-inspector,
-  .clip-inspector[data-open="false"] {
-    transform: none;
-  }
-  /* Reduced motion caps fades at the shorter panel-in token. */
-  .clip-inspector[data-open="false"] {
-    transition-duration: var(--duration-panel-in);
+    grid-area: 2 / 2 / 3 / 3;
   }
 }
 

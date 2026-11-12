@@ -230,12 +230,13 @@
   outline: none;
 }
 .edit-select-outline,
+.edit-select-hover,
 .edit-select-guides {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
-:is(.edit-select-outline, .edit-select-guides) :is(i, b) {
+:is(.edit-select-outline, .edit-select-hover, .edit-select-guides) :is(i, b) {
   position: absolute;
   top: 0;
   left: 0;
@@ -244,8 +245,12 @@
   transform-origin: 0 0;
   background: var(--selection);
 }
-.edit-select-outline i:nth-child(-n + 4) {
+:is(.edit-select-outline, .edit-select-hover) i:nth-child(-n + 4) {
   background: var(--pencil-casing);
+}
+/* What a press would take, before it is pressed: the same edges, quieter than the selection. */
+.edit-select-hover i:nth-child(n + 5) {
+  background: var(--selection-hover);
 }
 /* Corner handles mean the arrow keys move this clip. */
 .edit-select-outline b {
@@ -402,6 +407,7 @@ button.edit-note-pin {
 
 /* Transport */
 .edit-transport {
+  container: edit-transport / inline-size;
   flex: none;
   height: var(--size-transport);
   display: grid;
@@ -486,6 +492,25 @@ input.edit-now {
 }
 .edit-range span:not(:first-child) {
   margin-left: 1ch;
+}
+/*
+ * A narrow viewer keeps every transport button. The in and out times go first (the ruler shows
+ * them), then the duration, then the shuttle speed slots that balance the row.
+ */
+@container edit-transport (width < 888px) {
+  .edit-range {
+    display: none;
+  }
+}
+@container edit-transport (width < 616px) {
+  .edit-duration {
+    display: none;
+  }
+}
+@container edit-transport (width < 440px) {
+  .edit-shuttle {
+    display: none;
+  }
 }
 
 /* Fullscreen only: a scrub track above the transport, range shaded */
