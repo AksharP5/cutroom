@@ -265,8 +265,9 @@ test("the media menu places a file at the playhead, and the desktop reveals it",
         .map((clip) => [clip.kind, clip.track, clip.start, clip.src]),
     )
     .toEqual([
-      ["video", 0, 359, "source.mp4"],
-      ["audio", 1, 359, "source.mp4"],
+      // The playhead stops on the last frame, so the clip goes after it, at the end.
+      ["video", 0, 360, "source.mp4"],
+      ["audio", 1, 360, "source.mp4"],
     ]);
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(before);
@@ -275,11 +276,15 @@ test("the media menu places a file at the playhead, and the desktop reveals it",
   await file.focus();
   await page.keyboard.press("ContextMenu");
   await expect(
-    media.getByRole("menuitem", { name: "Insert at playhead" }),
+    media.getByRole("menuitem", { name: "Open in source viewer" }),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(file).toBeFocused();
   await page.keyboard.press("Shift+F10");
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    media.getByRole("menuitem", { name: "Insert at playhead" }),
+  ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect
     .poll(async () => (await read()).clips.length)

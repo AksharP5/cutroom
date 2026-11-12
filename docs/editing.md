@@ -22,6 +22,8 @@ The transport follows DaVinci Resolve: L and J play, faster on each press up to 
 
 I and O set the timeline's in and out points through the same `setRange` command MCP clients use, so each mark is one undo step and agents see it. With loop on, playback repeats the range, or the whole timeline when no range is set.
 
+The viewer also shows one media file at a time as a source, opened from Media. A video shows its picture, an audio file its waveform, and an image a five-second still. The transport bar and its keys then drive the source, a scrub track under it shows its playhead and marked range, and the header above it shows how much would be placed. Insert and Overwrite, or dragging the source onto a track, put the marked part on the timeline through the same `insert` command as a Media drop, with `clip.mediaStart` at the in mark, so it is one undo step. The source is counted in frames at the timeline's rate, so a mark is a whole number of timeline frames. One viewer shows either the source or the timeline, not both side by side: at 1280 and 1720 the space between Media and the inspector fits one picture at a useful size, and the timeline below already shows where an edit lands. [Keys](keyboard.md).
+
 When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
 
 ### Timeline

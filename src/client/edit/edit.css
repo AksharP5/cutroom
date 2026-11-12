@@ -133,6 +133,26 @@
   opacity: 1;
   color: var(--text-secondary);
 }
+/* The switch between a loaded source and the timeline. It takes the key hints' room first. */
+.edit-views {
+  display: flex;
+  gap: 2px;
+}
+@container edit-tools (width < 1040px) {
+  .edit-tools:has(.edit-views) .edit-tool kbd {
+    display: none;
+  }
+}
+@container edit-tools (width < 820px) {
+  .edit-tools:has(.edit-views) .edit-tool span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
 .edit-zoom {
   height: var(--size-tool-button);
   gap: var(--space-1);
@@ -541,6 +561,105 @@ input.edit-now {
   width: var(--stroke-hair);
   background: var(--playhead);
   will-change: transform;
+}
+
+/*
+ * A loaded source lies over the timeline's picture, which stays loaded and painting underneath,
+ * so an edit made from here still reloads it and switching back shows it at once.
+ */
+.edit-viewer {
+  position: relative;
+}
+.edit-source {
+  position: absolute;
+  inset: 0 0 var(--size-transport);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-ground);
+}
+.edit-source[hidden] {
+  display: none;
+}
+.edit-source-head {
+  flex: none;
+  height: var(--size-row);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 6px 0 var(--space-3);
+}
+.edit-source-head .edit-icon {
+  width: var(--size-tool-button);
+  height: var(--size-tool-button);
+}
+.edit-source-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-medium);
+}
+.edit-source-length {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-size: var(--type-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+.edit-source-stage {
+  container-type: size;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  margin: 0 var(--space-3) var(--space-2);
+}
+/* The picture drags onto the timeline as the marked range. */
+.edit-source-media {
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 0 var(--stroke-hair) var(--line);
+  cursor: grab;
+}
+.edit-source-media :is(video, img) {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.edit-source-media[data-kind="audio"] {
+  container-type: inline-size;
+  width: 100cqw;
+  height: min(100cqh, 160px);
+  background: var(--surface-lane);
+  color: var(--wave-audio);
+}
+/* Over a waveform the range is a light band between two lines, so the wave reads through it. */
+.edit-source-media .edit-scrub-range {
+  background: var(--range-band);
+  box-shadow:
+    inset var(--stroke-hair) 0 var(--range-line),
+    inset calc(-1 * var(--stroke-hair)) 0 var(--range-line);
+}
+.edit-source-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+/* What the pointer carries during that drag; the timeline draws the clip where it will land. */
+.edit-source-chip {
+  position: fixed;
+  top: -100px;
+  left: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-control);
+  background: var(--surface-float);
+  font-size: var(--type-xs);
+  white-space: nowrap;
+}
+.edit-source > .edit-scrub {
+  height: var(--space-4);
+  margin: 0 var(--space-3) var(--space-2);
 }
 
 /* Split and the timeline below it */

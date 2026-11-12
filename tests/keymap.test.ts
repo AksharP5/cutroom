@@ -26,6 +26,8 @@ test("key presses name their combo by key position, as the keymap writes it", ()
   expect(press("KeyZ", { ctrlKey: true, shiftKey: true })).toBe("Ctrl+Shift+Z");
   expect(press("KeyX", { altKey: true })).toBe("Alt+X");
   expect(press("KeyZ", { metaKey: true })).toBeNull();
+  expect(press("F9")).toBe("F9");
+  expect(press("F10", { shiftKey: true })).toBe("Shift+F10");
   expect(press("F13")).toBeNull();
 });
 

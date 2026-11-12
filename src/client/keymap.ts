@@ -135,8 +135,23 @@ export const keymap = {
     label: "Paste insert",
     keys: ["Ctrl+Shift+V"],
   },
+  editInsertOverwriteActionInsert: {
+    area: "Edit",
+    label: "Insert source at playhead",
+    keys: ["F9"],
+  },
+  editInsertOverwriteActionOverwrite: {
+    area: "Edit",
+    label: "Overwrite with source at playhead",
+    keys: ["F10"],
+  },
   editUndo: { area: "Edit", label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { area: "Edit", label: "Redo", keys: ["Ctrl+Shift+Z"] },
+  viewToggleSourceTimeline: {
+    area: "View",
+    label: "Show the source or the timeline",
+    keys: ["Alt+Q"],
+  },
   workspaceViewerModeCinemaViewer: {
     area: "View",
     label: "Fullscreen viewer",
@@ -261,7 +276,8 @@ export function comboOf(
   const key =
     named[event.code] ??
     /^Key([A-Z])$/.exec(event.code)?.[1] ??
-    /^(?:Digit|Numpad)(\d)$/.exec(event.code)?.[1];
+    /^(?:Digit|Numpad)(\d)$/.exec(event.code)?.[1] ??
+    /^F(?:[1-9]|1[0-2])$/.exec(event.code)?.[0];
   if (!key || event.metaKey) return null;
   return [
     event.ctrlKey && "Ctrl",

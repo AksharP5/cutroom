@@ -191,7 +191,7 @@ export const InsertClipSchema = z.object({
     .default(0)
     .overwrite((seconds) => Math.round(seconds * 1e6) / 1e6)
     .describe(
-      "Seconds into the source where the clip begins, to the microsecond",
+      "Seconds into the source where the clip begins, to the microsecond. With duration, this places part of a file, as marks in the source viewer do",
     ),
   label: label.optional(),
   volume: volume.optional(),

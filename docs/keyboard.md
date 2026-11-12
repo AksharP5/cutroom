@@ -2,71 +2,76 @@
 
 The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Resolve action id. Shortcuts never fire while you type in a field or work in a dialog. Space activates a button, checkbox, switch or menu item reached by keyboard. Mouse clicks on editing and transport buttons release their focus, so Space plays afterward. Dialog and menu openers retain focus. Fields, dialogs and menus keep their own keys. Esc returns to Select. During voiceover recording, Ctrl+Alt+Shift+V, Space and K stop and save, and Esc stops and asks before discarding the take, including when a field has focus. Cancelling saves it.
 
-| Action                                       | Keys                     | Action id                          |
-| -------------------------------------------- | ------------------------ | ---------------------------------- |
-| Export                                       | `Shift+8`                | `workspacePrimaryWorkspaceDeliver` |
-| Select                                       | `A`                      | `editPointer`                      |
-| Trim                                         | `T`                      | `editTrim`                         |
-| Blade                                        | `B`                      | `editBlade`                        |
-| Draw                                         | `Shift+N`                | `cutroomDraw`                      |
-| Comment                                      | `N`                      | `cutroomComment`                   |
-| Play or stop                                 | `Space`                  | `controlPlayToggle`                |
-| Record or stop voiceover                     | `Ctrl+Alt+Shift+V`       | `cutroomRecordVoiceover`           |
-| Play forward, faster on repeat               | `L`, `4`                 | `controlPlayForward`               |
-| Play reverse, faster on repeat               | `J`, `3`                 | `controlPlayReverse`               |
-| Play forward at 4x                           | `Shift+L`                | `controlFastForward`               |
-| Play reverse at 4x                           | `Shift+J`                | `controlFastReverse`               |
-| Stop                                         | `K`                      | `controlStop`                      |
-| Previous frame                               | `Left`                   | `controlStepReverse`               |
-| Next frame                                   | `Right`                  | `controlStepForward`               |
-| Back one second                              | `Shift+Left`             | `controlLargeStepReverse`          |
-| Forward one second                           | `Shift+Right`            | `controlLargeStepForward`          |
-| Previous edit                                | `Up`                     | `controlClipPrev`                  |
-| Next edit                                    | `Down`                   | `controlClipNext`                  |
-| Timeline start                               | `Home`                   | `controlTimelineStart`             |
-| Timeline end                                 | `End`                    | `controlTimelineEnd`               |
-| First frame                                  | `;`                      | `controlFirstFrame`                |
-| Last frame                                   | `'`                      | `controlLastFrame`                 |
-| Mark in                                      | `I`                      | `markIn`                           |
-| Mark out                                     | `O`                      | `markOut`                          |
-| Clear in                                     | `Alt+I`                  | `markResetIn`                      |
-| Clear out                                    | `Alt+O`                  | `markResetOut`                     |
-| Clear in and out                             | `Alt+X`                  | `markResetInOut`                   |
-| Go to in                                     | `Shift+I`                | `controlGotoIn`                    |
-| Go to out                                    | `Shift+O`                | `controlGotoOut`                   |
-| Loop                                         | `Ctrl+/`                 | `controlLoop`                      |
-| Copy clips                                   | `Ctrl+C`                 | `editCopy`                         |
-| Cut clips, leaving a gap                     | `Ctrl+X`                 | `editCut`                          |
-| Paste clips                                  | `Ctrl+V`                 | `editPaste`                        |
-| Paste insert                                 | `Ctrl+Shift+V`           | `editPasteInsert`                  |
-| Undo                                         | `Ctrl+Z`, `` ` ``        | `editUndo`                         |
-| Redo                                         | `Ctrl+Shift+Z`           | `editRedo`                         |
-| Fullscreen viewer                            | `P`, `Ctrl+F`            | `workspaceViewerModeCinemaViewer`  |
-| Fit the timeline, or return to the last zoom | `Shift+Z`                | `viewZoomSubZoomToFit`             |
-| Zoom the timeline in                         | `Ctrl+=`, `Ctrl+Shift+=` | `viewZoomSubZoomIn`                |
-| Zoom the timeline out                        | `Ctrl+-`                 | `viewZoomSubZoomOut`               |
-| Select clips at the playhead                 | `Shift+V`                | `editSelectItemAtPlayhead`         |
-| Select clips forward on auto-select tracks   | `Y`                      | `editSelectClipsSelectTrackAfter`  |
-| Select clips forward on all tracks           | `Alt+Y`                  | `editSelectClipsSelectAllAfter`    |
-| Select clips backward on auto-select tracks  | `Ctrl+Y`                 | `editSelectClipsSelectTrackBefore` |
-| Select clips backward on all tracks          | `Ctrl+Alt+Y`             | `editSelectClipsSelectAllBefore`   |
-| Deselect all                                 | `Shift+A`, `Esc`         | `editDeselectAll`                  |
-| Ripple trim the start to the playhead        | `Q`                      | `trimRippleStartToPlayhead`        |
-| Ripple trim the end to the playhead          | `W`                      | `trimRippleEndToPlayhead`          |
-| Razor at the playhead                        | `E`                      | `editBladeRazor`                   |
-| Split at the playhead                        | `Ctrl+\`                 | `editM2SplitClip`                  |
-| Lift, leaving a gap                          | `X`, `Backspace`         | `editBackspace`                    |
-| Ripple delete                                | `Shift+X`, `Delete`      | `editDelete`                       |
-| Turn clips on or off                         | `D`                      | `editClipEnabled`                  |
-| Add a marker                                 | `M`                      | `markMarkerAdd`                    |
-| Snapping                                     | `C`                      | `editSnapping`                     |
-| Keyboard shortcuts                           | `Ctrl+Alt+K`             | `resolveCustomizedActions`         |
+| Action                                       | Keys                     | Action id                            |
+| -------------------------------------------- | ------------------------ | ------------------------------------ |
+| Export                                       | `Shift+8`                | `workspacePrimaryWorkspaceDeliver`   |
+| Select                                       | `A`                      | `editPointer`                        |
+| Trim                                         | `T`                      | `editTrim`                           |
+| Blade                                        | `B`                      | `editBlade`                          |
+| Draw                                         | `Shift+N`                | `cutroomDraw`                        |
+| Comment                                      | `N`                      | `cutroomComment`                     |
+| Play or stop                                 | `Space`                  | `controlPlayToggle`                  |
+| Record or stop voiceover                     | `Ctrl+Alt+Shift+V`       | `cutroomRecordVoiceover`             |
+| Play forward, faster on repeat               | `L`, `4`                 | `controlPlayForward`                 |
+| Play reverse, faster on repeat               | `J`, `3`                 | `controlPlayReverse`                 |
+| Play forward at 4x                           | `Shift+L`                | `controlFastForward`                 |
+| Play reverse at 4x                           | `Shift+J`                | `controlFastReverse`                 |
+| Stop                                         | `K`                      | `controlStop`                        |
+| Previous frame                               | `Left`                   | `controlStepReverse`                 |
+| Next frame                                   | `Right`                  | `controlStepForward`                 |
+| Back one second                              | `Shift+Left`             | `controlLargeStepReverse`            |
+| Forward one second                           | `Shift+Right`            | `controlLargeStepForward`            |
+| Previous edit                                | `Up`                     | `controlClipPrev`                    |
+| Next edit                                    | `Down`                   | `controlClipNext`                    |
+| Timeline start                               | `Home`                   | `controlTimelineStart`               |
+| Timeline end                                 | `End`                    | `controlTimelineEnd`                 |
+| First frame                                  | `;`                      | `controlFirstFrame`                  |
+| Last frame                                   | `'`                      | `controlLastFrame`                   |
+| Mark in                                      | `I`                      | `markIn`                             |
+| Mark out                                     | `O`                      | `markOut`                            |
+| Clear in                                     | `Alt+I`                  | `markResetIn`                        |
+| Clear out                                    | `Alt+O`                  | `markResetOut`                       |
+| Clear in and out                             | `Alt+X`                  | `markResetInOut`                     |
+| Go to in                                     | `Shift+I`                | `controlGotoIn`                      |
+| Go to out                                    | `Shift+O`                | `controlGotoOut`                     |
+| Loop                                         | `Ctrl+/`                 | `controlLoop`                        |
+| Copy clips                                   | `Ctrl+C`                 | `editCopy`                           |
+| Cut clips, leaving a gap                     | `Ctrl+X`                 | `editCut`                            |
+| Paste clips                                  | `Ctrl+V`                 | `editPaste`                          |
+| Paste insert                                 | `Ctrl+Shift+V`           | `editPasteInsert`                    |
+| Insert source at playhead                    | `F9`                     | `editInsertOverwriteActionInsert`    |
+| Overwrite with source at playhead            | `F10`                    | `editInsertOverwriteActionOverwrite` |
+| Undo                                         | `Ctrl+Z`, `` ` ``        | `editUndo`                           |
+| Redo                                         | `Ctrl+Shift+Z`           | `editRedo`                           |
+| Show the source or the timeline              | `Alt+Q`                  | `viewToggleSourceTimeline`           |
+| Fullscreen viewer                            | `P`, `Ctrl+F`            | `workspaceViewerModeCinemaViewer`    |
+| Fit the timeline, or return to the last zoom | `Shift+Z`                | `viewZoomSubZoomToFit`               |
+| Zoom the timeline in                         | `Ctrl+=`, `Ctrl+Shift+=` | `viewZoomSubZoomIn`                  |
+| Zoom the timeline out                        | `Ctrl+-`                 | `viewZoomSubZoomOut`                 |
+| Select clips at the playhead                 | `Shift+V`                | `editSelectItemAtPlayhead`           |
+| Select clips forward on auto-select tracks   | `Y`                      | `editSelectClipsSelectTrackAfter`    |
+| Select clips forward on all tracks           | `Alt+Y`                  | `editSelectClipsSelectAllAfter`      |
+| Select clips backward on auto-select tracks  | `Ctrl+Y`                 | `editSelectClipsSelectTrackBefore`   |
+| Select clips backward on all tracks          | `Ctrl+Alt+Y`             | `editSelectClipsSelectAllBefore`     |
+| Deselect all                                 | `Shift+A`, `Esc`         | `editDeselectAll`                    |
+| Ripple trim the start to the playhead        | `Q`                      | `trimRippleStartToPlayhead`          |
+| Ripple trim the end to the playhead          | `W`                      | `trimRippleEndToPlayhead`            |
+| Razor at the playhead                        | `E`                      | `editBladeRazor`                     |
+| Split at the playhead                        | `Ctrl+\`                 | `editM2SplitClip`                    |
+| Lift, leaving a gap                          | `X`, `Backspace`         | `editBackspace`                      |
+| Ripple delete                                | `Shift+X`, `Delete`      | `editDelete`                         |
+| Turn clips on or off                         | `D`                      | `editClipEnabled`                    |
+| Add a marker                                 | `M`                      | `markMarkerAdd`                      |
+| Snapping                                     | `C`                      | `editSnapping`                       |
+| Keyboard shortcuts                           | `Ctrl+Alt+K`             | `resolveCustomizedActions`           |
 
 Ctrl+Alt+K opens a sheet of every shortcut by area, generated from this table. Type to search names and keys; Esc closes it. Settings has a button for it too. The key is the one the owner's Resolve preset gives Keyboard Customization, `resolveCustomizedActions`, which is also Resolve's default. The sheet lists the keys and does not change them.
 
 Ctrl+Alt+Shift+V is unused in the owner's Resolve preset and avoids the older KDE Klipper shortcut Ctrl+Alt+V. Its only recording-related action, `viewTimelineModeRecord`, has no assigned key. Shift+R remains reserved for Resolve's Freeze Frame.
 
 While a note is open on the picture, its text takes every key: Enter adds it, Shift+Enter starts a new line, Esc discards it, and Ctrl+Z undoes text typed since the last stroke by word or after a one-second pause before taking back strokes. Ctrl+Shift+Z restores strokes and undone text. Ruler clicks return focus to the note.
+
+Double-click a file in Media, press Enter on a focused one, or choose Open in source viewer from its menu to load it in the viewer. While the viewer shows a source, the playback, playhead and mark keys in this table drive it instead of the timeline: Space, J, K and L play it, the arrows step it, I and O mark the part you want, and Up and Down move between its marks and its ends. Alt+Q switches the viewer between the source and the timeline, as do the Source and Timeline buttons in the tool row; the file stays loaded until its close button is pressed. Scrubbing or playing the timeline shows the timeline. F9 inserts the marked part at the timeline's playhead and F10 overwrites with it, whichever the viewer shows; with no marks they place the whole file. The playhead then moves to the end of the new clip, so the next F9 or F10 follows on. Each is one undo step. A source's marks are its own, not timeline edits: each file keeps them while other files are open, until the project closes. A still runs five seconds, and its marks set a shorter length. Alt+Q, F9 and F10 are `viewToggleSourceTimeline`, `editInsertOverwriteActionInsert` and `editInsertOverwriteActionOverwrite` in the owner's Resolve preset, where Q itself is Ripple Trim Start.
 
 L and J double the speed on each press, up to 8x; the other direction drops back to 1x, and Shift starts at 4x. Marks are undoable timeline edits that agents see through MCP. Out is inclusive on screen and exclusive in the engine's range.
 
@@ -90,7 +95,7 @@ A right-click on a clip selects it with its linked partners, unless it is alread
 
 A track header's menu holds its switches (Lock, Auto-select, and Enable on video or Mute, Solo and Arm on audio), the track density, Add video track, Add audio track, and Remove empty track.
 
-A Media file's Insert at playhead and Overwrite at playhead make the edit a drop makes, on the first unlocked track of the file's kind: V1 or A1 unless it is locked. When every track of that kind is locked the file gets a new track. In the desktop app, Reveal in folder shows the file, or a project's folder from home, in the file manager.
+A Media file's menu opens it in the source viewer. Its Insert at playhead and Overwrite at playhead place the whole file with the edit a drop makes, on the first unlocked track of the file's kind: V1 or A1 unless it is locked. When every track of that kind is locked the file gets a new track. F9 and F10 place the source viewer's marked part the same way, and so do the Insert and Overwrite buttons above the source and the rows of its right-click menu, which also marks in and out and closes it. The playhead cannot go past the last frame, so with the playhead on the timeline's last frame these edits put the clip after it, at the end. In the desktop app, Reveal in folder shows the file, or a project's folder from home, in the file manager.
 
 Tab reaches the Media list. Once a file has keyboard focus, Up, Down, Home and End move between files; after a click those keys stay with the playhead.
 
@@ -110,7 +115,7 @@ On the picture, a Select click picks the topmost clip drawn under the pointer, w
 
 With snapping on, a dragged edge within 8px of a clip edge, the playhead, a marker, or in or out jumps to it, and a line marks where. C turns snapping off or on, also in the middle of a drag, as Resolve's snapping key does. Holding Ctrl while dragging turns it off until the key is let go; that hold is Cutroom's, not Resolve's.
 
-Drag a file from Media onto a track to add it, with its first frame under the pointer. A normal drop overwrites only the covered frames on the destination track. Hold Ctrl+Shift on Windows/Linux or Cmd+Shift on macOS while dropping to insert and open auto-select tracks. Video with sound also overwrites the same range on its linked picture-sound track; music and voice tracks stay in place. Drag picture above the top video track to create a video track, or audio below the last audio track to create an audio track. Existing clips use those same edge bands when moved. An incompatible edge refuses the drop and explains why in the header. Track creation and the drop undo together. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.
+Drag a file from Media onto a track to add it, with its first frame under the pointer. Dragging the picture, waveform or still out of the source viewer does the same with only its marked part. A normal drop overwrites only the covered frames on the destination track. Hold Ctrl+Shift on Windows/Linux or Cmd+Shift on macOS while dropping to insert and open auto-select tracks. Video with sound also overwrites the same range on its linked picture-sound track; music and voice tracks stay in place. Drag picture above the top video track to create a video track, or audio below the last audio track to create an audio track. Existing clips use those same edge bands when moved. An incompatible edge refuses the drop and explains why in the header. Track creation and the drop undo together. Picture is refused on audio tracks and audio on video tracks. A still runs five seconds.
 
 Media-drop overwrite and insert modifiers follow the [Resolve 21.1 manual, pages 891-893](https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_21.1_Reference_Manual.pdf#page=891). The owner's Resolve 21.1.2 preset has Insert and Overwrite actions, with no separate mouse-modifier binding. Ctrl/Cmd still bypasses snapping, including during an insert drop.
 

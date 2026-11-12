@@ -635,23 +635,29 @@ export function bladePreview(
   };
 }
 
-/** Media dragged from the Media panel: a project file and how long it runs on the timeline. */
+/** Media dragged onto the timeline: a project file and the part of it that plays there. */
 export interface DraggedMedia {
   kind: InsertClip["kind"];
   /** The project-relative path, which is also its `src` in the root composition. */
   src: string;
   frames: number;
+  /** Seconds into the file where the clip begins. */
+  mediaStart?: number;
   hasAudio?: boolean;
 }
 
-/** A Media row as the timeline places it: its length in whole frames at the timeline's rate. */
+/**
+ * Dragged media as the timeline places it: its length in whole frames at the timeline's rate.
+ * A marked range is a whole number of frames turned into seconds, which must not round down.
+ */
 export const placedMedia = (
   media: MediaDrag,
   { num, den }: Timeline["fps"],
 ): DraggedMedia => ({
   kind: media.kind,
   src: media.path,
-  frames: Math.max(1, Math.floor((media.seconds * num) / den)),
+  frames: Math.max(1, Math.floor((media.seconds * num) / den + 1e-6)),
+  mediaStart: media.start,
   hasAudio: media.hasAudio,
 });
 
@@ -694,6 +700,7 @@ export function dropPreview(
         kind: media.kind,
         src: media.src,
         duration: media.frames,
+        mediaStart: media.mediaStart,
         muted: media.kind === "video" && !media.hasAudio,
       },
     },
