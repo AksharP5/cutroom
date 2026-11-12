@@ -1,4 +1,5 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
+import type { Clip, Fps } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
 import {
@@ -18,14 +19,17 @@ import { formatTimecode } from "../../../shared/timeline/timecode";
 import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
+import { TextField } from "./TextField";
 import { groupedChanges, pendingEdit, shownChanges } from "./changes";
 import { transport } from "../transport";
 import {
   previewPosition,
   observePosition,
   usePositionWarning,
+  useTextWarning,
   cancelPositionPreview,
   commitPositionPreview,
+  usePictureMove,
 } from "../preview";
 
 export function InspectorToggle() {
@@ -41,6 +45,48 @@ export function InspectorToggle() {
       <SidebarSimple size={16} weight={open ? "fill" : "regular"} />
     </button>
   );
+}
+
+/** Follows a move made on the picture, so only these two fields render while it lasts. */
+function PositionFields({
+  projectId,
+  clip,
+  fps,
+  disabled,
+}: {
+  projectId: string;
+  clip: Clip;
+  fps: Fps;
+  disabled: boolean | undefined;
+}) {
+  const move = usePictureMove((state) => state.move);
+  const shown = move?.clipId === clip.id ? move : clip;
+  return (["x", "y"] as const).map((axis) => (
+    <ValueField
+      key={`${clip.id}:${axis}`}
+      label={`Position ${axis.toUpperCase()}`}
+      value={shown[axis] ?? 0}
+      unit="pixels"
+      min={-Infinity}
+      fps={fps}
+      disabled={disabled}
+      onPreview={(value) =>
+        previewPosition(
+          clip.id,
+          axis === "x" ? value : (clip.x ?? 0),
+          axis === "y" ? value : (clip.y ?? 0),
+        )
+      }
+      onCancel={() => cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)}
+      onCommit={async (value) => {
+        await commitPositionPreview(() =>
+          editTimeline(projectId, "Edit position", () => [
+            { type: "setClip", clipId: clip.id, [axis]: value },
+          ]),
+        );
+      }}
+    />
+  ));
 }
 
 export function Inspector({ projectId }: { projectId: string }) {
@@ -63,6 +109,7 @@ export function Inspector({ projectId }: { projectId: string }) {
       ),
   );
   const [compositeOpen, setCompositeOpen] = useState(true);
+  const [textOpen, setTextOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
   // Closing the project cancels a pending reload, like the timeline's own read.
@@ -78,7 +125,8 @@ export function Inspector({ projectId }: { projectId: string }) {
     const blur = (event: PointerEvent) => {
       const active = document.activeElement;
       if (
-        active instanceof HTMLInputElement &&
+        (active instanceof HTMLInputElement ||
+          active instanceof HTMLTextAreaElement) &&
         root.current?.contains(active) &&
         active !== event.target
       )
@@ -108,9 +156,22 @@ export function Inspector({ projectId }: { projectId: string }) {
   const clip = subject?.clip;
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
-    observePosition(clip && !isAudioKind(clip.kind) ? clip.id : null);
-    return () => observePosition(null);
-  }, [projectId, clip?.id]);
+    observePosition(
+      clip && !isAudioKind(clip.kind) ? clip.id : null,
+      clip?.sourceRestrictions?.text ? null : (clip?.text ?? null),
+    );
+  }, [projectId, clip?.id, clip?.text, clip?.sourceRestrictions?.text]);
+  useEffect(() => () => observePosition(null), [projectId]);
+  const textWarning = useTextWarning((state) => state.warning);
+  const textWarningFrame =
+    textWarning &&
+    textWarning.clipId === clip?.id &&
+    textWarning.text === clip?.text &&
+    timeline
+      ? Math.floor(
+          (textWarning.time * timeline.fps.num) / timeline.fps.den + 1e-6,
+        )
+      : null;
   const positionWarning = warning?.clipId === clip?.id ? warning : null;
   const warningFrame =
     positionWarning && timeline
@@ -199,6 +260,38 @@ export function Inspector({ projectId }: { projectId: string }) {
               <time>{formatTimecode(clip.start, timeline.fps)}</time>
             </span>
           </div>
+          {clip.text !== null && (
+            <details
+              open={textOpen}
+              onToggle={(event) => setTextOpen(event.currentTarget.open)}
+              className="inspector-section"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Text
+              </summary>
+              <TextField
+                key={clip.id}
+                value={clip.text}
+                disabled={track?.track.locked}
+                reason={clip.sourceRestrictions?.text}
+                onCommit={(text) => {
+                  void editTimeline(projectId, "Edit text", () => [
+                    { type: "setClip", clipId: clip.id, text },
+                  ]);
+                }}
+              />
+              {textWarningFrame !== null && timeline && (
+                <p className="inspector-warning" role="status">
+                  <Warning size={14} aria-hidden />
+                  <span>
+                    This clip's script replaces its text at{" "}
+                    {formatTimecode(textWarningFrame, timeline.fps)}.
+                  </span>
+                </p>
+              )}
+            </details>
+          )}
           {!isAudioKind(clip.kind) && (
             <details
               open={transformOpen}
@@ -209,34 +302,12 @@ export function Inspector({ projectId }: { projectId: string }) {
                 <CaretRight size={10} aria-hidden />
                 Transform
               </summary>
-              {(["x", "y"] as const).map((axis) => (
-                <ValueField
-                  key={`${clip.id}:${axis}`}
-                  label={`Position ${axis.toUpperCase()}`}
-                  value={clip[axis] ?? 0}
-                  unit="pixels"
-                  min={-Infinity}
-                  fps={timeline.fps}
-                  disabled={track?.track.locked}
-                  onPreview={(value) =>
-                    previewPosition(
-                      clip.id,
-                      axis === "x" ? value : (clip.x ?? 0),
-                      axis === "y" ? value : (clip.y ?? 0),
-                    )
-                  }
-                  onCancel={() =>
-                    cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
-                  }
-                  onCommit={async (value) => {
-                    await commitPositionPreview(() =>
-                      editTimeline(projectId, "Edit position", () => [
-                        { type: "setClip", clipId: clip.id, [axis]: value },
-                      ]),
-                    );
-                  }}
-                />
-              ))}
+              <PositionFields
+                projectId={projectId}
+                clip={clip}
+                fps={timeline.fps}
+                disabled={track?.track.locked}
+              />
               {warningFrame !== null && (
                 <p className="inspector-warning" role="status">
                   <Warning size={14} aria-hidden />

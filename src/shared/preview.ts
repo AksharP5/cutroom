@@ -28,11 +28,36 @@ export const PreviewUnloadedSchema = z.object({
   type: z.literal("unloaded"),
 });
 
+/** A clip's box in composition pixels, as the preview lays it out at the shown frame. */
+export const PictureBoxSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().positive().finite(),
+  height: z.number().positive().finite(),
+});
+export type PictureBox = z.infer<typeof PictureBoxSchema>;
+
+/** A clip under a point on the picture. `painted` is false where only its empty box is. */
+export const PictureHitSchema = z.object({
+  clipId: z.string(),
+  painted: z.boolean(),
+  box: PictureBoxSchema,
+});
+export type PictureHit = z.infer<typeof PictureHitSchema>;
+
 export const PreviewReplySchema = z.object({
   source: z.literal("cutroom-preview"),
   id: z.string().optional(),
   state: PreviewStateSchema,
   error: z.string().optional(),
+  hits: z.array(PictureHitSchema).optional(),
+});
+
+export const ClipBoxSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("clip-box"),
+  clipId: z.string(),
+  box: PictureBoxSchema.nullable(),
 });
 
 export const RuntimeStateSchema = z.object({
@@ -63,4 +88,9 @@ export const PositionFoldSchema = z.object({
   type: z.literal("analytics"),
   event: z.literal("position_edit_fold_skipped"),
   properties: z.object({ hfId: z.string().nullable() }),
+});
+
+export const TextWarningSchema = PositionWarningSchema.extend({
+  type: z.literal("text-warning"),
+  text: z.string(),
 });

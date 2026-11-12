@@ -12,6 +12,9 @@ import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
 import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
+import { PictureSelect } from "./PictureSelect";
+import { useTimeline } from "./timeline";
+import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview } from "./preview";
@@ -111,6 +114,10 @@ export function Viewer({
       connections.current.delete(gen);
     }
   }, [handoff.confirmed, candidate]);
+
+  useLayoutEffect(() => {
+    if (live) connections.current.get(live.gen)?.present();
+  }, [live]);
 
   useEffect(() => {
     if (!candidate) return;
@@ -266,6 +273,15 @@ export function Viewer({
       ref={stage}
       className="edit-stage"
       data-handoff={handoff.kind}
+      // A press on the stage around the picture selects nothing.
+      onPointerDown={(event) => {
+        if (
+          mode === "select" &&
+          event.button === 0 &&
+          event.target === event.currentTarget
+        )
+          useTimeline.setState({ selection: emptySelection });
+      }}
       data-preview-ready={
         handoff.kind === "showing" && handoff.confirmed?.revision === revision
           ? revision
@@ -320,6 +336,15 @@ export function Viewer({
           </div>
         </div>
       </div>
+      {live && width > 0 && (
+        <PictureSelect
+          projectId={projectId}
+          box={box}
+          frame={live}
+          scale={{ x: width / live.width, y: height / live.height }}
+          active={mode === "select"}
+        />
+      )}
       <NoteLayer
         projectId={projectId}
         stageSize={stageSize}

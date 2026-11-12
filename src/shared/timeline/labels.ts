@@ -72,6 +72,12 @@ export function editLabel(
                 `Moved ${Math.abs(delta)} px ${axis === "x" ? (delta > 0 ? "right" : "left") : delta > 0 ? "down" : "up"}`,
               );
           }
+        if (command.text !== undefined) {
+          const words = command.text.replaceAll("\n", " ");
+          parts.push(
+            `Set text to “${words.length > 40 ? `${words.slice(0, 40).trimEnd()}…` : words}”`,
+          );
+        }
         if (command.opacity !== undefined)
           parts.push(
             `Set opacity to ${command.opacity === null ? "Auto" : formatPercent(command.opacity)}`,

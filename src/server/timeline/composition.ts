@@ -8,7 +8,11 @@ import {
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
-import { isAudioKind } from "../../shared/timeline/schema";
+import {
+  canonicalText,
+  firstTextLine,
+  isAudioKind,
+} from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { readOpacity, writeOpacity } from "./opacity";
 import { readPosition, positionAttributes } from "./position";
@@ -78,6 +82,8 @@ interface SourceElement {
   index: number;
   /** Elements and text nodes the spec tree places inside it. */
   inner: number;
+  /** The spec tree's child nodes, read only when a clip's words are projected. */
+  nodes: DefaultTreeAdapterTypes.ChildNode[];
 }
 
 export interface ParsedComposition {
@@ -91,7 +97,10 @@ export interface ParsedComposition {
   /** Clips without an id attribute, which carry a positional stand-in id. */
   anonymous: Set<string>;
   ids: Set<string>;
+  scripts: string[];
   scriptsAndStyles: string[];
+  /** Source line breaks stay visible when CSS might preserve them; uncertain cascades refuse edits. */
+  textLayout: Map<SourceElement, { preserveLines: boolean; reason?: string }>;
   /** Source range of every element (start tag through end tag) and text node, in tree order. */
   nodes: SourceRange[];
   /**
@@ -166,6 +175,7 @@ function parseElements(html: string) {
         end: location.endOffset,
         index,
         inner: nodes.length - index - 1,
+        nodes: inert ? [] : node.childNodes,
       });
     }
     return { elements, text };
@@ -205,6 +215,75 @@ function clipKind(element: SourceElement): ClipKind {
   if (element.tag === "video") return "video";
   if (element.tag === "img") return "image";
   return isSubCompositionHost(element) ? "composition" : "element";
+}
+
+const HTML_SPACE = /[\t\n\f\r ]+/g;
+
+/**
+ * A text element's words, with `<br>` as a line break. `plain` is false when anything else is
+ * inside, such as a `<span>` or a comment, which a text edit would delete.
+ */
+function elementText(element: SourceElement, preserveLines = false) {
+  if (
+    element.tag === "svg" ||
+    element.tag === "canvas" ||
+    element.tag === "iframe"
+  )
+    return null;
+  let plain = true;
+  let text = "";
+  const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+    for (const node of nodes) {
+      if (defaultTreeAdapter.isTextNode(node))
+        text += node.value.replace(
+          preserveLines ? /[\t\f ]+/g : HTML_SPACE,
+          " ",
+        );
+      else if (!defaultTreeAdapter.isElementNode(node)) plain = false;
+      else if (node.tagName === "br") text += "\n";
+      else {
+        plain = false;
+        if (["script", "style", "template"].includes(node.tagName)) continue;
+        // Shown, never written: neighbouring elements read as separate words.
+        text += " ";
+        visit(node.childNodes);
+        text += " ";
+      }
+    }
+  };
+  visit(element.nodes);
+  text = canonicalText(text);
+  return text ? { text, plain } : null;
+}
+
+/**
+ * Whether a script writes this element's words: by id in the same statement, through a variable
+ * it was read into, or as a GSAP text tween. Scripts that reach it another way are not detected,
+ * and a text edit there changes the source the script then overwrites.
+ */
+function scriptWritesText(scripts: readonly string[], id: string): boolean {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reference = `(?:#${escaped}(?![\\w-])|["'\`]${escaped}["'\`])`;
+  const write =
+    "(?:textContent|innerText|innerHTML|outerHTML|replaceChildren|insertAdjacentHTML|insertAdjacentText)\\b";
+  const direct = new RegExp(`${reference}[^;{}]{0,120}\\.${write}`);
+  const tween = new RegExp(
+    `${reference}["'\`]?\\s*,\\s*\\{[^}]{0,400}\\b(?:text|scrambleText)\\s*:`,
+  );
+  const held = new RegExp(
+    `(?:const|let|var)\\s+([\\w$]+)\\s*=[^;\\n]{0,160}${reference}`,
+    "g",
+  );
+  return scripts.some(
+    (script) =>
+      direct.test(script) ||
+      tween.test(script) ||
+      [...script.matchAll(held)].some(([, name]) =>
+        new RegExp(
+          `(?<![\\w$.])${name!.replaceAll("$", "\\$")}\\.${write}`,
+        ).test(script),
+      ),
+  );
 }
 
 /**
@@ -288,10 +367,9 @@ function compositionFps(raw: string | undefined): Fps {
   );
 }
 
-/** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
-export function parseComposition(
+/** Shared source-to-clip projection for the timeline and isolated picture bridge. */
+function projectComposition(
   html: string,
-  settings: TimelineSettings,
   {
     scope = "document",
     mediaLengths = new Map(),
@@ -303,7 +381,7 @@ export function parseComposition(
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
-): ParsedComposition {
+) {
   const { roots, nodes, owned } = parseElements(html);
   const rootOf = (elements: SourceElement[]) =>
     elements.find(
@@ -386,7 +464,7 @@ export function parseComposition(
     element: SourceElement;
     read: Timing;
     start: number;
-    end: number;
+    end: number | null;
   }[] = [];
   const clipIds = new Map<SourceElement, string>();
   const used = new Set<string>();
@@ -395,23 +473,15 @@ export function parseComposition(
   for (const element of topLevelElements(root)) {
     if (element.attrs["data-start"] === undefined) continue;
     const read = timing(element);
-    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
-    if (read.finish === null)
-      throw new TimelineError(
-        "unsupported",
-        element.tag === "video" || element.tag === "audio"
-          ? `Clip ${name} has no data-duration and its media length could not be measured.`
-          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
-      );
     if (read.trackIndex < 0)
       throw new TimelineError(
         "unsupported",
-        `Clip ${name} has a negative data-track-index.`,
+        `Clip ${element.attrs.id || element.attrs["data-hf-id"] || "clip"} has a negative data-track-index.`,
       );
     const start = toFrames(read.begin, fps);
-    const end = toFrames(read.finish, fps);
+    const end = read.finish === null ? null : toFrames(read.finish, fps);
     // Shorter than a frame is never on screen, and the editor cannot address it.
-    if (end <= start) continue;
+    if (end !== null && end <= start) continue;
     // Clips without a unique id get a positional stand-in; edits locate them by offset, not id.
     let id = element.attrs.id || element.attrs["data-hf-id"];
     while (!id || used.has(id) || (id !== element.attrs.id && byId.has(id)))
@@ -422,6 +492,114 @@ export function parseComposition(
     rows.push({ id, element, read, start, end });
   }
 
+  return {
+    roots,
+    nodes,
+    owned,
+    all,
+    root,
+    fps,
+    byId,
+    rows,
+    anonymous,
+    clipIds,
+    timing,
+    lengthOf,
+  };
+}
+
+/** Timeline identities keyed by source offset; the preview never invents its own clip names. */
+export function compositionClipLocations(
+  html: string,
+  scope: CompositionScope = "document",
+  mediaLengths: ReadonlyMap<string, number> = new Map(),
+) {
+  return new Map(
+    projectComposition(html, { scope, mediaLengths }).rows.map(
+      ({ id, element }) => [element.start, id],
+    ),
+  );
+}
+
+/** Projects composition HTML and its sidecar settings onto the frames the runtime shows. */
+export function parseComposition(
+  html: string,
+  settings: TimelineSettings,
+  {
+    scope = "document",
+    mediaLengths = new Map(),
+    rootId,
+  }: {
+    scope?: CompositionScope;
+    /** A bundled scene instance whose tracks are mixed independently of its parent. */
+    rootId?: string;
+    /** Measured source lengths in seconds, by `src`. */
+    mediaLengths?: ReadonlyMap<string, number>;
+  } = {},
+): ParsedComposition {
+  const {
+    roots,
+    nodes,
+    owned,
+    all,
+    root,
+    fps,
+    byId,
+    rows: projected,
+    anonymous,
+    clipIds,
+    timing,
+    lengthOf,
+  } = projectComposition(html, { scope, mediaLengths, rootId });
+  const rows = projected.map(({ id, element, read, start, end }) => {
+    const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
+    if (end === null)
+      throw new TimelineError(
+        "unsupported",
+        element.tag === "video" || element.tag === "audio"
+          ? `Clip ${name} has no data-duration and its media length could not be measured.`
+          : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
+      );
+    return { id, element, read, start, end };
+  });
+
+  // CSS selectors, inheritance and external sheets are not a CSS cascade we
+  // can resolve in this parser. Keep multiline source visible and refuse uncertain rewrites.
+  const sharedWhiteSpace = all.some(
+    (element) =>
+      ["pre", "textarea"].includes(element.tag) ||
+      (element.tag === "style" &&
+        /white-space\s*:/i.test(html.slice(element.openEnd, element.end))) ||
+      (element.tag === "link" &&
+        /\bstylesheet\b/i.test(element.attrs.rel ?? "")),
+  );
+  const inlineWhiteSpace = all.filter((element) =>
+    /white-space\s*:/i.test(element.attrs.style ?? ""),
+  );
+  const textLayout: ParsedComposition["textLayout"] = new Map();
+  for (const { element } of rows) {
+    const preserveLines =
+      sharedWhiteSpace ||
+      inlineWhiteSpace.length > 0 ||
+      ["pre", "textarea"].includes(element.tag);
+    const multiline = elementText(element, true)?.text.includes("\n");
+    const inlinePreLine =
+      !sharedWhiteSpace &&
+      inlineWhiteSpace.length === 1 &&
+      inlineWhiteSpace[0] === element &&
+      /(?:^|;)\s*white-space\s*:\s*pre-line\s*(?:!important\s*)?(?:;|$)/i.test(
+        element.attrs.style ?? "",
+      );
+    textLayout.set(element, {
+      preserveLines,
+      ...(preserveLines &&
+        multiline &&
+        !inlinePreLine && {
+          reason:
+            "This text may preserve source line breaks. Edit it in the source.",
+        }),
+    });
+  }
   const clips = rows.map(({ id, element, read, start, end }): Clip => {
     const kind = clipKind(element);
     const attribute = (name: string) => element.attrs[name] ?? null;
@@ -466,18 +644,16 @@ export function parseComposition(
         element.attrs["data-timeline-label"] ??
         element.attrs["data-label"] ??
         null,
-      ...(kind === "element" && {
-        text:
-          element.text
-            .split(/\r?\n/)
-            .map((line) => line.replace(/\s+/g, " ").trim())
-            .find(Boolean)
-            ?.slice(0, 500) ?? "",
-      }),
+      ...(kind === "element" && { textPreview: firstTextLine(element.text) }),
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
       y: isAudioKind(kind) ? null : readPosition(element.attrs, "y"),
+      text:
+        kind === "element"
+          ? (elementText(element, textLayout.get(element)?.preserveLines)
+              ?.text ?? null)
+          : null,
       fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
       fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
@@ -526,11 +702,15 @@ export function parseComposition(
     scope,
     root,
     rootDurationAuthored,
+    textLayout,
     elements: new Map(rows.map(({ id, element }) => [id, element])),
     anonymous,
     ids: new Set(byId.keys()),
     nodes,
     owned,
+    scripts: all
+      .filter((element) => element.tag === "script")
+      .map((element) => html.slice(element.openEnd, element.end)),
     scriptsAndStyles: all
       .filter(
         (element) =>
@@ -819,6 +999,30 @@ function clipChanges(
   return changes;
 }
 
+/** Replaces a text element's words, keeping the whitespace that indents them in the source. */
+function textEdit(
+  parsed: ParsedComposition,
+  element: SourceElement,
+  text: string,
+): Edit {
+  // The engine refused restricted text before this, so the element has a closing tag.
+  const close = parsed.nodes[element.index]!.own[1]!;
+  const inner = parsed.html.slice(element.openEnd, close[0]);
+  return {
+    start: element.openEnd + /^[\t\n\f\r ]*/.exec(inner)![0].length,
+    end: close[0] - /[\t\n\f\r ]*$/.exec(inner)![0].length,
+    text: text
+      .split("\n")
+      .map((line) =>
+        line
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;"),
+      )
+      .join("<br>"),
+  };
+}
+
 /** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */
 export function applyTrackMix(parsed: ParsedComposition): string {
   const { html, timeline } = parsed;
@@ -882,17 +1086,50 @@ function indentOf(html: string, at: number): string {
   return /^[\t ]*$/.test(indent) ? indent : "";
 }
 
+/** Why a clip's words cannot be replaced as plain text, if they cannot. */
+function textRestriction(
+  parsed: ParsedComposition,
+  clip: Clip,
+  element: SourceElement,
+): string | undefined {
+  if (clip.text === null) return undefined;
+  if (!elementText(element)?.plain)
+    return "This text has markup inside it. Edit it in the source.";
+  if (
+    element.tag === "pre" ||
+    element.tag === "textarea" ||
+    /white-space\s*:\s*(?:pre(?:-wrap)?|break-spaces)(?:\s|;|!|$)/i.test(
+      element.attrs.style ?? "",
+    )
+  )
+    return "This text keeps its exact spacing. Edit it in the source.";
+  const spacing = parsed.textLayout.get(element)?.reason;
+  if (spacing) return spacing;
+  if (!parsed.nodes[element.index]!.own[1])
+    return "This element has no closing tag. Edit it in the source.";
+  if (element.attrs.id && scriptWritesText(parsed.scripts, element.attrs.id))
+    return "A script sets this text. Edit it in the source.";
+  return undefined;
+}
+
 /** Project source constraints once so browser and server commands make the same decision. */
 function sourceRestrictions(
   parsed: ParsedComposition,
   clip: Clip,
 ): Clip["sourceRestrictions"] {
   const element = parsed.elements.get(clip.id)!;
+  const text = textRestriction(parsed, clip, element);
   try {
     elementEnd(parsed, element, clip.id);
   } catch (error) {
     if (!(error instanceof TimelineError)) throw error;
-    return { copy: error.message, remove: error.message };
+    return {
+      copy: error.message,
+      remove: error.message,
+      ...(clip.text !== null && {
+        text: text ?? "This text's markup is misnested. Edit it in the source.",
+      }),
+    };
   }
   const authoredId = element.attrs.id;
   const escaped = authoredId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -901,6 +1138,7 @@ function sourceRestrictions(
   if (reference && parsed.scriptsAndStyles.some((text) => reference.test(text)))
     return {
       copy: `Clip ${clip.id} is styled or animated by its id, so a cut copy would lose that. Edit it in the source instead.`,
+      ...(text && { text }),
     };
   const source = parsed.html.slice(element.start, element.end);
   if (
@@ -910,8 +1148,9 @@ function sourceRestrictions(
   )
     return {
       copy: `Clip ${clip.id} contains elements with ids, which a cut copy would duplicate. Edit it in the source instead.`,
+      ...(text && { text }),
     };
-  return undefined;
+  return text ? { text } : undefined;
 }
 
 function copyMarkup(
@@ -1206,6 +1445,8 @@ export function patchComposition(
         edits.push(
           ...attributeEdits(openingTag(spans, element, clip.id), html, changes),
         );
+      if (next.text !== null && next.text !== clip.text)
+        edits.push(textEdit(parsed, element, next.text));
       continue;
     }
     if (element.attrs.id) removedIds.add(element.attrs.id);

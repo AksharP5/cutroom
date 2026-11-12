@@ -1,4 +1,4 @@
-import { isAudioKind } from "./schema";
+import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
 import { TimelineError } from "./errors";
 import { windowMix } from "./mix";
@@ -509,6 +509,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         opacity: null,
         x: null,
         y: null,
+        text: null,
         fadeIn: 0,
         fadeOut: 0,
         automation: null,
@@ -704,6 +705,18 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         (command.x !== undefined || command.y !== undefined)
       )
         throw new TimelineError("unsupported", "Audio clips have no position.");
+      if (command.text !== undefined) {
+        if (target.text === null)
+          throw new TimelineError(
+            "unsupported",
+            `${target.label ?? target.id} has no text to edit.`,
+          );
+        if (target.sourceRestrictions?.text)
+          throw new TimelineError(
+            "unsupported",
+            target.sourceRestrictions.text,
+          );
+      }
       const fadeIn = command.fadeIn ?? target.fadeIn;
       const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
@@ -721,6 +734,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 }),
                 ...(command.x !== undefined && { x: command.x }),
                 ...(command.y !== undefined && { y: command.y }),
+                ...(command.text !== undefined && {
+                  text: command.text,
+                  textPreview: firstTextLine(command.text),
+                }),
                 ...(command.opacity !== undefined && {
                   opacity: command.opacity,
                 }),

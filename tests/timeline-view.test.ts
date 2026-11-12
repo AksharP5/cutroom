@@ -60,6 +60,7 @@ const clip = (
   opacity: null,
   x: null,
   y: null,
+  text: null,
   fadeIn: 0,
   fadeOut: 0,
   automation: null,

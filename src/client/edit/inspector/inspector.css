@@ -275,6 +275,32 @@
   }
 }
 
+.inspector-text {
+  display: grid;
+}
+.inspector-text textarea {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: var(--leading-body);
+  resize: none;
+  field-sizing: content;
+  max-height: calc(var(--size-row) * 4);
+}
+.inspector-text textarea:disabled {
+  color: var(--text-tertiary);
+  background: var(--surface-panel);
+}
+.inspector-text .inspector-field-hint {
+  grid-column: 1;
+  text-align: left;
+  padding-top: var(--space-1);
+}
 .inspector-field-hint {
   grid-column: 2;
   color: var(--text-tertiary);

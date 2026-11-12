@@ -176,7 +176,8 @@ test("the existing HTML parse supplies decoded first-line title text without scr
   const [clip] = parsed(
     '<div id="title" data-start="0" data-duration="3"><script>wrong()</script><style>.bad{}</style><template>not live</template><b>Hello &amp; welcome</b><br>Second line</div>',
   ).clips;
-  expect(clip?.text).toBe("Hello & welcome");
+  expect(clip?.textPreview).toBe("Hello & welcome");
+  expect(clip?.text).toBe("Hello & welcome\nSecond line");
 });
 
 test("owner history rows stay silent while unrelated agent and disk edits are reported", () => {

@@ -221,7 +221,7 @@ No playback timing increase was measured in these runs. The unselected condition
 
 A GSAP x/y slide-in title with Position 40 px right and 10 px up retained its offset during playback and repeated seeks. FFmpeg-decoded MP4 frames 3, 15 and 45 matched the preview's video and title bounds within one pixel. [Decoded positions](https://github.com/AksharP5/cutroom/blob/pr-assets/inspector-position/position.json) retain the baseline, preview and export bounds. A separate hands-on drag/play/export check matched all four title edges exactly at frames 0, 30 and 90.
 
-The performance test now collects `cutroom:position-observation` measures from the isolated preview and requires every observation to finish within 5 ms. Nothing selected must produce zero measures. Three runs per condition also count callback-entry gaps above 1.5 times the measured display interval during playback and ruler scrubbing, with and without the Position-edited title. The selected condition's median late-frame rate may rise by less than five percentage points. The direct observer budget catches isolated costly checks that a frame percentile can hide. `position-observation.json` records each duration and callback gap, and `CUTROOM_POSITION_TIMING_OUT` saves that attachment locally.
+The performance test now collects `cutroom:position-observation` measures from the isolated preview and requires the median of three per-run maximum observation durations to stay below 5 ms. Nothing selected must produce zero measures. Three runs per condition also count callback-entry gaps above 1.5 times the measured display interval during playback and ruler scrubbing, with and without the Position-edited title. The selected condition's median late-frame rate may rise by less than five percentage points. The direct observer budget catches repeated costly checks that a frame percentile can hide. Like #63, it tolerates one isolated slow run and retains every outlier. `position-observation.json` records each duration and callback gap, and `CUTROOM_POSITION_TIMING_OUT` saves that attachment locally.
 
 On November 11, 2026, installed Chromium 155 on the same 500-clip workload measured a maximum observer duration of 0.9 ms in both playback and scrubbing. All six unselected runs produced zero observations. Playback had two late callbacks in each run, with either selection; scrubbing had 2/4/2 without selection and 1/2/2 with the positioned title. A temporary local change stalled alternate observations for 30 ms. The new per-observation gate failed at 30.4 ms; the injected change was removed. These local results establish that the gate catches that regression, not that every host has the same timings.
 
@@ -244,3 +244,42 @@ The same `bun run test:perf` invocation passed all five performance tests, inclu
 |   500 |      20.5 ms | 72.7 ms |           42.4 ms | 64.9 ms |
 
 The screenshot and raw timing evidence is on the `pr-assets` branch under `track-heights/`.
+
+## Selection on the picture
+
+The bridge caches the selected clip's element and last posted box. Seek, pause, paint, Position edits, resize and changes to that clip or its ancestors invalidate the box. Reads coalesce into one animation-frame callback, after the draft's style writes. Unchanged attribute assignments do not invalidate it. GSAP and script motion invalidate through DOM mutations; CSS animations on the clip, its children or ancestors keep frame tracking only while running. Nothing is read with no clip selected. The editor places the outline with transforms outside React.
+
+A press costs one `elementsFromPoint` in the preview and style reads for elements under the pointer. Only a hit test temporarily enables pointer events on visible elements whose computed value is `none`. It restores the exact inline values in `finally`. Captures never request hits. Selection immediately reuses the hit's box, before React renders the inspector.
+
+`bun run test:perf` collects `cutroom:clip-box` and `cutroom:position-observation` separately on the 500-clip real-media workload. Each budget remains below 5 ms, applied to the median of three fresh runs' maximum durations. This follows #63's smallest odd sample that tolerates one isolated pause while failing a repeated stall. Raw durations, overall maxima and per-run maxima remain in `position-observation.json`; `CUTROOM_POSITION_TIMING_OUT` saves it locally. Static selected playback may make at most six geometry reads per 2.5-second run. Unselected runs must make none, and selection may not add five percentage points to the median late-frame rate.
+
+The picture-paint gate measures native pointer-down `timeStamp` to a task after the outline update's next animation frame, including that rendering opportunity. It makes ten alternating video/title clicks in each of three fresh loads, after drawn clip bodies and a 4.5-second media warm-up. Cold clicks stay in each run's maximum. The median maximum must be at most 50 ms, three frames at 60 Hz and well below the roughly 100 ms instant-response threshold. CI Chromium 158 with SwiftShader measured 35.2 ms against the previous 33 ms ceiling. That two-frame ceiling was too close to normal runner variation. The measurement method is unchanged. `picture-selection-paint.json` and `CUTROOM_PICTURE_TIMING_OUT` retain every pointer, outline and after-paint timestamp, cold click and bridge hit cost. This includes a rendering opportunity, not physical display scan-out.
+
+Negative controls run inside actual preview reads without changing production code:
+
+- `CUTROOM_POSITION_READ_STALL_MS=10` stalls the selected title's geometry read.
+- `CUTROOM_POSITION_OBSERVATION_STALL_MS=10` stalls the selected title's computed-style read.
+- `CUTROOM_PICTURE_HIT_STALL_MS=60` stalls `elementsFromPoint`. This replaces the old 40 ms control so it clearly exceeds the 50 ms paint budget.
+
+Run either gate with `bun run test:perf --grep 'Position observation'` or `bun run test:perf --grep 'picture selection paints'`.
+
+The round-three comparison uses installed Chromium 155.0.8059.84, SwiftShader and a 1720×1050 viewport. No software or browsers were downloaded. The before control restores the bridge and observation test from `a44fdb7` on the same rebased UI, keeping #79's timeline title labels in both conditions. Each uses the same 500-clip project shape, three fresh runs per selected/unselected playback/scrub condition.
+
+| Selected condition | Before geometry reads | After geometry reads | Before Position / outline | After Position / outline |
+| ------------------ | --------------------: | -------------------: | ------------------------: | -----------------------: |
+| Playback           |         162, 162, 163 |              3, 3, 3 |              0.2 / 1.2 ms |             0.6 / 1.0 ms |
+| Scrub              |            95, 95, 95 |           92, 92, 92 |              0.2 / 1.1 ms |             0.4 / 0.9 ms |
+
+Each cost is the median of three per-run maxima. Reads are per fresh load; playback lasts 2.5 seconds. The before control restores the `a44fdb7` bridge and observation test on the same rebased UI. Both conditions share CPUs 0–7 with two busy workers. No unselected run makes a Position or outline read.
+
+| Full performance session | Position playback / scrub | Outline playback / scrub |        Paint maxima | Median paint | Result     |
+| ------------------------ | ------------------------: | -----------------------: | ------------------: | -----------: | ---------- |
+| 1                        |              0.6 / 0.4 ms |             1.0 / 0.9 ms | 29.5, 30.7, 29.3 ms |      29.5 ms | All 6 pass |
+| 2                        |              0.5 / 0.4 ms |             0.9 / 0.9 ms | 25.8, 27.2, 25.4 ms |      25.8 ms | All 6 pass |
+| 3                        |              0.4 / 0.4 ms |             1.1 / 0.9 ms | 30.1, 27.6, 37.0 ms |      30.1 ms | All 6 pass |
+
+| Injected stall, same CPU condition |      Per-run maxima | Median maximum |    Gate | Result |
+| ---------------------------------- | ------------------: | -------------: | ------: | ------ |
+| 10 ms geometry read                | 11.7, 11.3, 10.9 ms |        11.3 ms |  < 5 ms | Fail   |
+| 10 ms Position style read          | 10.3, 10.4, 10.8 ms |        10.4 ms |  < 5 ms | Fail   |
+| 60 ms picture hit                  | 86.5, 88.8, 87.1 ms |        87.1 ms | ≤ 50 ms | Fail   |

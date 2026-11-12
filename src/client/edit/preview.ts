@@ -2,7 +2,9 @@ import { create } from "zustand";
 import { reportEditorError } from "../workspace";
 import { audioLevels } from "./levels";
 import {
+  ClipBoxSchema,
   PositionWarningSchema,
+  TextWarningSchema,
   PositionFoldSchema,
   PreviewLevelsSchema,
   PlaybackClockSchema,
@@ -10,7 +12,13 @@ import {
   PreviewUnloadedSchema,
   RuntimeStateSchema,
 } from "../../shared/preview";
-import type { PlaybackClock, PreviewState } from "../../shared/preview";
+import type {
+  PictureBox,
+  PictureHit,
+  PlaybackClock,
+  PreviewState,
+} from "../../shared/preview";
+import type { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
 import { frameTime } from "../../shared/timeline/apply";
@@ -21,14 +29,55 @@ import { seekQueue } from "./seekQueue";
 export const usePositionWarning = create<{
   warning: { clipId: string; time: number } | null;
 }>(() => ({ warning: null }));
+export const useTextWarning = create<{
+  warning: { clipId: string; time: number; text: string } | null;
+}>(() => ({ warning: null }));
 let observedClip: string | null = null;
+let observedText: string | null = null;
 let warningSource: HTMLIFrameElement | null = null;
 const observers = new Set<(clipId: string | null) => void>();
-export function observePosition(clipId: string | null) {
+export function observePosition(
+  clipId: string | null,
+  text: string | null = null,
+) {
   observedClip = clipId;
+  observedText = text;
+  useTextWarning.setState({ warning: null });
   usePositionWarning.setState({ warning: null });
+  if (pictureBox.current()?.clipId !== clipId) pictureBox.publish(null);
   for (const observe of observers) observe(clipId);
 }
+
+type ShownBox = { clipId: string; box: PictureBox | null };
+let shownBox: ShownBox | null = null;
+const boxListeners = new Set<() => void>();
+/**
+ * Where the observed clip is on the picture, in composition pixels. Boxes follow playback, so
+ * they never enter React; only the promoted preview may publish them.
+ */
+export const pictureBox = {
+  current: () => shownBox,
+  publish(next: ShownBox | null) {
+    shownBox = next;
+    for (const listener of boxListeners) listener();
+  },
+  subscribe(listener: () => void) {
+    boxListeners.add(listener);
+    return () => {
+      boxListeners.delete(listener);
+    };
+  },
+};
+
+let hitTarget: ((x: number, y: number) => Promise<PictureHit[]>) | null = null;
+/** The clips under a point of the shown picture, topmost first, in composition pixels. */
+export const hitPicture = (x: number, y: number) =>
+  hitTarget?.(x, y) ?? Promise.resolve([]);
+
+/** A move under way on the picture, which the inspector's Position fields show until it ends. */
+export const usePictureMove = create<{
+  move: { clipId: string; x: number; y: number } | null;
+}>(() => ({ move: null }));
 
 type PositionDraft = { clipId: string; x: number | null; y: number | null };
 const positionTargets = new Set<(draft: PositionDraft) => void>();
@@ -72,9 +121,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const closing = new AbortController();
   let active = false;
   let clock: PlaybackClock | null = null;
+  type Reply = z.infer<typeof PreviewReplySchema>;
   const pending = new Map<
     string,
-    { resolve(): void; reject(error: Error): void; timer: number }
+    { resolve(reply: Reply): void; reject(error: Error): void; timer: number }
   >();
   const receive = (event: MessageEvent<unknown>) => {
     if (event.source !== frame.contentWindow) return;
@@ -96,6 +146,25 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
           usePositionWarning.setState({
             warning: overridden ? { clipId, time } : null,
           });
+        return;
+      }
+      const textWarning = TextWarningSchema.safeParse(event.data);
+      if (textWarning.success) {
+        const { clipId, time, text, overridden } = textWarning.data;
+        if (
+          frame === warningSource &&
+          clipId === observedClip &&
+          text === observedText
+        )
+          useTextWarning.setState({
+            warning: overridden ? { clipId, time, text } : null,
+          });
+        return;
+      }
+      const box = ClipBoxSchema.safeParse(event.data);
+      if (box.success) {
+        if (frame === warningSource && box.data.clipId === observedClip)
+          pictureBox.publish({ clipId: observedClip, box: box.data.box });
         return;
       }
       const fold = PositionFoldSchema.safeParse(event.data);
@@ -129,7 +198,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     pending.delete(id);
     clearTimeout(request.timer);
     if (reply.error) request.reject(new Error(reply.error));
-    else request.resolve();
+    else request.resolve(reply);
   };
   window.addEventListener("message", receive);
   const send = (action: string, payload: object = {}) => {
@@ -144,7 +213,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     return id;
   };
   const request = (action: string, payload: object = {}) =>
-    new Promise<void>((resolve, reject) => {
+    new Promise<Reply>((resolve, reject) => {
       closing.signal.throwIfAborted();
       const id = send(action, payload);
       const timer = window.setTimeout(() => {
@@ -178,7 +247,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     send("position", draft);
   };
   const observe = (clipId: string | null) =>
-    send("observe-position", { clipId });
+    send("observe-position", { clipId, text: observedText });
+  const hit = async (x: number, y: number) =>
+    (await request("hit", { x, y })).hits ?? [];
   const edit = seekQueue<EditPicture | null>(
     async (picture) => {
       const { frame, fps } = useTransport.getState();
@@ -203,7 +274,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (warningSource === frame) {
       warningSource = null;
       usePositionWarning.setState({ warning: null });
+      useTextWarning.setState({ warning: null });
+      pictureBox.publish(null);
     }
+    if (hitTarget === hit) hitTarget = null;
     send("meter", { enabled: false });
     closing.abort();
     if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
@@ -252,7 +326,12 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         edit.push(picture);
       });
       active = true;
+    },
+    /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */
+    present() {
+      if (closing.signal.aborted) return;
       warningSource = frame;
+      hitTarget = hit;
       observers.add(observe);
       observe(observedClip);
       send("meter", { enabled: true });
@@ -260,8 +339,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     get state() {
       return state;
     },
-    inspect: () => request("inspect"),
-    painted: () => request("paint"),
+    inspect: async () => void (await request("inspect")),
+    painted: async () => void (await request("paint")),
     dispose,
   };
 }

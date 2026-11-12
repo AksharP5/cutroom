@@ -49,9 +49,10 @@ import { createThumbnailRenderer } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
-import { withPreviewBridge } from "./previewBridge";
+import { withPreviewBridge, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
 import {
+  compositionScope,
   mixCompositionInstances,
   parseComposition,
   mediaSources,
@@ -397,10 +398,8 @@ export function createHyperframesApi(
       );
     },
     transformPreviewHtml: async ({ html, project, activeCompositionPath }) => {
-      for (const source of await readTrackMix(
-        store,
-        await store.get(project.id),
-      ))
+      const currentProject = await store.get(project.id);
+      for (const source of await readTrackMix(store, currentProject))
         html = mixCompositionInstances(
           html,
           source.settings,
@@ -408,7 +407,16 @@ export function createHyperframesApi(
           activeCompositionPath,
           source.lengths,
         );
-      return injectDeterministicFontFaces(html);
+      const source = await readSource(currentProject, activeCompositionPath);
+      const scope = compositionScope(activeCompositionPath);
+      const { lengths } = await mediaFacts(
+        currentProject,
+        activeCompositionPath,
+        mediaSources(source.content, scope),
+      );
+      return injectDeterministicFontFaces(
+        withPreviewClipIdentities(html, source.content, scope, lengths),
+      );
     },
     async getProjectSignature(dir) {
       let signature = signatures.get(dir);

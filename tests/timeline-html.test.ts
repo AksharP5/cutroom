@@ -833,3 +833,137 @@ test("position captures both native baselines and clearing one axis keeps the ot
     ).timeline.clips[0],
   ).toMatchObject({ x: 12.25, y: -10 });
 });
+
+test("a text edit replaces only the words, escaping them and writing line breaks as <br>", () => {
+  const html = composition(
+    `<h1 id="title" class="clip" data-start="0" data-duration="2">\n    Ada &amp; Park,\n    Editor\n  </h1>\n<video id="shot" src="shot.mp4" data-start="0" data-duration="2"></video>`,
+  );
+  const { clips } = parseComposition(html, emptyTimelineSettings()).timeline;
+  const title = clips.find((clip) => clip.id === "title");
+  const shot = clips.find((clip) => clip.id === "shot");
+  expect(title).toMatchObject({ text: "Ada & Park, Editor" });
+  expect(title!.sourceRestrictions).toBeUndefined();
+  expect(shot!.text).toBeNull();
+  const output = edit(html, [
+    { type: "setClip", clipId: "title", text: "  Cut <one>\r\n & two  " },
+  ]);
+  expect(output).toBe(
+    html.replace("Ada &amp; Park,\n    Editor", "Cut &lt;one&gt;<br>&amp; two"),
+  );
+  expect(
+    parseComposition(output, emptyTimelineSettings()).timeline.clips.find(
+      (clip) => clip.id === "title",
+    )!.text,
+  ).toBe("Cut <one>\n& two");
+  expect(
+    edit(output, [
+      { type: "setClip", clipId: "title", text: "Ada & Park, Editor" },
+    ]),
+  ).toBe(html.replace("Ada &amp; Park,\n    Editor", "Ada &amp; Park, Editor"));
+  expect(() =>
+    edit(html, [{ type: "setClip", clipId: "shot", text: "Words" }]),
+  ).toThrow("has no text to edit");
+  expect(
+    CommandSchema.safeParse({ type: "setClip", clipId: "title", text: " \n " })
+      .success,
+  ).toBe(false);
+});
+
+test("text with markup inside or a script that writes it is shown but never rewritten", () => {
+  const html = composition(
+    [
+      `<div id="lower" data-start="0" data-duration="2"><b>Ada Park</b><span>Editor</span></div>`,
+      `<div id="count" data-start="0" data-duration="2">0</div>`,
+      `<div id="typed" data-start="0" data-duration="2">Hello</div>`,
+      `<div id="faded" data-start="0" data-duration="2">Fades in</div>`,
+      `<p id="open" data-start="0" data-duration="2">No closing tag`,
+      `<div id="shape" data-start="0" data-duration="2"> </div>`,
+      `<script>
+        const counter = document.querySelector("#count");
+        tl.to(state, { value: 90, onUpdate: () => { counter.textContent = Math.round(state.value); } });
+        tl.to("#typed", { duration: 1, text: "Goodbye" });
+        gsap.from("#faded", { opacity: 0 });
+      </script>`,
+    ].join("\n"),
+  );
+  const clips = new Map(
+    parseComposition(html, emptyTimelineSettings()).timeline.clips.map(
+      (clip) => [clip.id, clip],
+    ),
+  );
+  expect(clips.get("lower")).toMatchObject({
+    text: "Ada Park Editor",
+    sourceRestrictions: {
+      text: "This text has markup inside it. Edit it in the source.",
+    },
+  });
+  expect(clips.get("count")!.sourceRestrictions?.text).toBe(
+    "A script sets this text. Edit it in the source.",
+  );
+  expect(clips.get("typed")!.sourceRestrictions?.text).toBe(
+    "A script sets this text. Edit it in the source.",
+  );
+  expect(clips.get("faded")).toMatchObject({ text: "Fades in" });
+  expect(clips.get("faded")!.sourceRestrictions?.text).toBeUndefined();
+  expect(clips.get("shape")!.text).toBeNull();
+  expect(clips.get("open")!.sourceRestrictions?.text).toBe(
+    "This element has no closing tag. Edit it in the source.",
+  );
+  for (const clipId of ["lower", "count", "typed", "open"])
+    expect(() =>
+      edit(html, [{ type: "setClip", clipId, text: "New" }]),
+    ).toThrow("Edit it in the source.");
+  expect(edit(html, [{ type: "setClip", clipId: "faded", text: "New" }])).toBe(
+    html.replace("Fades in", "New"),
+  );
+});
+
+test("inline pre-line keeps source newlines in the field and in a text edit", () => {
+  const html = composition(
+    '<div id="title" data-start="0" data-duration="2" style="white-space:pre-line">First\nSecond</div>',
+  );
+  const clip = parseComposition(html, emptyTimelineSettings()).timeline
+    .clips[0]!;
+  expect(clip.text).toBe("First\nSecond");
+  expect(clip.sourceRestrictions?.text).toBeUndefined();
+  const written = edit(html, [
+    { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+  ]);
+  expect(written).toContain(">Updated<br>Second</div>");
+  expect(
+    parseComposition(written, emptyTimelineSettings()).timeline.clips[0]!.text,
+  ).toBe("Updated\nSecond");
+});
+
+test("uncertain stylesheet whitespace preserves source newlines and refuses a lossy edit", () => {
+  for (const sheet of [
+    "<style>.title{white-space:pre-line}</style>",
+    '<link rel="stylesheet" href="type.css">',
+  ]) {
+    const html = composition(
+      `${sheet}<div id="title" class="title" data-start="0" data-duration="2">First\nSecond</div>`,
+    );
+    const clip = parseComposition(html, emptyTimelineSettings()).timeline
+      .clips[0]!;
+    expect(clip.text).toBe("First\nSecond");
+    expect(clip.sourceRestrictions?.text).toContain("source line breaks");
+    expect(() =>
+      edit(html, [
+        { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+      ]),
+    ).toThrow("source line breaks");
+  }
+  for (const whiteSpace of ["pre", "pre-wrap", "break-spaces"]) {
+    const html = composition(
+      `<div id="title" data-start="0" data-duration="2" style="white-space:${whiteSpace}">First\nSecond</div>`,
+    );
+    const clip = parseComposition(html, emptyTimelineSettings()).timeline
+      .clips[0]!;
+    expect(clip.text).toBe("First\nSecond");
+    expect(() =>
+      edit(html, [
+        { type: "setClip", clipId: "title", text: "Updated\nSecond" },
+      ]),
+    ).toThrow("exact spacing");
+  }
+});
