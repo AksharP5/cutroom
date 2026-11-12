@@ -47,6 +47,59 @@ An approval names what it acts on the way the editor does: a note by its first w
 
 Timeline edits use frames at the composition's fps. Pass the `revision` from `timeline_read` to `timeline_edit`; each successful edit returns the next revision. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
 
+### Animated titles
+
+Moves, trims, ripples, razor cuts and paste change a clip's `data-start`. Animation written at absolute seconds on the root timeline, such as `tl.fromTo("#cta", {opacity: 0}, {opacity: 1}, 36)`, stays at 36 seconds, so the title can play at the wrong time or not at all. Give each animated title its own sub-composition file instead. The HyperFrames runtime places a nested composition's timeline at its host clip's start, so every edit carries the animation with it.
+
+```html
+<!-- index.html: the host clip -->
+<div
+  id="lower"
+  class="clip"
+  data-composition-id="lower"
+  data-composition-src="compositions/lower.html"
+  data-start="6"
+  data-duration="6"
+  data-track-index="2"
+  data-width="1920"
+  data-height="1080"
+></div>
+```
+
+```html
+<!-- compositions/lower.html -->
+<template>
+  <div
+    id="root"
+    data-composition-id="lower"
+    data-width="1920"
+    data-height="1080"
+  >
+    <p id="lower-text">Ada Lovelace, Founder</p>
+  </div>
+  <script>
+    {
+      const clip = document
+        .querySelector('[data-composition-id="lower"]')
+        .closest("[data-start]");
+      const inPoint = Number(clip.getAttribute("data-playback-start") ?? 0);
+      const out = inPoint + Number(clip.getAttribute("data-duration"));
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo(
+        "#lower-text",
+        { opacity: 0, x: -60 },
+        { opacity: 1, x: 0, duration: 0.5 },
+        0,
+      );
+      tl.to("#lower-text", { opacity: 0, duration: 0.4 }, out - 0.4);
+      window.__timelines["lower"] = tl;
+    }
+  </script>
+</template>
+```
+
+Tween positions are clip-local seconds. Anchoring the exit to `out` keeps the fade-out when the clip is shortened. A razor cut through the title then fades the first piece at the cut.
+
 `timeline_copy` takes `projectId`, `composition`, `expectedRevision`, and `clipIds`. It returns `{id, clips}` with every linked partner included. The server keeps the copied source bytes, so the snapshot survives cuts, source edits, and timeline switches in the same project until the server restarts. It refuses source-restricted clips by name without changing files or history.
 
 Paste through `timeline_edit` with `{ "type": "paste", "clipboardId": "<id from timeline_copy>", "at": 120, "mode": "overwrite" }`. The earliest copied clip starts at `at`; other clips keep their relative timing. Picture and standalone audio keep their source tracks. All properties and source offsets are retained. New clips have fresh ids and new links within the copied group. Optional `ids` uses the same engine minting rules as razor pieces. Overwrite is the default and clears each copied picture or standalone audio interval on its own track, leaving gaps intact. Linked sound follows the same routing as media drops: it replaces the overwritten picture's partner interval, otherwise uses the first unlocked picture-sound track free over the full sound span, creating a track if needed. It never cuts another pair's sound through the fallback. Both paste modes select all new clips in the editor. `mode: "insert"` opens the full copied span once, splitting spanning clips and shifting unlocked auto-select tracks with the existing sync rules. Restricted spanning clips refuse the entire paste with the auto-select hint. Each paste is one undo step. For Cut, copy first, then send `remove` with `ripple: false`.

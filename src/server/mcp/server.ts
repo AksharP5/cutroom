@@ -54,7 +54,7 @@ export function createMcpServer(options: McpOptions = {}) {
     { name: "cutroom", version },
     {
       instructions:
-        "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Review notes persist until you complete, block, or withdraw them with the review tools; reconcile each new message with the queue first. Never modify source media to cut the timeline.",
+        "Cutroom is a local video studio. Use project IDs from projects_list. Read source before writing and retain its exact version. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Review notes persist until you complete, block, or withdraw them with the review tools; reconcile each new message with the queue first. Never modify source media to cut the timeline. Give each animated title or graphic its own sub-composition file: a host clip with data-composition-src, and in that file a timeline in clip-local seconds starting at 0, registered under its composition id. Timeline edits then move, cut and copy it with its animation. Do not put its tweens at absolute seconds on the root timeline. To end an animation at the clip's end, read the host clip's data-playback-start and data-duration.",
     },
   );
   const toolRegistry = new Map<string, ReturnType<McpServer["registerTool"]>>();
