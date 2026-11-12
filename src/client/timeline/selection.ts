@@ -124,6 +124,34 @@ export function selectionAtPlayhead(
   };
 }
 
+/** Start-based selection includes the playhead boundary in either direction, without linked expansion. */
+export function selectionFromPlayhead(
+  timeline: Timeline,
+  frame: number,
+  direction: "forward" | "backward",
+  allTracks = false,
+): Selection {
+  const tracks = new Set(
+    timeline.tracks
+      .filter((track) => !track.locked && (allTracks || track.autoSelect))
+      .map((track) => track.index),
+  );
+  return {
+    ids: new Set(
+      timeline.clips
+        .filter(
+          (clip) =>
+            tracks.has(clip.track) &&
+            (direction === "forward"
+              ? clip.start >= frame
+              : clip.start <= frame),
+        )
+        .map((clip) => clip.id),
+    ),
+    anchor: null,
+  };
+}
+
 /** Drops ids of clips that no longer exist or sit on a track that was locked since. */
 export function pruneSelection(
   timeline: Timeline,

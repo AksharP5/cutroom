@@ -6,7 +6,7 @@ import {
   PencilSimple,
 } from "@phosphor-icons/react";
 import type { EditorMode } from "../../shared/editor";
-import { hint, keymap } from "../keymap";
+import { blurPointerButton, hint, keymap } from "../keymap";
 
 export const EditorToolsContext = createContext<{
   mode: EditorMode;
@@ -21,7 +21,12 @@ export function EditorTools() {
   if (!tools) return null;
   return (
     <div className="editor-tools">
-      <div className="mode-switch" role="toolbar" aria-label="Preview tools">
+      <div
+        className="mode-switch"
+        role="toolbar"
+        aria-label="Preview tools"
+        onClick={blurPointerButton}
+      >
         {(
           [
             { id: "select", action: "editPointer", icon: Cursor },

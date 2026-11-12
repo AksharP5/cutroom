@@ -215,6 +215,7 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   expect(exported.ok()).toBeTruthy();
   await writeFile(output, await exported.body());
   await dialog.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
   const frame = page

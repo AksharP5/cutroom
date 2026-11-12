@@ -270,6 +270,8 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
     await (await request.get(`/api/render/${jobId}/download`)).body(),
   );
   await dialog.getByRole("button", { name: "Close dialog" }).click();
+  // The dialog returns focus to Export. Put it on the editor before using Space to play.
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
   const mutations = page.locator("#clip-inspector").evaluate(

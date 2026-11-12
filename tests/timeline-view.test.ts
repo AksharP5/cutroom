@@ -32,6 +32,7 @@ import {
   marqueeSelection,
   pruneSelection,
   selectionAtPlayhead,
+  selectionFromPlayhead,
 } from "../src/client/timeline/selection";
 
 const fps30 = { num: 30, den: 1 };
@@ -426,6 +427,45 @@ test("Shift+V skips tracks with auto-select off", () => {
   expect(ids(selectionAtPlayhead(off, 50))).toEqual(["a1"]);
   // The frame a clip ends on belongs to the next clip.
   expect(ids(selectionAtPlayhead(edit, 100))).toEqual(["v2"]);
+});
+
+test("Y selections compare starts, skip locked tracks, and do not pull in links from excluded tracks", () => {
+  const off = timeline(edit.clips, [
+    track(0),
+    track(1, { kind: "audio", autoSelect: false }),
+    track(2),
+    track(3, { kind: "audio", locked: true }),
+  ]);
+  expect(ids(selectionFromPlayhead(off, 0, "forward"))).toEqual([
+    "t1",
+    "v1",
+    "v2",
+    "v3",
+  ]);
+  expect(ids(selectionFromPlayhead(off, 100, "forward"))).toEqual([
+    "t1",
+    "v2",
+    "v3",
+  ]);
+  expect(ids(selectionFromPlayhead(off, 101, "forward"))).toEqual(["t1", "v3"]);
+  expect(ids(selectionFromPlayhead(off, 100, "backward"))).toEqual([
+    "v1",
+    "v2",
+  ]);
+  expect(ids(selectionFromPlayhead(off, 0, "forward", true))).toEqual([
+    "a1",
+    "a2",
+    "t1",
+    "v1",
+    "v2",
+    "v3",
+  ]);
+  expect(ids(selectionFromPlayhead(off, 100, "backward", true))).toEqual([
+    "a1",
+    "v1",
+    "v2",
+  ]);
+  expect(selectionFromPlayhead(off, 300, "forward")).toEqual(emptySelection);
 });
 
 test("a selection drops clips that were removed or whose track was locked", () => {

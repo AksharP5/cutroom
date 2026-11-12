@@ -648,3 +648,84 @@ for (const [name, change] of [
       .poll(clips)
       .toEqual(after.map((clip) => [clip.id, clip.start, clip.duration]));
   });
+
+for (const { key, all, backward } of [
+  { key: "y", all: false, backward: false },
+  { key: "Alt+y", all: true, backward: false },
+  { key: "Control+y", all: false, backward: true },
+  { key: "Control+Alt+y", all: true, backward: true },
+]) {
+  test(`${key} selects ${backward ? "backward" : "forward"} on ${all ? "all" : "auto-select"} unlocked tracks at a clip boundary`, async ({
+    page,
+    request,
+  }) => {
+    const { timeline, seek, agent } = await open(
+      page,
+      request,
+      "Select by playhead",
+      {
+        extra: [
+          '<div id="off-before" class="clip" data-start="0" data-duration="3" data-track-index="1">Off before</div>',
+          '<div id="off-at" class="clip" data-start="3" data-duration="3" data-track-index="1">Off at</div>',
+          '<div id="off-after" class="clip" data-start="6" data-duration="3" data-track-index="1">Off after</div>',
+          '<div id="locked-before" class="clip" data-start="0" data-duration="3" data-track-index="2">Locked before</div>',
+          '<div id="locked-at" class="clip" data-start="3" data-duration="3" data-track-index="2">Locked at</div>',
+          '<div id="locked-after" class="clip" data-start="6" data-duration="3" data-track-index="2">Locked after</div>',
+        ],
+      },
+    );
+    await agent([
+      { type: "setTrack", index: 1, autoSelect: false },
+      { type: "setTrack", index: 2, locked: true },
+    ]);
+    await expect(
+      timeline.getByRole("button", { name: "Auto-select V2", exact: true }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      timeline.getByRole("button", { name: "Lock V3", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const selected = () =>
+      timeline
+        .locator("[data-clip].selected")
+        .evaluateAll((clips) =>
+          clips.map((clip) => clip.getAttribute("data-clip")).sort(),
+        );
+    const select = async (time: string, expected: string[]) => {
+      await seek(time);
+      await page.keyboard.press(key);
+      await expect.poll(selected).toEqual(expected.sort());
+    };
+    if (backward) {
+      await select("0229", ["shot-1", ...(all ? ["off-before"] : [])]);
+      await select("0300", [
+        "shot-1",
+        "shot-2",
+        ...(all ? ["off-before", "off-at"] : []),
+      ]);
+      await select("0301", [
+        "shot-1",
+        "shot-2",
+        ...(all ? ["off-before", "off-at"] : []),
+      ]);
+      await select("0000", ["shot-1", ...(all ? ["off-before"] : [])]);
+    } else {
+      await select("0229", [
+        "shot-2",
+        "shot-3",
+        "shot-4",
+        ...(all ? ["off-at", "off-after"] : []),
+      ]);
+      await select("0300", [
+        "shot-2",
+        "shot-3",
+        "shot-4",
+        ...(all ? ["off-at", "off-after"] : []),
+      ]);
+      await select("0301", ["shot-3", "shot-4", ...(all ? ["off-after"] : [])]);
+      await select("1100", []);
+    }
+    await expect(
+      page.getByRole("button", { name: "Stop", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+}
