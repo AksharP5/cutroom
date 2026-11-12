@@ -370,6 +370,13 @@ test("audio shows its waveform and a still runs five seconds, each on a track of
       ),
     )
     .toBe(true);
+  // The list lets go of the arrows: Down and Up move the source to its end and back.
+  await expect(await file("music.wav")).not.toBeFocused();
+  const start = (await clock.textContent())!;
+  await page.keyboard.press("ArrowDown");
+  await expect(clock).not.toHaveText(start);
+  await page.keyboard.press("ArrowUp");
+  await expect(clock).toHaveText(start);
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("i");
   await page.keyboard.press("Shift+ArrowRight");

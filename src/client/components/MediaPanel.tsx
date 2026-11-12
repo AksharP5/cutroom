@@ -150,7 +150,10 @@ function MediaRow({
   });
   // The source viewer needs a timeline: its playhead counts the timeline's frames.
   const open = () => {
-    if (placeable && useTimeline.getState().view) openSource(dragged());
+    if (!placeable || !useTimeline.getState().view) return;
+    openSource(dragged());
+    // The transport keys go to the source now, not to moving through the list.
+    row.current?.blur();
   };
   return (
     <li
