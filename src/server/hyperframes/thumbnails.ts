@@ -15,8 +15,9 @@ type ThumbnailOptions = Parameters<
 >[0];
 
 interface PreviewWindow extends Window {
-  __player?: { seek?: (time: number) => void };
-  __timelines?: Record<string, { pause?: (time?: number) => void }>;
+  __player?: { seek: (time: number) => void | Promise<void> };
+  __renderReady?: boolean;
+  __hfStartupError?: string;
   __hfWaitForSeekCompletion?: () => Promise<void>;
   __hfStudioManualEditsApply?: () => number;
   __hfStudioMotionApply?: () => number;
@@ -72,18 +73,29 @@ export function createThumbnailRenderer() {
           waitUntil: "load",
           timeout: 20_000,
         });
+        // Load can precede authored scripts, sub-compositions, and buildReady.
+        // Seeking before the runtime binds them can silently capture time zero.
+        await page.waitForFunction(
+          () => {
+            const preview = window as PreviewWindow;
+            return (
+              typeof preview.__hfStartupError === "string" ||
+              (preview.__renderReady === true &&
+                typeof preview.__player?.seek === "function")
+            );
+          },
+          { timeout: 20_000 },
+        );
         await page.evaluate(async (time: number) => {
           const preview = window as PreviewWindow;
+          if (typeof preview.__hfStartupError === "string")
+            throw new Error(preview.__hfStartupError);
           document.body.style.margin = "0";
           document.body.style.overflow = "hidden";
           document.querySelectorAll("audio,video").forEach((media) => {
             if (media instanceof HTMLMediaElement) media.muted = true;
           });
-          if (typeof preview.__player?.seek === "function")
-            preview.__player.seek(time);
-          else
-            for (const timeline of Object.values(preview.__timelines ?? {}))
-              timeline.pause?.(time);
+          await preview.__player?.seek(time);
           preview.gsap?.ticker?.tick?.();
           await preview.__hfWaitForSeekCompletion?.();
           await document.fonts.ready;
