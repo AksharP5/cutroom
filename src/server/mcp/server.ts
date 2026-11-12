@@ -321,8 +321,8 @@ export function createMcpServer(options: McpOptions = {}) {
   );
   registerReviewTools(registry, request);
   registerExportTools(registry, requestApi);
-  registerTimelineTools(registry, request, async (path) =>
-    fetchLocal(`${baseUrl}${path}`),
+  registerTimelineTools(registry, request, async (path, init) =>
+    fetchLocal(`${baseUrl}${path}`, init),
   );
   return Object.assign(server, { toolRegistry });
 }

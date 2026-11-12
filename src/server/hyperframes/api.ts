@@ -45,7 +45,10 @@ import type { ProjectStore } from "../projects/store";
 import { isMissing, projectPath, readSource } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
-import { createThumbnailRenderer } from "./thumbnails";
+import {
+  createThumbnailRenderer,
+  thumbnailRendererVersion,
+} from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
@@ -85,6 +88,15 @@ export function createHyperframesApi(
   reviews: ReviewService,
 ) {
   const api = new Hono();
+  api.use("/projects/:id/thumbnail/*", async (c, next) => {
+    const url = new URL(c.req.url);
+    url.searchParams.set(
+      "v",
+      `${thumbnailRendererVersion}-${url.searchParams.get("v") ?? ""}`,
+    );
+    c.req.raw = new Request(url, c.req.raw);
+    await next();
+  });
   // Internal export forwarding must preserve errors for the application's HTTP boundary.
   api.onError((error) => {
     throw error;

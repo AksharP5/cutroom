@@ -10,6 +10,9 @@ import { studioRenderScripts } from "./render";
 import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
+// Prefix caller versions so old renderer output cannot bypass readiness in the cache.
+export const thumbnailRendererVersion = "capture-ready-v1";
+
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
 >[0];
@@ -73,33 +76,52 @@ export function createThumbnailRenderer() {
           waitUntil: "load",
           timeout: 20_000,
         });
-        // Load can precede authored scripts, sub-compositions, and buildReady.
-        // Seeking before the runtime binds them can silently capture time zero.
-        await page.waitForFunction(
-          () => {
+        await page.evaluate(
+          async (time: number, composition: string) => {
             const preview = window as PreviewWindow;
-            return (
+            // Load can precede authored scripts, sub-compositions, and buildReady.
+            // Ready scenes avoid a separate polling/protocol setup altogether.
+            const ready = () =>
               typeof preview.__hfStartupError === "string" ||
               (preview.__renderReady === true &&
-                typeof preview.__player?.seek === "function")
-            );
+                typeof preview.__player?.seek === "function");
+            if (!ready()) {
+              await new Promise<void>((resolve, reject) => {
+                let frame = 0;
+                const timeout = setTimeout(() => {
+                  cancelAnimationFrame(frame);
+                  reject(
+                    new Error(
+                      `HyperFrames readiness for "${composition}" did not complete within 20 s.`,
+                    ),
+                  );
+                }, 20_000);
+                const check = () => {
+                  if (!ready()) {
+                    frame = requestAnimationFrame(check);
+                    return;
+                  }
+                  clearTimeout(timeout);
+                  resolve();
+                };
+                frame = requestAnimationFrame(check);
+              });
+            }
+            if (typeof preview.__hfStartupError === "string")
+              throw new Error(preview.__hfStartupError);
+            document.body.style.margin = "0";
+            document.body.style.overflow = "hidden";
+            document.querySelectorAll("audio,video").forEach((media) => {
+              if (media instanceof HTMLMediaElement) media.muted = true;
+            });
+            await preview.__player?.seek(time);
+            preview.gsap?.ticker?.tick?.();
+            await preview.__hfWaitForSeekCompletion?.();
+            await document.fonts.ready;
           },
-          { timeout: 20_000 },
+          options.seekTime,
+          options.compPath,
         );
-        await page.evaluate(async (time: number) => {
-          const preview = window as PreviewWindow;
-          if (typeof preview.__hfStartupError === "string")
-            throw new Error(preview.__hfStartupError);
-          document.body.style.margin = "0";
-          document.body.style.overflow = "hidden";
-          document.querySelectorAll("audio,video").forEach((media) => {
-            if (media instanceof HTMLMediaElement) media.muted = true;
-          });
-          await preview.__player?.seek(time);
-          preview.gsap?.ticker?.tick?.();
-          await preview.__hfWaitForSeekCompletion?.();
-          await document.fonts.ready;
-        }, options.seekTime);
         for (const content of await studioRenderScripts(
           options.project.dir,
           options.compPath,
