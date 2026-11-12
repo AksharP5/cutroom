@@ -622,6 +622,15 @@ option {
   height: var(--size-media-row);
   padding: 0 6px;
   border-radius: var(--radius-control);
+  outline: none;
+}
+/* The focused row is the list's current row, also when a clip's menu reveals it. */
+.media-row:focus {
+  background: var(--surface-active);
+}
+.media-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .media-thumb {
   flex: none;

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
+import { menuStep } from "./menu";
 import "./select-menu.css";
 
 /** The viewer's popover picker, shared by fields and compact toolbar controls. */
@@ -115,46 +116,13 @@ export function SelectMenu<const Value extends string>({
             close();
             return;
           }
-          let next: number;
-          switch (event.key) {
-            case "ArrowDown":
-              next = (index + 1) % options.length;
-              break;
-            case "ArrowUp":
-              next = (index - 1 + options.length) % options.length;
-              break;
-            case "Home":
-              next = 0;
-              break;
-            case "End":
-              next = options.length - 1;
-              break;
-            default: {
-              if (
-                event.key.length !== 1 ||
-                event.ctrlKey ||
-                event.altKey ||
-                event.metaKey ||
-                event.key === " "
-              )
-                return;
-              const now = Date.now();
-              const text =
-                (now - search.current.at < 500 ? search.current.text : "") +
-                event.key.toLocaleLowerCase();
-              search.current = { text, at: now };
-              const prefix = [...text].every((letter) => letter === text[0])
-                ? text[0]
-                : text;
-              next = options.findIndex((_, offset) =>
-                options[(index + 1 + offset) % options.length].label
-                  .toLocaleLowerCase()
-                  .startsWith(prefix),
-              );
-              if (next < 0) return;
-              next = (index + 1 + next) % options.length;
-            }
-          }
+          const next = menuStep(
+            event,
+            options.map((option) => option.label),
+            index,
+            search.current,
+          );
+          if (next === null) return;
           event.preventDefault();
           event.stopPropagation();
           focus(next);

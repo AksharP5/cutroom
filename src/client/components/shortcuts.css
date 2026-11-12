@@ -1,0 +1,74 @@
+/* The sheet is wide enough for three columns; the list scrolls under a fixed search field. */
+.modal:has(.shortcuts) {
+  width: 1040px;
+}
+.modal:has(.shortcuts)[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.shortcuts > input {
+  flex: none;
+  margin: var(--space-3) var(--space-4);
+  height: var(--size-row);
+}
+.shortcut-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-2);
+}
+.shortcut-scroll > p {
+  margin: 0 0 var(--space-2);
+  color: var(--text-tertiary);
+}
+.shortcut-areas {
+  columns: 3 280px;
+  column-gap: var(--space-6);
+}
+.shortcut-areas section {
+  break-inside: avoid;
+  padding-bottom: var(--space-4);
+}
+.shortcut-areas h3 {
+  margin: 0 0 var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+  font-weight: var(--weight-semibold);
+}
+.shortcut-areas dl {
+  margin: 0;
+}
+.shortcut-areas dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-top: var(--stroke-hair) solid var(--line-subtle);
+  line-height: var(--leading-body);
+}
+.shortcut-areas dt {
+  color: var(--text-secondary);
+}
+.shortcut-areas dd {
+  flex: none;
+  display: flex;
+  gap: var(--space-3);
+  margin: 0;
+}
+.shortcut-areas kbd,
+.settings-content kbd {
+  font: var(--weight-medium) var(--type-2xs) / var(--leading-body)
+    var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  color: var(--text-primary);
+}
+.settings-content kbd {
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+}

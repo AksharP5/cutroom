@@ -1,122 +1,228 @@
 import { useEffect, useRef } from "react";
 import type { MouseEvent } from "react";
 
-type Binding = { label: string; keys: readonly string[]; repeat?: boolean };
+/** The shortcut sheet's groups, in an order that fills its three columns evenly. */
+export const areas = [
+  "Tools",
+  "Playback",
+  "Marks",
+  "Playhead",
+  "Select",
+  "Edit",
+  "View",
+] as const;
+
+type Binding = {
+  area: (typeof areas)[number];
+  label: string;
+  keys: readonly string[];
+  repeat?: boolean;
+};
 
 /**
  * Every editor shortcut, keyed by DaVinci Resolve's action id and bound as in the owner's Resolve
  * preset. Cutroom-only actions use a `cutroom` prefix. This table drives the key handlers,
- * button tooltips, and the table in `docs/keyboard.md`. Combos list modifiers as Ctrl, Alt, Shift.
+ * button tooltips, menu items, the shortcut sheet, and the table in `docs/keyboard.md`. Combos
+ * list modifiers as Ctrl, Alt, Shift.
  */
 export const keymap = {
-  workspacePrimaryWorkspaceDeliver: { label: "Export", keys: ["Shift+8"] },
-  editPointer: { label: "Select", keys: ["A"] },
-  editTrim: { label: "Trim", keys: ["T"] },
-  editBlade: { label: "Blade", keys: ["B"] },
-  cutroomDraw: { label: "Draw", keys: ["Shift+N"] },
-  cutroomComment: { label: "Comment", keys: ["N"] },
-  controlPlayToggle: { label: "Play or stop", keys: ["Space"] },
+  workspacePrimaryWorkspaceDeliver: {
+    area: "View",
+    label: "Export",
+    keys: ["Shift+8"],
+  },
+  editPointer: { area: "Tools", label: "Select", keys: ["A"] },
+  editTrim: { area: "Tools", label: "Trim", keys: ["T"] },
+  editBlade: { area: "Tools", label: "Blade", keys: ["B"] },
+  cutroomDraw: { area: "Tools", label: "Draw", keys: ["Shift+N"] },
+  cutroomComment: { area: "Tools", label: "Comment", keys: ["N"] },
+  controlPlayToggle: {
+    area: "Playback",
+    label: "Play or stop",
+    keys: ["Space"],
+  },
   cutroomRecordVoiceover: {
+    area: "Playback",
     label: "Record or stop voiceover",
     keys: ["Ctrl+Alt+Shift+V"],
   },
   controlPlayForward: {
+    area: "Playback",
     label: "Play forward, faster on repeat",
     keys: ["L", "4"],
   },
   controlPlayReverse: {
+    area: "Playback",
     label: "Play reverse, faster on repeat",
     keys: ["J", "3"],
   },
-  controlFastForward: { label: "Play forward at 4x", keys: ["Shift+L"] },
-  controlFastReverse: { label: "Play reverse at 4x", keys: ["Shift+J"] },
-  controlStop: { label: "Stop", keys: ["K"] },
-  controlStepReverse: { label: "Previous frame", keys: ["Left"], repeat: true },
-  controlStepForward: { label: "Next frame", keys: ["Right"], repeat: true },
+  controlFastForward: {
+    area: "Playback",
+    label: "Play forward at 4x",
+    keys: ["Shift+L"],
+  },
+  controlFastReverse: {
+    area: "Playback",
+    label: "Play reverse at 4x",
+    keys: ["Shift+J"],
+  },
+  controlStop: { area: "Playback", label: "Stop", keys: ["K"] },
+  controlStepReverse: {
+    area: "Playhead",
+    label: "Previous frame",
+    keys: ["Left"],
+    repeat: true,
+  },
+  controlStepForward: {
+    area: "Playhead",
+    label: "Next frame",
+    keys: ["Right"],
+    repeat: true,
+  },
   controlLargeStepReverse: {
+    area: "Playhead",
     label: "Back one second",
     keys: ["Shift+Left"],
     repeat: true,
   },
   controlLargeStepForward: {
+    area: "Playhead",
     label: "Forward one second",
     keys: ["Shift+Right"],
     repeat: true,
   },
-  controlClipPrev: { label: "Previous edit", keys: ["Up"], repeat: true },
-  controlClipNext: { label: "Next edit", keys: ["Down"], repeat: true },
-  controlTimelineStart: { label: "Timeline start", keys: ["Home"] },
-  controlTimelineEnd: { label: "Timeline end", keys: ["End"] },
-  controlFirstFrame: { label: "First frame", keys: [";"] },
-  controlLastFrame: { label: "Last frame", keys: ["'"] },
-  markIn: { label: "Mark in", keys: ["I"] },
-  markOut: { label: "Mark out", keys: ["O"] },
-  markResetIn: { label: "Clear in", keys: ["Alt+I"] },
-  markResetOut: { label: "Clear out", keys: ["Alt+O"] },
-  markResetInOut: { label: "Clear in and out", keys: ["Alt+X"] },
-  controlGotoIn: { label: "Go to in", keys: ["Shift+I"] },
-  controlGotoOut: { label: "Go to out", keys: ["Shift+O"] },
-  controlLoop: { label: "Loop", keys: ["Ctrl+/"] },
-  editCopy: { label: "Copy clips", keys: ["Ctrl+C"] },
-  editCut: { label: "Cut clips, leaving a gap", keys: ["Ctrl+X"] },
-  editPaste: { label: "Paste clips", keys: ["Ctrl+V"] },
-  editPasteInsert: { label: "Paste insert", keys: ["Ctrl+Shift+V"] },
-  editUndo: { label: "Undo", keys: ["Ctrl+Z", "`"] },
-  editRedo: { label: "Redo", keys: ["Ctrl+Shift+Z"] },
+  controlClipPrev: {
+    area: "Playhead",
+    label: "Previous edit",
+    keys: ["Up"],
+    repeat: true,
+  },
+  controlClipNext: {
+    area: "Playhead",
+    label: "Next edit",
+    keys: ["Down"],
+    repeat: true,
+  },
+  controlTimelineStart: {
+    area: "Playhead",
+    label: "Timeline start",
+    keys: ["Home"],
+  },
+  controlTimelineEnd: {
+    area: "Playhead",
+    label: "Timeline end",
+    keys: ["End"],
+  },
+  controlFirstFrame: { area: "Playhead", label: "First frame", keys: [";"] },
+  controlLastFrame: { area: "Playhead", label: "Last frame", keys: ["'"] },
+  markIn: { area: "Marks", label: "Mark in", keys: ["I"] },
+  markOut: { area: "Marks", label: "Mark out", keys: ["O"] },
+  markResetIn: { area: "Marks", label: "Clear in", keys: ["Alt+I"] },
+  markResetOut: { area: "Marks", label: "Clear out", keys: ["Alt+O"] },
+  markResetInOut: { area: "Marks", label: "Clear in and out", keys: ["Alt+X"] },
+  controlGotoIn: { area: "Playhead", label: "Go to in", keys: ["Shift+I"] },
+  controlGotoOut: { area: "Playhead", label: "Go to out", keys: ["Shift+O"] },
+  controlLoop: { area: "Playback", label: "Loop", keys: ["Ctrl+/"] },
+  editCopy: { area: "Edit", label: "Copy clips", keys: ["Ctrl+C"] },
+  editCut: {
+    area: "Edit",
+    label: "Cut clips, leaving a gap",
+    keys: ["Ctrl+X"],
+  },
+  editPaste: { area: "Edit", label: "Paste clips", keys: ["Ctrl+V"] },
+  editPasteInsert: {
+    area: "Edit",
+    label: "Paste insert",
+    keys: ["Ctrl+Shift+V"],
+  },
+  editUndo: { area: "Edit", label: "Undo", keys: ["Ctrl+Z", "`"] },
+  editRedo: { area: "Edit", label: "Redo", keys: ["Ctrl+Shift+Z"] },
   workspaceViewerModeCinemaViewer: {
+    area: "View",
     label: "Fullscreen viewer",
     keys: ["P", "Ctrl+F"],
   },
   viewZoomSubZoomToFit: {
+    area: "View",
     label: "Fit the timeline, or return to the last zoom",
     keys: ["Shift+Z"],
   },
   viewZoomSubZoomIn: {
+    area: "View",
     label: "Zoom the timeline in",
     keys: ["Ctrl+=", "Ctrl+Shift+="],
     repeat: true,
   },
   viewZoomSubZoomOut: {
+    area: "View",
     label: "Zoom the timeline out",
     keys: ["Ctrl+-"],
     repeat: true,
   },
   editSelectItemAtPlayhead: {
+    area: "Select",
     label: "Select clips at the playhead",
     keys: ["Shift+V"],
   },
   editSelectClipsSelectTrackAfter: {
+    area: "Select",
     label: "Select clips forward on auto-select tracks",
     keys: ["Y"],
   },
   editSelectClipsSelectAllAfter: {
+    area: "Select",
     label: "Select clips forward on all tracks",
     keys: ["Alt+Y"],
   },
   editSelectClipsSelectTrackBefore: {
+    area: "Select",
     label: "Select clips backward on auto-select tracks",
     keys: ["Ctrl+Y"],
   },
   editSelectClipsSelectAllBefore: {
+    area: "Select",
     label: "Select clips backward on all tracks",
     keys: ["Ctrl+Alt+Y"],
   },
-  editDeselectAll: { label: "Deselect all", keys: ["Shift+A", "Esc"] },
+  editDeselectAll: {
+    area: "Select",
+    label: "Deselect all",
+    keys: ["Shift+A", "Esc"],
+  },
   trimRippleStartToPlayhead: {
+    area: "Edit",
     label: "Ripple trim the start to the playhead",
     keys: ["Q"],
   },
   trimRippleEndToPlayhead: {
+    area: "Edit",
     label: "Ripple trim the end to the playhead",
     keys: ["W"],
   },
-  editBladeRazor: { label: "Razor at the playhead", keys: ["E"] },
-  editM2SplitClip: { label: "Split at the playhead", keys: ["Ctrl+\\"] },
-  editBackspace: { label: "Lift, leaving a gap", keys: ["X", "Backspace"] },
-  editDelete: { label: "Ripple delete", keys: ["Shift+X", "Delete"] },
-  editClipEnabled: { label: "Turn clips on or off", keys: ["D"] },
-  markMarkerAdd: { label: "Add a marker", keys: ["M"] },
-  editSnapping: { label: "Snapping", keys: ["C"] },
+  editBladeRazor: { area: "Edit", label: "Razor at the playhead", keys: ["E"] },
+  editM2SplitClip: {
+    area: "Edit",
+    label: "Split at the playhead",
+    keys: ["Ctrl+\\"],
+  },
+  editBackspace: {
+    area: "Edit",
+    label: "Lift, leaving a gap",
+    keys: ["X", "Backspace"],
+  },
+  editDelete: {
+    area: "Edit",
+    label: "Ripple delete",
+    keys: ["Shift+X", "Delete"],
+  },
+  editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
+  markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
+  editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
+  cutroomShortcuts: {
+    area: "View",
+    label: "Keyboard shortcuts",
+    keys: ["Shift+/"],
+  },
 } satisfies Record<string, Binding>;
 
 export type Action = keyof typeof keymap;
@@ -214,11 +320,40 @@ export function actionFor(event: KeyboardEvent): Action | null {
 export const hint = (action: Action) =>
   `${keymap[action].label} (${keymap[action].keys.join(", ")})`;
 
+/** The shortcut sheet's content: each area with its actions, in keymap order. */
+export const keymapAreas = () =>
+  areas.map((area) => ({
+    area,
+    actions: (Object.keys(keymap) as Action[]).filter(
+      (action) => keymap[action].area === area,
+    ),
+  }));
+
+type Handlers = Partial<Record<Action, () => void>>;
+
+/** The handlers on screen, first mounted first: the order their key listeners answer in. */
+const mounted = new Set<{ current: Handlers }>();
+
+/**
+ * Runs an action through the handler its key runs, so a menu item or button does exactly what the
+ * shortcut does. False when nothing on screen handles it.
+ */
+export function runAction(action: Action) {
+  for (const handlers of mounted) {
+    const handler = handlers.current[action];
+    if (!handler) continue;
+    handler();
+    return true;
+  }
+  return false;
+}
+
 /** Runs the handler bound to each key press. Handlers may change between renders. */
-export function useKeymap(handlers: Partial<Record<Action, () => void>>) {
+export function useKeymap(handlers: Handlers) {
   const latest = useRef(handlers);
   latest.current = handlers;
   useEffect(() => {
+    mounted.add(latest);
     const press = (event: KeyboardEvent) => {
       // A control that handled the key itself, such as the zoom slider, keeps it.
       if (event.defaultPrevented) return;
@@ -229,7 +364,10 @@ export function useKeymap(handlers: Partial<Record<Action, () => void>>) {
       handler();
     };
     window.addEventListener("keydown", press);
-    return () => window.removeEventListener("keydown", press);
+    return () => {
+      mounted.delete(latest);
+      window.removeEventListener("keydown", press);
+    };
   }, []);
 }
 

@@ -16,6 +16,7 @@ import {
   usePictureMove,
   usePositionWarning,
 } from "./preview";
+import { openClipMenu } from "./openClipMenu";
 import { editTimeline, useTimeline } from "./timeline";
 
 /** Travel before a press becomes a drag, as on the timeline. */
@@ -31,6 +32,17 @@ interface Offset {
   x: number;
   y: number;
 }
+
+/** The preview only knows elements; the timeline says which are clips that can be picked. */
+const pickable = (timeline: Timeline, hits: readonly PictureHit[]) =>
+  hits.filter((hit) => {
+    const found = timeline.clips.find((item) => item.id === hit.clipId);
+    return (
+      found &&
+      !isAudioKind(found.kind) &&
+      !timeline.tracks.find((track) => track.index === found.track)?.locked
+    );
+  });
 
 /** One Position change in flight: where the clip was and where the gesture has put it. */
 interface Move {
@@ -223,19 +235,11 @@ export function PictureSelect({
     if (!view) return;
     const { frame, scale, clip } = latest.current;
     if (!current.drag) {
-      // The preview only knows elements; the timeline says which are clips that can be picked.
-      const pickable = current.hits.filter((hit) => {
-        const found = view.timeline.clips.find(
-          (item) => item.id === hit.clipId,
-        );
-        return (
-          found &&
-          !isAudioKind(found.kind) &&
-          !view.timeline.tracks.find((track) => track.index === found.track)
-            ?.locked
-        );
-      });
-      const hit = pickHit(pickable, clip?.id ?? null, current.cycle);
+      const hit = pickHit(
+        pickable(view.timeline, current.hits),
+        clip?.id ?? null,
+        current.cycle,
+      );
       if (current.released) {
         // A click that picks something else, or nothing, leaves the arrows with the playhead.
         // The picture takes them once the selected clip itself is grabbed.
@@ -462,6 +466,60 @@ export function PictureSelect({
       onPointerUp={() => end(false)}
       onPointerCancel={() => end(true)}
       onLostPointerCapture={() => end(true)}
+      onContextMenu={(event) => {
+        const surface = event.currentTarget;
+        const bounds = surface.getBoundingClientRect();
+        // The menu key opens the menu for the selected clip, by its box on the picture.
+        if (event.button < 0) {
+          const shown = pictureBox.current();
+          const box = shown?.clipId === clip?.id ? shown?.box : null;
+          openClipMenu(
+            event,
+            projectId,
+            box
+              ? {
+                  getBoundingClientRect: () =>
+                    new DOMRect(
+                      bounds.left + box.x * scale.x,
+                      bounds.top + box.y * scale.y,
+                      box.width * scale.x,
+                      box.height * scale.y,
+                    ),
+                }
+              : surface,
+          );
+          return;
+        }
+        // A right-click picks the clip drawn under it first, once the preview says which, and
+        // keeps the selection when nothing is.
+        event.preventDefault();
+        const point = {
+          button: event.button,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          preventDefault() {},
+        };
+        const open = (hits: readonly PictureHit[]) => {
+          const { view, selection } = useTimeline.getState();
+          if (!view) return;
+          const hit = pickHit(
+            pickable(view.timeline, hits),
+            latest.current.clip?.id ?? null,
+            false,
+          );
+          if (hit && !selection.ids.has(hit.clipId)) select(hit, false);
+          openClipMenu(
+            point,
+            projectId,
+            surface,
+            view.timeline.clips.find((item) => item.id === hit?.clipId),
+          );
+        };
+        void hitPicture(
+          (event.clientX - bounds.left) / scale.x,
+          (event.clientY - bounds.top) / scale.y,
+        ).then(open, () => open([]));
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape" && nudge.current) {
           event.preventDefault();

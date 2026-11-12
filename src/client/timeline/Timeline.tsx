@@ -19,7 +19,13 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
+import type {
+  KeyboardEvent,
+  MouseEvent,
+  PointerEvent,
+  ReactNode,
+  RefObject,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   CursorClick,
@@ -123,7 +129,13 @@ export interface TimelineProps {
     setting: "locked" | "autoSelect" | "enabled" | "muted" | "solo",
   ): void;
   onRenameTrack(track: Track, name: string): void;
-  onAddTrack(kind: Track["kind"]): void;
+  /**
+   * A right-click or the menu key on a track header, or on the empty space under the headers.
+   * `anchor` is the header, which a menu opened from the keyboard hangs from.
+   */
+  onTrackMenu(event: MouseEvent, anchor: Element, row: Row | null): void;
+  /** A right-click in the lanes, on a clip or on empty space. */
+  onClipMenu(event: MouseEvent, anchor: Element, clip: Clip | null): void;
   recording?: { track: Track; start: number } | null;
   audioControls?(
     track: Track,
@@ -593,7 +605,8 @@ export function Timeline({
   audioControls,
   recording,
   onRenameTrack,
-  onAddTrack,
+  onTrackMenu,
+  onClipMenu,
   onOpenPin,
   onOpenMarker,
 }: TimelineProps) {
@@ -636,22 +649,6 @@ export function Timeline({
   );
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
-  const [trackMenu, setTrackMenu] = useState<{
-    x: number;
-    y: number;
-    track?: Track;
-  } | null>(null);
-  useEffect(() => {
-    if (!trackMenu) return;
-    const close = () => setTrackMenu(null);
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", close);
-    };
-  }, [trackMenu]);
-  const menuTrack = trackMenu?.track;
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
@@ -1035,20 +1032,17 @@ export function Timeline({
             className="tl-heads"
             style={{ minHeight: layout.height }}
             onContextMenu={(event) => {
-              event.preventDefault();
               const head =
                 event.target instanceof Element
                   ? event.target.closest<HTMLElement>(".tl-head[data-row]")
                   : null;
-              setTrackMenu({
-                x: Math.min(event.clientX, window.innerWidth - 180),
-                y: Math.min(event.clientY, window.innerHeight - 105),
-                track: head
-                  ? timeline.tracks.find(
-                      (track) => track.index === Number(head.dataset.row),
-                    )
-                  : undefined,
-              });
+              onTrackMenu(
+                event,
+                head ?? event.currentTarget,
+                headRows.find(
+                  (row) => row.track.index === Number(head?.dataset.row),
+                ) ?? null,
+              );
             }}
           >
             <TrackHeads
@@ -1083,52 +1077,6 @@ export function Timeline({
                   </div>
                 </div>
               ))}
-            {trackMenu && (
-              <div
-                className="tl-track-menu"
-                role="menu"
-                aria-label="Add track"
-                style={{ left: trackMenu.x, top: trackMenu.y }}
-                onPointerDown={(event) => event.stopPropagation()}
-                onKeyDown={(event) => {
-                  if (event.key !== "Escape") event.stopPropagation();
-                }}
-              >
-                {(["video", "audio"] as const).map((kind, index) => (
-                  <button
-                    key={kind}
-                    role="menuitem"
-                    autoFocus={index === 0}
-                    onClick={() => {
-                      onAddTrack(kind);
-                      setTrackMenu(null);
-                    }}
-                  >
-                    Add {kind} track
-                  </button>
-                ))}
-                {menuTrack && (
-                  <button
-                    role="menuitem"
-                    disabled={
-                      menuTrack.locked ||
-                      timeline.clips.some(
-                        (clip) => clip.track === menuTrack.index,
-                      ) ||
-                      recording?.track.index === menuTrack.index
-                    }
-                    onClick={() => {
-                      onEdit("Remove empty track", [
-                        { type: "removeTrack", index: menuTrack.index },
-                      ]);
-                      setTrackMenu(null);
-                    }}
-                  >
-                    Remove empty track
-                  </button>
-                )}
-              </div>
-            )}
             <i className="tl-divider" style={{ top: layout.dividerTop }} />
           </div>
           <div
@@ -1137,6 +1085,20 @@ export function Timeline({
             style={{ minHeight: layout.height }}
             data-tool={tool}
             {...gestures.handlers}
+            onContextMenu={(event) => {
+              const element =
+                event.target instanceof Element
+                  ? event.target.closest<HTMLElement>(
+                      "[data-clip], [data-clip-mix]",
+                    )
+                  : null;
+              const id = element?.dataset.clip ?? element?.dataset.clipMix;
+              onClipMenu(
+                event,
+                event.currentTarget,
+                timeline.clips.find((clip) => clip.id === id) ?? null,
+              );
+            }}
           >
             {rows.map((row) => (
               <i

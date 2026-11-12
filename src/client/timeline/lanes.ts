@@ -19,6 +19,7 @@ import {
   bladePreview,
   dragPreview,
   dropPreview,
+  placedMedia,
   idle,
   intentAt,
   previewCommands,
@@ -755,13 +756,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { row, create } = destination(media.kind, event.clientY);
     destinationRow.current = create.length ? row : null;
     const { timeline, playhead } = latest.current;
-    const { fps } = timeline;
-    const dragged = {
-      kind: media.kind,
-      src: media.path,
-      frames: Math.max(1, Math.floor((media.seconds * fps.num) / fps.den)),
-      hasAudio: media.hasAudio,
-    };
+    const dragged = placedMedia(media, timeline.fps);
     const mode =
       event.shiftKey && (event.ctrlKey || event.metaKey)
         ? "insert"

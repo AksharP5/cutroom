@@ -40,13 +40,15 @@ import { Logo } from "./components/Logo";
 import { MediaPanel } from "./components/MediaPanel";
 import { Modal } from "./components/Modal";
 import { ProjectsHome } from "./components/ProjectsHome";
+import { ContextMenuHost } from "./components/ContextMenu";
+import { ShortcutSheet } from "./components/ShortcutSheet";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
 import { showToast, useWorkspace } from "./workspace";
-import { actionFor } from "./keymap";
+import { actionFor, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
 
 const Editor = lazy(() =>
@@ -147,8 +149,9 @@ export function App() {
   const indicator = useRef<HTMLSpanElement>(null);
   const activeTab = chatVisible ? 0 : panel === "review" ? 1 : 2;
   const [dialog, setDialog] = useState<
-    "projects" | "create" | "settings" | null
+    "projects" | "create" | "settings" | "shortcuts" | null
   >(null);
+  useKeymap({ cutroomShortcuts: () => setDialog("shortcuts") });
   const [picker, setPicker] = useState<"file" | "directory" | "project" | null>(
     null,
   );
@@ -310,7 +313,7 @@ export function App() {
       if (
         target instanceof HTMLElement &&
         (target.closest(
-          "input,textarea,select,[contenteditable=true],.edit-note-popover",
+          "input,textarea,select,[contenteditable=true],.edit-note-popover,[role=menu]",
         ) ||
           target.closest("dialog"))
       )
@@ -537,6 +540,7 @@ export function App() {
           <MediaPanel
             key={project.id}
             projectId={project.id}
+            projectPath={project.path}
             hidden={!workPanel}
           />
           <section
@@ -903,6 +907,16 @@ export function App() {
               </p>
             </section>
             <section>
+              <h3>Keyboard</h3>
+              <button
+                className="secondary-button"
+                onClick={() => setDialog("shortcuts")}
+              >
+                {keymap.cutroomShortcuts.label}
+                <kbd>{keymap.cutroomShortcuts.keys[0]}</kbd>
+              </button>
+            </section>
+            <section>
               <h3>Your native agents</h3>
               <p>
                 Codex and Claude Code use their own skills, configuration,
@@ -914,6 +928,10 @@ export function App() {
           </div>
         </Modal>
       )}
+      {dialog === "shortcuts" && (
+        <ShortcutSheet onClose={() => setDialog(null)} />
+      )}
+      <ContextMenuHost />
       {picker && (
         <FileDialog
           kind={picker}
