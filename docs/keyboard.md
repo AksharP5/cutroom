@@ -60,9 +60,9 @@ The editor uses DaVinci Resolve's Edit page keys, and each action keeps its Reso
 | Turn clips on or off                         | `D`                      | `editClipEnabled`                  |
 | Add a marker                                 | `M`                      | `markMarkerAdd`                    |
 | Snapping                                     | `C`                      | `editSnapping`                     |
-| Keyboard shortcuts                           | `Shift+/`                | `cutroomShortcuts`                 |
+| Keyboard shortcuts                           | `Ctrl+Alt+K`             | `resolveCustomizedActions`         |
 
-Shift+/, the ? key, opens a sheet of every shortcut by area, generated from this table. Type to search names and keys; Esc closes it. Settings has a button for it too. In the owner's Resolve preset Shift+/ is Play Around Current Clip (`controlPlayAroundToPlayAroundCurrentClip`), which Cutroom does not implement.
+Ctrl+Alt+K opens a sheet of every shortcut by area, generated from this table. Type to search names and keys; Esc closes it. Settings has a button for it too. The key is the one the owner's Resolve preset gives Keyboard Customization, `resolveCustomizedActions`, which is also Resolve's default. The sheet lists the keys and does not change them.
 
 Ctrl+Alt+Shift+V is unused in the owner's Resolve preset and avoids the older KDE Klipper shortcut Ctrl+Alt+V. Its only recording-related action, `viewTimelineModeRecord`, has no assigned key. Shift+R remains reserved for Resolve's Freeze Frame.
 

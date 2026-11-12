@@ -376,7 +376,7 @@ main{position:relative;width:640px;height:360px;overflow:hidden}
   ]);
 });
 
-test("Shift+? lists every binding from the keymap, searchable, and closes with Escape", async ({
+test("Ctrl+Alt+K lists every binding from the keymap, searchable, and closes with Escape", async ({
   page,
   request,
 }) => {
@@ -400,7 +400,10 @@ test("Shift+? lists every binding from the keymap, searchable, and closes with E
       })
       .locator("kbd");
 
+  // Shift+/ is Resolve's Play Around Current Clip, so it is left alone.
   await page.keyboard.press("Shift+?");
+  await expect(sheet).toBeHidden();
+  await page.keyboard.press("Control+Alt+k");
   await expect(sheet).toBeVisible();
   await expect(sheet.locator("dt")).toHaveCount(Object.keys(keymap).length);
   await expect(binding("editDelete")).toHaveText(["Shift+X", "Delete"]);
@@ -421,7 +424,7 @@ test("Shift+? lists every binding from the keymap, searchable, and closes with E
   // Settings leads to the same sheet.
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
-    .getByRole("button", { name: keymap.cutroomShortcuts.label })
+    .getByRole("button", { name: keymap.resolveCustomizedActions.label })
     .click();
   await expect(sheet).toBeVisible();
 });

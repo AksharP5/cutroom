@@ -218,10 +218,10 @@ export const keymap = {
   editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
-  cutroomShortcuts: {
+  resolveCustomizedActions: {
     area: "View",
     label: "Keyboard shortcuts",
-    keys: ["Shift+/"],
+    keys: ["Ctrl+Alt+K"],
   },
 } satisfies Record<string, Binding>;
 

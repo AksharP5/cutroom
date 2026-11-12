@@ -21,7 +21,7 @@ export function ShortcutSheet({ onClose }: { onClose: () => void }) {
     }))
     .filter(({ actions }) => actions.length);
   return (
-    <Modal title={keymap.cutroomShortcuts.label} onClose={onClose}>
+    <Modal title={keymap.resolveCustomizedActions.label} onClose={onClose}>
       <div className="shortcuts">
         <input
           ref={search}

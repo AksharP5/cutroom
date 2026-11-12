@@ -151,7 +151,7 @@ export function App() {
   const [dialog, setDialog] = useState<
     "projects" | "create" | "settings" | "shortcuts" | null
   >(null);
-  useKeymap({ cutroomShortcuts: () => setDialog("shortcuts") });
+  useKeymap({ resolveCustomizedActions: () => setDialog("shortcuts") });
   const [picker, setPicker] = useState<"file" | "directory" | "project" | null>(
     null,
   );
@@ -912,8 +912,8 @@ export function App() {
                 className="secondary-button"
                 onClick={() => setDialog("shortcuts")}
               >
-                {keymap.cutroomShortcuts.label}
-                <kbd>{keymap.cutroomShortcuts.keys[0]}</kbd>
+                {keymap.resolveCustomizedActions.label}
+                <kbd>{keymap.resolveCustomizedActions.keys[0]}</kbd>
               </button>
             </section>
             <section>
