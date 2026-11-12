@@ -10,13 +10,17 @@ import { studioRenderScripts } from "./render";
 import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
+// Prefix caller versions so old renderer output cannot bypass readiness in the cache.
+export const thumbnailRendererVersion = "capture-ready-v1";
+
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
 >[0];
 
 interface PreviewWindow extends Window {
-  __player?: { seek?: (time: number) => void };
-  __timelines?: Record<string, { pause?: (time?: number) => void }>;
+  __player?: { seek: (time: number) => void | Promise<void> };
+  __renderReady?: boolean;
+  __hfStartupError?: string;
   __hfWaitForSeekCompletion?: () => Promise<void>;
   __hfStudioManualEditsApply?: () => number;
   __hfStudioMotionApply?: () => number;
@@ -72,22 +76,52 @@ export function createThumbnailRenderer() {
           waitUntil: "load",
           timeout: 20_000,
         });
-        await page.evaluate(async (time: number) => {
-          const preview = window as PreviewWindow;
-          document.body.style.margin = "0";
-          document.body.style.overflow = "hidden";
-          document.querySelectorAll("audio,video").forEach((media) => {
-            if (media instanceof HTMLMediaElement) media.muted = true;
-          });
-          if (typeof preview.__player?.seek === "function")
-            preview.__player.seek(time);
-          else
-            for (const timeline of Object.values(preview.__timelines ?? {}))
-              timeline.pause?.(time);
-          preview.gsap?.ticker?.tick?.();
-          await preview.__hfWaitForSeekCompletion?.();
-          await document.fonts.ready;
-        }, options.seekTime);
+        await page.evaluate(
+          async (time: number, composition: string) => {
+            const preview = window as PreviewWindow;
+            // Load can precede authored scripts, sub-compositions, and buildReady.
+            // Ready scenes avoid a separate polling/protocol setup altogether.
+            const ready = () =>
+              typeof preview.__hfStartupError === "string" ||
+              (preview.__renderReady === true &&
+                typeof preview.__player?.seek === "function");
+            if (!ready()) {
+              await new Promise<void>((resolve, reject) => {
+                let frame = 0;
+                const timeout = setTimeout(() => {
+                  cancelAnimationFrame(frame);
+                  reject(
+                    new Error(
+                      `HyperFrames readiness for "${composition}" did not complete within 20 s.`,
+                    ),
+                  );
+                }, 20_000);
+                const check = () => {
+                  if (!ready()) {
+                    frame = requestAnimationFrame(check);
+                    return;
+                  }
+                  clearTimeout(timeout);
+                  resolve();
+                };
+                frame = requestAnimationFrame(check);
+              });
+            }
+            if (typeof preview.__hfStartupError === "string")
+              throw new Error(preview.__hfStartupError);
+            document.body.style.margin = "0";
+            document.body.style.overflow = "hidden";
+            document.querySelectorAll("audio,video").forEach((media) => {
+              if (media instanceof HTMLMediaElement) media.muted = true;
+            });
+            await preview.__player?.seek(time);
+            preview.gsap?.ticker?.tick?.();
+            await preview.__hfWaitForSeekCompletion?.();
+            await document.fonts.ready;
+          },
+          options.seekTime,
+          options.compPath,
+        );
         for (const content of await studioRenderScripts(
           options.project.dir,
           options.compPath,

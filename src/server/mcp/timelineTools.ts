@@ -14,7 +14,7 @@ type JsonRequest = (
   body?: unknown,
 ) => Promise<CallToolResult>;
 /** Fetches a path on the local server, such as `/api/projects/...`. */
-type LocalFetch = (path: string) => Promise<Response>;
+type LocalFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
 const input = {
   projectId: z.string().describe("Project ID returned by projects_list"),
@@ -82,13 +82,17 @@ export function registerTimelineTools(
       // The thumbnail route captures in the capability-scoped, opaque renderer.
       annotations: readOnly,
     },
-    async ({ projectId, composition, frame }): Promise<CallToolResult> => {
+    async (
+      { projectId, composition, frame },
+      extra,
+    ): Promise<CallToolResult> => {
       const failed = (text: string): CallToolResult => ({
         content: [{ type: "text", text }],
         isError: true,
       });
       const read = await fetchLocal(
         `/api/cutroom${timelinePath(projectId, composition)}`,
+        { signal: extra.signal },
       );
       if (!read.ok)
         return failed(`Cutroom returned ${read.status}: ${await read.text()}`);
@@ -97,6 +101,7 @@ export function registerTimelineTools(
       const seconds = frameTime(frame, timeline.fps);
       const image = await fetchLocal(
         `/api/projects/${id(projectId)}/thumbnail/${composition.split("/").map(id).join("/")}?t=${seconds}&format=jpeg&output=source`,
+        { signal: extra.signal },
       );
       if (!image.ok)
         return failed(
