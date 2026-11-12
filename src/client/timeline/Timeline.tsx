@@ -629,9 +629,11 @@ export function Timeline({
   );
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
-  const [trackMenu, setTrackMenu] = useState<{ x: number; y: number } | null>(
-    null,
-  );
+  const [trackMenu, setTrackMenu] = useState<{
+    x: number;
+    y: number;
+    track?: Track;
+  } | null>(null);
   useEffect(() => {
     if (!trackMenu) return;
     const close = () => setTrackMenu(null);
@@ -642,6 +644,7 @@ export function Timeline({
       window.removeEventListener("keydown", close);
     };
   }, [trackMenu]);
+  const menuTrack = trackMenu?.track;
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
@@ -1026,9 +1029,18 @@ export function Timeline({
             style={{ minHeight: layout.height }}
             onContextMenu={(event) => {
               event.preventDefault();
+              const head =
+                event.target instanceof Element
+                  ? event.target.closest<HTMLElement>(".tl-head[data-row]")
+                  : null;
               setTrackMenu({
                 x: Math.min(event.clientX, window.innerWidth - 180),
-                y: Math.min(event.clientY, window.innerHeight - 70),
+                y: Math.min(event.clientY, window.innerHeight - 105),
+                track: head
+                  ? timeline.tracks.find(
+                      (track) => track.index === Number(head.dataset.row),
+                    )
+                  : undefined,
               });
             }}
           >
@@ -1088,6 +1100,26 @@ export function Timeline({
                     Add {kind} track
                   </button>
                 ))}
+                {menuTrack && (
+                  <button
+                    role="menuitem"
+                    disabled={
+                      menuTrack.locked ||
+                      timeline.clips.some(
+                        (clip) => clip.track === menuTrack.index,
+                      ) ||
+                      recording?.track.index === menuTrack.index
+                    }
+                    onClick={() => {
+                      onEdit("Remove empty track", [
+                        { type: "removeTrack", index: menuTrack.index },
+                      ]);
+                      setTrackMenu(null);
+                    }}
+                  >
+                    Remove empty track
+                  </button>
+                )}
               </div>
             )}
             <i className="tl-divider" style={{ top: layout.dividerTop }} />

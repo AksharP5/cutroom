@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -128,6 +130,121 @@ function correlate(
   }
   return { offset, correlation: best };
 }
+
+declare global {
+  interface Window {
+    voiceoverStreams: MediaStream[];
+  }
+}
+
+for (const removal of ["header", "MCP"] as const)
+  test(`removing an armed track through ${removal} releases the microphone and cannot recreate it`, async ({
+    page,
+    request,
+    baseURL,
+  }, info) => {
+    await page.addInitScript(() => {
+      if (window !== top) return;
+      window.voiceoverStreams = [];
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(
+        navigator.mediaDevices,
+      );
+      navigator.mediaDevices.getUserMedia = async (constraints) => {
+        const stream = await getUserMedia(constraints);
+        window.voiceoverStreams.push(stream);
+        return stream;
+      };
+    });
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: "Removed voiceover track", duration: 8 },
+        })
+      ).json(),
+    );
+    const base = `/api/cutroom/projects/${project.id}`;
+    const read = async () =>
+      TimelineViewSchema.parse(
+        await (await request.get(`${base}/timeline`)).json(),
+      );
+    const initial = await read();
+    const index =
+      Math.max(...initial.timeline.tracks.map((track) => track.index)) + 1;
+    const added = await request.post(`${base}/commands`, {
+      data: {
+        expectedRevision: initial.revision,
+        commands: [
+          { type: "setTrack", index, kind: "audio", name: "Narration" },
+          { type: "setTrack", index: index + 1, kind: "audio", name: "Spare" },
+        ],
+      },
+    });
+    expect(added.ok()).toBe(true);
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator("iframe[data-live]")).toBeVisible();
+    const arm = page.getByRole("button", { name: "Arm A1", exact: true });
+    await arm.click();
+    await expect(arm).toHaveAttribute("aria-pressed", "true");
+    const streamStates = () =>
+      page.evaluate(() =>
+        window.voiceoverStreams.flatMap((stream) =>
+          stream.getTracks().map((track) => track.readyState),
+        ),
+      );
+    await expect.poll(streamStates).toEqual(["live"]);
+    await expect(
+      page.getByRole("button", { name: "Record voiceover", exact: true }),
+    ).toBeEnabled();
+    if (removal === "header") {
+      await page
+        .locator(`.tl-head[data-row="${index}"]`)
+        .click({ button: "right" });
+      await page
+        .getByRole("menuitem", { name: "Remove empty track", exact: true })
+        .click();
+    } else {
+      const client = new Client({ name: "voiceover-removal", version: "1" });
+      try {
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+            requestInit: { headers: { origin: baseURL! } },
+          }),
+        );
+        const view = await read();
+        const result = await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            projectId: project.id,
+            expectedRevision: view.revision,
+            commands: [{ type: "removeTrack", index }],
+          },
+        });
+        expect(result.isError).not.toBe(true);
+      } finally {
+        await client.close();
+      }
+    }
+    await expect(page.locator(`.tl-head[data-row="${index}"]`)).toHaveCount(0);
+    await expect.poll(streamStates).toEqual(["ended"]);
+    await expect(
+      page.locator('.tl-head .vo-arm[aria-pressed="true"]'),
+    ).toHaveCount(0);
+    const removed = (await read()).timeline;
+    expect(
+      removed.tracks.filter((track) => track.kind === "audio"),
+    ).toHaveLength(1);
+    await page
+      .getByRole("button", { name: "Record voiceover", exact: true })
+      .click();
+    await expect(page.locator(".toast")).toContainText(
+      "Arm an audio track to record voiceover.",
+    );
+    await expect(page.getByLabel("Recording voiceover take")).toHaveCount(0);
+    expect((await read()).timeline).toEqual(removed);
+    await page.screenshot({
+      path: info.outputPath("removed-track-disarmed.png"),
+    });
+  });
 
 test("fake microphone records over the cut, preserves audio, undoes once, and exports in sync", async ({
   page,

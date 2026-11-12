@@ -140,6 +140,8 @@ export function editLabel(
           parts.push(command.solo ? "Soloed track" : "Unsoloed track");
         return parts.join("; ") || fallback;
       }
+      case "removeTrack":
+        return "Removed empty track";
       case "setMarker":
         return command.frame === undefined
           ? "Edited marker"

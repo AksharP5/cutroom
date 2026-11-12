@@ -36,12 +36,14 @@ const transitions = {
   arming: {
     arm: ["arming"],
     ready: ["armed"],
+    trackRemoved: ["idle"],
     release: ["idle"],
     dispose: ["idle"],
   },
   armed: {
     arm: ["arming"],
     record: ["recording"],
+    trackRemoved: ["idle"],
     release: ["idle"],
     dispose: ["idle"],
   },
@@ -100,6 +102,7 @@ export function createVoiceoverSession(projectId: string) {
   let generation = 0;
   let disposed = false;
   let maxLength = 0;
+  let stopTimeline = () => {};
   let stopTransport = () => {};
   let limit: number | undefined;
   let peak = 0;
@@ -371,6 +374,32 @@ export function createVoiceoverSession(projectId: string) {
     activate() {
       disposed = false;
       closing = new AbortController();
+      stopTimeline();
+      stopTimeline = useTimeline.subscribe((next, previous) => {
+        const state = get().state;
+        if (
+          next.projectId !== projectId ||
+          previous.projectId !== projectId ||
+          next.view === previous.view ||
+          !next.view ||
+          (state.kind !== "arming" && state.kind !== "armed")
+        )
+          return;
+        // An unpersisted A1 placeholder can be armed before any audio track exists.
+        const existed = previous.view?.timeline.tracks.some(
+          (track) => track.index === state.track.index,
+        );
+        if (
+          !existed ||
+          next.view.timeline.tracks.some(
+            (track) => track.index === state.track.index,
+          )
+        )
+          return;
+        releaseMicrophone();
+        transition("trackRemoved", { kind: "idle" });
+        clearMessage();
+      });
     },
     toggleArm(track: Track) {
       const state = get().state;
@@ -424,6 +453,7 @@ export function createVoiceoverSession(projectId: string) {
     refreshDevices,
     dispose() {
       disposed = true;
+      stopTimeline();
       answerDiscard(false);
       dismissToast();
       closing.abort();

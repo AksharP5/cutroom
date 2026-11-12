@@ -783,6 +783,27 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ],
       };
     }
+    case "removeTrack": {
+      const track = timeline.tracks.find(
+        (track) => track.index === command.index,
+      );
+      if (!track)
+        throw new TimelineError(
+          "not_found",
+          `Track ${command.index} not found.`,
+        );
+      if (track.locked)
+        throw new TimelineError("locked", `Track ${track.index} is locked.`);
+      if (clips.some((clip) => clip.track === track.index))
+        throw new TimelineError(
+          "unsupported",
+          `Track ${track.index} is not empty. Remove its clips first.`,
+        );
+      return {
+        ...timeline,
+        tracks: timeline.tracks.filter((item) => item !== track),
+      };
+    }
     case "setMarker": {
       const id =
         command.id ??

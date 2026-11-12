@@ -27,7 +27,12 @@ import type { Selection } from "../timeline/selection";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
-import { outsideChanges, outsideMessage, rippleFeedback } from "./feedback";
+import {
+  outsideChanges,
+  outsideMessage,
+  overwriteFeedback,
+  rippleFeedback,
+} from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
 
 const clipboards = new Map<string, readonly Clip[]>();
@@ -467,12 +472,9 @@ export async function editTimeline(
     const made = edit;
     dismissRipple();
     rippleRevision = null;
-    const feedback = rippleFeedback(
-      view.timeline,
-      timeline,
-      commands,
-      clipboards,
-    );
+    const feedback =
+      overwriteFeedback(view.timeline, timeline, commands) ||
+      rippleFeedback(view.timeline, timeline, commands, clipboards);
     useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
     onApply?.(timeline, commands, named.origins);

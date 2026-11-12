@@ -5,6 +5,34 @@ import type {
   TimelineView,
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
+import { clipName } from "../../shared/timeline/labels";
+
+/** Partial overwrites retain the original id; only completely replaced clips need a warning. */
+export function overwriteFeedback(
+  before: Timeline,
+  after: Timeline,
+  commands: readonly Command[],
+) {
+  if (
+    !commands.some(
+      (command) =>
+        (command.type === "insert" ||
+          command.type === "paste" ||
+          command.type === "move") &&
+        command.mode === "overwrite",
+    )
+  )
+    return "";
+  const retained = new Set(after.clips.map((clip) => clip.id));
+  const removed = before.clips.filter((clip) => !retained.has(clip.id));
+  if (!removed.length) return "";
+  const names = [...new Set(removed.map(clipName))];
+  const detail =
+    names.length < 3
+      ? names.join(" and ")
+      : `${names[0]} and ${names.length - 1} others`;
+  return `Replaced ${detail}.`;
+}
 
 /** Report actual ripple consequences. Same-track followers alone are an obvious, silent edit. */
 export function rippleFeedback(

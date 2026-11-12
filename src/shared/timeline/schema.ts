@@ -415,6 +415,14 @@ export const CommandSchema = z.discriminatedUnion("type", [
     ),
   z
     .object({
+      type: z.literal("removeTrack"),
+      index: frame,
+    })
+    .describe(
+      "Remove an unlocked empty track. Refuses occupied tracks; remove their clips first. Other track indices stay unchanged. Undo restores the track and its settings.",
+    ),
+  z
+    .object({
       type: z.literal("setMarker"),
       id: z
         .string()

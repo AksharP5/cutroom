@@ -237,7 +237,13 @@ export function createTimelineRoutes(
         });
     }
     const { timelines } = current.document;
-    if (!Bun.deepEquals(settings, settingsOf(current.parsed.timeline))) {
+    // Persist inferred tracks too, before their last source clip can disappear on the next read.
+    if (
+      !Bun.deepEquals(
+        settings,
+        timelines[composition] ?? emptyTimelineSettings(),
+      )
+    ) {
       if (Bun.deepEquals(settings, emptyTimelineSettings()))
         delete timelines[composition];
       else timelines[composition] = settings;
