@@ -1,0 +1,49 @@
+
+Running 1 test using 1 worker
+
+(node:1304673) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 e2e/editing-keys.spec.ts:735:1 › Q and W at a cut preserve the incoming clip and the rest of the film, including MCP (16.1s)
+
+
+  1) e2e/editing-keys.spec.ts:735:1 › Q and W at a cut preserve the incoming clip and the rest of the film, including MCP 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.toast')
+    Expected substring: "shot-2 would be shorter than one frame"
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" locator('.toast') with timeout 15000ms
+      - waiting for locator('.toast')
+        12 × locator resolved to <div class="toast" role="status" data-tone="info">…</div>
+           - unexpected value "Removed 09:00 from 2 tracks. 3 clips deleted.UndoDismiss"
+
+
+      751 |   await page.keyboard.press("w");
+      752 |   await page.screenshot({ path: testInfo.outputPath("after-w.png") });
+    > 753 |   await expect(page.locator(".toast")).toContainText(
+          |                                        ^
+      754 |     "shot-2 would be shorter than one frame",
+      755 |   );
+      756 |   expect(await clips()).toEqual(initial);
+        at /home/akshar/.cache/cutroom-trim-cut/e2e/editing-keys.spec.ts:753:40
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../cutroom-pr1-before/results/editing-keys-Q-and-W-at-a--8a5b2-t-of-the-film-including-MCP/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../cutroom-pr1-before/results/editing-keys-Q-and-W-at-a--8a5b2-t-of-the-film-including-MCP/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../cutroom-pr1-before/results/editing-keys-Q-and-W-at-a--8a5b2-t-of-the-film-including-MCP/trace.zip
+    Usage:
+
+        npx playwright show-trace ../cutroom-pr1-before/results/editing-keys-Q-and-W-at-a--8a5b2-t-of-the-film-including-MCP/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/editing-keys.spec.ts:735:1 › Q and W at a cut preserve the incoming clip and the rest of the film, including MCP 

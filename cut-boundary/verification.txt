@@ -1,0 +1,10 @@
+Same generated 12-second timeline, 30 fps, 1720x1050 Chromium, four contiguous three-second shots on V1 and a twelve-second audio bed. No selection.
+Home, Down: 00:00:03:00, incoming shot-2.
+Main 259cb24, W: Removed 09:00 from 2 tracks. 3 clips deleted. Only shot-1 and the shortened bed remain.
+Fix, W: Clip shot-2 would be shorter than one frame. All four shots and the twelve-second bed remain; playhead stays at 00:00:03:00.
+Fix, Q at the same cut: no change.
+Fix, Shift+V: selects incoming shot-2 and the bed, not outgoing shot-1.
+Fix, select shot-2 alone, E at its start: no change, no fallback to the bed.
+Fix, X: lifts shot-2 alone. Undo restores it.
+HTTP MCP timeline_edit, trim shot-2 end to frame 90: refuses as shorter than one frame and leaves timeline unchanged.
+Shared browser at 1280x800: repeated Home, Down, W; observed shot-2 refusal and read back all five original clips, with frame 90 unchanged.
