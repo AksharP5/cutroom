@@ -112,10 +112,14 @@ function animationWindows(
         }
       ).timeline;
       if (nested) {
-        if (!library || registered.has(nested)) continue;
+        if (registered.has(nested)) continue;
         const innerDuration = nested.duration();
+        if (innerDuration === 0) {
+          visit(nested, () => start);
+          continue;
+        }
         const duration = child.duration();
-        if (innerDuration <= 0 || duration <= 0) continue;
+        if (!library || duration <= 0) continue;
         const ease = nested._ease;
         if (ease !== linearEase) {
           monotonicEases ??= new Set(
@@ -237,12 +241,6 @@ function installPreviewBridge(
     }, 0);
   };
   const wrapped = new WeakSet<object>();
-  const remember = (
-    child: ReturnType<gsap.core.Timeline["recent"]> | undefined,
-  ) => {
-    if (!child || typeof child === "function") return;
-    if ("getChildren" in child) watchTimeline(child as gsap.core.Timeline);
-  };
   const wrapMethods = (target: gsap.core.Timeline) => {
     if (wrapped.has(target)) return;
     wrapped.add(target);
@@ -262,17 +260,11 @@ function installPreviewBridge(
         writable: true,
         value: function (this: gsap.core.Timeline, ...args: unknown[]) {
           const result: unknown = Reflect.apply(original, this, args);
-          remember(this.recent());
           changedWindows();
           return result;
         },
       });
     }
-  };
-  const watchTimeline = (timeline: gsap.core.Timeline) => {
-    wrapMethods(Object.getPrototypeOf(timeline));
-    for (const child of timeline.getChildren(false, true, true))
-      remember(child);
   };
   const timed = new WeakSet<object>();
   const watchTiming = (prototype: gsap.core.Animation) => {
@@ -321,21 +313,10 @@ function installPreviewBridge(
       if (value) watchLibrary(value);
     },
   });
-  const register = (
-    registry: Record<string, gsap.core.Timeline | undefined>,
-  ) => {
-    for (const timeline of Object.values(registry))
-      if (timeline) watchTimeline(timeline);
-    return new Proxy(registry, {
+  const register = (registry: Record<string, gsap.core.Timeline | undefined>) =>
+    new Proxy(registry, {
       set(target, key, value: unknown) {
         const success = Reflect.set(target, key, value);
-        if (
-          value &&
-          typeof value === "object" &&
-          "getChildren" in value &&
-          typeof value.getChildren === "function"
-        )
-          watchTimeline(value as gsap.core.Timeline);
         changedWindows();
         return success;
       },
@@ -345,7 +326,6 @@ function installPreviewBridge(
         return success;
       },
     });
-  };
   const runtime = win as PreviewWindow & {
     __timelines?: Record<string, gsap.core.Timeline | undefined>;
   };

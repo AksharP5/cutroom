@@ -852,8 +852,7 @@ export function createReviewService(store: ProjectStore) {
           edit.revision === sourceVersion &&
           active.has(edit.historyId),
       );
-      const pending =
-        !windows && previous && !previous.reported ? previous.checks : [];
+      const pending = previous && !previous.reported ? previous.checks : [];
       const evidence = activeAnimationResults(state, history, composition);
       return windows ||
         pending.length ||

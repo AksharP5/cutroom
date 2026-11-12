@@ -37,7 +37,7 @@ export type AnimationSnapshot = {
   evidence?: AnimationResult[];
 };
 
-/** Copy only the compared clip's inputs; unresolved moves keep their first observed origin. */
+/** Retain each observed clip's inputs until a report resolves the command chain. */
 export function animationCheck(
   source: AnimationSnapshot,
   sourceId: string,

@@ -222,13 +222,15 @@ test.skipIf(!browserExecutable())(
       const page = await browser.newPage();
       const gsap = await readFile("node_modules/gsap/dist/gsap.min.js", "utf8");
       await page.setContent(
-        withPreviewBridge(`<!doctype html><html><body><main data-composition-id="main" data-duration="40"><div id="title" class="shared" data-start="8" data-duration="4"></div><div id="still" class="shared" data-start="6" data-duration="4"></div><div id="framed" data-start="10" data-duration="8"></div><div id="nested" data-composition-id="nested" data-start="15" data-duration="4"></div></main><script>${gsap}</script><script>
+        withPreviewBridge(`<!doctype html><html><body><main data-composition-id="main" data-duration="40"><div id="title" class="shared" data-start="8" data-duration="4"></div><div id="still" class="shared" data-start="6" data-duration="4"></div><div id="framed" data-start="10" data-duration="8"></div><div id="stepped" data-start="11" data-duration="4"></div><div id="instant" data-start="12" data-duration="4"></div><div id="nested" data-composition-id="nested" data-start="15" data-duration="4"></div></main><script>${gsap}</script><script>
         window.reports=[];addEventListener('message',e=>{if(e.data.type==='animation-windows')reports.push(e.data)});
         window.__player={getTime:()=>0,isPlaying:()=>false};window.__renderReady=true;
         const tl=gsap.timeline({paused:true});
         tl.to('.shared',{x:100,duration:1,stagger:(i,target)=>+target.dataset.start-6},6);
         const timedParent=gsap.timeline();
         timedParent.to('#framed',{duration:8,ease:'power2.in',keyframes:[{x:20,duration:1},{y:20,duration:1}]},2);
+        timedParent.to('#stepped',{duration:1,ease:'back.inOut',keyframes:[{x:100,duration:0}]},2);
+        timedParent.to('#instant',{duration:0,keyframes:[{x:100,duration:0}]},4);
         timedParent.timeScale(2);tl.add(timedParent,10);
         const registered=gsap.timeline().to('#nested',{x:20,duration:1},0);tl.add(registered,15);
         window.__timelines={main:tl,nested:registered};
@@ -253,6 +255,12 @@ test.skipIf(!browserExecutable())(
       const framed = report.windows.framed!.flatMap(([, starts]) => starts);
       expect(framed[0]).toBe(11);
       expect(framed[1]).toBeCloseTo(14.1748021, 6);
+      expect(report.windows.stepped?.flatMap(([, starts]) => starts)).toEqual([
+        11,
+      ]);
+      expect(report.windows.instant?.flatMap(([, starts]) => starts)).toEqual([
+        12,
+      ]);
       expect(report.windows.nested).toBeUndefined();
       const count = await page.evaluate("window.reports.length");
       await page.evaluate(

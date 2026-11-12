@@ -90,6 +90,101 @@ async function holdPreviews(page: Page, action: () => Promise<void>) {
   }
 }
 
+test("R5 interleaved moves retain the first report for both clips and each undo step", async ({
+  page,
+  request,
+}, info) => {
+  const p = await open(page, request, "tl.to('.shared',{x:100,duration:1},6);");
+  await holdPreviews(page, async () => {
+    await p.raw([{ type: "move", clipIds: ["title"], by: 60 }]);
+    await p.raw([{ type: "move", clipIds: ["still"], by: 60 }]);
+  });
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#still"),
+  ).toHaveAttribute("data-start", "8");
+  await page.locator('[data-clip="still"]').click();
+  await expect(p.warning).toContainText("00:00:06:00");
+  await seekFrame(page, 255);
+  await page.screenshot({ path: info.outputPath("interleaved-moves.png") });
+  await page.reload();
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  for (const [direction, title, still] of [
+    [null, true, true],
+    ["undo", true, false],
+    ["undo", false, false],
+    ["redo", true, false],
+    ["redo", true, true],
+  ] as const) {
+    if (direction) await history(page, request, p.base, direction);
+    for (const [id, warned] of [
+      ["title", title],
+      ["still", still],
+    ] as const) {
+      await page.locator(`[data-clip="${id}"]`).click();
+      if (warned) await expect(p.warning).toContainText("00:00:06:00");
+      else await expect(p.warning).toHaveCount(0);
+    }
+  }
+});
+
+test("R5 zero-duration internal keyframes warn at their visible step", async ({
+  page,
+  request,
+}, info) => {
+  const p = await open(
+    page,
+    request,
+    "tl.to('.one',{duration:1,keyframes:[{x:100,duration:0}]},6);",
+  );
+  await seekFrame(page, 195);
+  const title = page.frameLocator("iframe[data-live]").locator("#title");
+  expect(
+    await title.evaluate(
+      (el) => new DOMMatrix(getComputedStyle(el).transform).m41,
+    ),
+  ).toBe(100);
+  await p.settled([{ type: "move", clipIds: ["title"], by: 60 }]);
+  await seekFrame(page, 255);
+  expect(
+    await title.evaluate(
+      (el) => new DOMMatrix(getComputedStyle(el).transform).m41,
+    ),
+  ).toBe(100);
+  await expect(p.warning).toContainText("00:00:06:00");
+  await page.screenshot({
+    path: info.outputPath("zero-duration-keyframe.png"),
+  });
+});
+
+test("a source edit breaks the unresolved comparison chain for every clip", async ({
+  page,
+  request,
+}) => {
+  const p = await open(page, request, "tl.to('.shared',{x:100,duration:1},6);");
+  const project = ProjectSchema.parse(await (await request.get(p.base)).json());
+  const path = join(project.path, "index.html");
+  const report = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/animation-windows") && response.ok(),
+  );
+  await holdPreviews(page, async () => {
+    await p.raw([{ type: "move", clipIds: ["title"], by: 60 }]);
+    await writeFile(
+      path,
+      `${await readFile(path, "utf8")}<!-- source edit -->`,
+    );
+    await p.raw([{ type: "move", clipIds: ["still"], by: 60 }]);
+  });
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#still"),
+  ).toHaveAttribute("data-start", "8");
+  expect(await (await report).json()).toMatchObject({ warnings: [] });
+  for (const id of ["title", "still"]) {
+    await page.locator(`[data-clip="${id}"]`).click();
+    await expect(p.warning).toHaveCount(0);
+  }
+});
+
 test("R4 rapid API moves keep cumulative evidence through reopen and both undo steps", async ({
   page,
   request,
