@@ -1,0 +1,12 @@
+Observed in native DaVinci Resolve Studio 21.1.2.10 on Linux with the owner's AP preset, in a new scratch project. Silent generated DNxHR video and silent PCM bed. 30 fps. The project was closed and deleted afterwards, then Resolve was quit.
+
+Three contiguous V1 shots: [start, duration] = [0,90], [90,90], [180,90]. No selection. Auto-select enabled.
+Without audio, W at 00:00:03:00 leaves all shots and the playhead unchanged, with no visible message.
+Positive control: W at 00:00:04:00 changes the shots to [0,90], [90,30], [120,90], confirming that the binding and input delivery work and the end is exclusive. Undo restores all three.
+
+Add A1 bed [0,270], auto-select enabled, and park at 00:00:03:00 with no selection.
+W: V1 becomes [0,90] only; A1 becomes [0,90]. It removes the remaining six seconds of picture, the same failure as the checkpoint. The first attempt had the bed selected in Media. I repeated after selecting the video in Media and clicking back into the timeline: same result.
+Undo restores the three shots and [0,270] bed.
+Q at 00:00:03:00: V1 becomes [0,90], [90,90]; A1 becomes [0,180]; playhead goes to 00:00:00:00. The first shot was removed.
+
+Cutroom's requested half-open incoming-clip rule intentionally differs from this native fallback. Q at the incoming clip's start is a no-op; W is explicitly refused by the shared one-frame minimum. Both preserve the film and bed. An explicit zero-frame trim through MCP is refused by the same engine.
