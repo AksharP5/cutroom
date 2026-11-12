@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition (4.3s)
+
+  1 passed (5.2s)

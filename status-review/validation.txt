@@ -1,0 +1,30 @@
+Final head: 1f02e7d75456e0bdc7bb707c2ce260ec23514b98
+Rebased onto dc60f74c78a6934380ad7dfa2aaf3fdd287d3cd5
+
+unit-full.log
+(skip) installed local Whisper produces a real word-timed transcript
+
+ 599 pass
+ 5 skip
+ 0 fail
+ 33931 expect() calls
+Ran 604 tests across 67 files. [79.85s]
+
+e2e-full.log
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/home-linked.spec.ts:9:1 › Home refreshes its last-edited date after MCP edits a linked composition 
+  309 passed (17.3m)
+error: script "test:e2e" exited with code 1
+
+populated-rerun.log
+
+Running 1 test using 1 worker
+
+  ✓  1 e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition (4.3s)
+
+  1 passed (5.2s)
+
+The single full browser failure waited for a lazy image on an offscreen, backdated tile. The test now scrolls its uniquely named project into view and checks dates/rendering without waiting for an unrelated thumbnail. Its focused rerun uses the same 327-project library from the full run. Production code did not change after the full run. Type and formatting checks pass on the final head.
