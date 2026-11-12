@@ -717,61 +717,111 @@ test("media dragged from the Media panel lands on a track as one undo step", asy
   await expect.poll(read).toEqual(initial);
 });
 
-test("a refused audio drop explains the destination track kind", async ({
-  page,
-  request,
-}) => {
-  const { project, timeline, read, at, agent } = await open(
+for (const noticeTiming of [null, "before", "after"] as const) {
+  test(`a refused audio drop explains the destination track kind${noticeTiming ? ` with an outside notice ${noticeTiming}` : ""}`, async ({
     page,
     request,
-    "Refused audio drop",
-  );
-  await promisify(execFile)("ffmpeg", [
-    "-loglevel",
-    "error",
-    "-f",
-    "lavfi",
-    "-i",
-    "sine=duration=2",
-    "-y",
-    join(project.path, "tone.wav"),
-  ]);
-  // A filename beginning with an existing clip id must remain a filename in a refusal.
-  await agent([
-    {
-      type: "insert",
-      track: 2,
-      at: 0,
-      mode: "place",
-      clip: { id: "tone", src: "tone.wav", kind: "audio", duration: 60 },
-    },
-  ]);
-  await expect(timeline.locator('[data-clip="tone"]')).toBeVisible();
-  // A copied file's name starts with that id and continues after a space.
-  await copyFile(
-    join(project.path, "tone.wav"),
-    join(project.path, "tone (1).wav"),
-  );
-  const initial = await read();
-  const row = page
-    .getByRole("region", { name: "Media", exact: true })
-    .getByRole("listitem")
-    .filter({ hasText: "tone (1).wav" });
-  await startMediaDrag(page, row);
-  const to = await at(420);
-  await page.mouse.move(to.x, to.y, { steps: 10 });
-  await page.mouse.move(to.x, to.y);
-  await expect(timeline.locator(".tl-lanes")).toHaveAttribute(
-    "data-refused",
-    "",
-  );
-  await page.mouse.up();
-  await refusalEvidence(page, "audio-drop.png");
-  await expect(page.locator(".toast")).toContainText(
-    "Clip tone (1).wav is audio and V1 is a video track.",
-  );
-  expect(await read()).toEqual(initial);
-});
+  }) => {
+    const { project, timeline, read, at, agent } = await open(
+      page,
+      request,
+      "Refused audio drop",
+    );
+    await promisify(execFile)("ffmpeg", [
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=duration=2",
+      "-y",
+      join(project.path, "tone.wav"),
+    ]);
+    // A filename beginning with an existing clip id must remain a filename in a refusal.
+    await agent([
+      {
+        type: "insert",
+        track: 2,
+        at: 0,
+        mode: "place",
+        clip: { id: "tone", src: "tone.wav", kind: "audio", duration: 60 },
+      },
+    ]);
+    await expect(timeline.locator('[data-clip="tone"]')).toBeVisible();
+    // A copied file's name starts with that id and continues after a space.
+    await copyFile(
+      join(project.path, "tone.wav"),
+      join(project.path, "tone (1).wav"),
+    );
+    const initial = await read();
+    if (noticeTiming) {
+      // Settle the setup insertion separately so its notice cannot coalesce with the disk edit.
+      await page.waitForTimeout(1000);
+      const dismiss = page
+        .locator(".toast")
+        .getByRole("button", { name: "Dismiss", exact: true });
+      if (await dismiss.count()) await dismiss.click();
+      await expect(page.locator(".toast")).toHaveCount(0);
+    }
+    const outside = page
+      .getByRole("status")
+      .filter({ hasText: "Outside edit updated 1 clip." });
+    const changeTitle = async () => {
+      const index = join(project.path, "index.html");
+      await writeFile(
+        index,
+        (await readFile(index, "utf8")).replace(
+          ">Title</div>",
+          ">Changed on disk</div>",
+        ),
+      );
+      await expect(
+        timeline.locator('[data-clip-label="title"] .tl-text'),
+      ).toHaveText("Changed on disk");
+    };
+    if (noticeTiming === "before") {
+      await changeTitle();
+      await expect(outside).toBeVisible();
+    }
+    const row = page
+      .getByRole("region", { name: "Media", exact: true })
+      .getByRole("listitem")
+      .filter({ hasText: "tone (1).wav" });
+    await startMediaDrag(page, row);
+    const to = await at(420);
+    await page.mouse.move(to.x, to.y, { steps: 10 });
+    await page.mouse.move(to.x, to.y);
+    await expect(timeline.locator(".tl-lanes")).toHaveAttribute(
+      "data-refused",
+      "",
+    );
+    await page.mouse.up();
+    await refusalEvidence(page, "audio-drop.png");
+    await expect(page.locator(".toast")).toContainText(
+      "Clip tone (1).wav is audio and V1 is a video track.",
+    );
+    if (!noticeTiming) {
+      expect(await read()).toEqual(initial);
+      return;
+    }
+    await page.clock.install();
+    if (noticeTiming === "after") await changeTitle();
+    // Force the coalescing and hold deadlines past. The refusal must keep its lifetime,
+    // and the queued notice must get its own full hold when it finally becomes visible.
+    await page.clock.fastForward(7000);
+    const refusal = page.getByRole("alert").filter({
+      hasText: "Clip tone (1).wav is audio and V1 is a video track.",
+    });
+    await expect(refusal).toBeVisible();
+    await refusal.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(outside).toBeVisible();
+    await page.clock.fastForward(1000);
+    await expect(outside).toBeVisible();
+    await page.clock.fastForward(6000);
+    await expect(outside).toHaveCount(0);
+    expect(await read()).toEqual(initial);
+  });
+}
 
 test("a refused move names its locked destination", async ({
   page,

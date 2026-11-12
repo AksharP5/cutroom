@@ -136,7 +136,10 @@ test("media overwrite, modifier insert and edge tracks match MCP and undo one st
         ).data[3];
     });
   const undo = async () => {
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await page
+      .getByRole("toolbar", { name: "Tools", exact: true })
+      .getByRole("button", { name: "Undo", exact: true })
+      .click();
     await expect.poll(read).toEqual(initial);
     expect(await agentRead()).toEqual(initial);
   };

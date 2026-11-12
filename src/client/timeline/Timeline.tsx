@@ -247,6 +247,18 @@ const ClipLabel = memo(function ClipLabel({
       >
         {clipName(clip)}
       </span>
+      {clip.text && (
+        <span className="tl-text-line">
+          <span
+            className="tl-name tl-text"
+            data-unscaled
+            style={{ "--f": clip.start, "--e": end }}
+            title={clip.text}
+          >
+            {clip.text}
+          </span>
+        </span>
+      )}
       {timed && (
         <span className="tl-length" data-unscaled style={{ "--f": end }}>
           {formatTimecode(clip.duration, fps)}

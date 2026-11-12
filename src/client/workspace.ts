@@ -1,3 +1,4 @@
+import { cssMilliseconds } from "./timeline/math";
 import { create } from "zustand";
 
 const NEW_EDITOR_KEY = "cutroom.newEditor";
@@ -55,23 +56,73 @@ export const useWorkspace = create(() => ({
   >,
   /** The header toast's message, empty when none shows. */
   toast: "",
+  toastTone: "error" as "error" | "info",
   toastAction: null as { label: string; run(): void } | null,
 }));
 
-let toastVersion = 0;
+interface Toast {
+  message: string;
+  action: { label: string; run(): void } | null;
+  tone: "error" | "info";
+  transient: boolean;
+}
+
+let foregroundToast: Toast | null = null;
+let backgroundToast: Toast | null = null;
+let visibleToast: Toast | null = null;
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+function dismissToast(toast: Toast | null) {
+  if (foregroundToast === toast) foregroundToast = null;
+  if (backgroundToast === toast) backgroundToast = null;
+  publishToast();
+}
+
+function publishToast() {
+  const toast = foregroundToast ?? backgroundToast;
+  if (toast === visibleToast) return;
+  visibleToast = toast;
+  clearTimeout(toastTimer);
+  useWorkspace.setState({
+    toast: toast?.message ?? "",
+    toastAction: toast?.action ?? null,
+    toastTone: toast?.tone ?? "error",
+  });
+  if (toast?.transient) {
+    const duration = cssMilliseconds(
+      getComputedStyle(document.documentElement).getPropertyValue(
+        "--duration-toast-hold",
+      ),
+    );
+    toastTimer = setTimeout(() => dismissToast(toast), duration);
+  }
+}
 
 /** The returned dismiss function clears only this toast, leaving later messages alone. */
 export const showToast = (
   message: string,
   action: { label: string; run(): void } | null = null,
+  options: {
+    tone?: "error" | "info";
+    transient?: boolean;
+    priority?: "background";
+  } = {},
 ) => {
-  const version = ++toastVersion;
-  useWorkspace.setState({ toast: message, toastAction: action });
-  return () => {
-    if (version !== toastVersion) return;
-    ++toastVersion;
-    useWorkspace.setState({ toast: "", toastAction: null });
+  if (!message) {
+    dismissToast(visibleToast);
+    return () => {};
+  }
+  const toast: Toast = {
+    message,
+    action,
+    tone: options.tone ?? "error",
+    transient: options.transient ?? false,
   };
+  // Outside notices wait behind owner feedback, including while their hold timer runs.
+  if (options.priority === "background") backgroundToast = toast;
+  else foregroundToast = toast;
+  publishToast();
+  return () => dismissToast(toast);
 };
 
 type EditorErrorSide = "viewer" | "timeline";

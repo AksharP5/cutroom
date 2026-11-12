@@ -611,6 +611,15 @@
   padding: 1px 0;
   text-overflow: ellipsis;
 }
+/* Text comes from the composition projection, using the same type and colour as the name. */
+.tl-text-line {
+  position: absolute;
+  top: var(--size-clip-name);
+  left: 0;
+  right: 0;
+  display: flex;
+  padding: 0 5px 0 6px;
+}
 /*
   The duration shows on clips at least 200px wide. As a clip scrolls out on the left its stuck
   name closes in on the duration, so the duration fades out before they meet: scroll-driven,

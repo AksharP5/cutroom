@@ -155,6 +155,7 @@ export function App() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const error = useWorkspace((state) => state.toast);
+  const toastTone = useWorkspace((state) => state.toastTone);
   const toastAction = useWorkspace((state) => state.toastAction);
   const [toastLeaving, setToastLeaving] = useState(false);
   useEffect(() => setToastLeaving(false), [error]);
@@ -488,9 +489,9 @@ export function App() {
           {error && (
             <div
               className="toast"
-              data-tone="error"
+              data-tone={toastTone}
               data-leaving={toastLeaving || undefined}
-              role="alert"
+              role={toastTone === "info" ? "status" : "alert"}
               onTransitionEnd={(event) => {
                 if (toastLeaving && event.propertyName === "opacity") {
                   setToastLeaving(false);

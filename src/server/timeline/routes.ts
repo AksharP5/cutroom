@@ -260,13 +260,16 @@ export function createTimelineRoutes(
     const project = await store.get(c.req.param("id"));
     const composition = canonical(c.req.query("composition") ?? "index.html");
     try {
-      const { parsed, revision } = await read(project, composition);
-      return c.json({
-        composition,
-        revision,
-        timeline: parsed.timeline,
-        ...(await reviews.clipChanges(project, composition)),
-      } satisfies TimelineView);
+      return c.json(
+        await reviews.readComposition(project, composition, async () => {
+          const { parsed, revision } = await read(project, composition);
+          return {
+            composition,
+            revision,
+            timeline: parsed.timeline,
+          } satisfies TimelineView;
+        }),
+      );
     } catch (error) {
       return refused(c, error);
     }
