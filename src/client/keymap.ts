@@ -174,6 +174,11 @@ export const keymap = {
     keys: ["Ctrl+-"],
     repeat: true,
   },
+  editSelectAll: {
+    area: "Select",
+    label: "Select all clips",
+    keys: ["Ctrl+A"],
+  },
   editSelectItemAtPlayhead: {
     area: "Select",
     label: "Select clips at the playhead",
@@ -328,6 +333,13 @@ export function actionFor(event: KeyboardEvent): Action | null {
   const combo = comboOf(event);
   const action = combo ? bindings.get(combo) : undefined;
   if (!action) return null;
+  if (
+    (action === "editCopy" ||
+      action === "editCut" ||
+      action === "editSelectAll") &&
+    window.getSelection()?.toString()
+  )
+    return null;
   const binding: Binding = keymap[action];
   return event.repeat && !binding.repeat ? null : action;
 }

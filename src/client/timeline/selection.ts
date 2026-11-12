@@ -100,6 +100,14 @@ export function marqueeSelection(
   };
 }
 
+/** Select All includes every unlocked track, regardless of auto-select or linked partners. */
+export function selectAll(timeline: Timeline): Selection {
+  return {
+    ids: new Set(selectable(timeline).map((clip) => clip.id)),
+    anchor: null,
+  };
+}
+
 /** Shift+V: the clips under the playhead on unlocked tracks with auto-select on. */
 export function selectionAtPlayhead(
   timeline: Timeline,
