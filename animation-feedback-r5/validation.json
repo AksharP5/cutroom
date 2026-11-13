@@ -1,0 +1,50 @@
+{
+  "head": "b89cfe1ae075801e7b9d0a26ee706bea1bda67c0",
+  "mainAtMerge": "e59752f977393e5f55519459ea92c0b834159d10",
+  "contract": "Timeline edits never rewrite animation scripts. Before/after animation origins and new target lineage select candidates; best-effort source attribution supplies one ephemeral warning per edit.",
+  "staticChecks": {
+    "types": "pass",
+    "format": "pass",
+    "productionBuild": "pass",
+    "diff": "pass"
+  },
+  "unit": {
+    "passed": 638,
+    "skipped": 5,
+    "failed": 0,
+    "files": 69,
+    "seconds": 112.39,
+    "head": "bb908002111df6bd30b175e678a239ed73ebc5a0",
+    "skips": "Optional native Electron lifecycle/window and installed Whisper checks"
+  },
+  "fullBrowser": {
+    "passed": 339,
+    "failed": 1,
+    "minutes": 19.6,
+    "head": "f59abe74af8f912f14345f7a63f625d361b26c63",
+    "failure": "An empty parser result incorrectly warned about an unrelated razor piece and replaced the partial-cut notice. Corrected in bb90800."
+  },
+  "browserAfterCorrection": {
+    "passed": 31,
+    "failed": 0,
+    "minutes": 1.6,
+    "head": "bb908002111df6bd30b175e678a239ed73ebc5a0",
+    "scope": "All animation R1-R5 and partial-razor tests"
+  },
+  "browserAfterMainMerge": {
+    "passed": 25,
+    "failed": 0,
+    "minutes": 1.4,
+    "head": "b89cfe1ae075801e7b9d0a26ee706bea1bda67c0",
+    "scope": "Animation flow, Ctrl+A selection, dialog/keyboard focus, export, source viewer"
+  },
+  "performance": {
+    "passed": 6,
+    "failed": 0,
+    "minutes": 3.7,
+    "head": "b89cfe1ae075801e7b9d0a26ee706bea1bda67c0",
+    "execution": "Alone after functional runs"
+  },
+  "reproduction": "R5 overlap regression fails on 81de1df because title is absent from feedback. The corrected route reports title and other; script SHA-256 is identical before/after. See overlap-result.json.",
+  "limits": "Attribution can over-warn and can miss targets the parser/source hints cannot attribute. No runtime animation audit. Warning uses generic timing copy. File-local sub-composition titles are preferred."
+}

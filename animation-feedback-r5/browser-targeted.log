@@ -1,0 +1,103 @@
+$ bun run build && playwright test --grep-invert @performance --config "playwright.retime6.config.ts" "e2e/animation-feedback-r2.spec.ts" "e2e/animation-feedback-r3.spec.ts" "e2e/animation-feedback-r4.spec.ts" "e2e/animation-feedback-safety.spec.ts" "e2e/animation-feedback.spec.ts" "e2e/razor-partial.spec.ts"
+$ vite build
+vite v6.4.2 building for production...
+transforming...
+../../dev/cutroom/node_modules/zod/v4/core/regexes.js (74:0): A comment
+
+"/** Anchors a pattern source. The interpolation lives here rather than at the call site because
+ * esbuild will not drop a `@__PURE__` call whose own argument interpolates a variable, but it
+ * will drop `anchor(dateSource)`. Keeping it inline pinned `date` into every bundle. */"
+
+in "../../dev/cutroom/node_modules/zod/v4/core/regexes.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+../../dev/cutroom/node_modules/zod/v4/core/util.js (400:0): A comment
+
+"// Wrapped in a `@__PURE__` IIFE: esbuild never tree-shakes a top-level initializer that contains a member access on `Number`, so the bare object literal survived into every bundle."
+
+in "../../dev/cutroom/node_modules/zod/v4/core/util.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+[plugin vite:resolve] Module "os" has been externalized for browser compatibility, imported by "/home/akshar/dev/cutroom/node_modules/recast/lib/util.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+✓ 6896 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /home/akshar/.cache/retime6/src/client/edit/transport.ts is dynamically imported by /home/akshar/.cache/retime6/src/client/App.tsx but also statically imported by /home/akshar/.cache/retime6/src/client/edit/EditPage.tsx, /home/akshar/.cache/retime6/src/client/edit/NoteLayer.tsx, /home/akshar/.cache/retime6/src/client/edit/PictureSelect.tsx, /home/akshar/.cache/retime6/src/client/edit/TransportBar.tsx, /home/akshar/.cache/retime6/src/client/edit/Viewer.tsx, /home/akshar/.cache/retime6/src/client/edit/editFrame.ts, /home/akshar/.cache/retime6/src/client/edit/inspector/Inspector.tsx, /home/akshar/.cache/retime6/src/client/edit/noteVisibility.ts, /home/akshar/.cache/retime6/src/client/edit/openClipMenu.ts, /home/akshar/.cache/retime6/src/client/edit/placeMedia.ts, /home/akshar/.cache/retime6/src/client/edit/preview.ts, /home/akshar/.cache/retime6/src/client/edit/source.ts, /home/akshar/.cache/retime6/src/client/timeline/ProjectTimeline.tsx, /home/akshar/.cache/retime6/src/client/voiceover/session.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                                    0.93 kB │ gzip:     0.48 kB
+dist/assets/MartianMono-var-1TqSgyfh.woff2        38.49 kB
+dist/assets/InstrumentSans-var-BVScPF0l.woff2     57.33 kB
+dist/assets/EditPage-Ctfo-iSZ.css                 40.60 kB │ gzip:     7.56 kB
+dist/assets/CutroomEditor-CF8NfkbL.css           130.99 kB │ gzip:    10.89 kB
+dist/assets/index-CAhnZFCx.css                   260.96 kB │ gzip:    42.78 kB
+dist/assets/pausedVideoDecoder-DwfPgV3V.js         6.54 kB │ gzip:     2.82 kB │ map:     26.95 kB
+dist/assets/shallow-BdC3CR33.js                   34.58 kB │ gzip:     8.99 kB │ map:     54.77 kB
+dist/assets/hyperframes-player-Bvg9ASHb.js       115.59 kB │ gzip:    33.30 kB │ map:    233.01 kB
+dist/assets/EditPage-Cdnzxqae.js                 189.38 kB │ gzip:    62.57 kB │ map:    684.67 kB
+dist/assets/src-CQdKIkeb.js                      207.60 kB │ gzip:    51.17 kB │ map:    785.11 kB
+dist/assets/dist-Dc1LLgNx.js                     211.15 kB │ gzip:    55.94 kB │ map:  1,005.75 kB
+dist/assets/codec-CuX-UgpR.js                    558.45 kB │ gzip:   145.37 kB │ map:  2,319.04 kB
+dist/assets/index-MrX4zzAj.js                    732.84 kB │ gzip:   226.32 kB │ map:  3,412.57 kB
+dist/assets/CutroomEditor-CwwYJcJp.js          5,056.54 kB │ gzip: 1,476.61 kB │ map: 20,413.05 kB
+
+(!) Some chunks are larger than 1500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 11.61s
+
+Running 31 tests using 1 worker
+
+(node:3853503) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"r2":"external","before":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   1 e2e/animation-feedback-r2.spec.ts:13:3 › R2 external: Inspector move warns and preserves unrelated animation (1.9s)
+{"r2":"negativeDelay","before":[{"id":"cta","owner":"cta","at":0},{"id":"shot-b","owner":"shot-b","at":6}],"after":[{"id":"cta","owner":"cta","at":0},{"id":"shot-b","owner":"shot-b","at":6}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   2 e2e/animation-feedback-r2.spec.ts:13:3 › R2 negativeDelay: Inspector move warns and preserves unrelated animation (1.3s)
+{"r2":"aliasedDefaults","before":[{"id":"cta","owner":"cta","at":36}],"after":[{"id":"cta","owner":"cta","at":37}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   3 e2e/animation-feedback-r2.spec.ts:13:3 › R2 aliasedDefaults: Inspector move warns and preserves unrelated animation (1.4s)
+{"r2":"computedMethod","before":[{"id":"cta","owner":"cta","at":36}],"after":[{"id":"cta","owner":"cta","at":37}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   4 e2e/animation-feedback-r2.spec.ts:13:3 › R2 computedMethod: Inspector move warns and preserves unrelated animation (1.7s)
+{"r2":"duplicateId","before":[{"id":"cta","owner":"cta","at":36},{"id":"cta","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"cta","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   5 e2e/animation-feedback-r2.spec.ts:13:3 › R2 duplicateId: Inspector move warns and preserves unrelated animation (1.3s)
+{"r2":"membership","before":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   6 e2e/animation-feedback-r2.spec.ts:13:3 › R2 membership: Inspector move warns and preserves unrelated animation (1.3s)
+  ✓   7 e2e/animation-feedback-r2.spec.ts:111:1 › R2 Map.set does not claim that a clip has animation (1.4s)
+{"r3":"nested","before":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":4},{"id":"cta","host":"child","at":4}]},"after":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":4},{"id":"cta","host":"child","at":4}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   8 e2e/animation-feedback-r3.spec.ts:17:3 › R3 nested: move refuses and preserves rendered ownership (5.9s)
+{"r3":"quirks","before":{"mode":"BackCompat","tweens":[{"id":"cta","host":"main","at":4},{"id":"CTA","host":"main","at":4}]},"after":{"mode":"BackCompat","tweens":[{"id":"cta","host":"main","at":4},{"id":"CTA","host":"main","at":4}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   9 e2e/animation-feedback-r3.spec.ts:17:3 › R3 quirks: move refuses and preserves rendered ownership (1.9s)
+{"r3":"precision","before":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":10000000000000000}]},"after":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":10000000000000000}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  10 e2e/animation-feedback-r3.spec.ts:17:3 › R3 precision: move refuses and preserves rendered ownership (1.8s)
+{"r4":"autoVideoFront","before":[{"id":"hf-video-0","tag":"VIDEO","at":4},{"id":"hf-video-0","tag":"SPAN","at":4}],"after":[{"id":"hf-video-0","tag":"VIDEO","at":4},{"id":"hf-video-0","tag":"SPAN","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":71200}
+  ✓  11 e2e/animation-feedback-r4.spec.ts:31:3 › R4 autoVideoFront: edit preserves tween seconds in the editor and MP4 (5.0s)
+{"r4":"noscriptScript","before":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"after":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓  12 e2e/animation-feedback-r4.spec.ts:31:3 › R4 noscriptScript: edit preserves tween seconds in the editor and MP4 (5.4s)
+{"r4":"pastedExecutable","before":[{"id":"cta","tag":"DIV","at":4}],"after":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓  13 e2e/animation-feedback-r4.spec.ts:31:3 › R4 pastedExecutable: edit preserves tween seconds in the editor and MP4 (6.8s)
+{"r4":"svgUse","before":[{"id":"word","tag":"text","at":4}],"after":[{"id":"word","tag":"text","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":3468}
+  ✓  14 e2e/animation-feedback-r4.spec.ts:31:3 › R4 svgUse: edit preserves tween seconds in the editor and MP4 (5.9s)
+{"r4":"smil","before":[{"id":"","tag":"text","at":4},{"id":"","tag":"text","at":4}],"after":[{"id":"","tag":"text","at":4},{"id":"","tag":"text","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓  15 e2e/animation-feedback-r4.spec.ts:31:3 › R4 smil: edit preserves tween seconds in the editor and MP4 (5.5s)
+{"r4":"tableOwner","before":[{"id":"word","tag":"SPAN","at":4}],"after":[{"id":"word","tag":"SPAN","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":7860}
+  ✓  16 e2e/animation-feedback-r4.spec.ts:31:3 › R4 tableOwner: edit preserves tween seconds in the editor and MP4 (6.7s)
+{"name":"relative","before":[{"id":"cta","at":36},{"id":"shot-b","at":36}],"after":[{"id":"cta","at":36},{"id":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  17 e2e/animation-feedback-safety.spec.ts:17:3 › R1 relative: Inspector move preserves authored script and every runtime tween, with a toast (1.9s)
+{"name":"mutablePosition","before":[{"id":"cta","at":40}],"after":[{"id":"cta","at":40}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  18 e2e/animation-feedback-safety.spec.ts:17:3 › R1 mutablePosition: Inspector move preserves authored script and every runtime tween, with a toast (1.7s)
+{"name":"mutableTarget","before":[{"id":"shot-b","at":36}],"after":[{"id":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  19 e2e/animation-feedback-safety.spec.ts:17:3 › R1 mutableTarget: Inspector move preserves authored script and every runtime tween, with a toast (1.4s)
+{"name":"nestedScaled","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  20 e2e/animation-feedback-safety.spec.ts:17:3 › R1 nestedScaled: Inspector move preserves authored script and every runtime tween, with a toast (1.3s)
+{"name":"helperMap","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  21 e2e/animation-feedback-safety.spec.ts:17:3 › R1 helperMap: Inspector move preserves authored script and every runtime tween, with a toast (1.6s)
+{"name":"wrongTimeline","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓  22 e2e/animation-feedback-safety.spec.ts:17:3 › R1 wrongTimeline: Inspector move preserves authored script and every runtime tween, with a toast (1.7s)
+  ✓  23 e2e/animation-feedback.spec.ts:97:1 › W ripple warns about the checkpoint title; script and exported animation remain unchanged (8.0s)
+  ✓  24 e2e/animation-feedback.spec.ts:212:1 › timeline move, Inspector Start and real MCP moves all warn without changing scripts (1.9s)
+  ✓  25 e2e/animation-feedback.spec.ts:294:1 › animation shows one dismissible Ask agent toast, saving a Review note only on request (5.4s)
+  ✓  26 e2e/animation-feedback.spec.ts:402:1 › several animated clips share one toast and Ask agent adds a note to each (1.8s)
+  ✓  27 e2e/animation-feedback.spec.ts:428:1 › W overlap warns once for the shortened lower third and later title; Ask agent saves both notes (2.4s)
+  ✓  28 e2e/razor-partial.spec.ts:9:1 › E cuts video under an id-animated title, reports the skip, and undoes in one step (2.0s)
+  ✓  29 e2e/razor-partial.spec.ts:136:3 › q refuses to desync a spanning title and honors its auto-select opt-out (1.9s)
+  ✓  30 e2e/razor-partial.spec.ts:136:3 › w refuses to desync a spanning title and honors its auto-select opt-out (1.9s)
+  ✓  31 e2e/razor-partial.spec.ts:136:3 › Shift+x refuses to desync a spanning title and honors its auto-select opt-out (2.0s)
+
+  31 passed (1.6m)

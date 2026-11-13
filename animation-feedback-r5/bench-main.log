@@ -1,0 +1,26 @@
+$ bun scripts/bench-timeline.ts
+{
+  "runtime": "Bun 1.4.4",
+  "clips": 500,
+  "bytes": 74761,
+  "medianMs": {
+    "parse": 9.55,
+    "apply": 2.87,
+    "multiRangeApply": 3.95,
+    "patch": 2.5,
+    "request": 59.35,
+    "bulkApply": 2.12,
+    "bulkPatch": 6.66
+  },
+  "budgetMs": {
+    "parse": 10,
+    "apply": 5,
+    "multiRangeApply": 15,
+    "patch": 5,
+    "request": 50,
+    "bulkApply": 20,
+    "bulkPatch": 20
+  }
+}
+Over budget: request
+error: script "bench:timeline" exited with code 1

@@ -1,0 +1,71 @@
+{
+  "fps": 30,
+  "command": {
+    "type": "trim",
+    "clipId": "shot",
+    "edge": "end",
+    "to": 30,
+    "ripple": true
+  },
+  "before": [
+    {
+      "id": "shot",
+      "start": 0,
+      "duration": 180
+    },
+    {
+      "id": "title",
+      "start": 120,
+      "duration": 120
+    },
+    {
+      "id": "other",
+      "start": 300,
+      "duration": 120
+    }
+  ],
+  "after": [
+    {
+      "id": "shot",
+      "start": 0,
+      "duration": 30
+    },
+    {
+      "id": "title",
+      "start": 30,
+      "duration": 60
+    },
+    {
+      "id": "other",
+      "start": 150,
+      "duration": 120
+    }
+  ],
+  "scriptSHA256": {
+    "before": "6e0960417ad4b7314b1d1a6850fe6c67423b08103b28973e1eb647d2d88c86ef",
+    "after": "6e0960417ad4b7314b1d1a6850fe6c67423b08103b28973e1eb647d2d88c86ef"
+  },
+  "scriptBytesUnchanged": true,
+  "observedToast": "2 clips left their animation behind.",
+  "notes": [
+    {
+      "clip": "title",
+      "time": 1,
+      "body": "Make this clip's animation follow the clip. Its animation could not be shifted automatically and the clip now starts at 1.00 s. Move the title into its own sub-composition file with a timeline in clip-local seconds. Keep the look and the timing relative to the clip's start. Check the first second of the clip with timeline_view."
+    },
+    {
+      "clip": "other",
+      "time": 5,
+      "body": "Make this clip's animation follow the clip. Its animation could not be shifted automatically and the clip now starts at 5.00 s. Move the title into its own sub-composition file with a timeline in clip-local seconds. Keep the look and the timing relative to the clip's start. Check the first second of the clip with timeline_view."
+    }
+  ],
+  "editorFrames": {
+    "before": 6.5,
+    "after": 1
+  },
+  "exportFrames": {
+    "before": 6.5,
+    "after": 1.5
+  },
+  "undoRedoExact": true
+}

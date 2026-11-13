@@ -1,0 +1,82 @@
+{
+  "runtime": "Bun 1.4.4",
+  "main": "d1354ae18f614f1ebf34fe744ec762324b37dc9b",
+  "ordinary500Clips": {
+    "mainMedianMs": {
+      "parse": 9.55,
+      "apply": 2.87,
+      "multiRangeApply": 3.95,
+      "patch": 2.5,
+      "request": 59.35,
+      "bulkApply": 2.12,
+      "bulkPatch": 6.66
+    },
+    "headMedianMs": {
+      "parse": 7.53,
+      "apply": 2.23,
+      "multiRangeApply": 3.98,
+      "patch": 2.87,
+      "request": 61.65,
+      "bulkApply": 1.82,
+      "bulkPatch": 7.78
+    },
+    "requestBudgetMs": 50,
+    "requestBudgetPassedOnEither": false
+  },
+  "feedbackOnly500Tweens": {
+    "clips": 500,
+    "tweens": 500,
+    "scriptBytes": 21862,
+    "coldMs": 54.36014399999999,
+    "medianMs": 14.635111999999992,
+    "p95Ms": 19.939842999999996,
+    "warnings": 499
+  },
+  "note": "Serial bench:timeline main/head runs. Feedback-only numbers include source parsing, attribution and warning creation, excluding the normal edit/write. This PR removes the retimer patch budget and restores the existing browser performance suite.",
+  "head": "b89cfe1ae075801e7b9d0a26ee706bea1bda67c0",
+  "mainAtMerge": "e59752f977393e5f55519459ea92c0b834159d10",
+  "browserTimeline": [
+    {
+      "count": 400,
+      "runs": 3,
+      "trace": false,
+      "key": {
+        "p50": 16.600000023841858,
+        "p95": 22.80000001192093,
+        "max": 85.09999999403954,
+        "medianMax": 77.2999999821186,
+        "longTasks": 3,
+        "longestTask": 84
+      },
+      "ripple": {
+        "p50": 16.700000017881393,
+        "p95": 37.599999994039536,
+        "max": 77.09999999403954,
+        "medianMax": 57.099999994039536,
+        "longTasks": 0,
+        "longestTask": 0
+      }
+    },
+    {
+      "count": 500,
+      "runs": 3,
+      "trace": false,
+      "key": {
+        "p50": 16.600000023841858,
+        "p95": 27.799999982118607,
+        "max": 78.40000000596046,
+        "medianMax": 68.10000002384186,
+        "longTasks": 3,
+        "longestTask": 77
+      },
+      "ripple": {
+        "p50": 16.80000001192093,
+        "p95": 56.60000002384186,
+        "max": 74.19999998807907,
+        "medianMax": 70.2000000178814,
+        "longTasks": 3,
+        "longestTask": 58
+      }
+    }
+  ]
+}

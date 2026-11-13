@@ -1,0 +1,28 @@
+bun test v1.4.4 (38afee6c8)
+
+../retime6-run/reviewed/tests/animation-feedback.test.ts:
+51 |   );
+52 |   try {
+53 |     const result = await f.edit([
+54 |       { type: "trim", clipId: "shot", edge: "end", to: 30, ripple: true },
+55 |     ]);
+56 |     expect(result.animationLeftBehind?.map((c) => c.clipId).sort()).toEqual([
+                                                                         ^
+error: expect(received).toEqual(expected)
+
+  [
+    "other",
+-   "title",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/akshar/.cache/retime6-run/reviewed/tests/animation-feedback.test.ts:56:69)
+(fail) W overlap warns for both the shortened/displaced lower third and later title without touching script [69.42ms]
+
+ 0 pass
+ 28 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [246.00ms]
