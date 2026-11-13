@@ -273,10 +273,7 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
       .toBe(24);
     await undo();
     await expect(field("Position X")).toHaveValue("40 px");
-    // The name strip: the middle of a unity clip is its gain line.
-    await page
-      .locator('[data-clip="sound"]')
-      .click({ modifiers: ["Alt"], position: { x: 20, y: 5 } });
+    await page.locator('[data-clip="sound"]').click({ modifiers: ["Alt"] });
     await expect(inspector.getByText("Transform", { exact: true })).toHaveCount(
       0,
     );

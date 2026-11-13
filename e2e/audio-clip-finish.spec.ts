@@ -114,8 +114,8 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
   const svg = (await page
     .locator('[data-clip-mix="music"] svg')
     .boundingBox())!;
-  // At unity the line sits three tenths of the way down the body.
-  const y = svg.y + svg.height * 0.3;
+  // At unity the line sits 3 px above the middle of the body.
+  const y = svg.y + svg.height / 2 - 3;
   await page.mouse.move(box.x + 3, y);
   await expect(page.locator(".tl-lanes")).toHaveAttribute(
     "data-cursor",
@@ -144,6 +144,6 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
     .poll(
       async () => (await read()).clips.find((c) => c.id === "music")!.volume,
     )
-    .toBe(10 ** (-7 / 20));
+    .toBe(10 ** (-4 / 20));
   expect((await read()).clips.find((c) => c.id === "music")!.start).toBe(0);
 });

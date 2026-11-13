@@ -20,19 +20,47 @@ import type { Row } from "./math";
 
 const SILENCE_DB = -60;
 /**
- * The gain scale of a clip body: how far down from its top, in percent, each dB level sits, in
- * straight runs between these stops. Most mixing is cutting, so the 24 dB below unity get more
- * than half the body: a music bed under speech lands on its level within a pixel or two, at
- * about 1.7 dB per pixel on a default audio track. The boost above unity keeps a like rate in
- * the top three tenths, and the last sliver falls away to silence. The line is drawn on this
- * scale and a drag reads it back, so the line stays under the pointer.
+ * Unity sits this many pixels above the middle of the clip body and -6 dB as many below it, at
+ * every track height. A hand takes a clip by the middle of its box or of its waveform, which
+ * are 5.5 px apart, and the line's grab band is 3 px wide: at unity the band lies between the
+ * two with a pixel to spare on each side, and from -6 dB down it is a pixel or more below both.
+ * So a press on either middle moves the clip, at unity and at any level a music bed sits at.
  */
-const SCALE = [
-  [0, MAX_AUDIO_GAIN_DB],
-  [30, 0],
-  [85, -24],
-  [100, SILENCE_DB],
-] as const;
+const CLEAR = 3;
+/** Where -24 dB sits, in percent down the body. What is left below falls away to silence. */
+const BED_END = 94;
+/**
+ * The clip body the line is drawn in, for a track of this height: the clip leaves 2 px of its
+ * row, and its body is what remains under the name strip, less 3 px at the bottom, as
+ * `.tl-mix` and `.tl-fade-curve` lay it out in timeline.css.
+ */
+export const mixBody = (rowHeight: number) => rowHeight - 19;
+
+type Stops = readonly (readonly [percent: number, db: number])[];
+const scales = new Map<number, Stops>();
+/**
+ * The gain scale of a body this many pixels tall: how far down from its top, in percent, each
+ * dB level sits, in straight runs between the stops. Between unity and -6 dB a pixel is 1 dB.
+ * Everything from there to `BED_END` goes to the 18 dB a music bed is set in, the most room
+ * that keeps the line clear of both middles. The line is drawn on this scale and a drag reads
+ * it back, so the line stays under the pointer.
+ */
+function scaleOf(body: number) {
+  let stops = scales.get(body);
+  if (!stops) {
+    const clear = (CLEAR / body) * 100;
+    stops = [
+      [0, MAX_AUDIO_GAIN_DB],
+      [50 - clear, 0],
+      [50 + clear, -6],
+      [BED_END, -24],
+      [100, SILENCE_DB],
+    ];
+    if (scales.size >= 64) scales.clear();
+    scales.set(body, stops);
+  }
+  return stops;
+}
 /**
  * A clip turned down still shows its waveform at this share of its height at unity, or more,
  * so the beats of a ducked music bed stay readable. Fades taper from there to nothing.
@@ -41,17 +69,18 @@ const WAVE_FLOOR = 1 / 3;
 /** Shift moves the line a tenth of a dB per pixel at every track height. */
 const FINE_DB = 0.1;
 
-/** Reads the scale from its `from` column to the other: 0 is percent, 1 is dB. */
-function onScale(value: number, from: 0 | 1) {
+/** Reads a body's scale from its `from` column to the other: 0 is percent, 1 is dB. */
+function onScale(value: number, from: 0 | 1, body: number) {
+  const scale = scaleOf(body);
   const to = from === 0 ? 1 : 0;
   // Percent rises down the stops while dB falls.
-  const found = SCALE.findIndex(
+  const found = scale.findIndex(
     (stop, index) =>
       index > 0 && (from === 0 ? value <= stop[0] : value >= stop[1]),
   );
-  const index = found < 0 ? SCALE.length - 1 : found;
-  const upper = SCALE[index - 1]!;
-  const lower = SCALE[index]!;
+  const index = found < 0 ? scale.length - 1 : found;
+  const upper = scale[index - 1]!;
+  const lower = scale[index]!;
   return (
     upper[to] +
     ((value - upper[from]) / (lower[from] - upper[from])) *
@@ -59,11 +88,13 @@ function onScale(value: number, from: 0 | 1) {
   );
 }
 
-export function gainLevel(volume: Clip["volume"]) {
+/** How far down a body of this height a gain's line sits, in percent. */
+export function gainLevel(volume: Clip["volume"], body: number) {
   const gain = clampAudioGain(volume ?? 1);
   return onScale(
     gain > 0 ? Math.max(SILENCE_DB, audioGainToDb(gain)) : SILENCE_DB,
     1,
+    body,
   );
 }
 
@@ -121,16 +152,18 @@ export function waveformScale(
 }
 
 /**
- * Where the line is drawn, in percent down the body, for a clip gain on a volume lane's value
- * through a fade. Fades are linear amplitude ramps from the gain's level to silence at the bottom.
+ * Where the line is drawn, in percent down a body of this height, for a clip gain on a volume
+ * lane's value through a fade. Fades are linear amplitude ramps from the gain's level to silence
+ * at the bottom.
  */
-const drawn = (gain: number, lane: number, fade: number) =>
-  100 - (100 - gainLevel(gainTimesLane(gain, lane))) * fade;
+const drawn = (gain: number, lane: number, fade: number, body: number) =>
+  100 - (100 - gainLevel(gainTimesLane(gain, lane), body)) * fade;
 
 export function envelopeHeight(
   clip: Clip,
   fps: Fps,
   time: number,
+  body: number,
   lane: Lane = volumeLane(clip),
   fades = clipFades(clip),
 ) {
@@ -138,6 +171,7 @@ export function envelopeHeight(
     clip.volume ?? 1,
     laneAt(fps, time, lane),
     fadeAt(clip, time, fades),
+    body,
   );
 }
 
@@ -187,17 +221,17 @@ export function gainFromDrag({ from, dy, fine, body, lane, fade }: GainDrag) {
   const through = fade > 0 ? fade : 1;
   const pixel = 100 / body;
   const reach = pixel / 2 + 1e-6;
-  const start = drawn(from, on, through);
-  const unity = drawn(1, on, through);
+  const start = drawn(from, on, through, body);
+  const unity = drawn(1, on, through, body);
   const sticky = from === 1 || Math.abs(start - unity) > reach;
   const at = Math.max(0, Math.min(100, start + dy * pixel));
   if (sticky && Math.abs(at - unity) <= reach) return 1;
-  const db = onScale(Math.max(0, 100 - (100 - at) / through), 0);
+  const db = onScale(Math.max(0, 100 - (100 - at) / through), 0, body);
   return db <= SILENCE_DB ? 0 : gainOf(db - audioGainToDb(on));
 }
 
-/** Draw native automation and fades at the clip's gain level. */
-export function fadePath(clip: Clip, fps: Fps) {
+/** Draw native automation and fades at the clip's gain level, in a body of this height. */
+export function fadePath(clip: Clip, fps: Fps, body: number) {
   const fades = clipFades(clip);
   const lane = volumeLane(clip);
   const framesPerSecond = fps.num / fps.den;
@@ -215,7 +249,7 @@ export function fadePath(clip: Clip, fps: Fps) {
     .sort((a, b) => a - b);
   return times
     .map((time, index) => {
-      return `${index ? "L" : "M"}${((time / clip.duration) * 100).toFixed(2)},${envelopeHeight(clip, fps, time, lane, fades).toFixed(2)}`;
+      return `${index ? "L" : "M"}${((time / clip.duration) * 100).toFixed(2)},${envelopeHeight(clip, fps, time, body, lane, fades).toFixed(2)}`;
     })
     .join(" ");
 }
@@ -231,7 +265,8 @@ export const ClipMix = memo(function ClipMix({
   fps: Fps;
   selected: boolean;
 }) {
-  const path = fadePath(clip, fps);
+  const body = mixBody(row.height);
+  const path = fadePath(clip, fps, body);
   const fades = clipFades(clip);
   return (
     <div
@@ -263,7 +298,7 @@ export const ClipMix = memo(function ClipMix({
         title={`Fade in: ${clip.fadeIn} authored frames`}
         style={{
           "--fade": `${(fades.fadeIn / clip.duration) * 100}%`,
-          "--level": envelopeHeight(clip, fps, fades.fadeIn),
+          "--level": envelopeHeight(clip, fps, fades.fadeIn, body),
         }}
       />
       <i
@@ -272,7 +307,12 @@ export const ClipMix = memo(function ClipMix({
         title={`Fade out: ${clip.fadeOut} authored frames`}
         style={{
           "--fade": `${(fades.fadeOut / clip.duration) * 100}%`,
-          "--level": envelopeHeight(clip, fps, clip.duration - fades.fadeOut),
+          "--level": envelopeHeight(
+            clip,
+            fps,
+            clip.duration - fades.fadeOut,
+            body,
+          ),
         }}
       />
     </div>
