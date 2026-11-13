@@ -132,7 +132,9 @@ A track header's menu holds its switches (Lock, Auto-select, and Enable on video
 
 A Media file's menu opens it in the source viewer. Its Insert at playhead and Overwrite at playhead place the whole file on the destination tracks, with no drag. F9 and F10 place the source viewer's marked part the same way, and so do the Insert and Overwrite buttons above the source and the rows of its right-click menu, which also marks in and out and closes it. The playhead cannot go past the last frame, so with the playhead on the timeline's last frame these edits put the clip after it, at the end. In the desktop app, Reveal in folder shows the file, or a project's folder from home, in the file manager.
 
-Tab reaches the Media list. Once a file has keyboard focus, Up, Down, Home and End move between files; after a click those keys stay with the playhead.
+Rename in a Media file's menu puts the name in a field, selected, with the extension fixed beside it. Enter or leaving the field renames the file, and Esc leaves the name alone. Remove moves the file to the project's `trash` folder, after asking when timeline clips still use it. [What each does to the project](editing.md#media-files).
+
+Tab reaches the Media list. Once a file has keyboard focus, Up, Down, Home and End move between files; after a click those keys stay with the playhead. Backspace, X, Delete and Shift+X remove the file that has keyboard focus, and the next file takes focus. These are the preset's `editBackspace` and `editDelete`, which remove clips from Resolve's Media Pool as well. After a click on a file they still lift and ripple delete on the timeline. The preset binds no key to renaming, so Rename is in the menu only.
 
 ## Mouse
 

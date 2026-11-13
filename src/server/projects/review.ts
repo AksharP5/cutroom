@@ -553,29 +553,39 @@ export function createReviewService(store: ProjectStore) {
     }
     return snapshot;
   };
+  /**
+   * `sources` records every clip the work changed, as a source edit does, for the owner as well.
+   * Otherwise only replaced files count, and only for an agent: watchers cannot tell an owner's
+   * source save from an agent's.
+   */
   const recordAssets = async (
     project: Project,
     before: AssetSnapshot,
     after: AssetSnapshot,
     actor: Extract<ReviewActor, { kind: "agent" }> | undefined,
+    sources = false,
   ) => {
-    if (!actor) return;
+    if (!actor && !sources) return;
     const changes = [...after].flatMap(([path, next]) => {
       const previous = before.get(path);
       if (!previous) return [];
       // A reference being authored is a source edit. Compare files already referenced before
       // this revision, so owner source edits cannot turn into agent asset replacements.
       const changed = new Set(
-        [...next.references]
-          .filter(([, paths]) =>
-            [...paths].some(
-              (path) =>
-                previous.mediaFiles.has(path) &&
-                next.mediaFiles.has(path) &&
-                previous.mediaFiles.get(path) !== next.mediaFiles.get(path),
-            ),
-          )
-          .map(([id]) => id),
+        sources
+          ? [...previous.versions.keys(), ...next.versions.keys()].filter(
+              (id) => previous.versions.get(id) !== next.versions.get(id),
+            )
+          : [...next.references]
+              .filter(([, paths]) =>
+                [...paths].some(
+                  (path) =>
+                    previous.mediaFiles.has(path) &&
+                    next.mediaFiles.has(path) &&
+                    previous.mediaFiles.get(path) !== next.mediaFiles.get(path),
+                ),
+              )
+              .map(([id]) => id),
       );
       return changed.size ? [{ path, previous, next, changed }] : [];
     });
@@ -585,13 +595,15 @@ export function createReviewService(store: ProjectStore) {
     );
     await (await store.history(project)).checkpoint();
     const items = await reconcile(project);
-    const noteIds = items
-      .filter(
-        (item) =>
-          item.review.status === "working" &&
-          item.review.turnId === actor.turn.id,
-      )
-      .map((item) => item.id);
+    const noteIds = actor
+      ? items
+          .filter(
+            (item) =>
+              item.review.status === "working" &&
+              item.review.turnId === actor.turn.id,
+          )
+          .map((item) => item.id)
+      : [];
     for (const { path, previous, next, changed } of changes)
       await recordEdits(
         project,
@@ -675,6 +687,7 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       token: string | undefined,
       work: () => Promise<T>,
+      options: { sources?: boolean } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
@@ -695,6 +708,7 @@ export function createReviewService(store: ProjectStore) {
           before,
           after,
           token === undefined ? undefined : agent(project, token),
+          options.sources,
         );
         assetSnapshots.set(project.id, after);
         return result;

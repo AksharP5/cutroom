@@ -675,6 +675,31 @@ option {
   font-stretch: var(--stretch-condensed);
   font-weight: var(--weight-medium);
 }
+.media-rename {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+}
+.media-rename input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  /* The text sits where the label sat, so the name does not jump as the field opens. */
+  margin-left: -5px;
+  color: var(--text-primary);
+  font-weight: inherit;
+  font-stretch: inherit;
+}
+.media-confirm {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-secondary);
+}
+.media-confirm-remove {
+  color: var(--danger);
+}
 .media-duration {
   flex: none;
   color: var(--text-tertiary);

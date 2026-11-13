@@ -1,49 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { stillMediaExtensions } from "../../shared/media";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
-import { frameTimecode, mediaUrl } from "../api";
+import { MEDIA_TRASH, mediaKind, mediaKinds } from "../../shared/media";
+import { api, frameTimecode, json, mediaUrl } from "../api";
 import { placeAtPlayhead } from "../edit/placeMedia";
-import { openSource } from "../edit/source";
-import { useTimeline } from "../edit/timeline";
+import { closeSource, openSource, useSource } from "../edit/source";
+import { stepHistory, useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
-import { focusByKeyboard, reachedByKeyboard, useKeymap } from "../keymap";
+import {
+  actionFor,
+  focusByKeyboard,
+  reachedByKeyboard,
+  useKeymap,
+} from "../keymap";
 import {
   MEDIA_DRAG_TYPE,
   STILL_SECONDS,
   setMediaDrag,
 } from "../timeline/mediaDrag";
 import type { MediaDrag } from "../timeline/mediaDrag";
-import { useFps, useWorkspace } from "../workspace";
+import { showToast, useFps, useWorkspace } from "../workspace";
 import { openContextMenu, revealRows } from "./ContextMenu";
+import { Modal } from "./Modal";
 
-// Mirrors the formats the upload route validates. `.ts` transport streams are left out so
-// TypeScript files in a project are never listed as video.
-const mediaKinds = [
-  {
-    kind: "video",
-    extensions: [
-      "mp4",
-      "webm",
-      "mov",
-      "mkv",
-      "avi",
-      "m4v",
-      "mxf",
-      "mts",
-      "m2ts",
-    ],
-  },
-  {
-    kind: "audio",
-    extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"],
-  },
-  {
-    kind: "image",
-    extensions: stillMediaExtensions,
-  },
-] as const;
 const acceptedFiles = mediaKinds
   .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
   .join(",");
@@ -65,12 +45,57 @@ const uploadSchema = z.object({
     .default([]),
 });
 
-const mediaKind = (path: string) => {
-  const extension = path.split(".").at(-1)?.toLowerCase();
-  return mediaKinds.find((item) =>
-    item.extensions.some((candidate) => candidate === extension),
+const fileName = (path: string) => path.split("/").at(-1) ?? path;
+
+/** The name in place of the row's label. The extension stays: a rename never converts a file. */
+function RenameField({
+  name,
+  onCommit,
+  onCancel,
+}: {
+  name: string;
+  /** Resolves false when the name was refused and the field stays open to correct it. */
+  onCommit(stem: string, by: "key" | "blur"): Promise<boolean>;
+  onCancel(): void;
+}) {
+  const extension = name.slice(name.lastIndexOf("."));
+  const stem = name.slice(0, -extension.length);
+  const input = useRef<HTMLInputElement>(null);
+  /** Enter or Escape answered; the blur that follows is not a second answer. */
+  const settled = useRef(false);
+  useEffect(() => {
+    input.current?.focus({ preventScroll: true });
+    input.current?.select();
+  }, []);
+  const settle = (value: string, by: "key" | "blur") => {
+    settled.current = true;
+    const next = value.trim();
+    if (!next || next === stem) return onCancel();
+    void onCommit(next, by).then((done) => (settled.current = done));
+  };
+  return (
+    <span className="media-name media-rename">
+      <input
+        ref={input}
+        aria-label={`Rename ${name}`}
+        defaultValue={stem}
+        spellCheck={false}
+        autoComplete="off"
+        onKeyDown={(event) => {
+          // Typing a name never opens, removes, or moves through the rows.
+          event.stopPropagation();
+          if (event.key === "Enter") settle(event.currentTarget.value, "key");
+          if (event.key === "Escape") settle(stem, "key");
+        }}
+        onBlur={(event) => {
+          if (!settled.current) settle(event.currentTarget.value, "blur");
+        }}
+        onDoubleClick={(event) => event.stopPropagation()}
+      />
+      <span>{extension}</span>
+    </span>
   );
-};
+}
 
 /** One row: a thumbnail, the file name, and its length read from the file itself. */
 function MediaRow({
@@ -80,6 +105,11 @@ function MediaRow({
   kind,
   tabbable,
   onFocus,
+  renaming,
+  onRename,
+  onRenameCommit,
+  onRenameCancel,
+  onRemove,
 }: {
   projectId: string;
   /** The project's folder on disk, for the desktop's file manager. */
@@ -89,6 +119,12 @@ function MediaRow({
   /** One row is in the tab order; the arrow keys move between rows. */
   tabbable: boolean;
   onFocus(): void;
+  renaming: boolean;
+  onRename(): void;
+  /** The new name without its extension; `key` when Enter asked for it. */
+  onRenameCommit(stem: string, by: "key" | "blur"): Promise<boolean>;
+  onRenameCancel(): void;
+  onRemove(): void;
 }) {
   const fps = useFps();
   const [duration, setDuration] = useState<number | null>(null);
@@ -165,8 +201,10 @@ function MediaRow({
       data-path={path}
       ref={row}
       tabIndex={tabbable ? 0 : -1}
-      onFocus={onFocus}
-      draggable={placeable}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onFocus();
+      }}
+      draggable={placeable && !renaming}
       onDragStart={(event) => {
         event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
         event.dataTransfer.effectAllowed = "copy";
@@ -203,6 +241,9 @@ function MediaRow({
               run: () =>
                 void placeAtPlayhead(projectId, dragged(), "overwrite"),
             },
+            "separator",
+            { label: "Rename", run: onRename },
+            { label: "Remove", run: onRemove },
             ...(reveal.length ? ["separator" as const, ...reveal] : []),
           ],
           event.currentTarget,
@@ -233,7 +274,20 @@ function MediaRow({
         )}
         {kind === "image" && <img src={src} alt="" loading="lazy" />}
       </span>
-      <span className="media-name">{path.split("/").at(-1)}</span>
+      {renaming ? (
+        <RenameField
+          name={fileName(path)}
+          onCommit={onRenameCommit}
+          onCancel={() => {
+            // Focus moves first: the row takes the keys back as the field closes.
+            if (row.current?.contains(document.activeElement))
+              row.current.focus({ preventScroll: true });
+            onRenameCancel();
+          }}
+        />
+      ) : (
+        <span className="media-name">{fileName(path)}</span>
+      )}
       <span className="media-duration mono">
         {kind === "image"
           ? "Still"
@@ -264,6 +318,18 @@ export function MediaPanel({
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState("");
+  const [renaming, setRenaming] = useState<string>();
+  /** A file the timeline still uses, waiting for the owner's answer. */
+  const [used, setUsed] = useState<{
+    path: string;
+    uses: number;
+    keyboard: boolean;
+  }>();
+  const keepButton = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  /** The row that takes focus once the list shows it: a renamed file, or a removed one's neighbour. */
+  const focusNext = useRef<string>(undefined);
+  const busy = useRef(false);
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
   // Its panel key lands on the list's current file, or on Import while there is none.
@@ -277,6 +343,7 @@ export function MediaPanel({
     },
   });
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
+  const cutroomUrl = `/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
   const active = useRef(false);
@@ -321,6 +388,117 @@ export function MediaPanel({
     );
     return () => clearTimeout(timer);
   }, [load, revision]);
+
+  useEffect(() => {
+    const path = focusNext.current;
+    if (path === undefined || !media?.some((item) => item.path === path))
+      return;
+    focusNext.current = undefined;
+    focusByKeyboard(
+      list.current?.querySelector<HTMLElement>(
+        `[data-path="${CSS.escape(path)}"]`,
+      ),
+    );
+  }, [media]);
+
+  const failed = (error: unknown) =>
+    setMessage(error instanceof Error ? error.message : String(error));
+
+  /** One file action at a time, each ending with the list read again. */
+  async function change(work: () => Promise<void>) {
+    if (busy.current) return;
+    busy.current = true;
+    setMessage("");
+    try {
+      await work();
+      await load();
+    } finally {
+      busy.current = false;
+    }
+  }
+
+  /** False when the name was refused after Enter, which leaves the field open to correct. */
+  function rename(path: string, stem: string, by: "key" | "blur") {
+    const current = fileName(path);
+    const name = `${stem}${current.slice(current.lastIndexOf("."))}`;
+    return change(async () => {
+      const renamed = await api(
+        `${cutroomUrl}/media/rename`,
+        z.object({ path: z.string() }),
+        json("POST", { path, name }),
+      );
+      useSource.setState(({ file }) => ({
+        file: file?.path === path ? { ...file, path: renamed.path } : file,
+      }));
+      if (by === "key") focusNext.current = renamed.path;
+      setRenaming(undefined);
+    }).then(
+      () => true,
+      (error: unknown) => {
+        failed(error);
+        // A name left by clicking away is dropped with its refusal shown.
+        if (by === "blur") setRenaming(undefined);
+        return by === "blur";
+      },
+    );
+  }
+
+  /**
+   * `keyboard` when the row was reached by keyboard: the next row then takes focus, so the keys
+   * keep working down the list. After a click they stay the timeline's.
+   */
+  async function remove(
+    path: string,
+    keyboard = document.activeElement instanceof HTMLElement &&
+      document.activeElement.dataset.path === path &&
+      reachedByKeyboard(document.activeElement),
+    confirmUsed = false,
+  ) {
+    const index = media?.findIndex((item) => item.path === path) ?? -1;
+    const neighbour = media?.[index + 1]?.path ?? media?.[index - 1]?.path;
+    await change(async () => {
+      const response = await fetch(`/api/cutroom${cutroomUrl}/media/remove`, {
+        ...json("POST", { path, confirmUsed }),
+        headers: { "content-type": "application/json" },
+      });
+      const body: unknown = await response.json();
+      const asked = z.object({ uses: z.number().positive() }).safeParse(body);
+      if (response.status === 409 && asked.success && !confirmUsed) {
+        setUsed({ path, uses: asked.data.uses, keyboard });
+        return;
+      }
+      if (!response.ok)
+        throw new Error(
+          z.object({ error: z.string() }).safeParse(body).data?.error ??
+            `The file could not be removed (${response.status}).`,
+        );
+      if (useSource.getState().file?.path === path) closeSource();
+      if (keyboard) focusNext.current = neighbour;
+      const { entries } = await api(
+        `${cutroomUrl}/history`,
+        z.object({
+          entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
+        }),
+      );
+      const removal = entries.findLast((entry) => !entry.undone)?.id;
+      const dismiss = showToast(
+        `Moved ${fileName(path)} to the project's ${MEDIA_TRASH} folder.`,
+        {
+          label: "Undo",
+          run: () => {
+            dismiss();
+            void stepHistory(projectId, "undo", removal).catch(
+              (error: unknown) =>
+                showToast(
+                  error instanceof Error ? error.message : String(error),
+                ),
+            );
+          },
+        },
+        { tone: "info", transient: true },
+      );
+    }).catch(failed);
+  }
 
   async function importFiles(list: FileList | null) {
     const files = [...(list ?? [])];
@@ -437,12 +615,25 @@ export function MediaPanel({
         ) : (
           <ul
             className="media-list"
+            ref={list}
             onKeyDown={(event) => {
-              // A row reached by keyboard takes the arrows; after a click they stay the playhead's.
               if (
                 !(event.target instanceof HTMLElement) ||
                 !event.target.matches(".media-row") ||
-                !reachedByKeyboard(event.target) ||
+                !reachedByKeyboard(event.target)
+              )
+                return;
+              const action = actionFor(event.nativeEvent);
+              const path = event.target.dataset.path;
+              if (
+                (action === "editBackspace" || action === "editDelete") &&
+                path !== undefined
+              ) {
+                event.preventDefault();
+                void remove(path, true);
+                return;
+              }
+              if (
                 event.key === "ArrowLeft" ||
                 event.key === "ArrowRight" ||
                 event.metaKey ||
@@ -474,12 +665,50 @@ export function MediaPanel({
                 path={path}
                 kind={kind}
                 tabbable={path === tabbable}
-                onFocus={() => setFocused(path)}
+                onFocus={() => {
+                  setFocused(path);
+                }}
+                renaming={path === renaming}
+                onRename={() => setRenaming(path)}
+                onRenameCommit={(stem, by) => rename(path, stem, by)}
+                onRenameCancel={() => setRenaming(undefined)}
+                onRemove={() => void remove(path)}
               />
             ))}
           </ul>
         )}
       </div>
+      {used && (
+        <Modal
+          title={`Remove ${fileName(used.path)}?`}
+          onClose={() => setUsed(undefined)}
+          initialFocus={keepButton}
+        >
+          <p className="media-confirm">
+            {used.uses === 1
+              ? "1 clip on the timeline uses this file. It stays in place and plays nothing until you undo."
+              : `${used.uses} clips on the timeline use this file. They stay in place and play nothing until you undo.`}
+          </p>
+          <footer className="modal-actions">
+            <button
+              ref={keepButton}
+              className="secondary-button"
+              onClick={() => setUsed(undefined)}
+            >
+              Keep file
+            </button>
+            <button
+              className="secondary-button media-confirm-remove"
+              onClick={() => {
+                setUsed(undefined);
+                void remove(used.path, used.keyboard, true);
+              }}
+            >
+              Remove
+            </button>
+          </footer>
+        </Modal>
+      )}
     </section>
   );
 }
