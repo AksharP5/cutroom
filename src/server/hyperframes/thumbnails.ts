@@ -12,7 +12,7 @@ import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
 // Prefix caller versions so old renderer output cannot bypass readiness in the cache.
-export const thumbnailRendererVersion = "capture-diagnostics-v2";
+export const thumbnailRendererVersion = "capture-provenance-v3";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>

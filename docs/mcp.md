@@ -28,7 +28,7 @@ Start with `projects_list` and retain the returned project ID. Before a source s
 
 `source_write` only edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
 
-`timeline_view` reports composition script and load failures as an error with the project-relative file and message instead of returning a misleading static frame. The editor shows the same failures in its header. Repeated errors are grouped per preview load, and dismissal lasts until the source reloads. Repair the source and request the frame again.
+`timeline_view` reports composition script and load failures as an error with the project-relative file and message instead of returning a misleading static frame. The editor shows the same failures in its header. Compiled script filenames remain available in callback locations and error stacks after setup, including timers, animation frames, event handlers and rejected promises. Unattributed failures say `unknown file` rather than guessing the root composition. Repeated errors are grouped per preview load, and dismissal lasts until the source reloads. Repair the source and request the frame again.
 
 ## Approvals
 

@@ -1,4 +1,7 @@
-import { compositionDiagnosticsScript } from "./diagnostics";
+import {
+  compositionDiagnosticsScript,
+  compositionScriptSources,
+} from "./diagnostics";
 import type { DiagnosticWindow } from "./diagnostics";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
@@ -1489,7 +1492,7 @@ export function withPreviewBridge(html: string, composition = "index.html") {
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
   const sourceTexts: [string, string[]][] = [];
-  const edits: { offset: number; end: number; text: string }[] = [];
+  const { sources, edits } = compositionScriptSources(document, composition);
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
@@ -1581,7 +1584,7 @@ export function withPreviewBridge(html: string, composition = "index.html") {
   edits.push({
     offset,
     end: offset,
-    text: `${compositionDiagnosticsScript(composition)}<script>(${installPreviewBridge.toString()})(${texts});</script>`,
+    text: `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${texts});</script>`,
   });
   return edits
     .sort((a, b) => b.offset - a.offset)
