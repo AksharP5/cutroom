@@ -1066,7 +1066,9 @@ option {
 
 /* An approval is an unboxed question pinned above the composer. */
 .agent-request[aria-label="Permission request"] {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 110px);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -1088,6 +1090,21 @@ option {
   line-height: var(--leading-chat);
   overflow-wrap: anywhere;
 }
+.agent-request-commands {
+  min-height: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--type-md);
+  line-height: var(--leading-chat);
+  overflow-wrap: anywhere;
+}
 .agent-request-detail {
   margin: calc(var(--space-1) * -1) 0 0;
   color: var(--text-secondary);
@@ -1095,6 +1112,7 @@ option {
   overflow-wrap: anywhere;
 }
 .agent-request-actions {
+  flex: none;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

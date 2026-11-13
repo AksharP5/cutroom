@@ -29,13 +29,15 @@ If a native run needs approval or an answer, the chat shows that request. Stoppi
 
 ## Transcript
 
+Agents mention review notes when that turn changed one, when you explicitly ask about notes, or when a note is needed to explain a blocker. Otherwise they skip recaps of untouched queued notes.
+
 The agent's replies are the transcript. The tool calls between two replies fold into one line, such as "Read 6 files, ran 3 commands, 2 more", whose counts grow while the agent works. Select it to see every call in order, and any call to see its output. Two kinds of call always keep their own row: one that failed, with the reason, and one that changed the project, naming the files or clips.
 
 ## Approvals and changed clips
 
 `timeline_view` and other Cutroom reads run without approval unless your native settings ask. So does queue bookkeeping: claiming a note, finishing it, asking a question about it, or releasing it changes only its status, never the project. Edits, withdrawals, and exports ask; [MCP approvals](mcp.md#approvals) lists every tool.
 
-An approval is a short question in the editor's words, such as "Edit Lower third?" or "Run this command?" with the command in full. **Details** shows the exact request. On an edit approval, choose **Always allow Cutroom edits** to allow Cutroom's own edit tools for this project. Shell commands and other MCP servers keep their own permissions. Project creation and import always prompt separately. Your native ask rules still apply. The Agent panel shows the saved choice and **Revoke**; revoking stops any active run too.
+A timeline approval lists each command in plain words, such as "Move Call to action to 00:00:24:00". Other approvals use a short question, such as "Run this command?" with the command in full. Long command lists scroll while Allow and Deny stay visible. **Details** shows the exact request. On an edit approval, choose **Always allow Cutroom edits** to allow Cutroom's own edit tools for this project. Shell commands and other MCP servers keep their own permissions. Project creation and import always prompt separately. Your native ask rules still apply. The Agent panel shows the saved choice and **Revoke**; revoking stops any active run too.
 
 Source editing is limited to composition HTML, CSS, JavaScript, TypeScript, SVG, and JSON. Hidden paths, agent instructions, and native tooling configuration are protected for everyone, even after a one-time approval. Change those files outside Cutroom through your native editor's permissions. The embedded editor also refuses renames when its automatic reference updates could rewrite protected text files.
 

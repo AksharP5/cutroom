@@ -43,7 +43,13 @@ import {
   runsCommand,
   summarizeSteps,
   targetsFile,
+  CUTROOM_SERVER,
+  parseTool,
 } from "../../shared/toolRow";
+import { CommandBatchSchema } from "../../shared/timeline/schema";
+import { apply, TimelineError } from "../../shared/timeline/apply";
+import { editLabel } from "../../shared/timeline/labels";
+import { useTimeline } from "../edit/timeline";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
 import { waitForNoteCaptures } from "../edit/noteStore";
@@ -234,6 +240,39 @@ function RequestCard({
     alwaysAllowCutroomEdits?: boolean,
   ) => Promise<void>;
 }) {
+  const batch = useMemo(() => {
+    const { server, name } = parseTool(request.tool);
+    if (
+      request.kind !== "approval" ||
+      server !== CUTROOM_SERVER ||
+      name !== "timeline_edit"
+    )
+      return undefined;
+    return CommandBatchSchema.safeParse(request.input).data;
+  }, [request]);
+  const timeline = useTimeline((state) =>
+    batch &&
+    state.projectId === request.input.projectId &&
+    state.view?.composition === batch.composition
+      ? state.view.timeline
+      : undefined,
+  );
+  const commands = useMemo(() => {
+    let before = timeline;
+    return batch?.commands.map((command) => {
+      const label = editLabel([command], before, "Edit", "pending");
+      // Later commands describe the result of earlier commands in this same batch.
+      if (before) {
+        try {
+          before = apply(before, command);
+        } catch (error) {
+          if (!(error instanceof TimelineError)) throw error;
+          before = undefined;
+        }
+      }
+      return label;
+    });
+  }, [batch, timeline]);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -280,14 +319,22 @@ function RequestCard({
     >
       {request.kind === "approval" ? (
         <>
-          <p className="agent-request-title" id={title}>
-            {request.title}
-          </p>
+          {commands ? (
+            <ul className="agent-request-commands" id={title}>
+              {commands.map((command, index) => (
+                <li key={index}>{command}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="agent-request-title" id={title}>
+              {request.title}
+            </p>
+          )}
           {/* A command is the thing being approved, so it is read in full. */}
           {runsCommand(request.tool) && request.target && (
             <pre className="agent-request-command">{request.target}</pre>
           )}
-          {request.detail && (
+          {!commands && request.detail && (
             <p className="agent-request-detail">{request.detail}</p>
           )}
           <div className="agent-request-actions">

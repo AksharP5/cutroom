@@ -1476,15 +1476,44 @@ test("occupied takes preview their destination and reuse A2 until the growing ra
     before.timeline.clips.find((clip) => clip.id === "music"),
   ).toMatchObject({ track: 1, start: 0, duration: 360 });
   await seek("0315");
-  await record.click();
-  const a2 = page.locator(".tl-head.audio").nth(1);
-  await expect(region).toBeVisible();
-  expect((await region.boundingBox())!.y).toBe((await a2.boundingBox())!.y);
+  // The region is replaced when the growing take moves lanes. Observe both placements in
+  // the page before recording, so a protocol round trip cannot miss a placement.
+  const preview = await page.evaluateHandle(() => {
+    const placements: { lane: string; aligned: boolean }[] = [];
+    const observer = new MutationObserver(() => {
+      const region = document.querySelector(".vo-take-region");
+      const lane = region?.parentElement?.dataset.row;
+      if (!region || !lane || placements.at(-1)?.lane === lane) return;
+      const box = region.getBoundingClientRect();
+      if (!box.width || !box.height) return;
+      const head = document.querySelector(`.tl-head[data-row="${lane}"]`);
+      if (!head) return;
+      placements.push({
+        lane,
+        aligned: box.y === head.getBoundingClientRect().y,
+      });
+    });
+    observer.observe(document.querySelector(".tl-lanes")!, {
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style"],
+      subtree: true,
+    });
+    return { placements, disconnect: () => observer.disconnect() };
+  });
+  try {
+    await record.click();
+    await expect
+      .poll(() => preview.evaluate(({ placements }) => placements))
+      .toEqual([
+        { lane: "2", aligned: true },
+        { lane: "3", aligned: true },
+      ]);
+  } finally {
+    await preview.evaluate(({ disconnect }) => disconnect());
+    await preview.dispose();
+  }
   await expect(page.getByLabel("New audio lane A3")).toBeVisible();
-  const destination = (await page
-    .getByLabel("New audio lane A3")
-    .boundingBox())!.y;
-  expect((await region.boundingBox())!.y).toBe(destination);
   await page.keyboard.press("Space");
   await expect(record).toBeEnabled();
   const after = await read();

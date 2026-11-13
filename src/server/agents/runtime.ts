@@ -9,6 +9,7 @@ import type {
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
 import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
+import { reviewReplyGuidance } from "../../shared/review";
 import type { ToolNames } from "./tool-subject";
 
 export interface RuntimeOptions {
@@ -51,6 +52,7 @@ export function agentPrompt(turn: AgentTurn, cwd: string): string {
     );
   parts.push(
     `Working project: ${cwd}\nUse the cutroom MCP tools to inspect and edit the active video when available. Keep source media intact. Changes to the project files refresh the editor.`,
+    reviewReplyGuidance,
   );
   return parts.filter(Boolean).join("\n\n");
 }
