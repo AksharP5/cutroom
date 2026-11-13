@@ -10,7 +10,8 @@ const executablePath =
 
 export default defineConfig({
   testDir: "e2e",
-  fullyParallel: false,
+  // Let shards split large specs at test boundaries without adding runner contention.
+  fullyParallel: true,
   workers: 1,
   ...(process.env.CUTROOM_E2E_DIR
     ? { outputDir: resolve(testRoot, "results") }
