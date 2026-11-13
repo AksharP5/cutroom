@@ -1,11 +1,12 @@
+import { extname } from "node:path";
 import { stat } from "node:fs/promises";
 import {
-  SourceMarksSchema,
+  SourceMarksSaveSchema,
   TimelineViewSettingsSchema,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
-import { createProjectViewStore } from "../projects/view";
+import { projectViews } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
 import {
   AGENT_HEADER,
@@ -49,7 +50,11 @@ import type {
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
 import { isMissing, readSource } from "../projects/store";
-import { fileFingerprint, localMediaPath } from "../../shared/media";
+import {
+  STILL_SECONDS,
+  stillMediaExtensions,
+  localMediaPath,
+} from "../../shared/media";
 import { editLabel } from "../../shared/timeline/labels";
 import { projectPath, projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
@@ -105,7 +110,7 @@ export function createTimelineRoutes(
       parsed: ParsedComposition;
     }
   >();
-  const views = createProjectViewStore();
+  const views = projectViews;
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -395,29 +400,42 @@ export function createTimelineRoutes(
       return refused(c, error);
     }
   });
-  const sourceFingerprint = async (project: Project, path: string) => {
+  const sourceIdentity = async (project: Project, path: string) => {
     const absolute = await projectPath(project, path);
     const info = await stat(absolute);
     if (!info.isFile()) throw new HttpError(400, "Choose a media file.");
-    return fileFingerprint(canonical(path), info);
+    const still = stillMediaExtensions.some(
+      (extension) => `.${extension}` === extname(path).toLowerCase(),
+    );
+    const src = canonical(path).split("/").map(encodeURIComponent).join("/");
+    const duration = still
+      ? STILL_SECONDS
+      : (await mediaFacts(project, "index.html", [src])).lengths.get(src);
+    if (duration === undefined)
+      throw new HttpError(422, "The media duration could not be read.");
+    return { size: info.size, duration };
   };
   api.get("/projects/:id/source-marks", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const fingerprint = await sourceFingerprint(
-      project,
-      c.req.query("path") ?? "",
-    );
-    return c.json(await views.readSource(project, fingerprint));
+    const path = c.req.query("path") ?? "";
+    const identity = await sourceIdentity(project, path);
+    return c.json({
+      identity,
+      ...(await views.readSource(project, canonical(path), identity)),
+    });
   });
   api.put("/projects/:id/source-marks", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const fingerprint = await sourceFingerprint(
-      project,
-      c.req.query("path") ?? "",
-    );
-    const marks = parseInput(SourceMarksSchema, await c.req.json());
-    await views.saveSource(project, fingerprint, marks);
-    return c.json(marks);
+    const path = c.req.query("path") ?? "";
+    const entry = parseInput(SourceMarksSaveSchema, await c.req.json());
+    const identity = await sourceIdentity(project, path);
+    if (!Bun.deepEquals(entry.identity, identity))
+      throw new HttpError(
+        409,
+        "The source media changed. Reopen it before saving marks.",
+      );
+    await views.saveSource(project, canonical(path), entry);
+    return c.json(entry);
   });
   api.get("/projects/:id/timeline-view", async (c) => {
     const project = await store.get(c.req.param("id"));

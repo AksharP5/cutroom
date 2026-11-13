@@ -1,10 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { expect, test } from "bun:test";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { HttpError } from "../src/shared/errors";
 import { Hono } from "hono";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
-import { SourceMarksSchema } from "../src/shared/timeline/view";
+import {
+  SourceMarksSaveSchema,
+  SourceMarksSchema,
+} from "../src/shared/timeline/view";
 import { projectFixture } from "./project-fixture";
 
 test("source marks share the view save queue, survive reopening, and ignore renamed or replaced files", async () => {
@@ -23,19 +27,36 @@ test("source marks share the view save queue, survive reopening, and ignore rena
   const endpoint = `/projects/${project.id}`;
   const media = join(project.path, "clip.wav");
   const marks = { in: 2, out: 5 };
-  const save = (path: string, body: unknown) =>
-    app.request(`${endpoint}${path}`, {
+  const make = (path: string, seconds: number) =>
+    execFileSync("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `sine=duration=${seconds}`,
+      path,
+    ]);
+  const save = async (path: string, body: Record<string, unknown>) => {
+    const identity = path.startsWith("/source-marks?")
+      ? SourceMarksSaveSchema.parse(
+          await (await app.request(`${endpoint}${path}`)).json(),
+        ).identity
+      : undefined;
+    return app.request(`${endpoint}${path}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, ...(identity && { identity }) }),
     });
+  };
   const read = async (path: string, api = app) =>
     SourceMarksSchema.parse(
       await (await api.request(`${endpoint}/source-marks?path=${path}`)).json(),
     );
   try {
-    await writeFile(media, "test media");
-    await writeFile(join(project.path, "other.wav"), "other media");
+    make(media, 12);
+    make(join(project.path, "other.wav"), 8);
     // Timeline preferences and source marks share one view file.
     await save("/timeline-view", { destinations: { video: 2 } });
     const ledger = await fixture.store.history(project);
@@ -71,7 +92,7 @@ test("source marks share the view save queue, survive reopening, and ignore rena
     expect(
       (await app.request(`${endpoint}/source-marks?path=clip.wav`)).status,
     ).toBe(404);
-    await writeFile(media, "a different replacement");
+    make(media, 3);
     expect(await read("clip.wav")).toEqual({ in: null, out: null });
   } finally {
     await fixture.close();

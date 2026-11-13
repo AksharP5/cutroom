@@ -586,7 +586,7 @@ test("source marks survive reload and project switches without entering undo his
         )
       ).json(),
     )
-    .toEqual({ in: 1, out: 2 });
+    .toMatchObject({ in: 1, out: 2 });
 
   await page.evaluate((id) => {
     location.hash = `project/${id}`;
@@ -623,7 +623,7 @@ test("source marks survive reload and project switches without entering undo his
         )
       ).json(),
     )
-    .toEqual({ in: 3, out: 5 });
+    .toMatchObject({ in: 3, out: 5 });
   await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
   await page.unroute("**/source-marks?**");
   await page.evaluate((id) => {
@@ -677,4 +677,165 @@ test("source marks survive reload and project switches without entering undo his
   expect((await a.read()).fps).toEqual({ num: 24, den: 1 });
   await (await a.file("talk.mp4")).dblclick();
   await expect(range).toHaveText("In 00:00:03:00Out 00:00:04:23");
+});
+
+test("review: saves stay ordered and coalesce across source navigation", async ({
+  page,
+  request,
+}) => {
+  const a = await open(page, request);
+  const endpoint = `/api/cutroom/projects/${a.project.id}/source-marks?path=talk.mp4`;
+  await (await a.file("talk.mp4")).dblclick();
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const sent: number[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "PUT" && request.url().includes("source-marks"))
+      sent.push(z.object({ in: z.number() }).parse(request.postDataJSON()).in);
+  });
+  let first = true;
+  await page.route("**/source-marks?**", async (route) => {
+    if (first && route.request().method() === "PUT") {
+      first = false;
+      held.resolve();
+      await release.promise;
+    }
+    await route.continue();
+  });
+  await seek(page, "400");
+  await page.keyboard.press("i");
+  await held.promise;
+  await seek(page, "500");
+  await page.keyboard.press("i");
+  await seek(page, "600");
+  await page.keyboard.press("i");
+  await seek(page, "500");
+  await page.keyboard.press("i");
+  await (await a.file("music.wav")).dblclick();
+  await (await a.file("talk.mp4")).dblclick();
+  const landed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().includes("source-marks") &&
+      response.request().postDataJSON().in === 4,
+  );
+  release.resolve();
+  await landed;
+  await expect
+    .poll(async () => (await (await request.get(endpoint)).json()).in, {
+      timeout: 3000,
+    })
+    .toBe(5);
+  await expect(page.locator(".edit-range")).toContainText("In 00:00:05:00");
+  expect(sent).toEqual([4, 5]);
+});
+
+test("review: an older read cannot replace a newer cross-tab mark", async ({
+  page,
+  request,
+}) => {
+  const a = await open(page, request);
+  const endpoint = `/api/cutroom/projects/${a.project.id}/source-marks?path=talk.mp4`;
+  await (await a.file("talk.mp4")).dblclick();
+  await seek(page, "400");
+  await page.keyboard.press("i");
+  await expect
+    .poll(async () => (await (await request.get(endpoint)).json()).in)
+    .toBe(4);
+  const old = await (await request.get(endpoint)).json();
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let first = true;
+  await page.route("**/source-marks?**", async (route) => {
+    if (first && route.request().method() === "GET") {
+      first = false;
+      const response = await route.fetch();
+      held.resolve();
+      await release.promise;
+      return route.fulfill({ response });
+    }
+    await route.continue();
+  });
+  await request.put(endpoint, { data: old });
+  await held.promise;
+  const other = await page.context().newPage();
+  try {
+    await other.goto(`/#project/${a.project.id}`);
+    await expect(
+      other.getByRole("region", { name: "Timeline" }).locator("[data-clip]"),
+    ).toHaveCount(2);
+    await other.locator('.media-row[data-path="talk.mp4"]').dblclick();
+    await expect(other.locator(".edit-range")).toContainText("In 00:00:04:00");
+    await seek(other, "500");
+    await other.keyboard.press("i");
+    await expect(page.locator(".edit-range")).toContainText("In 00:00:05:00");
+    const delivered = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        response.url().includes("source-marks"),
+    );
+    release.resolve();
+    await delivered;
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    expect(await page.locator(".edit-range").textContent()).toContain(
+      "In 00:00:05:00",
+    );
+  } finally {
+    release.resolve();
+    await other.close();
+  }
+});
+
+test("review: a one-frame NTSC source range stays nonempty at 24 fps", async ({
+  page,
+  request,
+}) => {
+  const a = await open(page, request);
+  const path = join(a.project.path, "index.html");
+  const original = await readFile(path, "utf8");
+  await writeFile(
+    path,
+    original.replace("<main ", '<main data-fps="30000/1001" '),
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Timeline" }).locator("[data-clip]"),
+  ).toHaveCount(2);
+  await (await a.file("talk.mp4")).dblclick();
+  await seek(page, "5");
+  await page.keyboard.press("i");
+  await page.keyboard.press("o");
+  await expect
+    .poll(
+      async () =>
+        (
+          await (
+            await request.get(
+              `/api/cutroom/projects/${a.project.id}/source-marks?path=talk.mp4`,
+            )
+          ).json()
+        ).out,
+    )
+    .toBeGreaterThan(0);
+  await writeFile(path, original.replace("<main ", '<main data-fps="24" '));
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Timeline" }).locator("[data-clip]"),
+  ).toHaveCount(2);
+  await (await a.file("talk.mp4")).dblclick();
+  await expect(page.locator(".edit-range")).toBeVisible();
+  await expect(a.source.getByTitle("Length to place")).toHaveText(
+    "00:00:00:01",
+    { timeout: 3000 },
+  );
+  await page.keyboard.press("F9");
+  await expect.poll(a.added).toEqual([
+    ["video", 0, 0, 1, 0.208333],
+    ["audio", 1, 0, 1, 0.208333],
+  ]);
 });

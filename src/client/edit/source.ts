@@ -1,9 +1,6 @@
 import { create } from "zustand";
 import { frameTime, toFrames } from "../../shared/timeline/apply";
-import {
-  SourceMarksSchema,
-  emptySourceMarks,
-} from "../../shared/timeline/view";
+import { SourceViewSchema, emptySourceMarks } from "../../shared/timeline/view";
 import { createViewPreferences } from "../viewPreferences";
 import type { Timeline } from "../../shared/timeline/schema";
 import { placedMedia } from "../timeline/gesture";
@@ -24,7 +21,10 @@ export const useSource = create(() => ({
   shown: false,
 }));
 
-const preferences = createViewPreferences(SourceMarksSchema, emptySourceMarks);
+const preferences = createViewPreferences(SourceViewSchema, () => ({
+  ...emptySourceMarks(),
+  identity: null,
+}));
 
 /** The source's own playhead, counted in frames at the timeline's rate. */
 export const sourcePlayer = createTransport();
@@ -35,16 +35,22 @@ function sync() {
   const { fps } = useTransport.getState();
   const duration = placedMedia(file, fps).frames;
   const marks = preferences.use.getState();
-  const start = marks.in === null ? null : toFrames(marks.in, fps);
-  const out = marks.out === null ? null : toFrames(marks.out, fps);
+  const start =
+    marks.in === null
+      ? null
+      : Math.min(duration - 1, Math.max(0, toFrames(marks.in, fps)));
+  const out =
+    marks.out === null
+      ? null
+      : Math.min(
+          duration,
+          Math.max((start ?? 0) + 1, toFrames(marks.out, fps)),
+        );
   // Round saved seconds to this timeline's frames and keep them within the source.
   sourcePlayer.setTimeline({
     fps,
     duration,
-    range: {
-      in: start !== null && start < duration ? start : null,
-      out: out === null ? null : Math.min(out, duration),
-    },
+    range: { in: start, out },
   });
 }
 useSource.subscribe(sync);
@@ -67,7 +73,7 @@ export function openSource(file: MediaDrag) {
   useSource.setState({ file, shown: true });
 }
 
-/** Follows the mounted media's marks, reloading when that file's fingerprint changes. */
+/** Follows the mounted media's marks and reloads them when the media refreshes. */
 export function openSourceMarks(projectId: string, path: string) {
   sourcePlayer.seek(0);
   let loaded = false;
@@ -100,8 +106,11 @@ export function closeSource() {
 /** Sets the loaded file's marks, which it keeps while other files are open. */
 export function markSource(range: Marks) {
   if (!useSource.getState().file) return;
+  const { identity } = preferences.use.getState();
+  if (identity === null) return;
   const { fps } = sourcePlayer.use.getState();
   preferences.save({
+    identity,
     in: range.in === null ? null : frameTime(range.in, fps),
     out: range.out === null ? null : frameTime(range.out, fps),
   });

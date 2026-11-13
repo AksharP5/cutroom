@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DragEvent } from "react";
+import { stillMediaExtensions } from "../../shared/media";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 import { frameTimecode, mediaUrl } from "../api";
@@ -39,7 +40,7 @@ const mediaKinds = [
   },
   {
     kind: "image",
-    extensions: ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"],
+    extensions: stillMediaExtensions,
   },
 ] as const;
 const acceptedFiles = mediaKinds

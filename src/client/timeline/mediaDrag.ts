@@ -2,8 +2,7 @@ import type { InsertClip } from "../../shared/timeline/schema";
 
 /** Marks a drag as project media, so the timeline takes it and the Media panel's importer does not. */
 export const MEDIA_DRAG_TYPE = "application/x-cutroom-media";
-/** How long a still runs when it is dropped on the timeline. */
-export const STILL_SECONDS = 5;
+export { STILL_SECONDS } from "../../shared/media";
 
 export interface MediaDrag {
   kind: InsertClip["kind"];

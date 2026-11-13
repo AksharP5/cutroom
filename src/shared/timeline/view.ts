@@ -42,3 +42,16 @@ export const SourceMarksSchema = z
   );
 export type SourceMarks = z.infer<typeof SourceMarksSchema>;
 export const emptySourceMarks = (): SourceMarks => ({ in: null, out: null });
+
+export const SourceIdentitySchema = z.object({
+  size: z.number().int().nonnegative(),
+  duration: z.number().finite().positive(),
+});
+export type SourceIdentity = z.infer<typeof SourceIdentitySchema>;
+export const SourceViewSchema = SourceMarksSchema.safeExtend({
+  identity: SourceIdentitySchema.nullable(),
+});
+export const SourceMarksSaveSchema = SourceViewSchema.safeExtend({
+  identity: SourceIdentitySchema,
+});
+export type SourceMarksSave = z.infer<typeof SourceMarksSaveSchema>;
