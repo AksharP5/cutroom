@@ -97,3 +97,60 @@ test("Space stays native in text fields, dialogs and viewer menus", async ({
   await expect(stop).toHaveAttribute("aria-pressed", "true");
   await expect(now).toHaveText("00:00:00:00");
 });
+
+test("Projects to New project focuses the name for immediate typing", async ({
+  page,
+}, testInfo) => {
+  await page
+    .getByRole("button", { name: "Cutroom projects", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Projects", exact: true })
+    .getByRole("button", { name: "New project", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "New project", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
+  await page.screenshot({ path: testInfo.outputPath("new-project-focus.png") });
+  await expect(
+    dialog.getByLabel("Project name", { exact: true }),
+  ).toBeFocused();
+  await page.keyboard.type("Keyboard-created project");
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Keyboard-created project", exact: true }),
+  ).toBeVisible();
+});
+
+test("Escape closes Edit marker after Tab moves past Save", async ({
+  page,
+}, testInfo) => {
+  await page.keyboard.press("m");
+  const marker = page.locator(".tl-marker");
+  await expect(marker).toHaveCount(1);
+  await marker.dblclick();
+  const editor = page.getByRole("dialog", { name: "Edit marker", exact: true });
+  await expect(editor).toBeVisible();
+  await editor.getByLabel("Marker name", { exact: true }).fill("Unsaved draft");
+  await editor.getByRole("button", { name: "Save", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  expect(
+    await editor.evaluate((element) =>
+      element.contains(document.activeElement),
+    ),
+  ).toBe(false);
+  await page.keyboard.press("Escape");
+  await page.screenshot({
+    path: testInfo.outputPath("marker-after-escape.png"),
+  });
+  await expect(editor).toHaveCount(0);
+  await marker.dblclick();
+  await expect(editor.getByLabel("Marker name", { exact: true })).toHaveValue(
+    "Marker 1",
+  );
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+});

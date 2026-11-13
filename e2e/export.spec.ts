@@ -480,3 +480,43 @@ test("Export explains a range it can't render instead of blanking the editor", a
   await expect(page.getByRole("region", { name: "Viewer" })).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("Shift+8 then Enter starts Export instead of closing, including slow defaults", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/export-defaults?**", async (route) => {
+    await gate;
+    await route.fulfill({ response: await route.fetch() });
+  });
+  await page.keyboard.press("Shift+8");
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  const button = dialog.getByRole("button", {
+    name: "Export MP4",
+    exact: true,
+  });
+  await dialog.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
+  await page.screenshot({ path: testInfo.outputPath("export-focus.png") });
+  await expect(button).toBeFocused();
+  await expect(button).toBeDisabled();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeVisible();
+  release();
+  await expect(button).toBeEnabled();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toContainText("Export complete", { timeout: 40_000 });
+  await page.screenshot({ path: testInfo.outputPath("export-complete.png") });
+  await dialog.getByRole("button", { name: "New export", exact: true }).click();
+  await expect(button).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});

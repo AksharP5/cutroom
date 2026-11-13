@@ -14,6 +14,7 @@ import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
 import { nextTrackIndex } from "../../shared/timeline/tracks";
 import { editKeys, trimmedPlayhead } from "../edit/keys";
+import { showSource, useSource } from "../edit/source";
 import {
   clipboardEdit,
   editTimeline,
@@ -69,6 +70,11 @@ const clock: TimelineClock = {
       if (state.frame !== previous.frame) listener();
     }),
 };
+
+/** Reveal the picture a timeline editing action is about to change. */
+function revealTimeline() {
+  if (useSource.getState().shown) showSource(false);
+}
 
 /**
  * The open project's timeline: the engine's projection from the editor's store, the transport's
@@ -137,6 +143,7 @@ export function ProjectTimeline({
     ([action, { label, commands }]) => [
       action,
       () => {
+        revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
         const target = {
           selection: useTimeline.getState().selection.ids,
@@ -167,11 +174,15 @@ export function ProjectTimeline({
       },
     ],
   );
+  const clipboard = (action: Parameters<typeof clipboardEdit>[1]) => {
+    if (action !== "copy") revealTimeline();
+    clipboardEdit(projectId, action, clock.frame());
+  };
   useKeymap({
-    editCopy: () => clipboardEdit(projectId, "copy", clock.frame()),
-    editCut: () => clipboardEdit(projectId, "cut", clock.frame()),
-    editPaste: () => clipboardEdit(projectId, "overwrite", clock.frame()),
-    editPasteInsert: () => clipboardEdit(projectId, "insert", clock.frame()),
+    editCopy: () => clipboard("copy"),
+    editCut: () => clipboard("cut"),
+    editPaste: () => clipboard("overwrite"),
+    editPasteInsert: () => clipboard("insert"),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
     editSelectItemAtPlayhead: () => {
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   defaultExportRange,
   exportQualities,
@@ -220,7 +220,10 @@ function ExportDialog({
     }
   })();
   const frames = range.frames;
+  const exportButton = useRef<HTMLButtonElement>(null);
+  const cannotExport = loading || !!destinationError || !timeline || !frames;
   const submit = () => {
+    if (cannotExport) return;
     const parsed = ExportOptionsSchema.safeParse({
       filename: filename ?? destination?.filename,
       directory: directory ?? destination?.directory,
@@ -251,7 +254,7 @@ function ExportDialog({
       );
   };
   return (
-    <Modal title="Export" onClose={onClose}>
+    <Modal title="Export" onClose={onClose} initialFocus={exportButton}>
       <div className="export-body">
         <div className="export-title">
           {job ? job.name : projectName}
@@ -473,7 +476,9 @@ function ExportDialog({
             </button>
             <button
               className="primary-button"
-              disabled={loading || !!destinationError || !timeline || !frames}
+              ref={exportButton}
+              autoFocus
+              aria-disabled={cannotExport}
               onClick={submit}
             >
               Export MP4
