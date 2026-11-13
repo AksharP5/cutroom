@@ -1,0 +1,22 @@
+PR #101 focus follow-up
+Baseline dbd433196b907ff046be0a253c28b9a3822c0bf6; fixed 8ca82ce4649b3fd6c0880e2d026fe9c73c6a95a2.
+Chromium 155, 1720x1050, generated projects and media.
+
+Q from Source: timeline parked at two seconds, linked four-second clip selected, Source showing its first red frame.
+Before: Q immediately trims the linked clip to two seconds and parks the timeline at zero, but Source stays visible.
+After: that same single Q performs the same trim and shows Timeline with the correct green frame. One undo restores the original timeline. The regression exercises 13 timeline editing bindings, including both razor bindings, both delete aliases, enable, marker, Cut, Paste, and Paste Insert. Each press edits once and reveals Timeline.
+Source I/O, stepping, playback, marks, F9/F10, button placement, drag, audio, stills and MCP placement remain covered by the existing source specs.
+
+Projects -> New project:
+Before: Close gets focus. The new regression fails on Project name focus.
+After: Project name gets focus. Typing a name and pressing Enter creates and opens the new project.
+
+Edit marker:
+Before: Tab past Save moves focus outside, and Escape leaves the popover open.
+After: Escape closes it from outside, discards the unsaved draft, and reopening shows the original name. Escape still closes from inside.
+
+Native Resolve 21.1.2 edits the timeline immediately while leaving Source visible. Its Timeline Viewer can remain beside Source. Cutroom has one picture, so it keeps the immediate edit and switches that picture to Timeline in the same press. F9/F10 retain Resolve's default switch-after-edit behavior. Copy and global Undo/Redo retain their existing behavior.
+
+All three new regressions fail on the baseline. Affected browser specs: 45 passed. Full units: 606 passed, 5 existing skips. Types and formatting pass.
+Full functional browser run: 317 passed in 17.4 minutes. All full runs used memory gates of at least 10 GB available.
+Full performance run: 6 passed in 3.6 minutes. 400/500-clip ripple median maxima were 54.9/74.6 ms, below the 150 ms budget; key-zoom medians were 69.7/68.3 ms.
