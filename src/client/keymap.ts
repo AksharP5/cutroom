@@ -422,10 +422,18 @@ export const reachedByKeyboard = (element: Element) =>
  * Focus as a key gives it, ring included. A key held with Ctrl does not make the browser show
  * the ring by itself after a click.
  */
-export const keyboardFocus: FocusOptions = {
+const keyboardFocus: FocusOptions = {
   preventScroll: true,
   focusVisible: true,
 };
+
+/** Claim keyboard ownership even when focusing the element already under the pointer. */
+export function focusByKeyboard(element: HTMLElement | null | undefined) {
+  if (!element) return;
+  pointerLast = false;
+  keyboardFocused.add(element);
+  element.focus(keyboardFocus);
+}
 
 /**
  * Gives a panel the keyboard for its panel key. The panel is focusable only while it holds
@@ -437,7 +445,7 @@ export function focusPanel(panel: HTMLElement | null) {
   panel.addEventListener("blur", () => panel.removeAttribute("tabindex"), {
     once: true,
   });
-  panel.focus(keyboardFocus);
+  focusByKeyboard(panel);
 }
 
 /** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */

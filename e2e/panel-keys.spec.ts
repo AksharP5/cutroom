@@ -208,3 +208,16 @@ test("after a click on a media file the arrows stay the playhead's", async ({
   await expect(file("talk.mp4")).toBeFocused();
   await expect(clock).toHaveText("00:00:02:00");
 });
+
+test("the Media panel key reclaims arrows on the already-focused clicked row", async ({
+  page,
+  request,
+}) => {
+  const { file, clock } = await open(page, request);
+  await file("music.wav").click();
+  await page.keyboard.press("Control+2");
+  await expect(file("music.wav")).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(file("talk.mp4")).toBeFocused();
+  await expect(clock).toHaveText("00:00:00:00");
+});

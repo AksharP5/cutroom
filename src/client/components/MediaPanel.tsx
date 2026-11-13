@@ -8,7 +8,7 @@ import { placeAtPlayhead } from "../edit/placeMedia";
 import { openSource } from "../edit/source";
 import { useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
-import { keyboardFocus, reachedByKeyboard, useKeymap } from "../keymap";
+import { focusByKeyboard, reachedByKeyboard, useKeymap } from "../keymap";
 import {
   MEDIA_DRAG_TYPE,
   STILL_SECONDS,
@@ -270,10 +270,10 @@ export function MediaPanel({
   useKeymap({
     viewActiveWindowSelectionMediaPoolClips: () => {
       if (hidden) return;
-      (
+      focusByKeyboard(
         panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
-        panel.current?.querySelector<HTMLElement>("button")
-      )?.focus(keyboardFocus);
+          panel.current?.querySelector<HTMLElement>("button"),
+      );
     },
   });
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
@@ -463,7 +463,7 @@ export function MediaPanel({
               );
               if (next === null) return;
               event.preventDefault();
-              rows[next]?.focus();
+              focusByKeyboard(rows[next]);
             }}
           >
             {media?.map(({ path, kind }) => (
