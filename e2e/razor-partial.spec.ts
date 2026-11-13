@@ -133,7 +133,7 @@ for (const [key, expectedPicture] of [
   ],
   ["Shift+x", [["later", 60, 360]]],
 ] satisfies [string, (string | number)[][]][]) {
-  test(`${key} refuses to desync a spanning title and honors its auto-select opt-out`, async ({
+  test(`${key} shortens an id-animated title in place and honors its auto-select opt-out`, async ({
     page,
     request,
   }, info) => {
@@ -185,23 +185,32 @@ for (const [key, expectedPicture] of [
     );
     if (key === "Shift+x") await page.locator('[data-clip="shot"]').click();
     const before = await read();
-    const batches: unknown[] = [];
-    page.on("request", (request) => {
-      if (
-        request.method() === "POST" &&
-        request.url().endsWith(`${api}/commands`)
-      )
-        batches.push(request.postDataJSON());
-    });
     await page.keyboard.press(key);
-    await expect(page.getByRole("alert")).toHaveCount(1);
-    await expect(page.getByRole("alert").locator("span")).toHaveText(
-      "Lower third on V2 can't be cut here. Turn off auto-select on V2 to ripple without it.",
+    await expect
+      .poll(
+        async () =>
+          (await read()).timeline.clips.find((clip) => clip.id === "lower")
+            ?.duration,
+      )
+      .toBe(key === "Shift+x" ? 240 : 270);
+    await expect(page.locator('[data-clip^="lower"]')).toHaveCount(1);
+    expect(
+      (await read()).timeline.clips.find((clip) => clip.id === "lower")?.start,
+    ).toBe(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.locator("[data-preview-ready]")).toHaveAttribute(
+      "data-preview-ready",
     );
-    expect(await read()).toEqual(before);
+    await page.screenshot({ path: info.outputPath("shortened.png") });
+    await page.keyboard.press("Control+z");
+    await expect
+      .poll(async () => (await read()).timeline)
+      .toEqual(before.timeline);
     expect(await readFile(index, "utf8")).toBe(html);
-    expect(batches).toHaveLength(0);
-    await page.screenshot({ path: info.outputPath("refused.png") });
+    await page.getByRole("button", { name: /^Current time/ }).click();
+    await page.getByLabel("Go to time").pressSequentially("0300");
+    await page.keyboard.press("Enter");
+    if (key === "Shift+x") await page.locator('[data-clip="shot"]').click();
     await page
       .getByRole("button", { name: "Auto-select V2", exact: true })
       .click();

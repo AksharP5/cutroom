@@ -1232,6 +1232,7 @@ function removeTime(
   mint: Minting,
   fixed: ReadonlySet<string> = new Set(),
 ): Clip[] {
+  const shortened = new Set<string>();
   for (const clip of clips) {
     const start = from(clip.track),
       end = start + duration;
@@ -1242,16 +1243,26 @@ function removeTime(
       clipEnd(clip) <= start
     )
       continue;
-    const reason =
-      clip.start < start && clipEnd(clip) > end
-        ? clip.sourceRestrictions?.copy
-        : clip.start >= start && clipEnd(clip) <= end
-          ? clip.sourceRestrictions?.remove
-          : undefined;
+    const spans = clip.start < start && clipEnd(clip) > end;
+    // Text and stills have no different source material to preserve after the gap.
+    if (
+      spans &&
+      (clip.kind === "image" ||
+        (clip.kind === "element" && (clip.text !== null || clip.textPreview)))
+    ) {
+      shortened.add(clip.id);
+      continue;
+    }
+    const reason = spans
+      ? clip.sourceRestrictions?.copy
+      : clip.start >= start && clipEnd(clip) <= end
+        ? clip.sourceRestrictions?.remove
+        : undefined;
     if (reason) refuseRippleCut(clip, timeline);
   }
   const fixedClips = clips.filter((clip) => fixed.has(clip.id));
   let next = clips.filter((clip) => !fixed.has(clip.id));
+  // Keep the original span through link regrouping so it joins both surviving media pieces.
   for (const track of tracks)
     next = clearRange(
       next,
@@ -1260,13 +1271,22 @@ function removeTime(
       from(track) + duration,
       timeline.fps,
       mint,
+      shortened,
     );
   return [
     ...fixedClips,
     ...next.map((clip) =>
-      tracks.has(clip.track) && clip.start >= from(clip.track) + duration
-        ? { ...clip, start: clip.start - duration }
-        : clip,
+      shortened.has(clip.id)
+        ? windowClip(
+            clip,
+            clip.start,
+            clipEnd(clip) - duration,
+            timeline.fps,
+            "trim",
+          )
+        : tracks.has(clip.track) && clip.start >= from(clip.track) + duration
+          ? { ...clip, start: clip.start - duration }
+          : clip,
     ),
   ];
 }

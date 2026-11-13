@@ -22,6 +22,38 @@ const composition = (script: string, extra = "") =>
 const simple =
   'const tl=gsap.timeline({paused:true});tl.to("#cta",{opacity:1,duration:1},36);window.__timelines.main=tl;';
 
+for (const command of [
+  { type: "remove", clipIds: ["shot"], ripple: true },
+  { type: "trim", clipId: "shot", edge: "start", to: 75, ripple: true },
+  { type: "trim", clipId: "shot", edge: "end", to: 75, ripple: true },
+] satisfies CommandInput[]) {
+  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} keeps a spanning title's animation origin and warns only for the displaced title`, async () => {
+    const f =
+      await fixture(`<main id="main" data-composition-id="main" data-fps="30" data-duration="6">
+<div id="shot" class="clip" data-start="2" data-duration="1" data-track-index="0">Interview</div>
+<div id="lower" class="clip" data-start="1" data-duration="4" data-track-index="1">Lower third</div>
+<div id="later" class="clip" data-start="5" data-duration="1" data-track-index="2">Later title</div>
+</main><script>const tl=gsap.timeline({paused:true});tl.to('#lower',{opacity:1},1);tl.to('#later',{opacity:1},5);window.__timelines.main=tl;</script>`);
+    try {
+      const result = await f.edit([command]);
+      expect(result.animationLeftBehind?.map((clip) => clip.clipId)).toEqual([
+        "later",
+      ]);
+      expect(
+        result.timeline.clips.find((clip) => clip.id === "lower"),
+      ).toMatchObject({
+        start: 30,
+        duration: command.type === "remove" ? 90 : 105,
+      });
+      expect(
+        result.timeline.clips.filter((clip) => clip.track === 1),
+      ).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
 async function fixture(html: string) {
   const fixture = await projectFixture();
   const routes = createTimelineRoutes(fixture.store, fixture.review);

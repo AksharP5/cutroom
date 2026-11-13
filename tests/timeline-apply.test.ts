@@ -82,6 +82,102 @@ const positions = (state: Timeline) =>
     ]),
   );
 
+for (const command of [
+  { type: "remove", clipIds: ["shot"], ripple: true },
+  { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
+  { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
+] satisfies CommandInput[]) {
+  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} shortens spanning text and stills without copying them`, () => {
+    const state = timeline([
+      clip("shot", 0, 60, 60),
+      clip("lower", 1, 15, 180, {
+        kind: "element",
+        src: null,
+        mediaStart: null,
+        text: "Grace Hopper",
+        sourceRestrictions: { copy: "Animated by id." },
+      }),
+      clip("still", 2, 0, 240, {
+        kind: "image",
+        src: "still.png",
+        mediaStart: null,
+      }),
+      clip("picture", 3, 0, 240),
+      clip("music", 4, 0, 240, { kind: "audio" }),
+    ]);
+    const result = run(state, command);
+    const removed = command.type === "remove" ? 60 : 30;
+    for (const id of ["lower", "still"]) {
+      const original = state.clips.find((clip) => clip.id === id)!;
+      expect(result.clips.find((clip) => clip.id === id)).toEqual({
+        ...original,
+        duration: original.duration - removed,
+      });
+      expect(
+        result.clips.filter((clip) => clip.track === original.track),
+      ).toHaveLength(1);
+    }
+    for (const id of ["picture", "music"])
+      expect(
+        result.clips.filter(
+          (clip) => clip.id === id || clip.id.startsWith(`${id}-`),
+        ),
+      ).toHaveLength(2);
+    const optedOut = run(
+      state,
+      { type: "setTrack", index: 1, autoSelect: false },
+      command,
+    );
+    expect(optedOut.clips.find((clip) => clip.id === "lower")).toEqual(
+      state.clips.find((clip) => clip.id === "lower"),
+    );
+  });
+}
+
+for (const kind of ["element", "image"] as const) {
+  for (const [start, duration] of [
+    [60, 60],
+    [30, 180],
+  ]) {
+    test(`a shortened ${kind} keeps both audio pieces linked after removing ${duration} frames`, () => {
+      const state = timeline([
+        clip("shot", 0, start, duration),
+        clip("lower", 1, 0, 240, {
+          kind,
+          text: kind === "element" ? "Grace Hopper" : null,
+          src: kind === "image" ? "still.png" : null,
+          mediaStart: null,
+          link: "pair",
+        }),
+        clip("sound", 2, 0, 240, { kind: "audio", link: "pair" }),
+      ]);
+      const cut = run(state, {
+        type: "remove",
+        clipIds: ["shot"],
+        ripple: true,
+      });
+      expect(cut.clips.find((clip) => clip.id === "lower")?.duration).toBe(
+        240 - duration,
+      );
+      const moved = run(cut, {
+        type: "move",
+        clipIds: ["lower"],
+        by: 30,
+        mode: "place",
+      });
+      expect(
+        moved.clips
+          .filter((clip) => clip.kind === "audio")
+          .map((clip) => [clip.start, clip.duration]),
+      ).toEqual([
+        [30, start],
+        [start + 30, 240 - start - duration],
+      ]);
+      expect(moved.clips.find((clip) => clip.id === "lower")?.start).toBe(30);
+    });
+  }
+}
+
 test("auto-select razor cuts supported clips and reports the title it leaves whole", () => {
   const title = clip("lower", 1, 0, 180, {
     kind: "element",
