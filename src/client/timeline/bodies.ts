@@ -10,7 +10,7 @@ import {
 } from "./math";
 import type { FrameRange, Row, TrackClips } from "./math";
 import { PEAK_CHUNK, createTimelineMedia } from "./media";
-import { envelopeGain, volumeLane } from "./mix";
+import { volumeLane, waveformScale } from "./mix";
 import { clipFades } from "../../shared/timeline/mix";
 import type { ViewState } from "./view";
 import { clipVisible, trackMix } from "../../shared/timeline/tracks";
@@ -231,8 +231,7 @@ export function createBodies(
             loaded(other, false),
           );
       if (level === undefined) return;
-      // Peaks are drawn on a square-root scale, so the envelope's gain scales them by its root:
-      // the wave grows and shrinks with the gain line and tapers under a fade.
+      // The wave grows and shrinks with the gain line, down to a floor, and tapers under a fade.
       const fades = clip.fadeIn || clip.fadeOut ? clipFades(clip) : NO_FADES;
       const lane = volumeLane(clip);
       const framesPerPixel = 1 / (ppf * dpr);
@@ -275,8 +274,12 @@ export function createBodies(
           if (pairs[at + 1]! > high) high = pairs[at + 1]!;
         }
         if (high < low) continue;
-        const gain = Math.sqrt(
-          envelopeGain(clip, fps, (x - x0) * framesPerPixel, lane, fades),
+        const gain = waveformScale(
+          clip,
+          fps,
+          (x - x0) * framesPerPixel,
+          lane,
+          fades,
         );
         // A boosted peak stops at the body's edge.
         const top = Math.min(1, high * gain);

@@ -147,11 +147,11 @@ test("drag clip gain and fades in single undo steps, then match stereo preview l
   const gain = '[data-clip-mix="music"] [data-mix="gain"]';
   const initial = (await read()).timeline;
   await drag(page, gain, 0, 3);
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-2.9 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-5.2 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(initial);
   await page.keyboard.press("Control+Shift+z");
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-2.9 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-5.2 / 20));
   const gainOnly = (await read()).timeline;
   const ppf = await settledPpf(page);
   await drag(
@@ -646,11 +646,14 @@ test("gain follows the pointer, Shift adjusts finely, horizontal presses move cl
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
   const measurements = [];
-  // On a default audio row a pixel is about 1 dB down to -6 dB, then 4.8 dB.
+  // On a default audio row a pixel is about 1.7 dB all the way down to -24 dB, where a bed sits.
   for (const [dy, level] of [
-    [3, "-2.9 dB"],
-    [6, "-5.8 dB"],
-    [9, "-19.2 dB"],
+    [3, "-5.2 dB"],
+    [6, "-10.5 dB"],
+    [7, "-12.2 dB"],
+    [8, "-14.0 dB"],
+    [9, "-15.7 dB"],
+    [12, "-20.9 dB"],
   ] as const) {
     await page.mouse.move(origin.x, origin.y + dy, { steps: 6 });
     const actual = await point();
@@ -878,16 +881,16 @@ test("a gain line answers its first pixel, and a press without a drag changes no
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
   await page.mouse.move(origin.x, origin.y + 1);
-  await expect(readout).toHaveText("-1.0 dB");
+  await expect(readout).toHaveText("-1.7 dB");
   expect(
     Math.abs((await lineAt(page, 0.5)).y - (origin.y + 1)),
   ).toBeLessThanOrEqual(0.5);
   await page.mouse.move(origin.x, origin.y + 2);
-  await expect(readout).toHaveText("-1.9 dB");
+  await expect(readout).toHaveText("-3.5 dB");
   await page.mouse.move(origin.x, origin.y - 1);
-  await expect(readout).toHaveText("+1.0 dB");
+  await expect(readout).toHaveText("+1.6 dB");
   await page.mouse.up();
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (1 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (1.6 / 20));
   expect(await gainEdits()).toBe(1);
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(initial);
@@ -916,7 +919,7 @@ test("a pixel of wobble on the gain line still lets a sideways drag move the cli
   await page.mouse.down();
   await page.mouse.move(origin.x, origin.y + 1);
   // The first pixel shows its gain, but has not chosen the axis.
-  await expect(readout).toHaveText("-1.0 dB");
+  await expect(readout).toHaveText("-1.7 dB");
   for (let dx = 6; dx <= 60; dx += 6) {
     await page.mouse.move(origin.x + dx, origin.y + 1);
     await page.waitForTimeout(16);
@@ -967,10 +970,10 @@ test("a quick click that wobbles on the gain line selects the clip and leaves th
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
   await page.mouse.move(origin.x, origin.y + 1);
-  await expect(readout).toHaveText("-1.0 dB");
+  await expect(readout).toHaveText("-1.7 dB");
   await page.waitForTimeout(350);
   await page.mouse.up();
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1.7 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(read).toMatchObject({ timeline: before.timeline });
   // A quick drag that went further and came back still commits where it was let go.
@@ -979,7 +982,7 @@ test("a quick click that wobbles on the gain line selects the clip and leaves th
   await page.mouse.move(origin.x, origin.y + 3);
   await page.mouse.move(origin.x, origin.y + 1);
   await page.mouse.up();
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-1.7 / 20));
 });
 
 test("releasing Shift mid-drag leaves the gain line where it is, under the pointer", async ({
@@ -1001,17 +1004,17 @@ test("releasing Shift mid-drag leaves the gain line where it is, under the point
   await expect(readout).toHaveText("+4.0 dB");
   await page.keyboard.up("Shift");
   const fine = await lineAt(page, 0.5);
-  await page.mouse.move(origin.x, origin.y - 37, { steps: 3 });
-  // The line goes on from +4 dB and moves the 3 px the pointer did.
-  await expect(readout).toHaveText("+1.1 dB");
+  await page.mouse.move(origin.x, origin.y - 36, { steps: 4 });
+  // The line goes on from +4 dB and moves the 4 px the pointer did, past unity.
+  await expect(readout).toHaveText("-2.6 dB");
   const coarse = await lineAt(page, 0.5);
-  expect(Math.abs(coarse.y - (fine.y + 3))).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(coarse.y - (fine.y + 4))).toBeLessThanOrEqual(0.5);
   await page.keyboard.down("Shift");
-  await page.mouse.move(origin.x, origin.y - 32, { steps: 5 });
-  await expect(readout).toHaveText("+0.6 dB");
+  await page.mouse.move(origin.x, origin.y - 32, { steps: 4 });
+  await expect(readout).toHaveText("-3.0 dB");
   await page.keyboard.up("Shift");
   await page.mouse.up();
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (0.6 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (-3 / 20));
   // Each change of Shift took hold again, yet the drag is one step back to where it began.
   expect(await gainEdits()).toBe(1);
   await page.keyboard.press("Control+z");
@@ -1033,16 +1036,16 @@ test("a gain drag inside a fade keeps the line under the pointer", async ({
   const origin = await lineAt(page, 0.1);
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
-  for (let dy = 1; dy <= 6; dy++) {
+  for (let dy = 1; dy <= 3; dy++) {
     await page.mouse.move(origin.x, origin.y - dy);
     await page.waitForTimeout(16);
   }
-  await expect(page.locator(".tl-readout")).toHaveText("+11.5 dB");
+  await expect(page.locator(".tl-readout")).toHaveText("+9.6 dB");
   expect(
-    Math.abs((await lineAt(page, 0.1)).y - (origin.y - 6)),
+    Math.abs((await lineAt(page, 0.1)).y - (origin.y - 3)),
   ).toBeLessThanOrEqual(0.5);
   await page.mouse.up();
-  await expect.poll(async () => (await music()).volume).toBe(10 ** (11.5 / 20));
+  await expect.poll(async () => (await music()).volume).toBe(10 ** (9.6 / 20));
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(initial);
 });
@@ -1105,7 +1108,7 @@ test("a gain drag keeps the line and its level under the pointer, scales the wav
     await page.mouse.move(origin.x, origin.y + dy);
     await page.waitForTimeout(16);
   }
-  await expect(readout).toHaveText("-19.2 dB");
+  await expect(readout).toHaveText("-15.7 dB");
   const held = await line();
   expect(Math.abs(held.y - (origin.y + 9))).toBeLessThanOrEqual(0.5);
   await onLine(held.y);
@@ -1120,7 +1123,7 @@ test("a gain drag keeps the line and its level under the pointer, scales the wav
   await expect(readout).toBeHidden();
   await expect
     .poll(async () => (await read()).timeline.clips[0]!.volume)
-    .toBe(10 ** (-19.2 / 20));
+    .toBe(10 ** (-15.7 / 20));
   expect(await gainEdits()).toBe(1);
   expect(await wave(0.25)).toBe(quiet);
   await page.keyboard.press("Control+z");
@@ -1134,7 +1137,7 @@ test("a gain drag keeps the line and its level under the pointer, scales the wav
         data: {
           expectedRevision: (await read()).revision,
           commands: [
-            { type: "setClip", clipId: "music", volume: 10 ** (-19.2 / 20) },
+            { type: "setClip", clipId: "music", volume: 10 ** (-15.7 / 20) },
           ],
         },
       })
@@ -1144,7 +1147,26 @@ test("a gain drag keeps the line and its level under the pointer, scales the wav
   await expect.poll(() => wave(0.25)).toBe(quiet);
   await expect(
     page.locator('[data-clip-mix="music"] [data-mix="gain"]'),
-  ).toContainText("Gain -19.2 dB");
+  ).toContainText("Gain -15.7 dB");
+
+  // Ducked far down, as a music bed under speech is, the wave keeps a third of its height so
+  // its beats still show, and the fade at the end still tapers away from it.
+  expect(
+    (
+      await request.post(`${api}/commands`, {
+        data: {
+          expectedRevision: (await read()).revision,
+          commands: [{ type: "setClip", clipId: "music", volume: 0.01 }],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await expect.poll(async () => (await line()).y).toBeGreaterThan(held.y + 4);
+  await page.waitForTimeout(100);
+  const ducked = await wave(0.25);
+  expect(ducked).toBeGreaterThan(full * 0.27);
+  expect(ducked).toBeLessThanOrEqual(quiet);
+  expect(await wave(0.9)).toBeLessThan(ducked * 0.8);
 });
 
 test("a horizontal drag from the gain line moves the whole selection, as a body drag does", async ({

@@ -79,7 +79,9 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
     "Picture",
   );
   await expect(gain).toHaveValue("0.0 dB");
-  await page.locator('[data-clip="sound"]').click();
+  await page
+    .locator('[data-clip="sound"]')
+    .click({ position: { x: 20, y: 5 } });
   await expect(inspector.locator(".inspector-clip strong")).toHaveText(
     "Picture",
   );
@@ -167,7 +169,9 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
     page.getByRole("button", { name: "Play forward", exact: true }),
   ).toHaveAttribute("aria-pressed", "false");
   await gain.fill("-9 dB");
-  await page.locator('[data-clip="music"]').click();
+  await page
+    .locator('[data-clip="music"]')
+    .click({ position: { x: 20, y: 5 } });
   await expect.poll(async () => (await sound()).volume).toBe(10 ** (-9 / 20));
   await expect(inspector.locator("summary")).toHaveText([
     "Audio",
@@ -483,7 +487,9 @@ test("linked Changes has one row per history entry and keeps review and session 
         .every((edit) => edit.accepted),
     )
     .toBe(true);
-  await page.locator('[data-clip="sound"]').click();
+  await page
+    .locator('[data-clip="sound"]')
+    .click({ position: { x: 20, y: 5 } });
   await expect(history).toHaveAttribute("open", "");
   // The section saves its state from the toggle event, which lands a task after the attribute.
   const saved = () =>

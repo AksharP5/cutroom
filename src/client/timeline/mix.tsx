@@ -19,21 +19,25 @@ import { clipFades } from "../../shared/timeline/mix";
 import type { Row } from "./math";
 
 const SILENCE_DB = -60;
-const UNITY = 50;
 /**
  * The gain scale of a clip body: how far down from its top, in percent, each dB level sits, in
- * straight runs between these stops. Unity stays at the middle, where a press on the middle of
- * the clip's box misses the line. The 6 dB below unity get the same room per dB as the boost
- * above it, for routine trims on a short track; deeper cuts share what is left. The line is
- * drawn on this scale and a drag reads it back, so the line stays under the pointer.
+ * straight runs between these stops. Most mixing is cutting, so the 24 dB below unity get more
+ * than half the body: a music bed under speech lands on its level within a pixel or two, at
+ * about 1.7 dB per pixel on a default audio track. The boost above unity keeps a like rate in
+ * the top three tenths, and the last sliver falls away to silence. The line is drawn on this
+ * scale and a drag reads it back, so the line stays under the pointer.
  */
 const SCALE = [
   [0, MAX_AUDIO_GAIN_DB],
-  [UNITY, 0],
-  [75, -6],
-  [90, -24],
+  [30, 0],
+  [85, -24],
   [100, SILENCE_DB],
 ] as const;
+/**
+ * A clip turned down still shows its waveform at this share of its height at unity, or more,
+ * so the beats of a ducked music bed stay readable. Fades taper from there to nothing.
+ */
+const WAVE_FLOOR = 1 / 3;
 /** Shift moves the line a tenth of a dB per pixel at every track height. */
 const FINE_DB = 0.1;
 
@@ -96,17 +100,23 @@ function fadeAt(clip: Clip, time: number, { fadeIn, fadeOut }: Fades) {
   return head * tail;
 }
 
-/** The clip's linear gain `time` frames in: its gain on the volume lane, through both fades. */
-export function envelopeGain(
+/**
+ * How tall the clip's waveform is drawn `time` frames in, against its height at unity gain.
+ * Peaks are on a square-root scale, so the gain on the volume lane scales them by its root, held
+ * at the floor, and a fade tapers that to nothing.
+ */
+export function waveformScale(
   clip: Clip,
   fps: Fps,
   time: number,
   lane: Lane,
   fades: Fades,
 ) {
-  return (
-    gainTimesLane(clip.volume ?? 1, laneAt(fps, time, lane)) *
-    fadeAt(clip, time, fades)
+  return Math.sqrt(
+    Math.max(
+      WAVE_FLOOR ** 2,
+      gainTimesLane(clip.volume ?? 1, laneAt(fps, time, lane)),
+    ) * fadeAt(clip, time, fades),
   );
 }
 
