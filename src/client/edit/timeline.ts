@@ -9,6 +9,8 @@ import {
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
+  AnimationFeedbackSchema,
+  TAB_ORIGIN_HEADER,
   CommandSchema,
   ClipboardSchema,
   TimelineViewSchema,
@@ -20,7 +22,7 @@ import type {
   Timeline,
   TimelineView,
 } from "../../shared/timeline/schema";
-import { ApiError, api, json } from "../api";
+import { ApiError, api, json, tabOrigin } from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
@@ -35,6 +37,10 @@ import {
 } from "./feedback";
 import { editLabel } from "../../shared/timeline/labels";
 import { ReviewItemSchema } from "../../shared/review";
+import {
+  dismissAnimationFeedback,
+  showAnimationFeedback,
+} from "./animationFeedback";
 import { noteNumbers } from "../review";
 import { dispatchNote, queueNoteChange } from "./noteStore";
 
@@ -132,6 +138,7 @@ function noticeOutside(before: TimelineView, after: TimelineView) {
 
 /** Opens a project's timeline, dropping what was shown for the last one. */
 export function openTimeline(projectId: string, signal?: AbortSignal) {
+  dismissAnimationFeedback();
   confirmed = null;
   pending = [];
   clearOutsideNotice();
@@ -142,6 +149,7 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   signal?.addEventListener(
     "abort",
     () => {
+      dismissAnimationFeedback();
       clearOutsideNotice();
       dismissRipple();
       dismissOutside();
@@ -313,12 +321,15 @@ async function send(edit: Edit) {
       const result = await api(
         `${project(edit.projectId)}/commands`,
         TimelineViewSchema,
-        json("POST", {
-          composition: base.composition,
-          expectedRevision: base.revision,
-          label: edit.label,
-          commands: edit.commands,
-        }),
+        {
+          ...json("POST", {
+            composition: base.composition,
+            expectedRevision: base.revision,
+            label: edit.label,
+            commands: edit.commands,
+          }),
+          headers: { [TAB_ORIGIN_HEADER]: tabOrigin },
+        },
       );
       if (useTimeline.getState().projectId === edit.projectId)
         confirmed = { projectId: edit.projectId, view: result };
@@ -725,4 +736,18 @@ export function clipboardEdit(
     .catch((error: unknown) => {
       showToast(error instanceof Error ? error.message : String(error));
     });
+}
+
+/** Only this tab's edits may show feedback through the live project event. */
+export function receiveAnimationFeedback(
+  projectId: string,
+  data: unknown,
+  signal: AbortSignal,
+) {
+  const feedback = AnimationFeedbackSchema.parse(data);
+  if (feedback.origin !== tabOrigin) return;
+  void queue.then(() => {
+    if (!signal.aborted && useTimeline.getState().projectId === projectId)
+      showAnimationFeedback(projectId, feedback);
+  });
 }

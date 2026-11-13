@@ -100,6 +100,7 @@ export async function createApp(
   ]
     .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
     .join(" ");
+  const timeline = createTimelineRoutes(projects, review);
   app.route(
     "/api/cutroom",
     createWorkspaceRoutes({
@@ -109,11 +110,12 @@ export async function createApp(
       projectsDir,
       mcpCommand,
       subscribePreview: editor.subscribe,
+      subscribeAnimationFeedback: timeline.subscribeAnimationFeedback,
       subscribeExports: editor.subscribeExports,
     }),
   );
   app.route("/api/cutroom", createProjectRoutes(projects, review, transcripts));
-  app.route("/api/cutroom", createTimelineRoutes(projects, review));
+  app.route("/api/cutroom", timeline);
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);

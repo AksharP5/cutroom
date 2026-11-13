@@ -45,6 +45,8 @@ interface Batch {
  */
 interface ApplyOptions {
   clipboards?: Batch["clipboards"];
+  /** Observe each admitted command before the batch is written. */
+  onApply?: (before: Timeline, after: Timeline) => void;
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
@@ -99,6 +101,15 @@ export const toFrames = (seconds: number, fps: Fps) =>
   // Adding zero turns the -0 that ceil returns just below zero into 0.
   Math.ceil((seconds * fps.num) / fps.den - 1e-3) + 0;
 export const clipEnd = (clip: Clip) => clip.start + clip.duration;
+
+// Plain clips have no persisted source in-point. Track their window only while observing a batch.
+const animationSource = Symbol("animation source offset");
+type ObservedClip = Clip & { [animationSource]?: number };
+export const animationOrigin = (clip: ObservedClip, fps: Fps) =>
+  canonicalSeconds(
+    frameTime(clip.start, fps) -
+      (clip.mediaStart ?? clip[animationSource] ?? 0) / clip.playbackRate,
+  );
 
 const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -175,6 +186,7 @@ export function applyAll(
   commands: readonly Command[],
   {
     clipboards = new Map(),
+    onApply,
     onSkip = () => {},
     onCreate = () => {},
     mediaLengths = new Map(),
@@ -200,9 +212,20 @@ export function applyAll(
       onCreate(id, resolved);
     },
   };
-  return commands.reduce((current, command, index) => {
+  const observed = onApply
+    ? {
+        ...timeline,
+        clips: timeline.clips.map((clip) => ({
+          ...clip,
+          [animationSource]: 0,
+        })),
+      }
+    : timeline;
+  const result = commands.reduce((current, command, index) => {
     try {
-      return applyIn(current, command, batch);
+      const next = applyIn(current, command, batch);
+      onApply?.(current, next);
+      return next;
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
       throw new TimelineError(
@@ -211,7 +234,16 @@ export function applyAll(
         index,
       );
     }
-  }, timeline);
+  }, observed);
+  if (result === observed) return timeline;
+  if (!onApply) return result;
+  return {
+    ...result,
+    clips: result.clips.map((clip: ObservedClip) => {
+      const { [animationSource]: _offset, ...written } = clip;
+      return written;
+    }),
+  };
 }
 
 /** Audio clips belong on audio tracks and everything else on video tracks. */
@@ -1338,7 +1370,7 @@ function advance(clip: Clip, frames: number, fps: Fps): number | null {
 
 /** Source geometry is shared; edge trims and internal cuts have different fade semantics. */
 function windowClip(
-  clip: Clip,
+  clip: ObservedClip,
   start: number,
   end: number,
   fps: Fps,
@@ -1352,6 +1384,11 @@ function windowClip(
     start,
     duration,
     mediaStart: advance(clip, start - clip.start, fps),
+    ...(clip[animationSource] !== undefined && {
+      [animationSource]:
+        clip[animationSource] +
+        frameTime(start - clip.start, fps) * clip.playbackRate,
+    }),
   };
 }
 

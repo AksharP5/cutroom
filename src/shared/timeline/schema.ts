@@ -498,6 +498,23 @@ export const ClipEditSchema = z.object({
   resolution: z.enum(["owner", "source"]).optional(),
 });
 
+export const TAB_ORIGIN_HEADER = "x-cutroom-tab-origin";
+export const TabOriginSchema = z.uuid();
+
+export const AnimationLeftBehindSchema = z.object({
+  clipId,
+  label: z.string(),
+});
+export type AnimationLeftBehind = z.infer<typeof AnimationLeftBehindSchema>;
+export const AnimationFeedbackSchema = z.object({
+  origin: TabOriginSchema.nullable(),
+  revision: z.string().min(1),
+  composition: z.string(),
+  clips: z.array(AnimationLeftBehindSchema),
+});
+
+export type AnimationFeedback = z.infer<typeof AnimationFeedbackSchema>;
+
 export const TimelineViewSchema = z.object({
   skippedClips: z
     .array(z.object({ clipId, label: label.nullable(), reason: z.string() }))

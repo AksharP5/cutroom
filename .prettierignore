@@ -1,2 +1,6 @@
 # A verbatim copy of the design source; edit it there, never reformat it here.
 src/client/tokens.css
+# Authored source bytes are fixtures for unchanged animation scripts.
+e2e/fixtures/animation-feedback/index.html
+e2e/fixtures/animation-feedback/review-r4/*.html
+e2e/fixtures/animation-feedback/overlap.html

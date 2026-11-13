@@ -28,6 +28,8 @@ import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { isMissing, projectPath } from "./projects/store";
 import { REVIEW_STATE_PATH } from "../shared/review";
+import type { createTimelineRoutes } from "./timeline/routes";
+import { TabOriginSchema } from "../shared/timeline/schema";
 import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
@@ -42,6 +44,9 @@ export function createWorkspaceRoutes(options: {
     projectId: string,
     listener: (change: FileChange) => void,
   ) => Promise<() => void>;
+  subscribeAnimationFeedback?: ReturnType<
+    typeof createTimelineRoutes
+  >["subscribeAnimationFeedback"];
   subscribeExports?: ReturnType<
     typeof createHyperframesApi
   >["subscribeExports"];
@@ -181,12 +186,26 @@ export function createWorkspaceRoutes(options: {
   });
   app.get("/projects/:id/events", async (c) => {
     const project = await options.projects.get(c.req.param("id"));
+    const origin = TabOriginSchema.optional().parse(c.req.query("origin"));
     return streamSSE(c, async (stream) => {
       const stopPreview = await options.subscribePreview?.(
         project.id,
         (change) => {
           void stream
             .writeSSE({ event: "file-change", data: JSON.stringify(change) })
+            .catch(() => {});
+        },
+      );
+      const stopAnimationFeedback = options.subscribeAnimationFeedback?.(
+        project.id,
+        (feedback) => {
+          if (!origin || feedback.origin !== origin || !feedback.clips.length)
+            return;
+          void stream
+            .writeSSE({
+              event: "animation-left-behind",
+              data: JSON.stringify(feedback),
+            })
             .catch(() => {});
         },
       );
@@ -268,6 +287,7 @@ export function createWorkspaceRoutes(options: {
       } finally {
         stopPreview?.();
         stopExports?.();
+        stopAnimationFeedback?.();
         watcher.close();
         for (const timer of timers.values()) clearTimeout(timer);
         clearInterval(heartbeat);
