@@ -1344,7 +1344,7 @@ for (const [name, command, expectedPicture] of [
     const client = new Client({ name: "ripple-sync", version: "1" });
     const api = `/projects/${project.id}`;
     const index = join(project.path, "index.html");
-    const html = `<main data-composition-id="main" data-duration="16" data-fps="30"><video id="shot" src="shot.mp4" muted data-start="2" data-duration="2" data-media-start="2" data-track-index="0"></video><video id="later" src="shot.mp4" muted data-start="4" data-duration="12" data-track-index="0"></video><div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1">Lower third</div><div id="later-title" class="clip" data-start="14" data-duration="2" data-track-index="1">Later cue</div><script>gsap.to("#lower", {opacity:1});</script></main>`;
+    const html = `<main data-composition-id="main" data-duration="16" data-fps="30"><video id="shot" src="shot.mp4" muted data-start="2" data-duration="2" data-media-start="2" data-track-index="0"></video><video id="later" src="shot.mp4" muted data-start="4" data-duration="12" data-track-index="0"></video><div id="lower" class="clip" data-label="Lower third" data-start="0" data-duration="10" data-track-index="1"></div><div id="later-title" class="clip" data-start="14" data-duration="2" data-track-index="1">Later cue</div><script>gsap.to("#lower", {opacity:1});</script></main>`;
     const read = async () =>
       TimelineViewSchema.parse(
         await (await fixture.request(`${api}/timeline`)).json(),

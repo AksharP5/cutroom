@@ -82,6 +82,58 @@ const positions = (state: Timeline) =>
     ]),
   );
 
+for (const command of [
+  { type: "remove", clipIds: ["shot"], ripple: true },
+  { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
+  { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
+] satisfies CommandInput[]) {
+  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} shortens spanning text and stills without copying them`, () => {
+    const state = timeline([
+      clip("shot", 0, 60, 60),
+      clip("lower", 1, 15, 180, {
+        kind: "element",
+        src: null,
+        mediaStart: null,
+        text: "Grace Hopper",
+        sourceRestrictions: { copy: "Animated by id." },
+      }),
+      clip("still", 2, 0, 240, {
+        kind: "image",
+        src: "still.png",
+        mediaStart: null,
+      }),
+      clip("picture", 3, 0, 240),
+      clip("music", 4, 0, 240, { kind: "audio" }),
+    ]);
+    const result = run(state, command);
+    const removed = command.type === "remove" ? 60 : 30;
+    for (const id of ["lower", "still"]) {
+      const original = state.clips.find((clip) => clip.id === id)!;
+      expect(result.clips.find((clip) => clip.id === id)).toEqual({
+        ...original,
+        duration: original.duration - removed,
+      });
+      expect(
+        result.clips.filter((clip) => clip.track === original.track),
+      ).toHaveLength(1);
+    }
+    for (const id of ["picture", "music"])
+      expect(
+        result.clips.filter(
+          (clip) => clip.id === id || clip.id.startsWith(`${id}-`),
+        ),
+      ).toHaveLength(2);
+    const optedOut = run(
+      state,
+      { type: "setTrack", index: 1, autoSelect: false },
+      command,
+    );
+    expect(optedOut.clips.find((clip) => clip.id === "lower")).toEqual(
+      state.clips.find((clip) => clip.id === "lower"),
+    );
+  });
+}
+
 test("auto-select razor cuts supported clips and reports the title it leaves whole", () => {
   const title = clip("lower", 1, 0, 180, {
     kind: "element",

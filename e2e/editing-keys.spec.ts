@@ -487,11 +487,10 @@ test("when a cut is refused, a queued X on its piece is taken back too", async (
   await expect(timeline.locator("[data-clip].selected")).toHaveCount(0);
 });
 
-test("pieces a ripple delete cuts from a spanning title keep their ids, so X lifts the right one", async ({
+test("a title shortened by ripple keeps its id, so queued X lifts the whole title", async ({
   page,
   request,
 }) => {
-  // A title from 1s to 14s spans shots 2 and 4, so ripple deleting both cuts it twice.
   const { timeline, clips, hold } = await open(page, request, "Spanning", {
     count: 5,
     extra: [
@@ -504,34 +503,24 @@ test("pieces a ripple delete cuts from a spanning title keep their ids, so X lif
     .locator('[data-clip="shot-4"]')
     .click({ modifiers: ["Control"] });
   await page.keyboard.press("Shift+X");
-  // The title is left at 1s to 3s, with the piece after shot 2 at 3s and the one after shot 4 at 6s.
-  const titles = () =>
-    timeline
-      .locator('[data-clip^="title"]')
-      .evaluateAll((elements) =>
-        elements
-          .map((element) => [
-            element.getAttribute("data-clip") ?? "",
-            Number(getComputedStyle(element).getPropertyValue("--s")),
-          ])
-          .sort((a, b) => Number(a[1]) - Number(b[1])),
-      );
-  const shown = await titles();
-  expect(shown.map(([, start]) => start)).toEqual([30, 90, 180]);
-  const [title, afterTwo, afterFour] = shown.map(([id]) => String(id));
-  // Lift the second new piece before the server has answered the ripple delete.
-  await timeline.locator(`[data-clip="${afterFour}"]`).click();
+  // Both removed ranges shorten the same title before the server answers.
+  await expect(timeline.locator('[data-clip^="title"]')).toHaveCount(1);
+  expect(
+    await timeline
+      .locator('[data-clip="title"]')
+      .evaluate((element) => [
+        getComputedStyle(element).getPropertyValue("--s").trim(),
+        getComputedStyle(element).getPropertyValue("--d").trim(),
+      ]),
+  ).toEqual(["30", "210"]);
+  await timeline.locator('[data-clip="title"]').click();
   await page.keyboard.press("x");
   release();
-
   await expect
     .poll(async () =>
       (await clips()).filter(([id]) => String(id).startsWith("title")),
     )
-    .toEqual([
-      [title, 30, 60],
-      [afterTwo, 90, 90],
-    ]);
+    .toEqual([]);
   await expect(page.locator(".toast")).toHaveCount(0);
 });
 
@@ -571,7 +560,7 @@ test("Q and E pressed on a selected shot act on that shot only, even after an ag
   ]);
 });
 
-test("an X on a title piece is taken back when the ripple that made it is refused", async ({
+test("an X on a shortened title is refused when the ripple is refused", async ({
   page,
   request,
 }) => {
@@ -587,19 +576,9 @@ test("an X on a title piece is taken back when the ripple that made it is refuse
     .locator('[data-clip="shot-4"]')
     .click({ modifiers: ["Control"] });
   await page.keyboard.press("Shift+X");
-  // Select the 60-frame title piece that follows shot 4 and queue X on it.
-  const tail = await timeline
-    .locator('[data-clip^="title"]')
-    .evaluateAll((elements) =>
-      elements
-        .find(
-          (element) =>
-            getComputedStyle(element).getPropertyValue("--s").trim() === "180",
-        )
-        ?.getAttribute("data-clip"),
-    );
-  expect(tail).toBeTruthy();
-  await timeline.locator(`[data-clip="${tail}"]`).click();
+  // X snapshots the shortened title, not its earlier uncut state.
+  await expect(timeline.locator('[data-clip^="title"]')).toHaveCount(1);
+  await timeline.locator('[data-clip="title"]').click();
   await page.keyboard.press("x");
   // The agent lifts shot 4 first, so the ripple delete no longer applies.
   const after = await agent([{ type: "remove", clipIds: ["shot-4"] }]);
@@ -608,7 +587,7 @@ test("an X on a title piece is taken back when the ripple that made it is refuse
   await expect(page.locator(".toast span")).toHaveText(
     "An agent changed those clips first. Press it again.",
   );
-  // The title is whole: the X never ran against a piece the server never made.
+  // The original title stays whole because X cannot lift the shorter version it saw.
   await expect
     .poll(clips)
     .toEqual(after.map((clip) => [clip.id, clip.start, clip.duration]));
