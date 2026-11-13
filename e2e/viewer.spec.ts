@@ -5,6 +5,145 @@ import { expect, test } from "./fixtures";
 import type { Request } from "@playwright/test";
 import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { parseTimecode } from "../src/shared/timeline/timecode";
+
+test("queued preview state cannot undo a seek before playback commands arrive", async ({
+  page,
+  request,
+}) => {
+  // Register before the bridge, so queued commands really stay outside the runtime.
+  await page.addInitScript(() => {
+    type Control = { source: string; action: string; id: string };
+    const queued: MessageEvent<Control>[] = [];
+    let holding = false;
+    window.addEventListener("test-hold-playback", () => {
+      holding = true;
+    });
+    window.addEventListener("test-release-playback", () => {
+      holding = false;
+      for (const event of queued.splice(0))
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: event.data,
+            source: event.source,
+            origin: event.origin,
+          }),
+        );
+    });
+    window.addEventListener("message", (event: MessageEvent<Control>) => {
+      if (
+        !holding ||
+        event.data?.source !== "cutroom-viewer" ||
+        !["pause", "seek", "play"].includes(event.data.action)
+      )
+        return;
+      event.stopImmediatePropagation();
+      if (!queued.length)
+        document.documentElement.dataset.firstHeldPlayback = event.data.id;
+      queued.push(event);
+      document.documentElement.dataset.heldPlayback = event.data.action;
+    });
+  });
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Pending playback", duration: 12 },
+      })
+    ).json(),
+  );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-handoff",
+    "showing",
+  );
+  const element = await page.locator("iframe[data-live]").elementHandle();
+  const frame = await element?.contentFrame();
+  if (!frame) throw new Error("The live preview frame is missing.");
+  const time = page.getByRole("button", { name: /^Current time/ });
+  const seek = async (value: string) => {
+    await time.click();
+    await page.getByLabel("Go to time").pressSequentially(value);
+    await page.keyboard.press("Enter");
+  };
+  await seek("0715");
+  await frame.evaluate(() =>
+    window.dispatchEvent(new Event("test-hold-playback")),
+  );
+  try {
+    await seek("0315");
+    await page
+      .getByRole("button", { name: "Play forward", exact: true })
+      .click();
+    await expect(frame.locator("html")).toHaveAttribute(
+      "data-held-playback",
+      "play",
+    );
+    const received = await page.evaluateHandle(() => ({
+      received: new Promise<(string | null)[]>((resolve) => {
+        const observe = (event: MessageEvent<{ probe?: string }>) => {
+          if (event.data?.probe !== "stale-playback") return;
+          window.removeEventListener("message", observe);
+          const shown: (string | null)[] = [];
+          const sample = () => {
+            shown.push(
+              document.querySelector(".edit-now")?.textContent ?? null,
+            );
+            if (shown.length === 2) resolve(shown);
+            else requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        };
+        window.addEventListener("message", observe);
+      }),
+    }));
+    // Old state and an earlier command's reply can arrive while the latest play is pending.
+    // Retain each painted time: waiting for the final text would miss a one-frame jump.
+    await frame.evaluate(() => {
+      parent.postMessage(
+        {
+          source: "hf-preview",
+          type: "state",
+          currentTime: 7.5,
+          isPlaying: false,
+        },
+        "*",
+      );
+      parent.postMessage(
+        {
+          source: "cutroom-preview",
+          id: document.documentElement.dataset.firstHeldPlayback,
+          probe: "stale-playback",
+          state: {
+            ready: true,
+            root: true,
+            error: null,
+            width: 1920,
+            height: 1080,
+            fps: null,
+            time: 7.5,
+            playing: false,
+          },
+        },
+        "*",
+      );
+    });
+    const shown = await received.evaluate(({ received }) => received);
+    await received.dispose();
+    expect(shown).toEqual(["00:00:03:15", "00:00:03:15"]);
+  } finally {
+    await frame.evaluate(() =>
+      window.dispatchEvent(new Event("test-release-playback")),
+    );
+  }
+  await expect(time).not.toHaveText("00:00:03:15");
+  expect(
+    parseTimecode((await time.textContent())!.replaceAll(":", ""), {
+      num: 30,
+      den: 1,
+    }),
+  ).toBeLessThan(225);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+});
 
 test("three editor tabs share project and preview events without exhausting HTTP connections", async ({
   context,

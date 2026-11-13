@@ -147,6 +147,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       : () => {};
   };
   let clock: PlaybackClock | null = null;
+  /** Runtime messages queued before this command must not undo the local playback intent. */
+  let playbackRequest: string | null = null;
   type Reply = z.infer<typeof PreviewReplySchema>;
   const pending = new Map<
     string,
@@ -157,7 +159,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (active) {
       const playback = PlaybackClockSchema.safeParse(event.data);
       if (playback.success) {
-        clock = playback.data;
+        if (playbackRequest === null) clock = playback.data;
         return;
       }
       const levels = PreviewLevelsSchema.safeParse(event.data);
@@ -214,6 +216,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     }
     const runtime = RuntimeStateSchema.safeParse(event.data);
     if (runtime.success) {
+      if (playbackRequest !== null) return;
       state.time = runtime.data.currentTime;
       state.playing = runtime.data.isPlaying;
       return;
@@ -226,7 +229,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     const parsed = PreviewReplySchema.safeParse(event.data);
     if (!parsed.success) return;
     const reply = parsed.data;
-    state = reply.state;
+    if (playbackRequest === null || reply.id === playbackRequest) {
+      state = reply.state;
+      playbackRequest = null;
+    }
     if (reply.diagnostics) {
       diagnostics = reply.diagnostics;
       showDiagnostics();
@@ -269,15 +275,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     play: () => {
       clock = null;
       state.playing = true;
-      send("play");
+      playbackRequest = send("play");
     },
     pause: () => {
       state.playing = false;
-      send("pause");
+      playbackRequest = send("pause");
     },
     seek: (time) => {
+      clock = null;
       state.time = time;
-      send("seek", { time });
+      playbackRequest = send("seek", { time });
     },
     time: () => state.time,
     clock: () => clock,

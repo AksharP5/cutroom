@@ -200,9 +200,14 @@ test("exact filmstrip frames follow the view: on a cold cache, after a scroll, a
   };
   page.on("requestfinished", arrived);
   page.on("requestfailed", arrived);
-  // Slow frames, so a queue has time to build.
+  // Hold the first batch so the initial view has a queue, and no response can start
+  // another batch between the count snapshot and the first scroll event.
+  let releaseFrames = () => {};
+  const heldFrames = new Promise<void>((resolve) => {
+    releaseFrames = resolve;
+  });
   await page.route("**/media/frame?*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await heldFrames;
     await route.continue().catch(() => {});
   });
   await page.goto(`/#project/${project.id}`);
@@ -214,24 +219,30 @@ test("exact filmstrip frames follow the view: on a cold cache, after a scroll, a
   await timeline.getByRole("slider", { name: "Zoom" }).focus();
   await page.keyboard.press("End");
   await expect.poll(() => asked.includes(0)).toBe(true);
-  await expect.poll(() => asked.length).toBeGreaterThan(8);
+  await expect.poll(() => pending).toBe(4);
 
   // While the view scrolls, nothing new is asked for; the frames of where it stops are.
   const scroller = timeline.locator(".tl-scroll");
-  await page.waitForTimeout(400);
   const before = asked.length;
-  await scroller.evaluate(
-    (element) =>
-      new Promise<void>((resolve) => {
-        let steps = 0;
-        const step = () => {
-          element.scrollLeft += 40;
-          if (++steps < 60) requestAnimationFrame(step);
-          else resolve();
-        };
-        requestAnimationFrame(step);
-      }),
-  );
+  const scrolling = await scroller.evaluateHandle((element) => {
+    const started = new Promise<void>((resolve) => {
+      element.addEventListener("scroll", () => resolve(), { once: true });
+    });
+    const finished = new Promise<void>((resolve) => {
+      let steps = 0;
+      const step = () => {
+        element.scrollLeft += 40;
+        if (++steps < 60) requestAnimationFrame(step);
+        else resolve();
+      };
+      requestAnimationFrame(step);
+    });
+    return { started, finished };
+  });
+  await scrolling.evaluate(({ started }) => started);
+  releaseFrames();
+  await scrolling.evaluate(({ finished }) => finished);
+  await scrolling.dispose();
   expect(asked.length).toBe(before);
   await expect.poll(() => asked.length).toBeGreaterThan(before);
 
