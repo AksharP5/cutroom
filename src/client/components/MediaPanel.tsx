@@ -8,6 +8,7 @@ import { placeAtPlayhead } from "../edit/placeMedia";
 import { openSource } from "../edit/source";
 import { useTimeline } from "../edit/timeline";
 import { gridStep } from "../home";
+import { focusByKeyboard, reachedByKeyboard, useKeymap } from "../keymap";
 import {
   MEDIA_DRAG_TYPE,
   STILL_SECONDS,
@@ -264,6 +265,17 @@ export function MediaPanel({
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState("");
   const picker = useRef<HTMLInputElement>(null);
+  const panel = useRef<HTMLElement>(null);
+  // Its panel key lands on the list's current file, or on Import while there is none.
+  useKeymap({
+    viewActiveWindowSelectionMediaPoolClips: () => {
+      if (hidden) return;
+      focusByKeyboard(
+        panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
+          panel.current?.querySelector<HTMLElement>("button"),
+      );
+    },
+  });
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
@@ -363,6 +375,7 @@ export function MediaPanel({
 
   return (
     <section
+      ref={panel}
       className="media-panel"
       aria-label="Media"
       hidden={hidden}
@@ -428,7 +441,8 @@ export function MediaPanel({
               // A row reached by keyboard takes the arrows; after a click they stay the playhead's.
               if (
                 !(event.target instanceof HTMLElement) ||
-                !event.target.matches(".media-row:focus-visible") ||
+                !event.target.matches(".media-row") ||
+                !reachedByKeyboard(event.target) ||
                 event.key === "ArrowLeft" ||
                 event.key === "ArrowRight" ||
                 event.metaKey ||
@@ -449,7 +463,7 @@ export function MediaPanel({
               );
               if (next === null) return;
               event.preventDefault();
-              rows[next]?.focus();
+              focusByKeyboard(rows[next]);
             }}
           >
             {media?.map(({ path, kind }) => (

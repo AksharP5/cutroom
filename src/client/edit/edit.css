@@ -673,6 +673,24 @@ input.edit-now {
   overflow: hidden;
   background: var(--surface-panel);
 }
+/*
+  A panel key gives a whole panel the keyboard, and a line along its top edge says which one has
+  it. A ring would be painted under the panel's own scrollers. The panel is positioned only while
+  it holds focus, so nothing inside it is laid out against it otherwise.
+*/
+:is(.edit-viewer, .edit-timeline, .clip-inspector):focus-visible {
+  position: relative;
+  outline: none;
+}
+:is(.edit-viewer, .edit-timeline, .clip-inspector):focus-visible::after {
+  content: "";
+  position: absolute;
+  z-index: calc(var(--z-track-heads) + 1);
+  inset: 0 0 auto;
+  height: var(--focus-ring-width);
+  background: var(--focus-ring-color);
+  pointer-events: none;
+}
 
 .edit-note-popover {
   overflow: auto;

@@ -13,6 +13,7 @@ import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
+import { focusPanel, useKeymap } from "../../keymap";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
@@ -96,6 +97,17 @@ export function Inspector({ projectId }: { projectId: string }) {
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
+  // Its panel key opens it first. Focus waits for that render, since a closed inspector is inert.
+  const [focusRequests, setFocusRequests] = useState(0);
+  useKeymap({
+    viewActiveWindowSelectionInspector: () => {
+      useWorkspace.setState({ inspector: true });
+      setFocusRequests((count) => count + 1);
+    },
+  });
+  useEffect(() => {
+    if (focusRequests) focusPanel(root.current);
+  }, [focusRequests]);
   const [changesOpen, setChangesOpen] = useState(
     () => sessionStorage.getItem("cutroom.inspector.changes") === "true",
   );
