@@ -159,6 +159,11 @@ export async function toolSubject(
     case "source_read":
     case "source_write":
       return text("path");
+    case "media_rename":
+    case "media_remove": {
+      const media = text("path");
+      return media && fileName(media);
+    }
     case "project_create": {
       const title = text("name");
       return title && `“${title}”`;

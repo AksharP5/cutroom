@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
+import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
@@ -112,7 +113,7 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "      return firstSegment === void 0 || !PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment);",
-            "      if (firstSegment !== void 0 && PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment)) return false;\n      await projectPath({ path: projectDir }, rel);\n      return true;",
+            `      if (firstSegment === ${JSON.stringify(MEDIA_TRASH)} || (firstSegment !== void 0 && PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment))) return false;\n      await projectPath({ path: projectDir }, rel);\n      return true;`,
             url,
           );
           // The local chunk engine supports rational fps; the distributed

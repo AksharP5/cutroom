@@ -132,12 +132,27 @@ export function sourceRange(): MediaDrag | null {
 /** Puts the loaded file's range on the timeline at the playhead. */
 export function placeSource(projectId: string, mode: "insert" | "overwrite") {
   const media = sourceRange();
-  if (media)
-    return void placeAtPlayhead(projectId, media, mode, () =>
-      showSource(false),
+  if (!media) {
+    showToast("Open a file from Media to place it.", null, {
+      tone: "info",
+      transient: true,
+    });
+    return;
+  }
+  // A history or MCP move can finish before the debounced Media listing refreshes.
+  void fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/preview/${media.path.split("/").map(encodeURIComponent).join("/")}`,
+    { method: "HEAD", cache: "no-store" },
+  )
+    .then((response) => {
+      if (useSource.getState().file?.path !== media.path) return;
+      if (!response.ok) {
+        closeSource();
+        throw new Error("Source media is no longer available.");
+      }
+      return placeAtPlayhead(projectId, media, mode, () => showSource(false));
+    })
+    .catch((error: unknown) =>
+      showToast(error instanceof Error ? error.message : String(error)),
     );
-  showToast("Open a file from Media to place it.", null, {
-    tone: "info",
-    transient: true,
-  });
 }

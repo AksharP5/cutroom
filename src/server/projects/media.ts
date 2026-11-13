@@ -6,7 +6,8 @@ import type { MediaClip, Project } from "../../shared/project";
 import { ProjectDocumentSchema } from "../../shared/project";
 import { projectPath, readSource } from "./store";
 
-export async function listMedia(project: Project): Promise<MediaClip[]> {
+/** Every HTML file in the project, as project-relative paths. Hidden and vendored folders are skipped. */
+export async function compositionFiles(project: Project): Promise<string[]> {
   const sources: string[] = [];
   const ignored = new Set(["node_modules", "dist", "build"]);
   const walk = async (directory: string) => {
@@ -20,6 +21,11 @@ export async function listMedia(project: Project): Promise<MediaClip[]> {
     }
   };
   await walk(project.path);
+  return sources;
+}
+
+export async function listMedia(project: Project): Promise<MediaClip[]> {
+  const sources = await compositionFiles(project);
   const media: MediaClip[] = [];
   let metadata: ReturnType<typeof ProjectDocumentSchema.parse> | undefined;
   for (const sourceFile of sources) {

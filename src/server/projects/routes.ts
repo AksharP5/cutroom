@@ -1,5 +1,6 @@
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
@@ -7,6 +8,7 @@ import {
   applyFileMutations,
   fileContentVersion,
 } from "@hyperframes/studio-server";
+import type { HistoryWho } from "@hyperframes/studio-server";
 import {
   AnnotationInputSchema,
   AnnotationPatchSchema,
@@ -30,10 +32,13 @@ import {
 import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
 import { ExportDestinationSchema } from "../../shared/export";
+import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
+import type { Project } from "../../shared/project";
 import { nextExportName } from "../hyperframes/exportName";
 import { createTranscriptService } from "../transcript/service";
 import type { TranscriptService } from "../transcript/service";
 import { listMedia } from "./media";
+import { mediaUses, removeMedia, renameMedia } from "./mediaFiles";
 import { ReviewFileError, addAnnotation } from "./review";
 import type { ReviewService } from "./review";
 import { readSource } from "./store";
@@ -62,6 +67,20 @@ export function createProjectRoutes(
   transcripts: TranscriptService = createTranscriptService(store),
 ) {
   const api = new Hono();
+  /** Whose history entry an edit is: the calling agent's, or the owner's when undefined. */
+  const agentWho = (c: Context, project: Project): HistoryWho | undefined => {
+    const token = c.req.header(AGENT_HEADER);
+    if (token === undefined) return undefined;
+    return {
+      kind: "agent",
+      name:
+        reviews.agent(project, token).turn.name ??
+        parseInput(
+          AgentNameSchema,
+          decodeURIComponent(c.req.header(AGENT_NAME_HEADER) ?? "Agent"),
+        ),
+    };
+  };
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.use("/projects", projectMutationGuard(reviews));
   api.get("/projects", async (c) => c.json({ projects: await store.list() }));
@@ -135,6 +154,40 @@ export function createProjectRoutes(
   api.get("/projects/:id/media", async (c) =>
     c.json({ media: await listMedia(await store.get(c.req.param("id"))) }),
   );
+  api.post("/projects/:id/media/rename", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(MediaRenameSchema, await c.req.json());
+    return c.json(
+      await reviews.editAssets(
+        project,
+        c.req.header(AGENT_HEADER),
+        () => renameMedia(store, project, input, agentWho(c, project)),
+        { sources: true },
+      ),
+    );
+  });
+  api.post("/projects/:id/media/remove", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(MediaRemoveSchema, await c.req.json());
+    const uses = await mediaUses(project, input.path);
+    if (uses && !input.confirmUsed)
+      return c.json(
+        {
+          error: `${input.path} has ${uses} ${uses === 1 ? "use" : "uses"} in the project. Removing it leaves existing clips and references offline until the file is back. Send confirmUsed: true to remove it anyway.`,
+          uses,
+        },
+        409,
+      );
+    return c.json({
+      ...(await reviews.editAssets(
+        project,
+        c.req.header(AGENT_HEADER),
+        () => removeMedia(store, project, input, agentWho(c, project)),
+        { sources: true },
+      )),
+      uses,
+    });
+  });
   api.get("/projects/:id/source", async (c) =>
     c.json(
       await readSource(
@@ -198,19 +251,7 @@ export function createProjectRoutes(
             ]);
             return readSource(project, body.path);
           },
-          token
-            ? {
-                kind: "agent",
-                name:
-                  reviews.agent(project, token).turn.name ??
-                  parseInput(
-                    AgentNameSchema,
-                    decodeURIComponent(
-                      c.req.header(AGENT_NAME_HEADER) ?? "Agent",
-                    ),
-                  ),
-              }
-            : undefined,
+          agentWho(c, project),
         ),
       body.noteId,
       { create: body.expectedVersion === null },

@@ -20,6 +20,7 @@ import {
   TranscribeInputSchema,
   TranscriptImportSchema,
 } from "../../shared/project";
+import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
@@ -235,6 +236,28 @@ export function createMcpServer(options: McpOptions = {}) {
       request(
         `/projects/${id(input.projectId)}/source-marks?path=${id(input.path)}`,
       ),
+  );
+  registry.registerTool(
+    "media_rename",
+    {
+      description:
+        "Rename a media file in its folder and point every reference in the project's sources at the new name, as one undo step. Keep the file extension. Agent instructions, tool configuration, and hidden files are never rewritten.",
+      inputSchema: MediaRenameSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/media/rename`, "POST", input),
+  );
+  registry.registerTool(
+    "media_remove",
+    {
+      description:
+        "Move a media file to the project's trash folder, where it stays recoverable; history_undo moves it back. A file used by clips or composition CSS/scripts is refused with its use count unless confirmUsed is true. Those clips stay on the timeline and play nothing until the file is back.",
+      inputSchema: MediaRemoveSchema.extend(project),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`/projects/${id(projectId)}/media/remove`, "POST", input),
   );
   registry.registerTool(
     "source_read",

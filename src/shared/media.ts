@@ -1,3 +1,85 @@
+import { z } from "zod";
+
+// Mirrors the formats the upload route validates. `.ts` transport streams are left out so
+// TypeScript files in a project are never listed as video.
+export const mediaKinds = [
+  {
+    kind: "video",
+    extensions: [
+      "mp4",
+      "webm",
+      "mov",
+      "mkv",
+      "avi",
+      "m4v",
+      "mxf",
+      "mts",
+      "m2ts",
+    ],
+  },
+  {
+    kind: "audio",
+    extensions: ["mp3", "wav", "ogg", "m4a", "aac", "flac"],
+  },
+  {
+    kind: "image",
+    extensions: ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"],
+  },
+] as const;
+
+export const mediaKind = (path: string) => {
+  const extension = path.split(".").at(-1)?.toLowerCase();
+  return mediaKinds.find((item) =>
+    item.extensions.some((candidate) => candidate === extension),
+  );
+};
+
+/**
+ * Where Remove puts a media file: an ordinary folder in the project, so the file stays
+ * recoverable by hand and project history can move it back.
+ */
+export const MEDIA_TRASH = "trash";
+
+/** Whether a project path is a removed file, which no panel or agent listing shows. */
+export const inMediaTrash = (path: string) =>
+  path === MEDIA_TRASH || path.startsWith(`${MEDIA_TRASH}/`);
+
+const mediaPath = z
+  .string()
+  .min(1)
+  .max(4096)
+  .describe("Project-relative path of a video, audio, or image file");
+
+export const MediaRenameSchema = z.object({
+  path: mediaPath,
+  name: z
+    .string()
+    .trim()
+    .min(1, "Enter a name.")
+    .max(255, "Use a shorter name.")
+    .refine(
+      (name) => !/[\\/:*?"<>|\u0000-\u001f]/.test(name),
+      'A file name cannot contain / \\ : * ? " < > |',
+    )
+    .refine(
+      (name) => !name.startsWith(".") && !/[. ]$/.test(name),
+      "A file name cannot start with a dot or end with a dot or space.",
+    )
+    .describe(
+      "The new file name with the same extension. The file stays in its folder",
+    ),
+});
+
+export const MediaRemoveSchema = z.object({
+  path: mediaPath,
+  confirmUsed: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Remove a file used by clips or composition CSS/scripts. Existing clips and references remain offline until the file is back",
+    ),
+});
+
 /** Stat identity shared by review marks, media caches, and browser URLs. No media bytes are read. */
 export function fileFingerprint(
   path: string,

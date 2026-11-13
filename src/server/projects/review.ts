@@ -41,6 +41,8 @@ import { clipVersions, compositionVersions, missingSignature } from "./changes";
 import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
+import { inMediaTrash, mediaKind } from "../../shared/media";
+import { moveSourceMarks } from "./view";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
@@ -553,29 +555,39 @@ export function createReviewService(store: ProjectStore) {
     }
     return snapshot;
   };
+  /**
+   * `sources` records every clip the work changed, as a source edit does, for the owner as well.
+   * Otherwise only replaced files count, and only for an agent: watchers cannot tell an owner's
+   * source save from an agent's.
+   */
   const recordAssets = async (
     project: Project,
     before: AssetSnapshot,
     after: AssetSnapshot,
     actor: Extract<ReviewActor, { kind: "agent" }> | undefined,
+    sources = false,
   ) => {
-    if (!actor) return;
+    if (!actor && !sources) return;
     const changes = [...after].flatMap(([path, next]) => {
       const previous = before.get(path);
       if (!previous) return [];
       // A reference being authored is a source edit. Compare files already referenced before
       // this revision, so owner source edits cannot turn into agent asset replacements.
       const changed = new Set(
-        [...next.references]
-          .filter(([, paths]) =>
-            [...paths].some(
-              (path) =>
-                previous.mediaFiles.has(path) &&
-                next.mediaFiles.has(path) &&
-                previous.mediaFiles.get(path) !== next.mediaFiles.get(path),
-            ),
-          )
-          .map(([id]) => id),
+        sources
+          ? [...previous.versions.keys(), ...next.versions.keys()].filter(
+              (id) => previous.versions.get(id) !== next.versions.get(id),
+            )
+          : [...next.references]
+              .filter(([, paths]) =>
+                [...paths].some(
+                  (path) =>
+                    previous.mediaFiles.has(path) &&
+                    next.mediaFiles.has(path) &&
+                    previous.mediaFiles.get(path) !== next.mediaFiles.get(path),
+                ),
+              )
+              .map(([id]) => id),
       );
       return changed.size ? [{ path, previous, next, changed }] : [];
     });
@@ -585,13 +597,15 @@ export function createReviewService(store: ProjectStore) {
     );
     await (await store.history(project)).checkpoint();
     const items = await reconcile(project);
-    const noteIds = items
-      .filter(
-        (item) =>
-          item.review.status === "working" &&
-          item.review.turnId === actor.turn.id,
-      )
-      .map((item) => item.id);
+    const noteIds = actor
+      ? items
+          .filter(
+            (item) =>
+              item.review.status === "working" &&
+              item.review.turnId === actor.turn.id,
+          )
+          .map((item) => item.id)
+      : [];
     for (const { path, previous, next, changed } of changes)
       await recordEdits(
         project,
@@ -675,6 +689,7 @@ export function createReviewService(store: ProjectStore) {
       project: Project,
       token: string | undefined,
       work: () => Promise<T>,
+      options: { sources?: boolean } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
@@ -695,6 +710,7 @@ export function createReviewService(store: ProjectStore) {
           before,
           after,
           token === undefined ? undefined : agent(project, token),
+          options.sources,
         );
         assetSnapshots.set(project.id, after);
         return result;
@@ -971,7 +987,29 @@ export function createReviewService(store: ProjectStore) {
               allowMissing: true,
             });
           }
+          const previous = history.list().at(-1)?.id;
           const result = await change();
+          const entry = history.list().at(-1);
+          if (entry && entry.id !== previous) {
+            // History records file moves as a deletion and an addition with the same content hash.
+            for (const file of entry.files) {
+              if (
+                !mediaKind(file.path) ||
+                inMediaTrash(file.path) ||
+                file.before === null ||
+                file.after !== null
+              )
+                continue;
+              const moved = entry.files.find(
+                (next) =>
+                  next.before === null &&
+                  next.after === file.before &&
+                  mediaKind(next.path) &&
+                  !inMediaTrash(next.path),
+              );
+              if (moved) await moveSourceMarks(project, file.path, moved.path);
+            }
+          }
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });

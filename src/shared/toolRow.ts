@@ -97,6 +97,16 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "project media",
   },
+  media_rename: {
+    verb: ["Renamed", "Renaming", "Rename"],
+    kind: "edit",
+    object: (target) => target ?? "a media file",
+  },
+  media_remove: {
+    verb: ["Removed", "Removing", "Remove"],
+    kind: "edit",
+    object: (target) => target ?? "a media file",
+  },
   source_read: { verb: read, kind: "file", object: file },
   source_write: {
     verb: ["Edited", "Editing", "Write"],
