@@ -710,6 +710,19 @@
   box-shadow: inset 0 var(--stroke-rail) 0 var(--rail);
 }
 /*
+  A resized clip's label keeps the width it was laid out at, so its duration is carried to the
+  held edge, over the end of a name that no longer fits. Under the width a duration shows at, it
+  hides whole.
+*/
+.tl-label[data-held] .tl-length {
+  transform: translateX(var(--grow, 0px));
+  background: var(--head);
+  box-shadow: -6px 0 0 var(--head);
+}
+.tl-label[data-short] .tl-length {
+  visibility: hidden;
+}
+/*
   Boxes for the pieces a previewed edit cuts off, as when a ripple passes through a music bed.
   Each is one pixel wide and stretched to its length, so placing it writes only a transform.
 */
