@@ -1,3 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
@@ -169,11 +173,15 @@ test("a turn's tool calls fold into one step group that counts in place, with fa
   await expect(rows(page)).toHaveCount(2);
 });
 
-test("an approval asks in plain words, keeps ids and tool names out of sight, and answers from the keyboard", async ({
+test("a staged approval lists each command, keeps raw input collapsed, and answers from the keyboard", async ({
   page,
   request,
-}) => {
+}, info) => {
   const project = await createProject(request, "Plain approvals");
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main data-composition-id="main" data-duration="12" data-fps="30"><div id="lt-7f3a" class="clip" data-label="Lower third" data-start="0" data-duration="5" data-track-index="1">Grace Hopper, Rear Admiral</div></main>`,
+  );
   const turn = agentTurn(project.id);
   const noteId = "9833c4fb-2f39-49af-bab0-30d39bfda8ed";
   const tool = "mcp__cutroom_studio__timeline_edit";
@@ -220,10 +228,16 @@ test("an approval asks in plain words, keeps ids and tool names out of sight, an
   await page.goto(`/#project/${project.id}`);
 
   const approval = page.getByRole("region", { name: "Permission request" });
-  await expect(approval).toContainText("Edit Lower third?");
-  await expect(approval).toContainText("2 changes");
-  // The region is described by its question for a screen reader.
-  await expect(approval).toHaveAccessibleDescription("Edit Lower third?");
+  await expect(approval).toBeVisible();
+  await expect(approval.locator(".agent-request-commands li")).toHaveText([
+    "Trim end of Lower third to 00:00:06:00",
+    "Set fade in to 00:00:00:09 for Lower third",
+  ]);
+  await approval.screenshot({ path: info.outputPath("staged-approval.png") });
+  await expect(approval).not.toContainText("2 changes");
+  await expect(approval).toHaveAccessibleDescription(
+    "Trim end of Lower third to 00:00:06:00 Set fade in to 00:00:00:09 for Lower third",
+  );
   const shown = await approval.innerText();
   for (const raw of [tool, "cutroom_studio", noteId, project.id, "lt-7f3a"])
     expect(shown).not.toContain(raw);
@@ -300,4 +314,105 @@ test("a command approval shows the whole command below a plain question", async 
     approval.getByRole("button", { name: "Allow once" }),
   ).toBeVisible();
   await expect(approval.getByRole("button", { name: "Deny" })).toBeVisible();
+});
+
+test("a live timeline approval names its marker and MCP clients receive the reply guidance", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const project = await createProject(request, "Live marker approval");
+  const turn = agentTurn(project.id);
+  const running = turn.session([turn.ask, turn.plan], "running");
+  const session = await playSession(page, [
+    running,
+    {
+      ...running,
+      status: "waiting",
+      pendingRequest: {
+        id: "marker-approval",
+        kind: "approval",
+        title: "Edit the timeline?",
+        tool: "mcp__cutroom_studio__timeline_edit",
+        input: {
+          projectId: project.id,
+          expectedRevision: "revision",
+          commands: [
+            { type: "setMarker", id: "hook", frame: 90, name: "Hook" },
+          ],
+        },
+      },
+    },
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await session.advance();
+  const approval = page.getByRole("region", { name: "Permission request" });
+  await expect(approval).toBeVisible();
+  await expect(approval.locator(".agent-request-commands li")).toHaveText([
+    'Add marker "Hook" at 00:00:03:00',
+  ]);
+  await approval.screenshot({ path: info.outputPath("live-approval.png") });
+  await expect(approval.locator("pre")).toHaveCount(0);
+  await approval.getByRole("button", { name: "Details" }).click();
+  await expect(approval.locator("pre")).toContainText('"frame": 90');
+  const client = new Client({ name: "approval-guidance-proof", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: baseURL! } },
+      }),
+    );
+    expect(client.getInstructions()).toContain(
+      "when the user explicitly asks about review notes",
+    );
+    expect(client.getInstructions()).toContain(
+      "when needed to explain a blocker",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+test("approval move destinations follow preceding commands without changing the project", async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request, "Sequential approval");
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main data-composition-id="main" data-duration="48" data-fps="24"><div id="cta" class="clip" data-label="Call to action" data-start="30" data-duration="2">Try it</div></main>`,
+  );
+  const before = await (
+    await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+  ).json();
+  const turn = agentTurn(project.id);
+  await playSession(page, [
+    {
+      ...turn.session([], "waiting"),
+      pendingRequest: {
+        id: "sequential-approval",
+        kind: "approval",
+        title: "Edit Call to action?",
+        tool: "mcp__cutroom_studio__timeline_edit",
+        input: {
+          projectId: project.id,
+          expectedRevision: before.revision,
+          commands: [
+            { type: "move", clipIds: ["cta"], by: -144 },
+            { type: "move", clipIds: ["cta"], by: 24 },
+          ],
+        },
+      },
+    },
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".agent-request-commands li")).toHaveText([
+    "Move Call to action to 00:00:24:00",
+    "Move Call to action to 00:00:25:00",
+  ]);
+  expect(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+    ).json(),
+  ).toEqual(before);
 });
