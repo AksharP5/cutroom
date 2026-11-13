@@ -581,6 +581,68 @@ test("edges resize with Select and ripple or roll with Trim, and the blade cuts 
   }
 });
 
+test("a rolled clip's duration rides its held edge, reads the held length, and hides whole when the clip gets narrow", async ({
+  page,
+  request,
+}) => {
+  const { timeline, at, drag } = await open(page, request, "Held duration");
+  const clip = (id: string) => timeline.locator(`[data-clip="${id}"]`);
+  const length = (id: string) =>
+    timeline.locator(`[data-clip-label="${id}"] .tl-length`);
+  // Durations show from 200px, so zoom until a three-second shot has room to lose some.
+  await expect(async () => {
+    await page.keyboard.press("Control+=");
+    expect((await clip("shot-1").boundingBox())!.width).toBeGreaterThan(320);
+  }).toPass();
+  await expect(length("shot-1")).toHaveText("00:00:03:00");
+  await expect(length("shot-2")).toHaveText("00:00:03:00");
+
+  // Trim, on the cut between shots 1 and 2: hold the roll half a second to the left.
+  await page.keyboard.press("t");
+  const cut = await at(75);
+  await drag(await at(90), cut, false);
+  await expect(length("shot-1")).toHaveText("00:00:02:15");
+  await expect(length("shot-2")).toHaveText("00:00:03:15");
+  // Every digit of the outgoing clip's duration is left of the cut, not sliced by it.
+  const outgoing = (await length("shot-1").boundingBox())!;
+  expect(outgoing.x + outgoing.width).toBeLessThanOrEqual(cut.x);
+  expect(outgoing.x + outgoing.width).toBeGreaterThan(cut.x - 12);
+  // The incoming clip grew to the left, and its duration is still at its right edge.
+  const incoming = (await length("shot-2").boundingBox())!;
+  const end = (await at(180)).x;
+  expect(incoming.x + incoming.width).toBeLessThanOrEqual(end);
+  expect(incoming.x + incoming.width).toBeGreaterThan(end - 12);
+
+  // Under 200px a clip shows no duration, held or not; its name stays.
+  const narrow = await at(0);
+  await page.mouse.move(narrow.x + 150, narrow.y, { steps: 6 });
+  await expect
+    .poll(async () => (await clip("shot-1").boundingBox())!.width)
+    .toBeLessThan(200);
+  await expect(length("shot-1")).toBeHidden();
+  await expect(
+    timeline.locator('[data-clip-label="shot-1"] .tl-name').first(),
+  ).toBeVisible();
+
+  // Esc puts the clips and their durations back.
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  for (const id of ["shot-1", "shot-2"]) {
+    await expect(length(id)).toBeVisible();
+    await expect(length(id)).toHaveText("00:00:03:00");
+  }
+
+  // A released roll keeps the lengths it showed, and undo restores them.
+  await drag(await at(90), await at(75));
+  await expect(length("shot-1")).toHaveText("00:00:02:15");
+  await expect(length("shot-2")).toHaveText("00:00:03:15");
+  const settled = (await length("shot-1").boundingBox())!;
+  expect(settled.x + settled.width).toBeLessThanOrEqual((await at(75)).x);
+  await page.keyboard.press("Control+z");
+  for (const id of ["shot-1", "shot-2"])
+    await expect(length(id)).toHaveText("00:00:03:00");
+});
+
 test("Esc cancels a drag and keeps the tool and the selection", async ({
   page,
   request,

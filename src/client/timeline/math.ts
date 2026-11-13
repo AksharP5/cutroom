@@ -60,6 +60,8 @@ export { clipName } from "../../shared/timeline/labels";
 export const MAX_PPF = 32;
 /** Ruler labels never sit closer than this many pixels. */
 export const LABEL_SPACING = 96;
+/** A clip shows its duration once it is this wide. */
+export const LENGTH_MIN_WIDTH = 200;
 /** Room kept after the last frame when the whole timeline is fitted. */
 const FIT_TAIL = 32;
 
