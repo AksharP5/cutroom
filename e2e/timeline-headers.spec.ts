@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { APIRequestContext } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
-import type { TimelineViewSettings } from "../src/shared/timeline/view";
+import type { TimelineViewSettingsInput } from "../src/shared/timeline/view";
 import { startMediaDrag } from "./media-drag";
 import { expect, test } from "./fixtures";
 
@@ -20,7 +20,7 @@ test.use({
 
 async function createProject(
   request: APIRequestContext,
-  settings: TimelineViewSettings,
+  settings: TimelineViewSettingsInput,
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -113,17 +113,18 @@ for (const [width, height] of [
           exact: true,
         });
         await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+        // The code's tooltip keeps the name a compact row hides, and says what a click does.
         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
           "title",
-          "Interview picture",
+          "Interview picture: destination for Insert and Overwrite",
         );
         await expect(audio.locator(".tl-head-id")).toHaveAttribute(
           "title",
-          "Dialogue and voiceover",
+          "Dialogue and voiceover: destination for Insert and Overwrite",
         );
         await expect(page.locator(".tl-head-name:visible")).toHaveCount(0);
-        await expect(picture.locator("button:visible")).toHaveCount(3);
-        await expect(audio.locator("button:visible")).toHaveCount(6);
+        await expect(picture.locator("button:visible")).toHaveCount(4);
+        await expect(audio.locator("button:visible")).toHaveCount(7);
         for (const armed of [false, true]) {
           if (armed) {
             await page

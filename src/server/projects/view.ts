@@ -9,7 +9,7 @@ import {
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { isMissing, projectStatePath } from "./path";
 
-const VIEW_PATH = ".cutroom/view.json";
+export const VIEW_PATH = ".cutroom/view.json";
 const ViewFileSchema = z.object({
   timelines: z.record(z.string(), TimelineViewSettingsSchema),
 });
@@ -43,8 +43,10 @@ export function createTimelineViewStore() {
   >();
   const writes = new Map<string, Promise<void>>();
   return {
+    /** The latest settings, including a save still waiting to be written. */
     async read(project: Project, composition: string) {
       return (
+        scheduled.get(project.id)?.updates.get(composition) ??
         (await readViews(project)).timelines[composition] ??
         emptyTimelineViewSettings()
       );

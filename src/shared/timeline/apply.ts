@@ -464,11 +464,22 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           ? mint.name(slug(input.src, input.kind), null)
           : claim(input.id);
       const end = at + input.duration;
+      const separate =
+        input.kind === "video" &&
+        !input.muted &&
+        !batch.silentMedia.has(input.src);
+      // A named sound track is edited as the picture's is; left out, the sound is routed to room.
+      const soundTrack = separate ? command.linkedAudio?.track : undefined;
+      if (soundTrack !== undefined)
+        assertTrackKind("audio", trackAt(soundTrack), `"${input.src}" sound`);
       let next = clips;
       if (mode === "overwrite")
         next = clearRange(next, track, at, end, fps, mint);
       if (mode === "insert") {
-        const tracks = rippleTracks(timeline, [track]);
+        const tracks = rippleTracks(timeline, [
+          track,
+          ...(soundTrack === undefined ? [] : [soundTrack]),
+        ]);
         const spans = (clip: Clip) => clip.start < at && at < clipEnd(clip);
         const targets = withPartners(
           next,
@@ -479,10 +490,6 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         next = splitClips(next, targets, at, fps, mint);
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
-      const separate =
-        input.kind === "video" &&
-        !input.muted &&
-        !batch.silentMedia.has(input.src);
       const video = separate ? { ...input, muted: true } : input;
       onCreate(id, { insert: video });
       const added: Clip = {
@@ -523,13 +530,16 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           command.linkedAudio?.id === undefined
             ? mint.name(`${slug(input.src, "audio")}-audio`, null)
             : claim(command.linkedAudio.id);
-        const routed = routePictureSound(
-          timeline,
-          { clips: next, tracks },
-          [added],
-          added,
-          mode === "overwrite",
-        );
+        const routed =
+          soundTrack === undefined
+            ? routePictureSound(
+                timeline,
+                { clips: next, tracks },
+                [added],
+                added,
+                mode === "overwrite",
+              )
+            : { tracks, track: soundTrack, replace: mode === "overwrite" };
         tracks = routed.tracks;
         if (routed.replace)
           next = clearRange(next, routed.track, at, end, fps, mint);

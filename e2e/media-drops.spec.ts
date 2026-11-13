@@ -349,6 +349,11 @@ test("overwriting V2 previews and cuts A2 while preserving the V1/A1 pair", asyn
     edited.clips.find((c) => c.src === "B-roll.mp4" && c.kind === "audio"),
   ).toMatchObject({ track: 3, start: 120, duration: 60 });
   await page.screenshot({ path: info.outputPath("two-pair-overwrite.png") });
-  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  // The drop took part of the second pair, which the notice names beside its Undo.
+  await page
+    .getByRole("status")
+    .filter({ hasText: "Replaced part of Interview.mp4." })
+    .getByRole("button", { name: "Undo", exact: true })
+    .click();
   await expect.poll(read).toEqual(initial);
 });

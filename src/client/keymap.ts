@@ -9,15 +9,21 @@ export const areas = [
   "Playhead",
   "Select",
   "Edit",
+  "Tracks",
   "View",
 ] as const;
 
-type Binding = {
+export type Binding = {
   area: (typeof areas)[number];
   label: string;
   keys: readonly string[];
   repeat?: boolean;
+  /** The keys are one run, as Alt+1 to Alt+8 are, and the handler is told which was pressed. */
+  series?: boolean;
 };
+
+/** Resolve binds a destination key to each of the first eight tracks of a kind. */
+const digits = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 /**
  * Every editor shortcut, keyed by DaVinci Resolve's action id and bound as in the owner's Resolve
@@ -144,6 +150,38 @@ export const keymap = {
     area: "Edit",
     label: "Overwrite with source at playhead",
     keys: ["F10"],
+  },
+  editTrackDestinationSelectionTargetV: {
+    area: "Tracks",
+    label: "Video destination, V1 to V8",
+    keys: digits.map((digit) => `Alt+${digit}`),
+    series: true,
+  },
+  editTrackDestinationSelectionTargetA: {
+    area: "Tracks",
+    label: "Audio destination, A1 to A8",
+    keys: digits.map((digit) => `Ctrl+Alt+${digit}`),
+    series: true,
+  },
+  editVideoMoveTrackDestinationUp: {
+    area: "Tracks",
+    label: "Video destination up",
+    keys: ["Ctrl+Shift+Up"],
+  },
+  editVideoMoveTrackDestinationDown: {
+    area: "Tracks",
+    label: "Video destination down",
+    keys: ["Ctrl+Shift+Down"],
+  },
+  editAudioMoveTrackDestinationUp: {
+    area: "Tracks",
+    label: "Audio destination up",
+    keys: ["Ctrl+Alt+Up"],
+  },
+  editAudioMoveTrackDestinationDown: {
+    area: "Tracks",
+    label: "Audio destination down",
+    keys: ["Ctrl+Alt+Down"],
   },
   editUndo: { area: "Edit", label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { area: "Edit", label: "Redo", keys: ["Ctrl+Shift+Z"] },
@@ -363,7 +401,8 @@ export const keymapAreas = () =>
     ),
   }));
 
-type Handlers = Partial<Record<Action, () => void>>;
+/** A handler is told which of its binding's keys was pressed, counted from zero. */
+type Handlers = Partial<Record<Action, (key: number) => void>>;
 
 /** The handlers on screen, first mounted first: the order their key listeners answer in. */
 const mounted = new Set<{ current: Handlers }>();
@@ -376,7 +415,7 @@ export function runAction(action: Action) {
   for (const handlers of mounted) {
     const handler = handlers.current[action];
     if (!handler) continue;
-    handler();
+    handler(0);
     return true;
   }
   return false;
@@ -395,7 +434,8 @@ export function useKeymap(handlers: Handlers) {
       const handler = action && latest.current[action];
       if (!handler) return;
       event.preventDefault();
-      handler();
+      const { keys }: Binding = keymap[action];
+      handler(keys.indexOf(comboOf(event) ?? ""));
     };
     window.addEventListener("keydown", press);
     return () => {

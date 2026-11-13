@@ -64,6 +64,39 @@ export function registerTimelineTools(
       request(`/projects/${id(projectId)}/commands`, "POST", batch),
   );
   server.registerTool(
+    "timeline_destinations",
+    {
+      description:
+        "Read or set the destination tracks: where the owner's Insert (F9), Overwrite (F10) and Media menu placements put picture and sound, shown on the track headers. Returns the video and audio track indexes. Pass video or audio to change one; the editor follows at once. Destinations are view preferences, outside undo history. To place media there yourself, pass these indexes to a timeline_edit insert as track and linkedAudio.track.",
+      inputSchema: {
+        ...input,
+        video: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Index of the video track to make the destination"),
+        audio: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Index of the audio track to make the destination"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    ({ projectId, composition, video, audio }) => {
+      const path = `/projects/${id(projectId)}/timeline-destinations?composition=${id(composition)}`;
+      return video === undefined && audio === undefined
+        ? request(path)
+        : request(path, "PUT", { video, audio });
+    },
+  );
+  server.registerTool(
     "timeline_copy",
     {
       description:

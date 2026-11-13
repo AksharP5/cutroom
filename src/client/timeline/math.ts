@@ -1,7 +1,11 @@
 import { mediaSettings, peakLevels } from "../../shared/media";
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Fps, Timeline, Track } from "../../shared/timeline/schema";
-import { newTrack, nextTrackIndex } from "../../shared/timeline/tracks";
+import {
+  newTrack,
+  nextTrackIndex,
+  shownTracks,
+} from "../../shared/timeline/tracks";
 import { nominal } from "../../shared/timeline/timecode";
 
 const FLOOR = 10 ** (-48 / 20);
@@ -186,13 +190,7 @@ export function trackRows(
   tracks: readonly Track[],
   sizes: RowSizes,
 ): RowLayout {
-  const all = [...tracks];
-  for (const kind of ["video", "audio"] as const) {
-    if (all.some((track) => track.kind === kind)) continue;
-    let index = 0;
-    while (all.some((track) => track.index === index)) index++;
-    all.push(newTrack(index, kind));
-  }
+  const all = shownTracks(tracks);
   const video = all.filter((track) => track.kind === "video");
   const audio = all.filter((track) => track.kind === "audio");
   const nextIndex = nextTrackIndex(all);

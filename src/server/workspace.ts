@@ -28,6 +28,7 @@ import { HttpError } from "../shared/errors";
 import type { ProjectStore } from "./projects/store";
 import { isMissing, projectPath } from "./projects/store";
 import { REVIEW_STATE_PATH } from "../shared/review";
+import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
 
@@ -201,6 +202,20 @@ export function createWorkspaceRoutes(options: {
         { recursive: true },
         (_event, filename) => {
           if (!filename) return;
+          // View preferences are not project content: only the open timeline reads them again.
+          if (filename.replaceAll("\\", "/") === VIEW_PATH) {
+            clearTimeout(timers.get(filename));
+            timers.set(
+              filename,
+              setTimeout(() => {
+                timers.delete(filename);
+                void stream
+                  .writeSSE({ event: "view", data: "{}" })
+                  .catch(() => {});
+              }, 100),
+            );
+            return;
+          }
           const review = filename.replaceAll("\\", "/") === REVIEW_STATE_PATH;
           if (
             !review &&

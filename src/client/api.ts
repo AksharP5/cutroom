@@ -8,7 +8,7 @@ const projectStreams = new Map<
 
 export function subscribeProjectEvents(
   projectId: string,
-  type: "message" | "file-change" | "export" | "ready",
+  type: "message" | "file-change" | "export" | "ready" | "view",
   listener: (event: MessageEvent<string>) => void,
 ) {
   let stream = projectStreams.get(projectId);

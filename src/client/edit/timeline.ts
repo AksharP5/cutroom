@@ -229,7 +229,9 @@ function name(commands: Command[], timeline: Timeline) {
           ...command,
           ids,
           clip: { ...command.clip, id: clipId },
-          ...(audioId !== undefined && { linkedAudio: { id: audioId } }),
+          ...(audioId !== undefined && {
+            linkedAudio: { ...command.linkedAudio, id: audioId },
+          }),
         }
       : { ...command, ids };
   });

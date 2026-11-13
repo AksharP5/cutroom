@@ -1,4 +1,6 @@
 import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
+import type { TimelineViewSettings } from "../../shared/timeline/view";
+import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
 import { createTimelineViewStore } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
 import {
@@ -31,6 +33,7 @@ import type {
   CommandBatch,
   TimelineSettings,
   TimelineView,
+  Track,
 } from "../../shared/timeline/schema";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
@@ -335,6 +338,61 @@ export function createTimelineRoutes(
     const settings = parseInput(TimelineViewSettingsSchema, await c.req.json());
     await views.save(project, composition, settings);
     return c.json(settings);
+  });
+  // Destinations by themselves, for agents: other view preferences stay as the editor left them.
+  const destinations = async (project: Project, composition: string) => {
+    const [{ parsed }, settings] = await Promise.all([
+      read(project, composition),
+      views.read(project, composition),
+    ]);
+    return { tracks: shownTracks(parsed.timeline.tracks), settings };
+  };
+  const destinationIndexes = (
+    tracks: readonly Track[],
+    settings: TimelineViewSettings,
+  ) => {
+    const { video, audio } = destinationTracks(tracks, settings.destinations);
+    return { video: video.index, audio: audio.index };
+  };
+  api.get("/projects/:id/timeline-destinations", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    try {
+      const { tracks, settings } = await destinations(project, composition);
+      return c.json(destinationIndexes(tracks, settings));
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+  api.put("/projects/:id/timeline-destinations", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const chosen = parseInput(
+      TimelineViewSettingsSchema.shape.destinations,
+      await c.req.json(),
+    );
+    try {
+      const { tracks, settings } = await destinations(project, composition);
+      for (const kind of ["video", "audio"] as const)
+        if (
+          chosen[kind] !== undefined &&
+          !tracks.some(
+            (track) => track.kind === kind && track.index === chosen[kind],
+          )
+        )
+          throw new TimelineError(
+            "not_found",
+            `Track ${chosen[kind]} is not ${kind === "audio" ? "an" : "a"} ${kind} track on this timeline.`,
+          );
+      const next = {
+        ...settings,
+        destinations: { ...settings.destinations, ...chosen },
+      };
+      await views.save(project, composition, next);
+      return c.json(destinationIndexes(tracks, next));
+    } catch (error) {
+      return refused(c, error);
+    }
   });
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));

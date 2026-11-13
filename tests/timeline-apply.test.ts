@@ -1344,6 +1344,54 @@ test("every piece a command cuts takes the caller's ids in order, and spent ids 
   ).toThrow("Id old was used earlier in this project.");
 });
 
+test("a video's sound goes to the audio track the command names, edited as the picture's track is", () => {
+  const state = timeline([
+    clip("interview", 0, 0, 300, { link: "interview" }),
+    clip("dialogue", 1, 0, 300, { kind: "audio", link: "interview" }),
+    clip("music", 2, 0, 300, { kind: "audio" }),
+    clip("spare", 3, 0, 1),
+  ]);
+  const place = (mode: "place" | "overwrite" | "insert", track: number) =>
+    run(state, {
+      type: "insert",
+      mode,
+      track: 3,
+      at: 60,
+      clip: { id: "b-roll", kind: "video", src: "b-roll.mp4", duration: 90 },
+      linkedAudio: { id: "b-roll-sound", track },
+    });
+  const spans = (next: Timeline, track: number) =>
+    next.clips
+      .filter((item) => item.track === track)
+      .map((item) => [item.start, item.duration]);
+  // Overwrite replaces the music under the new sound and leaves the dialogue it was not sent to.
+  const over = place("overwrite", 2);
+  expect(over.clips.find((item) => item.id === "b-roll-sound")).toMatchObject({
+    track: 2,
+    start: 60,
+    duration: 90,
+    link: "b-roll",
+  });
+  expect(spans(over, 2)).toEqual([
+    [0, 60],
+    [60, 90],
+    [150, 150],
+  ]);
+  expect(spans(over, 1)).toEqual([[0, 300]]);
+  // Insert opens the named track with the others, so the sound has room there.
+  const opened = place("insert", 2);
+  expect(spans(opened, 2)).toEqual([
+    [0, 60],
+    [60, 90],
+    [150, 240],
+  ]);
+  // Place never cuts, and picture cannot be sent to sound.
+  expect(() => place("place", 2)).toThrow(TimelineError);
+  expect(() => place("overwrite", 0)).toThrow(
+    'Clip "b-roll.mp4" sound is audio and track 0 is a video track.',
+  );
+});
+
 test("video overwrite clears matching picture-sound ranges, including fully covered picture, without rippling music", () => {
   for (const duration of [60, 180]) {
     const state = timeline([

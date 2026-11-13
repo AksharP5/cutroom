@@ -1,9 +1,4 @@
-import { api } from "../api";
-import {
-  TimelineViewSettingsSchema,
-  emptyTimelineViewSettings,
-  trackDensities,
-} from "../../shared/timeline/view";
+import { trackDensities } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { openContextMenu } from "../components/ContextMenu";
 import type { MenuItem } from "../components/menu";
@@ -12,7 +7,11 @@ import { useStore } from "zustand";
 import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
-import { nextTrackIndex } from "../../shared/timeline/tracks";
+import {
+  destinationTracks,
+  nextTrackIndex,
+  shownTracks,
+} from "../../shared/timeline/tracks";
 import { editKeys, trimmedPlayhead } from "../edit/keys";
 import { showSource, useSource } from "../edit/source";
 import {
@@ -29,6 +28,11 @@ import { reportEditorError, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
 import type { Row } from "./math";
 import { Timeline } from "./Timeline";
+import {
+  openViewSettings,
+  saveViewSettings,
+  useViewSettings,
+} from "./viewSettings";
 import { MarkerEditor } from "./MarkerEditor";
 import type { Marker, Track } from "../../shared/timeline/schema";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
@@ -102,22 +106,10 @@ export function ProjectTimeline({
     marker: Marker;
     anchor: { x: number; y: number };
   } | null>(null);
-  const [viewSettings, setViewSettings] = useState(emptyTimelineViewSettings);
+  const viewSettings = useViewSettings();
   const composition = view?.composition;
   useEffect(() => {
-    if (!composition) return;
-    const closing = new AbortController();
-    setViewSettings(emptyTimelineViewSettings());
-    void api(
-      `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(composition)}`,
-      TimelineViewSettingsSchema,
-      { signal: closing.signal },
-    )
-      .then(setViewSettings)
-      .catch((error: unknown) => {
-        if (!closing.signal.aborted) reportEditorError("timeline", error);
-      });
-    return () => closing.abort();
+    if (composition) return openViewSettings(projectId, composition);
   }, [projectId, composition]);
   const selection = useTimeline((state) => state.selection);
   const snapping = useTimeline((state) => state.snapping);
@@ -179,7 +171,46 @@ export function ProjectTimeline({
     if (action !== "copy") revealTimeline();
     clipboardEdit(projectId, action, clock.frame());
   };
+  const chooseDestination = ({
+    kind,
+    index,
+  }: Pick<Track, "kind" | "index">) => {
+    const settings = useViewSettings.getState();
+    saveViewSettings({
+      ...settings,
+      destinations: { ...settings.destinations, [kind]: index },
+    });
+  };
+  /** Picks a destination by its place among the tracks of its kind, counted from V1 or A1. */
+  const destinationKey = (
+    kind: Track["kind"],
+    place: (current: number) => number,
+  ) => {
+    const tracks = useTimeline.getState().view?.timeline.tracks;
+    if (!tracks) return;
+    const current = destinationTracks(
+      tracks,
+      useViewSettings.getState().destinations,
+    )[kind];
+    const ofKind = shownTracks(tracks).filter((track) => track.kind === kind);
+    const track =
+      ofKind[place(ofKind.findIndex(({ index }) => index === current.index))];
+    if (track) chooseDestination(track);
+  };
   useKeymap({
+    editTrackDestinationSelectionTargetV: (key) =>
+      destinationKey("video", () => key),
+    editTrackDestinationSelectionTargetA: (key) =>
+      destinationKey("audio", () => key),
+    // Up is the header above: a higher video track, a lower audio track.
+    editVideoMoveTrackDestinationUp: () =>
+      destinationKey("video", (current) => current + 1),
+    editVideoMoveTrackDestinationDown: () =>
+      destinationKey("video", (current) => current - 1),
+    editAudioMoveTrackDestinationUp: () =>
+      destinationKey("audio", (current) => current - 1),
+    editAudioMoveTrackDestinationDown: () =>
+      destinationKey("audio", (current) => current + 1),
     editCopy: () => clipboard("copy"),
     editCut: () => clipboard("cut"),
     editPaste: () => clipboard("overwrite"),
@@ -290,14 +321,10 @@ export function ProjectTimeline({
   }, [projectId]);
 
   if (!view) return null;
-  const saveViewSettings = (settings: TimelineViewSettings) => {
-    setViewSettings(settings);
-    void api(
-      `/projects/${projectId}/timeline-view?composition=${encodeURIComponent(view.composition)}`,
-      TimelineViewSettingsSchema,
-      { method: "PUT", body: JSON.stringify(settings) },
-    ).catch((error: unknown) => reportEditorError("timeline", error));
-  };
+  const destinations = destinationTracks(
+    view.timeline.tracks,
+    viewSettings.destinations,
+  );
   const addTrack = (kind: Track["kind"]) =>
     void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
       { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
@@ -346,7 +373,7 @@ export function ProjectTimeline({
         checked:
           viewSettings.density === density &&
           !Object.keys(viewSettings.heights).length,
-        run: () => saveViewSettings({ density, heights: {} }),
+        run: () => saveViewSettings({ ...viewSettings, density, heights: {} }),
       })),
       "separator",
       { label: "Add video track", run: () => addTrack("video") },
@@ -388,6 +415,11 @@ export function ProjectTimeline({
         )}
         viewSettings={viewSettings}
         onViewSettings={saveViewSettings}
+        destinations={{
+          video: destinations.video.index,
+          audio: destinations.audio.index,
+        }}
+        onDestination={chooseDestination}
         timeline={view.timeline}
         source={{ projectId, composition: view.composition }}
         clock={clock}
