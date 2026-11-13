@@ -1,7 +1,8 @@
 import { create } from "zustand";
-import { reportEditorError } from "../workspace";
+import { reportEditorError, showToast } from "../workspace";
 import { audioLevels } from "./levels";
 import {
+  CompositionDiagnosticsSchema,
   ClipBoxSchema,
   PositionWarningSchema,
   TextWarningSchema,
@@ -13,6 +14,7 @@ import {
   RuntimeStateSchema,
 } from "../../shared/preview";
 import type {
+  CompositionDiagnostic,
   PictureBox,
   PictureHit,
   PlaybackClock,
@@ -125,6 +127,25 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const closing = new AbortController();
   let active = false;
+  let diagnostics: CompositionDiagnostic[] = [];
+  let diagnosticsKey = "";
+  let dismissDiagnostics = () => {};
+  const showDiagnostics = () => {
+    if (!active) return;
+    const key = JSON.stringify(diagnostics);
+    if (key === diagnosticsKey) return;
+    diagnosticsKey = key;
+    dismissDiagnostics();
+    dismissDiagnostics = diagnostics.length
+      ? showToast(
+          diagnostics
+            .map(({ file, message }) => `${file}: ${message}`)
+            .join("\n"),
+          undefined,
+          { priority: "background" },
+        )
+      : () => {};
+  };
   let clock: PlaybackClock | null = null;
   type Reply = z.infer<typeof PreviewReplySchema>;
   const pending = new Map<
@@ -178,6 +199,19 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         return;
       }
     }
+    if (
+      event.data &&
+      typeof event.data === "object" &&
+      "type" in event.data &&
+      event.data.type === "composition-errors"
+    ) {
+      const errors = CompositionDiagnosticsSchema.safeParse(event.data);
+      if (errors.success) {
+        diagnostics = errors.data.diagnostics;
+        showDiagnostics();
+      }
+      return;
+    }
     const runtime = RuntimeStateSchema.safeParse(event.data);
     if (runtime.success) {
       state.time = runtime.data.currentTime;
@@ -193,6 +227,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (!parsed.success) return;
     const reply = parsed.data;
     state = reply.state;
+    if (reply.diagnostics) {
+      diagnostics = reply.diagnostics;
+      showDiagnostics();
+    }
     const id = reply.id;
     const request = id ? pending.get(id) : undefined;
     if (!id || !request) {
@@ -271,6 +309,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   );
   let unfollowEdit = () => {};
   const dispose = () => {
+    dismissDiagnostics();
     unfollowEdit();
     edit.dispose();
     if (positionTargets.delete(position) && !positionTargets.size)
@@ -331,6 +370,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         edit.push(picture);
       });
       active = true;
+      showDiagnostics();
     },
     /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */
     present() {

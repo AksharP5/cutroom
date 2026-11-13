@@ -8,7 +8,12 @@ import {
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
-import { compositionFps, reportEditorError, useWorkspace } from "../workspace";
+import {
+  compositionFps,
+  reportEditorError,
+  showToast,
+  useWorkspace,
+} from "../workspace";
 import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
@@ -74,6 +79,7 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const dismissFailure = useRef<(() => void) | undefined>(undefined);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [handoff, transition] = useReducer(transitionHandoff, {
     kind: "showing",
@@ -139,6 +145,14 @@ export function Viewer({
   useEffect(() => {
     if (handoff.kind !== "failed") return;
     reportEditorError("viewer", handoff.reason);
+    dismissFailure.current?.();
+    dismissFailure.current = showToast(
+      handoff.reason instanceof Error
+        ? handoff.reason.message
+        : String(handoff.reason),
+      undefined,
+      { priority: "background" },
+    );
     transition({ type: "reported" });
   }, [handoff]);
 
@@ -182,10 +196,13 @@ export function Viewer({
     });
     transport.attach(preview.player, picture.shown);
     reportEditorError("viewer", null);
+    dismissFailure.current?.();
+    dismissFailure.current = undefined;
   }, [handoff.confirmed]);
 
   useEffect(
     () => () => {
+      dismissFailure.current?.();
       for (const connection of connections.current.values())
         connection.dispose();
       connections.current.clear();
@@ -209,7 +226,7 @@ export function Viewer({
     connections.current.set(gen, preview);
     try {
       await preview.inspect();
-      while (!preview.state.ready) {
+      while (!preview.state.ready || preview.state.error) {
         if (preview.state.error)
           throw new Error(
             `The preview failed to start: ${preview.state.error}`,

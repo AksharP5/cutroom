@@ -1,3 +1,8 @@
+import {
+  compositionDiagnosticsScript,
+  compositionScriptSources,
+} from "./diagnostics";
+import type { DiagnosticWindow } from "./diagnostics";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import type { DefaultTreeAdapterTypes } from "parse5";
@@ -8,7 +13,7 @@ import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
 import type { EditFrame } from "../../shared/preview";
 
-interface PreviewWindow extends Window {
+interface PreviewWindow extends DiagnosticWindow {
   CSSNumericValue: {
     parse(value: string): {
       toSum(): { values: Iterable<{ unit: string; value: number }> };
@@ -30,7 +35,6 @@ interface PreviewWindow extends Window {
     isPlaying(): boolean;
   };
   __hfWaitForSeekCompletion?: () => Promise<void>;
-  __hfStartupError?: unknown;
 }
 
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
@@ -784,7 +788,11 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     return {
       ready: Boolean(win.__player),
       root: Boolean(root),
-      error: win.__hfStartupError ? String(win.__hfStartupError) : null,
+      error: win.__hfStartupError
+        ? (win.__cutroomReadDiagnostics?.() ?? [])
+            .map(({ file, message }) => `${file}: ${message}`)
+            .join("\n") || String(win.__hfStartupError)
+        : null,
       width: size("data-width", 1920),
       height: size("data-height", 1080),
       fps: root?.getAttribute("data-fps") ?? null,
@@ -796,11 +804,20 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
     id?: string,
     error?: string,
     hits?: ReturnType<typeof clipsAt>,
-  ) =>
+  ) => {
+    const diagnostics = win.__cutroomReadDiagnostics?.();
     parent.postMessage(
-      { source: "cutroom-preview", id, state: state(), error, hits },
+      {
+        source: "cutroom-preview",
+        id,
+        state: state(),
+        error,
+        hits,
+        ...(diagnostics?.length ? { diagnostics } : {}),
+      },
       "*",
     );
+  };
   const paint = () =>
     new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
@@ -1463,7 +1480,7 @@ export function withPreviewClipIdentities(
   );
 }
 
-export function withPreviewBridge(html: string) {
+export function withPreviewBridge(html: string, composition = "index.html") {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
   const document = parse(html, { sourceCodeLocationInfo: true });
@@ -1475,7 +1492,7 @@ export function withPreviewBridge(html: string) {
   const location = head && "tagName" in head ? head.sourceCodeLocation : null;
   const offset = location?.startTag?.endOffset ?? html.length;
   const sourceTexts: [string, string[]][] = [];
-  const edits: { offset: number; end: number; text: string }[] = [];
+  const { sources, edits } = compositionScriptSources(document, composition);
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
@@ -1567,7 +1584,7 @@ export function withPreviewBridge(html: string) {
   edits.push({
     offset,
     end: offset,
-    text: `<script>(${installPreviewBridge.toString()})(${texts});</script>`,
+    text: `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${texts});</script>`,
   });
   return edits
     .sort((a, b) => b.offset - a.offset)

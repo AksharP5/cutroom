@@ -110,3 +110,17 @@ test("measured media windows filter the same clips before assigning generated na
   expect(marked).not.toContain('data-hf-cutroom-clip-id="clip-2"');
   expect(marked.match(/data-hf-cutroom-clip-id=/g)).toHaveLength(1);
 });
+
+test("script provenance leaves inert project data unchanged", () => {
+  const data = '{"title":"Launch","frames":[0,15,30]}';
+  const html = `<html><head><script id="settings" type="application/json">${data}</script></head><body><main data-composition-id="main" data-duration="2"></main><script>setTimeout(() => {}, 16);</script></body></html>`;
+  const served = withPreviewBridge(html);
+  const settings = served.match(
+    /<script id="settings" type="application\/json">([^<]+)<\/script>/,
+  )?.[1];
+  expect(settings).toBe(data);
+  expect(JSON.parse(settings!)).toEqual({
+    title: "Launch",
+    frames: [0, 15, 30],
+  });
+});

@@ -5,19 +5,20 @@ import {
   thumbnailDeviceScaleFactor,
 } from "@hyperframes/studio-server";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
+import type { DiagnosticWindow } from "./diagnostics";
 import type { Page } from "puppeteer-core";
 import { studioRenderScripts } from "./render";
 import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
 // Prefix caller versions so old renderer output cannot bypass readiness in the cache.
-export const thumbnailRendererVersion = "capture-ready-v1";
+export const thumbnailRendererVersion = "capture-provenance-v3";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
 >[0];
 
-interface PreviewWindow extends Window {
+interface PreviewWindow extends DiagnosticWindow {
   __player?: { seek: (time: number) => void | Promise<void> };
   __renderReady?: boolean;
   __hfStartupError?: string;
@@ -82,6 +83,7 @@ export function createThumbnailRenderer() {
             // Load can precede authored scripts, sub-compositions, and buildReady.
             // Ready scenes avoid a separate polling/protocol setup altogether.
             const ready = () =>
+              Boolean(preview.__cutroomReadDiagnostics?.().length) ||
               typeof preview.__hfStartupError === "string" ||
               (preview.__renderReady === true &&
                 typeof preview.__player?.seek === "function");
@@ -107,6 +109,13 @@ export function createThumbnailRenderer() {
                 frame = requestAnimationFrame(check);
               });
             }
+            const diagnostics = preview.__cutroomReadDiagnostics?.() ?? [];
+            if (diagnostics.length)
+              throw new Error(
+                diagnostics
+                  .map(({ file, message }) => `${file}: ${message}`)
+                  .join("\n"),
+              );
             if (typeof preview.__hfStartupError === "string")
               throw new Error(preview.__hfStartupError);
             document.body.style.margin = "0";
@@ -134,6 +143,13 @@ export function createThumbnailRenderer() {
           );
           preview.__hfStudioManualEditsApply?.();
           preview.__hfStudioMotionApply?.();
+          const diagnostics = preview.__cutroomReadDiagnostics?.() ?? [];
+          if (diagnostics.length)
+            throw new Error(
+              diagnostics
+                .map(({ file, message }) => `${file}: ${message}`)
+                .join("\n"),
+            );
         });
         const clip = options.selector
           ? await page.evaluate(

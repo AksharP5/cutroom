@@ -110,7 +110,8 @@ export function registerTimelineTools(
   server.registerTool(
     "timeline_view",
     {
-      description: "Render one timeline frame as an image.",
+      description:
+        "Render one timeline frame as an image. Composition script and load failures return an error naming the file and message instead of a misleading static frame.",
       inputSchema: { ...input, frame: z.number().int().nonnegative() },
       // The thumbnail route captures in the capability-scoped, opaque renderer.
       annotations: readOnly,
@@ -119,16 +120,28 @@ export function registerTimelineTools(
       { projectId, composition, frame },
       extra,
     ): Promise<CallToolResult> => {
-      const failed = (text: string): CallToolResult => ({
-        content: [{ type: "text", text }],
+      const failed = (status: number, message: string): CallToolResult => ({
+        content: [
+          { type: "text", text: `Cutroom returned ${status}: ${message}` },
+        ],
         isError: true,
       });
+      const failedResponse = async (response: Response) => {
+        const text = await response.text();
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          return failed(response.status, text);
+        }
+        const error = z.object({ error: z.string() }).safeParse(body);
+        return failed(response.status, error.success ? error.data.error : text);
+      };
       const read = await fetchLocal(
         `/api/cutroom${timelinePath(projectId, composition)}`,
         { signal: extra.signal },
       );
-      if (!read.ok)
-        return failed(`Cutroom returned ${read.status}: ${await read.text()}`);
+      if (!read.ok) return failedResponse(read);
       const { timeline } = TimelineViewSchema.parse(await read.json());
       // Full precision: the renderer floors seek times onto frames.
       const seconds = frameTime(frame, timeline.fps);
@@ -136,10 +149,7 @@ export function registerTimelineTools(
         `/api/projects/${id(projectId)}/thumbnail/${composition.split("/").map(id).join("/")}?t=${seconds}&format=jpeg&output=source`,
         { signal: extra.signal },
       );
-      if (!image.ok)
-        return failed(
-          `Cutroom returned ${image.status}: ${await image.text()}`,
-        );
+      if (!image.ok) return failedResponse(image);
       return {
         content: [
           {

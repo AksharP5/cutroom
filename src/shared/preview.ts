@@ -45,12 +45,24 @@ export const PictureHitSchema = z.object({
 });
 export type PictureHit = z.infer<typeof PictureHitSchema>;
 
+export const CompositionDiagnosticSchema = z.object({
+  file: z.string(),
+  message: z.string(),
+});
+export type CompositionDiagnostic = z.infer<typeof CompositionDiagnosticSchema>;
+export const CompositionDiagnosticsSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("composition-errors"),
+  diagnostics: z.array(CompositionDiagnosticSchema).max(20),
+});
+
 export const PreviewReplySchema = z.object({
   source: z.literal("cutroom-preview"),
   id: z.string().optional(),
   state: PreviewStateSchema,
   error: z.string().optional(),
   hits: z.array(PictureHitSchema).optional(),
+  diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 
 export const ClipBoxSchema = z.object({
