@@ -1,0 +1,63 @@
+{
+  "head": "fab83da72b517dd6ab8515e1de703ced6d73c1e8",
+  "base": "242d60640f2edb187dac2bf35e9c2c29d8fa9f7a",
+  "unit": {
+    "pass": 654,
+    "skip": 5,
+    "fail": 0,
+    "files": 70
+  },
+  "browser": {
+    "pass": 359,
+    "fail": 0
+  },
+  "perf": {
+    "pass": 6,
+    "fail": 0,
+    "runsPerTimelineWorkload": 3,
+    "medianMaximumFrameMs": {
+      "400": {
+        "key": 74.30000001192093,
+        "ripple": 71.69999998807907
+      },
+      "500": {
+        "key": 80.89999997615814,
+        "ripple": 69.30000001192093
+      }
+    },
+    "budgetMs": 150
+  },
+  "focused": {
+    "unitPass": 43,
+    "browserPass": 31
+  },
+  "reviewRegressions": {
+    "oldImplementation": "bbdb98c",
+    "unitFailuresBeforeFix": 6,
+    "browserIsolationFailuresBeforeFix": [
+      "observer warning",
+      "warning survives project switch",
+      "Ask agent remains after project switch"
+    ],
+    "allPassAfterFix": true
+  },
+  "liveBrowser": {
+    "InspectorStart": {
+      "initiatingTabWarning": true,
+      "observerWarning": false
+    },
+    "projectSwitch": {
+      "warning": false,
+      "AskAgent": false
+    }
+  },
+  "contract": {
+    "rewritesAnimationScripts": false,
+    "delivery": "initiating tab only; MCP caller notification only",
+    "MCPIdentifiers": [
+      "requestId",
+      "revision"
+    ],
+    "storesWarningState": false
+  }
+}

@@ -1,0 +1,125 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/animation-feedback.test.ts:
+424 |         (
+425 |           await f.edit([
+426 |             { type: "move", clipIds: ["shot-b"], by: 1, mode: "place" },
+427 |           ])
+428 |         ).animationLeftBehind,
+429 |       ).toBeUndefined();
+              ^
+error: expect(received).toBeUndefined()
+
+Received: [
+  {
+    clipId: "shot-b",
+    label: "shot-b",
+  }
+]
+
+      at <anonymous> (/home/akshar/.cache/retime8/tests/animation-feedback.test.ts:429:9)
+(fail) resolved GSAP target ignores unrelated lookup const shot=document.getElementById("shot-b"); [77.52ms]
+424 |         (
+425 |           await f.edit([
+426 |             { type: "move", clipIds: ["shot-b"], by: 1, mode: "place" },
+427 |           ])
+428 |         ).animationLeftBehind,
+429 |       ).toBeUndefined();
+              ^
+error: expect(received).toBeUndefined()
+
+Received: [
+  {
+    clipId: "shot-b",
+    label: "shot-b",
+  }
+]
+
+      at <anonymous> (/home/akshar/.cache/retime8/tests/animation-feedback.test.ts:429:9)
+(fail) resolved GSAP target ignores unrelated lookup const byId=new Map();byId.set("#shot-b",{label:"Shot"}); [28.22ms]
+450 |         (
+451 |           await f.edit([
+452 |             { type: "move", clipIds: ["cta"], by: 1, mode: "place" },
+453 |           ])
+454 |         ).animationLeftBehind?.map((c) => c.clipId),
+455 |       ).toEqual(["cta"]);
+              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   "cta",
+- ]
++ undefined
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/akshar/.cache/retime8/tests/animation-feedback.test.ts:455:9)
+(fail) literal computed GSAP member warns: gsap["to"]("#cta",{x:100,duration:1,delay:36}); [25.18ms]
+450 |         (
+451 |           await f.edit([
+452 |             { type: "move", clipIds: ["cta"], by: 1, mode: "place" },
+453 |           ])
+454 |         ).animationLeftBehind?.map((c) => c.clipId),
+455 |       ).toEqual(["cta"]);
+              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   "cta",
+- ]
++ undefined
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/akshar/.cache/retime8/tests/animation-feedback.test.ts:455:9)
+(fail) literal computed GSAP member warns: const tl=gsap["timeline"]({paused:true});tl["to"]("#cta",{x:100},36);window.__timelines.main=tl; [21.31ms]
+ZodError: [
+  {
+    "code": "invalid_union",
+    "errors": [
+      [
+        {
+          "expected": "string",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected string, received undefined"
+        }
+      ],
+      [
+        {
+          "expected": "number",
+          "code": "invalid_type",
+          "path": [],
+          "message": "Invalid input: expected number, received undefined"
+        }
+      ]
+    ],
+    "path": [
+      "requestId"
+    ],
+    "message": "Invalid input"
+  }
+]
+(fail) rapid MCP edit notifications identify their request and saved revision [66.14ms]
+603 |     });
+604 |     const view = TimelineViewSchema.parse(await response.json());
+605 |     await streams[0].animation;
+606 |     // The source watcher follows the diagnostic on all three project streams.
+607 |     await Promise.all(streams.map((s) => s.changed));
+608 |     expect(streams[0].text()).toContain(`"origin":"${own}"`);
+                                    ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "\"origin\":\"aa0daa10-225e-49a5-bd53-c9fe9b7c7456\""
+Received: "event: ready\ndata: {}\n\nevent: animation-left-behind\ndata: {\"composition\":\"index.html\",\"clips\":[{\"clipId\":\"cta\",\"label\":\"cta\"}]}\n\ndata: {\"changed\":\"index.html.hf5b8302.tmp\",\"version\":null}\n\ndata: {\"changed\":\"cutroom.json.hfcc07a4.tmp\",\"version\":null}\n\ndata: {\"changed\":\"index.html\",\"version\":\"[\\\"index.html\\\",927,1794548200048.534]\"}\n\ndata: {\"changed\":\"cutroom.json\",\"version\":\"[\\\"cutroom.json\\\",683,1794548200049.3518]\"}\n\n"
+
+      at <anonymous> (/home/akshar/.cache/retime8/tests/animation-feedback.test.ts:608:31)
+(fail) project SSE delivers animation feedback only to the command's tab origin [133.33ms]
+
+ 0 pass
+ 37 filtered out
+ 6 fail
+ 27 expect() calls
+Ran 6 tests across 1 file. [524.00ms]
