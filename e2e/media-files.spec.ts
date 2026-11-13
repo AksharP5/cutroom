@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -176,7 +178,7 @@ test("Remove asks before taking a file the timeline uses, and Undo brings it bac
   await row("talk.mp4").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
   // The picture and its linked sound are one clip, as they are everywhere else in the editor.
-  await expect(dialog).toContainText("1 clip on the timeline uses this file.");
+  await expect(dialog).toContainText("This file has 1 use in the project.");
   await expect(dialog.getByRole("button", { name: "Keep file" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(dialog).toHaveCount(0);
@@ -227,8 +229,7 @@ test("the delete keys remove the file reached by keyboard, and stay the timeline
   await row("music.wav").click();
   await page.keyboard.press("Delete");
   await expect(media.getByRole("listitem")).toHaveCount(4);
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Control+2");
   await expect(row("music.wav")).toBeFocused();
   // Nothing uses this file, so it goes without a question, and the next row takes the keys.
   await page.keyboard.press("Backspace");
@@ -247,4 +248,69 @@ test("the delete keys remove the file reached by keyboard, and stay the timeline
   await expect(row("music.wav")).toBeVisible();
   expect(await present("assets/music.wav")).toBe(true);
   expect(await present("assets/spare.wav")).toBe(true);
+});
+
+test("review: undo or MCP rename cannot leave a missing source available to Insert", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  const { project, media, row, sources } = await open(page, request);
+  await row("talk.mp4").dblclick();
+  await expect(page.locator(".edit-source-name")).toHaveText("talk.mp4");
+  await row("talk.mp4").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  await media.getByRole("textbox", { name: "Rename talk.mp4" }).fill("renamed");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".edit-source-name")).toHaveText("renamed.mp4");
+  expect(
+    (
+      await request.post(`/api/cutroom/projects/${project.id}/history/undo`)
+    ).ok(),
+  ).toBe(true);
+  await page.keyboard.press("F9");
+  await expect(page.locator(".edit-source")).toHaveCount(0);
+  expect(await sources()).toEqual(["assets/talk.mp4", "assets/talk.mp4"]);
+
+  await expect(row("talk.mp4")).toBeVisible();
+  await row("talk.mp4").dblclick();
+  const client = new Client({ name: "media-source-test", version: "1" });
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: new URL(baseURL!).origin } },
+      }),
+    );
+    const renamed = await client.callTool({
+      name: "media_rename",
+      arguments: {
+        projectId: project.id,
+        path: "assets/talk.mp4",
+        name: "external.mp4",
+      },
+    });
+    expect(renamed.isError).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+  await page.keyboard.press("F9");
+  await expect(page.locator(".edit-source")).toHaveCount(0);
+  expect(await sources()).toEqual([
+    "assets/external.mp4",
+    "assets/external.mp4",
+  ]);
+  await row("external.mp4").dblclick();
+  expect(
+    (
+      await request.post(`/api/cutroom/projects/${project.id}/history/undo`)
+    ).ok(),
+  ).toBe(true);
+  await expect(page.locator(".edit-source")).toHaveCount(0);
+  await row("talk.mp4").dblclick();
+  expect(
+    (
+      await request.post(`/api/cutroom/projects/${project.id}/history/redo`)
+    ).ok(),
+  ).toBe(true);
+  await expect(page.locator(".edit-source")).toHaveCount(0);
 });

@@ -76,7 +76,7 @@ export const MediaRemoveSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "Remove a file that timeline clips still use. Those clips stay and play nothing until the file is back",
+      "Remove a file used by clips or composition CSS/scripts. Existing clips and references remain offline until the file is back",
     ),
 });
 

@@ -1,32 +1,10 @@
-import {
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, mkdir, readFile, readdir, rename } from "node:fs/promises";
 import { dirname, extname, join, posix } from "node:path";
-import {
-  createStudioApi,
-  fileContentVersion,
-} from "@hyperframes/studio-server";
-import type {
-  FileMutationInput,
-  HistoryWho,
-  StudioApiAdapter,
-} from "@hyperframes/studio-server";
+import { fileContentVersion } from "@hyperframes/studio-server";
+import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
-import {
-  MEDIA_TRASH,
-  inMediaTrash,
-  localMediaPath,
-  mediaKind,
-} from "../../shared/media";
+import { MEDIA_TRASH, inMediaTrash, mediaKind } from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -36,6 +14,9 @@ import { compositionFiles } from "./media";
 import { isMissing, projectWritePath } from "./path";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
+import { compositionVersions } from "./changes";
+import { renameReferences } from "./mediaReferences";
+import { moveSourceMarks } from "./view";
 
 const SOURCE_BYTES = 10 * 1024 * 1024;
 
@@ -60,111 +41,79 @@ const exists = (path: string) =>
     },
   );
 
-/** Timeline clips that play `path` in any composition. A clip and its linked sound count once. */
+/** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
   const { path } = await mediaFile(project, raw);
   let uses = 0;
-  for (const file of await compositionFiles(project)) {
-    const composition = file.replaceAll("\\", "/");
+  for (const composition of await compositionFiles(project)) {
+    const { references } = await compositionVersions(project, composition);
     const source = await readSource(project, composition);
+    const owners = new Set<string>();
     try {
       const { timeline } = parseComposition(
         source.content,
         emptyTimelineSettings(),
         { scope: compositionScope(composition) },
       );
-      uses += new Set(
-        timeline.clips
-          .filter(
-            (clip) =>
-              clip.src !== null &&
-              localMediaPath(composition, clip.src) === path,
-          )
-          .map((clip) => clip.link ?? clip.id),
-      ).size;
+      for (const clip of timeline.clips) {
+        if (references.get(clip.id)?.has(path))
+          owners.add(clip.link ?? clip.id);
+      }
     } catch (error) {
-      // A file that is not a timeline holds no clips to count.
       if (!(error instanceof TimelineError)) throw error;
     }
+    uses += Math.max(owners.size, references.get(null)?.has(path) ? 1 : 0);
   }
   return uses;
 }
 
-/**
- * The source edits that point every reference at `to`. HyperFrames' rename rewrites references in
- * every text file it finds, hidden agent settings and instruction files included, so it runs on a
- * copy that holds only the sources Cutroom may edit. Every other file is an empty stand-in, there
- * so the rewriter can tell which file a relative reference names.
- */
+/** Read only editable sources, resolving references against each source's directory. */
 async function referenceEdits(project: Project, from: string, to: string) {
-  const copy = await mkdtemp(join(tmpdir(), "cutroom-rename-"));
-  try {
-    const sources: { path: string; absolute: string; before: string }[] = [];
-    const directories = [""];
-    for (const directory of directories) {
-      await mkdir(join(copy, directory), { recursive: true });
-      for (const entry of await readdir(join(project.path, directory), {
-        withFileTypes: true,
-      })) {
-        if (entry.name.startsWith(".") || entry.name === "node_modules")
-          continue;
-        const path = posix.join(directory, entry.name);
-        if (entry.isDirectory()) directories.push(path);
-        if (!entry.isFile()) continue;
-        const absolute = await projectWritePath(project, path).catch(
-          (error: unknown) => {
-            if (error instanceof HttpError && error.status === 403) return null;
-            throw error;
-          },
-        );
-        const source =
-          absolute !== null && (await lstat(absolute)).size <= SOURCE_BYTES
-            ? { path, absolute, before: await readFile(absolute, "utf8") }
-            : null;
-        if (source) sources.push(source);
-        await writeFile(join(copy, path), source?.before ?? "");
+  const sources: { path: string; absolute: string; before: string }[] = [];
+  const files = new Set<string>();
+  const directories = [""];
+  for (const directory of directories) {
+    for (const entry of await readdir(join(project.path, directory), {
+      withFileTypes: true,
+    })) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const path = posix.join(directory, entry.name);
+      if (inMediaTrash(path)) continue;
+      if (entry.isDirectory()) directories.push(path);
+      if (!entry.isFile()) continue;
+      files.add(path);
+      const absolute = await projectWritePath(project, path).catch(
+        (error: unknown) => {
+          if (error instanceof HttpError && error.status === 403) return null;
+          throw error;
+        },
+      );
+      if (absolute !== null && (await lstat(absolute)).size <= SOURCE_BYTES) {
+        sources.push({
+          path,
+          absolute,
+          before: await readFile(absolute, "utf8"),
+        });
       }
     }
-    const unused = () => {
-      throw new Error("A rename only rewrites references.");
-    };
-    const adapter: StudioApiAdapter = {
-      listProjects: () => [],
-      resolveProject: (id) => ({ id, dir: copy }),
-      bundle: unused,
-      lint: unused,
-      runtimeUrl: "",
-      rendersDir: unused,
-      startRender: unused,
-    };
-    const response = await createStudioApi(adapter).request(
-      `http://localhost/projects/copy/files/${from.split("/").map(encodeURIComponent).join("/")}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newPath: to }),
-      },
-    );
-    if (!response.ok)
-      throw new Error(
-        `HyperFrames could not rewrite the references (${response.status}): ${await response.text()}`,
-      );
-    const edits: FileMutationInput[] = [];
-    for (const { path, absolute, before } of sources) {
-      const after = await readFile(join(copy, path), "utf8");
-      if (after !== before)
-        edits.push({
-          sourceFile: path,
-          absPath: absolute,
-          before,
-          after,
-          expectedVersion: fileContentVersion(before),
-        });
-    }
-    return edits;
-  } finally {
-    await rm(copy, { recursive: true, force: true });
   }
+  const edits: FileMutationInput[] = [];
+  for (const { path, absolute, before } of sources) {
+    const after = renameReferences(before, path, from, to, files);
+    if (after === before) continue;
+    const sourceFile = path === from ? to : path;
+    edits.push({
+      sourceFile,
+      absPath:
+        path === from
+          ? await projectWritePath(project, to, { allowMissing: true })
+          : absolute,
+      before,
+      after,
+      expectedVersion: fileContentVersion(before),
+    });
+  }
+  return edits;
 }
 
 /** Renames a media file in its folder and points every source reference at the new name. */
@@ -204,6 +153,7 @@ export async function renameMedia(
         await rename(absolute, file.absolute);
         throw error;
       }
+      await moveSourceMarks(project, file.path, path);
       return { path, sources: edits.map((edit) => edit.sourceFile) };
     },
     who,

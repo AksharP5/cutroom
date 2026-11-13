@@ -173,7 +173,7 @@ export function createProjectRoutes(
     if (uses && !input.confirmUsed)
       return c.json(
         {
-          error: `${uses} timeline ${uses === 1 ? "clip uses" : "clips use"} ${input.path}. Removing it leaves ${uses === 1 ? "that clip" : "those clips"} empty until the file is back. Send confirmUsed: true to remove it anyway.`,
+          error: `${input.path} has ${uses} ${uses === 1 ? "use" : "uses"} in the project. Removing it leaves existing clips and references offline until the file is back. Send confirmUsed: true to remove it anyway.`,
           uses,
         },
         409,

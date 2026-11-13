@@ -252,7 +252,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "media_remove",
     {
       description:
-        "Move a media file to the project's trash folder, where it stays recoverable; history_undo moves it back. A file that timeline clips still use is refused with the number of clips unless confirmUsed is true. Those clips stay on the timeline and play nothing until the file is back.",
+        "Move a media file to the project's trash folder, where it stays recoverable; history_undo moves it back. A file used by clips or composition CSS/scripts is refused with its use count unless confirmUsed is true. Those clips stay on the timeline and play nothing until the file is back.",
       inputSchema: MediaRemoveSchema.extend(project),
       annotations: edit,
     },

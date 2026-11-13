@@ -281,7 +281,7 @@ function MediaRow({
           onCancel={() => {
             // Focus moves first: the row takes the keys back as the field closes.
             if (row.current?.contains(document.activeElement))
-              row.current.focus({ preventScroll: true });
+              focusByKeyboard(row.current);
             onRenameCancel();
           }}
         />
@@ -367,6 +367,8 @@ export function MediaPanel({
     if (!active.current || id !== latestLoad.current) return;
     loaded.current = true;
     useWorkspace.setState({ fileChanges: fileVersions });
+    const source = useSource.getState().file;
+    if (source && !files.includes(source.path)) closeSource();
     setMedia(
       files
         .flatMap((path) => {
@@ -685,9 +687,7 @@ export function MediaPanel({
           initialFocus={keepButton}
         >
           <p className="media-confirm">
-            {used.uses === 1
-              ? "1 clip on the timeline uses this file. It stays in place and plays nothing until you undo."
-              : `${used.uses} clips on the timeline use this file. They stay in place and play nothing until you undo.`}
+            {`This file has ${used.uses} ${used.uses === 1 ? "use" : "uses"} in the project. Removing it leaves existing clips and references offline until you undo.`}
           </p>
           <footer className="modal-actions">
             <button

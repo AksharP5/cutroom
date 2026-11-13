@@ -41,6 +41,8 @@ import { clipVersions, compositionVersions, missingSignature } from "./changes";
 import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
+import { inMediaTrash, mediaKind } from "../../shared/media";
+import { moveSourceMarks } from "./view";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
 const ReviewFileSchema = z.object({
@@ -985,7 +987,29 @@ export function createReviewService(store: ProjectStore) {
               allowMissing: true,
             });
           }
+          const previous = history.list().at(-1)?.id;
           const result = await change();
+          const entry = history.list().at(-1);
+          if (entry && entry.id !== previous) {
+            // History records file moves as a deletion and an addition with the same content hash.
+            for (const file of entry.files) {
+              if (
+                !mediaKind(file.path) ||
+                inMediaTrash(file.path) ||
+                file.before === null ||
+                file.after !== null
+              )
+                continue;
+              const moved = entry.files.find(
+                (next) =>
+                  next.before === null &&
+                  next.after === file.before &&
+                  mediaKind(next.path) &&
+                  !inMediaTrash(next.path),
+              );
+              if (moved) await moveSourceMarks(project, file.path, moved.path);
+            }
+          }
           await reconcile(project, { actor, how }).catch(unlessUnreadable);
           return result;
         });

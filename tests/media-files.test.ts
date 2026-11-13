@@ -8,6 +8,7 @@ import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { ProjectSchema } from "../src/shared/project";
 import { projectFixture } from "./project-fixture";
+import { projectViews } from "../src/server/projects/view";
 
 let fixture: Awaited<ReturnType<typeof projectFixture>>;
 let project: z.infer<typeof ProjectSchema>;
@@ -58,6 +59,129 @@ beforeEach(async () => {
   await (await fixture.store.history(project)).checkpoint();
 });
 afterEach(() => fixture.close());
+
+test("review: rename resolves references from their declaring file without changing another folder's media", async () => {
+  await mkdir(at("other"));
+  await writeFile(at("other/my clip.mp4"), "other video");
+  const cases = {
+    "assets/local.html":
+      '<video src="./my%20clip.mp4?preview=1#frame"></video>',
+    "assets/style.css":
+      '.a{background:url("./my%20clip.mp4")} .b{background:url(../assets/my%20clip.mp4)}',
+    "assets/helper.js":
+      'const local = "./my clip.mp4"; const root = "assets/my clip.mp4";',
+    "assets/ref.svg": '<svg><image href="my%20clip.mp4"/></svg>',
+    "other/local.htm":
+      '<video src="../assets/my%20clip.mp4"></video><video src="./my%20clip.mp4"></video>',
+  };
+  for (const [path, content] of Object.entries(cases))
+    await writeFile(at(path), content);
+  await (await fixture.store.history(project)).checkpoint();
+  expect(
+    (
+      await post("rename", {
+        path: "assets/my clip.mp4",
+        name: "東京 clip.mp4",
+      })
+    ).status,
+  ).toBe(200);
+  expect(await readFile(at("assets/local.html"), "utf8")).toBe(
+    '<video src="./%E6%9D%B1%E4%BA%AC%20clip.mp4?preview=1#frame"></video>',
+  );
+  expect(await readFile(at("assets/style.css"), "utf8")).toContain(
+    'url("./%E6%9D%B1%E4%BA%AC%20clip.mp4")',
+  );
+  expect(await readFile(at("assets/helper.js"), "utf8")).toContain(
+    '"./東京 clip.mp4"',
+  );
+  expect(await readFile(at("assets/ref.svg"), "utf8")).toContain(
+    'href="%E6%9D%B1%E4%BA%AC%20clip.mp4"',
+  );
+  expect(await readFile(at("other/local.htm"), "utf8")).toBe(
+    '<video src="../assets/%E6%9D%B1%E4%BA%AC%20clip.mp4"></video><video src="./my%20clip.mp4"></video>',
+  );
+  expect((await step("undo")).status).toBe(200);
+  for (const [path, content] of Object.entries(cases))
+    expect(await readFile(at(path), "utf8")).toBe(content);
+});
+
+test("review: an SVG can be renamed and restored with its references", async () => {
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+  await writeFile(at("assets/logo.svg"), svg);
+  await writeFile(at("assets/logo.css"), '.logo{background:url("./logo.svg")}');
+  await (await fixture.store.history(project)).checkpoint();
+  expect(
+    (await post("rename", { path: "assets/logo.svg", name: "brand.svg" }))
+      .status,
+  ).toBe(200);
+  expect(await readFile(at("assets/brand.svg"), "utf8")).toBe(svg);
+  expect(await readFile(at("assets/logo.css"), "utf8")).toContain(
+    'url("./brand.svg")',
+  );
+  expect((await step("undo")).status).toBe(200);
+  expect(await readFile(at("assets/logo.svg"), "utf8")).toBe(svg);
+});
+
+test("review: CSS backgrounds and composition script dependencies require removal confirmation", async () => {
+  await writeFile(
+    at("assets/bg.svg"),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>',
+  );
+  const entry = await readFile(at("index.html"), "utf8");
+  for (const content of [
+    entry.replace(
+      /<main([^>]*)>[\s\S]*<\/main>/,
+      '<main$1><div class="clip" id="background" data-start="0" data-duration="4" data-track-index="0" style="background-image:url(assets/bg.svg)"></div></main>',
+    ),
+    entry.replace(
+      "</head>",
+      "<style>body{background:url(assets/bg.svg)}</style></head>",
+    ),
+    entry.replace("</head>", '<script src="assets/helper.js"></script></head>'),
+    entry.replace(
+      "</head>",
+      '<link rel="stylesheet" href="assets/style.css"></head>',
+    ),
+  ]) {
+    await writeFile(at("assets/helper.js"), 'const picture = "./bg.svg";');
+    await writeFile(at("assets/style.css"), 'body{background:url("./bg.svg")}');
+    await writeFile(at("index.html"), content);
+    await (await fixture.store.history(project)).checkpoint();
+    const response = await post("remove", { path: "assets/bg.svg" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ uses: 1 });
+    expect(await present("assets/bg.svg")).toBe(true);
+  }
+});
+
+test("review: saved source marks follow rename, undo and redo outside history", async () => {
+  const from = "assets/my clip.mp4";
+  const to = "assets/talk.mp4";
+  const identity = { size: VIDEO.length, duration: 6 };
+  const marks = { in: 1, out: 3 };
+  await projectViews.saveSource(project, from, { ...marks, identity });
+  expect((await post("rename", { path: from, name: "talk.mp4" })).status).toBe(
+    200,
+  );
+  expect(await projectViews.readSource(project, to, identity)).toEqual(marks);
+  expect(await projectViews.readSource(project, from, identity)).toEqual({
+    in: null,
+    out: null,
+  });
+  expect((await step("undo")).status).toBe(200);
+  expect(await projectViews.readSource(project, from, identity)).toEqual(marks);
+  expect((await step("redo")).status).toBe(200);
+  expect(await projectViews.readSource(project, to, identity)).toEqual(marks);
+  expect(
+    JSON.parse(await readFile(at(".cutroom/view.json"), "utf8")),
+  ).toMatchObject({ sources: { [to]: { ...marks, identity } } });
+  expect((await post("remove", { path: to, confirmUsed: true })).status).toBe(
+    200,
+  );
+  expect((await step("undo")).status).toBe(200);
+  expect(await projectViews.readSource(project, to, identity)).toEqual(marks);
+});
 
 test("a rename moves the file and every source reference in one undo step", async () => {
   // Files a broad rewrite must never reach: agent instructions and native settings.
@@ -207,7 +331,7 @@ test("remove asks before taking a file the timeline still uses", async () => {
   // The picture and its linked sound are one clip to the editor; the nested composition adds one.
   expect(await asked.json()).toEqual({
     error:
-      "3 timeline clips use assets/my clip.mp4. Removing it leaves those clips empty until the file is back. Send confirmUsed: true to remove it anyway.",
+      "assets/my clip.mp4 has 3 uses in the project. Removing it leaves existing clips and references offline until the file is back. Send confirmUsed: true to remove it anyway.",
     uses: 3,
   });
   expect(await readFile(at("assets/my clip.mp4"))).toEqual(VIDEO);
@@ -297,7 +421,7 @@ test("an agent renames, removes, and restores media through MCP as the owner doe
     // The question the editor asks its owner reaches an agent as a refusal it can answer.
     const asked = await call("media_remove", { path: "assets/talk.mp4" });
     expect(asked.refused).toBe(true);
-    expect(asked.text).toContain("3 timeline clips use assets/talk.mp4.");
+    expect(asked.text).toContain("assets/talk.mp4 has 3 uses in the project.");
     expect(await present("assets/talk.mp4")).toBe(true);
     expect(
       (
