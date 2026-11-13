@@ -1,7 +1,11 @@
-import { TimelineViewSettingsSchema } from "../../shared/timeline/view";
+import { stat } from "node:fs/promises";
+import {
+  SourceMarksSchema,
+  TimelineViewSettingsSchema,
+} from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
-import { createTimelineViewStore } from "../projects/view";
+import { createProjectViewStore } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
 import {
   AGENT_HEADER,
@@ -45,9 +49,9 @@ import type {
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
 import { isMissing, readSource } from "../projects/store";
-import { localMediaPath } from "../../shared/media";
+import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { editLabel } from "../../shared/timeline/labels";
-import { projectWritePath } from "../projects/path";
+import { projectPath, projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
@@ -101,7 +105,7 @@ export function createTimelineRoutes(
       parsed: ParsedComposition;
     }
   >();
-  const views = createTimelineViewStore();
+  const views = createProjectViewStore();
   const read = async (project: Project, composition: string) => {
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -390,6 +394,30 @@ export function createTimelineRoutes(
     } catch (error) {
       return refused(c, error);
     }
+  });
+  const sourceFingerprint = async (project: Project, path: string) => {
+    const absolute = await projectPath(project, path);
+    const info = await stat(absolute);
+    if (!info.isFile()) throw new HttpError(400, "Choose a media file.");
+    return fileFingerprint(canonical(path), info);
+  };
+  api.get("/projects/:id/source-marks", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const fingerprint = await sourceFingerprint(
+      project,
+      c.req.query("path") ?? "",
+    );
+    return c.json(await views.readSource(project, fingerprint));
+  });
+  api.put("/projects/:id/source-marks", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const fingerprint = await sourceFingerprint(
+      project,
+      c.req.query("path") ?? "",
+    );
+    const marks = parseInput(SourceMarksSchema, await c.req.json());
+    await views.saveSource(project, fingerprint, marks);
+    return c.json(marks);
   });
   api.get("/projects/:id/timeline-view", async (c) => {
     const project = await store.get(c.req.param("id"));

@@ -6,6 +6,7 @@ import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ProjectSchema } from "../src/shared/project";
+import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
@@ -525,4 +526,155 @@ test("timeline edit keys immediately edit and reveal Timeline while Source is sh
       await page.keyboard.press("Shift+v");
     });
   }
+});
+
+test("source marks survive reload and project switches without entering undo history", async ({
+  page,
+  request,
+  baseURL,
+}, testInfo) => {
+  const a = await open(page, request);
+  const range = page.locator(".edit-range");
+  const history = async () =>
+    (await request.get(`/api/cutroom/projects/${a.project.id}/history`)).json();
+  const before = await history();
+  await (await a.file("talk.mp4")).dblclick();
+  await seek(page, "200");
+  await page.keyboard.press("i");
+  await seek(page, "429");
+  await page.keyboard.press("o");
+  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await page.screenshot({ path: testInfo.outputPath("before-reload.png") });
+  // Observe the acknowledged disk save before reloading, as with destination tracks.
+  await expect
+    .poll(
+      async () =>
+        await readFile(
+          join(a.project.path, ".cutroom/view.json"),
+          "utf8",
+        ).catch(() => ""),
+    )
+    .toContain('"out": 5');
+  expect(await history()).toEqual(before);
+
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Timeline" }).locator("[data-clip]"),
+  ).toHaveCount(2);
+  await (await a.file("talk.mp4")).dblclick();
+  await expect(a.source).toBeVisible();
+  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(a.clock).toHaveText("00:00:02:00");
+  await expect
+    .poll(() => colour(page, a.source.locator("video")))
+    .toBe("green");
+  await page.screenshot({ path: testInfo.outputPath("after-reload.png") });
+
+  const b = await open(page, request);
+  await (await b.file("talk.mp4")).dblclick();
+  await expect(range).toBeHidden();
+  await seek(page, "100");
+  await page.keyboard.press("i");
+  await seek(page, "129");
+  await page.keyboard.press("o");
+  await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+  await expect
+    .poll(async () =>
+      (
+        await request.get(
+          `/api/cutroom/projects/${b.project.id}/source-marks?path=talk.mp4`,
+        )
+      ).json(),
+    )
+    .toEqual({ in: 1, out: 2 });
+
+  await page.evaluate((id) => {
+    location.hash = `project/${id}`;
+  }, a.project.id);
+  await (await a.file("talk.mp4")).dblclick();
+  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  // A's next save is held while B opens. A's completion cannot overwrite B's marks.
+  const saving = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  await page.route("**/source-marks?**", async (route) => {
+    if (route.request().method() === "PUT") {
+      saving.resolve();
+      await release.promise;
+    }
+    await route.continue();
+  });
+  await seek(page, "300");
+  await page.keyboard.press("i");
+  await saving.promise;
+  try {
+    await page.evaluate((id) => {
+      location.hash = `project/${id}`;
+    }, b.project.id);
+    await (await b.file("talk.mp4")).dblclick();
+    await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+  } finally {
+    release.resolve();
+  }
+  await expect
+    .poll(async () =>
+      (
+        await request.get(
+          `/api/cutroom/projects/${a.project.id}/source-marks?path=talk.mp4`,
+        )
+      ).json(),
+    )
+    .toEqual({ in: 3, out: 5 });
+  await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+  await page.unroute("**/source-marks?**");
+  await page.evaluate((id) => {
+    location.hash = `project/${id}`;
+  }, a.project.id);
+  await (await a.file("talk.mp4")).dblclick();
+  await expect(range).toHaveText("In 00:00:03:00Out 00:00:04:29");
+  expect(await a.read()).toEqual(a.before);
+  expect(await history()).toEqual(before);
+
+  const client = new Client({ name: "source-marks-agent", version: "1.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${baseURL}/mcp`), {
+      requestInit: { headers: { origin: baseURL! } },
+    }),
+  );
+  try {
+    const result = z
+      .object({
+        structuredContent: z.object({
+          result: z.object({
+            in: z.number().nullable(),
+            out: z.number().nullable(),
+          }),
+        }),
+      })
+      .parse(
+        await client.callTool({
+          name: "source_marks",
+          arguments: { projectId: a.project.id, path: "talk.mp4" },
+        }),
+      );
+    expect(result.structuredContent.result).toEqual({ in: 3, out: 5 });
+  } finally {
+    await client.close();
+  }
+
+  // Marks name source seconds, even when the project's frame rate changes.
+  const composition = join(a.project.path, "index.html");
+  await writeFile(
+    composition,
+    (await readFile(composition, "utf8")).replace(
+      "<main ",
+      '<main data-fps="24" ',
+    ),
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Timeline" }).locator("[data-clip]"),
+  ).toHaveCount(2);
+  expect((await a.read()).fps).toEqual({ num: 24, den: 1 });
+  await (await a.file("talk.mp4")).dblclick();
+  await expect(range).toHaveText("In 00:00:03:00Out 00:00:04:23");
 });

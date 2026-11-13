@@ -29,3 +29,16 @@ export const emptyTimelineViewSettings = (): TimelineViewSettings => ({
   heights: {},
   destinations: {},
 });
+
+/** Source seconds, independent of the open composition's frame rate; Out is exclusive. */
+export const SourceMarksSchema = z
+  .object({
+    in: z.number().finite().nonnegative().nullable(),
+    out: z.number().finite().positive().nullable(),
+  })
+  .refine(
+    (marks) => marks.in === null || marks.out === null || marks.out > marks.in,
+    "Out must follow In",
+  );
+export type SourceMarks = z.infer<typeof SourceMarksSchema>;
+export const emptySourceMarks = (): SourceMarks => ({ in: null, out: null });
