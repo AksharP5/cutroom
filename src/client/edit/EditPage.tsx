@@ -20,6 +20,7 @@ import { EditorToolsContext } from "../editor/EditorTools";
 import {
   blurPointerButton,
   clearBrowserSelection,
+  focusPanel,
   hint,
   isTyping,
   keymap,
@@ -28,7 +29,7 @@ import {
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { subscribeProjectEvents } from "../api";
-import { reportEditorError, useWorkspace } from "../workspace";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import "./edit.css";
 import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { ExportControl } from "./ExportDialog";
@@ -118,6 +119,7 @@ export function EditPage({
   };
   const page = useRef<HTMLDivElement>(null);
   const viewer = useRef<HTMLElement>(null);
+  const timelinePanel = useRef<HTMLElement>(null);
   const [revision, setRevision] = useState(0);
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
@@ -341,6 +343,28 @@ export function EditPage({
     editInsertOverwriteActionInsert: () => placeSource(projectId, "insert"),
     editInsertOverwriteActionOverwrite: () =>
       placeSource(projectId, "overwrite"),
+    // The one viewer is either panel: its key shows that side and takes the keyboard there.
+    viewActiveWindowSelectionSourceViewer: () => {
+      if (!source)
+        return void showToast(
+          "Open a file from Media to see its source.",
+          null,
+          {
+            tone: "info",
+            transient: true,
+          },
+        );
+      showSource(true);
+      focusPanel(viewer.current);
+    },
+    viewActiveWindowSelectionTimelineViewer: () => {
+      showSource(false);
+      focusPanel(viewer.current);
+    },
+    viewActiveWindowSelectionTimeline: () => {
+      showSource(false);
+      focusPanel(timelinePanel.current);
+    },
     viewToggleSourceTimeline: () => showSource(!sourceShown),
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),
@@ -491,6 +515,7 @@ export function EditPage({
         onPointerMove={resize}
       />
       <section
+        ref={timelinePanel}
         className="edit-timeline"
         aria-label="Timeline"
         onPointerDownCapture={clearBrowserSelection}

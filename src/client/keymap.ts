@@ -10,6 +10,7 @@ export const areas = [
   "Select",
   "Edit",
   "Tracks",
+  "Panels",
   "View",
 ] as const;
 
@@ -20,6 +21,8 @@ export type Binding = {
   repeat?: boolean;
   /** The keys are one run, as Alt+1 to Alt+8 are, and the handler is told which was pressed. */
   series?: boolean;
+  /** Also answers from a text field, as a way out of it. Dialogs and menus still keep the keys. */
+  fields?: boolean;
 };
 
 /** Resolve binds a destination key to each of the first eight tracks of a kind. */
@@ -185,6 +188,36 @@ export const keymap = {
   },
   editUndo: { area: "Edit", label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { area: "Edit", label: "Redo", keys: ["Ctrl+Shift+Z"] },
+  viewActiveWindowSelectionMediaPoolClips: {
+    area: "Panels",
+    label: "Focus Media",
+    keys: ["Ctrl+2"],
+    fields: true,
+  },
+  viewActiveWindowSelectionSourceViewer: {
+    area: "Panels",
+    label: "Focus the viewer on the source",
+    keys: ["Ctrl+3"],
+    fields: true,
+  },
+  viewActiveWindowSelectionTimeline: {
+    area: "Panels",
+    label: "Focus the timeline",
+    keys: ["Ctrl+4"],
+    fields: true,
+  },
+  viewActiveWindowSelectionTimelineViewer: {
+    area: "Panels",
+    label: "Focus the viewer on the timeline",
+    keys: ["Ctrl+5"],
+    fields: true,
+  },
+  viewActiveWindowSelectionInspector: {
+    area: "Panels",
+    label: "Focus the inspector",
+    keys: ["Ctrl+9"],
+    fields: true,
+  },
   viewToggleSourceTimeline: {
     area: "View",
     label: "Show the source or the timeline",
@@ -340,6 +373,73 @@ export const isTyping = (target: EventTarget | null) =>
       "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
 
+/** A text field in the page itself, which a panel key may leave. One in a dialog or menu is not. */
+const inPageField = (target: EventTarget | null) =>
+  target instanceof Element &&
+  !target.ownerDocument.querySelector("dialog[open]") &&
+  !!target.closest(
+    "input, textarea, [contenteditable]:not([contenteditable=false])",
+  ) &&
+  !target.closest(
+    "dialog, [role=dialog], [role=menu], [role=combobox], [role=listbox]",
+  );
+
+/** Whether the last input was a pointer press, and what the keyboard has brought focus to since. */
+let pointerLast = false;
+const keyboardFocused = new WeakSet<Element>();
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "pointerdown",
+    () => {
+      pointerLast = true;
+      // A click anywhere hands the keys back, also when it leaves focus where it was.
+      if (document.activeElement)
+        keyboardFocused.delete(document.activeElement);
+    },
+    true,
+  );
+  window.addEventListener("keydown", () => (pointerLast = false), true);
+  window.addEventListener(
+    "focusin",
+    ({ target }) => {
+      if (!(target instanceof Element)) return;
+      if (pointerLast) keyboardFocused.delete(target);
+      else keyboardFocused.add(target);
+    },
+    true,
+  );
+}
+
+/**
+ * Whether the keyboard brought focus to `element`: Tab, an arrow, a panel key, or a menu closed
+ * by key. `:focus-visible` cannot say, because the first key pressed after a click makes the
+ * clicked element match it.
+ */
+export const reachedByKeyboard = (element: Element) =>
+  keyboardFocused.has(element);
+
+/**
+ * Focus as a key gives it, ring included. A key held with Ctrl does not make the browser show
+ * the ring by itself after a click.
+ */
+export const keyboardFocus: FocusOptions = {
+  preventScroll: true,
+  focusVisible: true,
+};
+
+/**
+ * Gives a panel the keyboard for its panel key. The panel is focusable only while it holds
+ * focus, so Tab never stops on it and a click inside it focuses what it always did.
+ */
+export function focusPanel(panel: HTMLElement | null) {
+  if (!panel) return;
+  panel.tabIndex = -1;
+  panel.addEventListener("blur", () => panel.removeAttribute("tabindex"), {
+    once: true,
+  });
+  panel.focus(keyboardFocus);
+}
+
 /** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */
 export function clearBrowserSelection(event: PointerEvent<HTMLElement>) {
   if (isTyping(event.target)) return;
@@ -365,7 +465,8 @@ export function blurPointerButton(event: MouseEvent<HTMLElement>) {
 }
 
 export function actionFor(event: KeyboardEvent): Action | null {
-  if (isTyping(event.target)) return null;
+  const typing = isTyping(event.target);
+  if (typing && !inPageField(event.target)) return null;
   if (
     event.code === "Space" &&
     event.target instanceof Element &&
@@ -377,6 +478,8 @@ export function actionFor(event: KeyboardEvent): Action | null {
   const combo = comboOf(event);
   const action = combo ? bindings.get(combo) : undefined;
   if (!action) return null;
+  const binding: Binding = keymap[action];
+  if (typing && !binding.fields) return null;
   if (
     (action === "editCopy" ||
       action === "editCut" ||
@@ -384,7 +487,6 @@ export function actionFor(event: KeyboardEvent): Action | null {
     window.getSelection()?.toString()
   )
     return null;
-  const binding: Binding = keymap[action];
   return event.repeat && !binding.repeat ? null : action;
 }
 
