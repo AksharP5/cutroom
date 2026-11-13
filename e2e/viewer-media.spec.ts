@@ -1082,10 +1082,8 @@ async function trackViewerResources(page: Page) {
 }
 
 for (const withheld of [false, true]) {
-  test(`50-edit batches bound documents and decoded frames with ${withheld ? "withheld" : "normal"} acknowledgments`, async ({
-    page,
-    request,
-  }, testInfo) => {
+  const title = `50-edit batches bound documents and decoded frames with ${withheld ? "withheld" : "normal"} acknowledgments`;
+  test(title, { tag: "@performance" }, async ({ page, request }, testInfo) => {
     test.setTimeout(240_000);
     const frames = await trackViewerResources(page);
     const { project, read, seek } = await openMedia(page, request);
