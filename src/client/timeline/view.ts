@@ -63,19 +63,20 @@ export function createViewport(
   let wheel: { factor: number; x: number } | null = null;
   /** The zoom Shift+Z left, to return to on the next press. */
   let beforeFit: number | null = null;
-  let refit: Animation | undefined;
+  /**
+   * A stopped playhead the scroller could not reach. An edit that lengthens the timeline moves
+   * the playhead to its new end before the grid has grown, so the view is owed that frame when
+   * the longer timeline is measured.
+   */
+  let owed: number | null = null;
 
-  const refitState = () => {
-    grid.dataset.refit = refit
-      ? "pending"
-      : animations.some((animation) => animation.playState === "running")
-        ? "zooming"
-        : "settled";
-  };
-  const cancelRefit = () => {
-    refit?.cancel();
-    refit = undefined;
-    refitState();
+  /** Whether a zoom is still easing, for anything that measures the settled timeline. */
+  const zoomState = () => {
+    grid.dataset.refit = animations.some(
+      (animation) => animation.playState === "running",
+    )
+      ? "zooming"
+      : "settled";
   };
 
   const lanesLeft = () => scroller.getBoundingClientRect().left + headWidth;
@@ -91,16 +92,16 @@ export function createViewport(
   const stop = () => {
     for (const animation of animations) animation.cancel();
     animations = [];
-    refitState();
+    zoomState();
   };
   const setAnimations = (next: Animation[]) => {
     animations = next;
-    refitState();
+    zoomState();
     void Promise.allSettled(next.map((animation) => animation.finished)).then(
       () => {
         if (animations !== next) return;
         animations = [];
-        refitState();
+        zoomState();
       },
     );
   };
@@ -112,25 +113,6 @@ export function createViewport(
       composite: "add",
     } as const;
   };
-
-  function refitAfterSlide(duration: number) {
-    if (!duration) return zoom(fit, 0, true);
-    // Share the clips' animation clock so Fit cannot start before their final frame.
-    const wait = (grid.querySelector(".tl-lanes") ?? grid).animate(
-      {},
-      { duration },
-    );
-    refit = wait;
-    refitState();
-    void wait.finished.then(
-      () => {
-        if (refit !== wait) return;
-        refit = undefined;
-        zoom(fit, 0, true);
-      },
-      () => {}, // The next input cancels the wait.
-    );
-  }
 
   /** What is on screen now, which differs from the layout while a zoom is still easing. */
   function shown(): Placement {
@@ -191,8 +173,9 @@ export function createViewport(
   }
 
   function zoom(target: number, anchor: number, animate: boolean) {
-    cancelRefit();
-    const next = clampPpf(target, fit);
+    // Fit is the widest zoom asked for. An edit that shortened the timeline can leave the
+    // view wider than that, and zooming out from there stays where it is.
+    const next = clampPpf(target, Math.min(fit, ppf));
     fitted = next === fit;
     if (next === ppf && (next !== fit || scroll === 0)) return;
     const from = animate ? shown() : null;
@@ -209,6 +192,12 @@ export function createViewport(
     } else scrollTo(left);
     onChange(animate);
     if (from && options) ease(from, options);
+  }
+
+  /** Brings a frame to the middle of the view, or as near as the timeline's length allows. */
+  function centre(frame: number) {
+    scrollTo(frame * ppf - width / 2);
+    owed = frame * ppf - scroll > width ? frame : null;
   }
 
   /** The playhead when it is on screen, otherwise the middle of the view. */
@@ -241,11 +230,6 @@ export function createViewport(
     });
   }
   function onScroll() {
-    // Scrolling while an edit's slide waits to refit takes over the view: it stays where the user put it.
-    if (refit && scroller.scrollLeft !== scroll) {
-      cancelRefit();
-      fitted = false;
-    }
     scroll = scroller.scrollLeft;
     top = scroller.scrollTop;
     exact = settledScroll(exact, scroll);
@@ -253,28 +237,24 @@ export function createViewport(
   }
 
   /**
-   * Freeze before an input on the lanes or ruler measures timeline coordinates. Only automatic
-   * Fit waits; an explicit zoom still applies. The freeze ends with the press or drag itself, not
-   * window focus, because a held drag keeps its pointer across a blur.
+   * Freeze before an input on the lanes or ruler measures timeline coordinates: a zoom still
+   * easing stops where it is shown. An explicit zoom during the press still applies. The freeze
+   * ends with the press or drag itself, not window focus, because a held drag keeps its pointer
+   * across a blur.
    */
   function gesture(active: boolean) {
     if (gesturing === active) return;
     gesturing = active;
     grid.toggleAttribute("data-gesturing", active);
-    cancelRefit();
-    if (active) {
-      wheel = null;
-      if (animations.some((animation) => animation.playState === "running")) {
-        const from = shown();
-        stop();
-        write(from.ppf);
-        scrollTo(from.scroll);
-        onChange(true);
-      }
-      return;
+    if (!active) return;
+    wheel = null;
+    if (animations.some((animation) => animation.playState === "running")) {
+      const from = shown();
+      stop();
+      write(from.ppf);
+      scrollTo(from.scroll);
+      onChange(true);
     }
-    if ((fitted && ppf !== fit) || ppf < fit)
-      refitAfterSlide(motion("--duration-edit").duration);
   }
 
   let pointer: number | null = null;
@@ -343,14 +323,17 @@ export function createViewport(
   scroller.addEventListener("dragleave", onDragLeave, { signal });
   document.addEventListener("dragend", onDragEnd, { signal });
   document.addEventListener("drop", onDragEnd, { signal });
-  refitState();
+  zoomState();
 
-  /** Let an edit close its gap at the old scale before easing back to Fit. */
+  /**
+   * Takes the timeline's length and the room it has. The first measure fits the whole timeline,
+   * and a fitted view stays fitted when only its width changes. A change of length never
+   * rescales: an edit, undo or agent change leaves the ruler where the user put it, and Fit is
+   * theirs to ask for.
+   */
   function measure(next: Extent) {
-    const changed = next.frames !== extent.frames;
-    const delay =
-      fitted && changed && ppf > 0 ? motion("--duration-edit").duration : 0;
-    cancelRefit();
+    const opened = ppf === 0;
+    const sameLength = next.frames === extent.frames;
     extent = next;
     width = scroller.clientWidth - headWidth;
     height = scroller.clientHeight;
@@ -359,15 +342,9 @@ export function createViewport(
     exact = settledScroll(exact, scroll);
     grid.style.setProperty("--view", `${width}px`);
     fit = fitPpf(extent.frames, width, extent.fps);
-    if (gesturing) {
-      onChange(false);
-      return;
-    }
-    if (delay) refitAfterSlide(delay);
-    else {
-      write(fitted ? fit : clampPpf(ppf, fit));
-      fitted = ppf === fit;
-    }
+    if (opened || (fitted && sameLength && !gesturing)) write(fit);
+    fitted = ppf === fit;
+    if (owed !== null && !sameLength) centre(owed);
     onChange(false);
   }
 
@@ -407,9 +384,10 @@ export function createViewport(
      * screen is centred.
      */
     follow(frame: number, direction: 1 | 0 | -1) {
+      owed = null;
       const x = frame * ppf - scroll;
       if (!direction) {
-        if (x < 0 || x > width) scrollTo(frame * ppf - width / 2);
+        if (x < 0 || x > width) centre(frame);
         return;
       }
       const target = pageTarget(x, width, direction);
@@ -431,7 +409,6 @@ export function createViewport(
       );
     },
     destroy() {
-      cancelRefit();
       stop();
       resized.disconnect();
       events.abort();
