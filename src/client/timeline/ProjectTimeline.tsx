@@ -36,6 +36,7 @@ import {
   clickSelection,
   emptySelection,
   pruneSelection,
+  selectAll,
   selectionAtPlayhead,
   selectionFromPlayhead,
 } from "./selection";
@@ -184,6 +185,9 @@ export function ProjectTimeline({
     editPaste: () => clipboard("overwrite"),
     editPasteInsert: () => clipboard("insert"),
     ...(Object.fromEntries(edits) as Partial<Record<Action, () => void>>),
+    editSelectAll: () => {
+      if (timeline) setSelection(selectAll(timeline));
+    },
     editSelectItemAtPlayhead: () => {
       if (timeline) setSelection(selectionAtPlayhead(timeline, clock.frame()));
     },

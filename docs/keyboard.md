@@ -50,6 +50,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | Fit the timeline, or return to the last zoom | `Shift+Z`                | `viewZoomSubZoomToFit`               |
 | Zoom the timeline in                         | `Ctrl+=`, `Ctrl+Shift+=` | `viewZoomSubZoomIn`                  |
 | Zoom the timeline out                        | `Ctrl+-`                 | `viewZoomSubZoomOut`                 |
+| Select all clips                             | `Ctrl+A`                 | `editSelectAll`                      |
 | Select clips at the playhead                 | `Shift+V`                | `editSelectItemAtPlayhead`           |
 | Select clips forward on auto-select tracks   | `Y`                      | `editSelectClipsSelectTrackAfter`    |
 | Select clips forward on all tracks           | `Alt+Y`                  | `editSelectClipsSelectAllAfter`      |
@@ -80,6 +81,8 @@ Timeline editing keys Q, W, E, Ctrl+\\, X, Shift+X, Backspace, Delete, D, M, Cut
 L and J double the speed on each press, up to 8x; the other direction drops back to 1x, and Shift starts at 4x. Marks are undoable timeline edits that agents see through MCP. Out is inclusive on screen and exclusive in the engine's range.
 
 Timeline zoom keys hold the playhead still when it is on screen, and the middle of the view otherwise. Shift+V selects the clips under the playhead on unlocked tracks with auto-select on.
+
+Ctrl+A selects every clip on unlocked tracks, including tracks with auto-select off and disabled clips. It replaces the selection without expanding links onto locked tracks. Shift+A is the preset's Deselect All; Esc also clears selection. App controls and labels do not select as browser text. Chat, notes, transcript words, code, error messages, export paths, and text fields stay selectable. Copy, cut, and select-all keep their native behavior while browser text is selected; text fields always keep their own shortcuts. A pointer press in the timeline or picture clears the previous browser text selection and returns Ctrl+A/C/X to clip editing. Pointer presses in text controls keep their native selection.
 
 The Y bindings follow the owner's Resolve 21.1.2 preset. Y and Ctrl+Y use unlocked auto-select tracks. Alt+Y and Ctrl+Alt+Y use every unlocked track, including tracks with auto-select off. Each replaces the selection without adding linked clips on excluded tracks. Forward selects clips whose start is at or after the playhead; backward selects clips whose start is at or before it. A clip starting exactly there is included in either direction. A clip spanning the playhead but starting earlier is backward only. These keys select without moving the playhead or changing the timeline.
 

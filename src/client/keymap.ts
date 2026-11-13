@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, PointerEvent } from "react";
 
 /** The shortcut sheet's groups, in an order that fills its three columns evenly. */
 export const areas = [
@@ -174,6 +174,11 @@ export const keymap = {
     keys: ["Ctrl+-"],
     repeat: true,
   },
+  editSelectAll: {
+    area: "Select",
+    label: "Select all clips",
+    keys: ["Ctrl+A"],
+  },
   editSelectItemAtPlayhead: {
     area: "Select",
     label: "Select clips at the playhead",
@@ -297,6 +302,12 @@ export const isTyping = (target: EventTarget | null) =>
       "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
 
+/** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */
+export function clearBrowserSelection(event: PointerEvent<HTMLElement>) {
+  if (isTyping(event.target)) return;
+  event.currentTarget.ownerDocument.getSelection()?.removeAllRanges();
+}
+
 /** Pointer clicks leave editor buttons ready for Space playback; keyboard activation keeps focus. */
 export function blurPointerButton(event: MouseEvent<HTMLElement>) {
   if (
@@ -328,6 +339,13 @@ export function actionFor(event: KeyboardEvent): Action | null {
   const combo = comboOf(event);
   const action = combo ? bindings.get(combo) : undefined;
   if (!action) return null;
+  if (
+    (action === "editCopy" ||
+      action === "editCut" ||
+      action === "editSelectAll") &&
+    window.getSelection()?.toString()
+  )
+    return null;
   const binding: Binding = keymap[action];
   return event.repeat && !binding.repeat ? null : action;
 }

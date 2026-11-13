@@ -346,6 +346,7 @@ option {
 
 /* Shell: panels sit on the ground with 1px seams between them. */
 .cutroom-app {
+  user-select: none;
   height: 100dvh;
   width: 100%;
   display: flex;
@@ -353,6 +354,23 @@ option {
   gap: 1px;
   overflow: hidden;
   background: var(--surface-ground);
+}
+:is(
+  input,
+  textarea,
+  [contenteditable="true"],
+  .chat-messages,
+  .agent-request,
+  .review-row-text,
+  .review-answer,
+  .transcript-words,
+  .markdown,
+  .export-path,
+  [role="alert"],
+  pre,
+  code
+) {
+  user-select: text;
 }
 .app-header {
   flex: none;
