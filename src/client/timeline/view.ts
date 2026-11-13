@@ -63,6 +63,12 @@ export function createViewport(
   let wheel: { factor: number; x: number } | null = null;
   /** The zoom Shift+Z left, to return to on the next press. */
   let beforeFit: number | null = null;
+  /**
+   * A stopped playhead the scroller could not reach. An edit that lengthens the timeline moves
+   * the playhead to its new end before the grid has grown, so the view is owed that frame when
+   * the longer timeline is measured.
+   */
+  let owed: number | null = null;
 
   /** Whether a zoom is still easing, for anything that measures the settled timeline. */
   const zoomState = () => {
@@ -186,6 +192,12 @@ export function createViewport(
     } else scrollTo(left);
     onChange(animate);
     if (from && options) ease(from, options);
+  }
+
+  /** Brings a frame to the middle of the view, or as near as the timeline's length allows. */
+  function centre(frame: number) {
+    scrollTo(frame * ppf - width / 2);
+    owed = frame * ppf - scroll > width ? frame : null;
   }
 
   /** The playhead when it is on screen, otherwise the middle of the view. */
@@ -332,6 +344,7 @@ export function createViewport(
     fit = fitPpf(extent.frames, width, extent.fps);
     if (opened || (fitted && sameLength && !gesturing)) write(fit);
     fitted = ppf === fit;
+    if (owed !== null && !sameLength) centre(owed);
     onChange(false);
   }
 
@@ -371,9 +384,10 @@ export function createViewport(
      * screen is centred.
      */
     follow(frame: number, direction: 1 | 0 | -1) {
+      owed = null;
       const x = frame * ppf - scroll;
       if (!direction) {
-        if (x < 0 || x > width) scrollTo(frame * ppf - width / 2);
+        if (x < 0 || x > width) centre(frame);
         return;
       }
       const target = pageTarget(x, width, direction);

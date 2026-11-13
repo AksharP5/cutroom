@@ -382,6 +382,10 @@ test("edits, history and agent changes keep the timeline's zoom, and only Fit re
     .click();
   await expect.poll(length).toBe(2700);
   expect(await scale()).toBe(opened);
+  // The view followed the playhead to the end of the new clip; back at the start nothing moved.
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
+  await page.keyboard.press("Home");
+  await expect(first).toBeVisible();
   expect((await first.boundingBox())!.width).toBe(width);
   await expect(slider).not.toHaveAttribute("aria-valuenow", "0");
 
@@ -459,3 +463,74 @@ test("edits, history and agent changes keep the timeline's zoom, and only Fit re
   await expect.poll(scale).toBeLessThan(wide);
   await expect(slider).toHaveAttribute("aria-valuenow", "0");
 });
+
+for (const [width, height] of [
+  [1280, 800],
+  [1720, 1050],
+] as const)
+  test.describe(`a long placement at ${width}x${height}`, () => {
+    test.use({ viewport: { width, height } });
+    for (const key of ["F9", "F10"])
+      test(`${key} with a clip longer than the view brings the playhead on screen at the same zoom`, async ({
+        page,
+        request,
+      }) => {
+        const project = ProjectSchema.parse(
+          await (
+            await request.post("/api/cutroom/projects", {
+              data: { name: `Long ${key}`, duration: 18 },
+            })
+          ).json(),
+        );
+        await writeFile(
+          join(project.path, "index.html"),
+          `<main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-fps="30" data-duration="18">
+    <div id="cut" class="clip" data-start="0" data-duration="18" data-track-index="0">Cut</div>
+  </main>`,
+        );
+        await promisify(execFile)("ffmpeg", [
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=220:duration=90",
+          join(project.path, "music.wav"),
+        ]);
+        await page.goto(`/#project/${project.id}`);
+        const grid = page.locator(".tl-grid");
+        await expect(page.locator('[data-clip="cut"]')).toBeVisible();
+        const scale = () =>
+          grid.evaluate((element) =>
+            Number(getComputedStyle(element).getPropertyValue("--ppf")),
+          );
+        const opened = await scale();
+        const row = page.locator('.media-row[data-path="music.wav"]');
+        await expect(row).toHaveAttribute("draggable", "true");
+        await row.dblclick();
+        await expect(page.getByRole("group", { name: "Source" })).toBeVisible();
+        await page.keyboard.press(key);
+        // The playhead goes to the end of the placed clip, a minute and a half away: its last
+        // frame after an overwrite, and the cut it pushed along after an insert.
+        await expect(
+          page.getByRole("button", { name: /^Current time/ }),
+        ).toHaveText(key === "F9" ? "00:01:30:00" : "00:01:29:29");
+        await expect(page.locator(".tl-lanes")).not.toHaveAttribute(
+          "data-sliding",
+        );
+        expect(await scale()).toBe(opened);
+        await expect
+          .poll(async () => {
+            const heads = (await page.locator(".tl-heads").boundingBox())!;
+            const view = (await page.locator(".tl-scroll").boundingBox())!;
+            const playhead = (await page
+              .locator(".tl-playhead")
+              .boundingBox())!;
+            return (
+              playhead.x >= heads.x + heads.width - 1 &&
+              playhead.x <= view.x + view.width
+            );
+          })
+          .toBe(true);
+      });
+  });
