@@ -193,8 +193,10 @@ export function createProjectViewStore() {
       flush(project);
       return write(project, (current) => {
         const entry = preferenceAt(current.sources, from);
-        if (!entry) return current;
-        const sources = { ...current.sources, [to]: entry };
+        if (!entry && !preferenceAt(current.sources, to)) return current;
+        const sources = { ...current.sources };
+        if (entry) sources[to] = entry;
+        else delete sources[to];
         delete sources[from];
         return { ...current, sources };
       });

@@ -7,12 +7,14 @@ import {
   utimes,
   stat,
   mkdir,
+  copyFile,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { moveSourceMarks, projectViews } from "../src/server/projects/view";
 import {
   SourceMarksSaveSchema,
   SourceMarksSchema,
+  TimelineViewSettingsSchema,
 } from "../src/shared/timeline/view";
 import { sourceMarksFixture } from "./source-marks-fixture";
 
@@ -110,6 +112,43 @@ test("legacy versions collapse to one entry per path while missing files remain 
       "missing.wav",
       "talk.wav",
     ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an unmarked rename clears the destination's previous marks without changing other preferences", async () => {
+  const f = await sourceMarksFixture();
+  try {
+    const destination = join(f.project.path, "destination.wav");
+    await copyFile(f.path, destination);
+    const url = `${f.endpoint}/source-marks?path=destination.wav`;
+    const view = SourceMarksSaveSchema.parse(
+      await (await f.request(url)).json(),
+    );
+    expect(
+      (await f.request(url, "PUT", { ...view, in: 4, out: 5 })).status,
+    ).toBe(200);
+    await f.request(`${f.endpoint}/timeline-view`, "PUT", {
+      destinations: { video: 2 },
+    });
+    await rename(f.path, destination);
+    await moveSourceMarks(f.project, "talk.wav", "destination.wav");
+    expect(
+      SourceMarksSchema.parse(await (await f.request(url)).json()),
+    ).toEqual({ in: null, out: null });
+    const file = z
+      .object({
+        sources: z.record(z.string(), z.unknown()),
+        timelines: z.record(z.string(), TimelineViewSettingsSchema),
+      })
+      .parse(
+        JSON.parse(
+          await readFile(join(f.project.path, ".cutroom/view.json"), "utf8"),
+        ),
+      );
+    expect(file.sources).toEqual({});
+    expect(file.timelines["index.html"]?.destinations).toEqual({ video: 2 });
   } finally {
     await f.close();
   }

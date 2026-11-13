@@ -1,10 +1,13 @@
-import { execFile } from "node:child_process";
+import { once } from "node:events";
+import { createWriteStream } from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { isMissing } from "../src/server/projects/path";
 import { ProjectSchema } from "../src/shared/project";
 import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
@@ -839,3 +842,173 @@ test("review: a one-frame NTSC source range stays nonempty at 24 fps", async ({
     ["audio", 1, 0, 1, 0.208333],
   ]);
 });
+
+for (const failure of ["network", "503", "503-after-ready", "409"] as const) {
+  test(`restart: source saves recover from ${failure} without replaying identity conflicts`, async ({
+    browser,
+    playwright,
+  }, info) => {
+    const baseURL = "http://127.0.0.1:4952";
+    const log = createWriteStream(info.outputPath("server.log"));
+    const start = () => {
+      const child = spawn("bun", ["src/server/index.ts"], {
+        env: {
+          ...process.env,
+          CUTROOM_PORT: "4952",
+          CUTROOM_DATA_DIR: info.outputPath("server/data"),
+          CUTROOM_PROJECTS_DIR: info.outputPath("server/projects"),
+          HYPERFRAMES_NO_TELEMETRY: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child.stdout.pipe(log, { end: false });
+      child.stderr.pipe(log, { end: false });
+      return child;
+    };
+    const stop = async (child: ReturnType<typeof start>) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const exited = once(child, "close");
+      child.kill("SIGTERM");
+      await exited;
+    };
+    const request = await playwright.request.newContext({
+      baseURL,
+      extraHTTPHeaders: { origin: baseURL },
+    });
+    const context = await browser.newContext({
+      baseURL,
+      viewport: { width: 1720, height: 1050 },
+    });
+    const page = await context.newPage();
+    let server = start();
+    const ready = async () =>
+      expect
+        .poll(
+          async () =>
+            z.object({ dataDir: z.string() }).safeParse(
+              await request
+                .get("/api/cutroom/status", { timeout: 500 })
+                .then((response) => response.json())
+                .catch(() => null),
+            ).data?.dataDir,
+          { timeout: 15000 },
+        )
+        .toBe(info.outputPath("server/data"));
+    try {
+      await ready();
+      const a = await open(page, request);
+      const endpoint = `/api/cutroom/projects/${a.project.id}/source-marks?path=talk.mp4`;
+      await (await a.file("talk.mp4")).dblclick();
+      await seek(page, "400");
+      await page.keyboard.press("i");
+      const disk = async () =>
+        z
+          .object({
+            sources: z.record(
+              z.string(),
+              z.object({ in: z.number().nullable() }),
+            ),
+          })
+          .parse(
+            JSON.parse(
+              await readFile(
+                join(a.project.path, ".cutroom/view.json"),
+                "utf8",
+              ).catch((error: unknown) => {
+                if (isMissing(error)) return '{"sources":{}}';
+                throw error;
+              }),
+            ),
+          ).sources["talk.mp4"]?.in;
+      await expect.poll(disk).toBe(4);
+      const held = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const attempts: number[] = [];
+      let first = true;
+      await page.route("**/source-marks?**", async (route) => {
+        if (route.request().method() !== "PUT") return route.continue();
+        const input = z
+          .object({ in: z.number() })
+          .parse(route.request().postDataJSON());
+        attempts.push(input.in);
+        if (!first || input.in !== 5) return route.continue();
+        first = false;
+        held.resolve();
+        await release.promise;
+        if (failure === "network") return route.continue();
+        return route.fulfill({
+          status: failure === "409" ? 409 : 503,
+          contentType: failure !== "409" ? "text/plain" : "application/json",
+          body:
+            failure !== "409"
+              ? "Server unavailable"
+              : JSON.stringify({ error: "Source identity changed" }),
+        });
+      });
+      await seek(page, "500");
+      await page.keyboard.press("i");
+      await held.promise;
+      if (failure !== "409" && failure !== "503-after-ready") {
+        await seek(page, "600");
+        await page.keyboard.press("i");
+      }
+      await stop(server);
+      const reconnected = page.waitForResponse(
+        (response) =>
+          response.url().includes("/events?") && response.status() === 200,
+      );
+      if (failure === "503-after-ready") {
+        server = start();
+        await ready();
+        await reconnected;
+        await page.waitForTimeout(250);
+      }
+      const failed =
+        failure === "network"
+          ? page.waitForEvent("requestfailed", {
+              predicate: (request) =>
+                request.method() === "PUT" &&
+                request.url().includes("source-marks"),
+            })
+          : page.waitForResponse(
+              (response) =>
+                response.request().method() === "PUT" &&
+                response.status() === (failure === "409" ? 409 : 503),
+            );
+      release.resolve();
+      await failed;
+      // Let the failure settle before closing the viewer and reconnecting.
+      await page.waitForTimeout(250);
+      await a.source.getByRole("button", { name: "Close source" }).click();
+      if (failure !== "503-after-ready") {
+        server = start();
+        await ready();
+        await reconnected;
+      }
+      const expected =
+        failure === "409" ? 4 : failure === "503-after-ready" ? 5 : 6;
+      if (failure === "409") {
+        await page.waitForTimeout(250);
+        expect(attempts).toEqual([5]);
+      }
+      await expect.poll(disk, { timeout: 5000 }).toBe(expected);
+      expect(
+        z
+          .object({ in: z.number() })
+          .parse(await (await request.get(endpoint)).json()).in,
+      ).toBe(expected);
+      await (await a.file("talk.mp4")).dblclick();
+      await expect(page.locator(".edit-range")).toContainText(
+        `In 00:00:0${expected}:00`,
+      );
+      await page.screenshot({ path: info.outputPath("after-reconnect.png") });
+    } finally {
+      await context.close();
+      await request.dispose();
+      await stop(server);
+      const finished = once(log, "finish");
+      log.end();
+      await finished;
+    }
+  });
+}

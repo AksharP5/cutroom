@@ -1,12 +1,14 @@
 import { create } from "zustand";
 import type { z } from "zod";
-import { api, subscribeProjectEvents } from "./api";
+import { ApiError, api, subscribeProjectEvents } from "./api";
 import { reportEditorError } from "./workspace";
 
 interface SaveQueue<T> {
   running: boolean;
   pending: T | null;
   latest: T | null;
+  resumed: boolean;
+  stopReady: (() => void) | null;
 }
 interface Open<T> {
   path: string;
@@ -25,10 +27,18 @@ export function createViewPreferences<T extends object>(
   const queues = new Map<string, SaveQueue<T>>();
   let open: Open<T> | null = null;
 
+  function release(path: string, queue: SaveQueue<T>) {
+    if (queue.running || queue.pending !== null || open?.queue === queue)
+      return;
+    if (queues.get(path) === queue) queues.delete(path);
+    queue.stopReady?.();
+    queue.stopReady = null;
+  }
+
   function read(target: Open<T>) {
     const sequence = ++target.reads;
     // The drain reads again after all pending choices reach the server.
-    if (target.queue.running) return;
+    if (target.queue.running || target.queue.pending !== null) return;
     void api(target.path, schema, { signal: target.closing.signal })
       .then((settings) => {
         if (open !== target || target.reads !== sequence) return;
@@ -49,16 +59,30 @@ export function createViewPreferences<T extends object>(
     if (queue.running) return;
     queue.running = true;
     while (queue.pending !== null) {
+      queue.resumed = false;
       const settings = queue.pending;
       queue.pending = null;
-      await api(path, schema, {
-        method: "PUT",
-        body: JSON.stringify(settings),
-      }).catch((error: unknown) => reportEditorError("timeline", error));
+      try {
+        await api(path, schema, {
+          method: "PUT",
+          body: JSON.stringify(settings),
+        });
+      } catch (error) {
+        reportEditorError("timeline", error);
+        if (
+          error instanceof TypeError ||
+          (error instanceof ApiError && error.status >= 500)
+        ) {
+          queue.pending ??= settings;
+          // Reconnect may arrive before the failed request finishes. Otherwise wait for it.
+          if (queue.resumed) continue;
+          break;
+        }
+      }
     }
     queue.running = false;
     if (open?.queue === queue) read(open);
-    else queues.delete(path);
+    release(path, queue);
   }
 
   function save(settings: T) {
@@ -72,12 +96,22 @@ export function createViewPreferences<T extends object>(
   }
 
   function load(projectId: string, path: string, onRead?: () => void) {
-    const queue = queues.get(path) ?? {
-      running: false,
-      pending: null,
-      latest: null,
-    };
-    queues.set(path, queue);
+    let queue = queues.get(path);
+    if (!queue) {
+      const created: SaveQueue<T> = {
+        running: false,
+        pending: null,
+        latest: null,
+        resumed: false,
+        stopReady: subscribeProjectEvents(projectId, "ready", () => {
+          created.resumed = true;
+          if (created.pending !== null) void drain(path, created);
+          else if (open?.queue === created) read(open);
+        }),
+      };
+      queue = created;
+      queues.set(path, queue);
+    }
     const target: Open<T> = {
       path,
       queue,
@@ -87,7 +121,8 @@ export function createViewPreferences<T extends object>(
     };
     open = target;
     usePreferences.setState(queue.latest ?? defaults(), true);
-    read(target);
+    if (queue.pending !== null) void drain(path, queue);
+    else read(target);
     const unsubscribe = subscribeProjectEvents(projectId, "view", () =>
       read(target),
     );
@@ -95,7 +130,7 @@ export function createViewPreferences<T extends object>(
       target.closing.abort();
       unsubscribe();
       if (open === target) open = null;
-      if (!queue.running && open?.queue !== queue) queues.delete(path);
+      release(path, queue);
     };
   }
   return { use: usePreferences, save, open: load };
