@@ -1,0 +1,40 @@
+{
+  "head": "c73d1a4051cf8d1fb2e6a4dc35d99bac555c8666",
+  "main": "e59752f977393e5f55519459ea92c0b834159d10",
+  "staticChecks": {
+    "types": "pass",
+    "format": "pass",
+    "build": "pass",
+    "diff": "pass"
+  },
+  "fullUnit": {
+    "passed": 643,
+    "optionalSkipped": 5,
+    "failed": 0,
+    "seconds": 134.73
+  },
+  "finalFeedbackTests": {
+    "passed": 37,
+    "failed": 0,
+    "includes": "complete selectors, bindings, static templates, prefixed literals, composition/media hosts, R1-R5, MCP result-before-notification"
+  },
+  "fullBrowser": {
+    "passed": 349,
+    "failed": 0,
+    "minutes": 23.5
+  },
+  "performance": {
+    "passed": 6,
+    "failed": 0,
+    "minutes": 3.8,
+    "run": "alone after functional checks",
+    "rippleMedianMaxFrameMs": {
+      "400clips": 77.6,
+      "500clips": 77.3
+    },
+    "rippleBudgetMs": 150
+  },
+  "contract": "Save and acknowledge first; inspect actual edit snapshots afterward. Project SSE delivers one transient warning to all editor tabs, including the initiator. MCP returns the saved result first, then a notifications/message warning from cutroom.animation. No warning state or replay; disconnected callers lose their follow-up. Undo/redo stays quiet. Scripts are never rewritten.",
+  "browserEvidence": "Playwright verified qualified selectors and host quietness, Inspector Start warning, four-second expiry, Ask agent note, and real HTTP MCP notification ordering. Shared browser DOM also showed quiet mixed moves, then one title warning, then expiry. Shared preview screenshots timed out; Playwright captures were inspected instead.",
+  "sourceEvidence": "Initial prefix regression fails before the final selector-literal mask; see selector-prefix-before.log."
+}

@@ -1,0 +1,66 @@
+$ bun run build && playwright test --grep @performance --config "playwright.retime7.config.ts"
+$ vite build
+vite v6.4.2 building for production...
+transforming...
+../../dev/cutroom/node_modules/zod/v4/core/regexes.js (74:0): A comment
+
+"/** Anchors a pattern source. The interpolation lives here rather than at the call site because
+ * esbuild will not drop a `@__PURE__` call whose own argument interpolates a variable, but it
+ * will drop `anchor(dateSource)`. Keeping it inline pinned `date` into every bundle. */"
+
+in "../../dev/cutroom/node_modules/zod/v4/core/regexes.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+../../dev/cutroom/node_modules/zod/v4/core/util.js (400:0): A comment
+
+"// Wrapped in a `@__PURE__` IIFE: esbuild never tree-shakes a top-level initializer that contains a member access on `Number`, so the bare object literal survived into every bundle."
+
+in "../../dev/cutroom/node_modules/zod/v4/core/util.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+[plugin vite:resolve] Module "os" has been externalized for browser compatibility, imported by "/home/akshar/dev/cutroom/node_modules/recast/lib/util.js". See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.
+✓ 6896 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /home/akshar/.cache/retime7/src/client/edit/transport.ts is dynamically imported by /home/akshar/.cache/retime7/src/client/App.tsx but also statically imported by /home/akshar/.cache/retime7/src/client/edit/EditPage.tsx, /home/akshar/.cache/retime7/src/client/edit/NoteLayer.tsx, /home/akshar/.cache/retime7/src/client/edit/PictureSelect.tsx, /home/akshar/.cache/retime7/src/client/edit/TransportBar.tsx, /home/akshar/.cache/retime7/src/client/edit/Viewer.tsx, /home/akshar/.cache/retime7/src/client/edit/editFrame.ts, /home/akshar/.cache/retime7/src/client/edit/inspector/Inspector.tsx, /home/akshar/.cache/retime7/src/client/edit/noteVisibility.ts, /home/akshar/.cache/retime7/src/client/edit/openClipMenu.ts, /home/akshar/.cache/retime7/src/client/edit/placeMedia.ts, /home/akshar/.cache/retime7/src/client/edit/preview.ts, /home/akshar/.cache/retime7/src/client/edit/source.ts, /home/akshar/.cache/retime7/src/client/timeline/ProjectTimeline.tsx, /home/akshar/.cache/retime7/src/client/voiceover/session.ts, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                                    0.93 kB │ gzip:     0.48 kB
+dist/assets/MartianMono-var-1TqSgyfh.woff2        38.49 kB
+dist/assets/InstrumentSans-var-BVScPF0l.woff2     57.33 kB
+dist/assets/EditPage-DVS0ng5m.css                 40.68 kB │ gzip:     7.58 kB
+dist/assets/CutroomEditor-CF8NfkbL.css           130.99 kB │ gzip:    10.89 kB
+dist/assets/index-BBaDPPYL.css                   261.64 kB │ gzip:    42.87 kB
+dist/assets/pausedVideoDecoder-m68z2v28.js         6.54 kB │ gzip:     2.82 kB │ map:     26.95 kB
+dist/assets/shallow-CSapxU-O.js                   34.58 kB │ gzip:     9.00 kB │ map:     54.77 kB
+dist/assets/hyperframes-player-Bvg9ASHb.js       115.59 kB │ gzip:    33.30 kB │ map:    233.01 kB
+dist/assets/EditPage-UKq-YmKS.js                 189.72 kB │ gzip:    62.69 kB │ map:    686.31 kB
+dist/assets/src-DBsNjNlF.js                      207.60 kB │ gzip:    51.16 kB │ map:    785.11 kB
+dist/assets/dist-BXmiQzJk.js                     211.15 kB │ gzip:    55.94 kB │ map:  1,005.75 kB
+dist/assets/codec-Cw6G7FVi.js                    558.45 kB │ gzip:   145.37 kB │ map:  2,319.04 kB
+dist/assets/index-VdurTTYR.js                    732.80 kB │ gzip:   226.24 kB │ map:  3,412.62 kB
+dist/assets/CutroomEditor-CF2lbwUY.js          5,056.54 kB │ gzip: 1,476.61 kB │ map: 20,413.05 kB
+
+(!) Some chunks are larger than 1500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 14.55s
+
+Running 6 tests using 1 worker
+
+(node:1034175) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"positionObservation":[{"mode":"playback","selected":false,"observations":0,"maxObservation":0,"boxReads":0,"maxBoxRead":0,"observationMaxima":[0,0,0],"medianMaxObservation":0,"boxMaxima":[0,0,0],"medianMaxBoxRead":0,"lateFrames":[2,8,3],"medianLateRate":0.018292682926829267},{"mode":"playback","selected":true,"observations":27,"maxObservation":1,"boxReads":9,"maxBoxRead":1.600000023841858,"observationMaxima":[0.20000001788139343,1,0.30000001192092896],"medianMaxObservation":0.30000001192092896,"boxMaxima":[1.5,1.2000000178813934,1.600000023841858],"medianMaxBoxRead":1.5,"lateFrames":[4,2,3],"medianLateRate":0.018292682926829267},{"mode":"scrub","selected":false,"observations":0,"maxObservation":0,"boxReads":0,"maxBoxRead":0,"observationMaxima":[0,0,0],"medianMaxObservation":0,"boxMaxima":[0,0,0],"medianMaxBoxRead":0,"lateFrames":[83,77,49],"medianLateRate":0.20157068062827224},{"mode":"scrub","selected":true,"observations":276,"maxObservation":1,"boxReads":276,"maxBoxRead":1.5,"observationMaxima":[0.5,0.5999999940395355,1],"medianMaxObservation":0.5999999940395355,"boxMaxima":[1.5,1.2999999821186066,1.300000011920929],"medianMaxBoxRead":1.300000011920929,"lateFrames":[51,64,74],"medianLateRate":0.1693121693121693}]}
+  ✓  1 e2e/inspector-position-performance.spec.ts:20:1 › Position observation and outline tracking stay in budget during 500-clip playback and scrubbing @performance (1.4m)
+{"pictureSelection":{"maxima":[29.30000001192093,56.80000001192093,30.900000005960464],"medianMax":30.900000005960464,"hitMedian":1.5999999940395355}}
+  ✓  2 e2e/inspector-position-performance.spec.ts:286:1 › picture selection paints within three frames on 500 clips @performance (21.5s)
+{"count":400,"runs":3,"trace":false,"key":{"p50":16.69999998807907,"p95":46.900000005960464,"max":89,"medianMax":86.5,"longTasks":6,"longestTask":88},"ripple":{"p50":17,"p95":48.5,"max":106.80000001192093,"medianMax":77.59999999403954,"longTasks":1,"longestTask":92}}
+  ✓  3 e2e/timeline-performance.spec.ts:12:3 › 400 real-media clips stay inside the zoom and ripple frame budgets @performance (47.2s)
+{"count":500,"runs":3,"trace":false,"key":{"p50":16.69999998807907,"p95":30.900000005960464,"max":83.2999999821186,"medianMax":73.7000000178814,"longTasks":3,"longestTask":82},"ripple":{"p50":17.5,"p95":58.30000001192093,"max":78.5,"medianMax":77.30000001192093,"longTasks":4,"longestTask":76}}
+  ✓  4 e2e/timeline-performance.spec.ts:12:3 › 500 real-media clips stay inside the zoom and ripple frame budgets @performance (47.8s)
+{"heightDrag":{"frames":270,"p50":16.299999982118607,"p95":25.5,"max":29.80000001192093,"late":85,"longTasks":[],"clipWrites":0,"rowWrites":2700,"canvasResizes":0,"clips":400,"pointerInputs":180,"styleElements":[35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35,35],"styleMilliseconds":88.166}}
+  ✓  5 e2e/track-height-performance.spec.ts:5:1 › 400 clips resize tracks without per-clip writes @performance (13.3s)
+{"run":1,"clips":400,"inputs":540,"seconds":3.2435,"seeks":58,"seeksPerSecond":17.88191768151688,"maxPending":1,"p50":17.899999976158142,"p95":22.700000017881393,"max":28.099999994039536,"minSeekInterval":36}
+{"run":2,"clips":400,"inputs":540,"seconds":3.277,"seeks":57,"seeksPerSecond":17.39395788831248,"maxPending":1,"p50":18,"p95":23.299999982118607,"max":33.599999994039536,"minSeekInterval":33.69999998807907}
+{"run":3,"clips":400,"inputs":540,"seconds":3.7855999999940395,"seeks":57,"seeksPerSecond":15.057058326312802,"maxPending":1,"p50":19.80000001192093,"p95":33.599999994039536,"max":39.5,"minSeekInterval":32.19999998807907}
+{"clips":400,"runs":3,"medianP95":23.299999982118607}
+  ✓  6 e2e/trim-performance.spec.ts:17:1 › 400 clips keep edit-frame seeks bounded during a roll @performance (16.1s)
+
+  6 passed (3.8m)

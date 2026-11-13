@@ -1,0 +1,30 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/animation-feedback.test.ts:
+(pass) complete selector ".clip.title" leaves unrelated shots quiet [131.62ms]
+302 |         (
+303 |           await f.edit([
+304 |             { type: "move", clipIds: ["shot-b"], by: 30, mode: "place" },
+305 |           ])
+306 |         ).animationLeftBehind,
+307 |       ).toBeUndefined();
+              ^
+error: expect(received).toBeUndefined()
+
+Received: [
+  {
+    clipId: "shot-b",
+    label: "shot-b",
+  }
+]
+
+      at <anonymous> (/home/akshar/.cache/retime7/tests/animation-feedback.test.ts:307:9)
+(fail) complete selector "div.clip.title" leaves unrelated shots quiet [31.00ms]
+(pass) complete selector `.clip.title` leaves unrelated shots quiet [90.47ms]
+(pass) complete selector selector leaves unrelated shots quiet [60.37ms]
+
+ 3 pass
+ 33 filtered out
+ 1 fail
+ 28 expect() calls
+Ran 4 tests across 1 file. [544.00ms]
