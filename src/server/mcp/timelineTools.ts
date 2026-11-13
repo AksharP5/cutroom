@@ -77,7 +77,8 @@ export function registerTimelineTools(
   server.registerTool(
     "timeline_view",
     {
-      description: "Render one timeline frame as an image.",
+      description:
+        "Render one timeline frame as an image. Composition script and load failures return an error naming the file and message instead of a misleading static frame.",
       inputSchema: { ...input, frame: z.number().int().nonnegative() },
       // The thumbnail route captures in the capability-scoped, opaque renderer.
       annotations: readOnly,

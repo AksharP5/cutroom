@@ -477,6 +477,7 @@ export function createHyperframesApi(
           : null;
     if (!target) return c.notFound();
     let response: Response;
+    let activeCompositionPath = "index.html";
     let assetContentType: string | undefined;
     try {
       if (path.startsWith("preview/")) {
@@ -486,6 +487,7 @@ export function createHyperframesApi(
           c.req.url,
           composition ? "isolated/:key/preview/comp" : "isolated/:key/preview",
         );
+        if (composition) activeCompositionPath = file;
         const canonical = await projectPath(project, file);
         const asset = relative(project.path, canonical)
           .split(sep)
@@ -527,7 +529,7 @@ export function createHyperframesApi(
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
     // The HTTP CSP applies before any authored markup, including malformed documents.
-    return new Response(withPreviewBridge(html), {
+    return new Response(withPreviewBridge(html, activeCompositionPath), {
       status: response.status,
       headers,
     });

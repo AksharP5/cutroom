@@ -21,12 +21,14 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `history_list`, `history_undo`, `history_redo`             | Use the editor's shared history.                                   |
 | `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
 | `timeline_copy`                                            | Copy clips and linked partners into the in-app clipboard.          |
-| `timeline_view`                                            | Render one timeline frame as an image.                             |
+| `timeline_view`                                            | Render one frame, or report composition setup errors.              |
 | `export_start`, `export_status`, `export_cancel`           | Start, inspect, and cancel the editor's MP4 render jobs.           |
 
 Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
 `source_write` only edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
+
+`timeline_view` reports composition script and load failures as an error with the project-relative file and message instead of returning a misleading static frame. The editor shows the same failures in its header. Repeated errors are grouped per preview load, and dismissal lasts until the source reloads. Repair the source and request the frame again.
 
 ## Approvals
 

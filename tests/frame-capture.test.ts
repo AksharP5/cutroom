@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -27,11 +27,15 @@ async function captureFixture({ neverReady = false } = {}) {
     duration: 3,
   });
   await writeFile(join(project.path, "scene.json"), "{}");
+  await copyFile(
+    Bun.resolveSync("gsap/dist/gsap.min.js", import.meta.dir),
+    join(project.path, "gsap.min.js"),
+  );
   await writeFile(
     join(project.path, "index.html"),
     `<!doctype html><html><head><style>
       html,body{margin:0}#swatch{position:absolute;inset:0;background:red;color:white;font:48px sans-serif}
-    </style><script src="/api/vendor/npm/gsap@3.15.0/dist/gsap.min.js"></script></head>
+    </style><script src="gsap.min.js"></script></head>
     <body><main data-composition-id="main" data-width="320" data-height="240" data-fps="30" data-duration="3">
       <div id="swatch" class="clip" data-start="0" data-duration="3" data-track-index="0">0</div>
     </main><script>
