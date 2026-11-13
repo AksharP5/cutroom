@@ -294,3 +294,103 @@ test("an agent reads and sets the destinations, and the open editor follows", as
     await client.close();
   }
 });
+
+test("a project's destinations show after a switch made while the last project is still saving", async ({
+  page,
+  request,
+}) => {
+  const view = "**/timeline-view?**";
+  // Project B has V2 and A2 saved.
+  const b = await open(page, request);
+  await page.keyboard.press("Alt+2");
+  await page.keyboard.press("Control+Alt+2");
+  await expect
+    .poll(async () => (await request.get(`${b.api}/timeline-view`)).json())
+    .toMatchObject({ destinations: { video: 2, audio: 3 } });
+
+  // In project A a choice is still being saved when the owner switches back to B.
+  const a = await open(page, request);
+  await expect.poll(a.destinations).toEqual(["A1", "V1"]);
+  const saving = Promise.withResolvers<void>();
+  const saved = Promise.withResolvers<void>();
+  await page.route(view, async (route) => {
+    if (route.request().method() === "PUT") {
+      saving.resolve();
+      await saved.promise;
+    }
+    await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "V2 destination", exact: true })
+    .click();
+  await saving.promise;
+  await page.evaluate((id) => {
+    location.hash = `project/${id}`;
+  }, b.project.id);
+  await expect.poll(b.destinations).toEqual(["A2", "V2"]);
+  // Placement uses what the headers show.
+  await b.seek("100");
+  await b.place("still.png", "Overwrite at playhead");
+  await expect.poll(b.clips).toEqual([...interview, ["image", 2, 30, 150]]);
+  saved.resolve();
+  await expect
+    .poll(async () => (await request.get(`${a.api}/timeline-view`)).json())
+    .toMatchObject({ destinations: { video: 2 } });
+  await expect.poll(b.destinations).toEqual(["A2", "V2"]);
+});
+
+test("a destination answer read before a newer choice never replaces it", async ({
+  page,
+  request,
+}) => {
+  const b = await open(page, request);
+  await page.keyboard.press("Alt+2");
+  await page.keyboard.press("Control+Alt+2");
+  await expect
+    .poll(async () => (await request.get(`${b.api}/timeline-view`)).json())
+    .toMatchObject({ destinations: { video: 2, audio: 3 } });
+  const read = Promise.withResolvers<void>();
+  const late = Promise.withResolvers<void>();
+  // The first read is held with the answer it got. Later reads never answer, so nothing else
+  // can correct what the held one leaves on screen.
+  let held = false;
+  await page.route("**/timeline-view?**", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    if (held) return;
+    held = true;
+    const response = await route.fetch();
+    read.resolve();
+    await late.promise;
+    await route.fulfill({ response });
+  });
+  // An agent's change makes the editor read; that read holds V1 and A2.
+  expect(
+    (
+      await request.put(`${b.api}/timeline-destinations`, {
+        data: { video: 0 },
+      })
+    ).ok(),
+  ).toBe(true);
+  await read.promise;
+  // The choice is made and its save has answered before the old read arrives.
+  const saved = page.waitForResponse(
+    (response) =>
+      response.url().includes("/timeline-view") &&
+      response.request().method() === "PUT",
+  );
+  await page
+    .getByRole("button", { name: "A1 destination", exact: true })
+    .click();
+  await saved;
+  // Let the page finish with the save's answer; only then is the old read purely late.
+  await page.waitForTimeout(200);
+  const answered = page.waitForResponse(
+    (response) =>
+      response.url().includes("/timeline-view") &&
+      response.request().method() === "GET",
+  );
+  late.resolve();
+  await answered;
+  await page.waitForTimeout(300);
+  expect(await b.destinations()).toEqual(["A1", "V2"]);
+});

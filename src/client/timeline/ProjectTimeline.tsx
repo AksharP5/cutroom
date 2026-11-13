@@ -175,10 +175,8 @@ export function ProjectTimeline({
     kind,
     index,
   }: Pick<Track, "kind" | "index">) => {
-    const composition = useTimeline.getState().view?.composition;
-    if (!composition) return;
     const settings = useViewSettings.getState();
-    saveViewSettings(projectId, composition, {
+    saveViewSettings({
       ...settings,
       destinations: { ...settings.destinations, [kind]: index },
     });
@@ -323,8 +321,6 @@ export function ProjectTimeline({
   }, [projectId]);
 
   if (!view) return null;
-  const save = (settings: TimelineViewSettings) =>
-    saveViewSettings(projectId, view.composition, settings);
   const destinations = destinationTracks(
     view.timeline.tracks,
     viewSettings.destinations,
@@ -377,7 +373,7 @@ export function ProjectTimeline({
         checked:
           viewSettings.density === density &&
           !Object.keys(viewSettings.heights).length,
-        run: () => save({ ...viewSettings, density, heights: {} }),
+        run: () => saveViewSettings({ ...viewSettings, density, heights: {} }),
       })),
       "separator",
       { label: "Add video track", run: () => addTrack("video") },
@@ -418,7 +414,7 @@ export function ProjectTimeline({
           />
         )}
         viewSettings={viewSettings}
-        onViewSettings={save}
+        onViewSettings={saveViewSettings}
         destinations={{
           video: destinations.video.index,
           audio: destinations.audio.index,
