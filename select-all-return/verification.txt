@@ -1,0 +1,12 @@
+PR #99 text selection handoff follow-up
+Baseline 2ef7fdf223a28b2add2db0b0f80c6772c1a847df; fixed 42c6e8fb87fab63d9258d941e9c6095ae3556002.
+Chromium 155, 1720x1050, generated three-clip project with one locked linked partner and an unlocked disabled clip on an auto-select-off track.
+
+Triple-click an agent-chat paragraph, then click the picture clip and press Ctrl+A.
+Before: the browser text selection survives; Ctrl+A stays native, and only the clicked clip is selected. The regression fails with one selected clip rather than the expected two unlocked clips.
+The fix clears page-text selection on pointer entry into the timeline or viewer, except within text controls. After either a clip click or a viewer click, Ctrl+A selects both unlocked clips and Ctrl+C reaches the timeline clipboard endpoint. Copy keeps its existing linked-partner behavior. Chat selection and native Ctrl+C remain available before returning to editing; input Ctrl+A remains native.
+
+The regression fails on the baseline and passes on the fix. Affected browser specs: 54 passed. Full units: 606 passed, 5 existing skips. Types and formatting passed.
+Full functional browser run: 313 passed in 17.2 minutes, with a clean process exit.
+Full performance run: 6 passed in 3.8 minutes. 400/500-clip ripple median maxima: 77.1/68.1 ms against the 150 ms budget. Picture selection median maximum: 30.3 ms, within the three-frame budget.
+Full suites ran serially in the foreground after checking at least 10 GB available memory.
