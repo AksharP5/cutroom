@@ -1260,22 +1260,9 @@ function removeTime(
         : undefined;
     if (reason) refuseRippleCut(clip, timeline);
   }
-  const fixedClips = clips
-    .filter((clip) => fixed.has(clip.id) || shortened.has(clip.id))
-    .map((clip) =>
-      shortened.has(clip.id)
-        ? windowClip(
-            clip,
-            clip.start,
-            clipEnd(clip) - duration,
-            timeline.fps,
-            "trim",
-          )
-        : clip,
-    );
-  let next = clips.filter(
-    (clip) => !fixed.has(clip.id) && !shortened.has(clip.id),
-  );
+  const fixedClips = clips.filter((clip) => fixed.has(clip.id));
+  let next = clips.filter((clip) => !fixed.has(clip.id));
+  // Keep the original span through link regrouping so it joins both surviving media pieces.
   for (const track of tracks)
     next = clearRange(
       next,
@@ -1284,13 +1271,22 @@ function removeTime(
       from(track) + duration,
       timeline.fps,
       mint,
+      shortened,
     );
   return [
     ...fixedClips,
     ...next.map((clip) =>
-      tracks.has(clip.track) && clip.start >= from(clip.track) + duration
-        ? { ...clip, start: clip.start - duration }
-        : clip,
+      shortened.has(clip.id)
+        ? windowClip(
+            clip,
+            clip.start,
+            clipEnd(clip) - duration,
+            timeline.fps,
+            "trim",
+          )
+        : tracks.has(clip.track) && clip.start >= from(clip.track) + duration
+          ? { ...clip, start: clip.start - duration }
+          : clip,
     ),
   ];
 }

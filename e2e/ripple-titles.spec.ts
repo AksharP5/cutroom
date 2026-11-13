@@ -176,3 +176,74 @@ test("ripple delete and Q/W keep a title editable as one attributed clip, with M
     await client.close();
   }
 });
+
+test("a shortened linked title still moves both audio pieces after ripple, undo and redo", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Linked title ripple",
+          width: 640,
+          height: 360,
+          duration: 10,
+        },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=8",
+    join(project.path, "sound.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>body{background:#123;color:white}.clip{position:absolute;top:200px;left:20px;font:30px sans-serif}#shot{top:20px}</style></head><body><main data-composition-id="main" data-width="640" data-height="360" data-fps="30" data-duration="10"><div id="shot" class="clip" data-label="Removed shot" data-start="2" data-duration="2" data-track-index="0">Removed shot</div><div id="lower" class="clip" data-label="Linked lower third" data-start="0" data-duration="8" data-track-index="1" data-link="pair">Linked lower third</div><audio id="sound" src="sound.wav" muted data-start="0" data-duration="8" data-track-index="2" data-link="pair"></audio></main></body></html>`,
+  );
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    );
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="lower"]')).toBeVisible();
+  const before = await read();
+  await page.locator('[data-clip="shot"]').click();
+  await page.keyboard.press("Delete");
+  await expect(page.locator('[data-clip="shot"]')).toHaveCount(0);
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(before.timeline);
+  await page.keyboard.press("Control+Shift+z");
+  await expect(page.locator('[data-clip="shot"]')).toHaveCount(0);
+  await expect(page.locator('[data-clip^="lower"]')).toHaveCount(1);
+  expect(
+    (await read()).timeline.clips.find((clip) => clip.id === "lower")?.duration,
+  ).toBe(180);
+  await page.locator('[data-clip="lower"]').click();
+  await page.getByRole("textbox", { name: "Start", exact: true }).fill("1f");
+  await page
+    .getByRole("textbox", { name: "Start", exact: true })
+    .press("Enter");
+  await expect
+    .poll(async () =>
+      (await read()).timeline.clips
+        .filter((clip) => clip.kind === "audio")
+        .map((clip) => [clip.start, clip.duration]),
+    )
+    .toEqual([
+      [1, 60],
+      [61, 120],
+    ]);
+  await page.screenshot({
+    path: info.outputPath("linked-title-after-move.png"),
+  });
+});
