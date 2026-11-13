@@ -872,9 +872,10 @@
   stroke: var(--scrim);
   stroke-width: 3;
 }
+/* The grab band is the line and a pixel each side, so a press beside it takes the clip. */
 .tl-fade-curve .tl-gain {
   stroke: transparent;
-  stroke-width: 7;
+  stroke-width: 3;
   cursor: ns-resize;
   pointer-events: stroke;
 }

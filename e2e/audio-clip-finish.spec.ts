@@ -114,13 +114,15 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
   const svg = (await page
     .locator('[data-clip-mix="music"] svg')
     .boundingBox())!;
-  await page.mouse.move(box.x + 3, svg.y + svg.height / 2);
+  // At unity the line sits 3 px above the middle of the body.
+  const y = svg.y + svg.height / 2 - 3;
+  await page.mouse.move(box.x + 3, y);
   await expect(page.locator(".tl-lanes")).toHaveAttribute(
     "data-cursor",
     "trim",
   );
   await page.mouse.down();
-  await page.mouse.move(box.x + 43, svg.y + svg.height / 2, { steps: 8 });
+  await page.mouse.move(box.x + 43, y, { steps: 8 });
   await page.mouse.up();
   await expect
     .poll(async () => (await read()).clips.find((c) => c.id === "music")!.start)
@@ -130,7 +132,6 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
   await expect.poll(read).toEqual(initial);
   // A middle gain drag leaves timing alone, and its readout stays within the scroller.
   const x = box.x + box.width / 3;
-  const y = svg.y + svg.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x, y + 4, { steps: 8 });
@@ -143,6 +144,6 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
     .poll(
       async () => (await read()).clips.find((c) => c.id === "music")!.volume,
     )
-    .toBe(10 ** (-3.8 / 20));
+    .toBe(10 ** (-4 / 20));
   expect((await read()).clips.find((c) => c.id === "music")!.start).toBe(0);
 });

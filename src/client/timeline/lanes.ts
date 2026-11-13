@@ -1,4 +1,10 @@
-import { envelopeAt, envelopeHeight, fadePath, gainFromDrag } from "./mix";
+import {
+  envelopeAt,
+  envelopeHeight,
+  fadePath,
+  gainFromDrag,
+  mixBody,
+} from "./mix";
 import type { GainDrag } from "./mix";
 import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { clipFades } from "../../shared/timeline/mix";
@@ -270,7 +276,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const mix = root.querySelector<HTMLElement>(
         `[data-clip-mix="${CSS.escape(clip.id)}"]`,
       );
-      const path = fadePath(clip, shown.fps);
+      const body = mixBody(heights.get(clip.track) ?? 0);
+      const path = fadePath(clip, shown.fps, body);
       for (const curve of mix?.querySelectorAll("path") ?? [])
         curve.setAttribute("d", path);
       const fades = clipFades(clip);
@@ -290,6 +297,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
                 edge === "fadeIn"
                   ? fades.fadeIn
                   : clip.duration - fades.fadeOut,
+                body,
               ),
             ),
           );
@@ -536,7 +544,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const held = gain.current;
     if (!held) return null;
     return (
-      held.top + (envelopeHeight(clip, fps, clipTime(clip)) / 100) * held.body
+      held.top +
+      (envelopeHeight(clip, fps, clipTime(clip), held.body) / 100) * held.body
     );
   }
 

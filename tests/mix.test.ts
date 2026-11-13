@@ -13,11 +13,11 @@ import { TimelineError, applyAll } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
 import {
   envelopeAt,
-  envelopeGain,
   envelopeHeight,
   fadePath,
   gainFromDrag,
   gainLevel,
+  waveformScale,
 } from "../src/client/timeline/mix";
 import { emptyMeter, meterSample } from "../src/client/timeline/meters";
 import {
@@ -69,24 +69,54 @@ test("a gain drag leaves the line under the pointer, lands on unity, and recover
   for (const body of [13, 25, 61, 101])
     for (const start of [6, 0, -7, -24])
       for (const dy of [-9, -2, 1, 4, 11]) {
-        const from = gainLevel(at(start));
+        const from = gainLevel(at(start), body);
         const to = gainLevel(
           gainFromDrag({ ...plain, from: at(start), dy, body }),
+          body,
         );
         const pointer = Math.max(0, Math.min(body, (from * body) / 100 + dy));
         expect(Math.abs((to * body) / 100 - pointer)).toBeLessThanOrEqual(0.51);
       }
-  // Routine trims: a pixel beside unity is about 1 dB on a default row and under 2 dB on a compact one.
-  expect(gainFromDrag({ ...plain, from: 1, dy: 1 })).toBeCloseTo(at(-1), 10);
-  expect(gainFromDrag({ ...plain, from: 1, dy: -1 })).toBeCloseTo(at(1), 10);
-  expect(gainFromDrag({ ...plain, from: 1, dy: 1, body: 13 })).toBeCloseTo(
-    at(-1.8),
+  // Between unity and -6 dB a pixel is 1 dB at every height, and just over that above unity on
+  // a default row.
+  for (const body of [13, 25, 61])
+    expect(gainFromDrag({ ...plain, from: 1, dy: 1, body })).toBeCloseTo(
+      at(-1),
+      10,
+    );
+  expect(gainFromDrag({ ...plain, from: 1, dy: -1 })).toBeCloseTo(at(1.3), 10);
+  // From -6 to -24 dB, where a music bed sits, a pixel is 2.25 dB on a default row, about 6.6 dB
+  // on a compact one and three quarters of a dB on a tall one.
+  expect(gainFromDrag({ ...plain, from: at(-9), dy: 2 })).toBeCloseTo(
+    at(-13.5),
     10,
   );
+  expect(gainFromDrag({ ...plain, from: at(-12), dy: 4 })).toBeCloseTo(
+    at(-21),
+    10,
+  );
+  expect(gainFromDrag({ ...plain, from: at(-6), dy: 1, body: 13 })).toBeCloseTo(
+    at(-12.6),
+    10,
+  );
+  expect(gainFromDrag({ ...plain, from: at(-6), dy: 4, body: 61 })).toBeCloseTo(
+    at(-9),
+    10,
+  );
+  // The line at unity and from -6 dB down stays clear of where a hand takes a clip: the middle
+  // of its body, and the middle of its box 5.5 px above that. The grab band is 1.5 px each way.
+  for (const body of [9, 13, 25, 61, 181]) {
+    const pixels = (db: number) => (gainLevel(at(db), body) * body) / 100;
+    for (const middle of [body / 2, body / 2 - 5.5]) {
+      expect(Math.abs(pixels(0) - middle)).toBeGreaterThanOrEqual(2.5);
+      for (const db of [-6, -12, -18, -24])
+        expect(Math.abs(pixels(db) - middle)).toBeGreaterThanOrEqual(2.5);
+    }
+  }
   // From -3.3 dB the pixel nearest unity is unity itself, and the one before it is not.
   expect(gainFromDrag({ ...plain, from: at(-3.3), dy: -3 })).toBe(1);
   expect(gainFromDrag({ ...plain, from: at(-3.3), dy: -2 })).toBeCloseTo(
-    at(-1.4),
+    at(-1.3),
     10,
   );
   // A clip already inside that pixel is never pulled against the drag.
@@ -101,7 +131,7 @@ test("a gain drag leaves the line under the pointer, lands on unity, and recover
   expect(gainFromDrag({ ...plain, from: 1, dy: 25 })).toBe(0);
   expect(gainFromDrag({ ...plain, from: 1, dy: -25 })).toBe(MAX_AUDIO_GAIN);
   expect(gainFromDrag({ ...plain, from: 0, dy: -2 })).toBeCloseTo(
-    at(-31.2),
+    at(-22.9),
     10,
   );
   // A press that returns to where it began leaves an off-grid gain as it was.
@@ -128,15 +158,15 @@ test("a drag inside a fade or over automation still keeps the line under the poi
     { ...timeline.clips[0]!, duration: 300, automation },
   ])
     for (const [time, dy] of [
-      [30, -6],
+      [30, -3],
       [30, 2],
       [150, 3],
     ] as const) {
       const hold = envelopeAt(base, timeline.fps, time);
       const volume = gainFromDrag({ from: 1, dy, fine: false, body, ...hold });
       const moved =
-        ((envelopeHeight({ ...base, volume }, timeline.fps, time) -
-          envelopeHeight(base, timeline.fps, time)) *
+        ((envelopeHeight({ ...base, volume }, timeline.fps, time, body) -
+          envelopeHeight(base, timeline.fps, time, body)) *
           body) /
         100;
       expect(Math.abs(moved - dy)).toBeLessThanOrEqual(0.51);
@@ -648,6 +678,32 @@ test("a cut that would exceed HyperFrames' automation limit is refused, not thro
   expect(refusal).toMatchObject({ code: "unsupported" });
 });
 
+test("a ducked clip's waveform stays a third of its unity height, and its fade still tapers to nothing", () => {
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  const scale = (db: number, elapsed: number) => {
+    const clip = {
+      ...timeline.clips[0]!,
+      duration: 300,
+      fadeOut: 100,
+      volume: audioDbToGain(db),
+    };
+    return waveformScale(
+      clip,
+      timeline.fps,
+      elapsed,
+      undefined,
+      clipFades(clip),
+    );
+  };
+  // Down to about -19 dB the wave follows the gain; a bed at -24 or -40 dB holds the floor.
+  for (const db of [-6, -18])
+    expect(scale(db, 0)).toBeCloseTo(Math.sqrt(audioDbToGain(db)), 10);
+  for (const db of [-24, -40]) expect(scale(db, 0)).toBeCloseTo(1 / 3, 10);
+  // The fade is not floored: halfway down it the wave is at the root of a half, then gone.
+  expect(scale(-24, 250)).toBeCloseTo(Math.sqrt(0.5) / 3, 10);
+  expect(scale(-24, 300)).toBe(0);
+});
+
 test("the drawn fade follows core's linear amplitude ramp and reaches its knee and silence", () => {
   const { timeline } = parseComposition(html, emptyTimelineSettings());
   for (const volume of [audioDbToGain(-12), 1, audioDbToGain(6)]) {
@@ -658,7 +714,8 @@ test("the drawn fade follows core's linear amplitude ramp and reaches its knee a
       fadeOut: 90,
       volume,
     };
-    const path = fadePath(clip, timeline.fps);
+    const body = 25;
+    const path = fadePath(clip, timeline.fps, body);
     const points = [...path.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(
       (point) => [Number(point[1]), Number(point[2])] as const,
     );
@@ -668,18 +725,21 @@ test("the drawn fade follows core's linear amplitude ramp and reaches its knee a
       const [x1, y1] = points[next]!;
       const [x0, y0] = points[Math.max(0, next - 1)]!;
       const y = x0 === x1 ? y1 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
-      const fraction = (100 - y) / (100 - gainLevel(volume));
+      const fraction = (100 - y) / (100 - gainLevel(volume, body));
       const fade = fadeGain(elapsed, clip.duration, clip);
       expect(fraction).toBeCloseTo(fade, 3);
-      // The waveform is scaled by the same envelope the line draws.
+      // The waveform is scaled by the same envelope the line draws, on its square-root scale.
       expect(
-        envelopeGain(clip, timeline.fps, elapsed, undefined, clipFades(clip)),
-      ).toBeCloseTo(volume * fade, 10);
+        waveformScale(clip, timeline.fps, elapsed, undefined, clipFades(clip)),
+      ).toBeCloseTo(Math.sqrt(volume * fade), 10);
     }
-    expect(points).toContainEqual([70, Number(gainLevel(volume).toFixed(2))]);
+    expect(points).toContainEqual([
+      70,
+      Number(gainLevel(volume, body).toFixed(2)),
+    ]);
     expect(points.at(-1)).toEqual([100, 100]);
-    expect(envelopeHeight(clip, timeline.fps, 255)).toBeCloseTo(
-      (100 + gainLevel(volume)) / 2,
+    expect(envelopeHeight(clip, timeline.fps, 255, body)).toBeCloseTo(
+      (100 + gainLevel(volume, body)) / 2,
       6,
     );
   }
