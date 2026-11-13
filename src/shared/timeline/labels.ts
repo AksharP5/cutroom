@@ -39,7 +39,7 @@ export function editLabel(
   };
   const trackName = (index: number) => {
     const track = timeline?.tracks.find((track) => track.index === index);
-    if (!track || !timeline) return undefined;
+    if (!track || !timeline) return `track ${index}`;
     return (
       track.name ??
       `${track.kind === "audio" ? "A" : "V"}${timeline.tracks.filter((item) => item.kind === track.kind && item.index <= index).length}`
@@ -88,11 +88,22 @@ export function editLabel(
             ? "Ripple deleted clips"
             : "Lifted clips";
       case "paste":
-        return `${pending ? "Paste" : "Pasted"} clips${command.mode === "insert" ? " with insert" : ""} at ${time(command.at)}`;
-      case "insert":
+        return `${pending ? "Paste" : "Pasted"} clips${pending || command.mode === "insert" ? ` with ${command.mode}` : ""} at ${time(command.at)}`;
+      case "insert": {
+        const name =
+          command.clip.label ??
+          command.clip.src.split("/").at(-1) ??
+          command.clip.kind;
+        if (pending && command.mode === "overwrite") {
+          const tracks = [trackName(command.track)];
+          if (command.linkedAudio?.track !== undefined)
+            tracks.push(trackName(command.linkedAudio.track));
+          return `Overwrite ${tracks.join(" and ")} from ${time(command.at)} to ${time(command.at + command.clip.duration)} with ${name}`;
+        }
         return pending
-          ? `Add ${command.clip.label ?? command.clip.src.split("/").at(-1) ?? command.clip.kind} at ${time(command.at)}${command.mode !== "place" ? ` with ${command.mode}` : ""}`
+          ? `Add ${name} at ${time(command.at)}${command.mode !== "place" ? ` with ${command.mode}` : ""}`
           : `Added ${command.clip.kind} at ${time(command.at)}`;
+      }
       case "setClip": {
         const parts: string[] = [];
         if (command.x === null && command.y === null)
@@ -166,11 +177,11 @@ export function editLabel(
         return `${parts.join("; ") || (pending ? fallback : "")}${pending ? ` for ${target([command.clipId])}` : ""}`;
       }
       case "setTrack": {
-        if (
-          timeline &&
-          !timeline.tracks.some((track) => track.index === command.index)
-        )
-          return `${pending ? "Add" : "Added"} ${command.kind ?? "video"} track`;
+        const creating =
+          timeline !== undefined &&
+          !timeline.tracks.some((track) => track.index === command.index);
+        if (creating && !pending)
+          return `Added ${command.kind ?? "video"} track`;
         const parts: string[] = [];
         if (command.name !== undefined)
           parts.push(
@@ -208,6 +219,11 @@ export function editLabel(
               ? `${pending ? "Solo" : "Soloed"} track`
               : `${pending ? "Unsolo" : "Unsoloed"} track`,
           );
+        if (creating)
+          return [
+            `Add ${command.kind ?? "video"} track ${command.index}`,
+            ...parts,
+          ].join("; ");
         return (
           (parts.join("; ") || fallback) +
           (pending && trackName(command.index)
@@ -227,9 +243,26 @@ export function editLabel(
         const marker = timeline?.markers.find(
           (marker) => marker.id === command.id,
         );
-        const name = command.name === undefined ? marker?.name : command.name;
-        const frame = command.frame ?? marker?.frame;
-        return `${marker ? "Update" : "Add"} marker${name ? ` "${name}"` : ""}${frame === undefined ? "" : ` at ${time(frame)}`}`;
+        const adding = timeline ? !marker : command.id === undefined;
+        const name = adding ? command.name : marker?.name;
+        const parts: string[] = [];
+        if (!adding && command.name !== undefined)
+          parts.push(`name to "${command.name}"`);
+        if (!adding && command.frame !== undefined)
+          parts.push(`position to ${time(command.frame)}`);
+        if (command.note !== undefined) {
+          const note = command.note.replace(/\s+/g, " ").trim();
+          parts.push(
+            note
+              ? `note to "${note.length > 80 ? `${note.slice(0, 80).trimEnd()}…` : note}"`
+              : "clear note",
+          );
+        }
+        if (command.duration !== undefined)
+          parts.push(`duration to ${time(command.duration)}`);
+        if (command.color !== undefined)
+          parts.push(`color to ${command.color}`);
+        return `${adding ? "Add" : marker ? "Update" : "Set"} marker${name ? ` "${name}"` : ""}${adding && command.frame !== undefined ? ` at ${time(command.frame)}` : ""}${parts.length ? `: ${parts.join("; ")}` : ""}`;
       }
       case "removeMarker": {
         const marker = timeline?.markers.find(

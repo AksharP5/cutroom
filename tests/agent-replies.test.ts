@@ -5,21 +5,28 @@ import { createMcpServer } from "../src/server/mcp/server";
 import { agentPrompt } from "../src/server/agents/runtime";
 import { agentTurnSchema } from "../src/shared/agent";
 
-test("native agents and MCP clients are told to mention only review notes changed this turn", async () => {
-  const expected =
-    "Mention review notes in your reply only when this turn changed one.";
+test("native agents and MCP clients allow explicit note questions and blocker explanations", async () => {
+  const expected = [
+    "when this turn changed one",
+    "when the user explicitly asks about review notes",
+    "when needed to explain a blocker",
+    "Otherwise do not recap untouched notes",
+  ];
   const prompt = agentPrompt(
-    agentTurnSchema.parse({ text: "Add a marker. Do nothing else." }),
+    agentTurnSchema.parse({
+      text: "Which review notes are still queued? Do not change anything.",
+    }),
     "/tmp/project",
   );
-  expect(prompt).toContain(expected);
+  for (const instruction of expected) expect(prompt).toContain(instruction);
   const server = createMcpServer();
   const client = new Client({ name: "reply-guidance", version: "1" });
   const [local, remote] = InMemoryTransport.createLinkedPair();
   try {
     await server.connect(remote);
     await client.connect(local);
-    expect(client.getInstructions()).toContain(expected);
+    for (const instruction of expected)
+      expect(client.getInstructions()).toContain(instruction);
   } finally {
     await client.close();
     await server.close();

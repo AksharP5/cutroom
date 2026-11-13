@@ -363,7 +363,10 @@ test("a live timeline approval names its marker and MCP clients receive the repl
       }),
     );
     expect(client.getInstructions()).toContain(
-      "Mention review notes in your reply only when this turn changed one.",
+      "when the user explicitly asks about review notes",
+    );
+    expect(client.getInstructions()).toContain(
+      "when needed to explain a blocker",
     );
   } finally {
     await client.close();

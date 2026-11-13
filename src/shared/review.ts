@@ -21,7 +21,7 @@ export const AgentNameSchema = z.string().trim().min(1).max(200);
 export const REVIEW_STATE_PATH = ".cutroom/review.json";
 
 export const reviewReplyGuidance =
-  "Mention review notes in your reply only when this turn changed one. Describe the change briefly. Do not recap untouched notes or say that they remain queued.";
+  "Mention review notes when this turn changed one, when the user explicitly asks about review notes, or when needed to explain a blocker. Describe changes briefly. Otherwise do not recap untouched notes or say that they remain queued.";
 
 /**
  * One review note's lifecycle. A note stays in the queue until an explicit

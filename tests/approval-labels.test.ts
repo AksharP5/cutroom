@@ -47,6 +47,21 @@ test("pending command sentences name their targets and use the composition's fra
       editLabel([CommandSchema.parse(input)], timeline, "Edit", "pending"),
     ).toBe(expected);
   }
+  expect(
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "paste",
+          clipboardId: "copy",
+          at: 72,
+          mode: "overwrite",
+        }),
+      ],
+      timeline,
+      "Edit",
+      "pending",
+    ),
+  ).toBe("Paste clips with overwrite at 00:00:03:00");
 });
 
 test("a pending command without its composition shows exact frames rather than guessing a frame rate", () => {
@@ -64,7 +79,7 @@ test("a pending command without its composition shows exact frames rather than g
       "Edit",
       "pending",
     ),
-  ).toBe('Add marker "Hook" at frame 72');
+  ).toBe('Set marker: name to "Hook"; position to frame 72');
   expect(
     editLabel(
       [CommandSchema.parse({ type: "move", clipIds: ["opaque-id"], by: -24 })],
@@ -73,4 +88,133 @@ test("a pending command without its composition shows exact frames rather than g
       "pending",
     ),
   ).toBe("Move a clip 24 frames left");
+});
+
+test("overwrite approvals distinguish destination tracks and the covered interval", () => {
+  for (const [track, duration, audioTrack, expected] of [
+    [
+      0,
+      24,
+      4,
+      "Overwrite V1 and track 4 from 00:00:06:00 to 00:00:07:00 with interview.mp4",
+    ],
+    [
+      1,
+      240,
+      5,
+      "Overwrite V2 and track 5 from 00:00:06:00 to 00:00:16:00 with interview.mp4",
+    ],
+  ] as const) {
+    expect(
+      editLabel(
+        [
+          CommandSchema.parse({
+            type: "insert",
+            at: 144,
+            track,
+            mode: "overwrite",
+            clip: { kind: "video", src: "interview.mp4", duration },
+            linkedAudio: { track: audioTrack },
+          }),
+        ],
+        timeline,
+        "Edit",
+        "pending",
+      ),
+    ).toBe(expected);
+  }
+});
+
+test("marker approvals name every changed field", () => {
+  const before = {
+    ...timeline,
+    markers: [
+      {
+        id: "hook",
+        frame: 72,
+        duration: 0,
+        name: "Hook",
+        note: "old",
+        color: "blue" as const,
+      },
+    ],
+  };
+  expect(
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "setMarker",
+          id: "hook",
+          name: "Opening",
+          frame: 96,
+          note: "Brand safety warning",
+          duration: 48,
+          color: "red",
+        }),
+      ],
+      before,
+      "Edit",
+      "pending",
+    ),
+  ).toBe(
+    'Update marker "Hook": name to "Opening"; position to 00:00:04:00; note to "Brand safety warning"; duration to 00:00:02:00; color to red',
+  );
+  expect(
+    editLabel(
+      [CommandSchema.parse({ type: "setMarker", id: "hook", note: "" })],
+      before,
+      "Edit",
+      "pending",
+    ),
+  ).toBe('Update marker "Hook": clear note');
+});
+
+test("creating a track includes its supplied name and settings", () => {
+  expect(
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "setTrack",
+          index: 3,
+          kind: "audio",
+          name: "Music",
+          locked: true,
+          muted: true,
+          enabled: false,
+          autoSelect: false,
+          solo: true,
+        }),
+      ],
+      timeline,
+      "Edit",
+      "pending",
+    ),
+  ).toBe(
+    "Add audio track 3; Rename track to Music; Lock track; Disable track; Disable track auto-select; Mute track; Solo track",
+  );
+});
+
+test("missing composition context uses track indices and neutral marker wording", () => {
+  expect(
+    editLabel(
+      [CommandSchema.parse({ type: "removeTrack", index: 2 })],
+      undefined,
+      "Edit",
+      "pending",
+    ),
+  ).toBe("Remove empty track 2");
+  expect(
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "setMarker",
+          id: "hook",
+          note: "new note",
+        }),
+      ],
+      undefined,
+      "Edit",
+      "pending",
+    ),
+  ).toBe('Set marker: note to "new note"');
 });
