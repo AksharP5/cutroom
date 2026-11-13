@@ -156,6 +156,7 @@ export function App() {
     null,
   );
   const [name, setName] = useState("");
+  const projectName = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const error = useWorkspace((state) => state.toast);
   const toastTone = useWorkspace((state) => state.toastTone);
@@ -798,7 +799,11 @@ export function App() {
         </Modal>
       )}
       {dialog === "create" && (
-        <Modal title="New project" onClose={closeCreateDialog}>
+        <Modal
+          title="New project"
+          onClose={closeCreateDialog}
+          initialFocus={projectName}
+        >
           <form
             className="project-form"
             onSubmit={(event) => {
@@ -832,7 +837,7 @@ export function App() {
             <label htmlFor="project-name">Project name</label>
             <input
               id="project-name"
-              autoFocus
+              ref={projectName}
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="Untitled project"

@@ -454,3 +454,75 @@ test("F9 and F10 from Source reveal Timeline after a successful placement", asyn
     await expect.poll(read).toEqual(before);
   }
 });
+
+test("timeline edit keys immediately edit and reveal Timeline while Source is shown", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(90_000);
+  const { read, before, file, source } = await open(page, request);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const selected = () =>
+    timeline
+      .locator("[data-clip].selected")
+      .evaluateAll((clips) =>
+        clips.map((clip) => clip.getAttribute("data-clip")).sort(),
+      );
+  await seek(page, "200");
+  await expect
+    .poll(() => colour(page, page.locator(".edit-picture")))
+    .toBe("green");
+  await page.keyboard.press("Shift+v");
+  const selection = await selected();
+  expect(selection).toEqual(["picture", "sound"]);
+  const copied = page.waitForResponse(/\/timeline\/copy$/);
+  await page.keyboard.press("Control+c");
+  expect((await copied).ok()).toBe(true);
+
+  let commands = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/commands"))
+      commands++;
+  });
+  for (const key of [
+    "q",
+    "w",
+    "e",
+    "Control+Backslash",
+    "x",
+    "Shift+x",
+    "Backspace",
+    "Delete",
+    "d",
+    "m",
+    "Control+x",
+    "Control+v",
+    "Control+Shift+v",
+  ]) {
+    await test.step(key, async () => {
+      await seek(page, "200");
+      await (await file("talk.mp4")).dblclick();
+      await expect(source).toBeVisible();
+      commands = 0;
+      await page.keyboard.press(key);
+      await expect.poll(read).not.toEqual(before);
+      if (key === "q")
+        await page.screenshot({
+          path: testInfo.outputPath("after-press-q.png"),
+        });
+      await expect(source).toBeHidden();
+      expect(commands).toBe(1);
+      if (key === "q") {
+        await expect
+          .poll(() => colour(page, page.locator(".edit-picture")))
+          .toBe("green");
+        await page.screenshot({ path: testInfo.outputPath("visible-q.png") });
+      }
+      await page.keyboard.press("Control+z");
+      await expect.poll(read).toEqual(before);
+      // Removing clips prunes selection; restore it for the next selected edit.
+      await seek(page, "200");
+      await page.keyboard.press("Shift+v");
+    });
+  }
+});

@@ -36,7 +36,16 @@ export function MarkerEditor({
     popover.current?.showPopover();
     field.current?.focus();
     field.current?.select();
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    // Tab can leave this nonmodal popover. Escape still belongs to its open editor.
+    document.addEventListener("keydown", escape, true);
     return () => {
+      document.removeEventListener("keydown", escape, true);
       if (opener instanceof HTMLElement && opener.isConnected)
         opener.focus({ preventScroll: true });
     };
@@ -76,9 +85,6 @@ export function MarkerEditor({
       onKeyDown={(event) => {
         // Keys pressed in the editor are for the editor: Space picks a colour, never plays.
         event.stopPropagation();
-        if (event.key !== "Escape") return;
-        event.preventDefault();
-        onClose();
       }}
     >
       <form
