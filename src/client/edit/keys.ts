@@ -22,7 +22,7 @@ interface EditKey {
 }
 
 const spans = (clip: Clip, frame: number) =>
-  clip.start < frame && frame < clipEnd(clip);
+  clip.start <= frame && frame < clipEnd(clip);
 
 /**
  * The selected clips in the timeline an edit is built from, which may be the server's, newer than
@@ -50,7 +50,9 @@ function underPlayhead(timeline: Timeline, target: EditTarget) {
   return timeline.clips
     .filter((clip) => editable.has(clip.track) && spans(clip, frame))
     .toSorted(
-      (a, b) => Number(isAudioKind(a.kind)) - Number(isAudioKind(b.kind)),
+      (a, b) =>
+        Number(isAudioKind(a.kind)) - Number(isAudioKind(b.kind)) ||
+        a.track - b.track,
     );
 }
 
@@ -93,7 +95,9 @@ export function trimmedPlayhead(
  * the browser with its own reason, and nothing is sent.
  */
 const razor = (timeline: Timeline, target: EditTarget): CommandInput[] => {
-  const clips = underPlayhead(timeline, target);
+  const targets = underPlayhead(timeline, target);
+  const clips = targets.filter((clip) => clip.start < target.frame);
+  if (targets.length && !clips.length) return [];
   return [
     {
       type: "split",

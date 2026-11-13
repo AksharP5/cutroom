@@ -1,3 +1,5 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
@@ -729,3 +731,69 @@ for (const { key, all, backward } of [
     ).toHaveAttribute("aria-pressed", "true");
   });
 }
+
+test("Q and W at a cut preserve the incoming clip and the rest of the film, including MCP", async ({
+  page,
+  request,
+  baseURL,
+}, testInfo) => {
+  const { timeline, clips, read } = await open(page, request, "Cut boundary", {
+    extra: [
+      '<audio id="music" class="clip" data-start="0" data-duration="12" data-track-index="2"></audio>',
+    ],
+  });
+  const initial = await clips();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:03:00",
+  );
+  await page.screenshot({ path: testInfo.outputPath("parked.png") });
+  await page.keyboard.press("w");
+  await page.screenshot({ path: testInfo.outputPath("after-w.png") });
+  await expect(page.locator(".toast")).toContainText(
+    "shot-2 would be shorter than one frame",
+  );
+  expect(await clips()).toEqual(initial);
+  await page.getByRole("button", { name: "Dismiss" }).click();
+  await page.keyboard.press("q");
+  expect(await clips()).toEqual(initial);
+  await page.keyboard.press("Shift+V");
+  await expect(timeline.locator('[data-clip="shot-2"]')).toHaveClass(
+    /selected/,
+  );
+  await expect(timeline.locator('[data-clip="shot-1"]')).not.toHaveClass(
+    /selected/,
+  );
+  // With the incoming shot selected alone, E at its first frame cannot cut the music instead.
+  await timeline.locator('[data-clip="shot-2"]').click({ modifiers: ["Alt"] });
+  await page.keyboard.press("e");
+  expect(await clips()).toEqual(initial);
+  await page.keyboard.press("x");
+  await expect.poll(clips).toEqual(initial.filter(([id]) => id !== "shot-2"));
+  await page.keyboard.press("Control+z");
+  await expect.poll(clips).toEqual(initial);
+  const client = new Client({ name: "cut-boundary-proof", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+      requestInit: { headers: { origin: new URL(baseURL!).origin } },
+    }),
+  );
+  try {
+    const view = await read();
+    const result = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: page.url().split("#project/")[1],
+        expectedRevision: view.revision,
+        commands: [
+          { type: "trim", clipId: "shot-2", edge: "end", to: 90, ripple: true },
+        ],
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("shorter than one frame");
+    expect(await clips()).toEqual(initial);
+  } finally {
+    await client.close();
+  }
+});
