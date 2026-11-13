@@ -1088,6 +1088,17 @@ option {
   line-height: var(--leading-chat);
   overflow-wrap: anywhere;
 }
+.agent-request-commands {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--type-md);
+  line-height: var(--leading-chat);
+  overflow-wrap: anywhere;
+}
 .agent-request-detail {
   margin: calc(var(--space-1) * -1) 0 0;
   color: var(--text-secondary);

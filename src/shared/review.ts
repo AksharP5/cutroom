@@ -20,6 +20,9 @@ export const AgentNameSchema = z.string().trim().min(1).max(200);
 /** Outside project history and the preview watcher, so status changes are never undone. */
 export const REVIEW_STATE_PATH = ".cutroom/review.json";
 
+export const reviewReplyGuidance =
+  "Mention review notes in your reply only when this turn changed one. Describe the change briefly. Do not recap untouched notes or say that they remain queued.";
+
 /**
  * One review note's lifecycle. A note stays in the queue until an explicit
  * transition finishes it; nothing moves it implicitly.

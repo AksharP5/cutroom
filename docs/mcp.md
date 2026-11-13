@@ -45,7 +45,7 @@ Cutroom tells its native agents which of its tools may run without asking. The r
 
 Withdrawing a note is not bookkeeping: it cancels a request the owner made, so it asks like an edit. Shell commands, native file tools, and other MCP servers keep the agent's own permissions, including every write outside the project. Your own native ask rule for a Cutroom tool still wins over this table. Outside MCP clients decide for themselves; these rules apply to the agents Cutroom starts.
 
-An approval names what it acts on the way the editor does: a note by its first words, a timeline edit by its clips, a file by its project path. Unnamed clips use their kind or count, such as "Edit a text clip?" or "Edit 3 clips?". Naming waits at most 250 ms before using neutral wording. Ids and tool identifiers appear only under **Details**, which shows the exact request.
+Timeline approvals list each pending command in plain words through the shared edit labels. Clip names and timecodes use the matching open composition; unavailable compositions use exact frame counts. Commands later in a batch account for earlier commands. Other approvals name their note or file, with naming bounded at 250 ms. Ids and tool identifiers appear only under **Details**, which shows the exact request. MCP and native agent instructions ask for review notes in replies only when the turn changed one, without recapping untouched queued notes.
 
 ## Timeline
 
