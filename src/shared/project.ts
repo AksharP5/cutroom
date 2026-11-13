@@ -151,7 +151,13 @@ export const SourceWriteSchema = z.object({
     ),
   path: z.string().default("index.html"),
   content: z.string().max(10 * 1024 * 1024),
-  expectedVersion: z.string().min(1),
+  expectedVersion: z
+    .string()
+    .min(1)
+    .nullable()
+    .describe(
+      "Exact version from source_read, or null to create a new file without overwriting",
+    ),
 });
 export const TranscriptJobSchema = z.object({
   id: z.string(),

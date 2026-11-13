@@ -315,6 +315,11 @@ test("last edited uses the newest composition or document mtime, not registry ac
     const html = join(p.path, "index.html");
     const document = join(p.path, "cutroom.json");
     await utimes(html, new Date("2024-01-01"), new Date("2024-01-01"));
+    await utimes(
+      join(p.path, "assets/vendor/gsap.min.js"),
+      new Date("2024-01-01"),
+      new Date("2024-01-01"),
+    );
     await utimes(document, new Date("2024-02-01"), new Date("2024-02-01"));
     expect((await f.store.list())[0]?.updatedAt).toBe(
       "2024-02-01T00:00:00.000Z",

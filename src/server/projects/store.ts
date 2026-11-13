@@ -82,6 +82,7 @@ function escapeHtml(value: string): string {
 function starter(input: z.infer<typeof CreateProjectSchema>): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(input.name)}</title>
+<script src="assets/vendor/gsap.min.js"></script>
 <style>
 @font-face {
   font-family: "Instrument Sans";
@@ -338,6 +339,13 @@ export async function createProjectStore(options: {
             join(fonts, "LICENSE.txt"),
           ),
         ]);
+        const vendor = join(path, "assets", "vendor");
+        await mkdir(vendor);
+        // Keep the distribution's license notice with the project, including offline exports.
+        await copyFile(
+          Bun.resolveSync("gsap/dist/gsap.min.js", import.meta.dir),
+          join(vendor, "gsap.min.js"),
+        );
         await writeFile(join(path, "index.html"), starter(input));
         await writeFile(
           join(path, DOCUMENT_PATH),

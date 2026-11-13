@@ -1,7 +1,7 @@
 import { projectMutationGuard } from "./authorization";
 import { Hono } from "hono";
-import { realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   applyFileMutations,
@@ -156,6 +156,31 @@ export function createProjectRoutes(
           project,
           `Edit ${body.path}`,
           async () => {
+            const absolute = await projectWritePath(project, body.path, {
+              allowMissing: body.expectedVersion === null,
+            });
+            if (body.expectedVersion === null) {
+              await mkdir(dirname(absolute), { recursive: true });
+              await writeFile(
+                await projectWritePath(project, body.path, {
+                  allowMissing: true,
+                }),
+                body.content,
+                { flag: "wx" },
+              ).catch((error: unknown) => {
+                if (
+                  error instanceof Error &&
+                  "code" in error &&
+                  error.code === "EEXIST"
+                )
+                  throw new HttpError(
+                    409,
+                    "The file already exists. Read it before saving.",
+                  );
+                throw error;
+              });
+              return readSource(project, body.path);
+            }
             const source = await readSource(project, body.path);
             if (source.version !== body.expectedVersion)
               throw new HttpError(
@@ -165,7 +190,7 @@ export function createProjectRoutes(
             applyFileMutations(project.path, [
               {
                 sourceFile: body.path,
-                absPath: await projectWritePath(project, body.path),
+                absPath: absolute,
                 before: source.content,
                 after: body.content,
                 expectedVersion: body.expectedVersion,
@@ -188,6 +213,7 @@ export function createProjectRoutes(
             : undefined,
         ),
       body.noteId,
+      { create: body.expectedVersion === null },
     );
     return c.json(result);
   });

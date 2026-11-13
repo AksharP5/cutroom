@@ -159,6 +159,7 @@ test("home dates direct composition and document edits", async ({
   const old = new Date(Date.now() - 3 * 86400000);
   await utimes(html, old, old);
   await utimes(document, old, old);
+  await utimes(join(project.path, "assets/vendor/gsap.min.js"), old, old);
   await page.goto("/");
   const date = tile(page, project.name).locator("time");
   await page.screenshot({ path: info.outputPath("file-date.png") });
