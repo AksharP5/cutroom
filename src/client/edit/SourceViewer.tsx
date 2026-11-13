@@ -11,6 +11,7 @@ import type { MediaDrag } from "../timeline/mediaDrag";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import {
   closeSource,
+  openSourceMarks,
   placeSource,
   sourcePlayer,
   sourceRange,
@@ -194,6 +195,10 @@ function SourceMedia({
   file: MediaDrag;
   version: string | null;
 }) {
+  useEffect(
+    () => openSourceMarks(projectId, file.path),
+    [projectId, file.path, version],
+  );
   const media = useRef<HTMLMediaElement | null>(null);
   const hold = (element: HTMLMediaElement | null) => {
     media.current = element;

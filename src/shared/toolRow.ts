@@ -151,6 +151,7 @@ const cutroomTools: Record<
     kind: "edit",
     object: () => "an edit",
   },
+  source_marks: { verb: read, kind: "project", object: () => "source marks" },
   timeline_read: { verb: read, kind: "project", object: () => "the timeline" },
   timeline_edit: {
     verb: edited,
