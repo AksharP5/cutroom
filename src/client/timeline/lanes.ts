@@ -35,7 +35,7 @@ import {
   step,
 } from "./gesture";
 import type { Drag, Gesture, Hit, Outcome, Preview, Tool } from "./gesture";
-import { clipsByTrack, rowsBetween } from "./math";
+import { LENGTH_MIN_WIDTH, clipsByTrack, rowsBetween } from "./math";
 import type { Row, RowLayout, TrackClips } from "./math";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
@@ -213,7 +213,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
     );
     const before = new Map(base.clips.map((clip) => [clip.id, clip]));
     const surviving = new Set(shown.clips.map((clip) => clip.id));
-    const next = new Map<string, Offset & { scale: number; height: number }>();
+    const next = new Map<
+      string,
+      Offset & { scale: number; height: number; duration: number }
+    >();
     if (shown !== base)
       for (const clip of shown.clips) {
         const old = before.get(clip.id);
@@ -230,6 +233,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
           y: (top.get(clip.track) ?? from) - from,
           scale: clip.duration / old.duration,
           height: heights.get(clip.track) ?? 0,
+          duration: clip.duration,
         });
       }
     if (shown !== base || next.size || placed.current.size || preview.current)
@@ -255,12 +259,34 @@ export function useLaneGestures(options: LaneGestureOptions) {
         }
         element.toggleAttribute("data-held", at !== undefined);
         // Brackets and an edit's translation follow the held clip's scale.
-        if (clipLabel === undefined)
+        if (clipLabel === undefined) {
           element.style.setProperty("--k", String(at?.scale ?? 1));
+          continue;
+        }
         // A name is not stretched; a shortened clip shows as much of it as still fits.
-        if (clipLabel !== undefined)
-          element.style.clipPath =
-            at && at.scale < 1 ? `inset(0 ${(1 - at.scale) * 100}% 0 0)` : "";
+        element.style.clipPath =
+          at && at.scale < 1 ? `inset(0 ${(1 - at.scale) * 100}% 0 0)` : "";
+        // The duration is laid out at the length the clip had, so a shorter clip would cut
+        // through its digits. It rides the held edge and reads the held length instead.
+        const old = before.get(id);
+        const resized = at !== undefined && at.scale !== 1;
+        if (!old || (!resized && !element.style.getPropertyValue("--grow")))
+          continue;
+        const length = element.querySelector(".tl-length")?.firstChild;
+        if (!length) continue;
+        const duration = resized ? at.duration : old.duration;
+        if (resized)
+          element.style.setProperty(
+            "--grow",
+            `${(duration - old.duration) * ppf}px`,
+          );
+        else element.style.removeProperty("--grow");
+        element.toggleAttribute(
+          "data-short",
+          resized && duration * ppf < LENGTH_MIN_WIDTH,
+        );
+        // React keeps this text node, so its value is written, never replaced.
+        length.nodeValue = formatTimecode(duration, shown.fps);
       }
     const remixing = new Set<string>();
     for (const clip of shown.clips) {

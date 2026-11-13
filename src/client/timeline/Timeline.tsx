@@ -46,6 +46,7 @@ import type {
 import { clipVisible, trackMix } from "../../shared/timeline/tracks";
 import {
   LABEL_SPACING,
+  LENGTH_MIN_WIDTH,
   MAX_PPF,
   clipName,
   clipsByTrack,
@@ -162,8 +163,6 @@ const pinLabels = {
 
 /** A clip name shows once its clip is this wide; timeline.css hides it below that. */
 const NAME_MIN_WIDTH = 28;
-/** A clip shows its duration once it is this wide. */
-const LENGTH_MIN_WIDTH = 200;
 
 interface Mounted {
   frames: FrameRange;
