@@ -1825,6 +1825,7 @@ test("track view settings stay outside history and survive real-edit undo and re
         await readFile(join(project.path, ".cutroom/view.json"), "utf8"),
       ),
     ).toEqual({
+      sources: {},
       timelines: {
         "index.html": settings,
         "second.html": {

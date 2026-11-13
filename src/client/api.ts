@@ -65,7 +65,10 @@ export async function api<T>(
       ...init?.headers,
     },
   });
-  const value: unknown = await response.json();
+  const value: unknown = await response.json().catch((error: unknown) => {
+    if (response.ok) throw error;
+    return null;
+  });
   if (!response.ok) {
     const error = z
       .object({ error: z.string(), code: z.string().optional() })

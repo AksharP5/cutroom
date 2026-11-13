@@ -22,6 +22,7 @@ const reads = [
   "projects_list",
   "project_read",
   "media_list",
+  "source_marks",
   "source_read",
   "transcripts_list",
   "transcription_status",

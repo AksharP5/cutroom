@@ -221,6 +221,22 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) => request(`/projects/${id(input.projectId)}/media`),
   );
   registry.registerTool(
+    "source_marks",
+    {
+      description:
+        "Read a media file's saved source In/Out marks in seconds, with exclusive Out. Null means unmarked. Marks are project view preferences, outside undo history. To place this range, pass In as clip.mediaStart and convert (Out - In) to timeline frames for clip.duration in timeline_edit. Unmarked ends use 0 and the media duration.",
+      inputSchema: {
+        ...project,
+        path: z.string().describe("Project-relative media file path"),
+      },
+      annotations: readOnly,
+    },
+    (input) =>
+      request(
+        `/projects/${id(input.projectId)}/source-marks?path=${id(input.path)}`,
+      ),
+  );
+  registry.registerTool(
     "source_read",
     {
       description: "Read a project text file and its exact content version.",

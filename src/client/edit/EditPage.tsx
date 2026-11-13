@@ -180,7 +180,6 @@ export function EditPage({
     return () => {
       closing.abort();
       closeSource();
-      useSource.setState({ marks: {} });
       reportEditorError("timeline", null);
       stopProject();
       stopPreview();

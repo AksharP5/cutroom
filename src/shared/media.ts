@@ -50,3 +50,15 @@ export const peakLevels = (() => {
     levels.push(levels.at(-1)! * mediaSettings.mipFactor);
   return Object.freeze(levels);
 })();
+
+/** Source-view length for a still image. */
+export const STILL_SECONDS = 5;
+export const stillMediaExtensions = [
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "avif",
+  "svg",
+] as const;
