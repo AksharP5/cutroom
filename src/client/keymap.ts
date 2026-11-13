@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, PointerEvent } from "react";
 
 /** The shortcut sheet's groups, in an order that fills its three columns evenly. */
 export const areas = [
@@ -301,6 +301,12 @@ export const isTyping = (target: EventTarget | null) =>
     !!target.closest(
       "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
+
+/** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */
+export function clearBrowserSelection(event: PointerEvent<HTMLElement>) {
+  if (isTyping(event.target)) return;
+  event.currentTarget.ownerDocument.getSelection()?.removeAllRanges();
+}
 
 /** Pointer clicks leave editor buttons ready for Space playback; keyboard activation keeps focus. */
 export function blurPointerButton(event: MouseEvent<HTMLElement>) {

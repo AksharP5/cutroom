@@ -19,6 +19,7 @@ import type { Timeline } from "../../shared/timeline/schema";
 import { EditorToolsContext } from "../editor/EditorTools";
 import {
   blurPointerButton,
+  clearBrowserSelection,
   hint,
   isTyping,
   keymap,
@@ -437,7 +438,12 @@ export function EditPage({
         <InspectorToggle />
         <ExportControl projectId={projectId} projectName={projectName} />
       </div>
-      <section ref={viewer} className="edit-viewer" aria-label="Viewer">
+      <section
+        ref={viewer}
+        className="edit-viewer"
+        aria-label="Viewer"
+        onPointerDownCapture={clearBrowserSelection}
+      >
         <Viewer
           key={projectId}
           projectId={projectId}
@@ -468,7 +474,11 @@ export function EditPage({
         }
         onPointerMove={resize}
       />
-      <section className="edit-timeline" aria-label="Timeline">
+      <section
+        className="edit-timeline"
+        aria-label="Timeline"
+        onPointerDownCapture={clearBrowserSelection}
+      >
         <ProjectTimeline
           voiceover={voiceover}
           projectId={projectId}

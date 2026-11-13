@@ -2,7 +2,10 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
-import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import {
+  ClipboardSchema,
+  TimelineViewSchema,
+} from "../src/shared/timeline/schema";
 
 test("Ctrl+A selects unlocked clips and preserves native text selection", async ({
   page,
@@ -80,5 +83,33 @@ test("Ctrl+A selects unlocked clips and preserves native text selection", async 
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     selected,
   );
+  for (const [kind, target] of [
+    ["clip", page.locator('[data-clip="picture"]')],
+    ["picture", page.getByRole("region", { name: "Viewer", exact: true })],
+  ] as const) {
+    await page.mouse.click(box.x + 22, box.y + 8, { clickCount: 3 });
+    expect(
+      await page.evaluate(() => window.getSelection()?.toString()),
+    ).toContain("Describe an edit");
+    await target.click();
+    await page.keyboard.press("Control+a");
+    await page.screenshot({
+      path: testInfo.outputPath(`return-to-${kind}.png`),
+    });
+    await expect(page.locator("[data-clip].selected")).toHaveCount(2);
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(
+      "",
+    );
+    const copied = page.waitForResponse(/\/timeline\/copy$/);
+    await page.keyboard.press("Control+c");
+    const clipboard = ClipboardSchema.parse(await (await copied).json());
+    // Copy retains its existing linked-partner behavior, including the locked partner.
+    expect(clipboard.clips.map((clip) => clip.id).sort()).toEqual([
+      "locked",
+      "off",
+      "picture",
+    ]);
+    await page.keyboard.press("Shift+A");
+  }
   expect((await read()).timeline).toEqual(before.timeline);
 });
