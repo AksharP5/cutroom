@@ -34,6 +34,7 @@ import { Inspector, InspectorToggle } from "./inspector/Inspector";
 import { ExportControl } from "./ExportDialog";
 import { SelectMenu } from "../components/SelectMenu";
 import {
+  receiveAnimationFeedback,
   editTimeline,
   loadTimeline,
   openTimeline,
@@ -145,6 +146,21 @@ export function EditPage({
       () => void loadTimeline(projectId, closing.signal).catch(fail),
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
+    const stopAnimationFeedback = subscribeProjectEvents(
+      projectId,
+      "animation-left-behind",
+      (event) => {
+        try {
+          receiveAnimationFeedback(
+            projectId,
+            JSON.parse(event.data),
+            closing.signal,
+          );
+        } catch (error) {
+          fail(error);
+        }
+      },
+    );
     const stopPreview = subscribeProjectEvents(
       projectId,
       "file-change",
@@ -168,6 +184,7 @@ export function EditPage({
       reportEditorError("timeline", null);
       stopProject();
       stopPreview();
+      stopAnimationFeedback();
       unsubscribe();
     };
   }, [projectId]);

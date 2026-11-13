@@ -9,8 +9,10 @@ import {
   AgentNameSchema,
 } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
+import type { z } from "zod";
 import { posix } from "node:path";
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
@@ -18,12 +20,17 @@ import type { Project, ProjectSummary } from "../../shared/project";
 import {
   TimelineError,
   applyAll,
+  animationOrigin,
+  canonicalSeconds,
   canonicalTimeline,
   toSeconds,
   copyClips,
 } from "../../shared/timeline/apply";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
+  AnimationFeedbackSchema,
+  TAB_ORIGIN_HEADER,
+  TabOriginSchema,
   CommandBatchSchema,
   CopyClipsSchema,
   TimelineSettingsSchema,
@@ -37,7 +44,8 @@ import type {
 } from "../../shared/timeline/schema";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { parseInput } from "../projects/routes";
-import { readSource } from "../projects/store";
+import { isMissing, readSource } from "../projects/store";
+import { localMediaPath } from "../../shared/media";
 import { editLabel } from "../../shared/timeline/labels";
 import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
@@ -52,6 +60,7 @@ import {
   settingsOf,
 } from "./composition";
 import type { ParsedComposition } from "./composition";
+import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
@@ -79,6 +88,10 @@ export function createTimelineRoutes(
   store: ProjectStore,
   reviews: ReviewService,
 ) {
+  const listeners = new Map<
+    string,
+    Set<(feedback: z.infer<typeof AnimationFeedbackSchema>) => void>
+  >();
   const clipboards = new Map<
     string,
     {
@@ -118,7 +131,11 @@ export function createTimelineRoutes(
   const edit = async (
     project: Project,
     batch: CommandBatch,
-  ): Promise<TimelineView> => {
+  ): Promise<
+    TimelineView & {
+      detectAnimation: () => ReturnType<typeof animationFeedback>;
+    }
+  > => {
     const { composition } = batch;
     const current = await read(project, composition);
     if (current.revision !== batch.expectedRevision)
@@ -177,10 +194,33 @@ export function createTimelineRoutes(
         if (clip.src !== null && clip.sourceDuration !== null)
           lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
+    const shifts = new Map<string, number>();
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
         onCreate: (id, origin) => origins.set(id, origin),
+        onApply: [current.parsed, ...snapshots.values()].some((source) =>
+          /<script\b/i.test(source.html),
+        )
+          ? (before, after) => {
+              const previous = new Map(
+                before.clips.map((clip) => [clip.id, clip]),
+              );
+              for (const clip of after.clips) {
+                const old = previous.get(clip.id);
+                if (!old) continue;
+                const delta = canonicalSeconds(
+                  animationOrigin(clip, after.fps) -
+                    animationOrigin(old, before.fps),
+                );
+                if (delta)
+                  shifts.set(
+                    clip.id,
+                    canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
+                  );
+              }
+            }
+          : undefined,
         onSkip: (clip, reason) =>
           skippedClips.set(clip.id, {
             clipId: clip.id,
@@ -199,14 +239,39 @@ export function createTimelineRoutes(
     const html = patchComposition(current.parsed, timeline, origins, snapshots);
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
-    const written = parseComposition(html, settings, {
+    const writtenSource = parseComposition(html, settings, {
       scope: current.scope,
       mediaLengths: lengths,
-    }).timeline;
+    });
+    const written = writtenSource.timeline;
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
+      );
+    const detectAnimation = () =>
+      animationFeedback(
+        current.parsed,
+        writtenSource,
+        shifts,
+        origins,
+        snapshots,
+        async (src) => {
+          const path = localMediaPath(composition, src);
+          if (path === null) return null;
+          const source = await readSource(project, path).catch((error) => {
+            if (
+              isMissing(error) ||
+              (error instanceof HttpError && error.status < 500) ||
+              (error instanceof Error &&
+                "code" in error &&
+                ["EACCES", "EPERM"].includes(String(error.code)))
+            )
+              return null;
+            throw error;
+          });
+          return source?.content ?? null;
+        },
       );
     // Recorded before the write, so an id is spent even if the write fails.
     await recordClipIds(
@@ -263,6 +328,7 @@ export function createTimelineRoutes(
         timelines[composition] ?? emptyTimelineSettings(),
       ),
       timeline: written,
+      detectAnimation,
       ...(skippedClips.size && { skippedClips: [...skippedClips.values()] }),
     };
   };
@@ -408,38 +474,88 @@ export function createTimelineRoutes(
           "Edited timeline",
         );
       const batch = { ...input, composition, label };
-      return c.json({
-        ...(await reviews.editComposition(
-          project,
-          batch.composition,
-          c.req.header(AGENT_HEADER),
-          () =>
-            store.mutate(
-              project,
-              batch.label,
-              () => edit(project, batch),
-              c.req.header(AGENT_HEADER)
-                ? {
-                    kind: "agent",
-                    name:
-                      reviews.agent(project, c.req.header(AGENT_HEADER)).turn
-                        .name ??
-                      parseInput(
-                        AgentNameSchema,
-                        decodeURIComponent(
-                          c.req.header(AGENT_NAME_HEADER) ?? "Agent",
-                        ),
+      const origin =
+        parseInput(
+          TabOriginSchema.optional(),
+          c.req.header(TAB_ORIGIN_HEADER),
+        ) ?? null;
+      const { detectAnimation, ...result } = await reviews.editComposition(
+        project,
+        batch.composition,
+        c.req.header(AGENT_HEADER),
+        () =>
+          store.mutate(
+            project,
+            batch.label,
+            () => edit(project, batch),
+            c.req.header(AGENT_HEADER)
+              ? {
+                  kind: "agent",
+                  name:
+                    reviews.agent(project, c.req.header(AGENT_HEADER)).turn
+                      .name ??
+                    parseInput(
+                      AgentNameSchema,
+                      decodeURIComponent(
+                        c.req.header(AGENT_NAME_HEADER) ?? "Agent",
                       ),
-                  }
-                : undefined,
-            ),
-          batch.noteId,
-        )),
+                    ),
+                }
+              : undefined,
+          ),
+        batch.noteId,
+      );
+      const response = {
+        ...result,
         ...(await reviews.clipChanges(project, batch.composition)),
-      });
+      };
+      const followup = async () => {
+        // Give the committed edit's response a turn to flush before running source inspection.
+        await Bun.sleep(0);
+        const feedback = {
+          origin,
+          revision: response.revision,
+          composition,
+          clips: await detectAnimation(),
+        };
+        for (const listener of listeners.get(project.id) ?? [])
+          listener(feedback);
+        return feedback;
+      };
+      if (c.req.header("accept") === "text/event-stream")
+        return streamSSE(c, async (stream) => {
+          await stream.writeSSE({
+            event: "result",
+            data: JSON.stringify(response),
+          });
+          const feedback = await followup();
+          await stream.writeSSE({
+            event: "animation-left-behind",
+            data: JSON.stringify(feedback),
+          });
+        });
+      setTimeout(() => {
+        void followup().catch((error: unknown) =>
+          console.error("Animation feedback failed:", error),
+        );
+      }, 0);
+      return c.json(response);
     } catch (error) {
       return refused(c, error);
     }
   });
-  return api;
+  return Object.assign(api, {
+    subscribeAnimationFeedback(
+      projectId: string,
+      listener: (feedback: z.infer<typeof AnimationFeedbackSchema>) => void,
+    ) {
+      const subscriptions = listeners.get(projectId) ?? new Set();
+      subscriptions.add(listener);
+      listeners.set(projectId, subscriptions);
+      return () => {
+        subscriptions.delete(listener);
+        if (!subscriptions.size) listeners.delete(projectId);
+      };
+    },
+  });
 }

@@ -19,6 +19,8 @@ import {
   TranscribeInputSchema,
   TranscriptImportSchema,
 } from "../../shared/project";
+import type { AnimationFeedback } from "../../shared/timeline/schema";
+import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
 
@@ -58,6 +60,7 @@ export function createMcpServer(options: McpOptions = {}) {
   const server = new McpServer(
     { name: "cutroom", version },
     {
+      capabilities: { logging: {} },
       instructions:
         "Cutroom is a local video studio. Use project IDs from projects_list. Read existing source before writing and retain its exact version. To create a new composition source file, use source_write with expectedVersion: null; existing paths are refused. Source writes and script edits share the editor's undo history. Script cuts ripple the selected media lane; other tracks retain their timing. Read project annotations for frame, drawing, and time context. Review notes persist until you complete, block, or withdraw them with the review tools; reconcile each new message with the queue first. Never modify source media to cut the timeline. Give each animated title or graphic its own sub-composition file: a host clip with data-composition-src, and in that file a timeline in clip-local seconds starting at 0, registered under its composition id. Timeline edits then move, cut and copy it with its animation. Do not put its tweens at absolute seconds on the root timeline. New projects load the pinned GSAP build from assets/vendor/gsap.min.js in index.html, offline in preview and export. Keep that script tag when editing the root composition. Initialize window.__timelines ??= {} before registering a timeline. To end an animation at the clip's end, read the host clip's data-playback-start and data-duration.",
     },
@@ -70,11 +73,17 @@ export function createMcpServer(options: McpOptions = {}) {
       return tool;
     },
   };
-  const requestApi = async (path: string, method = "GET", body?: unknown) => {
+  const requestApi = async (
+    path: string,
+    method = "GET",
+    body?: unknown,
+    followup?: (data: AnimationFeedback) => Promise<void>,
+  ) => {
     try {
       const response = await fetchLocal(`${baseUrl}/api${path}`, {
         method,
         headers: {
+          ...(followup && { accept: "text/event-stream" }),
           origin: baseUrl,
           [AGENT_HEADER]: options.agentToken ?? "external",
           [AGENT_NAME_HEADER]: encodeURIComponent(
@@ -86,6 +95,35 @@ export function createMcpServer(options: McpOptions = {}) {
         },
         ...(body !== undefined && { body: JSON.stringify(body) }),
       });
+      if (response.ok && followup) {
+        const events = animationEvents(response);
+        const first = await events.next();
+        if (first.done || first.value.event !== "result") {
+          await events.return();
+          throw new Error(
+            "Timeline edit did not acknowledge its committed result.",
+          );
+        }
+        const result = first.value.result;
+        setTimeout(() => {
+          void (async () => {
+            for await (const event of events)
+              if (
+                event.event === "animation-left-behind" &&
+                event.feedback.clips.length
+              )
+                await followup(event.feedback);
+          })().catch((error: unknown) =>
+            console.error("MCP animation follow-up failed:", error),
+          );
+        }, 0);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+          structuredContent: { result },
+        };
+      }
       const text = await response.text();
       if (!response.ok)
         return {
@@ -116,8 +154,12 @@ export function createMcpServer(options: McpOptions = {}) {
       };
     }
   };
-  const request = (path: string, method?: string, body?: unknown) =>
-    requestApi(`/cutroom${path}`, method, body);
+  const request = (
+    path: string,
+    method?: string,
+    body?: unknown,
+    followup?: (data: AnimationFeedback) => Promise<void>,
+  ) => requestApi(`/cutroom${path}`, method, body, followup);
   const id = encodeURIComponent;
   const readOnly = {
     readOnlyHint: true,
@@ -321,8 +363,18 @@ export function createMcpServer(options: McpOptions = {}) {
   );
   registerReviewTools(registry, request);
   registerExportTools(registry, requestApi);
-  registerTimelineTools(registry, request, async (path, init) =>
-    fetchLocal(`${baseUrl}${path}`, init),
+  registerTimelineTools(
+    registry,
+    request,
+    async (path, init) => fetchLocal(`${baseUrl}${path}`, init),
+    async (data) => {
+      if (!server.isConnected()) return;
+      await server.server.sendLoggingMessage({
+        level: "warning",
+        logger: "cutroom.animation",
+        data,
+      });
+    },
   );
   return Object.assign(server, { toolRegistry });
 }

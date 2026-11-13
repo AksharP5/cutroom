@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Fresh for each page, including a duplicated tab; never stored with project data. */
+export const tabOrigin = crypto.randomUUID();
+
 /** App, timeline and preview share one project connection per tab. */
 const projectStreams = new Map<
   string,
@@ -8,14 +11,20 @@ const projectStreams = new Map<
 
 export function subscribeProjectEvents(
   projectId: string,
-  type: "message" | "file-change" | "export" | "ready" | "view",
+  type:
+    | "message"
+    | "file-change"
+    | "export"
+    | "ready"
+    | "view"
+    | "animation-left-behind",
   listener: (event: MessageEvent<string>) => void,
 ) {
   let stream = projectStreams.get(projectId);
   if (!stream) {
     stream = {
       source: new EventSource(
-        `/api/cutroom/projects/${encodeURIComponent(projectId)}/events`,
+        `/api/cutroom/projects/${encodeURIComponent(projectId)}/events?origin=${tabOrigin}`,
       ),
       listeners: 0,
     };
