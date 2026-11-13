@@ -24,9 +24,9 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `timeline_view`                                            | Render one timeline frame as an image.                             |
 | `export_start`, `export_status`, `export_cancel`           | Start, inspect, and cancel the editor's MP4 render jobs.           |
 
-Start with `projects_list` and retain the returned project ID. Before a source save, use `source_read` and pass its exact version to `source_write`. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
+Start with `projects_list` and retain the returned project ID. Before saving an existing file, use `source_read` and pass its exact version to `source_write`. To create a file and its parent folders, pass `expectedVersion: null`; an existing path is rejected with 409. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
-`source_write` only edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
+`source_write` only creates or edits composition source types: `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, `.svg`, and `.json`. Any hidden path segment, agent instruction file, or tooling configuration such as `package.json`, `tsconfig.json`, or `vite.config.js` is refused with 403. Symlink targets follow the same rule. These server checks apply to agents and owner requests, regardless of approval or the saved grant. History cannot undo or restore protected instructions/configuration either.
 
 ## Approvals
 
@@ -55,6 +55,10 @@ In the editor, drops, moves and overwrite pastes that remove a whole clip show o
 
 Moves, trims, ripples, razor cuts and paste change a clip's `data-start`. Animation written at absolute seconds on the root timeline, such as `tl.fromTo("#cta", {opacity: 0}, {opacity: 1}, 36)`, stays at 36 seconds, so the title can play at the wrong time or not at all. Give each animated title its own sub-composition file instead. The HyperFrames runtime places a nested composition's timeline at its host clip's start, so every edit carries the animation with it.
 
+On a fresh project, keep the starter's `<script src="assets/vendor/gsap.min.js"></script>` in `index.html`. New projects carry the pinned GSAP distribution with its license notice, so preview, thumbnails and export work offline. Imported projects must supply their own local GSAP script before the title's setup script.
+
+First call `source_write` with `path: "compositions/lower.html"`, `expectedVersion: null`, and the second HTML block below as `content`. Then `source_read` the root, insert the host clip inside its `main`, and save it with that read's exact version. Keep the rest of the starter HTML. Verify the entrance with `timeline_view` at frames 180, 185 and 195 on a 30 fps project, then export the same range.
+
 ```html
 <!-- index.html: the host clip -->
 <div
@@ -79,7 +83,12 @@ Moves, trims, ripples, razor cuts and paste change a clip's `data-start`. Animat
     data-width="1920"
     data-height="1080"
   >
-    <p id="lower-text">Ada Lovelace, Founder</p>
+    <p
+      id="lower-text"
+      style="position:absolute;left:120px;top:600px;margin:0;font-size:64px"
+    >
+      Ada Lovelace, Founder
+    </p>
   </div>
   <script>
     {
@@ -96,6 +105,7 @@ Moves, trims, ripples, razor cuts and paste change a clip's `data-start`. Animat
         0,
       );
       tl.to("#lower-text", { opacity: 0, duration: 0.4 }, out - 0.4);
+      window.__timelines ??= {};
       window.__timelines["lower"] = tl;
     }
   </script>

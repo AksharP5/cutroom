@@ -21,7 +21,7 @@ Use **Refresh agent configuration** after installing a skill or signing in. The 
 
 Messages include the project path, playhead, active composition, and selected elements. Captured frames of new review notes are sent as images. Files explicitly chosen outside the project are copied into `.cutroom/attachments/` before use; files already inside the project stay in place.
 
-The MCP instructions ask agents to build each animated title as its own sub-composition file, so timeline edits carry its animation with it. [Animated titles](mcp.md#animated-titles) has the pattern.
+The MCP instructions ask agents to create each animated title as its own sub-composition file with `source_write` and `expectedVersion: null`, so timeline edits carry its animation with it. New projects load their local `assets/vendor/gsap.min.js`; keep that script tag in the root HTML. [Animated titles](mcp.md#animated-titles) has the pattern.
 
 Conversation presentation is stored in Cutroom's data folder. Native session IDs allow a resumed conversation to use the provider's existing context. Unsent composer text and attachments are saved in browser storage for each project.
 

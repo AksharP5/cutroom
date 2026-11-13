@@ -706,16 +706,21 @@ export function createReviewService(store: ProjectStore) {
       token: string | undefined,
       work: () => Promise<T>,
       noteId?: string,
+      options: { create?: boolean } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
-        await projectWritePath(project, composition);
+        await projectWritePath(project, composition, {
+          allowMissing: options.create,
+        });
         composition = posix.normalize(composition.replaceAll("\\", "/"));
         let items: ReviewItem[];
         let before: ClipVersions;
         try {
           items = await reconcile(project);
-          before = await clipVersions(project, composition);
+          before = options.create
+            ? new Map()
+            : await clipVersions(project, composition);
         } catch (error) {
           // Broken review metadata cannot stop repairing source or using the timeline.
           if (
