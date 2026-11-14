@@ -240,11 +240,19 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   await Promise.all([changed(page, tokens[0]!), changed(second, tokens[1]!)]);
   expect(await Promise.all([live(page), live(second)])).toEqual(docs);
   let source = await readFile(join(project.path, "index.html"), "utf8");
-  let previous = await token(page);
+  const diskTokens = await Promise.all([token(page), token(second)]);
   source = source.replace('data-media-start="1"', 'data-media-start="2"');
   await replaceIndex(project.path, source);
-  await changed(page, previous);
-  expect(await live(page)).toBe(docs[0]);
+  await Promise.all([
+    changed(page, diskTokens[0]!),
+    changed(second, diskTokens[1]!),
+  ]);
+  // Shared pending compilations can lack eligibility proof and safely reload.
+  for (const tab of [page, second])
+    await expect(
+      tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
+    ).toHaveAttribute("data-media-start", "2");
+  let previous = await token(page);
   for (const transform of [
     (s: string) => s.replace("Chapter one", "Chapter two"),
     (s: string) => s.replace("color:white", "color:yellow"),
