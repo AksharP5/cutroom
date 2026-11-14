@@ -110,10 +110,12 @@ export function registerRenderIsolation(
             "    filter: async (src) => {\n      const rel = relative5(projectDir, src);",
             url,
           );
+          // The editor keeps rewriting .cutroom (thumbnail scratch, view state) while an export
+          // runs, and the copy fails on any entry that vanishes under it. The render reads none of it.
           source = replaceOnce(
             source,
             "      return firstSegment === void 0 || !PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment);",
-            `      if (firstSegment === ${JSON.stringify(MEDIA_TRASH)} || (firstSegment !== void 0 && PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment))) return false;\n      await projectPath({ path: projectDir }, rel);\n      return true;`,
+            `      if (firstSegment === ${JSON.stringify(MEDIA_TRASH)} || firstSegment === ".cutroom" || (firstSegment !== void 0 && PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment))) return false;\n      await projectPath({ path: projectDir }, rel);\n      return true;`,
             url,
           );
           // The local chunk engine supports rational fps; the distributed
