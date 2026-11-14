@@ -1,0 +1,619 @@
+{
+  "date": "2026-11-14",
+  "base": "b774c2a2e15d006305bc4ec344c1a882df855f84",
+  "implementation": "917945f34a63f1a78681fcdd05dd401344c0ac6a",
+  "environment": {
+    "bun": "1.4.4",
+    "chromium": "155.0.8059.84",
+    "viewport": [1720, 1050],
+    "headless": true,
+    "muted": true,
+    "gpuOverride": null,
+    "cpu": "Intel Core i5-14400F",
+    "host": "shared, 32 GB RAM",
+    "workers": 1,
+    "dpr": 1,
+    "loadNote": "Final local samples were taken on a loaded shared machine. The owner reported an active Rust build and browsers and authorized proceeding below 10 GB available. No local packages, browsers or media were downloaded."
+  },
+  "method": {
+    "input": "Size field Enter keydown, alternating 64px and 96px",
+    "end": "edit-stage data-preview-ready after saved revision and paint confirmation",
+    "runsPerMode": 5,
+    "warmupMs": 4500,
+    "beforeModeNote": "Both modes reload on main. live means the normal authorized path attempts timing then reloads; reload disables parent authorization. The baseline driver asserts document replacement and records latency without the new relative gate.",
+    "control": "Same implementation and saved edit, with parent authorization disabled to force a direct reload. Five samples per mode, alternating order; visible PNG must change, saved and computed sizes must agree, live must retain the document and reload must replace it.",
+    "comparisonLimit": "Main and implementation ran separately under different shared-host load. Main/head medians are descriptive. The same-build relative control is the gate; every completed sample and outlier is retained."
+  },
+  "loadedMachineStarts": [
+    {
+      "case": "check-final-source",
+      "time": "2026-11-14T21:32:42.772701+00:00",
+      "availableKiB": 8993820,
+      "loadAverage": ["9.32", "9.40", "6.70"],
+      "workers": 1
+    },
+    {
+      "case": "e2e-scale-final",
+      "time": "2026-11-14T21:32:44.124484+00:00",
+      "availableKiB": 9011700,
+      "loadAverage": ["9.32", "9.40", "6.70"],
+      "workers": 1
+    },
+    {
+      "case": "perf-interview-final",
+      "time": "2026-11-14T21:39:34.320360+00:00",
+      "availableKiB": 7619220,
+      "loadAverage": ["9.64", "9.38", "7.54"],
+      "workers": 1
+    },
+    {
+      "case": "perf-large-final",
+      "time": "2026-11-14T21:40:38.870176+00:00",
+      "availableKiB": 7358380,
+      "loadAverage": ["10.66", "9.74", "7.79"],
+      "workers": 1
+    }
+  ],
+  "before": [
+    {
+      "scenario": "500-clip title style",
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 975.7000000029802
+        },
+        {
+          "mode": "live",
+          "ms": 1101.5999999940395
+        },
+        {
+          "mode": "live",
+          "ms": 998.2000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 1135.6000000089407
+        },
+        {
+          "mode": "reload",
+          "ms": 1124.7000000029802
+        },
+        {
+          "mode": "live",
+          "ms": 1195.2000000029802
+        },
+        {
+          "mode": "live",
+          "ms": 2648.2000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 1947.5
+        },
+        {
+          "mode": "reload",
+          "ms": 1999.4000000059605
+        },
+        {
+          "mode": "live",
+          "ms": 2568.7000000029802
+        }
+      ],
+      "live": 1195.2000000029802,
+      "reload": 1135.6000000089407
+    },
+    {
+      "scenario": "interview title style",
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 714.5999999940395
+        },
+        {
+          "mode": "live",
+          "ms": 794.7999999970198
+        },
+        {
+          "mode": "live",
+          "ms": 927.7999999970198
+        },
+        {
+          "mode": "reload",
+          "ms": 634.2000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 920.5999999940395
+        },
+        {
+          "mode": "live",
+          "ms": 875.6999999880791
+        },
+        {
+          "mode": "live",
+          "ms": 998.3999999910593
+        },
+        {
+          "mode": "reload",
+          "ms": 1000.7000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 445.80000001192093
+        },
+        {
+          "mode": "live",
+          "ms": 531.6999999880791
+        }
+      ],
+      "live": 875.6999999880791,
+      "reload": 714.5999999940395
+    }
+  ],
+  "after": [
+    {
+      "scenario": "interview title style",
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 409.09999999403954
+        },
+        {
+          "mode": "live",
+          "ms": 191.8999999910593
+        },
+        {
+          "mode": "live",
+          "ms": 136.20000000298023
+        },
+        {
+          "mode": "reload",
+          "ms": 369.79999999701977
+        },
+        {
+          "mode": "reload",
+          "ms": 389.3999999910593
+        },
+        {
+          "mode": "live",
+          "ms": 134.3999999910593
+        },
+        {
+          "mode": "live",
+          "ms": 138.20000000298023
+        },
+        {
+          "mode": "reload",
+          "ms": 382.09999999403954
+        },
+        {
+          "mode": "reload",
+          "ms": 368.5
+        },
+        {
+          "mode": "live",
+          "ms": 129.1000000089407
+        }
+      ],
+      "live": 136.20000000298023,
+      "reload": 382.09999999403954,
+      "liveReloadRatio": 0.3564511908011119
+    },
+    {
+      "scenario": "500-clip title style",
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 1015.5999999940395
+        },
+        {
+          "mode": "live",
+          "ms": 461.20000000298023
+        },
+        {
+          "mode": "live",
+          "ms": 419.5
+        },
+        {
+          "mode": "reload",
+          "ms": 976.3999999910593
+        },
+        {
+          "mode": "reload",
+          "ms": 912.6000000089407
+        },
+        {
+          "mode": "live",
+          "ms": 466.20000000298023
+        },
+        {
+          "mode": "live",
+          "ms": 467
+        },
+        {
+          "mode": "reload",
+          "ms": 1012.2000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 952.3999999910593
+        },
+        {
+          "mode": "live",
+          "ms": 460.09999999403954
+        }
+      ],
+      "live": 461.20000000298023,
+      "reload": 976.3999999910593,
+      "liveReloadRatio": 0.4723473986145057
+    }
+  ],
+  "earlierImplementation": {
+    "note": "Before the decoded-handoff exclusion fix. The complete performance suite passed 10/11; interview document retention failed. These completed records are preserved separately from final samples.",
+    "scenarios": [
+      {
+        "scenario": "500-clip timing",
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 974.9000000059605
+          },
+          {
+            "mode": "live",
+            "ms": 429.90000000596046
+          },
+          {
+            "mode": "live",
+            "ms": 422.1000000089407
+          },
+          {
+            "mode": "reload",
+            "ms": 936.7999999970198
+          },
+          {
+            "mode": "reload",
+            "ms": 918.1999999880791
+          },
+          {
+            "mode": "live",
+            "ms": 433.90000000596046
+          },
+          {
+            "mode": "live",
+            "ms": 432.59999999403954
+          },
+          {
+            "mode": "reload",
+            "ms": 981.5
+          },
+          {
+            "mode": "reload",
+            "ms": 916
+          },
+          {
+            "mode": "live",
+            "ms": 438.29999999701977
+          }
+        ],
+        "live": 432.59999999403954,
+        "reload": 936.7999999970198
+      },
+      {
+        "scenario": "500-clip title style",
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 980.9000000059605
+          },
+          {
+            "mode": "live",
+            "ms": 411.3999999910593
+          },
+          {
+            "mode": "live",
+            "ms": 931
+          },
+          {
+            "mode": "reload",
+            "ms": 938.6000000089407
+          },
+          {
+            "mode": "reload",
+            "ms": 1014.2999999970198
+          },
+          {
+            "mode": "live",
+            "ms": 415.6000000089407
+          },
+          {
+            "mode": "live",
+            "ms": 422.3999999910593
+          },
+          {
+            "mode": "reload",
+            "ms": 972.7000000029802
+          },
+          {
+            "mode": "reload",
+            "ms": 950
+          },
+          {
+            "mode": "live",
+            "ms": 430.59999999403954
+          }
+        ],
+        "live": 422.3999999910593,
+        "reload": 972.7000000029802
+      }
+    ]
+  },
+  "ci": {
+    "source": "GitHub Actions",
+    "commit": "45996901311ee9245e9ed0114591d6f048c17fe2",
+    "url": "https://github.com/AksharP5/cutroom/actions/runs/43640845855",
+    "environment": {
+      "os": "ubuntu-24.04",
+      "bun": "1.4.4",
+      "chromium": "158.0.8127.18",
+      "viewport": [1720, 1050],
+      "headless": true,
+      "muted": true,
+      "renderer": "default; no override"
+    },
+    "performance": {
+      "pass": 11,
+      "fail": 0,
+      "durationMinutes": 11.7
+    },
+    "scenarios": [
+      {
+        "scenario": "500-clip timing",
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 1397
+          },
+          {
+            "mode": "live",
+            "ms": 812.5999999999767
+          },
+          {
+            "mode": "live",
+            "ms": 805.1000000000349
+          },
+          {
+            "mode": "reload",
+            "ms": 1296.399999999965
+          },
+          {
+            "mode": "reload",
+            "ms": 1232.600000000035
+          },
+          {
+            "mode": "live",
+            "ms": 749.3000000000466
+          },
+          {
+            "mode": "live",
+            "ms": 817.9000000000233
+          },
+          {
+            "mode": "reload",
+            "ms": 1313.399999999965
+          },
+          {
+            "mode": "reload",
+            "ms": 1258.399999999965
+          },
+          {
+            "mode": "live",
+            "ms": 777.7000000000116
+          }
+        ],
+        "live": 805.1000000000349,
+        "reload": 1296.399999999965
+      },
+      {
+        "scenario": "500-clip title style",
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 1336.1999999999534
+          },
+          {
+            "mode": "live",
+            "ms": 758
+          },
+          {
+            "mode": "live",
+            "ms": 736.2000000000698
+          },
+          {
+            "mode": "reload",
+            "ms": 1306.1999999999534
+          },
+          {
+            "mode": "reload",
+            "ms": 1318.5
+          },
+          {
+            "mode": "live",
+            "ms": 756.9000000000233
+          },
+          {
+            "mode": "live",
+            "ms": 724.5999999999767
+          },
+          {
+            "mode": "reload",
+            "ms": 1331.9000000000233
+          },
+          {
+            "mode": "reload",
+            "ms": 1216
+          },
+          {
+            "mode": "live",
+            "ms": 728.3000000000466
+          }
+        ],
+        "live": 736.2000000000698,
+        "reload": 1318.5
+      },
+      {
+        "scenario": "interview title style",
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 590.5
+          },
+          {
+            "mode": "live",
+            "ms": 183.59999999997672
+          },
+          {
+            "mode": "live",
+            "ms": 180.20000000006985
+          },
+          {
+            "mode": "reload",
+            "ms": 552.8000000000466
+          },
+          {
+            "mode": "reload",
+            "ms": 579.0999999999767
+          },
+          {
+            "mode": "live",
+            "ms": 191.39999999990687
+          },
+          {
+            "mode": "live",
+            "ms": 186.29999999993015
+          },
+          {
+            "mode": "reload",
+            "ms": 575.9000000000233
+          },
+          {
+            "mode": "reload",
+            "ms": 544.1999999999534
+          },
+          {
+            "mode": "live",
+            "ms": 173.80000000004657
+          }
+        ],
+        "live": 183.59999999997672,
+        "reload": 575.9000000000233
+      }
+    ]
+  },
+  "parityExample": [
+    {
+      "frame": 32,
+      "liveSha256": "4fb1f86bada502835153eaa7c5f795efc5f85bdb64b916dcedd90b318e6d17f5",
+      "freshSha256": "4fb1f86bada502835153eaa7c5f795efc5f85bdb64b916dcedd90b318e6d17f5"
+    },
+    {
+      "frame": 90,
+      "liveSha256": "862cf83217dcaf4d4cbe67d04bba123f6e89b0ca48a7b700f9acc4d911de8eef",
+      "freshSha256": "862cf83217dcaf4d4cbe67d04bba123f6e89b0ca48a7b700f9acc4d911de8eef"
+    },
+    {
+      "frame": 148,
+      "liveSha256": "3f5a44b3d88e92090554a0679de079a2c03e72b3f949c84455651ad458d74b25",
+      "freshSha256": "3f5a44b3d88e92090554a0679de079a2c03e72b3f949c84455651ad458d74b25"
+    }
+  ],
+  "validation": {
+    "main": {
+      "sha": "b774c2a2e15d006305bc4ec344c1a882df855f84",
+      "ci": "https://github.com/AksharP5/cutroom/actions/runs/43625721443",
+      "state": "failure",
+      "failedJob": "browser 3 of 3",
+      "failedTest": "viewer-media.spec.ts:1355 coalesced stalled replacements never expose the viewer background"
+    },
+    "local": {
+      "fullUnit": {
+        "pass": 779,
+        "skip": 5,
+        "fail": 0,
+        "log": "unit-final.log"
+      },
+      "fullBrowser": {
+        "pass": 445,
+        "fail": 3,
+        "total": 448,
+        "durationMinutes": 37,
+        "log": "e2e-final.log",
+        "failures": [
+          "preview-title.spec.ts MCP cold-font and motion PNG comparison",
+          "tracks.spec.ts export complete timeout at 45 seconds",
+          "trim-preview.spec.ts stage missing after 15 seconds"
+        ]
+      },
+      "notes": [
+        "Full browser suite ran once, in the foreground.",
+        "Available memory fell to 1-2 GiB during later export/trim cases after starting with 10 GiB available.",
+        "No owned processes or fixed-port task listeners remained after the full suite.",
+        "An earlier atomic font/motion edit failed PNG parity and initially received a combined-change reload exception. The final policy reloads edits involving Scale, covering that case and the later plate failure. Font readiness alone and will-change did not fix it; the will-change experiment was removed.",
+        "An extra comparison between two fresh reloads of that same compound case also differed at the scaled entrance despite equal computed state and geometry. This diagnostic is retained; it is not used to relax the strict live/fresh positive assertions. The fallback test verifies the canonical document replacement.",
+        "The interview failure identified HTML data-hf-preview-seek-hold changing from an empty string to null after decoding. It was already excluded by PR117. Seek bookkeeping now uses those same existing handoff-flag exclusions; unknown style and attribute divergence still reloads, verified by focused browser tests.",
+        "The extra Scale probe passed font and size, then failed exact PNG parity at a plate edit. The final bridge conservatively reloads any changed title involving Scale, including stylesheet changes affecting one. Non-Scale live assertions remain byte-exact. The combined font/motion exception was removed."
+      ],
+      "finalFocusedUnit": {
+        "pass": 45,
+        "fail": 0,
+        "log": "unit-scale-policy.log"
+      },
+      "finalFocusedBrowser": {
+        "pass": 27,
+        "fail": 0,
+        "log": "e2e-scale-policy.log",
+        "scope": "All timing/title workflows, including canonical reloads for loaded Scale font, size, plate and words."
+      },
+      "firstPerformanceSuite": {
+        "pass": 10,
+        "fail": 1,
+        "log": "perf-final.log",
+        "failure": "interview title style replaced the document because seek bookkeeping incorrectly checked the existing excluded root handoff flag."
+      },
+      "finalTypes": "pass, check-scale-policy.log",
+      "finalPerformance": {
+        "pass": 2,
+        "fail": 0,
+        "logs": ["perf-interview-final.log", "perf-large-final.log"],
+        "workers": 1,
+        "loadedMachine": true
+      },
+      "earlierShippingRecheck": {
+        "pass": 27,
+        "fail": 0,
+        "log": "e2e-shipping.log",
+        "note": "28 ran; the additional fresh-versus-fresh compound font/motion PNG diagnostic failed and is recorded separately. All 27 live-path and other fallback/export/trim checks passed."
+      },
+      "earlierCompoundFallback": {
+        "pass": 1,
+        "fail": 0,
+        "log": "e2e-fallback-final.log",
+        "contract": "Document replacement and saved title text, as for all other fallback cases."
+      }
+    },
+    "ci": {
+      "commit": "45996901311ee9245e9ed0114591d6f048c17fe2",
+      "url": "https://github.com/AksharP5/cutroom/actions/runs/43640845855",
+      "jobsPassed": 5,
+      "unitPass": 779,
+      "unitSkip": 5,
+      "functionalPass": 449,
+      "performancePass": 11,
+      "note": "Before the final narrower Scale eligibility rule and its additional fallback test; final-head CI is reported separately in the PR."
+    }
+  },
+  "liveLimitations": [
+    "Scale title changes reload, including entering/leaving Scale, font/size/plate/words and managed font-rule changes affecting a Scale title.",
+    "Enabling motion on a title without proven initial animation discovery reloads.",
+    "Authored scripts, DOM divergence, structural/CSS/dependency changes, stale revisions and failed acknowledgments retain the existing reload fallback."
+  ]
+}
