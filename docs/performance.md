@@ -221,9 +221,31 @@ No playback timing increase was measured in these runs. The unselected condition
 
 A GSAP x/y slide-in title with Position 40 px right and 10 px up retained its offset during playback and repeated seeks. FFmpeg-decoded MP4 frames 3, 15 and 45 matched the preview's video and title bounds within one pixel. [Decoded positions](https://github.com/AksharP5/cutroom/blob/pr-assets/inspector-position/position.json) retain the baseline, preview and export bounds. A separate hands-on drag/play/export check matched all four title edges exactly at frames 0, 30 and 90.
 
-The performance test now collects `cutroom:position-observation` measures from the isolated preview and requires the median of three per-run maximum observation durations to stay below 5 ms. Nothing selected must produce zero measures. Three runs per condition also count callback-entry gaps above 1.5 times the measured display interval during playback and ruler scrubbing, with and without the Position-edited title. The selected condition's median late-frame rate may rise by less than five percentage points. The direct observer budget catches repeated costly checks that a frame percentile can hide. Like #63, it tolerates one isolated slow run and retains every outlier. `position-observation.json` records each duration and callback gap, and `CUTROOM_POSITION_TIMING_OUT` saves that attachment locally.
+The performance test now collects `cutroom:position-observation` measures from the isolated preview and requires the median of three per-run maximum observation durations to stay below 5 ms. Nothing selected must produce zero measures. Three runs per condition also count callback-entry gaps above 1.5 times the measured display interval during playback, with and without the Position-edited title. The selected condition's median late-frame rate may rise by less than five percentage points. Scrubbing is judged differently, as described below. The direct observer budget catches repeated costly checks that a frame percentile can hide. Like #63, it tolerates one isolated slow run and retains every outlier. `position-observation.json` records each duration and callback gap, and `CUTROOM_POSITION_TIMING_OUT` saves that attachment locally.
 
 On November 11, 2026, installed Chromium 155 on the same 500-clip workload measured a maximum observer duration of 0.9 ms in both playback and scrubbing. All six unselected runs produced zero observations. Playback had two late callbacks in each run, with either selection; scrubbing had 2/4/2 without selection and 1/2/2 with the positioned title. A temporary local change stalled alternate observations for 30 ms. The new per-observation gate failed at 30.4 ms; the injected change was removed. These local results establish that the gate catches that regression, not that every host has the same timings.
+
+Scrubbing used the same late-frame comparison until November 14, 2026. It failed on `main` three times with no Position change and passed on rerun. In 59 CI performance jobs, the late-frame rate with nothing selected ranged from 2% to 39% between runners, because the runtime's own work per scrubbed frame sits near the 1.5-interval threshold. The selected-minus-unselected difference ranged from -6.2 to +13.1 points against a 5-point limit. With a 3 ms stall injected into every outline read, that gate failed one local run in two.
+
+Scrubbing now runs five pairs of 90 ruler steps, alternating which condition goes first, and gates on two measured quantities:
+
+- Position work per scrub step: the selected run's observation and outline-read durations summed and divided by 90, median of five runs, below 2 ms. This catches reads that each stay under the 5 ms per-read budget but add up on every seek.
+- Editor CPU ratio: the editor main thread's CPU time (`ThreadTime` from Chromium's `Performance.getMetrics`) over the scrub with the title selected, divided by the paired unselected scrub, median of five pairs, below 1.3. CPU time does not grow when a busy runner deschedules the browser. This catches the editor's own cost of following the selected clip, such as handling each warning, at roughly 4 ms per step and above on this workload. The sandboxed preview runs in another process, where the runtime uses about 50 ms of CPU per step; Position work there is too small to see against that, which is why it is measured directly.
+
+Scrub late-frame counts stay in the attachment but no longer gate. Local results on November 14, 2026, installed Chromium at 1720×1050:
+
+| Condition                        | Position ms per step | Editor CPU ratio | Result |
+| -------------------------------- | -------------------: | ---------------: | ------ |
+| Idle, three runs                 |         0.53 to 0.59 |     1.04 to 1.14 | pass   |
+| 24 busy loops on 16 cores, three |         0.56 to 0.95 |     0.98 to 1.12 | pass   |
+| 3 ms stall in each outline read  |                 3.56 |             1.07 | fail   |
+| 3 ms stall in each observation   |                 3.59 |             1.10 | fail   |
+| 6 ms stall handling each warning |                 0.60 |             1.46 | fail   |
+| 4 ms stall handling each warning |                 0.54 |             1.42 | fail   |
+
+Four CI runs of this change on GitHub's runners, whose scrub late-frame rates with nothing selected ranged from 18% to 39%, measured 0.54 to 0.67 ms per step and CPU ratios of 1.09 to 1.11.
+
+The stalls are `CUTROOM_POSITION_READ_STALL_MS`, `CUTROOM_POSITION_OBSERVATION_STALL_MS` and `CUTROOM_POSITION_EDITOR_STALL_MS`. In those four stalled runs the old late-frame difference was 4.5, -1.7, -3.0 and 0.0 points, all inside its limit.
 
 ### Track heights
 

@@ -16,12 +16,34 @@ interface MeasuredWindow extends Window {
 
 const median = (values: number[]) =>
   values.toSorted((a, b) => a - b)[Math.floor(values.length / 2)]!;
+const sum = (values: number[]) =>
+  values.reduce((total, value) => total + value, 0);
+
+const scrubSteps = 90;
+// Runners differ several-fold in how many scrub frames arrive late (2% to 39% with nothing
+// selected), so scrubbing is judged on work that is measured, in alternating pairs.
+const conditions = [
+  ...[0, 1, 2].flatMap((run) =>
+    [false, true].map((selected) => ({
+      run,
+      mode: "playback" as const,
+      selected,
+    })),
+  ),
+  ...[0, 1, 2, 3, 4].flatMap((run) =>
+    (run % 2 ? [true, false] : [false, true]).map((selected) => ({
+      run,
+      mode: "scrub" as const,
+      selected,
+    })),
+  ),
+];
 
 test(
   "Position observation and outline tracking stay in budget during 500-clip playback and scrubbing",
   { tag: "@performance" },
   async ({ page, request }, info) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     // Negative controls stall the actual measured reads, not the test's clock.
     const stall = Number(process.env.CUTROOM_POSITION_READ_STALL_MS ?? 0);
     if (stall > 0)
@@ -53,6 +75,31 @@ test(
           return readStyle.call(this, element, pseudo);
         };
       }, observationStall);
+    const editorStall = Number(
+      process.env.CUTROOM_POSITION_EDITOR_STALL_MS ?? 0,
+    );
+    if (editorStall > 0)
+      await page.addInitScript((stall) => {
+        if (window !== top) return;
+        window.addEventListener("message", (event) => {
+          if (event.data?.type !== "position-warning") return;
+          const end = performance.now() + stall;
+          while (performance.now() < end) {
+            /* injected editor-side stall */
+          }
+        });
+      }, editorStall);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Performance.enable");
+    // CPU time the editor's main thread has used, which a busy runner cannot inflate by
+    // descheduling the browser. The sandboxed preview is another process: its Position work
+    // is the two measures collected below.
+    const editorCpuMs = async () => {
+      const { metrics } = await cdp.send("Performance.getMetrics");
+      return (
+        metrics.find((metric) => metric.name === "ThreadTime")!.value * 1000
+      );
+    };
     const project = await timelineWorkload(request, 500);
     const file = join(project.path, "index.html");
     await writeFile(
@@ -72,126 +119,121 @@ test(
       frames: number[];
       maxObservation: number;
       lateFrames: number;
+      positionMs: number;
+      editorCpuMs: number;
     }[] = [];
-    for (let run = 0; run < 3; run++) {
-      for (const mode of ["playback", "scrub"] as const) {
-        for (const selected of [false, true]) {
-          await page.goto("about:blank");
-          await page.goto(`/#project/${project.id}`);
-          await expect(
-            page.locator(".edit-stage[data-preview-ready]"),
-          ).toBeVisible();
-          await expect(page.locator("[data-clip]")).toHaveCount(500);
-          if (selected) {
-            await page.locator('[data-clip="title-0"]').click();
-            await expect(positionField(page)).toHaveValue("40 px");
-          }
-          // Zoom both conditions equally so ruler drags can seek within the title's 4 seconds.
-          if (mode === "scrub") {
-            for (let i = 0; i < 10; i++)
-              await page.keyboard.press("Control+Equal");
-          }
-          await waitFrames(page, 15);
-          const preview = page
-            .frameLocator("iframe[data-live]")
-            .locator("#title-0");
-          const interval = await preview.evaluate(async () => {
-            const entries: number[] = [];
-            for (let i = 0; i < 20; i++) {
-              await new Promise<void>((resolve) =>
-                requestAnimationFrame(() => resolve()),
-              );
-              entries.push(performance.now());
-            }
-            const gaps = entries.slice(1).map((at, i) => at - entries[i]!);
-            return gaps.toSorted((a, b) => a - b)[Math.floor(gaps.length / 2)]!;
-          });
-          await preview.evaluate(() => {
-            const stats = {
-              observations: [] as { start: number; duration: number }[],
-              boxes: [] as number[],
-              frames: [] as number[],
-              running: true,
-              observer: new PerformanceObserver((list) => {
-                for (const entry of list.getEntries())
-                  if (entry.name === "cutroom:position-observation")
-                    stats.observations.push({
-                      start: entry.startTime,
-                      duration: entry.duration,
-                    });
-                  else if (entry.name === "cutroom:clip-box")
-                    stats.boxes.push(entry.duration);
-              }),
-            };
-            stats.observer.observe({ type: "measure" });
-            Object.assign(window, { positionPerf: stats });
-            let previous = performance.now();
-            const sample = () => {
-              const now = performance.now(); // Actual callback entry, not rAF's scheduled timestamp.
-              stats.frames.push(now - previous);
-              previous = now;
-              if (stats.running) requestAnimationFrame(sample);
-            };
-            requestAnimationFrame(sample);
-          });
-          if (mode === "playback") {
-            await page
-              .getByRole("button", { name: "Play forward", exact: true })
-              .click();
-            await page.waitForTimeout(2500);
-            await page
-              .getByRole("button", { name: "Stop", exact: true })
-              .click();
-          } else {
-            const ppf = await page
-              .locator(".tl-grid")
-              .evaluate((el) =>
-                Number.parseFloat(
-                  getComputedStyle(el).getPropertyValue("--ppf"),
-                ),
-              );
-            const ruler = await page.locator(".tl-ruler").boundingBox();
-            if (!ruler) throw new Error("Timeline ruler missing");
-            await page.mouse.move(ruler.x + 3 * ppf, ruler.y + 12);
-            await page.mouse.down();
-            for (let i = 0; i < 90; i++) {
-              await page.mouse.move(
-                ruler.x + (3 + (i % 75)) * ppf,
-                ruler.y + 12,
-              );
-              await waitFrames(page, 1);
-            }
-            await page.mouse.up();
-            await expect(
-              page.locator(".edit-stage[data-preview-ready]"),
-            ).toBeVisible();
-          }
-          await waitFrames(page, 2);
-          const samples = await preview.evaluate(() => {
-            const stats = (window as unknown as MeasuredWindow).positionPerf;
-            stats.running = false;
-            stats.observer.disconnect();
-            return {
-              observations: stats.observations,
-              boxes: stats.boxes,
-              frames: stats.frames.slice(1),
-            };
-          });
-          results.push({
-            run,
-            mode,
-            selected,
-            interval,
-            ...samples,
-            maxObservation: Math.max(
-              0,
-              ...samples.observations.map((entry) => entry.duration),
-            ),
-            lateFrames: samples.frames.filter((gap) => gap > interval * 1.5)
-              .length,
-          });
-        }
+    for (const { run, mode, selected } of conditions) {
+      await page.goto("about:blank");
+      await page.goto(`/#project/${project.id}`);
+      await expect(
+        page.locator(".edit-stage[data-preview-ready]"),
+      ).toBeVisible();
+      await expect(page.locator("[data-clip]")).toHaveCount(500);
+      if (selected) {
+        await page.locator('[data-clip="title-0"]').click();
+        await expect(positionField(page)).toHaveValue("40 px");
       }
+      // Zoom both conditions equally so ruler drags can seek within the title's 4 seconds.
+      if (mode === "scrub") {
+        for (let i = 0; i < 10; i++) await page.keyboard.press("Control+Equal");
+      }
+      await waitFrames(page, 15);
+      const preview = page
+        .frameLocator("iframe[data-live]")
+        .locator("#title-0");
+      const interval = await preview.evaluate(async () => {
+        const entries: number[] = [];
+        for (let i = 0; i < 20; i++) {
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          );
+          entries.push(performance.now());
+        }
+        const gaps = entries.slice(1).map((at, i) => at - entries[i]!);
+        return gaps.toSorted((a, b) => a - b)[Math.floor(gaps.length / 2)]!;
+      });
+      await preview.evaluate(() => {
+        const stats = {
+          observations: [] as { start: number; duration: number }[],
+          boxes: [] as number[],
+          frames: [] as number[],
+          running: true,
+          observer: new PerformanceObserver((list) => {
+            for (const entry of list.getEntries())
+              if (entry.name === "cutroom:position-observation")
+                stats.observations.push({
+                  start: entry.startTime,
+                  duration: entry.duration,
+                });
+              else if (entry.name === "cutroom:clip-box")
+                stats.boxes.push(entry.duration);
+          }),
+        };
+        stats.observer.observe({ type: "measure" });
+        Object.assign(window, { positionPerf: stats });
+        let previous = performance.now();
+        const sample = () => {
+          const now = performance.now(); // Actual callback entry, not rAF's scheduled timestamp.
+          stats.frames.push(now - previous);
+          previous = now;
+          if (stats.running) requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+      const editorCpuStart = await editorCpuMs();
+      if (mode === "playback") {
+        await page
+          .getByRole("button", { name: "Play forward", exact: true })
+          .click();
+        await page.waitForTimeout(2500);
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+      } else {
+        const ppf = await page
+          .locator(".tl-grid")
+          .evaluate((el) =>
+            Number.parseFloat(getComputedStyle(el).getPropertyValue("--ppf")),
+          );
+        const ruler = await page.locator(".tl-ruler").boundingBox();
+        if (!ruler) throw new Error("Timeline ruler missing");
+        await page.mouse.move(ruler.x + 3 * ppf, ruler.y + 12);
+        await page.mouse.down();
+        for (let i = 0; i < scrubSteps; i++) {
+          await page.mouse.move(ruler.x + (3 + (i % 75)) * ppf, ruler.y + 12);
+          await waitFrames(page, 1);
+        }
+        await page.mouse.up();
+        await expect(
+          page.locator(".edit-stage[data-preview-ready]"),
+        ).toBeVisible();
+      }
+      await waitFrames(page, 2);
+      const editorCpuEnd = await editorCpuMs();
+      const samples = await preview.evaluate(() => {
+        const stats = (window as unknown as MeasuredWindow).positionPerf;
+        stats.running = false;
+        stats.observer.disconnect();
+        return {
+          observations: stats.observations,
+          boxes: stats.boxes,
+          frames: stats.frames.slice(1),
+        };
+      });
+      results.push({
+        run,
+        mode,
+        selected,
+        interval,
+        ...samples,
+        maxObservation: Math.max(
+          0,
+          ...samples.observations.map((entry) => entry.duration),
+        ),
+        lateFrames: samples.frames.filter((gap) => gap > interval * 1.5).length,
+        positionMs:
+          sum(samples.observations.map((entry) => entry.duration)) +
+          sum(samples.boxes),
+        editorCpuMs: editorCpuEnd - editorCpuStart,
+      });
     }
     const summary = (["playback", "scrub"] as const).flatMap((mode) =>
       [false, true].map((selected) => {
@@ -201,14 +243,11 @@ test(
         return {
           mode,
           selected,
-          observations: runs.reduce(
-            (sum, result) => sum + result.observations.length,
-            0,
-          ),
+          observations: sum(runs.map((result) => result.observations.length)),
           maxObservation: Math.max(
             ...runs.map((result) => result.maxObservation),
           ),
-          boxReads: runs.reduce((sum, result) => sum + result.boxes.length, 0),
+          boxReads: sum(runs.map((result) => result.boxes.length)),
           maxBoxRead: Math.max(0, ...runs.flatMap((result) => result.boxes)),
           observationMaxima: runs.map((result) => result.maxObservation),
           medianMaxObservation: median(
@@ -222,11 +261,31 @@ test(
           medianLateRate: median(
             runs.map((result) => result.lateFrames / result.frames.length),
           ),
+          positionMs: runs.map((result) => result.positionMs),
+          editorCpuMs: runs.map((result) => result.editorCpuMs),
         };
       }),
     );
+    const scrub = (selected: boolean) =>
+      summary.find(
+        (result) => result.mode === "scrub" && result.selected === selected,
+      )!;
+    const positionMsPerStep = median(scrub(true).positionMs) / scrubSteps;
+    const editorCpuRatios = scrub(true).editorCpuMs.map(
+      (ms, run) => ms / scrub(false).editorCpuMs[run]!,
+    );
+    const scrubCost = {
+      positionMsPerStep,
+      editorCpuRatios,
+      medianEditorCpuRatio: median(editorCpuRatios),
+    };
     const evidence = JSON.stringify(
-      { browser: page.context().browser()?.version(), summary, results },
+      {
+        browser: page.context().browser()?.version(),
+        scrubCost,
+        summary,
+        results,
+      },
       null,
       2,
     );
@@ -236,7 +295,7 @@ test(
     });
     if (process.env.CUTROOM_POSITION_TIMING_OUT)
       await writeFile(process.env.CUTROOM_POSITION_TIMING_OUT, evidence);
-    console.log(JSON.stringify({ positionObservation: summary }));
+    console.log(JSON.stringify({ positionObservation: summary, scrubCost }));
     for (const result of results) {
       expect(result.frames.length).toBeGreaterThan(30);
       if (!result.selected) {
@@ -268,18 +327,24 @@ test(
         `${result.mode}: outline box budget`,
       ).toBeLessThan(5);
     }
-    for (const mode of ["playback", "scrub"] as const) {
-      const none = summary.find(
-        (result) => result.mode === mode && !result.selected,
+    const playback = (selected: boolean) =>
+      summary.find(
+        (result) => result.mode === "playback" && result.selected === selected,
       )!;
-      const positioned = summary.find(
-        (result) => result.mode === mode && result.selected,
-      )!;
-      expect(
-        positioned.medianLateRate - none.medianLateRate,
-        `${mode}: added late-frame rate`,
-      ).toBeLessThan(0.05);
-    }
+    expect(
+      playback(true).medianLateRate - playback(false).medianLateRate,
+      "playback: added late-frame rate",
+    ).toBeLessThan(0.05);
+    // Many reads that each stay under the per-read budget still add up on every seek.
+    expect(
+      positionMsPerStep,
+      "scrub: Position observation and outline reads per scrub step, ms",
+    ).toBeLessThan(2);
+    // The editor's own work for the selected clip, such as handling each warning.
+    expect(
+      scrubCost.medianEditorCpuRatio,
+      "scrub: editor main-thread CPU with the positioned title selected, relative to nothing selected",
+    ).toBeLessThan(1.3);
   },
 );
 
