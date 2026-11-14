@@ -1142,6 +1142,7 @@ for (const withheld of [false, true]) {
     const initial = await page.locator(".edit-picture").screenshot();
     try {
       for (let batch = 1; batch <= 3; batch++) {
+        let stalled: string | null = null;
         for (let edit = 0; edit < 50; edit++) {
           const previous = await page
             .locator(".edit-frame")
@@ -1165,17 +1166,23 @@ for (const withheld of [false, true]) {
             },
           );
           expect(result.ok(), await result.text()).toBe(true);
-          await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
-            "src",
-            previous!,
-          );
-          // Each candidate must actually allocate a decoded hold before replacement.
-          await expect(
-            page
-              .frameLocator(".edit-frame")
+          if (!withheld || edit === 0) {
+            await expect(
+              page.locator(".edit-frame").last(),
+            ).not.toHaveAttribute("src", previous!);
+            // Normal edits allocate every hold. Withheld bursts retain the active
+            // candidate and coalesce the remaining invalidations into one destination.
+            await expect(
+              page
+                .frameLocator(".edit-frame")
+                .last()
+                .locator("[data-cutroom-video-hold]"),
+            ).toHaveCount(1);
+            stalled = await page
+              .locator(".edit-frame")
               .last()
-              .locator("[data-cutroom-video-hold]"),
-          ).toHaveCount(1);
+              .getAttribute("src");
+          }
           if (withheld) {
             await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
               "src",
@@ -1185,7 +1192,16 @@ for (const withheld of [false, true]) {
           } else await expect(page.locator(".edit-frame")).toHaveCount(1);
           expect((await resourceCounts()).maxDocuments).toBeLessThanOrEqual(2);
         }
-        await expect(page.locator(".edit-frame")).toHaveCount(1);
+        if (withheld) {
+          await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
+            "src",
+            stalled!,
+            { timeout: 20000 },
+          );
+        }
+        await expect(page.locator(".edit-frame")).toHaveCount(1, {
+          timeout: 20000,
+        });
         if (withheld) {
           await expect(page.locator("iframe[data-live]")).toHaveAttribute(
             "src",
@@ -1336,7 +1352,7 @@ test("a navigation that never loads expires and keeps the confirmed picture", as
   }
 });
 
-test("stalled candidate replacements never expose the viewer background", async ({
+test("coalesced stalled replacements never expose the viewer background", async ({
   page,
   request,
 }, testInfo) => {
@@ -1347,6 +1363,7 @@ test("stalled candidate replacements never expose the viewer background", async 
   const capture = await capturePicture(page);
   capture.reset();
   try {
+    let stalled: string | null = null;
     for (let edit = 0; edit < 50; edit++) {
       const previous = await page
         .locator(".edit-frame")
@@ -1369,10 +1386,16 @@ test("stalled candidate replacements never expose the viewer background", async 
         },
       );
       expect(response.ok()).toBe(true);
-      await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
-        "src",
-        previous!,
-      );
+      if (edit === 0) {
+        await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
+          "src",
+          previous!,
+        );
+        stalled = await page.locator(".edit-frame").last().getAttribute("src");
+      } else
+        expect(
+          await page.locator(".edit-frame").last().getAttribute("src"),
+        ).toBe(stalled);
       await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
         "src",
         before!,
@@ -1380,7 +1403,14 @@ test("stalled candidate replacements never expose the viewer background", async 
       await expect(page.locator(".edit-frame")).toHaveCount(2);
       await expect(page.locator(`iframe[src="${before}"]`)).toBeVisible();
     }
-    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
+      "src",
+      stalled!,
+      { timeout: 20000 },
+    );
+    await expect(page.locator(".edit-frame")).toHaveCount(1, {
+      timeout: 20000,
+    });
     await expect(page.locator("iframe[data-live]")).toHaveAttribute(
       "src",
       before!,

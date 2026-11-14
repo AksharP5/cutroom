@@ -129,6 +129,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const closing = new AbortController();
   let active = false;
   let timingRevision: string | undefined;
+  let timingAllowed = false;
   let diagnostics: CompositionDiagnostic[] = [];
   let diagnosticsKey = "";
   let dismissDiagnostics = () => {};
@@ -264,15 +265,40 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       );
     return id;
   };
-  const request = (action: string, payload: object = {}) =>
+  const request = (
+    action: string,
+    payload: object = {},
+    signal = closing.signal,
+  ) =>
     new Promise<Reply>((resolve, reject) => {
       closing.signal.throwIfAborted();
+      signal.throwIfAborted();
       const id = send(action, payload);
-      const timer = window.setTimeout(() => {
+      const finish = () => {
+        clearTimeout(timer);
         pending.delete(id);
+        signal.removeEventListener("abort", cancel);
+      };
+      const cancel = () => {
+        finish();
+        reject(signal.reason);
+      };
+      const timer = window.setTimeout(() => {
+        finish();
         reject(new Error("The preview did not draw the frame in time."));
       }, 10_000);
-      pending.set(id, { resolve, reject, timer });
+      signal.addEventListener("abort", cancel, { once: true });
+      pending.set(id, {
+        resolve: (reply) => {
+          finish();
+          resolve(reply);
+        },
+        reject: (error) => {
+          finish();
+          reject(error);
+        },
+        timer,
+      });
     });
   const player: RuntimePlayer = {
     play: () => {
@@ -396,28 +422,54 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     },
     inspect: async () => void (await request("inspect")),
     painted: async () => void (await request("paint")),
-    async updateTiming(version: string, time: number, signal: AbortSignal) {
-      if (!timingRevision)
+    async authorizeTiming() {
+      const response = await fetch(`${frame.src}&cutroom-status=1`, {
+        signal: closing.signal,
+      });
+      if (response.ok)
+        timingAllowed = z
+          .object({ allowed: z.boolean() })
+          .parse(await response.json()).allowed;
+    },
+    get timingAllowed() {
+      return timingAllowed;
+    },
+    async updateTiming(
+      time: number,
+      signal: AbortSignal,
+      latest: () => boolean,
+    ) {
+      if (!timingAllowed || !timingRevision)
         throw new Error("The preview has no timing revision.");
       const response = await fetch(`${frame.src}&cutroom-timing=1`, { signal });
       if (!response.ok)
         throw new Error("The saved preview timing is unavailable.");
       const snapshot = z
-        .object({ version: z.string(), timing: PreviewTimingSchema })
+        .object({
+          version: z.string(),
+          timing: PreviewTimingSchema,
+          live: z.boolean(),
+        })
         .parse(await response.json());
       signal.throwIfAborted();
-      if (snapshot.version !== version)
-        throw new Error("The saved preview was superseded.");
-      const reply = await request("timing", {
-        timing: snapshot.timing,
-        expectedRevision: timingRevision,
-        time,
-      });
+      if (!latest()) return false;
+      if (!snapshot.live || !snapshot.timing.allowed)
+        throw new Error("This preview requires a reload.");
+      const reply = await request(
+        "timing",
+        {
+          timing: snapshot.timing,
+          expectedRevision: timingRevision,
+          time,
+        },
+        signal,
+      );
       signal.throwIfAborted();
       if (reply.timingRevision !== snapshot.timing.revision)
         throw new Error(
           "The preview did not acknowledge the saved timing revision.",
         );
+      return true;
     },
     dispose,
   };

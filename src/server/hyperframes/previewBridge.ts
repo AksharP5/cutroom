@@ -42,12 +42,29 @@ interface PreviewWindow extends DiagnosticWindow {
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
   texts: [string, string[]][],
-  initialTiming: Pick<PreviewTiming, "structure" | "revision"> & {
+  initialTiming: Pick<PreviewTiming, "structure" | "revision" | "allowed"> & {
     clips: { id: string }[];
   },
 ) {
   let timingRevision = initialTiming.revision;
   let updatingTiming = false;
+  let confirmedStructure: string | null = null;
+  const liveStructure = () => {
+    const root = document.documentElement.cloneNode(true);
+    if (!(root instanceof Element))
+      throw new Error("The preview document is unavailable.");
+    root.removeAttribute("data-hf-preview-seek-hold");
+    // These canvases and flags belong to this bridge, not the composition.
+    for (const hold of root.querySelectorAll(
+      "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+    ))
+      hold.remove();
+    for (const video of root.querySelectorAll("video")) {
+      video.removeAttribute("data-cutroom-held");
+      video.removeAttribute("data-cutroom-flow");
+    }
+    return root.outerHTML;
+  };
   const sourceTexts = new Map(texts);
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
@@ -1307,6 +1324,14 @@ function installPreviewBridge(
             positionFrame = requestAnimationFrame(writePosition);
           return;
         case "timing": {
+          if (
+            !initialTiming.allowed ||
+            confirmedStructure === null ||
+            liveStructure() !== confirmedStructure
+          )
+            throw new Error(
+              "The live preview document changed or requires a reload.",
+            );
           if (updatingTiming || win.__player?.isPlaying() || !win.__player)
             throw new Error("Timing updates require a paused preview.");
           if (
@@ -1397,6 +1422,7 @@ function installPreviewBridge(
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             win.__player.seek(data.time);
+            const expectedStructure = liveStructure();
             const restored = refreshPicture();
             const version = pictureVersion;
             await restored;
@@ -1408,6 +1434,9 @@ function installPreviewBridge(
             )
               throw new Error("The preview timing update was superseded.");
             clearEditPicture();
+            if (liveStructure() !== expectedStructure)
+              throw new Error("The live preview changed while drawing.");
+            confirmedStructure = expectedStructure;
             timingRevision = timing.revision;
             scheduleObservation();
             scheduleBox();
@@ -1506,6 +1535,8 @@ function installPreviewBridge(
         case "paint":
           await picture;
           await paint();
+          if (initialTiming.allowed && confirmedStructure === null)
+            confirmedStructure = liveStructure();
           scheduleObservation();
           scheduleBox();
           break;
