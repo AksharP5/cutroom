@@ -1776,9 +1776,10 @@ function installPreviewBridge(
                 element.setAttribute("data-volume", volume);
             if (titleStyle && nextTitleStyle && nextTitleStyle !== titleStyle) {
               const style = styles[0]!;
+              // A replacer function keeps $-sequences in the CSS literal.
               style.textContent = style.textContent!.replace(
                 titleStyle,
-                nextTitleStyle,
+                () => nextTitleStyle,
               );
               for (const { element, text } of writes)
                 if (text) changedTitles.add(element);
