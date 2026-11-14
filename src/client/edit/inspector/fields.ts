@@ -75,6 +75,21 @@ export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
           ? formatTimecode(value, fps)
           : formatPercent(value);
 
+/** Clip × track gain as shown, uncapped by HyperFrames' +12 dB clip formatter. Products
+ * that read the same are the same; null when there is nothing to combine.
+ */
+export function combinedGainText(gains: readonly number[]) {
+  const labels = new Set(
+    gains.map((gain) => {
+      if (gain <= 0) return "-∞ dB";
+      const db = Math.round(20 * Math.log10(gain) * 10) / 10;
+      return `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+    }),
+  );
+  if (!labels.size) return null;
+  return labels.size > 1 ? "Mixed" : [...labels][0]!;
+}
+
 /** Uses the same move and trim commands as the timeline, with source timing shared by linked media. */
 export function timingCommands(
   timeline: Timeline,

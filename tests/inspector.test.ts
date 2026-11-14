@@ -10,6 +10,7 @@ import {
 import { parseComposition } from "../src/server/timeline/composition";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import {
+  combinedGainText,
   formatField,
   parseField,
   timingCommands,
@@ -90,6 +91,19 @@ test("inspector fields parse timecode, frames, seconds and percentages without a
     expect(() => parseField(input, "timecode", fps)).toThrow();
   for (const input of ["Infinity", "5%junk", "-10%"])
     expect(() => parseField(input, "percent", fps)).toThrow();
+});
+
+test("combined static gain is Mixed only when the shown values differ", () => {
+  const plus6 = 10 ** (6 / 20);
+  const minus6 = 10 ** (-6 / 20);
+  // +6 dB clip on a -6 dB track multiplies to 0.9999999999999999, which still reads 0 dB.
+  expect(combinedGainText([plus6 * minus6, 1])).toBe("0.0 dB");
+  expect(combinedGainText([minus6, 0.5])).toBe("-6.0 dB");
+  expect(combinedGainText([0.5, 0.25])).toBe("Mixed");
+  expect(combinedGainText([16])).toBe("+24.1 dB");
+  expect(combinedGainText([0, 0])).toBe("-∞ dB");
+  expect(combinedGainText([0, 1])).toBe("Mixed");
+  expect(combinedGainText([])).toBeNull();
 });
 
 test("a percentage shows every digit the engine keeps", () => {

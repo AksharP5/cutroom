@@ -17,7 +17,7 @@ import { focusPanel, useKeymap } from "../../keymap";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
-import { inspectorSubject, timingCommands } from "./fields";
+import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { TextField } from "./TextField";
@@ -106,16 +106,8 @@ function CombinedGain({
         (clip.volume ?? 1) *
         tracks.find((track) => track.index === clip.track)!.volume,
     );
-  const gain = gains[0];
-  if (gain === undefined) return null;
-  const mixed = gains.some((next) => next !== gain);
-  // HyperFrames' clip formatter caps at +12 dB; this product can reach +24 dB.
-  const db = gain > 0 ? Math.round(20 * Math.log10(gain) * 10) / 10 : null;
-  const text = mixed
-    ? "Mixed"
-    : db === null
-      ? "-∞ dB"
-      : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+  const text = combinedGainText(gains);
+  if (text === null) return null;
   return (
     <div
       className="inspector-field inspector-combined-gain"
