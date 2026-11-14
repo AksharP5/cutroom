@@ -1,5 +1,6 @@
 import { ArrowCounterClockwise } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../../workspace";
 import { formatField, parseField, stepField } from "./fields";
@@ -16,6 +17,8 @@ export function ValueField({
   min = 0,
   max = Infinity,
   hint,
+  tip,
+  before,
   onCommit,
   onPreview,
   onCancel,
@@ -29,6 +32,10 @@ export function ValueField({
   min?: number;
   max?: number;
   hint?: string;
+  /** The input's tooltip, in place of the unit's own. */
+  tip?: string;
+  /** A control that shares the row, ahead of the value. */
+  before?: ReactNode;
   onCommit(value: number | null): void;
   onPreview?(value: number): void;
   onCancel?(): void;
@@ -149,17 +156,19 @@ export function ValueField({
         {label}
       </label>
       <div className="inspector-value">
+        {before}
         <input
           ref={input}
           id={id}
           title={
-            unit === "pixels"
+            tip ??
+            (unit === "pixels"
               ? "Offset in composition pixels. Drag the label or use Up/Down. Shift for 10 pixels."
               : allowAuto
                 ? "Auto uses source styles. Type a percentage to set static inline opacity."
                 : unit === "gain"
                   ? "Gain in dB. Drag the label or use Up/Down. Alt for fine adjustment. Type -∞ for silence."
-                  : undefined
+                  : undefined)
           }
           aria-describedby={hint ? `${id}-hint` : undefined}
           type="text"

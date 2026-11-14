@@ -21,6 +21,7 @@ import { inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { TextField } from "./TextField";
+import { TitleSection } from "./TitleSection";
 import { groupedChanges, pendingEdit, shownChanges } from "./changes";
 import { transport } from "../transport";
 import {
@@ -123,6 +124,7 @@ export function Inspector({ projectId }: { projectId: string }) {
   );
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [textOpen, setTextOpen] = useState(true);
+  const [titleOpen, setTitleOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
   // Closing the project cancels a pending reload, like the timeline's own read.
@@ -285,9 +287,11 @@ export function Inspector({ projectId }: { projectId: string }) {
           <div className="inspector-clip" data-kind={clip.kind}>
             <strong title={name || undefined}>{name}</strong>
             <span>
-              {clip.kind === "element"
-                ? "Text"
-                : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
+              {clip.title || clip.sourceRestrictions?.title
+                ? "Title"
+                : clip.kind === "element"
+                  ? "Text"
+                  : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
               on {track?.id} ·{" "}
               <time>{formatTimecode(clip.start, timeline.fps)}</time>
             </span>
@@ -323,6 +327,17 @@ export function Inspector({ projectId }: { projectId: string }) {
                 </p>
               )}
             </details>
+          )}
+          {(clip.title || clip.sourceRestrictions?.title) && (
+            <TitleSection
+              projectId={projectId}
+              clip={clip}
+              fps={timeline.fps}
+              fonts={timeline.fonts ?? []}
+              disabled={track?.track.locked ?? false}
+              open={titleOpen}
+              onToggle={setTitleOpen}
+            />
           )}
           {!isAudioKind(clip.kind) && (
             <details

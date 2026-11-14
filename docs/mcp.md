@@ -94,7 +94,7 @@ A title is words on screen with a preset entrance and exit: a lower third, a nam
 
 The default size suits 1920x1080; pass a size for other compositions. `font: null` uses the composition's own font. A font no `@font-face` rule in the composition or `index.html` declares is refused with the declared families, because preview and export can resolve a system font to different faces. New projects declare Instrument Sans.
 
-`timeline_read` returns `title` on each title clip and `null` on every other clip. Change the look with `setClip.title`, which keeps the fields you leave out, and the words with `setClip.text`:
+`timeline_read` returns `title` on each title clip and `null` on every other clip. `timeline.fonts` lists the families the project declares, which are the ones `title.font` accepts and the inspector's Font menu offers; it is omitted when the project declares none. Change the look with `setClip.title`, which keeps the fields you leave out, and the words with `setClip.text`:
 
 ```json
 {

@@ -752,6 +752,7 @@ export function parseComposition(
   };
   parsed.timeline = {
     ...timeline,
+    ...(fonts.size > 0 && { fonts: [...fonts] }),
     clips: timeline.clips.map((clip) => {
       const restrictions = sourceRestrictions(parsed, clip);
       return restrictions

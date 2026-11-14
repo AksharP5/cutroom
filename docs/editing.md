@@ -131,7 +131,18 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 
 ### Titles
 
-A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles); controls in the inspector are not built yet. Alt+Shift+T, or Add title in a clip's, lane's or track header's menu, adds a five-second lower-left title at the playhead on a free video track above the video destination and opens the inspector's Text field on its words; [Keys](keyboard.md) has the track rule. The words are already editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
+A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles). Alt+Shift+T, or Add title in a clip's, lane's or track header's menu, adds a five-second lower-left title at the playhead on a free video track above the video destination and opens the inspector's Text field on its words; [Keys](keyboard.md) has the track rule. The words are editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
+
+Select one title and the inspector shows a Title section between Text and Transform: Font, Weight, Size, Colour, Align, Position, Plate, In and Out. Every change is one undo step and shows on the picture as soon as it saves.
+
+- Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font.
+- Size is in composition pixels; drag its label or use Up and Down, as with Position.
+- Colour is a swatch that opens the system colour picker, with the same colour as six hex digits beside it. Moving through colours in the picker saves once, when the picker closes.
+- Position picks one of five places on the picture and clears any Position X/Y offset in the same undo step, so the title lands on the place you chose.
+- Plate puts a filled box behind the words. Ticking it starts from black at 70%; the swatch, hex and percentage beside it set its colour and opacity.
+- In and Out each take a preset and a length, typed as timecode, frames (`12f`) or seconds (`0.4s`). The length is disabled while the preset is None.
+
+The section edits one title at a time. Several selected clips show the clip count, as for every other inspector section. A title Cutroom cannot read shows the reason in the section in place of the controls.
 
 The entrance belongs to the clip's first frame and the exit to its last:
 
