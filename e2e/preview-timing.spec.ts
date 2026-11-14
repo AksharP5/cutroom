@@ -288,6 +288,7 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
         const failure = document.documentElement?.dataset.failTiming;
         if (!failure || event.data?.action !== "timing") return;
         event.stopImmediatePropagation();
+        console.debug(`timing fault: ${failure}`);
         if (failure === "missing") return;
         setTimeout(
           () =>
@@ -343,6 +344,10 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
     .toBe(String((38 * 1001) / 30000));
   await waitForPreview(page);
   for (const failure of ["missing", "late", "error"] as const) {
+    await prepareTimingPreview(page, request);
+    const intercepted = page.waitForEvent("console", {
+      predicate: (message) => message.text() === `timing fault: ${failure}`,
+    });
     const doc = await live(page),
       before = await token(page);
     // Alter only the next live document's bridge, never its replacement.
@@ -355,6 +360,7 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
     await edit([
       { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
     ]);
+    await intercepted;
     await waitForPreview(page, { after: before });
     await expect.poll(() => live(page)).not.toBe(doc);
     await page.waitForTimeout(600);
