@@ -1,0 +1,214 @@
+
+Running 7 tests using 1 worker
+
+  ✘  1 e2e/focus-return.spec.ts:40:6 › Viewer zoom: choose returns transport and destination keys to editing (16.5s)
+  ✓  2 e2e/focus-return.spec.ts:40:6 › Viewer zoom: outside returns transport and destination keys to editing (1.5s)
+  ✘  3 e2e/focus-return.spec.ts:40:6 › Track density: choose returns transport and destination keys to editing (16.6s)
+  ✓  4 e2e/focus-return.spec.ts:40:6 › Track density: outside returns transport and destination keys to editing (1.5s)
+  ✘  5 e2e/focus-return.spec.ts:71:2 › right-clicking a track name never starts renaming, and Escape restores editor keys (16.0s)
+  ✘  6 e2e/focus-return.spec.ts:98:2 › Escape leaves the composer with its draft and returns editor keys (16.0s)
+  ✘  7 e2e/focus-return.spec.ts:113:2 › a pointer menu restores an interrupted field, while a keyboard picker keeps its opener (16.2s)
+
+
+  1) e2e/focus-return.spec.ts:40:6 › Viewer zoom: choose returns transport and destination keys to editing 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('button', { name: 'A2 destination', exact: true })
+    Expected: "true"
+    Received: "false"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('button', { name: 'A2 destination', exact: true }) with timeout 15000ms
+      - waiting for getByRole('button', { name: 'A2 destination', exact: true })
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="false" aria-label="A2 destination" title="Audio 2: make this the destination for Insert and Overwrite">A2</button>
+           - unexpected value "false"
+
+
+      53 |       await expect(
+      54 |         page.getByRole("button", { name: "A2 destination", exact: true }),
+    > 55 |       ).toHaveAttribute("aria-pressed", "true");
+         |         ^
+      56 |       await page.keyboard.press("l");
+      57 |       await expect(
+      58 |         page.getByRole("button", { name: "Play forward", exact: true }),
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/focus-baseline/e2e/focus-return.spec.ts:55:9)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Viewer-zoom-c-62b4f-destination-keys-to-editing/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr1-baseline/results/focus-return-Viewer-zoom-c-62b4f-destination-keys-to-editing/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Viewer-zoom-c-62b4f-destination-keys-to-editing/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr1-baseline/results/focus-return-Viewer-zoom-c-62b4f-destination-keys-to-editing/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/focus-return.spec.ts:40:6 › Track density: choose returns transport and destination keys to editing 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('button', { name: 'A2 destination', exact: true })
+    Expected: "true"
+    Received: "false"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('button', { name: 'A2 destination', exact: true }) with timeout 15000ms
+      - waiting for getByRole('button', { name: 'A2 destination', exact: true })
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="false" aria-label="A2 destination" title="Audio 2: make this the destination for Insert and Overwrite">A2</button>
+           - unexpected value "false"
+
+
+      53 |       await expect(
+      54 |         page.getByRole("button", { name: "A2 destination", exact: true }),
+    > 55 |       ).toHaveAttribute("aria-pressed", "true");
+         |         ^
+      56 |       await page.keyboard.press("l");
+      57 |       await expect(
+      58 |         page.getByRole("button", { name: "Play forward", exact: true }),
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/focus-baseline/e2e/focus-return.spec.ts:55:9)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Track-density-7643d-destination-keys-to-editing/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr1-baseline/results/focus-return-Track-density-7643d-destination-keys-to-editing/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Track-density-7643d-destination-keys-to-editing/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr1-baseline/results/focus-return-Track-density-7643d-destination-keys-to-editing/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e/focus-return.spec.ts:71:2 › right-clicking a track name never starts renaming, and Escape restores editor keys 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('button', { name: 'Play forward', exact: true })
+    Expected: "true"
+    Received: "false"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('button', { name: 'Play forward', exact: true }) with timeout 15000ms
+      - waiting for getByRole('button', { name: 'Play forward', exact: true })
+        34 × locator resolved to <button class="edit-icon" aria-pressed="false" aria-label="Play forward" title="Play forward, faster on repeat (L, 4)">…</button>
+           - unexpected value "false"
+
+
+      81 |   await expect(
+      82 |     page.getByRole("button", { name: "Play forward", exact: true }),
+    > 83 |   ).toHaveAttribute("aria-pressed", "true");
+         |     ^
+      84 |   await page.keyboard.press("k");
+      85 |   await expect(name).toHaveValue("");
+      86 |   await name.fill("unsaved");
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/focus-baseline/e2e/focus-return.spec.ts:83:5)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-right-clickin-fe29a-Escape-restores-editor-keys/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr1-baseline/results/focus-return-right-clickin-fe29a-Escape-restores-editor-keys/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-right-clickin-fe29a-Escape-restores-editor-keys/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr1-baseline/results/focus-return-right-clickin-fe29a-Escape-restores-editor-keys/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) e2e/focus-return.spec.ts:98:2 › Escape leaves the composer with its draft and returns editor keys 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('button', { name: 'Play forward', exact: true })
+    Expected: "true"
+    Received: "false"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('button', { name: 'Play forward', exact: true }) with timeout 15000ms
+      - waiting for getByRole('button', { name: 'Play forward', exact: true })
+        34 × locator resolved to <button class="edit-icon" aria-pressed="false" aria-label="Play forward" title="Play forward, faster on repeat (L, 4)">…</button>
+           - unexpected value "false"
+
+
+      105 |   await expect(
+      106 |     page.getByRole("button", { name: "Play forward", exact: true }),
+    > 107 |   ).toHaveAttribute("aria-pressed", "true");
+          |     ^
+      108 |   await page.keyboard.press("k");
+      109 |   await expect(composer).toHaveValue("Keep this draft");
+      110 |   await page.screenshot({ path: info.outputPath("composer.png") });
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/focus-baseline/e2e/focus-return.spec.ts:107:5)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Escape-leaves-6723b-aft-and-returns-editor-keys/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr1-baseline/results/focus-return-Escape-leaves-6723b-aft-and-returns-editor-keys/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-Escape-leaves-6723b-aft-and-returns-editor-keys/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr1-baseline/results/focus-return-Escape-leaves-6723b-aft-and-returns-editor-keys/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) e2e/focus-return.spec.ts:113:2 › a pointer menu restores an interrupted field, while a keyboard picker keeps its opener 
+
+    Error: expect(locator).toBeFocused() failed
+
+    Locator:  getByRole('textbox', { name: 'Message your agent' })
+    Expected: focused
+    Received: inactive
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toBeFocused" getByRole('textbox', { name: 'Message your agent' }) with timeout 15000ms
+      - waiting for getByRole('textbox', { name: 'Message your agent' })
+        34 × locator resolved to <textarea rows="1" aria-label="Message your agent" placeholder="Describe the next edit" title="Enter to send, Shift+Enter for a new line">Keep typing here</textarea>
+           - unexpected value "inactive"
+
+
+      119 |   await zoom.click();
+      120 |   await page.getByRole("option", { name: "Fit", exact: true }).click();
+    > 121 |   await expect(composer).toBeFocused();
+          |                          ^
+      122 |   await page.keyboard.type(" lk");
+      123 |   await expect(composer).toHaveValue("Keep typing here lk");
+      124 |   await page.keyboard.press("Escape");
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/focus-baseline/e2e/focus-return.spec.ts:121:26)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-a-pointer-men-05a07-ard-picker-keeps-its-opener/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr1-baseline/results/focus-return-a-pointer-men-05a07-ard-picker-keeps-its-opener/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr1-baseline/results/focus-return-a-pointer-men-05a07-ard-picker-keeps-its-opener/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr1-baseline/results/focus-return-a-pointer-men-05a07-ard-picker-keeps-its-opener/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5 failed
+    e2e/focus-return.spec.ts:40:6 › Viewer zoom: choose returns transport and destination keys to editing 
+    e2e/focus-return.spec.ts:40:6 › Track density: choose returns transport and destination keys to editing 
+    e2e/focus-return.spec.ts:71:2 › right-clicking a track name never starts renaming, and Escape restores editor keys 
+    e2e/focus-return.spec.ts:98:2 › Escape leaves the composer with its draft and returns editor keys 
+    e2e/focus-return.spec.ts:113:2 › a pointer menu restores an interrupted field, while a keyboard picker keeps its opener 
+  2 passed (1.5m)

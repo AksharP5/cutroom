@@ -1,0 +1,12 @@
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/focus-return.spec.ts:40:6 › Viewer zoom: choose returns transport and destination keys to editing (1.5s)
+  ✓  2 e2e/focus-return.spec.ts:40:6 › Viewer zoom: outside returns transport and destination keys to editing (1.3s)
+  ✓  3 e2e/focus-return.spec.ts:40:6 › Track density: choose returns transport and destination keys to editing (1.5s)
+  ✓  4 e2e/focus-return.spec.ts:40:6 › Track density: outside returns transport and destination keys to editing (1.6s)
+  ✓  5 e2e/focus-return.spec.ts:71:2 › right-clicking a track name never starts renaming, and Escape restores editor keys (962ms)
+  ✓  6 e2e/focus-return.spec.ts:98:2 › Escape leaves the composer with its draft and returns editor keys (879ms)
+  ✓  7 e2e/focus-return.spec.ts:113:2 › a pointer menu restores an interrupted field, while a keyboard picker keeps its opener (1.2s)
+
+  7 passed (9.7s)
