@@ -229,9 +229,8 @@ test("a track's gain turns a split music bed down once, and preview, meters and 
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
   // The header meters draw what this tap reads.
-  const frame = page
-    .frames()
-    .find((frame) => frame.url().includes("/api/isolated/"))!;
+  // Sample the document that owns playback, never a retired or preparing one.
+  const frame = live.locator("main");
   const samples = await frame.evaluate(
     () =>
       new Promise<{ time: number; l: number; r: number }[]>((resolve) => {
@@ -483,9 +482,8 @@ test("GSAP silence and independent boosted stages agree in preview meters and ex
   await page.getByRole("region", { name: "Viewer", exact: true }).click();
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
-  const frame = page
-    .frames()
-    .find((frame) => frame.url().includes("/api/isolated/"))!;
+  // Sample the document that owns playback, never a retired or preparing one.
+  const frame = live.locator("main");
   const samples = await frame.evaluate(
     () =>
       new Promise<{ time: number; l: number; r: number }[]>((resolve) => {
