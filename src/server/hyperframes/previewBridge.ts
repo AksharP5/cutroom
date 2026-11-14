@@ -1634,7 +1634,7 @@ export function withPreviewClipIdentities(
 export function previewDocument(
   html: string,
   composition = "index.html",
-  dependencies = "",
+  dependencies: string | null = "",
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -1741,7 +1741,8 @@ export function previewDocument(
         source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
       html,
     );
-  const timing = previewTiming(normalized, dependencies);
+  const timing = previewTiming(normalized, dependencies ?? "");
+  if (dependencies === null) timing.allowed = false;
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,

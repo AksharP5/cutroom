@@ -97,7 +97,9 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   };
 }
 
-/** App state/history must not invalidate timing; every other project file does. */
+/** App state/history must not invalidate timing; every other project file does.
+ * An unavailable fingerprint disables live timing without blocking a full preview.
+ */
 export async function previewDependencies(dir: string, composition: string) {
   const hash = createHash("sha256");
   const visit = async (relative: string) => {
@@ -128,16 +130,28 @@ export async function previewDependencies(dir: string, composition: string) {
         hash.update(`${info.mtimeMs}:${info.ctimeMs}:${info.ino}:${info.dev}`);
     }
   };
-  await visit("");
-  // These hidden manifests affect compiled animation and are not ordinary app state.
-  for (const path of STUDIO_SIGNATURE_MANIFEST_PATHS) {
-    const info = await lstat(join(dir, path)).catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT")
-        return null;
-      throw error;
-    });
-    if (info?.isFile())
-      hash.update(path + "\0" + (await readFile(join(dir, path), "utf8")));
+  try {
+    await visit("");
+    // These hidden manifests affect compiled animation and are not ordinary app state.
+    for (const path of STUDIO_SIGNATURE_MANIFEST_PATHS) {
+      const info = await lstat(join(dir, path)).catch((error: unknown) => {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return null;
+        throw error;
+      });
+      if (info?.isFile())
+        hash.update(path + "\0" + (await readFile(join(dir, path), "utf8")));
+    }
+    return hash.digest("hex");
+  } catch (error) {
+    console.warn(
+      "Preview timing fingerprint unavailable; using document reload.",
+      error,
+    );
+    return null;
   }
-  return hash.digest("hex");
 }

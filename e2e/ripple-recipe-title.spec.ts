@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { ExportJobSchema } from "../src/shared/export";
+import { PreviewReplySchema } from "../src/shared/preview";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
 
@@ -97,6 +98,10 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
     const before = await read();
     await page.goto(`/#project/${project.id}`);
     await expect(page.locator('[data-clip="shot"]')).toBeVisible();
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-preview-ready",
+      /\d+/,
+    );
     await page.locator('[data-clip="shot"]').click();
     await page.keyboard.press("Delete");
     await expect(page.locator('[data-clip="shot"]')).toHaveCount(0);
@@ -107,6 +112,14 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
     await expect(page.locator(".toast")).not.toContainText(
       "Recipe lower third",
     );
+    // Attachment precedes promotion and transport attachment. Sample the saved
+    // document only after its handoff, then wait for each actual seek/paint.
+    const preview = page.frameLocator("iframe[data-live]");
+    await expect(preview.locator("#shot")).toHaveCount(0);
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-preview-ready",
+      /\d+/,
+    );
     const seek = async (frame: number) => {
       await page.getByRole("button", { name: /^Current time/ }).click();
       await page
@@ -115,8 +128,45 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
           `0000${String(Math.floor(frame / 30)).padStart(2, "0")}${String(frame % 30).padStart(2, "0")}`,
         );
       await page.keyboard.press("Enter");
+      const reply = PreviewReplySchema.parse(
+        await page.evaluate(
+          () =>
+            new Promise<unknown>((resolve, reject) => {
+              const frame =
+                document.querySelector<HTMLIFrameElement>("iframe[data-live]")!;
+              const id = crypto.randomUUID();
+              const finish = () => {
+                clearTimeout(timer);
+                removeEventListener("message", receive);
+              };
+              const receive = (event: MessageEvent<unknown>) => {
+                const data = event.data;
+                if (
+                  event.source !== frame.contentWindow ||
+                  !data ||
+                  typeof data !== "object" ||
+                  !("id" in data) ||
+                  data.id !== id
+                )
+                  return;
+                finish();
+                resolve(data);
+              };
+              const timer = setTimeout(() => {
+                finish();
+                reject(Error("Seek paint timed out"));
+              }, 10000);
+              addEventListener("message", receive);
+              frame.contentWindow!.postMessage(
+                { source: "cutroom-viewer", id, action: "paint" },
+                "*",
+              );
+            }),
+        ),
+      );
+      expect(reply.error).toBeUndefined();
+      expect(reply.state.time).toBeCloseTo(frame / 30, 4);
     };
-    const preview = page.frameLocator("iframe[data-live]");
     const states = [];
     for (const frame of [54, 59, 61]) {
       await seek(frame);

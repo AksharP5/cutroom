@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, mkdir, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -596,4 +596,31 @@ test("scripted bursts coalesce reloads while preserving every save and undo step
     )
     .toBeCloseTo((initial * 1001) / 30000, 6);
   await ready(page);
+});
+
+test("an unavailable fingerprint keeps the canonical full preview usable and ineligible for live timing", async ({
+  page,
+  request,
+}) => {
+  test.skip(
+    process.platform === "win32" || process.getuid?.() === 0,
+    "Needs directory permission boundaries",
+  );
+  const { project } = await fixture(request, page);
+  const aux = join(project.path, "aux");
+  await mkdir(aux);
+  await writeFile(join(aux, "unused.tmp"), "temporary");
+  await chmod(aux, 0o400);
+  try {
+    await page.reload();
+    await ready(page);
+    await seek(page, 45);
+    const frame = page.locator("iframe[data-live]").contentFrame();
+    await expect(frame.locator("#title")).toBeVisible();
+    const response = await request.get(`${await live(page)}&cutroom-status=1`);
+    expect(response.ok()).toBe(true);
+    expect(await response.json()).toEqual({ allowed: false });
+  } finally {
+    await chmod(aux, 0o700);
+  }
 });

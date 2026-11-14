@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { previewDependencies } from "../src/server/hyperframes/previewTiming";
 import { test, expect } from "bun:test";
+import { stampTimingContract } from "../src/server/hyperframes/previewTimingPolicy";
 import { previewDocument } from "../src/server/hyperframes/previewBridge";
 
 const source = `<html><head><style>video { position:absolute }</style></head><body><main data-composition-id="main" data-fps="30000/1001" data-duration="10"><video id="v" data-start="0" data-duration="2.535867" data-media-start="0" src="a.mp4" data-link="pair"></video><audio id="a" data-start="0" data-duration="2.535867" data-media-start="0" src="a.mp4" data-link="pair"></audio><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main><script>window.answer=42</script></body></html>`;
@@ -89,3 +90,31 @@ test("app state does not invalidate timing, but other source files do", async ()
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "unavailable fingerprints disable timing without preventing the full document",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cutroom-fingerprint-"));
+    const aux = join(dir, "aux");
+    await mkdir(aux);
+    await writeFile(join(aux, "unused.tmp"), "temporary");
+    await chmod(aux, 0o400);
+    try {
+      const dependencies = await previewDependencies(dir, "index.html");
+      expect(dependencies).toBeNull();
+      const html = stampTimingContract(
+        '<html><body><main data-composition-id="main" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="4">Words</div></main></body></html>',
+        "attributes",
+      );
+      expect(previewDocument(html, "index.html", "stable").timing.allowed).toBe(
+        true,
+      );
+      const full = previewDocument(html, "index.html", dependencies);
+      expect(full.timing.allowed).toBe(false);
+      expect(full.timing.clips.map(({ id }) => id)).toEqual(["title"]);
+    } finally {
+      await chmod(aux, 0o700);
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
