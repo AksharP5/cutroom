@@ -448,6 +448,29 @@ export function focusPanel(panel: HTMLElement | null) {
   focusByKeyboard(panel);
 }
 
+/** Pointer menus give editing back to the field they interrupted, or to the timeline. */
+export function menuFocusTarget(target: Element | null, pointer: boolean) {
+  // Nothing was focused: the timeline is looked up when the menu closes, once it exists.
+  if (!(target instanceof HTMLElement) || target === target.ownerDocument.body)
+    return null;
+  if (
+    !pointer ||
+    target.closest(
+      "dialog, [role=dialog], input, textarea, [contenteditable=true]",
+    )
+  )
+    return target;
+  return document.querySelector<HTMLElement>(".edit-timeline") ?? target;
+}
+
+export function restoreMenuFocus(target: HTMLElement | null) {
+  if (!target?.isConnected)
+    target = document.querySelector<HTMLElement>(".edit-timeline");
+  if (!target) return;
+  if (target.matches(".edit-timeline")) focusPanel(target);
+  else target.focus({ preventScroll: true });
+}
+
 /** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */
 export function clearBrowserSelection(event: PointerEvent<HTMLElement>) {
   if (isTyping(event.target)) return;
