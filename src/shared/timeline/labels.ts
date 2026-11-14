@@ -288,6 +288,12 @@ export function editLabel(
               ? `${pending ? "Solo" : "Soloed"} track`
               : `${pending ? "Unsolo" : "Unsoloed"} track`,
           );
+        if (command.volume !== undefined) {
+          const db = audioGainToDb(command.volume);
+          parts.push(
+            `Set ${trackName(command.index)} gain to ${command.volume === 0 ? "-inf" : `${db > 0 ? "+" : ""}${Number(db.toFixed(1))}`} dB`,
+          );
+        }
         if (creating)
           return [
             `Add ${command.kind ?? "video"} track ${command.index}`,
@@ -295,7 +301,7 @@ export function editLabel(
           ].join("; ");
         return (
           (parts.join("; ") || fallback) +
-          (named && trackName(command.index)
+          (named && command.volume === undefined && trackName(command.index)
             ? ` ${trackName(command.index)}`
             : "")
         );

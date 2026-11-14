@@ -65,11 +65,45 @@ function installPreviewBridge(
       video.removeAttribute("data-cutroom-held");
       video.removeAttribute("data-cutroom-flow");
     }
+    // Gain checks and timing updates both set these faders in place.
+    for (const group of root.querySelectorAll(
+      "hf-audio-group[data-cutroom-track]",
+    ))
+      group.removeAttribute("data-volume");
     return root.outerHTML;
   };
   const sourceTexts = new Map(texts);
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
+  /** Resolves every Cutroom track fader in this document, or null when the set differs. */
+  const trackGains = (gains: unknown) => {
+    if (!Array.isArray(gains)) return null;
+    const changes: { element: Element; volume: string }[] = [];
+    for (const gain of gains) {
+      if (
+        !gain ||
+        typeof gain !== "object" ||
+        !("id" in gain) ||
+        typeof gain.id !== "string" ||
+        !("volume" in gain) ||
+        typeof gain.volume !== "number" ||
+        !Number.isFinite(gain.volume) ||
+        gain.volume < 0
+      )
+        return null;
+      const element = document.getElementById(gain.id);
+      if (
+        element?.tagName.toLowerCase() !== "hf-audio-group" ||
+        !element.hasAttribute("data-cutroom-track")
+      )
+        return null;
+      changes.push({ element, volume: String(gain.volume) });
+    }
+    return new Set(changes.map(({ element }) => element)).size ===
+      document.querySelectorAll("hf-audio-group[data-cutroom-track]").length
+      ? changes
+      : null;
+  };
   const win = window as PreviewWindow;
   const positions = new Map<
     HTMLElement | SVGElement,
@@ -814,6 +848,10 @@ function installPreviewBridge(
       return Number.isFinite(value) && value > 0 ? value : fallback;
     };
     return {
+      mixSignature:
+        document
+          .querySelector('meta[name="cutroom-mix-signature"]')
+          ?.getAttribute("content") ?? undefined,
       ready: Boolean(win.__player),
       root: Boolean(root),
       error: win.__hfStartupError
@@ -832,6 +870,7 @@ function installPreviewBridge(
     id?: string,
     error?: string,
     hits?: ReturnType<typeof clipsAt>,
+    mixApplied?: boolean,
   ) => {
     const diagnostics = win.__cutroomReadDiagnostics?.();
     parent.postMessage(
@@ -842,6 +881,7 @@ function installPreviewBridge(
         ...(timingRevision ? { timingRevision } : {}),
         error,
         hits,
+        mixApplied,
         ...(diagnostics?.length ? { diagnostics } : {}),
       },
       "*",
@@ -1260,6 +1300,64 @@ function installPreviewBridge(
     const id = data.id;
     void (async () => {
       switch (data.action) {
+        case "track-gains": {
+          const changes = "gains" in data ? trackGains(data.gains) : null;
+          if (
+            !("signature" in data) ||
+            data.signature !== state().mixSignature ||
+            !("positionDraftClipId" in data) ||
+            !(
+              data.positionDraftClipId === null ||
+              typeof data.positionDraftClipId === "string"
+            ) ||
+            !changes
+          ) {
+            reply(id, undefined, undefined, false);
+            return;
+          }
+          for (const { element, volume } of changes)
+            if (element.getAttribute("data-volume") !== volume)
+              element.setAttribute("data-volume", volume);
+          // Undo can return to this document before a committed Position draft is
+          // replaced. Restore its canonical styles, retaining any current gesture.
+          if (positions.size) {
+            if (positionDraft?.clipId !== data.positionDraftClipId) {
+              cancelAnimationFrame(positionFrame);
+              positionFrame = 0;
+              positionDraft = null;
+            }
+            let restored = false;
+            for (const [element, original] of positions) {
+              if (
+                element.getAttribute("data-hf-cutroom-clip-id") ===
+                data.positionDraftClipId
+              )
+                continue;
+              element.style.setProperty(
+                "translate",
+                original.translate,
+                original.priority,
+              );
+              if (element instanceof HTMLVideoElement)
+                holds
+                  .get(element)
+                  ?.canvas.style.setProperty(
+                    "translate",
+                    original.translate,
+                    original.priority,
+                  );
+              positions.delete(element);
+              restored = true;
+            }
+            if (restored) {
+              scheduleObservation();
+              scheduleBox();
+              await paint();
+            }
+          }
+          reply(id, undefined, undefined, true);
+          return;
+        }
         case "observe-position":
           if (
             !("clipId" in data) ||
@@ -1340,6 +1438,9 @@ function installPreviewBridge(
             !("timing" in data) ||
             !data.timing ||
             typeof data.timing !== "object" ||
+            !("mixSignature" in data) ||
+            typeof data.mixSignature !== "string" ||
+            !("gains" in data) ||
             !("expectedRevision" in data) ||
             data.expectedRevision !== timingRevision ||
             !("time" in data) ||
@@ -1412,6 +1513,8 @@ function installPreviewBridge(
             }
             writes.push({ element, values });
           }
+          const gains = trackGains(data.gains);
+          if (!gains) throw new Error("The preview track gains changed.");
           updatingTiming = true;
           try {
             // Synchronous writes are one MutationObserver batch to the runtime.
@@ -1421,9 +1524,15 @@ function installPreviewBridge(
                 if (value === null) element.removeAttribute(name);
                 else element.setAttribute(name, value);
               }
+            for (const { element, volume } of gains)
+              if (element.getAttribute("data-volume") !== volume)
+                element.setAttribute("data-volume", volume);
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             win.__player.seek(data.time);
+            document
+              .querySelector('meta[name="cutroom-mix-signature"]')
+              ?.setAttribute("content", data.mixSignature);
             const expectedStructure = liveStructure();
             const restored = refreshPicture();
             const version = pictureVersion;
@@ -1637,6 +1746,7 @@ export function previewDocument(
   html: string,
   composition = "index.html",
   dependencies: string | null = null,
+  mixSignature?: string,
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -1750,7 +1860,7 @@ export function previewDocument(
     sourceTexts,
     timing && { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

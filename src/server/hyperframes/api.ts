@@ -22,7 +22,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
-import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
+import { previewRuntimeScript } from "./previewRuntime";
 import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
 import {
   DELETED_VERSION,
@@ -66,6 +66,7 @@ import {
 } from "../timeline/composition";
 import { mediaFacts } from "../timeline/media";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
 
 export interface FileChange {
@@ -459,6 +460,14 @@ export function createHyperframesApi(
         activeCompositionPath,
         mediaSources(source.content, scope),
       );
+      const document = await store.document(currentProject);
+      html = mixCompositionInstances(
+        html,
+        document.timelines[activeCompositionPath] ?? emptyTimelineSettings(),
+        activeCompositionPath,
+        activeCompositionPath,
+        lengths,
+      );
       return injectDeterministicFontFaces(
         withPreviewClipIdentities(html, source.content, scope, lengths),
       );
@@ -600,13 +609,26 @@ export function createHyperframesApi(
       )
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
+    const mix = trackGainPreview(html, activeCompositionPath);
+    if (url.searchParams.get("cutroom-mix") === "1") {
+      headers.set("Content-Type", "application/json");
+      return new Response(JSON.stringify(mix), {
+        status: response.status,
+        headers,
+      });
+    }
     // The HTTP CSP applies before any authored markup, including malformed documents.
     // The root HTML is compared after masking timing. Other files, including nested
     // sources and assets, must remain identical even if their watcher event is late.
     const dependencies = eligible
       ? await previewDependencies(project.path, activeCompositionPath)
       : null;
-    const document = previewDocument(html, activeCompositionPath, dependencies);
+    const document = previewDocument(
+      html,
+      activeCompositionPath,
+      dependencies,
+      mix.signature,
+    );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
       const sourceAfter = await readSource(project, "index.html");
@@ -619,6 +641,7 @@ export function createHyperframesApi(
         return c.json({
           version: sourceAfter.version,
           timing: null,
+          mix,
           live: true,
         });
       if (
@@ -633,6 +656,7 @@ export function createHyperframesApi(
       return c.json({
         version: sourceAfter.version,
         timing: document.timing,
+        mix,
         live:
           timingDocuments.get(documentId ?? "")?.projectId === projectId &&
           timingDocuments.get(documentId ?? "")?.allowed === true,
@@ -659,7 +683,7 @@ export function createHyperframesApi(
   });
 
   api.get("/runtime.js", (c) =>
-    c.body(getHyperframeRuntimeScript(), 200, {
+    c.body(previewRuntimeScript(), 200, {
       "content-type": "application/javascript",
       "cache-control": "public, max-age=3600",
     }),

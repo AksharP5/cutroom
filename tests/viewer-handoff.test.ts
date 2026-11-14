@@ -181,3 +181,97 @@ test("a live acknowledgment advances only its confirmed document, never a newer 
     transitionHandoff(loading, { type: "updated", gen: 1, revision: 4 }),
   ).toBe(loading);
 });
+
+test("gain checks retain the playing picture and only their latest revision may finish", () => {
+  const checking = transitionHandoff(showing, {
+    type: "check",
+    revision: 2,
+    deadline: 15_000,
+  });
+  expect(checking).toEqual({
+    kind: "checking",
+    confirmed,
+    check: { revision: 2, deadline: 15_000 },
+  });
+  const newer = transitionHandoff(checking, {
+    type: "check",
+    revision: 3,
+    deadline: 16_000,
+  });
+  expect(transitionHandoff(newer, { type: "mixed", revision: 2 })).toBe(newer);
+  expect(
+    transitionHandoff(newer, {
+      type: "check-failed",
+      revision: 2,
+      reason: "Late failure",
+    }),
+  ).toBe(newer);
+  expect(
+    transitionHandoff(newer, { type: "updated", gen: 1, revision: 2 }),
+  ).toBe(newer);
+  expect(
+    transitionHandoff(newer, { type: "updated", gen: 1, revision: 3 }),
+  ).toEqual({
+    kind: "showing",
+    confirmed: { ...confirmed, revision: 3 },
+  });
+  const mixed = transitionHandoff(newer, { type: "mixed", revision: 3 });
+  expect(mixed).toEqual(showing);
+  // The existing player must not reattach just because its gain changed.
+  expect(mixed.confirmed).toBe(confirmed);
+  const navigating = transitionHandoff(newer, {
+    type: "navigate",
+    gen: 2,
+    deadline: 16_000,
+  });
+  expect(transitionHandoff(navigating, { type: "mixed", revision: 3 })).toBe(
+    navigating,
+  );
+});
+
+test("a failed gain check reports once while preserving the existing document", () => {
+  const checking = transitionHandoff(showing, {
+    type: "check",
+    revision: 2,
+    deadline: 15_000,
+  });
+  const failed = transitionHandoff(checking, {
+    type: "check-failed",
+    revision: 2,
+    reason: "Deadline",
+  });
+  expect(failed).toEqual({ kind: "failed", confirmed, reason: "Deadline" });
+  expect(
+    transitionHandoff(failed, {
+      type: "check-failed",
+      revision: 2,
+      reason: "Late reply",
+    }),
+  ).toBe(failed);
+  expect(transitionHandoff(failed, { type: "reported" })).toEqual(showing);
+});
+
+test("a document reloading during its gain check keeps the overall deadline", () => {
+  const checking = transitionHandoff(showing, {
+    type: "check",
+    revision: 2,
+    deadline: 15_000,
+  });
+  const reloading = transitionHandoff(checking, {
+    type: "unloaded",
+    gen: 1,
+    deadline: 20_000,
+  });
+  expect(reloading).toEqual({
+    kind: "loading",
+    confirmed,
+    candidate: { gen: 1, deadline: 15_000 },
+  });
+  expect(
+    transitionHandoff(reloading, {
+      type: "check-failed",
+      revision: 2,
+      reason: "Disposed connection",
+    }),
+  ).toBe(reloading);
+});

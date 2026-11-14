@@ -1319,6 +1319,10 @@ test("a navigation that never loads expires and keeps the confirmed picture", as
   const before = await page.locator("iframe[data-live]").getAttribute("src");
   let release = () => {};
   await page.route("**/isolated-preview?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.has("cutroom-mix")) {
+      await route.fallback();
+      return;
+    }
     await new Promise<void>((resolve) => {
       release = resolve;
     });

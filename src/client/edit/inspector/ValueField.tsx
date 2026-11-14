@@ -14,6 +14,7 @@ export function ValueField({
   fps,
   disabled = false,
   allowAuto = false,
+  mixed = false,
   min = 0,
   max = Infinity,
   hint,
@@ -29,6 +30,8 @@ export function ValueField({
   fps: Fps;
   disabled?: boolean;
   allowAuto?: boolean;
+  /** Several clips with different values share the field: `value` is null and typing sets them all. */
+  mixed?: boolean;
   min?: number;
   max?: number;
   hint?: string;
@@ -174,7 +177,7 @@ export function ValueField({
           type="text"
           spellCheck={false}
           disabled={disabled}
-          value={draft ?? formatField(value, unit, fps)}
+          value={draft ?? (mixed ? "Mixed" : formatField(value, unit, fps))}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => {

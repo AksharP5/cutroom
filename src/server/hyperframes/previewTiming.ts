@@ -60,6 +60,9 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
           );
         }
       }
+      // Track gains travel with each timing update, so a fader change is not structure.
+      if (node.tagName === "hf-audio-group" && attrs.has("data-cutroom-track"))
+        node.attrs = node.attrs.filter(({ name }) => name !== "data-volume");
       if (
         node.tagName === "meta" &&
         attrs.get("name") === "hyperframes-project-signature"
