@@ -13,6 +13,11 @@ interface Candidate {
 
 export type Handoff =
   | { kind: "showing"; confirmed: Picture | null }
+  | {
+      kind: "checking";
+      confirmed: Picture;
+      check: { revision: number; deadline: number };
+    }
   | { kind: "loading"; confirmed: Picture | null; candidate: Candidate }
   | {
       kind: "promoting";
@@ -22,6 +27,9 @@ export type Handoff =
   | { kind: "failed"; confirmed: Picture | null; reason: unknown };
 
 type Event =
+  | { type: "check"; revision: number; deadline: number }
+  | { type: "mixed"; revision: number }
+  | { type: "check-failed"; revision: number; reason: unknown }
   | { type: "navigate"; gen: number; deadline: number }
   | { type: "loaded"; gen: number; deadline: number }
   | { type: "unloaded"; gen: number; deadline: number }
@@ -34,14 +42,32 @@ type Event =
 /** Only a confirmed visible paint can replace the picture we retain. Stale work has no effect. */
 export function transitionHandoff(state: Handoff, event: Event): Handoff {
   if (event.type === "updated")
-    return state.kind === "showing" &&
+    return (state.kind === "showing" ||
+      (state.kind === "checking" && state.check.revision === event.revision)) &&
       state.confirmed?.gen === event.gen &&
       event.revision > state.confirmed.revision
       ? {
-          ...state,
+          kind: "showing",
           confirmed: { ...state.confirmed, revision: event.revision },
         }
       : state;
+  if (event.type === "check")
+    return state.kind !== "loading" &&
+      state.kind !== "promoting" &&
+      state.confirmed
+      ? {
+          kind: "checking",
+          confirmed: state.confirmed,
+          check: { revision: event.revision, deadline: event.deadline },
+        }
+      : state;
+  if (event.type === "mixed" || event.type === "check-failed") {
+    if (state.kind !== "checking" || state.check.revision !== event.revision)
+      return state;
+    return event.type === "mixed"
+      ? { kind: "showing", confirmed: state.confirmed }
+      : { kind: "failed", confirmed: state.confirmed, reason: event.reason };
+  }
   if (event.type === "navigate")
     return {
       kind: "loading",
@@ -57,11 +83,16 @@ export function transitionHandoff(state: Handoff, event: Event): Handoff {
         confirmed: state.confirmed,
         candidate: { gen: event.gen, deadline: state.candidate.deadline },
       };
-    return state.kind === "showing" && state.confirmed?.gen === event.gen
+    return (state.kind === "showing" || state.kind === "checking") &&
+      state.confirmed?.gen === event.gen
       ? {
           kind: "loading",
           confirmed: state.confirmed,
-          candidate: { gen: event.gen, deadline: event.deadline },
+          candidate: {
+            gen: event.gen,
+            deadline:
+              state.kind === "checking" ? state.check.deadline : event.deadline,
+          },
         }
       : state;
   }

@@ -372,10 +372,21 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   return {
     player,
-    async mix(snapshot: TrackGainPreview) {
+    async mix(snapshot: TrackGainPreview, signal = closing.signal) {
       if (!state.mixSignature || snapshot.signature !== state.mixSignature)
         return false;
-      return (await request("track-gains", snapshot)).mixApplied === true;
+      return (
+        (
+          await request(
+            "track-gains",
+            {
+              ...snapshot,
+              positionDraftClipId: positionDraft?.clipId ?? null,
+            },
+            signal,
+          )
+        ).mixApplied === true
+      );
     },
     signal: closing.signal,
     async activate() {
@@ -458,6 +469,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         .object({
           version: z.string(),
           timing: PreviewTimingSchema.nullable(),
+          mixSignature: z.string(),
           live: z.boolean(),
         })
         .parse(await response.json());
@@ -471,6 +483,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         "timing",
         {
           timing: snapshot.timing,
+          mixSignature: snapshot.mixSignature,
           expectedRevision: timingRevision,
           time,
         },

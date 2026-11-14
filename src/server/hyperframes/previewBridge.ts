@@ -1270,6 +1270,11 @@ function installPreviewBridge(
           if (
             !("signature" in data) ||
             data.signature !== state().mixSignature ||
+            !("positionDraftClipId" in data) ||
+            !(
+              data.positionDraftClipId === null ||
+              typeof data.positionDraftClipId === "string"
+            ) ||
             !("gains" in data) ||
             !Array.isArray(data.gains)
           ) {
@@ -1313,6 +1318,43 @@ function installPreviewBridge(
             if (element.getAttribute("data-volume") !== String(volume)) {
               element.setAttribute("data-volume", String(volume));
             }
+          // Undo can return to this document before a committed Position draft is
+          // replaced. Restore its canonical styles, retaining any current gesture.
+          if (positions.size) {
+            if (positionDraft?.clipId !== data.positionDraftClipId) {
+              cancelAnimationFrame(positionFrame);
+              positionFrame = 0;
+              positionDraft = null;
+            }
+            let restored = false;
+            for (const [element, original] of positions) {
+              if (
+                element.getAttribute("data-hf-cutroom-clip-id") ===
+                data.positionDraftClipId
+              )
+                continue;
+              element.style.setProperty(
+                "translate",
+                original.translate,
+                original.priority,
+              );
+              if (element instanceof HTMLVideoElement)
+                holds
+                  .get(element)
+                  ?.canvas.style.setProperty(
+                    "translate",
+                    original.translate,
+                    original.priority,
+                  );
+              positions.delete(element);
+              restored = true;
+            }
+            if (restored) {
+              scheduleObservation();
+              scheduleBox();
+              await paint();
+            }
+          }
           reply(id, undefined, undefined, true);
           return;
         }
@@ -1396,6 +1438,8 @@ function installPreviewBridge(
             !("timing" in data) ||
             !data.timing ||
             typeof data.timing !== "object" ||
+            !("mixSignature" in data) ||
+            typeof data.mixSignature !== "string" ||
             !("expectedRevision" in data) ||
             data.expectedRevision !== timingRevision ||
             !("time" in data) ||
@@ -1480,6 +1524,9 @@ function installPreviewBridge(
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             win.__player.seek(data.time);
+            document
+              .querySelector('meta[name="cutroom-mix-signature"]')
+              ?.setAttribute("content", data.mixSignature);
             const expectedStructure = liveStructure();
             const restored = refreshPicture();
             const version = pictureVersion;

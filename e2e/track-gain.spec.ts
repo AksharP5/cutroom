@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { positionField } from "./position-helpers";
 
 const exec = promisify(execFile);
 const db = (level: number) => 10 ** (level / 20);
@@ -255,6 +256,28 @@ test("a track's gain turns a split music bed down once, and preview, meters and 
       }),
   );
   await page.keyboard.press("k");
+  await writeFile(
+    info.outputPath("preview-level-samples.json"),
+    JSON.stringify(samples, null, 2),
+  );
+  await writeFile(
+    info.outputPath("preview-media.json"),
+    JSON.stringify(
+      await frame.evaluate(() =>
+        [...document.querySelectorAll("audio")].map((media) => ({
+          id: media.id,
+          time: media.currentTime,
+          paused: media.paused,
+          muted: media.muted,
+          volume: media.volume,
+          ready: media.readyState,
+          error: media.error?.message,
+        })),
+      ),
+      null,
+      2,
+    ),
+  );
   // Voice: -6 dB clip on a -6 dB track. Bed: a -12 dB track, with +6 dB on its second piece.
   const evidence = [];
   for (const [target, voice, bed] of [
@@ -808,4 +831,296 @@ test("the inspector shows uncapped combined static gain without changing clip ga
   await expect(combined).toHaveText("-12.0 dB");
   await select("bed-1", true);
   await expect(combined).toHaveText("Mixed");
+});
+
+test("slow and blocked gain checks retain live audio and recover without a reload", async ({
+  page,
+  request,
+}, info) => {
+  const { project, api, read } = await mixProject(
+    request,
+    "Delayed gain check",
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=220:duration=60",
+    "-af",
+    "pan=stereo|c0=0*c0|c1=c0",
+    join(project.path, "Music.wav"),
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-fps="30" data-duration="60"><audio id="bed" src="Music.wav" data-track-index="2" data-start="0" data-duration="60" data-volume="0.4"></audio></main></body></html>',
+  );
+  const set = async (volume: number) => {
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setTrack", index: 2, volume }],
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  const sample = () =>
+    page
+      .frameLocator("iframe[data-live]")
+      .locator("main")
+      .evaluate(() => {
+        const win = window as Window & {
+          __hf?: { audioMeter?: { read(): { master: { r: number } } } };
+          __player?: { getTime(): number; isPlaying(): boolean };
+        };
+        const media = document.querySelector<HTMLAudioElement>("#bed");
+        return {
+          peak: win.__hf?.audioMeter?.read().master.r ?? 0,
+          volume: document
+            .querySelector('hf-audio-group[data-cutroom-track="2"]')
+            ?.getAttribute("data-volume"),
+          origin: performance.timeOrigin,
+          time: win.__player?.getTime(),
+          playing: win.__player?.isPlaying(),
+          mediaTime: media?.currentTime,
+          mediaPaused: media?.paused,
+        };
+      });
+  const matches = async (volume: number) => {
+    const value = await sample();
+    return (
+      value.volume === String(volume) &&
+      Math.abs(20 * Math.log10(value.peak / (SINE_PEAK * 0.4 * volume))) < 1
+    );
+  };
+  const releases: (() => void)[] = [];
+  const pattern = "**/isolated-preview?cutroom-mix=1&*";
+  const hold = async () => {
+    let unblock = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+      releases.push(resolve);
+    });
+    let notify = () => {};
+    const requested = new Promise<void>((resolve) => {
+      notify = resolve;
+    });
+    await page.route(pattern, async (route) => {
+      notify();
+      await blocked;
+      await route.fallback();
+    });
+    return {
+      requested,
+      release: async () => {
+        unblock();
+        await page.unroute(pattern);
+      },
+    };
+  };
+  let initial: Awaited<ReturnType<typeof sample>> | undefined;
+  try {
+    await page.getByRole("region", { name: "Viewer", exact: true }).click();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Space");
+    await expect.poll(() => matches(1)).toBe(true);
+    initial = await sample();
+    const slow = await hold();
+    await set(0.5);
+    await slow.requested;
+    // The previous 500 ms cutoff must not turn a slow fader check into a document reload.
+    await page.waitForTimeout(800);
+    await slow.release();
+    await expect.poll(() => matches(0.5)).toBe(true);
+    expect((await sample()).origin).toBe(initial.origin);
+    const blocked = await hold();
+    await set(0.25);
+    await blocked.requested;
+    await expect(page.locator(".status-error")).toContainText(
+      "did not finish loading",
+      { timeout: 17_000 },
+    );
+    expect((await sample()).origin).toBe(initial.origin);
+    await expect.poll(() => matches(0.5)).toBe(true);
+    await blocked.release();
+    await set(0.125);
+    await expect.poll(() => matches(0.125)).toBe(true);
+    expect((await sample()).origin).toBe(initial.origin);
+    await expect(page.locator(".status-error")).toHaveCount(0);
+  } finally {
+    for (const release of releases) release();
+    await writeFile(
+      info.outputPath("delayed-gain-audio.json"),
+      JSON.stringify({ initial, final: await sample() }, null, 2),
+    );
+  }
+});
+
+test("script-free timing edits and track gain keep the preview's sound in sync", async ({
+  page,
+  request,
+}) => {
+  const { project, api, read } = await mixProject(request, "Timing and gain");
+  const edit = async (commands: CommandInput[]) => {
+    const response = await request.post(`${api}/commands`, {
+      data: { expectedRevision: (await read()).revision, commands },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  // Establish routing before the initial timing contract is compiled.
+  await edit([{ type: "setTrack", index: 2, volume: 0.5 }]);
+  await edit([{ type: "setTrack", index: 2, volume: 1 }]);
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const live = page.frameLocator("iframe[data-live]");
+  if ((await stage.getAttribute("data-preview-timing-ready")) !== "true") {
+    for (const mediaStart of [0.125, 0]) {
+      const previous = await stage.getAttribute("data-preview-ready");
+      await edit([{ type: "setTiming", clipId: "bed-1", mediaStart }]);
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      await expect(stage).not.toHaveAttribute("data-preview-ready", previous!);
+    }
+  }
+  await expect(stage).toHaveAttribute("data-preview-timing-ready", "true");
+  const origin = await live
+    .locator("main")
+    .evaluate(() => performance.timeOrigin);
+  let token = await stage.getAttribute("data-preview-ready");
+  await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.25 }]);
+  await expect(live.locator("#bed-1")).toHaveAttribute(
+    "data-media-start",
+    "0.25",
+  );
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
+  expect(
+    await live.locator("main").evaluate(() => performance.timeOrigin),
+  ).toBe(origin);
+  token = await stage.getAttribute("data-preview-ready");
+  await edit([{ type: "setTrack", index: 2, volume: 0.5 }]);
+  const bus = live.locator('hf-audio-group[data-cutroom-track="2"]');
+  await expect(bus).toHaveAttribute("data-volume", "0.5");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
+  const matches = (volume: number) =>
+    live.locator("main").evaluate((_, volume) => {
+      const win = window as Window & {
+        __hf?: { audioMeter?: { read(): { master: { r: number } } } };
+      };
+      const peak = win.__hf?.audioMeter?.read().master.r ?? 0;
+      return Math.abs(20 * Math.log10(peak / (0.125 * volume))) < 1;
+    }, volume);
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  await expect.poll(() => matches(0.5)).toBe(true);
+  await edit([{ type: "setTrack", index: 2, volume: 0.25 }]);
+  await expect.poll(() => matches(0.25)).toBe(true);
+  expect(
+    await live.locator("main").evaluate(() => performance.timeOrigin),
+  ).toBe(origin);
+  await page.keyboard.press("k");
+  token = await stage.getAttribute("data-preview-ready");
+  await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.5 }]);
+  await expect(live.locator("#bed-1")).toHaveAttribute(
+    "data-media-start",
+    "0.5",
+  );
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
+  await edit([{ type: "setTrack", index: 2, volume: 0.125 }]);
+  await expect(bus).toHaveAttribute("data-volume", "0.125");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  await expect.poll(() => matches(0.125)).toBe(true);
+  await page.keyboard.press("k");
+});
+
+test("a gain check retires an undone Position draft and preserves a gesture still in progress", async ({
+  page,
+  request,
+}) => {
+  const { project, api, read } = await mixProject(
+    request,
+    "Gain and Position drafts",
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><head><style>#title{position:absolute;left:60px;top:100px;width:100px;height:50px;background:lime}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="8" data-fps="30"><div id="title" class="clip" data-start="0" data-duration="8" data-track-index="0">Title</div><audio id="bed" src="Music.wav" data-track-index="1" data-start="0" data-duration="8"></audio></main></body></html>',
+  );
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  await page.locator('[data-clip="title"]').click();
+  const field = positionField(page);
+  await expect(field).toBeVisible();
+  const live = page.frameLocator("iframe[data-live]");
+  const x = () =>
+    live
+      .locator("#title")
+      .evaluate((element) => element.getBoundingClientRect().left);
+  const origin = await live
+    .locator("main")
+    .evaluate(() => performance.timeOrigin);
+  const label = page
+    .getByRole("complementary", { name: "Inspector" })
+    .locator("label")
+    .filter({ hasText: /^Position X$/ });
+  const box = await label.boundingBox();
+  if (!box) throw new Error("Position label missing");
+  const blocked = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let held = false;
+  await page.route("**/isolated-preview?cutroom-mix=1&*", async (route) => {
+    if (!held) {
+      held = true;
+      blocked.resolve();
+      await release.promise;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.mouse.move(box.x + 10, box.y + 5);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 50, box.y + 5);
+    await expect.poll(x).toBe(100);
+    await page.mouse.up();
+    await expect(field).toHaveValue("40 px");
+    await blocked.promise;
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await expect(field).toHaveValue("0 px");
+    await expect.poll(x).toBe(60);
+    release.resolve();
+    await page.unroute("**/isolated-preview?cutroom-mix=1&*");
+    await page.mouse.move(box.x + 10, box.y + 5);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 50, box.y + 5);
+    await expect.poll(x).toBe(100);
+    const response = await request.post(`${api}/commands`, {
+      data: {
+        expectedRevision: (await read()).revision,
+        commands: [{ type: "setTrack", index: 1, volume: 0.5 }],
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    await expect(
+      live.locator('hf-audio-group[data-cutroom-track="1"]'),
+    ).toHaveAttribute("data-volume", "0.5");
+    expect(await x()).toBe(100);
+    expect(
+      await live.locator("main").evaluate(() => performance.timeOrigin),
+    ).toBe(origin);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect.poll(x).toBe(60);
+  } finally {
+    release.resolve();
+  }
 });

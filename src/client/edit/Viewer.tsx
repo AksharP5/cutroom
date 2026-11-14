@@ -30,10 +30,8 @@ import { editPicture, followEditPicture } from "./editFrame";
 
 export type Zoom = "fit" | "actual";
 
-/** Includes navigation, preparation, and the first fully visible paint. */
+/** Includes live verification, navigation, preparation, and the first fully visible paint. */
 const READY_TIMEOUT = 15_000;
-/** An optional fader update must not hold up normal preview preparation. */
-const MIX_TIMEOUT = 500;
 /**
  * Warm one candidate over the last confirmed picture. Only a visible paint can
  * confirm its replacement; a failed or superseded candidate is retired.
@@ -86,6 +84,8 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const [mixedRevision, setMixedRevision] = useState<number | null>(null);
+  const checking = useRef<AbortController | null>(null);
   const loadingRevision = useRef<{ gen: number; revision: number } | null>(
     null,
   );
@@ -120,7 +120,11 @@ export function Viewer({
   const settled = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     shownHandoff.current = handoff;
-    if (handoff.kind === "showing" || handoff.kind === "failed") {
+    if (
+      handoff.kind === "showing" ||
+      handoff.kind === "checking" ||
+      handoff.kind === "failed"
+    ) {
       settled.current?.();
       settled.current = null;
     }
@@ -129,6 +133,7 @@ export function Viewer({
     new Promise<void>((resolve) => {
       if (
         shownHandoff.current.kind === "showing" ||
+        shownHandoff.current.kind === "checking" ||
         shownHandoff.current.kind === "failed"
       )
         resolve();
@@ -149,58 +154,135 @@ export function Viewer({
     const closing = new AbortController();
     refresh.current = previewRefresh(
       async (change, isLatest) => {
-        if (timingEligible.current) await waitForPicture();
+        if (
+          timingEligible.current &&
+          useTransport.getState().state.kind === "stopped"
+        )
+          await waitForPicture();
         if (closing.signal.aborted || !isLatest()) return;
         const readyDeadline = performance.now() + READY_TIMEOUT;
         const state = shownHandoff.current;
-        const picture = state.kind === "showing" ? state.confirmed : null;
+        const picture =
+          state.kind !== "loading" && state.kind !== "promoting"
+            ? state.confirmed
+            : null;
         const preview = picture && connections.current.get(picture.gen);
-        if (
-          picture &&
-          preview?.timingAllowed &&
-          change.path === "index.html" &&
-          useTransport.getState().state.kind === "stopped" &&
-          !editPicture()
-        ) {
-          const attempt = new AbortController();
-          const signal = AbortSignal.any([closing.signal, attempt.signal]);
-          const timer = window.setTimeout(() => attempt.abort(), 2000);
-          const stop = useTransport.subscribe((state, previous) => {
-            if (
-              state.state.kind !== "stopped" ||
-              state.frame !== previous.frame
-            )
-              attempt.abort();
+        const attempt = new AbortController();
+        checking.current = attempt;
+        const signal = AbortSignal.any([closing.signal, attempt.signal]);
+        const timer = window.setTimeout(
+          () => {
+            transition({
+              type: "check-failed",
+              revision: change.revision,
+              reason: new Error(
+                "The preview did not finish loading or drawing in time.",
+              ),
+            });
+            attempt.abort();
+          },
+          Math.max(0, readyDeadline - performance.now()),
+        );
+        if (picture)
+          transition({
+            type: "check",
+            revision: change.revision,
+            deadline: readyDeadline,
           });
-          try {
-            const { frame, fps } = useTransport.getState();
-            if (
-              await preview.updateTiming(
-                frameTime(frame, fps),
-                signal,
-                isLatest,
+        try {
+          if (
+            picture &&
+            preview?.timingAllowed &&
+            change.path === "index.html" &&
+            useTransport.getState().state.kind === "stopped" &&
+            !editPicture()
+          ) {
+            const timing = new AbortController();
+            const timingSignal = AbortSignal.any([signal, timing.signal]);
+            const timingTimer = window.setTimeout(() => timing.abort(), 2000);
+            const stop = useTransport.subscribe((state, previous) => {
+              if (
+                state.state.kind !== "stopped" ||
+                state.frame !== previous.frame
               )
-            )
-              transition({
-                type: "updated",
-                gen: picture.gen,
-                revision: change.revision,
-              });
-            return;
-          } catch {
-            if (!preview.timingAllowed) {
-              timingEligible.current = false;
-              setTimingReady(null);
+                timing.abort();
+            });
+            try {
+              const { frame, fps } = useTransport.getState();
+              if (
+                await preview.updateTiming(
+                  frameTime(frame, fps),
+                  timingSignal,
+                  isLatest,
+                )
+              )
+                transition({
+                  type: "updated",
+                  gen: picture.gen,
+                  revision: change.revision,
+                });
+              return;
+            } catch {
+              if (!preview.timingAllowed) {
+                timingEligible.current = false;
+                setTimingReady(null);
+              }
+              if (signal.aborted || !isLatest()) return;
+            } finally {
+              clearTimeout(timingTimer);
+              stop();
             }
-            if (closing.signal.aborted || !isLatest()) return;
-          } finally {
-            clearTimeout(timer);
-            stop();
           }
+          if (
+            preview &&
+            (/\.html?$/i.test(change.path) || change.path === "cutroom.json")
+          ) {
+            try {
+              const response = await fetch(
+                `/api/projects/${encodeURIComponent(projectId)}/isolated-preview?cutroom-mix=1&v=${change.revision}`,
+                { signal: AbortSignal.any([signal, preview.signal]) },
+              );
+              if (!response.ok)
+                throw new Error(
+                  `The preview could not be updated (HTTP ${response.status}).`,
+                );
+              const snapshot = TrackGainPreviewSchema.parse(
+                await response.json(),
+              );
+              if (signal.aborted || !isLatest()) return;
+              if (
+                snapshot.compositions.every((path) => path === "index.html") &&
+                (await preview.mix(snapshot, signal))
+              ) {
+                if (signal.aborted || !isLatest()) return;
+                setMixedRevision(change.revision);
+                transition({ type: "mixed", revision: change.revision });
+                reportEditorError("viewer", null);
+                dismissFailure.current?.();
+                dismissFailure.current = undefined;
+                return;
+              }
+            } catch (reason) {
+              if (!signal.aborted && isLatest())
+                transition({
+                  type: "check-failed",
+                  revision: change.revision,
+                  reason,
+                });
+              return;
+            }
+          }
+          if (!isLatest() || signal.aborted) return;
+          reload(change.revision, readyDeadline);
+        } finally {
+          clearTimeout(timer);
+          if (checking.current === attempt) checking.current = null;
         }
-        if (!isLatest() || closing.signal.aborted) return;
-        reload(change.revision, readyDeadline);
-        if (!timingEligible.current) return;
+        if (
+          !timingEligible.current ||
+          useTransport.getState().state.kind !== "stopped"
+        )
+          return;
         // A newer invalidation waits here, replacing the pending destination rather
         // than retiring every candidate before it can paint.
         await new Promise<void>((resolve) => {
@@ -212,6 +294,7 @@ export function Viewer({
     reload(0);
     return () => {
       closing.abort();
+      checking.current?.abort();
       refresh.current?.dispose();
       settled.current?.();
       settled.current = null;
@@ -219,15 +302,8 @@ export function Viewer({
   }, []);
   useLayoutEffect(() => {
     if (!change.revision) return;
-    if (
-      timingEligible.current &&
-      useTransport.getState().state.kind === "stopped"
-    )
-      refresh.current?.push(change);
-    else {
-      refresh.current?.invalidate();
-      reload(change.revision);
-    }
+    checking.current?.abort();
+    refresh.current?.push(change);
   }, [change]);
 
   useLayoutEffect(() => {

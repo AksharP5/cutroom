@@ -623,7 +623,12 @@ export function createHyperframesApi(
     const dependencies = eligible
       ? await previewDependencies(project.path, activeCompositionPath)
       : null;
-    const document = previewDocument(html, activeCompositionPath, dependencies, mix.signature);
+    const document = previewDocument(
+      html,
+      activeCompositionPath,
+      dependencies,
+      mix.signature,
+    );
     if (timingOnly) {
       c.header("Cache-Control", "no-store");
       const sourceAfter = await readSource(project, "index.html");
@@ -636,6 +641,7 @@ export function createHyperframesApi(
         return c.json({
           version: sourceAfter.version,
           timing: null,
+          mixSignature: mix.signature,
           live: true,
         });
       if (
@@ -650,6 +656,7 @@ export function createHyperframesApi(
       return c.json({
         version: sourceAfter.version,
         timing: document.timing,
+        mixSignature: mix.signature,
         live:
           timingDocuments.get(documentId ?? "")?.projectId === projectId &&
           timingDocuments.get(documentId ?? "")?.allowed === true,
