@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { writeFile, readFile, mkdir, chmod, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { z } from "zod";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -10,21 +9,10 @@ import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { prepareTimingPreview, waitForPreview } from "./preview-ready";
 
-const ready = (page: Page) =>
-  page.waitForFunction(() =>
-    document.querySelector(".edit-stage")?.hasAttribute("data-preview-ready"),
-  );
 const token = (page: Page) =>
   page.locator(".edit-stage").getAttribute("data-preview-ready");
-const changed = (page: Page, old: string | null) =>
-  page.waitForFunction((old) => {
-    const stage = document.querySelector(".edit-stage");
-    return (
-      stage?.hasAttribute("data-preview-ready") &&
-      stage.getAttribute("data-preview-ready") !== old
-    );
-  }, old);
 const live = (page: Page) =>
   page.locator("iframe[data-live]").getAttribute("src");
 
@@ -102,33 +90,8 @@ async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   await edit([{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]);
   await edit([{ type: "move", clipIds: ["title"], by: -1, mode: "overwrite" }]);
   await page.goto(`/#project/${project.id}`);
-  await ready(page);
-  if (!scripts) {
-    const approved = async () =>
-      z
-        .object({ allowed: z.boolean() })
-        .parse(
-          await (
-            await request.get(`${await live(page)}&cutroom-status=1`)
-          ).json(),
-        ).allowed;
-    if (!(await approved())) {
-      // A thumbnail may own the initial compilation, which safely lacks live proof.
-      // Establish an approved document before asserting the timing-only fast path.
-      for (const by of [1, -1]) {
-        const previous = await token(page);
-        await edit([
-          { type: "move", clipIds: ["title"], by, mode: "overwrite" },
-        ]);
-        await changed(page, previous);
-      }
-      await expect.poll(approved).toBe(true);
-    }
-    await expect(page.locator(".edit-stage")).toHaveAttribute(
-      "data-preview-timing-ready",
-      "true",
-    );
-  }
+  await waitForPreview(page);
+  if (!scripts) await prepareTimingPreview(page, request);
   return { project, read, edit };
 }
 
@@ -165,19 +128,24 @@ async function seek(page: Page, frame: number) {
   });
 }
 
-test("paused timing matches fresh pictures at NTSC cuts, linked source-in/rate, titles, undo and redo", async ({
+test("paused timing keeps the document and matches fresh pictures at NTSC cuts, linked source-in/rate, titles, undo and redo", async ({
   page,
   request,
 }, info) => {
   test.setTimeout(120000);
   const { project, edit, read } = await fixture(request, page);
+  const original = await live(page);
   let previous = await token(page);
   await edit([
     { type: "setTiming", clipId: "v1", mediaStart: 1, playbackRate: 1.5 },
     { type: "trim", clipId: "v1", edge: "end", to: 75, ripple: false },
     { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
   ]);
-  await changed(page, previous);
+  await waitForPreview(page, { after: previous });
+  const picture = page.locator("iframe[data-live]").contentFrame();
+  await expect(picture.locator("#v1")).toHaveAttribute("data-media-start", "1");
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
   const clips = (await read()).timeline.clips;
   expect(clips.find((c) => c.id === "a1")?.mediaStart).toBe(1);
   expect(clips.find((c) => c.id === "a1")?.playbackRate).toBe(1.5);
@@ -185,15 +153,20 @@ test("paused timing matches fresh pictures at NTSC cuts, linked source-in/rate, 
   expect(clips.find((c) => c.id === "a1")?.duration).toBe(75);
   const control = await page.context().newPage();
   try {
-    // Timing may safely reload when target proof is unavailable. Every control picture
-    // starts in a separate fresh document, so either refresh path must match it.
+    // The patched page never reloads. Every control picture starts in another fresh document.
     for (const step of ["Control+z", "Control+Shift+z"]) {
       previous = await token(page);
-      await page.getByRole("region", { name: "Viewer", exact: true }).click();
+      await page.getByRole("button", { name: /^Current time/ }).focus();
       await page.keyboard.press(step);
-      await changed(page, previous);
+      await waitForPreview(page, { after: previous });
+      await expect(picture.locator("#v1")).toHaveAttribute(
+        "data-media-start",
+        step === "Control+z" ? "0" : "1",
+      );
+      await waitForPreview(page);
+      expect(await live(page)).toBe(original);
       await control.goto(`/#project/${project.id}`);
-      await ready(control);
+      await waitForPreview(control);
       await seek(page, 0);
       await seek(control, 0);
       const patched = await page.locator(".edit-picture").screenshot();
@@ -207,20 +180,24 @@ test("paused timing matches fresh pictures at NTSC cuts, linked source-in/rate, 
         contentType: "image/png",
       });
       expect(patched.equals(fresh), step).toBe(true);
+      // The reference is a fresh render, not a second editor applying the next history step.
+      await control.goto("about:blank");
     }
     for (const frame of [0, 30, 31, 75, 76, 77]) {
       await seek(page, frame);
       const patched = await page.locator(".edit-picture").screenshot();
-      await control.reload();
-      await ready(control);
+      await control.goto(`/#project/${project.id}`);
+      await waitForPreview(control);
       await seek(control, frame);
       const fresh = await control.locator(".edit-picture").screenshot();
       expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
+      expect(await live(page)).toBe(original);
       if (frame === 76)
         await info.attach("NTSC cut.png", {
           body: fresh,
           contentType: "image/png",
         });
+      await control.goto("about:blank");
     }
   } finally {
     await control.close();
@@ -236,11 +213,9 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   const { project, read } = await fixture(request, page);
   const second = await page.context().newPage();
   await second.goto(`/#project/${project.id}`);
-  await ready(second);
-  await expect(second.locator(".edit-stage")).toHaveAttribute(
-    "data-preview-timing-ready",
-    "true",
-  );
+  await waitForPreview(second);
+  await prepareTimingPreview(second, request);
+  const docs = await Promise.all([live(page), live(second)]);
   const tokens = await Promise.all([token(page), token(second)]);
   const client = new Client({ name: "timing-test", version: "1" });
   await client.connect(
@@ -264,21 +239,24 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   } finally {
     await client.close();
   }
-  await Promise.all([changed(page, tokens[0]!), changed(second, tokens[1]!)]);
-  for (const tab of [page, second]) {
+  await Promise.all([
+    waitForPreview(page, { after: tokens[0]! }),
+    waitForPreview(second, { after: tokens[1]! }),
+  ]);
+  for (const tab of [page, second])
     await expect(
       tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
     ).toHaveAttribute("data-media-start", "1");
-  }
+  await Promise.all([waitForPreview(page), waitForPreview(second)]);
+  expect(await Promise.all([live(page), live(second)])).toEqual(docs);
   let source = await readFile(join(project.path, "index.html"), "utf8");
   const diskTokens = await Promise.all([token(page), token(second)]);
   source = source.replace('data-media-start="1"', 'data-media-start="2"');
   await replaceIndex(project.path, source);
   await Promise.all([
-    changed(page, diskTokens[0]!),
-    changed(second, diskTokens[1]!),
+    waitForPreview(page, { after: diskTokens[0]! }),
+    waitForPreview(second, { after: diskTokens[1]! }),
   ]);
-  // Shared pending compilations can lack eligibility proof and safely reload.
   for (const tab of [page, second])
     await expect(
       tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
@@ -301,7 +279,7 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
     previous = await token(page);
     source = transform(source);
     await writeFile(join(project.path, "index.html"), source);
-    await changed(page, previous);
+    await waitForPreview(page, { after: previous });
     expect(await live(page)).not.toBe(oldDoc);
   }
   await second.close();
@@ -319,6 +297,7 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
         const failure = document.documentElement?.dataset.failTiming;
         if (!failure || event.data?.action !== "timing") return;
         event.stopImmediatePropagation();
+        console.debug(`timing fault: ${failure}`);
         if (failure === "missing") return;
         setTimeout(
           () =>
@@ -360,8 +339,8 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
     await field.press("ArrowUp");
     await field.press("Enter");
   }
-  await changed(page, previous);
-  await ready(page);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
   await expect
     .poll(async () =>
       page
@@ -372,8 +351,12 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
         ),
     )
     .toBe(String((38 * 1001) / 30000));
-  await ready(page);
+  await waitForPreview(page);
   for (const failure of ["missing", "late", "error"] as const) {
+    await prepareTimingPreview(page, request);
+    const intercepted = page.waitForEvent("console", {
+      predicate: (message) => message.text() === `timing fault: ${failure}`,
+    });
     const doc = await live(page),
       before = await token(page);
     // Alter only the next live document's bridge, never its replacement.
@@ -386,7 +369,8 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
     await edit([
       { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
     ]);
-    await changed(page, before);
+    await intercepted;
+    await waitForPreview(page, { after: before });
     await expect.poll(() => live(page)).not.toBe(doc);
     await page.waitForTimeout(600);
     expect(await live(page)).not.toBe(doc);
@@ -426,7 +410,7 @@ test("a source race retires an in-flight timing snapshot, and playing edits use 
   );
   await expect.poll(() => live(page)).not.toBe(doc);
   release();
-  await changed(page, previous);
+  await waitForPreview(page, { after: previous });
   const current = (await (await page
     .locator("iframe[data-live]")
     .elementHandle())!.contentFrame())!;
@@ -439,7 +423,7 @@ test("a source race retires an in-flight timing snapshot, and playing edits use 
     page.getByRole("button", { name: "Play forward", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
   await edit([{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]);
-  await changed(page, playingToken);
+  await waitForPreview(page, { after: playingToken });
   expect(await live(page)).not.toBe(playingDoc);
   await page.keyboard.press("Space");
 });
@@ -514,14 +498,14 @@ for (const [name, scripts] of [
     await edit([
       { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
     ]);
-    await changed(page, before);
+    await waitForPreview(page, { after: before });
     expect(await live(page)).not.toBe(doc);
     expect(snapshots).toBe(0);
     if (name === "init-time GSAP") {
       const control = await page.context().newPage();
       try {
         await control.goto(`/#project/${project.id}`);
-        await ready(control);
+        await waitForPreview(control);
         await seek(page, 45);
         await seek(control, 45);
         expect(
@@ -537,7 +521,7 @@ for (const [name, scripts] of [
       prior = await token(page);
     const path = join(project.path, "index.html");
     await writeFile(path, (await readFile(path, "utf8")).replace(scripts, ""));
-    await changed(page, prior);
+    await waitForPreview(page, { after: prior });
     expect(await live(page)).not.toBe(scripted);
     expect(
       await page.evaluate(() => Reflect.get(window, "forgedTimingAttempts")),
@@ -565,7 +549,7 @@ for (const divergence of ["text", "style", "element"] as const)
     await edit([
       { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
     ]);
-    await changed(page, before);
+    await waitForPreview(page, { after: before });
     expect(await live(page)).not.toBe(doc);
     const current = (await (await page
       .locator("iframe[data-live]")
@@ -643,7 +627,7 @@ for (const scripted of [false, true])
           .getAttribute("data-start"),
       )
       .toBe(String(((initial + 8) * 1001) / 30000));
-    await ready(page);
+    await waitForPreview(page);
     if (!scripted) expect(navigations).toBeLessThanOrEqual(2);
     // Preview coalescing must never coalesce saved history.
     for (let index = 0; index < 8; index++) {
@@ -668,7 +652,7 @@ for (const scripted of [false, true])
         ),
       )
       .toBeCloseTo((initial * 1001) / 30000, 6);
-    await ready(page);
+    await waitForPreview(page);
     if (scripted) expect(timingWork).toBe(0);
   });
 
@@ -687,7 +671,7 @@ test("an unavailable fingerprint keeps the canonical full preview usable and ine
   await chmod(aux, 0o400);
   try {
     await page.reload();
-    await ready(page);
+    await waitForPreview(page);
     await seek(page, 45);
     const frame = page.locator("iframe[data-live]").contentFrame();
     await expect(frame.locator("#title")).toBeVisible();
@@ -771,7 +755,7 @@ for (const scenario of ["playing", "forged hint"] as const)
           ),
         )
         .toBeCloseTo(((initial + 2) * 1001) / 30000, 6);
-      await ready(page);
+      await waitForPreview(page);
     } finally {
       release.resolve();
     }

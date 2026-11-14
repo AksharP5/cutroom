@@ -222,7 +222,8 @@ export function Viewer({
                   revision: change.revision,
                 });
               return;
-            } catch {
+            } catch (reason) {
+              console.debug("Preview timing fell back to reload:", reason);
               if (!preview.timingAllowed) {
                 timingEligible.current = false;
                 setTimingReady(null);

@@ -1,16 +1,122 @@
-import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+  chmod,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { previewDependencies } from "../src/server/hyperframes/previewTiming";
 import { test, expect, spyOn } from "bun:test";
 import { Hono } from "hono";
 import * as timingWork from "../src/server/hyperframes/previewTiming";
+import * as hyperframes from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createProjectStore } from "../src/server/projects/store";
 import { createReviewService } from "../src/server/projects/review";
 import { previewDocument } from "../src/server/hyperframes/previewBridge";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { defaultTitle } from "../src/shared/timeline/title";
+import { PreviewTimingSchema } from "../src/shared/preview";
+import { z } from "zod";
+
+test("concurrent timing readers share approval when the compiled cache cannot finalize", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-shared-timing-"));
+  const persisted = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let block = false;
+  const store = {
+    ...persisted,
+    async document(...args: Parameters<typeof persisted.document>) {
+      const document = await persisted.document(...args);
+      if (block) {
+        block = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return document;
+    },
+  };
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  const signed = Promise.withResolvers<void>();
+  let observeSignature = false;
+  const signature = hyperframes.createProjectSignatureAsync;
+  const signatureSpy = spyOn(
+    hyperframes,
+    "createProjectSignatureAsync",
+  ).mockImplementation(async (...args) => {
+    const result = await signature(...args);
+    if (observeSignature) signed.resolve();
+    return result;
+  });
+  try {
+    const project = await store.create({
+      name: "Shared timing",
+      width: 320,
+      height: 240,
+      duration: 4,
+    });
+    const path = join(project.path, "index.html");
+    const html =
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+    await writeFile(path, html);
+    const load = async (document: string) => {
+      const redirect = await app.request(
+        `/api/projects/${project.id}/isolated-preview?document=${document}`,
+      );
+      const url = redirect.headers.get("location")!;
+      expect(
+        (
+          await app.request(url, {
+            headers: {
+              "sec-fetch-dest": "iframe",
+              "sec-fetch-site": "same-origin",
+            },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        await (await app.request(`${url}&cutroom-status=1`)).json(),
+      ).toEqual({ allowed: true });
+      return url;
+    };
+    const urls = await Promise.all([load("one"), load("two")]);
+    await writeFile(path, html.replace('data-start="0"', 'data-start="1"'));
+    block = true;
+    const first = app.request(`${urls[0]}&cutroom-timing=1`);
+    await entered.promise;
+    observeSignature = true;
+    const second = app.request(`${urls[1]}&cutroom-timing=1`);
+    await signed.promise;
+    // App metadata changes the upstream cache key, but not the canonical picture.
+    const settings = join(project.path, "cutroom.json");
+    await writeFile(settings, (await readFile(settings, "utf8")) + "\n");
+    release.resolve();
+    const body = z.object({
+      live: z.literal(true),
+      timing: PreviewTimingSchema.nullable(),
+    });
+    for (const response of await Promise.all([first, second])) {
+      expect(response.status).toBe(200);
+      const result = body.parse(await response.json());
+      expect(result.timing).not.toBeNull();
+      expect(result.timing?.clips[0]?.values["data-start"]).toBe("1");
+    }
+  } finally {
+    release.resolve();
+    signatureSpy.mockRestore();
+    await editor.dispose();
+    await persisted.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 const snapshot = (html: string, dependencies = "") => {
   const { timing } = previewDocument(html, "index.html", dependencies);
@@ -326,6 +432,80 @@ test("scripted preview responses skip dependency and timing work, including forg
   } finally {
     dependencies.mockRestore();
     snapshot.mockRestore();
+    await editor.dispose();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a compile whose source changes after signing cannot approve the signed version", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-stale-sign-"));
+  const store = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  let afterSignature: (() => Promise<void>) | null = null;
+  const signature = hyperframes.createProjectSignatureAsync;
+  const spy = spyOn(
+    hyperframes,
+    "createProjectSignatureAsync",
+  ).mockImplementation(async (...args) => {
+    const result = await signature(...args);
+    const hook = afterSignature;
+    afterSignature = null;
+    await hook?.();
+    return result;
+  });
+  try {
+    const project = await store.create({
+      name: "Stale signature",
+      width: 320,
+      height: 240,
+      duration: 4,
+    });
+    const path = join(project.path, "index.html");
+    const plain =
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+    const scripted = plain.replace(
+      "</main>",
+      "</main><script>document.body.dataset.authored='1'</script>",
+    );
+    const iframe = {
+      headers: { "sec-fetch-dest": "iframe", "sec-fetch-site": "same-origin" },
+    };
+    const previewUrl = async (document: string, query = "") =>
+      (
+        await app.request(
+          `/api/projects/${project.id}/isolated-preview?document=${document}${query}`,
+        )
+      ).headers.get("location")!;
+
+    // The scripted version sits in the upstream compiled cache.
+    await writeFile(path, scripted);
+    expect((await app.request(await previewUrl("warm"))).status).toBe(200);
+
+    // A capture compile signs the scripted version, then the plain one lands before the compiler reads.
+    afterSignature = () => writeFile(path, plain);
+    expect(
+      (await app.request(await previewUrl("capture", "&hf-capture=1"))).status,
+    ).toBe(200);
+
+    const loaded = await previewUrl("loaded");
+    expect((await app.request(loaded, iframe)).status).toBe(200);
+    expect(
+      await (await app.request(`${loaded}&cutroom-status=1`)).json(),
+    ).toEqual({ allowed: true });
+
+    // Undo back to the cached scripted version: it must not be treated as script-free.
+    await writeFile(path, scripted);
+    const timing = (await (
+      await app.request(`${loaded}&cutroom-timing=1`)
+    ).json()) as { timing: unknown };
+    expect(timing.timing).toBeNull();
+  } finally {
+    spy.mockRestore();
     await editor.dispose();
     await store.close();
     await rm(root, { recursive: true, force: true });

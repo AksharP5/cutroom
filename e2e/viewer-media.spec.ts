@@ -9,6 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { prepareTimingPreview, waitForPreview } from "./preview-ready";
 
 declare global {
   interface Window {
@@ -136,7 +137,7 @@ async function openMedia(
 }
 
 /** Decode every compositor screencast frame in the page, including opaque iframes. */
-async function capturePicture(page: Page) {
+async function capturePicture(page: Page, minimumRed = 230) {
   const session = await page.context().newCDPSession(page);
   const box = (await page.locator(".edit-picture").boundingBox())!;
   const samples: { time: number; color: number[] }[] = [];
@@ -189,7 +190,10 @@ async function capturePicture(page: Page) {
       );
       if (metadata.timestamp! < since) return;
       samples.push({ time: metadata.timestamp!, color });
-      if (!blank && (color[0]! < 230 || color[1]! > 20 || color[2]! > 20)) {
+      if (
+        !blank &&
+        (color[0]! < minimumRed || color[1]! > 20 || color[2]! > 20)
+      ) {
         blank = data;
         const contexts = await Promise.all(
           page
@@ -235,7 +239,7 @@ async function capturePicture(page: Page) {
     maxWidth: 860,
     maxHeight: 525,
   });
-  await expect.poll(() => samples.at(-1)?.color[0]).toBeGreaterThan(230);
+  await expect.poll(() => samples.at(-1)?.color[0]).toBeGreaterThan(minimumRed);
   return {
     reset() {
       since = Date.now() / 1000;
@@ -1356,23 +1360,21 @@ test("a navigation that never loads expires and keeps the confirmed picture", as
   }
 });
 
-test("coalesced stalled replacements never expose the viewer background", async ({
+test("coalesced stalled replacements keep the picture and finish the latest saved revision", async ({
   page,
   request,
 }, testInfo) => {
   test.setTimeout(120_000);
   const { project, read, seek } = await openMedia(page, request);
+  await prepareTimingPreview(page, request);
   await seek("0311");
-  const { before, gate } = await gatePaint(page, "promotion");
-  const capture = await capturePicture(page);
+  const { gate } = await gatePaint(page, "promotion");
+  // The last edit halves the red picture's opacity over the dark background.
+  const capture = await capturePicture(page, 120);
   capture.reset();
+  const finalLabel = `Stalled replacement ${project.id} 49`;
   try {
-    let stalled: string | null = null;
     for (let edit = 0; edit < 50; edit++) {
-      const previous = await page
-        .locator(".edit-frame")
-        .last()
-        .getAttribute("src");
       const view = await read();
       const response = await request.post(
         `/api/cutroom/projects/${project.id}/commands`,
@@ -1383,49 +1385,50 @@ test("coalesced stalled replacements never expose the viewer background", async 
               {
                 type: "setClip",
                 clipId: "picture",
-                label: `Stalled replacement ${edit}`,
+                label: `Stalled replacement ${project.id} ${edit}`,
+                ...(edit === 49 ? { opacity: 0.5 } : {}),
               },
             ],
           },
         },
       );
       expect(response.ok()).toBe(true);
-      if (edit === 0) {
-        await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
-          "src",
-          previous!,
-        );
-        stalled = await page.locator(".edit-frame").last().getAttribute("src");
-      } else
-        expect(
-          await page.locator(".edit-frame").last().getAttribute("src"),
-        ).toBe(stalled);
-      await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-        "src",
-        before!,
-      );
-      await expect(page.locator(".edit-frame")).toHaveCount(2);
-      await expect(page.locator(`iframe[src="${before}"]`)).toBeVisible();
+      if (edit === 0)
+        await expect
+          .poll(() => gate.evaluate((gate) => gate.blocked))
+          .toBe(true);
+      const frames = await page.locator(".edit-frame").count();
+      expect(frames).toBeGreaterThan(0);
+      expect(frames).toBeLessThanOrEqual(2);
     }
-    await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
-      "src",
-      stalled!,
-      { timeout: 20000 },
-    );
-    await expect(page.locator(".edit-frame")).toHaveCount(1, {
-      timeout: 20000,
-    });
-    await expect(page.locator("iframe[data-live]")).toHaveAttribute(
-      "src",
-      before!,
-    );
+    const saved = (await read()).timeline.clips.find(
+      (clip) => clip.id === "picture",
+    )!;
+    expect(saved.label).toBe(finalLabel);
+    expect(saved.opacity).toBe(0.5);
+    await gate.evaluate((gate) => gate.release());
+    const picture = page
+      .locator("iframe[data-live]")
+      .contentFrame()
+      .locator("#picture");
+    await expect(picture).toHaveAttribute("data-timeline-label", saved.label!);
+    await expect(picture).toHaveCSS("opacity", "0.5");
+    await waitForPreview(page);
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
+    await expect(page.locator(".status-error")).toHaveCount(0);
     const result = await capture.read();
     const bad = result.samples.filter(
-      ({ color: [r, g, b] }) => r! < 230 || g! > 20 || b! > 20,
+      ({ color: [r, g, b] }) => r! < 120 || g! > 20 || b! > 20,
     );
     console.log(
       "STALLED PICTURE",
-      JSON.stringify({ edits: 50, samples: result.samples.length, bad }),
+      JSON.stringify({
+        edits: 50,
+        samples: result.samples.length,
+        bad,
+        finalPixel: result.samples.at(-1)?.color,
+        label: saved.label,
+      }),
     );
     await testInfo.attach("stalled replacement frames", {
       body: JSON.stringify(result.samples),
@@ -1433,7 +1436,12 @@ test("coalesced stalled replacements never expose the viewer background", async 
     });
     expect(result.samples.length).toBeGreaterThan(1);
     expect(bad).toEqual([]);
-    await expect(page.locator(".status-error")).toContainText("in time");
+    // The old retained picture is bright red; the latest saved picture is darker.
+    expect(result.samples.at(-1)!.color[0]).toBeLessThan(230);
+    await testInfo.attach("latest saved picture", {
+      body: await page.locator(".edit-picture").screenshot(),
+      contentType: "image/png",
+    });
   } finally {
     await gate.evaluate((gate) => gate.release());
     await gate.dispose();
