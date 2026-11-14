@@ -1,0 +1,26 @@
+{
+  "previewOpacity": [
+    0.25,
+    0.0069,
+    0
+  ],
+  "exportLuminance": [
+    23,
+    17,
+    41
+  ],
+  "titleClips": [
+    [
+      "lower",
+      30,
+      30,
+      0
+    ],
+    [
+      "lower-pozm3p",
+      60,
+      120,
+      2
+    ]
+  ]
+}

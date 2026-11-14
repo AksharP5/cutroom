@@ -1,0 +1,239 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/timeline-apply.test.ts:
+112 |     ]);
+113 |     const result = run(state, command);
+114 |     const removed = command.type === "remove" ? 60 : 30;
+115 |     for (const id of ["lower", "still", "recipe"]) {
+116 |       const original = state.clips.find((clip) => clip.id === id)!;
+117 |       expect(result.clips.find((clip) => clip.id === id)).toEqual({
+                                                                ^
+error: expect(received).toEqual(expected)
+
+  {
+    "automation": null,
+-   "duration": 120,
++   "duration": 45,
+    "enabled": true,
+    "fadeIn": 0,
+    "fadeOut": 0,
+    "hasAudio": false,
+    "id": "recipe",
+    "kind": "composition",
+    "label": null,
+    "link": null,
+    "mediaStart": 0.5,
+    "opacity": null,
+    "playbackRate": 1,
+    "sourceDuration": null,
+    "src": "compositions/lower.html",
+    "start": 15,
+    "startRef": null,
+    "text": null,
+    "track": 5,
+    "volume": null,
+    "x": null,
+    "y": null,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/keep-recipe-titles/tests/timeline-apply.test.ts:117:59)
+(fail) remove shortens spanning text, stills and recipe compositions without copying them [4.20ms]
+112 |     ]);
+113 |     const result = run(state, command);
+114 |     const removed = command.type === "remove" ? 60 : 30;
+115 |     for (const id of ["lower", "still", "recipe"]) {
+116 |       const original = state.clips.find((clip) => clip.id === id)!;
+117 |       expect(result.clips.find((clip) => clip.id === id)).toEqual({
+                                                                ^
+error: expect(received).toEqual(expected)
+
+  {
+    "automation": null,
+-   "duration": 150,
++   "duration": 45,
+    "enabled": true,
+    "fadeIn": 0,
+    "fadeOut": 0,
+    "hasAudio": false,
+    "id": "recipe",
+    "kind": "composition",
+    "label": null,
+    "link": null,
+    "mediaStart": 0.5,
+    "opacity": null,
+    "playbackRate": 1,
+    "sourceDuration": null,
+    "src": "compositions/lower.html",
+    "start": 15,
+    "startRef": null,
+    "text": null,
+    "track": 5,
+    "volume": null,
+    "x": null,
+    "y": null,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/keep-recipe-titles/tests/timeline-apply.test.ts:117:59)
+(fail) trim start shortens spanning text, stills and recipe compositions without copying them [0.93ms]
+112 |     ]);
+113 |     const result = run(state, command);
+114 |     const removed = command.type === "remove" ? 60 : 30;
+115 |     for (const id of ["lower", "still", "recipe"]) {
+116 |       const original = state.clips.find((clip) => clip.id === id)!;
+117 |       expect(result.clips.find((clip) => clip.id === id)).toEqual({
+                                                                ^
+error: expect(received).toEqual(expected)
+
+  {
+    "automation": null,
+-   "duration": 150,
++   "duration": 75,
+    "enabled": true,
+    "fadeIn": 0,
+    "fadeOut": 0,
+    "hasAudio": false,
+    "id": "recipe",
+    "kind": "composition",
+    "label": null,
+    "link": null,
+    "mediaStart": 0.5,
+    "opacity": null,
+    "playbackRate": 1,
+    "sourceDuration": null,
+    "src": "compositions/lower.html",
+    "start": 15,
+    "startRef": null,
+    "text": null,
+    "track": 5,
+    "volume": null,
+    "x": null,
+    "y": null,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/keep-recipe-titles/tests/timeline-apply.test.ts:117:59)
+(fail) trim end shortens spanning text, stills and recipe compositions without copying them [0.29ms]
+(pass) a shortened element keeps both audio pieces linked after removing 60 frames [0.88ms]
+(pass) a shortened element keeps both audio pieces linked after removing 180 frames [0.21ms]
+(pass) a shortened image keeps both audio pieces linked after removing 60 frames [0.16ms]
+(pass) a shortened image keeps both audio pieces linked after removing 180 frames [0.15ms]
+159 |       const cut = run(state, {
+160 |         type: "remove",
+161 |         clipIds: ["shot"],
+162 |         ripple: true,
+163 |       });
+164 |       expect(cut.clips.find((clip) => clip.id === "lower")?.duration).toBe(
+                                                                            ^
+error: expect(received).toBe(expected)
+
+Expected: 180
+Received: 60
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/keep-recipe-titles/tests/timeline-apply.test.ts:164:71)
+(fail) a shortened composition keeps both audio pieces linked after removing 60 frames [0.22ms]
+159 |       const cut = run(state, {
+160 |         type: "remove",
+161 |         clipIds: ["shot"],
+162 |         ripple: true,
+163 |       });
+164 |       expect(cut.clips.find((clip) => clip.id === "lower")?.duration).toBe(
+                                                                            ^
+error: expect(received).toBe(expected)
+
+Expected: 60
+Received: 30
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/keep-recipe-titles/tests/timeline-apply.test.ts:164:71)
+(fail) a shortened composition keeps both audio pieces linked after removing 180 frames [0.18ms]
+(pass) auto-select razor cuts supported clips and reports the title it leaves whole [0.99ms]
+(pass) auto-select leaves a restricted clip's linked group whole [0.11ms]
+(pass) Q refuses a spanning restricted element atomically until its track opts out [0.88ms]
+(pass) Q refuses a spanning restricted audio atomically until its track opts out [0.19ms]
+(pass) W refuses a spanning restricted element atomically until its track opts out [0.14ms]
+(pass) W refuses a spanning restricted audio atomically until its track opts out [0.17ms]
+(pass) Shift+X refuses a spanning restricted element atomically until its track opts out [0.17ms]
+(pass) Shift+X refuses a spanning restricted audio atomically until its track opts out [0.18ms]
+(pass) ripple extension refuses a spanning restricted element atomically until its track opts out [0.30ms]
+(pass) ripple extension refuses a spanning restricted audio atomically until its track opts out [0.15ms]
+(pass) insert ripple refuses a spanning restricted element atomically until its track opts out [1.36ms]
+(pass) insert ripple refuses a spanning restricted audio atomically until its track opts out [0.24ms]
+(pass) a ripple refuses a fully covered clip whose source cannot be removed [0.13ms]
+(pass) lift leaves the gap and ripple delete closes it on auto-select tracks [0.18ms]
+(pass) ripple edits skip locked and deselected tracks and locked clips refuse edits [0.29ms]
+(pass) Q and W trim to the playhead and ripple the rest of the edit [0.18ms]
+(pass) a trim past an overwritten sound partner names the sound, not the picture [0.27ms]
+(pass) a refused move names the locked destination track [0.12ms]
+(pass) a picture refused on an audio track uses the right article [0.09ms]
+(pass) a linked group is one unit: trims move every partner's same edge [0.22ms]
+(pass) Q removes exactly [30, 60), including partial overlaps on other tracks [0.23ms]
+(pass) Q leaves locked spanning clips alone and names linked blockers [0.45ms]
+(pass) Q leaves autoSelect spanning clips alone and names linked blockers [0.14ms]
+(pass) W removes exactly [30, 60), including partial overlaps on other tracks [0.11ms]
+(pass) W leaves locked spanning clips alone and names linked blockers [0.21ms]
+(pass) W leaves autoSelect spanning clips alone and names linked blockers [0.13ms]
+(pass) delete removes exactly [30, 60), including partial overlaps on other tracks [0.12ms]
+(pass) delete leaves locked spanning clips alone and names linked blockers [0.21ms]
+(pass) delete leaves autoSelect spanning clips alone and names linked blockers [0.10ms]
+(pass) Q ripples explicitly edited auto-select-off tracks and their partners [0.12ms]
+(pass) W ripples explicitly edited auto-select-off tracks and their partners [0.07ms]
+(pass) Shift+X ripples explicitly edited auto-select-off tracks and their partners [0.06ms]
+(pass) Q on the first clip cuts a music bed at zero without pulling it before the timeline [0.10ms]
+(pass) ripple delete cuts a linked L-cut tail under B-roll and preserves the earlier shot [0.11ms]
+(pass) ripple delete trims a J-cut head under B-roll and keeps its surviving source in sync [0.08ms]
+(pass) ripple cuts linked spanning clips into matching groups on either side [0.11ms]
+(pass) ripple extensions cut overlapping clips and open exactly the added time [0.18ms]
+(pass) ripple delete removes the union of selected linked spans without a smallest-gap holdback [0.27ms]
+(pass) deleting a J-cut pair trims the preceding picture inside the selected union [0.14ms]
+(pass) separate ripple deletions preserve the unselected interval between them [0.10ms]
+(pass) range trims unlink survivors when their only overlap was removed [0.11ms]
+(pass) linked interval sweep lifts only surviving overlapping partners after Q, W, and delete [231.81ms]
+(pass) cuts keep a piece linked while it still overlaps its partner [0.37ms]
+(pass) a linked group that cannot move together is refused by name [0.26ms]
+(pass) razor cuts auto-select tracks and linked partners, which stay linked [0.30ms]
+(pass) insert edits place, overwrite, or push the timeline [0.28ms]
+(pass) commands that cannot apply exactly fail with typed errors [1.37ms]
+(pass) moves overwrite partial and full clips without rippling or changing the moved source [0.13ms]
+(pass) an overwrite move splits a spanning clip with a fresh stable id [0.72ms]
+(pass) linked moves overwrite each partner's own range, including on a deselected track [0.41ms]
+(pass) a moving selection never overwrites itself, including mixed kinds changing tracks [0.20ms]
+(pass) a batch never reuses an id, so every copy comes from original markup [0.22ms]
+(pass) placing the first clip in an empty composition keeps its length [0.16ms]
+(pass) a root kept shorter than its content does not grow after a ripple delete [0.05ms]
+(pass) track kinds are stored, so an empty locked audio track stays audio [0.19ms]
+(pass) every piece a command cuts takes the caller's ids in order, and spent ids are refused [0.43ms]
+(pass) a video's sound goes to the audio track the command names, edited as the picture's track is [0.61ms]
+(pass) video overwrite clears matching picture-sound ranges, including fully covered picture, without rippling music [0.29ms]
+(pass) video overwrite routes sound to the overwritten picture's partner instead of another pair [0.28ms]
+(pass) overwriting a silent picture never cuts another picture's sound on the fallback track [0.20ms]
+(pass) overwrite keeps the existing audio fallback without a partner and refuses multiple partner destinations [0.13ms]
+(pass) setMarker on an existing marker changes only the fields it names [0.54ms]
+(pass) paste overwrite routes linked sound to a new track without cutting another pair [0.59ms]
+(pass) paste overwrite routes linked sound to a free track without cutting another pair [0.10ms]
+(pass) paste overwrite routes linked sound to a partner track without cutting another pair [0.10ms]
+(pass) paste into an empty composition retains picture tracks and reserves standalone audio before routing sound [0.17ms]
+(pass) linked paste needs room for the whole J-cut sound span and skips locked or music tracks [0.12ms]
+(pass) standalone audio paste keeps the same overwrite semantics as an audio drop [0.16ms]
+(pass) paste keeps relative timing and J-cut partners on their tracks with fresh ids and links [0.25ms]
+(pass) paste overwrite clears each copied interval; insert opens the whole span once across auto-select tracks [0.15ms]
+(pass) copy and paste refuse restricted clips by name, and insert keeps the existing auto-select hint [0.34ms]
+(pass) paste insert refuses a linked partner on an excluded track and a locked destination [0.23ms]
+
+5 tests failed:
+(fail) remove shortens spanning text, stills and recipe compositions without copying them [4.20ms]
+(fail) trim start shortens spanning text, stills and recipe compositions without copying them [0.93ms]
+(fail) trim end shortens spanning text, stills and recipe compositions without copying them [0.29ms]
+(fail) a shortened composition keeps both audio pieces linked after removing 60 frames [0.22ms]
+(fail) a shortened composition keeps both audio pieces linked after removing 180 frames [0.18ms]
+
+ 76 pass
+ 5 fail
+ 29713 expect() calls
+Ran 81 tests across 1 file. [285.00ms]

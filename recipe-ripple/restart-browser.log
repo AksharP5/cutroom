@@ -1,0 +1,9 @@
+
+Running 4 tests using 1 worker
+
+  ✓  1 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from network without replaying identity conflicts (6.4s)
+  ✓  2 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 503 without replaying identity conflicts (6.1s)
+  ✓  3 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 503-after-ready without replaying identity conflicts (6.8s)
+  ✓  4 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 409 without replaying identity conflicts (5.8s)
+
+  4 passed (26.1s)

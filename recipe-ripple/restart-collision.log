@@ -1,0 +1,15 @@
+ 9 |   throw new Error("CUTROOM_PORT must be a valid TCP port.");
+10 | const runtime = await createApp({
+11 |   port,
+12 |   allowDevOrigin: process.env.CUTROOM_DEV === "1",
+13 | });
+14 | const server = Bun.serve({
+                        ^
+error: Failed to start server. Is port 4952 in use?
+ syscall: "listen",
+   errno: 0,
+    code: "EADDRINUSE"
+
+      at /home/akshar/.cache/cutroom-implementation/keep-recipe-titles/src/server/index.ts:14:20
+
+Bun v1.4.4 (Linux x64)
