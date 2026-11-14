@@ -43,18 +43,106 @@ interface PreviewWindow extends DiagnosticWindow {
 function installPreviewBridge(
   texts: [string, string[]][],
   initialTiming:
-    | (Pick<PreviewTiming, "structure" | "revision"> & {
-        clips: { id: string }[];
+    | (Pick<PreviewTiming, "structure" | "revision" | "titleStyle"> & {
+        clips: {
+          id: string;
+          titleAttributes: string[] | null;
+          animated: boolean;
+        }[];
       })
     | null,
 ) {
+  const animatedTitles = new Set<string>();
+  const titleAnimations = new Map<string, Set<Animation>>();
   let timingRevision = initialTiming?.revision;
+  let titleStyle = initialTiming?.titleStyle;
   let updatingTiming = false;
   let confirmedStructure: string | null = null;
+  // Attribute writes made synchronously by the pinned runtime during a parent seek may
+  // change visibility. Remember their exact before/after values without cloning per frame.
+  // An outside write before or after those operations must still fail the DOM comparison.
+  const seekAttributes = new Map<
+    Element,
+    Map<string, { before: string | null; after: string | null }>
+  >();
+  let seekDiverged = false;
+  const seekMutations = new MutationObserver(() => {});
+  const seekRuntime = (time: number) => {
+    if (!initialTiming || confirmedStructure === null) {
+      win.__player?.seek(time);
+      return;
+    }
+    seekMutations.observe(document.documentElement, {
+      subtree: true,
+      attributes: true,
+      attributeOldValue: true,
+    });
+    try {
+      win.__player?.seek(time);
+    } finally {
+      const records = seekMutations.takeRecords();
+      seekMutations.disconnect();
+      const seen = new Map<Element, Set<string>>();
+      for (const record of records) {
+        const element = record.target;
+        const name = record.attributeName;
+        if (!(element instanceof Element) || !name) continue;
+        // Decoded-frame handoff flags can finish asynchronously and are already
+        // excluded from the divergence comparison below.
+        if (
+          (element === document.documentElement &&
+            name === "data-hf-preview-seek-hold") ||
+          (element.tagName === "VIDEO" &&
+            (name === "data-cutroom-held" || name === "data-cutroom-flow"))
+        )
+          continue;
+        const names = seen.get(element) ?? new Set<string>();
+        if (names.has(name)) continue;
+        names.add(name);
+        seen.set(element, names);
+        const attributes =
+          seekAttributes.get(element) ??
+          new Map<string, { before: string | null; after: string | null }>();
+        const prior = attributes.get(name);
+        if (prior && prior.after !== record.oldValue) seekDiverged = true;
+        attributes.set(name, {
+          before: prior ? prior.before : record.oldValue,
+          after: element.getAttribute(name),
+        });
+        seekAttributes.set(element, attributes);
+      }
+    }
+  };
   const liveStructure = () => {
+    if (seekDiverged)
+      throw new Error("The live preview changed between seeks.");
     const root = document.documentElement.cloneNode(true);
     if (!(root instanceof Element))
       throw new Error("The preview document is unavailable.");
+    for (const [element, attributes] of seekAttributes) {
+      const path: number[] = [];
+      let node: Node | null = element;
+      while (node && node !== document.documentElement) {
+        const parentNode: ParentNode | null = node.parentNode;
+        if (!parentNode) break;
+        path.unshift([...parentNode.childNodes].indexOf(node as ChildNode));
+        node = parentNode;
+      }
+      if (node !== document.documentElement)
+        throw new Error("The live preview element changed.");
+      const clone = path.reduce<Node>(
+        (node, index) => node.childNodes[index]!,
+        root,
+      );
+      if (!(clone instanceof Element))
+        throw new Error("The live preview element changed.");
+      for (const [name, { before, after }] of attributes) {
+        if (element.getAttribute(name) !== after)
+          throw new Error(`The live preview attribute ${name} changed.`);
+        if (before === null) clone.removeAttribute(name);
+        else clone.setAttribute(name, before);
+      }
+    }
     root.removeAttribute("data-hf-preview-seek-hold");
     // These canvases and flags belong to this bridge, not the composition.
     for (const hold of root.querySelectorAll(
@@ -65,12 +153,48 @@ function installPreviewBridge(
       video.removeAttribute("data-cutroom-held");
       video.removeAttribute("data-cutroom-flow");
     }
+    for (const element of [root, ...root.querySelectorAll("*")]) {
+      const attributes = [...element.attributes].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      for (const { name } of attributes) element.removeAttribute(name);
+      for (const { name, value } of attributes)
+        element.setAttribute(name, value);
+    }
     return root.outerHTML;
   };
   const sourceTexts = new Map(texts);
+  const titleNodes = (element: Element) =>
+    [...element.childNodes].map((node) =>
+      node.nodeType === Node.TEXT_NODE
+        ? (node.nodeValue ?? "")
+        : {
+            br:
+              node instanceof Element ? node.getAttribute("data-hf-id") : null,
+          },
+    );
+  const canonicalWords = (text: string) =>
+    text
+      .split(/\r\n?|\n/)
+      .map((line) => line.replace(/[\t\f ]+/g, " ").replace(/^ | $/g, ""))
+      .join("\n")
+      .replace(/^\n+|\n+$/g, "");
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   const win = window as PreviewWindow;
+  // Finished entrance effects disappear from getAnimations(), but the pinned runtime
+  // can still retain their handles. Collect them before the parent's first seek.
+  const rememberTitleAnimations = () => {
+    if (!initialTiming || !win.__player) return;
+    for (const clip of initialTiming.clips) {
+      if (!clip.titleAttributes) continue;
+      const element = clipElement(clip.id);
+      if (!element) continue;
+      const handles = titleAnimations.get(clip.id) ?? new Set<Animation>();
+      for (const animation of element.getAnimations()) handles.add(animation);
+      titleAnimations.set(clip.id, handles);
+    }
+  };
   const positions = new Map<
     HTMLElement | SVGElement,
     { translate: string; priority: string; base: string; x: number; y: number }
@@ -162,11 +286,7 @@ function installPreviewBridge(
       if (node instanceof HTMLElement && node.tagName === "BR") return "\n";
       return [...node.childNodes].map(words).join("");
     };
-    const rendered = words(element)
-      .split(/\r\n?|\n/)
-      .map((line) => line.replace(/[\t\f ]+/g, " ").replace(/^ | $/g, ""))
-      .join("\n")
-      .replace(/^\n+|\n+$/g, "");
+    const rendered = canonicalWords(words(element));
     parent.postMessage(
       {
         source: "cutroom-preview",
@@ -1214,6 +1334,8 @@ function installPreviewBridge(
   );
   addEventListener("pagehide", () => {
     retired = true;
+    seekMutations.disconnect();
+    seekAttributes.clear();
     parent.postMessage({ source: "cutroom-preview", type: "unloaded" }, "*");
     pictureVersion += 1;
     clearTimeout(observationTimer);
@@ -1358,13 +1480,32 @@ function installPreviewBridge(
             typeof timing.revision !== "string" ||
             !("clips" in timing) ||
             !Array.isArray(timing.clips) ||
-            timing.clips.length !== initialTiming.clips.length
+            timing.clips.length !== initialTiming.clips.length ||
+            !("titleStyle" in timing)
           )
             throw new Error("The preview document changed.");
+          const nextTitleStyle = timing.titleStyle;
+          if (
+            !(nextTitleStyle === null || typeof nextTitleStyle === "string") ||
+            (nextTitleStyle === null) !== (titleStyle === null)
+          )
+            throw new Error("The title stylesheet changed.");
           const writes: {
+            id: string;
             element: Element;
             values: [string, string | null][];
+            text:
+              | NonNullable<PreviewTiming["clips"][number]["title"]>["text"]
+              | null;
           }[] = [];
+          const styles = [...document.querySelectorAll("style")].filter(
+            (style) =>
+              titleStyle !== null &&
+              titleStyle !== undefined &&
+              style.textContent?.includes(titleStyle),
+          );
+          if (titleStyle !== null && styles.length !== 1)
+            throw new Error("The title stylesheet changed.");
           const elements = new Map<string, Element>();
           for (const element of document.querySelectorAll(
             "[data-hf-cutroom-clip-id]",
@@ -1410,17 +1551,195 @@ function installPreviewBridge(
                 throw new Error("Invalid preview timing.");
               values.push([name, value]);
             }
-            writes.push({ element, values });
+            const title: unknown = Reflect.get(clip, "title");
+            const expected = initialTiming.clips[index]!;
+            let text:
+              | NonNullable<PreviewTiming["clips"][number]["title"]>["text"]
+              | null = null;
+            if (expected.titleAttributes) {
+              if (
+                !title ||
+                typeof title !== "object" ||
+                !("attributes" in title) ||
+                !Array.isArray(title.attributes) ||
+                title.attributes.length !== expected.titleAttributes.length ||
+                !("text" in title) ||
+                !Array.isArray(title.text) ||
+                !title.text.every(
+                  (part): part is string | { br: string | null } =>
+                    typeof part === "string" ||
+                    (part !== null &&
+                      typeof part === "object" &&
+                      "br" in part &&
+                      (part.br === null || typeof part.br === "string")),
+                )
+              )
+                throw new Error("Invalid preview title.");
+              for (const [index, pair] of title.attributes.entries()) {
+                if (
+                  !Array.isArray(pair) ||
+                  pair.length !== 2 ||
+                  pair[0] !== expected.titleAttributes[index] ||
+                  !(pair[1] === null || typeof pair[1] === "string")
+                )
+                  throw new Error("Invalid preview title attributes.");
+                values.push([pair[0], pair[1]]);
+              }
+              // The pinned CSS adapter discovers animated elements at initialization.
+              // A title loaded with both directions None needs that fresh discovery.
+              if (
+                !animatedTitles.has(clip.id) &&
+                values.some(
+                  ([name, value]) =>
+                    (name === "data-title-in" || name === "data-title-out") &&
+                    value !== "none",
+                )
+              )
+                throw new Error("This title needs animation discovery.");
+              // A combined font/motion change can paint different scaled pixels despite
+              // identical computed styles. Preserve fresh-load fidelity with a reload.
+              const changed = values.filter(
+                ([name, value]) => element.getAttribute(name) !== value,
+              );
+              if (
+                changed.some(([name]) => name === "data-title-font") &&
+                changed.some(
+                  ([name]) =>
+                    name.startsWith("data-title-in") ||
+                    name.startsWith("data-title-out"),
+                )
+              )
+                throw new Error(
+                  "Combined title font and motion changes require fresh layout.",
+                );
+              text = title.text;
+            } else if (title !== null)
+              throw new Error("The preview titles changed.");
+            writes.push({ id: clip.id, element, values, text });
           }
           updatingTiming = true;
           try {
+            seekAttributes.clear();
+            rememberTitleAnimations();
             // Synchronous writes are one MutationObserver batch to the runtime.
-            for (const { element, values } of writes)
+            const changedTitles = new Set<Element>();
+            for (const { id, element, values, text } of writes) {
               for (const [name, value] of values) {
                 if (element.getAttribute(name) === value) continue;
                 if (value === null) element.removeAttribute(name);
                 else element.setAttribute(name, value);
+                if (text) changedTitles.add(element);
               }
+              if (text) {
+                const current = titleNodes(element);
+                if (JSON.stringify(current) !== JSON.stringify(text)) {
+                  element.replaceChildren(
+                    ...text.map((part) => {
+                      if (typeof part === "string")
+                        return document.createTextNode(part);
+                      const br = document.createElement("br");
+                      if (part.br !== null)
+                        br.setAttribute("data-hf-id", part.br);
+                      return br;
+                    }),
+                  );
+                  changedTitles.add(element);
+                }
+                sourceTexts.set(id, [
+                  canonicalWords(
+                    text
+                      .map((part) => (typeof part === "string" ? part : "\n"))
+                      .join(""),
+                  ),
+                  canonicalWords(
+                    text
+                      .map((part) =>
+                        typeof part !== "string"
+                          ? "\n"
+                          : part.replace(/[\t\n\f\r ]+/g, " "),
+                      )
+                      .join(""),
+                  ),
+                ]);
+              }
+            }
+            if (titleStyle && nextTitleStyle && nextTitleStyle !== titleStyle) {
+              const style = styles[0]!;
+              style.textContent = style.textContent!.replace(
+                titleStyle,
+                nextTitleStyle,
+              );
+              for (const { element, text } of writes)
+                if (text) changedTitles.add(element);
+            }
+            // Resolve new font metrics before recreating animation effects.
+            for (const element of changedTitles)
+              element.getBoundingClientRect();
+            rememberTitleAnimations();
+            if (changedTitles.size) await document.fonts.ready;
+            // Recreate the changed title's CSS animations before seeking. The pinned
+            // adapter retains handles across name/rule changes and can revive canceled
+            // effects, so merely setting new attributes can leave two entrances composed.
+            const canceled: Promise<void>[] = [];
+            const retiredAnimations: Animation[] = [];
+            for (const element of changedTitles) {
+              if (!(
+                element instanceof HTMLElement || element instanceof SVGElement
+              ))
+                throw new Error("The title cannot refresh its animations.");
+              const clipId = element.getAttribute("data-hf-cutroom-clip-id")!;
+              const animations = [
+                ...new Set([
+                  ...(titleAnimations.get(clipId) ?? []),
+                  ...element.getAnimations(),
+                ]),
+              ].filter((animation) => animation.playState !== "idle");
+              if (
+                animations.some(
+                  (animation) =>
+                    animation.effect instanceof KeyframeEffect &&
+                    animation.effect.pseudoElement,
+                ) ||
+                [...element.querySelectorAll("br")].some((br) =>
+                  getComputedStyle(br)
+                    .animationName.split(",")
+                    .some((name) => name.trim() !== "none"),
+                )
+              )
+                throw new Error("This title needs animation discovery.");
+              for (const animation of animations) {
+                retiredAnimations.push(animation);
+                canceled.push(
+                  new Promise<void>((resolve) =>
+                    animation.addEventListener("cancel", () => resolve(), {
+                      once: true,
+                    }),
+                  ),
+                );
+              }
+              const style = element.getAttribute("style");
+              element.style.setProperty("animation-name", "none", "important");
+              element.getBoundingClientRect();
+              for (const animation of [
+                ...animations,
+                ...element.getAnimations(),
+              ])
+                animation.cancel();
+              if (style === null) element.removeAttribute("style");
+              else element.setAttribute("style", style);
+              // Flush the replacement animations before the runtime seeks them.
+              element.getBoundingClientRect();
+              titleAnimations.set(clipId, new Set(element.getAnimations()));
+            }
+            // The WAAPI adapter drops cached handles on the browser's cancel event,
+            // which arrives after microtasks. Seeking earlier can revive the old effects.
+            await Promise.all(canceled);
+            if (
+              retiredAnimations.some(
+                (animation) => animation.playState !== "idle",
+              )
+            )
+              throw new Error("The title animations did not retire.");
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             win.__player.seek(data.time);
@@ -1440,6 +1759,7 @@ function installPreviewBridge(
               throw new Error("The live preview changed while drawing.");
             confirmedStructure = expectedStructure;
             timingRevision = timing.revision;
+            titleStyle = nextTitleStyle;
             scheduleObservation();
             scheduleBox();
           } finally {
@@ -1448,6 +1768,7 @@ function installPreviewBridge(
           break;
         }
         case "inspect":
+          rememberTitleAnimations();
           break;
         case "cancel-edit":
           // Let the one pending seek finish without painting a stale edge. The queued
@@ -1512,7 +1833,7 @@ function installPreviewBridge(
             await picture;
             break;
           }
-          win.__player?.seek(data.time);
+          seekRuntime(data.time);
           if (!win.__player?.isPlaying()) {
             const restored = refreshPicture();
             const version = pictureVersion;
@@ -1537,8 +1858,32 @@ function installPreviewBridge(
         case "paint":
           await picture;
           await paint();
-          if (initialTiming && confirmedStructure === null)
+          if (initialTiming && confirmedStructure === null) {
+            for (const clip of initialTiming.clips) {
+              const element = clipElement(clip.id);
+              if (
+                clip.animated &&
+                element &&
+                getComputedStyle(element)
+                  .animationName.split(",")
+                  .some((name) => name.trim() !== "none")
+              )
+                if (
+                  getComputedStyle(element)
+                    .animationName.split(",")
+                    .filter((name) => name.trim() !== "none")
+                    .every((name) =>
+                      [...(titleAnimations.get(clip.id) ?? [])].some(
+                        (animation) =>
+                          animation instanceof CSSAnimation &&
+                          animation.animationName === name.trim(),
+                      ),
+                    )
+                )
+                  animatedTitles.add(clip.id);
+            }
             confirmedStructure = liveStructure();
+          }
           scheduleObservation();
           scheduleBox();
           break;
@@ -1748,7 +2093,20 @@ export function previewDocument(
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,
-    timing && { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
+    timing && {
+      ...timing,
+      clips: timing.clips.map(({ id, title }) => ({
+        id,
+        titleAttributes: title?.attributes.map(([name]) => name) ?? null,
+        animated: Boolean(
+          title?.attributes.some(
+            ([name, value]) =>
+              (name === "data-title-in" || name === "data-title-out") &&
+              value !== "none",
+          ),
+        ),
+      })),
+    },
   ]).replaceAll("<", "\\u003c");
   const bridge = `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.

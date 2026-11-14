@@ -9,6 +9,8 @@ import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createProjectStore } from "../src/server/projects/store";
 import { createReviewService } from "../src/server/projects/review";
 import { previewDocument } from "../src/server/hyperframes/previewBridge";
+import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
+import { defaultTitle } from "../src/shared/timeline/title";
 
 const snapshot = (html: string, dependencies = "") => {
   const { timing } = previewDocument(html, "index.html", dependencies);
@@ -77,6 +79,132 @@ test("the signature of other project files belongs to the document revision", ()
     snapshot(source, "after").structure,
   );
 });
+
+const titleSource = (font: string | null = null) => {
+  const attrs = titleAttributes(
+    { ...defaultTitle({ num: 30, den: 1 }), font },
+    { num: 30, den: 1 },
+  )
+    .flatMap(([name, value]) => (value === null ? [] : [`${name}="${value}"`]))
+    .join(" ");
+  return `<html><head><style>@font-face{font-family:Test;src:url(test.woff2)}</style>${titleStyle(font ? [font] : [])}</head><body><main data-composition-id="main" data-duration="10" data-fps="30"><div id="title" class="clip" data-start="1" data-duration="4" ${attrs}>A &amp; B<br>&lt;script&gt;words&lt;/script&gt;</div></main></body></html>`;
+};
+
+test("title snapshots carry the exact validated attribute and decoded text values; only the generated font rules may change", () => {
+  const source = titleSource();
+  const before = snapshot(source);
+  const changed = snapshot(
+    source
+      .replace('data-title-size="64px"', 'data-title-size="96px"')
+      .replace("A &amp; B", "C &lt; D"),
+  );
+  expect(changed.structure).toBe(before.structure);
+  expect(changed.revision).not.toBe(before.revision);
+  expect(changed.clips[0]?.title?.attributes).toContainEqual([
+    "data-title-size",
+    "96px",
+  ]);
+  expect(changed.clips[0]?.title?.text).toEqual([
+    "C < D",
+    { br: null },
+    "<script>words</script>",
+  ]);
+  expect(changed.titleStyle).toBe(before.titleStyle);
+  const font = snapshot(titleSource("Test"));
+  expect(font.structure).toBe(before.structure);
+  expect(font.revision).not.toBe(before.revision);
+  expect(font.titleStyle).toContain(
+    '[data-title-font="Test"]{font-family:"Test",sans-serif}',
+  );
+});
+
+test("compiled title rules may share a sheet, but surrounding CSS, conditions and referenced break identities remain significant", () => {
+  const merged = (font: string | null = null) =>
+    titleSource(font).replace(
+      titleStyle(font ? [font] : []),
+      `<style>.before{color:red}\n${titleStyle(font ? [font] : [])
+        .replace(/^<style[^>]*>|<\/style>$/g, "")
+        .trim()}\n.after{color:blue}</style>`,
+    );
+  const before = snapshot(merged());
+  expect(before.clips[0]?.title).not.toBeNull();
+  expect(snapshot(merged("Test")).structure).toBe(before.structure);
+  expect(
+    snapshot(merged().replace("color:blue", "color:green")).structure,
+  ).not.toBe(before.structure);
+  expect(
+    snapshot(merged().replace("<style>.before", '<style media="print">.before'))
+      .clips[0]?.title,
+  ).toBeNull();
+  const br = merged().replace("<br>", '<br data-hf-id="break-id">');
+  expect(snapshot(br).clips[0]?.title?.text).toEqual([
+    "A & B",
+    { br: "break-id" },
+    "<script>words</script>",
+  ]);
+  expect(
+    snapshot(br.replace(".before{", '[data-hf-id="break-id"]{')).clips[0]
+      ?.title,
+  ).toBeNull();
+});
+
+for (const [name, transform] of [
+  [
+    "invalid attribute",
+    (s: string) =>
+      s.replace(
+        'data-title-color="#ffffff"',
+        'data-title-color="red;position:fixed"',
+      ),
+  ],
+  [
+    "undeclared font",
+    (s: string) =>
+      s.replace(
+        'data-title-size="64px"',
+        'data-title-size="64px" data-title-font="Unknown"',
+      ),
+  ],
+  ["markup", (s: string) => s.replace("A &amp; B", "<span>A &amp; B</span>")],
+  [
+    "empty words",
+    (s: string) =>
+      s.replace("A &amp; B<br>&lt;script&gt;words&lt;/script&gt;", ""),
+  ],
+  [
+    "styled break",
+    (s: string) => s.replace("<br>", '<br style="display:none">'),
+  ],
+  [
+    "managed CSS",
+    (s: string) => s.replace("line-height:1.15", "line-height:2"),
+  ],
+  [
+    "stylesheet version",
+    (s: string) =>
+      s.replace('data-cutroom-titles="1"', 'data-cutroom-titles="2"'),
+  ],
+  [
+    "duplicate stylesheet",
+    (s: string) => s.replace("</head>", titleStyle([]) + "</head>"),
+  ],
+  [
+    "inert stylesheet",
+    (s: string) =>
+      s.replace(titleStyle([]), `<template>${titleStyle([])}</template>`),
+  ],
+  [
+    "title version",
+    (s: string) =>
+      s.replace('data-cutroom-title="1"', 'data-cutroom-title="2"'),
+  ],
+] as const)
+  test(`${name} cannot enter the live title contract`, () => {
+    const changed = snapshot(transform(titleSource()));
+    expect(changed.structure).not.toBe(snapshot(titleSource()).structure);
+    expect(changed.clips[0]?.title).toBeNull();
+    expect(changed.titleStyle).toBeNull();
+  });
 
 test("app state does not invalidate timing, but other source files do", async () => {
   const dir = await mkdtemp(join(tmpdir(), "cutroom-preview-timing-"));

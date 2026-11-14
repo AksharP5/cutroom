@@ -73,8 +73,18 @@ export const PreviewTimingSchema = z.object({
         ]),
         z.string().nullable(),
       ),
+      title: z
+        .object({
+          attributes: z.array(z.tuple([z.string(), z.string().nullable()])),
+          // Decoded text nodes and plain breaks, retaining the compiler's break identities.
+          text: z.array(
+            z.union([z.string(), z.object({ br: z.string().nullable() })]),
+          ),
+        })
+        .nullable(),
     }),
   ),
+  titleStyle: z.string().nullable(),
 });
 export type PreviewTiming = z.infer<typeof PreviewTimingSchema>;
 

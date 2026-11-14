@@ -8,8 +8,8 @@ const gsap = readFileSync(
   "utf8",
 );
 
-/** The sole policy for timing updates. A future owned title contract belongs here;
- * project markup cannot opt arbitrary scripts in. Today only script-free sources qualify.
+/** The sole policy for live attribute updates, including script-free Cutroom titles.
+ * Project markup cannot opt arbitrary scripts in.
  * Run on the compiler's source reads, before it adds its runtime and bootstrap scripts.
  */
 export function previewTimingPolicy(dir: string) {
