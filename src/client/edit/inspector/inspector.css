@@ -231,6 +231,17 @@
   color: var(--text-tertiary);
   background: var(--surface-panel);
 }
+.inspector-combined-gain span {
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+}
+.inspector-combined-gain output {
+  padding-inline: var(--space-2);
+  text-align: right;
+  font: var(--weight-medium) var(--type-xs) / var(--leading-tight)
+    var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
 /*
  * A narrow editor keeps the tool row whole, so the inspector opens under it. The viewer narrows
  * beside it and the picture refits: nothing covers the picture or the transport.

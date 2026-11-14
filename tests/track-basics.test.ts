@@ -1,3 +1,4 @@
+import { parseHTML } from "linkedom";
 import { expect, test } from "bun:test";
 import { parseAudioElements } from "@hyperframes/engine";
 import { applyAll } from "../src/shared/timeline/apply";
@@ -7,6 +8,7 @@ import {
   emptyTimelineSettings,
 } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
+import { editLabel } from "../src/shared/timeline/labels";
 import { newTrack } from "../src/shared/timeline/tracks";
 import {
   parseComposition,
@@ -327,4 +329,156 @@ test("mute and solo suppress embedded video sound without hiding picture or losi
   expect(parseComposition(normal, settingsOf(restored)).timeline).toEqual(
     restored,
   );
+});
+
+test("track gain plays on top of each clip's gain and leaves the clip's own gain as authored", () => {
+  let parsed = parseComposition(source, emptyTimelineSettings());
+  const edit = (...commands: CommandInput[]) => {
+    const origins = new Map<string, ClipOrigin>();
+    const timeline = applyAll(
+      parsed.timeline,
+      commands.map((command) => CommandSchema.parse(command)),
+      { onCreate: (id, origin) => origins.set(id, origin) },
+    );
+    const html = patchComposition(parsed, timeline, origins);
+    parsed = parseComposition(html, settingsOf(timeline));
+    expect(parsed.timeline).toEqual(timeline);
+    return html;
+  };
+  const played = (html: string) =>
+    Object.fromEntries(
+      parseAudioElements(html).map((audio) => [audio.id, audio.volume]),
+    );
+  const own = () =>
+    Object.fromEntries(
+      parsed.timeline.clips.map((clip) => [clip.id, clip.volume]),
+    );
+
+  // History and approvals say which track, in dB.
+  expect(
+    editLabel(
+      [CommandSchema.parse({ type: "setTrack", index: 2, volume: 0.125 })],
+      parsed.timeline,
+      "Edit",
+      "done",
+    ),
+  ).toBe("Set A2 gain to -18.1 dB");
+  const named = applyAll(parsed.timeline, [
+    CommandSchema.parse({ type: "setTrack", index: 2, name: "Music bed" }),
+  ]);
+  expect(
+    editLabel(
+      [
+        CommandSchema.parse({
+          type: "setTrack",
+          index: 2,
+          volume: 10 ** (-18 / 20),
+        }),
+      ],
+      named,
+      "Edit",
+    ),
+  ).toBe("Set Music bed gain to -18 dB");
+
+  // A split music bed is turned down once, on its track.
+  let html = edit(
+    { type: "split", at: 60, clipIds: ["music"], ids: { music: ["bed-2"] } },
+    { type: "setTrack", index: 2, volume: 0.25 },
+    { type: "setTrack", index: 1, volume: 0.5 },
+  );
+  expect(played(html)).toEqual({ voice: 0.4, music: 1, "bed-2": 1 });
+  const group = (source: string, track: number) =>
+    parseHTML(source).document.querySelector(
+      `hf-audio-group[data-cutroom-track="${track}"]`,
+    )!;
+  expect(group(html, 2).getAttribute("data-volume")).toBe("0.25");
+  expect(
+    parseHTML(html)
+      .document.getElementById("bed-2")!
+      .getAttribute("data-audio-group"),
+  ).toBe(group(html, 2).id);
+  expect(own()).toMatchObject({ voice: 0.4, music: null, "bed-2": null });
+
+  // Clip gain still changes on its own, and a piece cut afterwards plays at the same level.
+  html = edit(
+    { type: "setClip", clipId: "music", volume: 2 },
+    { type: "split", at: 30, clipIds: ["music"], ids: { music: ["bed-1"] } },
+  );
+  expect(played(html)).toMatchObject({ music: 2, "bed-1": 2 });
+  expect(own()).toMatchObject({ music: 2, "bed-1": 2, "bed-2": null });
+
+  // Clip and track gains remain separate, so their product has no combined +12 dB cap.
+  html = edit({ type: "setTrack", index: 2, volume: 3 });
+  expect(played(html).music).toBe(2);
+  expect(group(html, 2).getAttribute("data-volume")).toBe("3");
+  expect(own().music).toBe(2);
+
+  // Settings changed outside an edit reach the preview and the render without a write.
+  const outside = settingsOf(parsed.timeline);
+  outside.tracks = outside.tracks.map((track) =>
+    track.index === 2 ? { ...track, volume: 0.1 } : track,
+  );
+  const mixed = mixCompositionInstances(
+    html,
+    outside,
+    "index.html",
+    "index.html",
+    new Map(),
+  );
+  expect(played(mixed)).toMatchObject({ voice: 0.4, music: 2, "bed-2": 1 });
+  expect(group(mixed, 2).getAttribute("data-volume")).toBe("0.1");
+
+  // Back at 0 dB the source carries only what the clips were given.
+  html = edit(
+    { type: "setTrack", index: 2, volume: 1 },
+    { type: "setTrack", index: 1, volume: 1 },
+  );
+  expect(html).not.toContain("data-cutroom-volume");
+  expect(played(html)).toEqual({
+    voice: 0.4,
+    music: 2,
+    "bed-1": 2,
+    "bed-2": 1,
+  });
+  expect(html).toMatch(/id="bed-2"(?![^>]*data-volume)/);
+});
+
+test("a gained track preserves outside clip gain and authored groups, and edits one attribute at 500 clips", () => {
+  const source = `<main data-composition-id="main" data-duration="5"><hf-audio-group id="authored" data-volume="0.8"></hf-audio-group>${Array.from({ length: 500 }, (_, i) => `<audio id="clip-${i}" src="voice.wav" data-start="0" data-duration="5" data-track-index="1" data-volume="0.4"${i === 0 ? ' data-audio-group="authored"' : ""}></audio>`).join("")}</main>`;
+  let parsed = parseComposition(source, emptyTimelineSettings());
+  const edit = (volume: number) => {
+    const after = applyAll(parsed.timeline, [
+      CommandSchema.parse({ type: "setTrack", index: 1, volume }),
+    ]);
+    const html = patchComposition(parsed, after, new Map());
+    parsed = parseComposition(html, settingsOf(after));
+    return html;
+  };
+  const before = edit(0.5);
+  const after = edit(0.25);
+  expect(after).toBe(
+    before.replace(
+      'data-cutroom-track="1" data-volume="0.5"',
+      'data-cutroom-track="1" data-volume="0.25"',
+    ),
+  );
+  expect(parsed.timeline.clips[0]!.trackGainWarning).toContain(
+    'authored audio group "authored"',
+  );
+  const document = parseHTML(after).document;
+  expect(
+    document.getElementById("clip-0")!.getAttribute("data-audio-group"),
+  ).toBe("authored");
+  expect(
+    document.getElementById("clip-1")!.getAttribute("data-audio-group"),
+  ).toBe("cutroom-main-track-1");
+  document.getElementById("clip-1")!.setAttribute("data-volume", "0.7");
+  parsed = parseComposition(document.toString(), settingsOf(parsed.timeline));
+  const outside = edit(0.1);
+  expect(
+    parseHTML(outside)
+      .document.getElementById("clip-1")!
+      .getAttribute("data-volume"),
+  ).toBe("0.7");
+  expect(parsed.timeline.clips[1]!.volume).toBe(0.7);
 });

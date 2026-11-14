@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
+import { interviewWorkload } from "../scripts/interview-performance";
 import { afterPaint, seekFrame } from "./position-helpers";
 import { expect, test } from "./fixtures";
 
@@ -13,6 +14,12 @@ const live = (page: Page) =>
   page.locator("iframe[data-live]").getAttribute("src");
 const ready = (page: Page) =>
   expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+
+const eligible = (page: Page) =>
+  expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-timing-ready",
+    "true",
+  );
 
 async function fixture(request: APIRequestContext, page: Page, script = "") {
   const project = ProjectSchema.parse(
@@ -66,6 +73,7 @@ async function fixture(request: APIRequestContext, page: Page, script = "") {
   ]);
   await page.goto(`/#project/${project.id}`);
   await ready(page);
+  if (!script) await eligible(page);
   await page.locator('[data-clip="lower"]').click();
   await seekFrame(page, 90);
   return { project, path, edit, read };
@@ -325,6 +333,7 @@ test("loaded Scale titles reload font, size, plate and words from the saved docu
     { type: "setClip", clipId: "lower", text: "Changed & owner\nSecond line" },
   ];
   for (const command of changes) {
+    await eligible(page);
     const original = await live(page);
     await afterPaint(page, () => edit([command]));
     expect(await live(page)).not.toBe(original);
@@ -352,6 +361,7 @@ test("MCP title edits and history update both tabs through the same revisioned l
   const fresh = await page.context().newPage();
   await second.goto(`/#project/${project.id}`);
   await ready(second);
+  await eligible(second);
   await seekFrame(second, 90);
   const originals = await Promise.all([live(page), live(second)]);
   const client = new Client({ name: "live-title-test", version: "1" });
@@ -416,6 +426,78 @@ test("MCP title edits and history update both tabs through the same revisioned l
     await second.close();
     await fresh.close();
   }
+});
+
+test("title edits share the timing operation with track gains and linked source timing", async ({
+  page,
+  request,
+}) => {
+  const project = await interviewWorkload(request);
+  const path = `/api/cutroom/projects/${project.id}`;
+  const edit = async (commands: CommandInput[]) => {
+    const view = TimelineViewSchema.parse(
+      await (await request.get(`${path}/timeline`)).json(),
+    );
+    const response = await request.post(`${path}/commands`, {
+      data: {
+        composition: "index.html",
+        expectedRevision: view.revision,
+        label: "Title and gain",
+        commands,
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await edit([{ type: "setTrack", index: 1, volume: 0.5 }]);
+  await page.goto(`/#project/${project.id}`);
+  await ready(page);
+  await eligible(page);
+  await seekFrame(page, 90);
+  const original = await live(page);
+  const frame = page.locator("iframe[data-live]").contentFrame();
+  const bus = frame.locator('hf-audio-group[data-cutroom-track="1"]');
+  await expect(bus).toHaveAttribute("data-volume", "0.5");
+  await afterPaint(page, () =>
+    edit([
+      {
+        type: "setClip",
+        clipId: "title-0",
+        text: "Mixed & title",
+        title: { size: 80, plate: "#11223399" },
+      },
+      { type: "setTiming", clipId: "voice-0", mediaStart: 0.25 },
+      { type: "setTrack", index: 1, volume: 0.25 },
+    ]),
+  );
+  expect(await live(page)).toBe(original);
+  await expect(frame.locator("#title-0")).toHaveAttribute(
+    "data-title-size",
+    "80px",
+  );
+  await expect(frame.locator("#title-0")).toHaveText("Mixed & title");
+  await expect(frame.locator("#voice-0")).toHaveAttribute(
+    "data-media-start",
+    "0.25",
+  );
+  await expect(bus).toHaveAttribute("data-volume", "0.25");
+  await afterPaint(page, () =>
+    edit([{ type: "setTrack", index: 1, volume: 0.75 }]),
+  );
+  expect(await live(page)).toBe(original);
+  await expect(bus).toHaveAttribute("data-volume", "0.75");
+  await afterPaint(page, () =>
+    edit([
+      {
+        type: "setClip",
+        clipId: "title-0",
+        text: "Next words",
+        title: { color: "#ffcc00" },
+      },
+    ]),
+  );
+  expect(await live(page)).toBe(original);
+  await expect(frame.locator("#title-0")).toHaveText("Next words");
+  await expect(bus).toHaveAttribute("data-volume", "0.75");
 });
 
 for (const failure of [
