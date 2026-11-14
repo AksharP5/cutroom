@@ -23,6 +23,7 @@ import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview } from "./preview";
+import { previewRefresh } from "./previewRefresh";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 
@@ -45,13 +46,14 @@ export function Viewer({
 }: {
   projectId: string;
   /** The preview watcher owns invalidation, including edits from other tabs and disk. */
-  change: { revision: number; path: string; version: string | null };
+  change: { revision: number; path: string };
   zoom: Zoom;
   mode: EditorMode;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
   onSaveNote: SaveNote;
 }) {
+  const documentId = useRef(crypto.randomUUID());
   const { revision } = change;
   const stage = useRef<HTMLDivElement>(null);
   const editLabels = useRef<HTMLDivElement>(null);
@@ -81,6 +83,9 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const loadingRevision = useRef<{ gen: number; revision: number } | null>(
+    null,
+  );
   const dismissFailure = useRef<(() => void) | undefined>(undefined);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [handoff, transition] = useReducer(transitionHandoff, {
@@ -106,72 +111,112 @@ export function Viewer({
     return () => observer.disconnect();
   }, []);
 
-  const patching = useRef(false);
-  const seenRevision = useRef(-1);
+  const shownHandoff = useRef(handoff);
+  const settled = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
-    const readyDeadline = performance.now() + READY_TIMEOUT;
-    const reload = () => {
-      latest.current += 1;
-      transition({
-        type: "navigate",
-        gen: latest.current,
-        deadline: readyDeadline,
-      });
-    };
-    const sequential = revision === seenRevision.current + 1;
-    seenRevision.current = revision;
-    const picture = handoff.kind === "showing" ? handoff.confirmed : null;
-    const preview = picture && connections.current.get(picture.gen);
-    if (
-      !sequential ||
-      !picture ||
-      !preview ||
-      patching.current ||
-      change.path !== "index.html" ||
-      !change.version ||
-      useTransport.getState().state.kind !== "stopped" ||
-      editPicture()
-    ) {
-      reload();
-      return;
+    shownHandoff.current = handoff;
+    if (handoff.kind === "showing" || handoff.kind === "failed") {
+      settled.current?.();
+      settled.current = null;
     }
-    const closing = new AbortController();
-    const abandon = () => {
-      if (closing.signal.aborted) return;
-      closing.abort();
-      stop();
-      clearTimeout(deadline);
-      reload();
-    };
-    const deadline = window.setTimeout(abandon, 2000);
-    patching.current = true;
-    // Playback, scrubbing or another invalidation retires the live attempt. Its late
-    // acknowledgment cannot suppress a reload or confirm a newer document.
-    const stop = useTransport.subscribe((state, previous) => {
-      if (state.state.kind !== "stopped" || state.frame !== previous.frame)
-        abandon();
+  }, [handoff]);
+  const waitForPicture = () =>
+    new Promise<void>((resolve) => {
+      if (
+        shownHandoff.current.kind === "showing" ||
+        shownHandoff.current.kind === "failed"
+      )
+        resolve();
+      else settled.current = resolve;
     });
-    const { frame, fps } = useTransport.getState();
-    void preview
-      .updateTiming(change.version, frameTime(frame, fps), closing.signal)
-      .then(() => {
-        if (!closing.signal.aborted)
-          transition({ type: "updated", gen: picture.gen, revision });
-      })
-      .catch(() => {
-        if (!closing.signal.aborted) reload();
-      })
-      .finally(() => {
-        clearTimeout(deadline);
-        stop();
-        patching.current = false;
-      });
+  const refresh = useRef<ReturnType<
+    typeof previewRefresh<typeof change>
+  > | null>(null);
+  useLayoutEffect(() => {
+    const closing = new AbortController();
+    refresh.current = previewRefresh(
+      async (change, isLatest) => {
+        await waitForPicture();
+        if (closing.signal.aborted) return;
+        const readyDeadline = performance.now() + READY_TIMEOUT;
+        const state = shownHandoff.current;
+        const picture = state.kind === "showing" ? state.confirmed : null;
+        const preview = picture && connections.current.get(picture.gen);
+        if (
+          picture &&
+          preview?.timingAllowed &&
+          change.path === "index.html" &&
+          useTransport.getState().state.kind === "stopped" &&
+          !editPicture()
+        ) {
+          const attempt = new AbortController();
+          const signal = AbortSignal.any([closing.signal, attempt.signal]);
+          const timer = window.setTimeout(() => attempt.abort(), 2000);
+          const stop = useTransport.subscribe((state, previous) => {
+            if (
+              state.state.kind !== "stopped" ||
+              state.frame !== previous.frame
+            )
+              attempt.abort();
+          });
+          try {
+            const { frame, fps } = useTransport.getState();
+            if (
+              await preview.updateTiming(
+                frameTime(frame, fps),
+                signal,
+                isLatest,
+              )
+            )
+              transition({
+                type: "updated",
+                gen: picture.gen,
+                revision: change.revision,
+              });
+            return;
+          } catch {
+            if (closing.signal.aborted || !isLatest()) return;
+          } finally {
+            clearTimeout(timer);
+            stop();
+          }
+        }
+        if (!isLatest() || closing.signal.aborted) return;
+        latest.current += 1;
+        loadingRevision.current = {
+          gen: latest.current,
+          revision: change.revision,
+        };
+        transition({
+          type: "navigate",
+          gen: latest.current,
+          deadline: readyDeadline,
+        });
+        // A newer invalidation waits here, replacing the pending destination rather
+        // than retiring every candidate before it can paint.
+        await new Promise<void>((resolve) => {
+          settled.current = resolve;
+        });
+      },
+      (reason) => reportEditorError("viewer", reason),
+    );
+    latest.current += 1;
+    loadingRevision.current = { gen: latest.current, revision: 0 };
+    transition({
+      type: "navigate",
+      gen: latest.current,
+      deadline: performance.now() + READY_TIMEOUT,
+    });
     return () => {
-      clearTimeout(deadline);
       closing.abort();
-      stop();
+      refresh.current?.dispose();
+      settled.current?.();
+      settled.current = null;
     };
-  }, [revision]);
+  }, []);
+  useLayoutEffect(() => {
+    if (change.revision) refresh.current?.push(change);
+  }, [change]);
 
   useLayoutEffect(() => {
     for (const [gen, connection] of connections.current) {
@@ -247,6 +292,8 @@ export function Viewer({
     if (!picture) return;
     const preview = connections.current.get(picture.gen);
     if (!preview) return;
+    if (loadingRevision.current?.gen === picture.gen)
+      loadingRevision.current = null;
     useWorkspace.setState({
       composition: {
         fps: compositionFps(preview.state.fps),
@@ -285,9 +332,11 @@ export function Viewer({
         deadline: performance.now() + READY_TIMEOUT,
       });
     });
+    const reloaded = connections.current.has(gen);
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
+      if (!reloaded) await preview.authorizeTiming().catch(() => {});
       await preview.inspect();
       while (!preview.state.ready || preview.state.error) {
         if (preview.state.error)
@@ -318,7 +367,16 @@ export function Viewer({
       const { width, height } = preview.state;
       transition({
         type: "prepared",
-        picture: { gen, revision, width, height, shown },
+        picture: {
+          gen,
+          revision:
+            loadingRevision.current?.gen === gen
+              ? loadingRevision.current.revision
+              : (shownHandoff.current.confirmed?.revision ?? 0),
+          width,
+          height,
+          shown,
+        },
       });
     } catch (reason) {
       if (preview.signal.aborted || gen !== latest.current) return;
@@ -388,7 +446,7 @@ export function Viewer({
               tabIndex={-1}
               sandbox="allow-scripts"
               allow="autoplay"
-              src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}`}
+              src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}&document=${documentId.current}-${gen}`}
               data-live={gen === live?.gen || undefined}
               data-held={Boolean(retained) || undefined}
               style={{

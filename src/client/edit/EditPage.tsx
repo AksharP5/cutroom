@@ -62,7 +62,6 @@ import type { Zoom } from "./Viewer";
 const previewChangeSchema = z.object({
   projectId: z.string(),
   path: z.string(),
-  version: z.string().nullable(),
   affectsPreview: z.boolean(),
   affectedCompositions: z.array(z.string()).nullable(),
 });
@@ -125,7 +124,6 @@ export function EditPage({
   const [previewChange, setPreviewChange] = useState({
     revision: 0,
     path: "",
-    version: null as string | null,
   });
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
@@ -185,7 +183,6 @@ export function EditPage({
           setPreviewChange((value) => ({
             revision: value.revision + 1,
             path: change.data.path,
-            version: change.data.version,
           }));
       },
     );

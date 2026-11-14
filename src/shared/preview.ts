@@ -57,6 +57,7 @@ export const CompositionDiagnosticsSchema = z.object({
 });
 
 export const PreviewTimingSchema = z.object({
+  allowed: z.boolean(),
   structure: z.string(),
   revision: z.string(),
   clips: z.array(

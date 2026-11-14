@@ -27,7 +27,7 @@ const changed = (page: Page, old: string | null) =>
 const live = (page: Page) =>
   page.locator("iframe[data-live]").getAttribute("src");
 
-async function fixture(request: APIRequestContext, page: Page) {
+async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -83,6 +83,13 @@ async function fixture(request: APIRequestContext, page: Page) {
     );
     expect(response.ok(), await response.text()).toBe(true);
   };
+  if (scripts) {
+    const path = join(project.path, "index.html");
+    await writeFile(
+      path,
+      (await readFile(path, "utf8")).replace("</body>", scripts + "</body>"),
+    );
+  }
   // Establish the editor's managed track stylesheet before measuring timing-only changes.
   await edit([{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]);
   await edit([{ type: "move", clipIds: ["title"], by: -1, mode: "overwrite" }]);
@@ -129,11 +136,12 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   request,
 }, info) => {
   test.setTimeout(120000);
-  const { edit, read } = await fixture(request, page);
+  const { project, edit, read } = await fixture(request, page);
   const original = await live(page);
   let previous = await token(page);
   await edit([
     { type: "setTiming", clipId: "v1", mediaStart: 1, playbackRate: 1.5 },
+    { type: "trim", clipId: "v1", edge: "end", to: 75, ripple: false },
     { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
   ]);
   await changed(page, previous);
@@ -141,35 +149,50 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   const clips = (await read()).timeline.clips;
   expect(clips.find((c) => c.id === "a1")?.mediaStart).toBe(1);
   expect(clips.find((c) => c.id === "a1")?.playbackRate).toBe(1.5);
-  // Two source-in controls from the study plus both sides of the rational cut/title edges.
-  for (const frame of [0, 30, 31, 75, 76, 77]) {
-    await seek(page, frame);
-    const patched = await page.locator(".edit-picture").screenshot();
-    await page.reload();
-    await ready(page);
-    await seek(page, frame);
-    const fresh = await page.locator(".edit-picture").screenshot();
-    expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
-    if (frame === 76)
-      await info.attach("NTSC cut.png", {
+  expect(clips.find((c) => c.id === "v1")?.duration).toBe(75);
+  expect(clips.find((c) => c.id === "a1")?.duration).toBe(75);
+  const control = await page.context().newPage();
+  try {
+    // The patched page never reloads. Every control picture starts in another fresh document.
+    for (const step of ["Control+z", "Control+Shift+z"]) {
+      previous = await token(page);
+      await page.getByRole("region", { name: "Viewer", exact: true }).click();
+      await page.keyboard.press(step);
+      await changed(page, previous);
+      expect(await live(page)).toBe(original);
+      await control.goto(`/#project/${project.id}`);
+      await ready(control);
+      await seek(page, 0);
+      await seek(control, 0);
+      const patched = await page.locator(".edit-picture").screenshot();
+      const fresh = await control.locator(".edit-picture").screenshot();
+      await info.attach("history live.png", {
+        body: patched,
+        contentType: "image/png",
+      });
+      await info.attach("history fresh.png", {
         body: fresh,
         contentType: "image/png",
       });
-  }
-  for (const step of ["Control+z", "Control+Shift+z"]) {
-    const doc = await live(page);
-    previous = await token(page);
-    await page.getByRole("region", { name: "Viewer", exact: true }).click();
-    await page.keyboard.press(step);
-    await changed(page, previous);
-    expect(await live(page)).toBe(doc);
-    const patched = await page.locator(".edit-picture").screenshot();
-    await page.reload();
-    await ready(page);
-    await seek(page, 77);
-    expect(
-      patched.equals(await page.locator(".edit-picture").screenshot()),
-    ).toBe(true);
+      expect(patched.equals(fresh), step).toBe(true);
+    }
+    for (const frame of [0, 30, 31, 75, 76, 77]) {
+      await seek(page, frame);
+      const patched = await page.locator(".edit-picture").screenshot();
+      await control.reload();
+      await ready(control);
+      await seek(control, frame);
+      const fresh = await control.locator(".edit-picture").screenshot();
+      expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
+      expect(await live(page)).toBe(original);
+      if (frame === 76)
+        await info.attach("NTSC cut.png", {
+          body: fresh,
+          contentType: "image/png",
+        });
+    }
+  } finally {
+    await control.close();
   }
 });
 
@@ -406,4 +429,171 @@ test("a refused save never changes the preview document or its picture", async (
   expect(picture.equals(await page.locator(".edit-picture").screenshot())).toBe(
     true,
   );
+});
+
+for (const [name, scripts] of [
+  [
+    "init-time GSAP",
+    '<script src="assets/vendor/gsap.min.js"></script><script>const title=document.querySelector("#title");window.__timelines={main:gsap.timeline({paused:true}).fromTo(title,{x:-120},{x:0,duration:1},+title.dataset.start)};</script>',
+  ],
+  ["noembed", "<noembed><script>window.authored=true</script></noembed>"],
+  ["noscript", "<noscript><script>window.authored=true</script></noscript>"],
+  [
+    "forged timing replies",
+    '<script>addEventListener("message",e=>{if(e.data?.action!=="timing")return;parent.postMessage({type:"forged-timing-attempt"},"*");parent.postMessage({source:"cutroom-preview",id:e.data.id,timingRevision:e.data.timing.revision,state:{ready:true,root:true,error:null,width:640,height:360,fps:"30000/1001",time:0,playing:false}},"*")})</script>',
+  ],
+] as const)
+  test(`authored ${name} always reloads, even if the next source becomes script-free`, async ({
+    page,
+    request,
+  }) => {
+    await page.addInitScript(() => {
+      Reflect.set(window, "forgedTimingAttempts", 0);
+      addEventListener("message", (e) => {
+        if (e.data?.type === "forged-timing-attempt")
+          Reflect.set(
+            window,
+            "forgedTimingAttempts",
+            Number(Reflect.get(window, "forgedTimingAttempts")) + 1,
+          );
+      });
+    });
+    const { project, edit } = await fixture(request, page, scripts);
+    const doc = await live(page),
+      before = await token(page);
+    await edit([
+      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
+    ]);
+    await changed(page, before);
+    expect(await live(page)).not.toBe(doc);
+    if (name === "init-time GSAP") {
+      const control = await page.context().newPage();
+      try {
+        await control.goto(`/#project/${project.id}`);
+        await ready(control);
+        await seek(page, 45);
+        await seek(control, 45);
+        expect(
+          (await page.locator(".edit-picture").screenshot()).equals(
+            await control.locator(".edit-picture").screenshot(),
+          ),
+        ).toBe(true);
+      } finally {
+        await control.close();
+      }
+    }
+    const scripted = await live(page),
+      prior = await token(page);
+    const path = join(project.path, "index.html");
+    await writeFile(path, (await readFile(path, "utf8")).replace(scripts, ""));
+    await changed(page, prior);
+    expect(await live(page)).not.toBe(scripted);
+    expect(
+      await page.evaluate(() => Reflect.get(window, "forgedTimingAttempts")),
+    ).toBe(0);
+  });
+
+for (const divergence of ["text", "style", "element"] as const)
+  test(`a script-free document with divergent live ${divergence} fails closed`, async ({
+    page,
+    request,
+  }) => {
+    const { edit } = await fixture(request, page);
+    const before = await token(page),
+      doc = await live(page);
+    const frame = (await (await page
+      .locator("iframe[data-live]")
+      .elementHandle())!.contentFrame())!;
+    await frame.evaluate((divergence) => {
+      const title = document.querySelector<HTMLElement>("#title")!;
+      if (divergence === "text") title.textContent = "Divergent";
+      if (divergence === "style") title.style.background = "red";
+      if (divergence === "element")
+        title.append(document.createElement("span"));
+    }, divergence);
+    await edit([
+      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
+    ]);
+    await changed(page, before);
+    expect(await live(page)).not.toBe(doc);
+    const current = (await (await page
+      .locator("iframe[data-live]")
+      .elementHandle())!.contentFrame())!;
+    await expect(current.locator("#title")).toHaveText("Chapter one");
+  });
+
+test("scripted bursts coalesce reloads while preserving every save and undo step", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120000);
+  const { read } = await fixture(
+    request,
+    page,
+    "<script>window.authored=true</script>",
+  );
+  const initial = (await read()).timeline.clips.find(
+    (clip) => clip.id === "title",
+  )!.start;
+  let navigations = 0;
+  await page.route("**/isolated-preview?*", async (route) => {
+    if (route.request().isNavigationRequest()) {
+      navigations++;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+    await route.continue();
+  });
+  let saves = 0;
+  page.on("response", (response) => {
+    if (response.url().endsWith("/commands") && response.ok()) saves++;
+  });
+  await page.locator('[data-clip="title"]').click({ force: true });
+  const started = performance.now();
+  for (let index = 0; index < 8; index++) {
+    const delay = started + index * 125 - performance.now();
+    if (delay > 0) await page.waitForTimeout(delay);
+    const field = page.getByLabel("Start", { exact: true });
+    await field.focus();
+    await field.press("ArrowUp");
+    await field.press("Enter");
+    expect(
+      await page.locator(".edit-picture iframe").count(),
+    ).toBeLessThanOrEqual(2);
+  }
+  await expect.poll(() => saves).toBe(8);
+  await expect
+    .poll(async () =>
+      page
+        .locator("iframe[data-live]")
+        .contentFrame()
+        .locator("#title")
+        .getAttribute("data-start"),
+    )
+    .toBe(String(((initial + 8) * 1001) / 30000));
+  await ready(page);
+  expect(navigations).toBeLessThanOrEqual(3);
+  // Preview coalescing must never coalesce saved history.
+  for (let index = 0; index < 8; index++) {
+    await page.getByRole("region", { name: "Viewer", exact: true }).click();
+    await page.keyboard.press("Control+z");
+    await expect
+      .poll(
+        async () =>
+          (await read()).timeline.clips.find((clip) => clip.id === "title")!
+            .start,
+      )
+      .toBe(initial + 7 - index);
+  }
+  await expect
+    .poll(async () =>
+      Number(
+        await page
+          .locator("iframe[data-live]")
+          .contentFrame()
+          .locator("#title")
+          .getAttribute("data-start"),
+      ),
+    )
+    .toBeCloseTo((initial * 1001) / 30000, 6);
+  await ready(page);
 });
