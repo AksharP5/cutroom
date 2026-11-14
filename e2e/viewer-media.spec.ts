@@ -1407,14 +1407,14 @@ test("coalesced stalled replacements keep the picture and finish the latest save
     expect(saved.label).toBe(finalLabel);
     expect(saved.opacity).toBe(0.5);
     await gate.evaluate((gate) => gate.release());
-    await waitForPreview(page);
-    await expect(page.locator(".edit-frame")).toHaveCount(1);
     const picture = page
       .locator("iframe[data-live]")
       .contentFrame()
       .locator("#picture");
     await expect(picture).toHaveAttribute("data-timeline-label", saved.label!);
     await expect(picture).toHaveCSS("opacity", "0.5");
+    await waitForPreview(page);
+    await expect(page.locator(".edit-frame")).toHaveCount(1);
     await expect(page.locator(".status-error")).toHaveCount(0);
     const result = await capture.read();
     const bad = result.samples.filter(

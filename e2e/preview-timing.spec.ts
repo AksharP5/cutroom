@@ -142,6 +142,9 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
     { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
   ]);
   await waitForPreview(page, { after: previous });
+  const picture = page.locator("iframe[data-live]").contentFrame();
+  await expect(picture.locator("#v1")).toHaveAttribute("data-media-start", "1");
+  await waitForPreview(page);
   expect(await live(page)).toBe(original);
   const clips = (await read()).timeline.clips;
   expect(clips.find((c) => c.id === "a1")?.mediaStart).toBe(1);
@@ -156,6 +159,11 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
       await page.getByRole("button", { name: /^Current time/ }).focus();
       await page.keyboard.press(step);
       await waitForPreview(page, { after: previous });
+      await expect(picture.locator("#v1")).toHaveAttribute(
+        "data-media-start",
+        step === "Control+z" ? "0" : "1",
+      );
+      await waitForPreview(page);
       expect(await live(page)).toBe(original);
       await control.goto(`/#project/${project.id}`);
       await waitForPreview(control);
@@ -235,11 +243,12 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
     waitForPreview(page, { after: tokens[0]! }),
     waitForPreview(second, { after: tokens[1]! }),
   ]);
-  expect(await Promise.all([live(page), live(second)])).toEqual(docs);
   for (const tab of [page, second])
     await expect(
       tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
     ).toHaveAttribute("data-media-start", "1");
+  await Promise.all([waitForPreview(page), waitForPreview(second)]);
+  expect(await Promise.all([live(page), live(second)])).toEqual(docs);
   let source = await readFile(join(project.path, "index.html"), "utf8");
   const diskTokens = await Promise.all([token(page), token(second)]);
   source = source.replace('data-media-start="1"', 'data-media-start="2"');
