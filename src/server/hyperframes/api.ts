@@ -138,10 +138,12 @@ export function createHyperframesApi(
   >();
   // Keep the compiler's decision outside authored HTML. The upstream cache's write
   // hook supplies the final, stable response bytes, including all augmentations.
-  const timingBuild = new AsyncLocalStorage<{ allowed: boolean }>();
+  type TimingBuild = { allowed?: boolean; signature?: string };
+  const timingBuild = new AsyncLocalStorage<TimingBuild>();
+  const timingPolicies = new Set<string>();
   const eligiblePreviews = new Set<string>();
   const previewContext: MiddlewareHandler = (_c, next) =>
-    timingBuild.getStore() ? next() : timingBuild.run({ allowed: false }, next);
+    timingBuild.getStore() ? next() : timingBuild.run({}, next);
   api.use("/projects/:id/preview", previewContext);
   api.use("/projects/:id/preview/*", previewContext);
   const subscribers = new Set<(change: FileChange) => void>();
@@ -427,7 +429,18 @@ export function createHyperframesApi(
         },
       });
       const build = timingBuild.getStore();
-      if (build) build.allowed = policy.contract() === "attributes";
+      if (build) {
+        build.allowed = policy.contract() === "attributes";
+        if (build.signature) {
+          const key = `${dir}\0${build.signature}`;
+          timingPolicies.delete(key);
+          if (build.allowed) {
+            timingPolicies.add(key);
+            if (timingPolicies.size > 64)
+              timingPolicies.delete(timingPolicies.values().next().value!);
+          }
+        }
+      }
       return html.replace(
         'data-hyperframes-preview-runtime="1" src=""',
         'data-hyperframes-preview-runtime="1" src="/api/runtime.js"',
@@ -474,16 +487,19 @@ export function createHyperframesApi(
     },
     async getProjectSignature(dir) {
       // Closed projects have no watcher to invalidate cached signatures.
-      if (!watchers.has(dir)) return createProjectSignatureAsync(dir);
-      let signature = signatures.get(dir);
+      const watched = watchers.has(dir);
+      let signature = watched ? signatures.get(dir) : undefined;
       if (!signature) {
         signature = createProjectSignatureAsync(dir).catch((error: unknown) => {
           signatures.delete(dir);
           throw error;
         });
-        signatures.set(dir, signature);
+        if (watched) signatures.set(dir, signature);
       }
-      return signature;
+      const value = await signature;
+      const build = timingBuild.getStore();
+      if (build) build.signature = value;
+      return value;
     },
     invalidateProjectSignature: (dir) => {
       signatures.delete(dir);
@@ -546,7 +562,7 @@ export function createHyperframesApi(
     // A disk write can beat its watch event. Do not label a cached compiled document
     // with the newer source version merely because the watcher has not invalidated it yet.
     if (timingOnly) signatures.delete(project.path);
-    const timingRead = timingOnly ? { allowed: false } : null;
+    const timingRead: TimingBuild | null = timingOnly ? {} : null;
     let response: Response;
     let activeCompositionPath = "index.html";
     let assetContentType: string | undefined;
@@ -597,11 +613,17 @@ export function createHyperframesApi(
     if (!headers.get("content-type")?.includes("text/html"))
       return new Response(response.body, { status: response.status, headers });
     const compiled = await response.text();
-    // A comparison can use this compilation's source policy after the version guards
-    // below. Approval of an executing document still requires a finalized response.
+    // Concurrent readers share the upstream compilation, not its async-local context.
+    // Reuse that build's source policy by input signature for guarded comparisons only.
+    // Approval of an executing document still requires a finalized response.
     const eligible =
       path === "preview" &&
-      (eligiblePreviews.has(compiled) || timingRead?.allowed === true);
+      (timingRead
+        ? timingRead.allowed === true ||
+          (timingRead.allowed !== false &&
+            !!timingRead.signature &&
+            timingPolicies.has(`${project.path}\0${timingRead.signature}`))
+        : eligiblePreviews.has(compiled));
     const html = compiled
       .replaceAll(
         `/api/projects/${encodeURIComponent(projectId)}/preview/`,
