@@ -283,3 +283,27 @@ Each cost is the median of three per-run maxima. Reads are per fresh load; playb
 | 10 ms geometry read                | 11.7, 11.3, 10.9 ms |        11.3 ms |  < 5 ms | Fail   |
 | 10 ms Position style read          | 10.3, 10.4, 10.8 ms |        10.4 ms |  < 5 ms | Fail   |
 | 60 ms picture hit                  | 86.5, 88.8, 87.1 ms |        87.1 ms | ≤ 50 ms | Fail   |
+
+## Paused timing edits
+
+A saved timing-only edit can update the isolated preview in place while stopped. It still compiles and validates the saved document, then uses the runtime's observed timing attributes and the existing decoded-frame hold and paint bridge. This removes document initialization and promotion, rather than the command, watcher or compiler work. Playback and unsupported changes retain the full reload.
+
+On November 14, 2026, production builds at `678954b` and this change used Bun 1.4.4 and installed Chromium 155.0.8059.84, headless with hardware ANGLE on an NVIDIA GeForce RTX 5060. The shared host was an Intel Core i5-14400F with 32 GB RAM. Viewport was 1720×1050 and audio was muted. No packages, browsers or media were downloaded.
+
+Each result is the median of five native Enter commits after ArrowUp in the selected title's Start field, after a 4.5-second warm-up. The interval starts at keydown and ends when the stage confirms the saved picture following the bridge's hold capture and paint. It includes saving, the watcher delay, compilation, validation and drawing. It does not measure physical display scan-out. These are integrated timings; the ownership study's 90/46 ms direct-DOM prototype excluded saving and validation.
+
+| Project                             | Full reload | Live timing | Improvement |
+| ----------------------------------- | ----------: | ----------: | ----------: |
+| Plain 500 clips                     |    1,004 ms |      411 ms |       2.45× |
+| Scripted 500 clips                  |    1,591 ms |      585 ms |       2.72× |
+| Interview, b-roll, music and titles |      354 ms |      207 ms |       1.71× |
+
+All fifteen after measurements retained their live iframe. The six original study comparisons, source-in 1/2/3 seconds on the plain and interview projects, were repeated through saved commands and the integrated bridge. Every live PNG matched its fresh-document PNG byte-for-byte. The functional browser test also compares six frames around title and media cuts at 30000/1001, linked source-in/rate changes, undo and redo. It covers MCP and disk edits in two tabs, 8 edits/s, source races, playback fallback, refused saves and missing, failed or late bridge acknowledgments. [Raw timings and parity results](measurements/preview-timing.json) retain every run.
+
+Three eight-key bursts on the scripted 500-clip project requested 4 and 8 edits/s. All eight saves in every burst reached the shown source timing. Superseding work took the required full-reload fallback: the median final confirmation was 2,460 ms after the last key at requested 4/s and 3,177 ms at 8/s. The 4/s bursts produced two confirmations each; the 8/s bursts produced one each. This change improves settled single edits; it does not make overlapping large-project edits display at the input rate.
+
+`bun run test:perf` includes a 500-clip saved-picture check. Five real one-frame Start commits must retain the document and have a median keydown-to-confirmation below 600 ms. This measures the complete saved-picture path, unlike a synchronous timeline-update metric. `CUTROOM_PREVIEW_TIMING_STALL_MS=800` delays the snapshot request as a negative control. A local negative-control run failed at a 1,241 ms median against the 600 ms ceiling; the ordinary run measured 391 ms and the final complete performance suite measured 397 ms. The existing timeline, trim, track-height, Position and selection budgets remain unchanged.
+
+The first timing edit can establish the managed stacking stylesheet and therefore reload. Root duration changes, nested compositions, adds/removes, source/script/CSS changes and stacking changes also reload. A live attempt has two seconds within the existing fifteen-second preparation deadline; fallback does not extend that deadline.
+
+The separate `bench:timeline` request budget was already failing on this host. Fresh `origin/main` measured 79.53 ms against its 50 ms limit; this branch measured 88.91 ms. Main also measured 5.14 ms against the 5 ms patch limit, while this branch measured 2.52 ms. These single benchmark sessions do not establish a change in the unchanged engine path. The ownership study also recorded the request-budget failure. No budget was raised and no engine changes are included here; both complete benchmark records are retained in the raw results.

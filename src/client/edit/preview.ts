@@ -10,6 +10,7 @@ import {
   PreviewLevelsSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
+  PreviewTimingSchema,
   PreviewUnloadedSchema,
   RuntimeStateSchema,
 } from "../../shared/preview";
@@ -20,7 +21,7 @@ import type {
   PlaybackClock,
   PreviewState,
 } from "../../shared/preview";
-import type { z } from "zod";
+import { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
 import { frameTime } from "../../shared/timeline/apply";
@@ -127,6 +128,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const closing = new AbortController();
   let active = false;
+  let timingRevision: string | undefined;
   let diagnostics: CompositionDiagnostic[] = [];
   let diagnosticsKey = "";
   let dismissDiagnostics = () => {};
@@ -229,6 +231,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     const parsed = PreviewReplySchema.safeParse(event.data);
     if (!parsed.success) return;
     const reply = parsed.data;
+    timingRevision = reply.timingRevision;
     if (playbackRequest === null || reply.id === playbackRequest) {
       state = reply.state;
       playbackRequest = null;
@@ -393,6 +396,29 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     },
     inspect: async () => void (await request("inspect")),
     painted: async () => void (await request("paint")),
+    async updateTiming(version: string, time: number, signal: AbortSignal) {
+      if (!timingRevision)
+        throw new Error("The preview has no timing revision.");
+      const response = await fetch(`${frame.src}&cutroom-timing=1`, { signal });
+      if (!response.ok)
+        throw new Error("The saved preview timing is unavailable.");
+      const snapshot = z
+        .object({ version: z.string(), timing: PreviewTimingSchema })
+        .parse(await response.json());
+      signal.throwIfAborted();
+      if (snapshot.version !== version)
+        throw new Error("The saved preview was superseded.");
+      const reply = await request("timing", {
+        timing: snapshot.timing,
+        expectedRevision: timingRevision,
+        time,
+      });
+      signal.throwIfAborted();
+      if (reply.timingRevision !== snapshot.timing.revision)
+        throw new Error(
+          "The preview did not acknowledge the saved timing revision.",
+        );
+    },
     dispose,
   };
 }

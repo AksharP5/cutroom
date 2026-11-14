@@ -52,7 +52,8 @@ import {
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
-import { withPreviewBridge, withPreviewClipIdentities } from "./previewBridge";
+import { previewDependencies } from "./previewTiming";
+import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
 import {
   compositionScope,
@@ -476,6 +477,18 @@ export function createHyperframesApi(
           ? `/projects/${encodeURIComponent(projectId)}/${path}`
           : null;
     if (!target) return c.notFound();
+    const timingOnly = url.searchParams.has("cutroom-timing");
+    url.searchParams.delete("cutroom-timing");
+    const project = await store.get(projectId);
+    const sourceBefore = timingOnly
+      ? await readSource(project, "index.html")
+      : null;
+    const dependenciesBefore = timingOnly
+      ? await previewDependencies(project.path, "index.html")
+      : null;
+    // A disk write can beat its watch event. Do not label a cached compiled document
+    // with the newer source version merely because the watcher has not invalidated it yet.
+    if (timingOnly) signatures.delete(project.path);
     let response: Response;
     let activeCompositionPath = "index.html";
     let assetContentType: string | undefined;
@@ -529,7 +542,28 @@ export function createHyperframesApi(
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
     // The HTTP CSP applies before any authored markup, including malformed documents.
-    return new Response(withPreviewBridge(html, activeCompositionPath), {
+    // The root HTML is compared after masking timing. Other files, including nested
+    // sources and assets, must remain identical even if their watcher event is late.
+    const dependencies = await previewDependencies(
+      project.path,
+      activeCompositionPath,
+    );
+    const document = previewDocument(html, activeCompositionPath, dependencies);
+    if (timingOnly) {
+      const sourceAfter = await readSource(project, "index.html");
+      if (
+        !response.ok ||
+        sourceBefore?.version !== sourceAfter.version ||
+        dependenciesBefore !== dependencies
+      )
+        return c.json(
+          { error: "The preview changed while reading timing." },
+          409,
+        );
+      c.header("Cache-Control", "no-store");
+      return c.json({ version: sourceAfter.version, timing: document.timing });
+    }
+    return new Response(document.html, {
       status: response.status,
       headers,
     });

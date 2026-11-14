@@ -1,0 +1,850 @@
+{
+  "base": "678954bc30de15fe64f8b74a1e59ef16fb04ec28",
+  "date": "2026-11-14",
+  "environment": {
+    "bun": "1.4.4",
+    "chromium": "155.0.8059.84",
+    "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)",
+    "viewport": {
+      "width": 1720,
+      "height": 1050
+    },
+    "headless": true,
+    "audio": "muted",
+    "host": "shared Intel Core i5-14400F, 32 GB RAM"
+  },
+  "method": "Five native Enter commits per fixture after ArrowUp in the selected title-1 Start field; 4.5-second warmup. Keydown performance.now() to the stage confirming the saved picture after the bridge paint. Includes save, watcher delay, compilation/validation, seek, hold capture and paint. Not physical display scan-out. Both builds use the study fixtures and the same generated media. First stacking creation may reload; every after measurement retained its document.",
+  "samples": {
+    "before": [
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 0,
+        "ms": 1021.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 1,
+        "ms": 972.4000000022352,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 2,
+        "ms": 1004.3000000007451,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 3,
+        "ms": 1002.6999999992549,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 4,
+        "ms": 1105.5999999977648,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "scripted",
+        "i": 0,
+        "ms": 1660.800000000745,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "scripted",
+        "i": 1,
+        "ms": 1224.199999999255,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "scripted",
+        "i": 2,
+        "ms": 1402.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "scripted",
+        "i": 3,
+        "ms": 1590.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "scripted",
+        "i": 4,
+        "ms": 2077.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 0,
+        "ms": 353.79999999701977,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 1,
+        "ms": 359.80000000074506,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 2,
+        "ms": 327.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 3,
+        "ms": 348.3999999985099,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 4,
+        "ms": 363.9000000022352,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      }
+    ],
+    "after": [
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 0,
+        "ms": 410.5,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 1,
+        "ms": 381.69999999925494,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 2,
+        "ms": 388.69999999925494,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 3,
+        "ms": 438.6000000014901,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 4,
+        "ms": 448.5,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "scripted",
+        "i": 0,
+        "ms": 615.6999999992549,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "scripted",
+        "i": 1,
+        "ms": 543.6999999992549,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "scripted",
+        "i": 2,
+        "ms": 582.6999999992549,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "scripted",
+        "i": 3,
+        "ms": 646.8999999985099,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "scripted",
+        "i": 4,
+        "ms": 585,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 0,
+        "ms": 261.9000000022352,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 1,
+        "ms": 207,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 2,
+        "ms": 225.89999999850988,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 3,
+        "ms": 195.60000000149012,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 4,
+        "ms": 177.30000000074506,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      }
+    ]
+  },
+  "studyImageParity": [
+    {
+      "name": "plain",
+      "i": 1,
+      "retained": true,
+      "equal": true
+    },
+    {
+      "name": "plain",
+      "i": 2,
+      "retained": true,
+      "equal": true
+    },
+    {
+      "name": "plain",
+      "i": 3,
+      "retained": true,
+      "equal": true
+    },
+    {
+      "name": "interview",
+      "i": 1,
+      "retained": true,
+      "equal": true
+    },
+    {
+      "name": "interview",
+      "i": 2,
+      "retained": true,
+      "equal": true
+    },
+    {
+      "name": "interview",
+      "i": 3,
+      "retained": true,
+      "equal": true
+    }
+  ],
+  "scriptedBurstRuns": [
+    {
+      "hz": 4,
+      "run": 0,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 2,
+      "lastKeyToFinalMs": 2466.5,
+      "liveStart": "30.866666666666667",
+      "savedStart": 30.866666666666667,
+      "events": [
+        {
+          "type": "key",
+          "t": 6253.5
+        },
+        {
+          "type": "save",
+          "t": 6356.199999999255
+        },
+        {
+          "type": "key",
+          "t": 6496.5
+        },
+        {
+          "type": "key",
+          "t": 6764.300000000745
+        },
+        {
+          "type": "shown",
+          "t": 6885.900000002235
+        },
+        {
+          "type": "save",
+          "t": 6943
+        },
+        {
+          "type": "key",
+          "t": 7001.5
+        },
+        {
+          "type": "save",
+          "t": 7100.699999999255
+        },
+        {
+          "type": "key",
+          "t": 7249.5
+        },
+        {
+          "type": "key",
+          "t": 7499.800000000745
+        },
+        {
+          "type": "save",
+          "t": 7591.400000002235
+        },
+        {
+          "type": "key",
+          "t": 7741
+        },
+        {
+          "type": "key",
+          "t": 7993.199999999255
+        },
+        {
+          "type": "save",
+          "t": 8222.199999999255
+        },
+        {
+          "type": "save",
+          "t": 8464.5
+        },
+        {
+          "type": "save",
+          "t": 9023.300000000745
+        },
+        {
+          "type": "save",
+          "t": 9192.199999999255
+        },
+        {
+          "type": "shown",
+          "t": 10459.699999999255
+        }
+      ]
+    },
+    {
+      "hz": 4,
+      "run": 1,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 2,
+      "lastKeyToFinalMs": 2434.7000000029802,
+      "liveStart": "31.133333333333333",
+      "savedStart": 31.133333333333333,
+      "events": [
+        {
+          "type": "key",
+          "t": 10671.800000000745
+        },
+        {
+          "type": "save",
+          "t": 10753.5
+        },
+        {
+          "type": "key",
+          "t": 10921.699999999255
+        },
+        {
+          "type": "key",
+          "t": 11190.10000000149
+        },
+        {
+          "type": "shown",
+          "t": 11214.60000000149
+        },
+        {
+          "type": "save",
+          "t": 11271.60000000149
+        },
+        {
+          "type": "key",
+          "t": 11422.699999999255
+        },
+        {
+          "type": "save",
+          "t": 11462.400000002235
+        },
+        {
+          "type": "key",
+          "t": 11676.900000002235
+        },
+        {
+          "type": "key",
+          "t": 11946.400000002235
+        },
+        {
+          "type": "key",
+          "t": 12173.199999999255
+        },
+        {
+          "type": "save",
+          "t": 12244.900000002235
+        },
+        {
+          "type": "key",
+          "t": 12441.199999999255
+        },
+        {
+          "type": "save",
+          "t": 12789.900000002235
+        },
+        {
+          "type": "save",
+          "t": 12921.199999999255
+        },
+        {
+          "type": "save",
+          "t": 13339.900000002235
+        },
+        {
+          "type": "save",
+          "t": 13780.400000002235
+        },
+        {
+          "type": "shown",
+          "t": 14875.900000002235
+        }
+      ]
+    },
+    {
+      "hz": 4,
+      "run": 2,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 2,
+      "lastKeyToFinalMs": 2460,
+      "liveStart": "31.4",
+      "savedStart": 31.4,
+      "events": [
+        {
+          "type": "key",
+          "t": 15065
+        },
+        {
+          "type": "save",
+          "t": 15140.900000002235
+        },
+        {
+          "type": "key",
+          "t": 15317.300000000745
+        },
+        {
+          "type": "key",
+          "t": 15572.699999999255
+        },
+        {
+          "type": "shown",
+          "t": 15587.900000002235
+        },
+        {
+          "type": "save",
+          "t": 15637.300000000745
+        },
+        {
+          "type": "key",
+          "t": 15816.199999999255
+        },
+        {
+          "type": "save",
+          "t": 15828.60000000149
+        },
+        {
+          "type": "key",
+          "t": 16064.800000000745
+        },
+        {
+          "type": "key",
+          "t": 16314.699999999255
+        },
+        {
+          "type": "save",
+          "t": 16469.900000002235
+        },
+        {
+          "type": "key",
+          "t": 16564.60000000149
+        },
+        {
+          "type": "key",
+          "t": 16815.400000002235
+        },
+        {
+          "type": "save",
+          "t": 16983.800000000745
+        },
+        {
+          "type": "save",
+          "t": 17124.60000000149
+        },
+        {
+          "type": "save",
+          "t": 17694.900000002235
+        },
+        {
+          "type": "save",
+          "t": 18208.800000000745
+        },
+        {
+          "type": "shown",
+          "t": 19275.400000002235
+        }
+      ]
+    },
+    {
+      "hz": 8,
+      "run": 0,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 1,
+      "lastKeyToFinalMs": 3176.599999997765,
+      "liveStart": "31.666666666666668",
+      "savedStart": 31.666666666666668,
+      "events": [
+        {
+          "type": "key",
+          "t": 5934.5
+        },
+        {
+          "type": "save",
+          "t": 6023.89999999851
+        },
+        {
+          "type": "key",
+          "t": 6053.199999999255
+        },
+        {
+          "type": "key",
+          "t": 6185.599999997765
+        },
+        {
+          "type": "save",
+          "t": 6198.199999999255
+        },
+        {
+          "type": "key",
+          "t": 6305.699999999255
+        },
+        {
+          "type": "key",
+          "t": 6424.5
+        },
+        {
+          "type": "key",
+          "t": 6565.699999999255
+        },
+        {
+          "type": "key",
+          "t": 6676.89999999851
+        },
+        {
+          "type": "key",
+          "t": 6803.5
+        },
+        {
+          "type": "save",
+          "t": 6926.199999999255
+        },
+        {
+          "type": "save",
+          "t": 7379.39999999851
+        },
+        {
+          "type": "save",
+          "t": 7808.800000000745
+        },
+        {
+          "type": "save",
+          "t": 8181.099999997765
+        },
+        {
+          "type": "save",
+          "t": 8584.199999999255
+        },
+        {
+          "type": "save",
+          "t": 8989.199999999255
+        },
+        {
+          "type": "shown",
+          "t": 9980.099999997765
+        }
+      ]
+    },
+    {
+      "hz": 8,
+      "run": 1,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 1,
+      "lastKeyToFinalMs": 2940.10000000149,
+      "liveStart": "31.933333333333334",
+      "savedStart": 31.933333333333334,
+      "events": [
+        {
+          "type": "key",
+          "t": 10172.800000000745
+        },
+        {
+          "type": "key",
+          "t": 10253.699999999255
+        },
+        {
+          "type": "save",
+          "t": 10264.099999997765
+        },
+        {
+          "type": "key",
+          "t": 10383.800000000745
+        },
+        {
+          "type": "save",
+          "t": 10400.39999999851
+        },
+        {
+          "type": "key",
+          "t": 10505
+        },
+        {
+          "type": "key",
+          "t": 10630.5
+        },
+        {
+          "type": "key",
+          "t": 10755.5
+        },
+        {
+          "type": "key",
+          "t": 10885
+        },
+        {
+          "type": "key",
+          "t": 11022.89999999851
+        },
+        {
+          "type": "save",
+          "t": 11244.699999999255
+        },
+        {
+          "type": "save",
+          "t": 11410.699999999255
+        },
+        {
+          "type": "save",
+          "t": 12064.699999999255
+        },
+        {
+          "type": "save",
+          "t": 12225.599999997765
+        },
+        {
+          "type": "save",
+          "t": 12722.699999999255
+        },
+        {
+          "type": "save",
+          "t": 12893.39999999851
+        },
+        {
+          "type": "shown",
+          "t": 13963
+        }
+      ]
+    },
+    {
+      "hz": 8,
+      "run": 2,
+      "keys": 8,
+      "saves": 8,
+      "confirmations": 1,
+      "lastKeyToFinalMs": 3391.699999999255,
+      "liveStart": "32.2",
+      "savedStart": 32.2,
+      "events": [
+        {
+          "type": "key",
+          "t": 14134
+        },
+        {
+          "type": "key",
+          "t": 14217.39999999851
+        },
+        {
+          "type": "save",
+          "t": 14230.89999999851
+        },
+        {
+          "type": "key",
+          "t": 14344.699999999255
+        },
+        {
+          "type": "save",
+          "t": 14363.5
+        },
+        {
+          "type": "key",
+          "t": 14468.89999999851
+        },
+        {
+          "type": "key",
+          "t": 14598.800000000745
+        },
+        {
+          "type": "key",
+          "t": 14719.199999999255
+        },
+        {
+          "type": "key",
+          "t": 14845
+        },
+        {
+          "type": "key",
+          "t": 14970.800000000745
+        },
+        {
+          "type": "save",
+          "t": 15084.39999999851
+        },
+        {
+          "type": "save",
+          "t": 15585.599999997765
+        },
+        {
+          "type": "save",
+          "t": 16033.800000000745
+        },
+        {
+          "type": "save",
+          "t": 16450.599999997765
+        },
+        {
+          "type": "save",
+          "t": 16901.199999999255
+        },
+        {
+          "type": "save",
+          "t": 17304.5
+        },
+        {
+          "type": "shown",
+          "t": 18362.5
+        }
+      ]
+    }
+  ],
+  "runtime": "HyperFrames 0.9.26",
+  "engineBudgets": {
+    "base": {
+      "runtime": "Bun 1.4.4",
+      "clips": 500,
+      "bytes": 74761,
+      "medianMs": {
+        "parse": 9.71,
+        "apply": 3.1,
+        "multiRangeApply": 4.96,
+        "patch": 5.14,
+        "request": 79.53,
+        "bulkApply": 1.98,
+        "bulkPatch": 6.1
+      },
+      "budgetMs": {
+        "parse": 10,
+        "apply": 5,
+        "multiRangeApply": 15,
+        "patch": 5,
+        "request": 50,
+        "bulkApply": 20,
+        "bulkPatch": 20
+      }
+    },
+    "change": {
+      "runtime": "Bun 1.4.4",
+      "clips": 500,
+      "bytes": 74761,
+      "medianMs": {
+        "parse": 7.26,
+        "apply": 2.24,
+        "multiRangeApply": 3.63,
+        "patch": 2.52,
+        "request": 88.91,
+        "bulkApply": 1.58,
+        "bulkPatch": 14.46
+      },
+      "budgetMs": {
+        "parse": 10,
+        "apply": 5,
+        "multiRangeApply": 15,
+        "patch": 5,
+        "request": 50,
+        "bulkApply": 20,
+        "bulkPatch": 20
+      }
+    }
+  },
+  "editToPictureBudget": {
+    "limitMs": 600,
+    "focusedMedianMs": 390.9,
+    "finalSuiteMedianMs": 397.3,
+    "injected800msDelayMedianMs": 1240.8
+  }
+}

@@ -11,6 +11,8 @@ import { compositionClipLocations } from "../timeline/composition";
 import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
+import { previewTiming } from "./previewTiming";
+import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 
 interface PreviewWindow extends DiagnosticWindow {
@@ -38,7 +40,14 @@ interface PreviewWindow extends DiagnosticWindow {
 }
 
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
-function installPreviewBridge(texts: [string, string[]][] = []) {
+function installPreviewBridge(
+  texts: [string, string[]][],
+  initialTiming: Pick<PreviewTiming, "structure" | "revision"> & {
+    clips: { id: string }[];
+  },
+) {
+  let timingRevision = initialTiming.revision;
+  let updatingTiming = false;
   const sourceTexts = new Map(texts);
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
@@ -811,6 +820,7 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
         source: "cutroom-preview",
         id,
         state: state(),
+        timingRevision,
         error,
         hits,
         ...(diagnostics?.length ? { diagnostics } : {}),
@@ -1296,6 +1306,116 @@ function installPreviewBridge(texts: [string, string[]][] = []) {
           if (!positionFrame)
             positionFrame = requestAnimationFrame(writePosition);
           return;
+        case "timing": {
+          if (updatingTiming || win.__player?.isPlaying() || !win.__player)
+            throw new Error("Timing updates require a paused preview.");
+          if (
+            !("timing" in data) ||
+            !data.timing ||
+            typeof data.timing !== "object" ||
+            !("expectedRevision" in data) ||
+            data.expectedRevision !== timingRevision ||
+            !("time" in data) ||
+            typeof data.time !== "number" ||
+            !Number.isFinite(data.time) ||
+            data.time < 0
+          )
+            throw new Error("The preview timing revision changed.");
+          // The parent validates the server snapshot. Check again at the isolated boundary,
+          // then resolve every target before changing any linked partner.
+          const timing = data.timing;
+          if (
+            !("structure" in timing) ||
+            timing.structure !== initialTiming.structure ||
+            !("revision" in timing) ||
+            typeof timing.revision !== "string" ||
+            !("clips" in timing) ||
+            !Array.isArray(timing.clips) ||
+            timing.clips.length !== initialTiming.clips.length
+          )
+            throw new Error("The preview document changed.");
+          const writes: {
+            element: Element;
+            values: [string, string | null][];
+          }[] = [];
+          const elements = new Map<string, Element>();
+          for (const element of document.querySelectorAll(
+            "[data-hf-cutroom-clip-id]",
+          )) {
+            const id = element.getAttribute("data-hf-cutroom-clip-id")!;
+            if (elements.has(id))
+              throw new Error("The preview clip is ambiguous.");
+            elements.set(id, element);
+          }
+          const attributes = [
+            "data-start",
+            "data-duration",
+            "data-end",
+            "data-media-start",
+            "data-playback-start",
+            "data-playback-rate",
+          ];
+          const clips: unknown[] = timing.clips;
+          for (const [index, clip] of clips.entries()) {
+            if (
+              !clip ||
+              typeof clip !== "object" ||
+              !("id" in clip) ||
+              typeof clip.id !== "string" ||
+              clip.id !== initialTiming.clips[index]?.id ||
+              !("values" in clip) ||
+              !clip.values ||
+              typeof clip.values !== "object"
+            )
+              throw new Error("The preview clips changed.");
+            const element = elements.get(clip.id);
+            if (!element) throw new Error("The preview clip is missing.");
+            const values: [string, string | null][] = [];
+            for (const name of attributes) {
+              const value: unknown = Reflect.get(clip.values, name);
+              if (
+                value !== null &&
+                (typeof value !== "string" ||
+                  value.trim() === "" ||
+                  !Number.isFinite(Number(value)) ||
+                  Number(value) < 0)
+              )
+                throw new Error("Invalid preview timing.");
+              values.push([name, value]);
+            }
+            writes.push({ element, values });
+          }
+          updatingTiming = true;
+          try {
+            // Synchronous writes are one MutationObserver batch to the runtime.
+            for (const { element, values } of writes)
+              for (const [name, value] of values) {
+                if (element.getAttribute(name) === value) continue;
+                if (value === null) element.removeAttribute(name);
+                else element.setAttribute(name, value);
+              }
+            // Let the runtime invalidate its descriptor cache before seeking.
+            await Promise.resolve();
+            win.__player.seek(data.time);
+            const restored = refreshPicture();
+            const version = pictureVersion;
+            await restored;
+            await paint();
+            if (
+              retired ||
+              version !== pictureVersion ||
+              win.__player.isPlaying()
+            )
+              throw new Error("The preview timing update was superseded.");
+            clearEditPicture();
+            timingRevision = timing.revision;
+            scheduleObservation();
+            scheduleBox();
+          } finally {
+            updatingTiming = false;
+          }
+          break;
+        }
         case "inspect":
           break;
         case "cancel-edit":
@@ -1480,7 +1600,11 @@ export function withPreviewClipIdentities(
   );
 }
 
-export function withPreviewBridge(html: string, composition = "index.html") {
+export function previewDocument(
+  html: string,
+  composition = "index.html",
+  dependencies = "",
+) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
   const document = parse(html, { sourceCodeLocationInfo: true });
@@ -1579,18 +1703,28 @@ export function withPreviewBridge(html: string, composition = "index.html") {
     }
   };
   visit(document.childNodes);
-  // Escape '<' so authored words cannot terminate the bridge's script element.
-  const texts = JSON.stringify(sourceTexts).replaceAll("<", "\\u003c");
-  edits.push({
-    offset,
-    end: offset,
-    text: `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${texts});</script>`,
-  });
-  return edits
+  const normalized = edits
     .sort((a, b) => b.offset - a.offset)
     .reduce(
       (source, edit) =>
         source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
       html,
     );
+  const timing = previewTiming(normalized, dependencies);
+  // Escape '<' so authored words cannot terminate the bridge's script element.
+  const args = JSON.stringify([
+    sourceTexts,
+    { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
+  ]).replaceAll("<", "\\u003c");
+  const bridge = `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
+  // All normalization edits are in the body or attributes after the head's opening tag.
+  const insertion = location?.startTag ? offset : normalized.length;
+  return {
+    html: normalized.slice(0, insertion) + bridge + normalized.slice(insertion),
+    timing,
+  };
+}
+
+export function withPreviewBridge(html: string, composition = "index.html") {
+  return previewDocument(html, composition).html;
 }
