@@ -4,12 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
-import {
-  previewTimingPolicy,
-  readTimingContract,
-  stampTimingContract,
-} from "../src/server/hyperframes/previewTimingPolicy";
-import { parse } from "parse5";
+import { previewTimingPolicy } from "../src/server/hyperframes/previewTimingPolicy";
 
 for (const [name, extra, allowed] of [
   ["plain", "", true],
@@ -62,15 +57,12 @@ for (const [name, extra, allowed] of [
         `<html><head><meta name="cutroom-timing-contract" content="attributes"></head><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="5"><div class="clip" id="title" data-start="0" data-duration="4">Title</div></main>${extra}</body></html>`,
       );
       const policy = previewTimingPolicy(dir);
-      const html = await bundleToSingleHtml(dir, {
+      await bundleToSingleHtml(dir, {
         runtime: "placeholder",
         inlineAssets: false,
         onRead: policy.read,
       });
       expect(policy.contract()).toBe(allowed ? "attributes" : null);
-      expect(
-        readTimingContract(parse(stampTimingContract(html, policy.contract()))),
-      ).toBe(allowed ? "attributes" : null);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

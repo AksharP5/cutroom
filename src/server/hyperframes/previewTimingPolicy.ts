@@ -1,11 +1,8 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse, serialize } from "parse5";
 import { parseHTML } from "linkedom";
-import type { DefaultTreeAdapterTypes } from "parse5";
 
-const marker = "cutroom-timing-contract";
 const gsap = readFileSync(
   fileURLToPath(import.meta.resolve("gsap/dist/gsap.min.js")),
   "utf8",
@@ -80,63 +77,4 @@ export function previewTimingPolicy(dir: string) {
     }
   };
   return { read, contract: () => (allowed ? ("attributes" as const) : null) };
-}
-
-/** The marker is compiler-owned: erase every authored copy before adding ours. */
-export function stampTimingContract(
-  html: string,
-  contract: "attributes" | null,
-) {
-  const document = parse(html);
-  const visit = (
-    parent:
-      | DefaultTreeAdapterTypes.Document
-      | DefaultTreeAdapterTypes.Element
-      | DefaultTreeAdapterTypes.DocumentFragment,
-  ) => {
-    parent.childNodes = parent.childNodes.filter(
-      (node) =>
-        !(
-          "tagName" in node &&
-          node.tagName === "meta" &&
-          node.attrs.some(
-            ({ name, value }) => name === "name" && value === marker,
-          )
-        ),
-    );
-    for (const child of parent.childNodes)
-      if ("tagName" in child) {
-        visit(child);
-        if ("content" in child) visit(child.content);
-      }
-  };
-  visit(document);
-  const normalized = serialize(document);
-  return normalized.replace(
-    /<head>/i,
-    `<head><meta name="${marker}" content="${contract ?? "reload"}">`,
-  );
-}
-
-export function readTimingContract(document: DefaultTreeAdapterTypes.Document) {
-  const root = document.childNodes.find((node) => node.nodeName === "html");
-  const head =
-    root &&
-    "childNodes" in root &&
-    root.childNodes.find((node) => node.nodeName === "head");
-  return head &&
-    "childNodes" in head &&
-    head.childNodes.some(
-      (node) =>
-        "tagName" in node &&
-        node.tagName === "meta" &&
-        node.attrs.some(
-          ({ name, value }) => name === "name" && value === marker,
-        ) &&
-        node.attrs.some(
-          ({ name, value }) => name === "content" && value === "attributes",
-        ),
-    )
-    ? ("attributes" as const)
-    : null;
 }

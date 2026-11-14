@@ -112,6 +112,7 @@ export function Viewer({
   }, []);
 
   const shownHandoff = useRef(handoff);
+  const timingEligible = useRef(false);
   const settled = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     shownHandoff.current = handoff;
@@ -132,12 +133,20 @@ export function Viewer({
   const refresh = useRef<ReturnType<
     typeof previewRefresh<typeof change>
   > | null>(null);
+  const reload = (
+    revision: number,
+    deadline = performance.now() + READY_TIMEOUT,
+  ) => {
+    latest.current += 1;
+    loadingRevision.current = { gen: latest.current, revision };
+    transition({ type: "navigate", gen: latest.current, deadline });
+  };
   useLayoutEffect(() => {
     const closing = new AbortController();
     refresh.current = previewRefresh(
       async (change, isLatest) => {
-        await waitForPicture();
-        if (closing.signal.aborted) return;
+        if (timingEligible.current) await waitForPicture();
+        if (closing.signal.aborted || !isLatest()) return;
         const readyDeadline = performance.now() + READY_TIMEOUT;
         const state = shownHandoff.current;
         const picture = state.kind === "showing" ? state.confirmed : null;
@@ -175,6 +184,7 @@ export function Viewer({
               });
             return;
           } catch {
+            if (!preview.timingAllowed) timingEligible.current = false;
             if (closing.signal.aborted || !isLatest()) return;
           } finally {
             clearTimeout(timer);
@@ -182,16 +192,8 @@ export function Viewer({
           }
         }
         if (!isLatest() || closing.signal.aborted) return;
-        latest.current += 1;
-        loadingRevision.current = {
-          gen: latest.current,
-          revision: change.revision,
-        };
-        transition({
-          type: "navigate",
-          gen: latest.current,
-          deadline: readyDeadline,
-        });
+        reload(change.revision, readyDeadline);
+        if (!timingEligible.current) return;
         // A newer invalidation waits here, replacing the pending destination rather
         // than retiring every candidate before it can paint.
         await new Promise<void>((resolve) => {
@@ -200,13 +202,7 @@ export function Viewer({
       },
       (reason) => reportEditorError("viewer", reason),
     );
-    latest.current += 1;
-    loadingRevision.current = { gen: latest.current, revision: 0 };
-    transition({
-      type: "navigate",
-      gen: latest.current,
-      deadline: performance.now() + READY_TIMEOUT,
-    });
+    reload(0);
     return () => {
       closing.abort();
       refresh.current?.dispose();
@@ -215,7 +211,16 @@ export function Viewer({
     };
   }, []);
   useLayoutEffect(() => {
-    if (change.revision) refresh.current?.push(change);
+    if (!change.revision) return;
+    if (
+      timingEligible.current &&
+      useTransport.getState().state.kind === "stopped"
+    )
+      refresh.current?.push(change);
+    else {
+      refresh.current?.invalidate();
+      reload(change.revision);
+    }
   }, [change]);
 
   useLayoutEffect(() => {
@@ -336,8 +341,30 @@ export function Viewer({
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
-      if (!reloaded) await preview.authorizeTiming().catch(() => {});
       await preview.inspect();
+      const resume = () => {
+        settled.current?.();
+        settled.current = null;
+      };
+      if (!reloaded && preview.hasTimingHint) {
+        // A bridge hint can start authorization, never grant it. Painting does not wait.
+        void preview
+          .authorizeTiming()
+          .then(() => {
+            if (gen !== latest.current || preview.signal.aborted) return;
+            timingEligible.current = preview.timingAllowed;
+            if (!timingEligible.current) resume();
+          })
+          .catch(() => {
+            if (gen === latest.current) {
+              timingEligible.current = false;
+              resume();
+            }
+          });
+      } else {
+        timingEligible.current = false;
+        resume();
+      }
       while (!preview.state.ready || preview.state.error) {
         if (preview.state.error)
           throw new Error(

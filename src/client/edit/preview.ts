@@ -422,7 +422,11 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     },
     inspect: async () => void (await request("inspect")),
     painted: async () => void (await request("paint")),
+    get hasTimingHint() {
+      return Boolean(timingRevision);
+    },
     async authorizeTiming() {
+      if (!timingRevision) return;
       const response = await fetch(`${frame.src}&cutroom-status=1`, {
         signal: closing.signal,
       });
@@ -447,13 +451,15 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       const snapshot = z
         .object({
           version: z.string(),
-          timing: PreviewTimingSchema,
+          timing: PreviewTimingSchema.nullable(),
           live: z.boolean(),
         })
         .parse(await response.json());
       signal.throwIfAborted();
       if (!latest()) return false;
-      if (!snapshot.live || !snapshot.timing.allowed)
+      if (!snapshot.live) timingAllowed = false;
+      // Availability of the new snapshot does not change approval of this loaded document.
+      if (!snapshot.live || !snapshot.timing)
         throw new Error("This preview requires a reload.");
       const reply = await request(
         "timing",

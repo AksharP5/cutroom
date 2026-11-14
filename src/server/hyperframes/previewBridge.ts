@@ -42,11 +42,13 @@ interface PreviewWindow extends DiagnosticWindow {
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
   texts: [string, string[]][],
-  initialTiming: Pick<PreviewTiming, "structure" | "revision" | "allowed"> & {
-    clips: { id: string }[];
-  },
+  initialTiming:
+    | (Pick<PreviewTiming, "structure" | "revision"> & {
+        clips: { id: string }[];
+      })
+    | null,
 ) {
-  let timingRevision = initialTiming.revision;
+  let timingRevision = initialTiming?.revision;
   let updatingTiming = false;
   let confirmedStructure: string | null = null;
   const liveStructure = () => {
@@ -837,7 +839,7 @@ function installPreviewBridge(
         source: "cutroom-preview",
         id,
         state: state(),
-        timingRevision,
+        ...(timingRevision ? { timingRevision } : {}),
         error,
         hits,
         ...(diagnostics?.length ? { diagnostics } : {}),
@@ -1325,7 +1327,7 @@ function installPreviewBridge(
           return;
         case "timing": {
           if (
-            !initialTiming.allowed ||
+            !initialTiming ||
             confirmedStructure === null ||
             liveStructure() !== confirmedStructure
           )
@@ -1535,7 +1537,7 @@ function installPreviewBridge(
         case "paint":
           await picture;
           await paint();
-          if (initialTiming.allowed && confirmedStructure === null)
+          if (initialTiming && confirmedStructure === null)
             confirmedStructure = liveStructure();
           scheduleObservation();
           scheduleBox();
@@ -1634,7 +1636,7 @@ export function withPreviewClipIdentities(
 export function previewDocument(
   html: string,
   composition = "index.html",
-  dependencies: string | null = "",
+  dependencies: string | null = null,
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -1741,12 +1743,12 @@ export function previewDocument(
         source.slice(0, edit.offset) + edit.text + source.slice(edit.end),
       html,
     );
-  const timing = previewTiming(normalized, dependencies ?? "");
-  if (dependencies === null) timing.allowed = false;
+  const timing =
+    dependencies === null ? null : previewTiming(normalized, dependencies);
   // Escape '<' so authored words cannot terminate the bridge's script element.
   const args = JSON.stringify([
     sourceTexts,
-    { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
+    timing && { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
   ]).replaceAll("<", "\\u003c");
   const bridge = `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.

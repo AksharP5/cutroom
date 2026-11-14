@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { timelineWorkload } from "../scripts/timeline-performance";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
@@ -29,7 +30,7 @@ test(
             expectedRevision: view.revision,
             label: "Establish stacking",
             commands: [
-              { type: "move", clipIds: ["title-1"], by, mode: "overwrite" },
+              { type: "move", clipIds: ["title-0"], by, mode: "overwrite" },
             ],
           },
         },
@@ -96,11 +97,24 @@ test(
             ?.hasAttribute("data-preview-ready"),
         );
         await page.waitForTimeout(4500);
-        await page.locator('[data-clip="title-1"]').click({ force: true });
+        await page.locator('[data-clip="title-0"]').click({ force: true });
+        const title = page
+          .locator("iframe[data-live]")
+          .contentFrame()
+          .locator("#title-0");
+        const wasVisible = samples.length % 2 === 0;
+        if (wasVisible) await expect(title).toBeVisible();
+        else await expect(title).toBeHidden();
+        const beforePicture = await page
+          .locator("iframe[data-live]")
+          .screenshot();
+        await page.evaluate(() => {
+          window.previewTimingSamples = [];
+        });
         const doc = await page.locator("iframe[data-live]").getAttribute("src");
         const field = page.getByLabel("Start", { exact: true });
         await field.focus();
-        await field.press("ArrowUp");
+        await field.press(wasVisible ? "ArrowUp" : "ArrowDown");
         const before = await page
           .locator(".edit-stage")
           .getAttribute("data-preview-ready");
@@ -112,6 +126,19 @@ test(
             stage.getAttribute("data-preview-ready") !== before
           );
         }, before);
+        if (wasVisible) await expect(title).toBeHidden();
+        else await expect(title).toBeVisible();
+        const afterPicture = await page
+          .locator("iframe[data-live]")
+          .screenshot();
+        expect(
+          afterPicture.equals(beforePicture),
+          "the saved title visibly changes at the parked cut",
+        ).toBe(false);
+        if (mode === "live" && run === 0) {
+          await writeFile(info.outputPath("visible-before.png"), beforePicture);
+          await writeFile(info.outputPath("visible-after.png"), afterPicture);
+        }
         const retained =
           (await page.locator("iframe[data-live]").getAttribute("src")) === doc;
         expect(retained).toBe(mode === "live");

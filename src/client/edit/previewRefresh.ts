@@ -6,15 +6,16 @@ export function previewRefresh<T>(
   failed: (error: unknown) => void,
 ) {
   let pending: { value: T } | null = null;
+  let current: { value: T } | null = null;
   let running = false;
   let disposed = false;
   const drain = async () => {
     running = true;
     try {
       while (pending && !disposed) {
-        const { value } = pending;
+        const entry = pending;
         pending = null;
-        await refresh(value, () => !pending && !disposed);
+        await refresh(entry.value, () => current === entry && !disposed);
       }
     } catch (error) {
       if (!disposed) failed(error);
@@ -25,12 +26,15 @@ export function previewRefresh<T>(
   };
   return {
     push(value: T) {
-      pending = { value };
+      current = pending = { value };
       if (!running && !disposed) void drain();
+    },
+    invalidate() {
+      current = pending = null;
     },
     dispose() {
       disposed = true;
-      pending = null;
+      current = pending = null;
     },
   };
 }

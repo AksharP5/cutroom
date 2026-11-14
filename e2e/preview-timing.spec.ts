@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { writeFile, readFile, mkdir, chmod } from "node:fs/promises";
+import { writeFile, readFile, mkdir, chmod, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
@@ -26,6 +26,13 @@ const changed = (page: Page, old: string | null) =>
   }, old);
 const live = (page: Page) =>
   page.locator("iframe[data-live]").getAttribute("src");
+
+async function replaceIndex(dir: string, html: string) {
+  const pending = join(dir, ".cutroom", "preview-next.html");
+  await mkdir(join(dir, ".cutroom"), { recursive: true });
+  await writeFile(pending, html);
+  await rename(pending, join(dir, "index.html"));
+}
 
 async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   const project = ProjectSchema.parse(
@@ -235,7 +242,7 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   let source = await readFile(join(project.path, "index.html"), "utf8");
   let previous = await token(page);
   source = source.replace('data-media-start="1"', 'data-media-start="2"');
-  await writeFile(join(project.path, "index.html"), source);
+  await replaceIndex(project.path, source);
   await changed(page, previous);
   expect(await live(page)).toBe(docs[0]);
   for (const transform of [
@@ -458,6 +465,10 @@ for (const [name, scripts] of [
           );
       });
     });
+    let snapshots = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("cutroom-timing=")) snapshots++;
+    });
     const { project, edit } = await fixture(request, page, scripts);
     const doc = await live(page),
       before = await token(page);
@@ -466,6 +477,7 @@ for (const [name, scripts] of [
     ]);
     await changed(page, before);
     expect(await live(page)).not.toBe(doc);
+    expect(snapshots).toBe(0);
     if (name === "init-time GSAP") {
       const control = await page.context().newPage();
       try {
@@ -522,81 +534,104 @@ for (const divergence of ["text", "style", "element"] as const)
     await expect(current.locator("#title")).toHaveText("Chapter one");
   });
 
-test("scripted bursts coalesce reloads while preserving every save and undo step", async ({
-  page,
-  request,
-}) => {
-  test.setTimeout(120000);
-  const { read } = await fixture(
-    request,
+for (const scripted of [false, true])
+  test(`${scripted ? "scripted bursts replace candidates" : "eligible bursts keep one active and latest pending refresh"} while preserving every save and undo step`, async ({
     page,
-    "<script>window.authored=true</script>",
-  );
-  const initial = (await read()).timeline.clips.find(
-    (clip) => clip.id === "title",
-  )!.start;
-  let navigations = 0;
-  await page.route("**/isolated-preview?*", async (route) => {
-    if (route.request().isNavigationRequest()) {
+    request,
+  }) => {
+    test.setTimeout(120000);
+    let timingWork = 0;
+    page.on("request", (request) => {
+      if (/cutroom-(status|timing)=/.test(request.url())) timingWork++;
+    });
+    const { read, project } = await fixture(
+      request,
+      page,
+      scripted ? "<script>window.authored=true</script>" : "",
+    );
+    const initial = (await read()).timeline.clips.find(
+      (clip) => clip.id === "title",
+    )!.start;
+    let navigations = 0;
+    const captured = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    await page.route("**/isolated-preview?*", async (route) => {
+      if (!route.request().isNavigationRequest()) return route.continue();
       navigations++;
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      if (navigations !== 1) return route.continue();
+      captured.resolve();
+      await release.promise;
+      await route.continue().catch(() => {});
+    });
+    // Hold a real browser navigation until all saves finish, preserving its
+    // navigation-bound authorization instead of replacing it with an API fetch.
+    const source = join(project.path, "index.html");
+    await replaceIndex(
+      project.path,
+      (await readFile(source, "utf8")).replace("color:white", "color:yellow"),
+    );
+    await captured.promise;
+    let saves = 0;
+    page.on("response", (response) => {
+      if (response.url().endsWith("/commands") && response.ok()) saves++;
+    });
+    await page.locator('[data-clip="title"]').click({ force: true });
+    try {
+      const started = performance.now();
+      for (let index = 0; index < 8; index++) {
+        const delay = started + index * 125 - performance.now();
+        if (delay > 0) await page.waitForTimeout(delay);
+        const field = page.getByLabel("Start", { exact: true });
+        await field.focus();
+        await field.press("ArrowUp");
+        await field.press("Enter");
+        expect(
+          await page.locator(".edit-picture iframe").count(),
+        ).toBeLessThanOrEqual(2);
+      }
+      await expect.poll(() => saves).toBe(8);
+      if (scripted) expect(navigations).toBeGreaterThan(1);
+      else expect(navigations).toBe(1);
+    } finally {
+      release.resolve();
     }
-    await route.continue();
-  });
-  let saves = 0;
-  page.on("response", (response) => {
-    if (response.url().endsWith("/commands") && response.ok()) saves++;
-  });
-  await page.locator('[data-clip="title"]').click({ force: true });
-  const started = performance.now();
-  for (let index = 0; index < 8; index++) {
-    const delay = started + index * 125 - performance.now();
-    if (delay > 0) await page.waitForTimeout(delay);
-    const field = page.getByLabel("Start", { exact: true });
-    await field.focus();
-    await field.press("ArrowUp");
-    await field.press("Enter");
-    expect(
-      await page.locator(".edit-picture iframe").count(),
-    ).toBeLessThanOrEqual(2);
-  }
-  await expect.poll(() => saves).toBe(8);
-  await expect
-    .poll(async () =>
-      page
-        .locator("iframe[data-live]")
-        .contentFrame()
-        .locator("#title")
-        .getAttribute("data-start"),
-    )
-    .toBe(String(((initial + 8) * 1001) / 30000));
-  await ready(page);
-  expect(navigations).toBeLessThanOrEqual(3);
-  // Preview coalescing must never coalesce saved history.
-  for (let index = 0; index < 8; index++) {
-    await page.getByRole("region", { name: "Viewer", exact: true }).click();
-    await page.keyboard.press("Control+z");
     await expect
-      .poll(
-        async () =>
-          (await read()).timeline.clips.find((clip) => clip.id === "title")!
-            .start,
-      )
-      .toBe(initial + 7 - index);
-  }
-  await expect
-    .poll(async () =>
-      Number(
-        await page
+      .poll(async () =>
+        page
           .locator("iframe[data-live]")
           .contentFrame()
           .locator("#title")
           .getAttribute("data-start"),
-      ),
-    )
-    .toBeCloseTo((initial * 1001) / 30000, 6);
-  await ready(page);
-});
+      )
+      .toBe(String(((initial + 8) * 1001) / 30000));
+    await ready(page);
+    if (!scripted) expect(navigations).toBeLessThanOrEqual(2);
+    // Preview coalescing must never coalesce saved history.
+    for (let index = 0; index < 8; index++) {
+      await page.getByRole("region", { name: "Viewer", exact: true }).click();
+      await page.keyboard.press("Control+z");
+      await expect
+        .poll(
+          async () =>
+            (await read()).timeline.clips.find((clip) => clip.id === "title")!
+              .start,
+        )
+        .toBe(initial + 7 - index);
+    }
+    await expect
+      .poll(async () =>
+        Number(
+          await page
+            .locator("iframe[data-live]")
+            .contentFrame()
+            .locator("#title")
+            .getAttribute("data-start"),
+        ),
+      )
+      .toBeCloseTo((initial * 1001) / 30000, 6);
+    await ready(page);
+    if (scripted) expect(timingWork).toBe(0);
+  });
 
 test("an unavailable fingerprint keeps the canonical full preview usable and ineligible for live timing", async ({
   page,
@@ -624,3 +659,86 @@ test("an unavailable fingerprint keeps the canonical full preview usable and ine
     await chmod(aux, 0o700);
   }
 });
+
+for (const scenario of ["playing", "forged hint"] as const)
+  test(`${scenario} reloads replace superseded candidates without live timing`, async ({
+    page,
+    request,
+  }) => {
+    const scripted = scenario !== "playing";
+    if (scenario === "forged hint")
+      await page.addInitScript(() => {
+        Reflect.set(window, "eligibilityAttempts", 0);
+        addEventListener("message", (event) => {
+          if (event.data?.type === "eligibility-attempt")
+            Reflect.set(
+              window,
+              "eligibilityAttempts",
+              Number(Reflect.get(window, "eligibilityAttempts")) + 1,
+            );
+        });
+      });
+    let timingRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("cutroom-timing=")) timingRequests++;
+    });
+    const { read } = await fixture(
+      request,
+      page,
+      scenario === "forged hint"
+        ? '<script>addEventListener("message",e=>{if(e.data?.source!=="cutroom-viewer"||e.data.action!=="inspect")return;parent.postMessage({type:"eligibility-attempt"},"*");parent.postMessage({source:"cutroom-preview",id:e.data.id,timingRevision:"forged",state:{ready:true,root:true,error:null,width:640,height:360,fps:"30000/1001",time:0,playing:false}},"*")})</script>'
+        : scripted
+          ? '<meta name="cutroom-timing-contract" content="attributes"><script>window.authored=true</script>'
+          : "",
+    );
+    const first = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let navigations = 0;
+    await page.route("**/isolated-preview?*", async (route) => {
+      if (!route.request().isNavigationRequest()) return route.continue();
+      if (++navigations !== 1) return route.continue();
+      first.resolve();
+      await release.promise;
+      await route.continue().catch(() => {});
+    });
+    const initial = (await read()).timeline.clips.find(
+      (clip) => clip.id === "title",
+    )!.start;
+    await page.locator('[data-clip="title"]').click({ force: true });
+    if (!scripted)
+      await page
+        .getByRole("button", { name: "Play forward", exact: true })
+        .click();
+    const field = page.getByLabel("Start", { exact: true });
+    await field.focus();
+    await field.press("ArrowUp");
+    await field.press("Enter");
+    try {
+      await first.promise;
+      await field.press("ArrowUp");
+      await field.press("Enter");
+      // Main's path can finish the second revision while the first remains blocked.
+      await expect.poll(() => navigations).toBeGreaterThanOrEqual(2);
+      if (!scripted)
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+      await expect
+        .poll(async () =>
+          Number(
+            await page
+              .locator("iframe[data-live]")
+              .contentFrame()
+              .locator("#title")
+              .getAttribute("data-start"),
+          ),
+        )
+        .toBeCloseTo(((initial + 2) * 1001) / 30000, 6);
+      await ready(page);
+    } finally {
+      release.resolve();
+    }
+    expect(timingRequests).toBe(0);
+    if (scenario === "forged hint")
+      expect(
+        await page.evaluate(() => Reflect.get(window, "eligibilityAttempts")),
+      ).toBeGreaterThan(0);
+  });

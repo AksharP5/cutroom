@@ -17,6 +17,7 @@ import { mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
+import type { MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
@@ -40,6 +41,7 @@ import {
 import type {
   ResolvedProject,
   StudioApiAdapter,
+  createPreviewDocumentStore,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
 import { isMissing, projectPath, readSource } from "../projects/store";
@@ -52,10 +54,7 @@ import {
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
-import {
-  previewTimingPolicy,
-  stampTimingContract,
-} from "./previewTimingPolicy";
+import { previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
@@ -136,6 +135,14 @@ export function createHyperframesApi(
     string,
     { projectId: string; allowed: boolean }
   >();
+  // Keep the compiler's decision outside authored HTML. The upstream cache's write
+  // hook supplies the final, stable response bytes, including all augmentations.
+  const timingBuild = new AsyncLocalStorage<{ allowed: boolean }>();
+  const eligiblePreviews = new Set<string>();
+  const previewContext: MiddlewareHandler = (_c, next) =>
+    timingBuild.getStore() ? next() : timingBuild.run({ allowed: false }, next);
+  api.use("/projects/:id/preview", previewContext);
+  api.use("/projects/:id/preview/*", previewContext);
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<
     string,
@@ -389,7 +396,9 @@ export function createHyperframesApi(
     return resolved;
   };
 
-  const adapter: StudioApiAdapter = {
+  const adapter: StudioApiAdapter & {
+    previewDocuments: ReturnType<typeof createPreviewDocumentStore>;
+  } = {
     async listProjects() {
       return (await store.list()).map((project) => ({
         id: project.id,
@@ -416,10 +425,22 @@ export function createHyperframesApi(
           policy.read(path);
         },
       });
-      return stampTimingContract(html, policy.contract()).replace(
+      const build = timingBuild.getStore();
+      if (build) build.allowed = policy.contract() === "attributes";
+      return html.replace(
         'data-hyperframes-preview-runtime="1" src=""',
         'data-hyperframes-preview-runtime="1" src="/api/runtime.js"',
       );
+    },
+    previewDocuments: {
+      read: () => null,
+      write: (_key, html) => {
+        if (!timingBuild.getStore()?.allowed) return;
+        eligiblePreviews.delete(html);
+        eligiblePreviews.add(html);
+        if (eligiblePreviews.size > 8)
+          eligiblePreviews.delete(eligiblePreviews.values().next().value!);
+      },
     },
     transformPreviewHtml: async ({ html, project, activeCompositionPath }) => {
       const currentProject = await store.get(project.id);
@@ -503,6 +524,9 @@ export function createHyperframesApi(
     }
     const timingOnly = url.searchParams.has("cutroom-timing");
     url.searchParams.delete("cutroom-timing");
+    const loaded = timingDocuments.get(documentId ?? "");
+    if (timingOnly && (loaded?.projectId !== projectId || !loaded.allowed))
+      return c.json({ error: "This document requires a reload." }, 409);
     const project = await store.get(projectId);
     const sourceBefore = timingOnly
       ? await readSource(project, "index.html")
@@ -513,6 +537,7 @@ export function createHyperframesApi(
     // A disk write can beat its watch event. Do not label a cached compiled document
     // with the newer source version merely because the watcher has not invalidated it yet.
     if (timingOnly) signatures.delete(project.path);
+    const timingRead = timingOnly ? { allowed: false } : null;
     let response: Response;
     let activeCompositionPath = "index.html";
     let assetContentType: string | undefined;
@@ -534,9 +559,13 @@ export function createHyperframesApi(
         if (!composition && !url.searchParams.has("hf-proxy"))
           assetContentType = getMimeType(file);
       }
-      response = await api.request(`${url.origin}${target}${url.search}`, {
-        headers: c.req.raw.headers,
-      });
+      const forward = () =>
+        api.request(`${url.origin}${target}${url.search}`, {
+          headers: c.req.raw.headers,
+        });
+      response = await (timingRead
+        ? timingBuild.run(timingRead, forward)
+        : forward());
     } catch (error) {
       if (!(error instanceof HttpError)) throw error;
       response = c.text(error.message, error.status);
@@ -558,7 +587,13 @@ export function createHyperframesApi(
     headers.set("Referrer-Policy", "no-referrer");
     if (!headers.get("content-type")?.includes("text/html"))
       return new Response(response.body, { status: response.status, headers });
-    const html = (await response.text())
+    const compiled = await response.text();
+    // A comparison can use this compilation's source policy after the version guards
+    // below. Approval of an executing document still requires a finalized response.
+    const eligible =
+      path === "preview" &&
+      (eligiblePreviews.has(compiled) || timingRead?.allowed === true);
+    const html = compiled
       .replaceAll(
         `/api/projects/${encodeURIComponent(projectId)}/preview/`,
         `${prefix}preview/`,
@@ -568,16 +603,25 @@ export function createHyperframesApi(
     // The HTTP CSP applies before any authored markup, including malformed documents.
     // The root HTML is compared after masking timing. Other files, including nested
     // sources and assets, must remain identical even if their watcher event is late.
-    const dependencies = await previewDependencies(
-      project.path,
-      activeCompositionPath,
-    );
+    const dependencies = eligible
+      ? await previewDependencies(project.path, activeCompositionPath)
+      : null;
     const document = previewDocument(html, activeCompositionPath, dependencies);
     if (timingOnly) {
+      c.header("Cache-Control", "no-store");
       const sourceAfter = await readSource(project, "index.html");
+      if (!response.ok || sourceBefore?.version !== sourceAfter.version)
+        return c.json(
+          { error: "The preview changed while reading timing." },
+          409,
+        );
+      if (!document.timing)
+        return c.json({
+          version: sourceAfter.version,
+          timing: null,
+          live: true,
+        });
       if (
-        !response.ok ||
-        sourceBefore?.version !== sourceAfter.version ||
         dependenciesBefore === null ||
         dependencies === null ||
         dependenciesBefore !== dependencies
@@ -586,7 +630,6 @@ export function createHyperframesApi(
           { error: "The preview changed while reading timing." },
           409,
         );
-      c.header("Cache-Control", "no-store");
       return c.json({
         version: sourceAfter.version,
         timing: document.timing,
@@ -604,7 +647,7 @@ export function createHyperframesApi(
     ) {
       timingDocuments.set(documentId, {
         projectId,
-        allowed: document.timing.allowed,
+        allowed: document.timing !== null,
       });
       if (timingDocuments.size > 64)
         timingDocuments.delete(timingDocuments.keys().next().value!);

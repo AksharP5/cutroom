@@ -1,4 +1,3 @@
-import { readTimingContract } from "./previewTimingPolicy";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -90,7 +89,6 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   const structure = hash(dependencies + serialize(document));
 
   return {
-    allowed: readTimingContract(document) === "attributes",
     structure,
     revision: hash(structure + JSON.stringify(clips)),
     clips,
