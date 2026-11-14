@@ -283,3 +283,39 @@ Each cost is the median of three per-run maxima. Reads are per fresh load; playb
 | 10 ms geometry read                | 11.7, 11.3, 10.9 ms |        11.3 ms |  < 5 ms | Fail   |
 | 10 ms Position style read          | 10.3, 10.4, 10.8 ms |        10.4 ms |  < 5 ms | Fail   |
 | 60 ms picture hit                  | 86.5, 88.8, 87.1 ms |        87.1 ms | ≤ 50 ms | Fail   |
+
+## Paused timing edits
+
+A saved timing-only edit can update an isolated, script-free preview in place while stopped. The policy uses the compiler's HTML parser and checks root and mounted source files before runtime injection, including template contents and hoisted fallback markup. Only the exact pinned GSAP library is exempt from the authored-script restriction. Authored GSAP timelines, handlers and other scripts always reload. Before a patch, the bridge compares the current live DOM with its last confirmed structure and rejects changed text, styles or elements. It applies canonical timing to linked partners together, then confirms the decoded hold canvas through the existing seek/paint path.
+
+On November 14, 2026, production builds of main `6ea9beb` and this implementation used Bun 1.4.4 and installed Chromium 155.0.8059.84, headless with hardware ANGLE on NVIDIA GeForce RTX 5060. The shared host was an Intel Core i5-14400F with 32 GB RAM, at 1720×1050 with audio muted. Both builds started from identical copies of a saved project/database snapshot, including media, settings and edit history. No packages, browsers or media were downloaded.
+
+Each result is the median of five native Enter commits after ArrowUp in the selected title's Start field, after 4.5 seconds warm-up. Keydown to confirmed saved picture includes saving, watching, compilation, validation, decoded capture and paint. It does not measure physical display scan-out. The ownership study's direct-DOM prototype excluded saving and validation.
+
+| Project                             | Main, full reload | Revised | Revised path                          |
+| ----------------------------------- | ----------------: | ------: | ------------------------------------- |
+| Plain 500 clips                     |            835 ms |  420 ms | Live in all five runs; 1.99× faster   |
+| Interview, b-roll, music and titles |            330 ms |  346 ms | Full reload in all five runs; no gain |
+
+The interview contains authored GSAP scripts and no longer qualifies for live timing. Scripted 500-clip projects also reload; the earlier scripted/interview live-path speedups do not apply to this policy.
+
+The parity test keeps its patched page alive and loads every fresh comparison in a second page. All eight PNG pairs matched byte-for-byte: six title/media cut checkpoints at 30000/1001 plus undo and redo, with linked source-in/rate changes, a linked one-frame duration trim and a title move. An authored init-time GSAP case reloads and matches a fresh page. Browser tests cover spoofed replies, fallback-tag scripts, live text/style/element divergence, MCP/disk edits in two tabs, rapid edits, source races, playback fallback, refused saves and missing/failed/late acknowledgments. Compiler-policy tests include mounted scripts and fallback markup parsed as the compiler sees it.
+
+The Viewer keeps one refresh in flight and one latest pending invalidation. Saves and history remain intact. Three eight-key bursts per rate produced these median last-key-to-final-picture intervals. Acceptance requires a confirmed stage and live timing equal to the final saved snapshot, so an earlier confirmation cannot end the measurement.
+
+| Project   | Requested rate | Main settle | Revised settle |
+| --------- | -------------: | ----------: | -------------: |
+| Plain 500 |            4/s |    1,288 ms |         974 ms |
+| Plain 500 |            8/s |    1,868 ms |       1,486 ms |
+| Interview |            4/s |      280 ms |         352 ms |
+| Interview |            8/s |      376 ms |         506 ms |
+
+All bursts saved eight edits and reached the saved timing. Coalescing bounds refresh work; these measurements do not establish display at the input rate. Interview settling was slower at both rates. The scripted burst regression checks that all eight undo steps survive and that eight edits produce at most three navigations under a delayed reload. Stalled 50-edit tests retain the decoded-frame and compositor checks while coalescing invalidations.
+
+`bun run test:perf` compares five live edits with five direct reloads on the same runner, alternating order on the identical document. The control disables live authorization in the parent and goes straight to reload, without a timing-snapshot request first. Live median must be below 80% of reload median. This replaces the old absolute 600 ms ceiling, which failed in CI at 627 and 647 ms. The relative check allows different hardware speeds while requiring a material saving. The final standalone suite on ddba125 measured 408/907 ms. With `CUTROOM_PREVIEW_TIMING_STALL_MS=800`, the check correctly failed at 1,216/885 ms against a 708 ms limit. Existing budgets are unchanged. Both performance jobs on earlier head `15d5d10` passed in CI. The pull-request runner measured 474/883 ms.
+
+Full validation on 7752e03 passed 757 unit tests, with five optional native-Electron/Whisper skips, and all 432 functional browser tests. One initial native-factory five-second timeout passed in isolation and on the unchanged full retry. After rebasing the marked-export fix from ddba125, types, 37 focused unit tests, five title/export browser workflows and all nine standalone performance checks passed. An unavailable dependency fingerprint disables live timing while preserving full preview loading, covered with real directory permissions. The CI title-opacity assertion now waits for the saved document and each seek/paint acknowledgment before sampling. The hardware comparison remains labeled with its measured base.
+
+[Raw measurements](measurements/preview-timing.json) retain every single-edit, burst and budget sample, including actual input cadence. Earlier unpaired runs are retained locally but excluded from these tables. Local drivers, logs and screenshots remain in `/home/akshar/.cache/cutroom-preview-r2-evidence/`.
+
+The first timing edit can establish the managed stacking stylesheet and therefore reload. Root duration, nested compositions, adds/removes, source/script/CSS changes and stacking changes also reload. A live attempt has two seconds within the existing fifteen-second preparation deadline; fallback does not extend it. The pinned HyperFrames runtime is unchanged.

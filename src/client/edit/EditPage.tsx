@@ -61,6 +61,7 @@ import type { Zoom } from "./Viewer";
 /** A file change from the preview server's watcher, which owns preview invalidation. */
 const previewChangeSchema = z.object({
   projectId: z.string(),
+  path: z.string(),
   affectsPreview: z.boolean(),
   affectedCompositions: z.array(z.string()).nullable(),
 });
@@ -120,7 +121,10 @@ export function EditPage({
   const page = useRef<HTMLDivElement>(null);
   const viewer = useRef<HTMLElement>(null);
   const timelinePanel = useRef<HTMLElement>(null);
-  const [revision, setRevision] = useState(0);
+  const [previewChange, setPreviewChange] = useState({
+    revision: 0,
+    path: "",
+  });
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
@@ -176,7 +180,10 @@ export function EditPage({
           change.data.affectsPreview &&
           (change.data.affectedCompositions?.includes("index.html") ?? true)
         )
-          setRevision((value) => value + 1);
+          setPreviewChange((value) => ({
+            revision: value.revision + 1,
+            path: change.data.path,
+          }));
       },
     );
     return () => {
@@ -487,7 +494,7 @@ export function EditPage({
         <Viewer
           key={projectId}
           projectId={projectId}
-          revision={revision}
+          change={previewChange}
           zoom={zoom}
           mode={mode}
           notes={notes}

@@ -28,10 +28,20 @@ type Event =
   | { type: "prepared"; picture: Picture }
   | { type: "painted"; gen: number }
   | { type: "failed"; gen: number; reason: unknown }
+  | { type: "updated"; gen: number; revision: number }
   | { type: "reported" };
 
 /** Only a confirmed visible paint can replace the picture we retain. Stale work has no effect. */
 export function transitionHandoff(state: Handoff, event: Event): Handoff {
+  if (event.type === "updated")
+    return state.kind === "showing" &&
+      state.confirmed?.gen === event.gen &&
+      event.revision > state.confirmed.revision
+      ? {
+          ...state,
+          confirmed: { ...state.confirmed, revision: event.revision },
+        }
+      : state;
   if (event.type === "navigate")
     return {
       kind: "loading",

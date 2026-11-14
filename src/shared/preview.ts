@@ -56,12 +56,36 @@ export const CompositionDiagnosticsSchema = z.object({
   diagnostics: z.array(CompositionDiagnosticSchema).max(20),
 });
 
+export const PreviewTimingSchema = z.object({
+  allowed: z.boolean(),
+  structure: z.string(),
+  revision: z.string(),
+  clips: z.array(
+    z.object({
+      id: z.string(),
+      values: z.record(
+        z.enum([
+          "data-start",
+          "data-duration",
+          "data-end",
+          "data-media-start",
+          "data-playback-start",
+          "data-playback-rate",
+        ]),
+        z.string().nullable(),
+      ),
+    }),
+  ),
+});
+export type PreviewTiming = z.infer<typeof PreviewTimingSchema>;
+
 export const PreviewReplySchema = z.object({
   source: z.literal("cutroom-preview"),
   id: z.string().optional(),
   state: PreviewStateSchema,
   error: z.string().optional(),
   hits: z.array(PictureHitSchema).optional(),
+  timingRevision: z.string().optional(),
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 
