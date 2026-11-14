@@ -48,7 +48,7 @@ import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
 import { clearToasts, showToast, useWorkspace } from "./workspace";
-import { actionFor, keymap, useKeymap } from "./keymap";
+import { actionFor, focusPanel, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
 
 const Editor = lazy(() =>
@@ -461,7 +461,27 @@ export function App() {
   }
 
   return (
-    <div className="cutroom-app">
+    <div
+      className="cutroom-app"
+      onKeyDown={(event) => {
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          !(event.target instanceof HTMLElement) ||
+          !event.target.matches("input, textarea, [contenteditable=true]") ||
+          event.target.closest(
+            "dialog, [role=dialog], [popover], .edit-note-popover",
+          )
+        )
+          return;
+        const timeline =
+          event.currentTarget.querySelector<HTMLElement>(".edit-timeline");
+        if (!timeline) return;
+        event.preventDefault();
+        event.stopPropagation();
+        focusPanel(timeline);
+      }}
+    >
       <header className="app-header">
         <div className="header-start">
           {project ? (

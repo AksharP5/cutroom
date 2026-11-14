@@ -1048,6 +1048,10 @@ export function Timeline({
           <div
             className="tl-heads"
             style={{ minHeight: layout.height }}
+            onPointerDownCapture={(event) => {
+              // A secondary press opens the track menu, never its rename field.
+              if (event.button === 2) event.preventDefault();
+            }}
             onContextMenu={(event) => {
               const head =
                 event.target instanceof Element

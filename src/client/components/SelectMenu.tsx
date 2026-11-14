@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CaretDown } from "@phosphor-icons/react";
 import { menuStep } from "./menu";
+import { menuFocusTarget, restoreMenuFocus } from "../keymap";
 import "./select-menu.css";
 
 /** The viewer's popover picker, shared by fields and compact toolbar controls. */
@@ -31,6 +32,7 @@ export function SelectMenu<const Value extends string>({
   const [open, setOpen] = useState(false);
   const search = useRef({ text: "", at: 0 });
   const returnFocus = useRef(false);
+  const restore = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (disabled) {
       menu.current?.hidePopover();
@@ -38,7 +40,7 @@ export function SelectMenu<const Value extends string>({
     }
     // Selecting a conversation or model briefly disables its trigger while it loads.
     if (returnFocus.current && document.activeElement === document.body)
-      trigger.current?.focus({ preventScroll: true });
+      restoreMenuFocus(restore.current);
     returnFocus.current = false;
   }, [disabled, open]);
   const focus = (index: number) => {
@@ -50,7 +52,7 @@ export function SelectMenu<const Value extends string>({
   const close = () => {
     returnFocus.current = true;
     menu.current?.hidePopover();
-    trigger.current?.focus({ preventScroll: true });
+    restoreMenuFocus(restore.current);
   };
   const show = () => {
     menu.current?.showPopover();
@@ -78,14 +80,22 @@ export function SelectMenu<const Value extends string>({
         title={title}
         disabled={disabled || !options.length}
         popoverTarget={menuId}
+        onPointerDown={() => {
+          if (!open)
+            restore.current = menuFocusTarget(document.activeElement, true);
+        }}
         onClick={(event) => {
           event.preventDefault();
           if (menu.current?.matches(":popover-open")) close();
-          else show();
+          else {
+            if (!event.detail) restore.current = trigger.current;
+            show();
+          }
         }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           event.preventDefault();
+          restore.current = trigger.current;
           show();
         }}
       >
@@ -104,6 +114,13 @@ export function SelectMenu<const Value extends string>({
           const opening = event.newState === "open";
           setOpen(opening);
           search.current = { text: "", at: 0 };
+          if (
+            !opening &&
+            (document.activeElement === document.body ||
+              document.activeElement === trigger.current ||
+              menu.current?.contains(document.activeElement))
+          )
+            restoreMenuFocus(restore.current);
         }}
         onKeyDown={(event) => {
           const index = options.findIndex(

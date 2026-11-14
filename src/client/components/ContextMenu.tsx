@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Check } from "@phosphor-icons/react";
 import { create } from "zustand";
-import { runAction } from "../keymap";
+import { menuFocusTarget, restoreMenuFocus, runAction } from "../keymap";
 import { showToast } from "../workspace";
 import { itemText, menuStep } from "./menu";
 import type { MenuItem } from "./menu";
@@ -54,10 +54,7 @@ export function openContextMenu(
       ...(keyboard
         ? { x: box.left, y: box.bottom + 2, above: box.top - 2 }
         : { x: event.clientX, y: event.clientY, above: event.clientY }),
-      restore:
-        focused instanceof HTMLElement && focused !== document.body
-          ? focused
-          : null,
+      restore: menuFocusTarget(focused, !keyboard),
     },
   }));
 }
@@ -86,8 +83,7 @@ function close(restore: boolean) {
   const { menu } = useContextMenu.getState();
   if (!menu) return;
   useContextMenu.setState({ menu: null });
-  if (restore && menu.restore?.isConnected)
-    menu.restore.focus({ preventScroll: true });
+  if (restore) restoreMenuFocus(menu.restore);
 }
 
 function Menu({ menu }: { menu: OpenMenu }) {
@@ -116,7 +112,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
       if (!(
         event.target instanceof Node && root.current?.contains(event.target)
       ))
-        close(false);
+        close(true);
     };
     const leave = () => close(false);
     // A right press opens its menu before the release, so the popover's own light dismiss
