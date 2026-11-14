@@ -72,7 +72,7 @@ import {
 import type { ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
-import { declaredFonts } from "./titles";
+import { declaredFonts, undeclaredFontReason } from "./titles";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -126,6 +126,12 @@ export function createTimelineRoutes(
       composition,
       mediaSources(source.content, scope),
     );
+    const fonts = new Set([
+      ...declaredFonts(source.content),
+      ...(composition === "index.html"
+        ? []
+        : declaredFonts((await readSource(project, "index.html")).content)),
+    ]);
     return {
       source,
       document,
@@ -134,6 +140,7 @@ export function createTimelineRoutes(
       parsed: parseComposition(source.content, settings, {
         scope,
         mediaLengths: lengths,
+        fonts,
       }),
       revision: revisionOf(source.version, settings),
     };
@@ -174,19 +181,12 @@ export function createTimelineRoutes(
       }),
     );
     if (fonts.size) {
-      const declared = new Set([
-        ...declaredFonts(current.source.content),
-        ...(composition === "index.html"
-          ? []
-          : declaredFonts((await readSource(project, "index.html")).content)),
-      ]);
+      const declared = current.parsed.fonts;
       const missing = [...fonts].find((font) => !declared.has(font));
       if (missing !== undefined)
         throw new TimelineError(
           "unsupported",
-          declared.size
-            ? `No @font-face rule in this project declares "${missing}". Declared fonts: ${[...declared].join(", ")}.`
-            : `No @font-face rule in this project declares "${missing}", or any other font. Leave the title's font unset.`,
+          undeclaredFontReason(missing, declared),
         );
     }
     const skippedClips = new Map<
@@ -284,6 +284,7 @@ export function createTimelineRoutes(
     const writtenSource = parseComposition(html, settings, {
       scope: current.scope,
       mediaLengths: lengths,
+      fonts: current.parsed.fonts,
     });
     const written = writtenSource.timeline;
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))

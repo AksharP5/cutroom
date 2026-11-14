@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -22,7 +22,7 @@ import {
 import type { CompositionScope } from "../src/server/timeline/composition";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
-import { titleStyle } from "../src/server/timeline/titles";
+import { declaredFonts, titleStyle } from "../src/server/timeline/titles";
 
 const TITLE_STYLE = titleStyle([]);
 import { countingIds } from "./clip-ids";
@@ -161,6 +161,141 @@ test("timeline edits leave a title's settings alone, and a stale or missing styl
   expect(
     edit(page(shot), [{ type: "trim", clipId: "shot", edge: "end", to: 90 }]),
   ).not.toContain("data-cutroom-titles");
+});
+
+test("title stylesheet discovery and deduplication leave unused templates untouched", () => {
+  const inert = `<template id="unused">${TITLE_STYLE}${TITLE_STYLE}</template>`;
+  const inserted = edit(page(`${shot}\n${inert}`), [lowerThird]);
+  expect(inserted).toContain(inert);
+  expect(inserted.replace(`\n${inert}`, "")).toBe(
+    edit(page(shot), [lowerThird]),
+  );
+  const duplicated = inserted.replace("<head>", `<head>${TITLE_STYLE}`);
+  const deduplicated = edit(duplicated, [
+    { type: "setClip", clipId: "lower", title: { size: 24 } },
+  ]);
+  expect(deduplicated).toContain(inert);
+  expect(
+    deduplicated.replace(inert, "").split("data-cutroom-titles"),
+  ).toHaveLength(2);
+  expect(
+    clips(deduplicated).find((clip) => clip.id === "lower")?.title?.size,
+  ).toBe(24);
+
+  const scene = `<template><div data-composition-id="scene" data-duration="10">${shot}${inert}</div></template>${inert}`;
+  const written = edit(scene, [lowerThird], "sub-composition");
+  expect(
+    withoutStacking(written).startsWith(`<template>${TITLE_STYLE}\n`),
+  ).toBe(true);
+  expect(written.split(inert)).toHaveLength(3);
+  expect(
+    written.replaceAll(inert, "").split("data-cutroom-titles"),
+  ).toHaveLength(2);
+});
+
+test.each([
+  { x: 24 },
+  { y: -12 },
+  { opacity: 0.35 },
+  { enabled: false },
+  { x: 24, y: -12, opacity: 0, enabled: false },
+])("a title inserted and changed in one batch retains %j", (patch) => {
+  const html = edit(page(shot), [
+    lowerThird,
+    { type: "setClip", clipId: "lower", ...patch },
+  ]);
+  expect(clips(html).find((clip) => clip.id === "lower")).toMatchObject(patch);
+});
+
+test("a title disabled in its insertion batch stays disabled when its track is re-enabled", () => {
+  const html = edit(page(shot), [
+    lowerThird,
+    { type: "setTrack", index: 1, enabled: false },
+    { type: "setClip", clipId: "lower", enabled: false },
+  ]);
+  expect(titleTag(html, "lower")).not.toContain("data-cutroom-track-hidden");
+  const shown = edit(html, [{ type: "setTrack", index: 1, enabled: true }]);
+  expect(clips(shown).find((clip) => clip.id === "lower")?.enabled).toBe(false);
+});
+
+test.each(["fade", "slide", "scale", "wipe", "center"])(
+  "a title named %s can be copied and razored",
+  (id) => {
+    const inserted = edit(page(shot), [
+      { ...lowerThird, clip: { ...lowerThird.clip, id } } as CommandInput,
+    ]);
+    expect(
+      clips(inserted).find((clip) => clip.id === id)?.sourceRestrictions?.copy,
+    ).toBeUndefined();
+    const cut = edit(inserted, [
+      { type: "split", at: 90, clipIds: [id], ids: { [id]: [`${id}-tail`] } },
+    ]);
+    expect(
+      clips(cut)
+        .filter((clip) => clip.title)
+        .map((clip) => clip.id),
+    ).toEqual([id, `${id}-tail`]);
+    const authored = inserted.replace(
+      "<head>",
+      `<head><style>#${id}{color:red}</style>`,
+    );
+    expect(
+      clips(authored).find((clip) => clip.id === id)?.sourceRestrictions?.copy,
+    ).toContain("styled or animated by its id");
+  },
+);
+
+test("font declarations ignore CSS comments and accept comments within a live rule", () => {
+  expect(
+    declaredFonts(`<style>
+    /* @font-face {font-family: "Commented";src:url(unused.woff2)} */
+    @font-face { /* font-family: "Also commented"; */ font-family: /* family */ "Declared";src:url(font.woff2)}
+    .sample::before {content:'/* not a comment */ @font-face {font-family: "Quoted";}'}
+  </style>`),
+  ).toEqual(["Declared"]);
+});
+
+test("a hand-edited font must be declared on readback as well as on edit", () => {
+  const tag = lowerTag.replace(
+    'data-title-size="64px"',
+    'data-title-font="Declared" data-title-size="64px"',
+  );
+  const html = page(tag);
+  for (const source of [
+    html,
+    html.replace(
+      "<head>",
+      '<head><style>/* @font-face{font-family:"Declared";src:url(font.woff2)} */</style>',
+    ),
+  ]) {
+    const clip = clips(source)[0]!;
+    expect(clip.title).toBeNull();
+    expect(clip.text).toBe("Ada Lovelace\nFounder");
+    expect(clip.sourceRestrictions?.title).toContain(
+      'No @font-face rule in this project declares "Declared"',
+    );
+  }
+  const declared = html.replace(
+    "<head>",
+    '<head><style>@font-face{font-family:"Declared";src:url(font.woff2)}</style>',
+  );
+  expect(clips(declared)[0]?.title?.font).toBe("Declared");
+});
+
+test.each([
+  "<b>Ada Lovelace</b>",
+  '<img src="portrait.png">',
+  "",
+  " \n<br> ",
+  "Ada<!-- comment -->",
+])("a title with non-plain or empty content falls back: %s", (content) => {
+  const html = page(lowerTag.replace("Ada Lovelace<br>Founder", content));
+  const clip = clips(html)[0]!;
+  expect(clip.title).toBeNull();
+  expect(clip.sourceRestrictions?.title).toContain("non-empty plain text");
+  expect(() =>
+    edit(html, [{ type: "setClip", clipId: "lower", title: { size: 24 } }]),
+  ).toThrow("non-empty plain text");
 });
 
 test("a razor leaves the entrance on the first piece and the exit on the second; a ripple through the middle keeps both", () => {
@@ -415,6 +550,14 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
     createTimelineRoutes(fixture.store, fixture.review),
   );
   const project = await fixture.store.create({ name: "Titles" });
+  const sourcePath = join(project.path, "index.html");
+  await writeFile(
+    sourcePath,
+    (await readFile(sourcePath, "utf8")).replace(
+      "</head>",
+      '<style>/* @font-face {font-family:"Commented";src:url(unused.woff2)} */</style></head>',
+    ),
+  );
   const files = () =>
     Promise.all(
       ["index.html", "cutroom.json"].map((file) =>
@@ -423,7 +566,7 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
     );
   const server = Bun.serve({
     hostname: "127.0.0.1",
-    port: 0,
+    port: 4931,
     fetch: createMcpHttpHandler({
       fetch: (url, init) => fixture.app.request(url, init),
     }),
@@ -475,14 +618,33 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
     );
     expect(await files()).toEqual(original);
 
-    const added = result.parse(await call([insert("Instrument Sans")]))
-      .structuredContent.result;
+    const commented = await call([insert("Commented")]);
+    expect(commented.isError).toBe(true);
+    expect(await files()).toEqual(original);
+
+    const added = result.parse(
+      await call([
+        insert("Instrument Sans"),
+        {
+          type: "setClip",
+          clipId: "lower",
+          x: 24,
+          y: -12,
+          opacity: 0.35,
+          enabled: false,
+        },
+      ]),
+    ).structuredContent.result;
     expect(
       added.timeline.clips.find((clip) => clip.id === "lower"),
     ).toMatchObject({
       start: 30,
       duration: 120,
       text: "Ada Lovelace",
+      x: 24,
+      y: -12,
+      opacity: 0.35,
+      enabled: false,
       title: { font: "Instrument Sans", in: { preset: "fade", frames: 12 } },
     });
     const [html] = await files();
@@ -495,7 +657,7 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
         await (await fixture.request(`/projects/${project.id}/history`)).json(),
       ).entries;
     expect(history.map((entry) => entry.label)).toEqual([
-      "Added title at 00:00:01:00",
+      "Added title at 00:00:01:00; Moved 24 px right; Moved 12 px up; Set opacity to 35%; Disabled clip",
     ]);
     const undo = await fixture.request(
       `/projects/${project.id}/history/undo`,

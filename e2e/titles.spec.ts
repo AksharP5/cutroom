@@ -10,6 +10,7 @@ import { ExportJobSchema } from "../src/shared/export";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
+import { titleStyle } from "../src/server/timeline/titles";
 import { expect, test } from "./fixtures";
 
 const FPS = 30;
@@ -158,6 +159,67 @@ const lowerThird = (extra: Record<string, unknown> = {}): CommandInput => ({
       ...extra,
     },
   },
+});
+
+test("an unused template's title stylesheet does not leave a new live title unstyled", async ({
+  page,
+  baseURL,
+}, testInfo) => {
+  const client = await connect(baseURL!);
+  try {
+    const project = result(
+      ProjectSchema,
+      await client.callTool({
+        name: "project_create",
+        arguments: { name: "Live title styles", duration: 12 },
+      }),
+    );
+    const source = result(
+      SourceSchema,
+      await client.callTool({
+        name: "source_read",
+        arguments: { projectId: project.id },
+      }),
+    );
+    const inert = `<template id="unused-titles">${titleStyle([])}</template>`;
+    result(
+      SourceSchema,
+      await client.callTool({
+        name: "source_write",
+        arguments: {
+          projectId: project.id,
+          expectedVersion: source.version,
+          content: source.content.replace("</body>", `${inert}</body>`),
+        },
+      }),
+    );
+    const { edit } = editor(client, project.id);
+    await edit([
+      { type: "setTrack", index: 3, kind: "video" },
+      lowerThird({ size: 24 }),
+    ]);
+    await page.goto(`/#project/${project.id}`);
+    const preview = page.frameLocator("iframe[data-live]");
+    await opacityAt(page, preview, "lower", 240, full);
+    await expect(preview.locator("#lower")).toHaveCSS("font-size", "24px");
+    await expect(preview.locator("#lower")).toHaveCSS(
+      "background-color",
+      "rgb(255, 255, 255)",
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("live-title-styles.png"),
+    });
+    const written = result(
+      SourceSchema,
+      await client.callTool({
+        name: "source_read",
+        arguments: { projectId: project.id },
+      }),
+    );
+    expect(written.content).toContain(inert);
+  } finally {
+    await client.close();
+  }
 });
 
 test("a title added over MCP keeps its entrance and exit on the clip through trims, a move and a razor, in the viewer and the export", async ({

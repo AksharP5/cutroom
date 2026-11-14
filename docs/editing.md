@@ -144,7 +144,9 @@ The entrance belongs to the clip's first frame and the exit to its last:
 A title is one element in the composition's HTML plus one stylesheet block Cutroom keeps current, with no script. Preview, `timeline_view` and export read the same attributes through the same HyperFrames runtime, so they agree. Two limits follow from how it is built:
 
 - The stylesheet uses typed CSS `attr()`, which needs Chromium 133 or newer. The desktop app, frame capture and export all qualify. If you open the editor in Firefox or Safari, titles show unstyled and unanimated in the viewer; the exported video is still correct.
-- A title can only use a font the project declares with `@font-face`. A system font can resolve to a different face in export than in the viewer.
+- A title can only use a font the project declares with an uncommented `@font-face` rule. A system font can resolve to a different face in export than in the viewer.
+
+If a source edit gives a title an undeclared font, invalid settings, markup other than `<br>`, or empty words, the timeline reads it as an ordinary element with `title: null` and a reason in `sourceRestrictions.title`. Repair its source before changing title settings.
 
 Titles an agent wrote as sub-composition files or root scripts are left as they are and keep the behavior described above.
 

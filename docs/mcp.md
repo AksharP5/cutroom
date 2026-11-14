@@ -108,7 +108,7 @@ The default size suits 1920x1080; pass a size for other compositions. `font: nul
 
 The entrance starts on the clip's first frame and the exit ends on its last. Tail trims, head trims, moves, ripples and pastes keep both there with no further command. When they are longer than the clip together, both shorten in proportion. A ripple through the middle of a title shortens it in place. A razor leaves the entrance on the first piece and the exit on the second, with `preset: "none"` at the cut, so the words run straight through it; set either again with `setClip.title`.
 
-In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. If you edit an attribute by hand to a value Cutroom does not write, the clip reads as plain text with `title: null`, and `sourceRestrictions.title` names the attribute. Titles work in scene files as well as `index.html`.
+In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. A title must contain non-empty plain text, with `<br>` allowed for line breaks, and any named font must have an uncommented `@font-face` declaration in the composition or `index.html`. Invalid content, an undeclared font or an attribute value Cutroom does not write gives `title: null` and a reason in `sourceRestrictions.title`; the element stays on the timeline. Titles work in scene files as well as `index.html`.
 
 ### Animated titles
 

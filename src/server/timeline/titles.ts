@@ -1,4 +1,5 @@
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
+import { transform } from "lightningcss";
 import { TitleSchema } from "../../shared/timeline/schema";
 import type { Fps, Title } from "../../shared/timeline/schema";
 
@@ -99,6 +100,7 @@ const FIELD_ATTRIBUTES: Record<string, string> = {
 export function readTitle(
   attrs: Attributes,
   fps: Fps,
+  fonts: ReadonlySet<string>,
 ): { title: Title } | { reason: string } | null {
   if (attrs[TITLE_ATTRIBUTE] === undefined) return null;
   const size = attrs["data-title-size"];
@@ -120,13 +122,26 @@ export function readTitle(
       frames: seconds(attrs["data-title-out-duration"], fps),
     },
   });
-  if (parsed.success) return { title: parsed.data };
+  if (parsed.success) {
+    const font = parsed.data.font;
+    if (font !== null && !fonts.has(font))
+      return { reason: undeclaredFontReason(font, fonts) };
+    return { title: parsed.data };
+  }
   const attribute =
     FIELD_ATTRIBUTES[parsed.error.issues[0]!.path.join(".")] ?? TITLE_ATTRIBUTE;
   return {
     reason: `This title's ${attribute} is ${attrs[attribute] === undefined ? "missing" : "not a value Cutroom writes"}. Edit it in the source.`,
   };
 }
+
+export const undeclaredFontReason = (
+  font: string,
+  declared: ReadonlySet<string>,
+) =>
+  declared.size
+    ? `No @font-face rule in this project declares "${font}". Declared fonts: ${[...declared].join(", ")}.`
+    : `No @font-face rule in this project declares "${font}", or any other font. Leave the title's font unset.`;
 
 /** Every attribute of a title, in the order a new title is written. Null removes one. */
 export function titleAttributes(
@@ -152,13 +167,26 @@ export function titleAttributes(
 /** Font families a document's own `@font-face` rules declare. */
 export function declaredFonts(html: string): string[] {
   const families = new Set<string>();
-  for (const [, style] of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi))
-    for (const [, rule] of style!.matchAll(/@font-face\s*\{([^}]*)\}/gi)) {
-      const family = /font-family\s*:\s*(?:"([^"]+)"|'([^']+)'|([^;]+))/i.exec(
-        rule!,
-      );
-      const name = (family?.[1] ?? family?.[2] ?? family?.[3])?.trim();
-      if (name) families.add(name);
+  for (const [, style] of html.matchAll(
+    /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
+  )) {
+    if (!/@font-face/i.test(style!)) continue;
+    try {
+      transform({
+        filename: "title-fonts.css",
+        code: Buffer.from(style!),
+        errorRecovery: true,
+        visitor: {
+          Rule(rule) {
+            if (rule.type !== "font-face") return;
+            for (const property of rule.value.properties)
+              if (property.type === "font-family") families.add(property.value);
+          },
+        },
+      });
+    } catch {
+      // Unparseable authored CSS cannot establish a font declaration.
     }
+  }
   return [...families];
 }

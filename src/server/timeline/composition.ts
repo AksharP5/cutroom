@@ -42,7 +42,12 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import { trackMix } from "../../shared/timeline/tracks";
 import type { TrackMix } from "../../shared/timeline/tracks";
-import { readTitle, titleAttributes, titleStyle } from "./titles";
+import {
+  declaredFonts,
+  readTitle,
+  titleAttributes,
+  titleStyle,
+} from "./titles";
 import type {
   Clip,
   ClipKind,
@@ -50,7 +55,6 @@ import type {
   InsertClip,
   Timeline,
   TimelineSettings,
-  Title,
 } from "../../shared/timeline/schema";
 
 /** One element of the source, located by byte offsets so edits can leave everything else untouched. */
@@ -101,6 +105,7 @@ export interface ParsedComposition {
   ids: Set<string>;
   scripts: string[];
   scriptsAndStyles: string[];
+  fonts: ReadonlySet<string>;
   /** Source line breaks stay visible when CSS might preserve them; uncertain cascades refuse edits. */
   textLayout: Map<SourceElement, { preserveLines: boolean; reason?: string }>;
   /** Source range of every element (start tag through end tag) and text node, in tree order. */
@@ -219,10 +224,19 @@ function clipKind(element: SourceElement): ClipKind {
   return isSubCompositionHost(element) ? "composition" : "element";
 }
 
-/** A title's settings, or null for an element that is not one or whose settings do not read. */
-function titleOf(element: SourceElement, fps: Fps): Title | null {
-  const read = readTitle(element.attrs, fps);
-  return read && "title" in read ? read.title : null;
+/** A title must have both valid settings and words that can be edited as plain text. */
+function readElementTitle(
+  element: SourceElement,
+  fps: Fps,
+  fonts: ReadonlySet<string>,
+) {
+  const read = readTitle(element.attrs, fps, fonts);
+  if (read && "title" in read && !elementText(element)?.plain)
+    return {
+      reason:
+        "This title must contain non-empty plain text. Edit it in the source.",
+    };
+  return read;
 }
 
 const HTML_SPACE = /[\t\n\f\r ]+/g;
@@ -537,10 +551,13 @@ export function parseComposition(
     scope = "document",
     mediaLengths = new Map(),
     rootId,
+    fonts = new Set(declaredFonts(html)),
   }: {
     scope?: CompositionScope;
     /** A bundled scene instance whose tracks are mixed independently of its parent. */
     rootId?: string;
+    /** Font faces available from this composition and the project's entry document. */
+    fonts?: ReadonlySet<string>;
     /** Measured source lengths in seconds, by `src`. */
     mediaLengths?: ReadonlyMap<string, number>;
   } = {},
@@ -610,6 +627,8 @@ export function parseComposition(
   }
   const clips = rows.map(({ id, element, read, start, end }): Clip => {
     const kind = clipKind(element);
+    const title =
+      kind === "element" ? readElementTitle(element, fps, fonts) : null;
     const attribute = (name: string) => element.attrs[name] ?? null;
     const reference =
       read.startExpression?.kind === "reference" && read.start !== null
@@ -662,7 +681,7 @@ export function parseComposition(
           ? (elementText(element, textLayout.get(element)?.preserveLines)
               ?.text ?? null)
           : null,
-      title: kind === "element" ? titleOf(element, fps) : null,
+      title: title && "title" in title ? title.title : null,
       fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
       fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
@@ -725,9 +744,11 @@ export function parseComposition(
         (element) =>
           element.tag === "script" ||
           (element.tag === "style" &&
-            element.attrs["data-cutroom-track-stacking"] === undefined),
+            element.attrs["data-cutroom-track-stacking"] === undefined &&
+            element.attrs["data-cutroom-titles"] === undefined),
       )
       .map((element) => html.slice(element.openEnd, element.end)),
+    fonts,
   };
   parsed.timeline = {
     ...timeline,
@@ -1131,7 +1152,11 @@ function sourceRestrictions(
   const restrictions = cutAndTextRestrictions(parsed, clip);
   const read =
     clip.kind === "element"
-      ? readTitle(parsed.elements.get(clip.id)!.attrs, parsed.timeline.fps)
+      ? readElementTitle(
+          parsed.elements.get(clip.id)!,
+          parsed.timeline.fps,
+          parsed.fonts,
+        )
       : null;
   return read && "reason" in read
     ? { ...restrictions, title: read.reason }
@@ -1246,11 +1271,15 @@ function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
-    ...(hidden
-      ? [
-          ["data-hidden", ""] as const,
-          ["data-cutroom-track-hidden", ""] as const,
-        ]
+    ...(!clip.enabled || hidden ? [["data-hidden", ""] as const] : []),
+    ...(clip.enabled && hidden
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...positionAttributes({}, clip).filter(
+      (attribute) => attribute[1] !== null,
+    ),
+    ...(clip.opacity !== null
+      ? [["style", writeOpacity(undefined, clip.opacity)] as const]
       : []),
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]
@@ -1463,7 +1492,7 @@ function titleStyleEdits(parsed: ParsedComposition, after: Timeline): Edit[] {
   const titles = after.clips.flatMap((clip) => clip.title ?? []);
   if (!titles.length) return [];
   const style = titleStyle(titles.flatMap((title) => title.font ?? []));
-  const styles = [...descendants(parsed.roots, true)].filter(
+  const styles = scopeElements(parsed.roots, parsed.scope).filter(
     (element) => element.tag === "style",
   );
   const [block, ...extra] = styles.filter(
@@ -1691,6 +1720,7 @@ export function rebaseClipboard(
     settingsOf(parsed.timeline),
     {
       scope: parsed.scope,
+      fonts: parsed.fonts,
       mediaLengths: new Map(
         parsed.timeline.clips.flatMap((clip) =>
           clip.src !== null && clip.sourceDuration !== null
