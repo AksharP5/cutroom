@@ -354,6 +354,8 @@ export function MediaPanel({
     };
   }, []);
   const loaded = useRef(false);
+  /** The files of the last listing, to tell which ones a new listing no longer has. */
+  const listed = useRef({ projectUrl, files: [] as string[] });
 
   const load = useCallback(async () => {
     const id = ++latestLoad.current;
@@ -366,7 +368,26 @@ export function MediaPanel({
     );
     if (!active.current || id !== latestLoad.current) return;
     loaded.current = true;
-    useWorkspace.setState({ fileChanges: fileVersions });
+    // A file that left the listing is gone, as the watcher will say. Saying so here keeps a
+    // clip that still names it from asking the server for it before the timeline catches up.
+    useWorkspace.setState(({ fileChanges }) => ({
+      fileChanges: {
+        ...Object.fromEntries(
+          [
+            ...(listed.current.projectUrl === projectUrl
+              ? listed.current.files
+              : []),
+            ...Object.keys(fileChanges).filter(
+              (path) => fileChanges[path] === null,
+            ),
+          ]
+            .filter((path) => !(path in fileVersions))
+            .map((path) => [path, null]),
+        ),
+        ...fileVersions,
+      },
+    }));
+    listed.current = { projectUrl, files };
     const source = useSource.getState().file;
     if (source && !files.includes(source.path)) closeSource();
     setMedia(
@@ -459,6 +480,13 @@ export function MediaPanel({
     const index = media?.findIndex((item) => item.path === path) ?? -1;
     const neighbour = media?.[index + 1]?.path ?? media?.[index - 1]?.path;
     await change(async () => {
+      if (!confirmUsed) {
+        const { uses } = await api(
+          `${cutroomUrl}/media/uses?path=${encodeURIComponent(path)}`,
+          z.object({ uses: z.number() }),
+        );
+        if (uses) return setUsed({ path, uses, keyboard });
+      }
       const response = await fetch(`/api/cutroom${cutroomUrl}/media/remove`, {
         ...json("POST", { path, confirmUsed }),
         headers: { "content-type": "application/json" },
