@@ -68,34 +68,57 @@ interface Toast {
 }
 
 let foregroundToast: Toast | null = null;
+/** A plain notice that arrived while a toast with an action held the foreground. */
+let waitingToast: Toast | null = null;
 let backgroundToast: Toast | null = null;
 let visibleToast: Toast | null = null;
+let visibleSince = 0;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+const toastHold = () =>
+  cssMilliseconds(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      "--duration-toast-hold",
+    ),
+  );
 
 function dismissToast(toast: Toast | null) {
   if (foregroundToast === toast) foregroundToast = null;
+  if (waitingToast === toast) waitingToast = null;
   if (backgroundToast === toast) backgroundToast = null;
   publishToast();
 }
 
 function publishToast() {
-  const toast = foregroundToast ?? backgroundToast;
+  const toast = foregroundToast ?? waitingToast ?? backgroundToast;
   if (toast === visibleToast) return;
+  // A notice covered after half its hold has had its turn. Left waiting, it would come back
+  // once the toast over it is gone and read as the newer of the two.
+  if (
+    toast &&
+    visibleToast?.transient &&
+    performance.now() - visibleSince >= toastHold() / 2
+  ) {
+    if (waitingToast === visibleToast) waitingToast = null;
+    if (backgroundToast === visibleToast) backgroundToast = null;
+  }
   visibleToast = toast;
+  visibleSince = performance.now();
   clearTimeout(toastTimer);
   useWorkspace.setState({
     toast: toast?.message ?? "",
     toastAction: toast?.action ?? null,
     toastTone: toast?.tone ?? "error",
   });
-  if (toast?.transient) {
-    const duration = cssMilliseconds(
-      getComputedStyle(document.documentElement).getPropertyValue(
-        "--duration-toast-hold",
-      ),
-    );
-    toastTimer = setTimeout(() => dismissToast(toast), duration);
-  }
+  if (toast?.transient)
+    toastTimer = setTimeout(() => dismissToast(toast), toastHold());
+}
+
+/** Leaving a project takes its feedback along, shown or still waiting. */
+export function clearToasts() {
+  foregroundToast = null;
+  waitingToast = null;
+  publishToast();
 }
 
 /** The returned dismiss function clears only this toast, leaving later messages alone. */
@@ -120,7 +143,14 @@ export const showToast = (
   };
   // Outside notices wait behind owner feedback, including while their hold timer runs.
   if (options.priority === "background") backgroundToast = toast;
-  else foregroundToast = toast;
+  // A toast with an action keeps its place until it is used, dismissed or expires. A plain
+  // notice waits behind it; an error is the answer to a press and shows at once.
+  else if (foregroundToast?.action && !action && toast.tone === "info")
+    waitingToast = toast;
+  else {
+    foregroundToast = toast;
+    if (!action) waitingToast = null;
+  }
   publishToast();
   return () => dismissToast(toast);
 };
