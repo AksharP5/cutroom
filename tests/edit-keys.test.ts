@@ -214,9 +214,10 @@ test("a cut belongs to the incoming V1 clip, never the spanning music", () => {
   expect(
     apply(timeline, press("trimRippleStartToPlayhead", timeline, 100)),
   ).toEqual(timeline);
-  expect(press("trimRippleEndToPlayhead", timeline, 100)).toEqual([
-    { type: "trim", clipId: "b", edge: "end", to: 100, ripple: true },
-  ]);
+  // W there would leave none of the incoming clip, so the refusal says what to do instead.
+  expect(() => press("trimRippleEndToPlayhead", timeline, 100)).toThrow(
+    "Nothing to trim: the playhead is at the start of b. Move into the clip to trim its end, or ripple delete the clip.",
+  );
   // Razor still needs an interior frame. A selected incoming clip never falls back to music.
   expect(press("editBladeRazor", timeline, 100, ["b"])).toEqual([]);
   expect(press("editBladeRazor", timeline, 100)).toEqual([

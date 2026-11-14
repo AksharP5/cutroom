@@ -16,7 +16,7 @@ import {
   inspectorSubject,
   stepField,
 } from "../src/client/edit/inspector/fields";
-import { shownChanges } from "../src/client/edit/inspector/changes";
+import { reviewRows, shownChanges } from "../src/client/edit/inspector/changes";
 import { editLabel } from "../src/shared/timeline/labels";
 import { projectFixture } from "./project-fixture";
 
@@ -396,6 +396,56 @@ test("Changes shows five recent rows, always includes older pending work, and ex
     accepted: false,
   }));
   expect(shownChanges(allPending, false)).toHaveLength(15);
+});
+
+test("away from its clip, an edit label names the clip and says how far it changed", () => {
+  const timeline = parseComposition(
+    '<main data-composition-id="main" data-fps="30" data-duration="6"><img id="still" class="clip" src="media/still.png" data-start="2" data-duration="2" data-track-index="0"><video id="shot" class="clip" src="media/shot.mp4" data-start="0" data-duration="2" data-track-index="1"></video></main>',
+    emptyTimelineSettings(),
+  ).timeline;
+  const label = (command: unknown) =>
+    editLabel([CommandSchema.parse(command)], timeline, "Edit", "done");
+  expect(label({ type: "trim", clipId: "still", edge: "end", to: 150 })).toBe(
+    "Extended still.png by 1 s",
+  );
+  expect(
+    label({
+      type: "trim",
+      clipId: "still",
+      edge: "start",
+      to: 72,
+      ripple: true,
+    }),
+  ).toBe("Shortened still.png by 12 frames at its start, with ripple");
+  expect(label({ type: "move", clipIds: ["shot"], by: 15 })).toBe(
+    "Moved shot.mp4 15 frames right",
+  );
+  expect(
+    label({ type: "remove", clipIds: ["shot", "still"], ripple: true }),
+  ).toBe("Ripple deleted shot.mp4 and still.png");
+  expect(label({ type: "setClip", clipId: "still", opacity: 0.5 })).toBe(
+    "Set opacity to 50% for still.png",
+  );
+  expect(
+    reviewRows(
+      [
+        "Extended still.png by 1 s",
+        "Edited index.html composition",
+        "Edited index.html composition",
+      ].map((label, index) => ({
+        id: `edit-${index}`,
+        clipId: null,
+        composition: "index.html",
+        label,
+        at: "2026-01-01T00:00:00.000Z",
+        by: "agent" as const,
+        accepted: false,
+      })),
+    ).map((row) => [row.label, row.count]),
+  ).toEqual([
+    ["Extended still.png by 1 s", 1],
+    ["Edited index.html composition", 2],
+  ]);
 });
 
 test("edit labels describe the commands with past tense and the actual values", () => {

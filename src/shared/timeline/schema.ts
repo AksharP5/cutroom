@@ -499,6 +499,8 @@ export const ClipEditSchema = z.object({
 });
 
 export const TAB_ORIGIN_HEADER = "x-cutroom-tab-origin";
+/** On a command batch's answer: what the edit did, naming its clips, URI-encoded. */
+export const EDIT_SUMMARY_HEADER = "x-cutroom-edit-summary";
 export const TabOriginSchema = z.uuid();
 
 export const AnimationLeftBehindSchema = z.object({

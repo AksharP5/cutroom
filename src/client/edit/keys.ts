@@ -1,5 +1,6 @@
 import { isAudioKind } from "../../shared/timeline/schema";
 import { clipEnd } from "../../shared/timeline/apply";
+import { TimelineError } from "../../shared/timeline/errors";
 import type {
   Clip,
   CommandInput,
@@ -64,6 +65,12 @@ const trimToPlayhead =
   (edge: "start" | "end") =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
     const [clip] = underPlayhead(timeline, target);
+    // At a cut the playhead is on the incoming clip's first frame, so W would leave none of it.
+    if (clip && edge === "end" && target.frame === clip.start)
+      throw new TimelineError(
+        "out_of_bounds",
+        `Nothing to trim: the playhead is at the start of ${clip.id}. Move into the clip to trim its end, or ripple delete the clip.`,
+      );
     return clip
       ? [
           {

@@ -730,7 +730,7 @@ test("Q and W at a cut preserve the incoming clip and the rest of the film, incl
   await page.keyboard.press("w");
   await page.screenshot({ path: testInfo.outputPath("after-w.png") });
   await expect(page.locator(".toast")).toContainText(
-    "shot-2 would be shorter than one frame",
+    "Nothing to trim: the playhead is at the start of shot-2. Move into the clip to trim its end, or ripple delete the clip.",
   );
   expect(await clips()).toEqual(initial);
   await page.getByRole("button", { name: "Dismiss" }).click();

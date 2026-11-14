@@ -34,6 +34,7 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
+  EDIT_SUMMARY_HEADER,
   TAB_ORIGIN_HEADER,
   TabOriginSchema,
   CommandBatchSchema,
@@ -520,13 +521,14 @@ export function createTimelineRoutes(
     const composition = canonical(input.composition);
     try {
       // Agents may omit the label; the edit is then named from its commands, as the editor names its own.
+      const { timeline } = (await read(project, composition)).parsed;
       const label =
+        input.label ?? editLabel(input.commands, timeline, "Edited timeline");
+      // History and the inspector show the label beside its clip. Review and chat show this
+      // away from it, so it names the clip.
+      const summary =
         input.label ??
-        editLabel(
-          input.commands,
-          (await read(project, composition)).parsed.timeline,
-          "Edited timeline",
-        );
+        editLabel(input.commands, timeline, "Edited timeline", "done");
       const batch = { ...input, composition, label };
       const origin =
         parseInput(
@@ -558,11 +560,14 @@ export function createTimelineRoutes(
               : undefined,
           ),
         batch.noteId,
+        { label: summary },
       );
       const response = {
         ...result,
         ...(await reviews.clipChanges(project, batch.composition)),
       };
+      // Beside the view, not in it: an edit answers with exactly what a read returns.
+      c.header(EDIT_SUMMARY_HEADER, encodeURIComponent(summary));
       const followup = async () => {
         // Give the committed edit's response a turn to flush before running source inspection.
         await Bun.sleep(0);

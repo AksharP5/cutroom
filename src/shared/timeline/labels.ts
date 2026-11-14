@@ -12,14 +12,18 @@ export const clipName = (clip: Pick<Clip, "id" | "label" | "src">) =>
 export const formatPercent = (value: number) =>
   `${Number((value * 100).toFixed(4))}%`;
 
-/** Command sentences shared by history, the inspector and pending agent approvals. */
+/**
+ * Command sentences shared by history, the inspector, review and agent approvals. `past` reads
+ * beside the clip it changed, `done` names the clip so it reads anywhere, `pending` asks.
+ */
 export function editLabel(
   commands: Command[],
   timeline: Timeline | undefined,
   fallback: string,
-  tense: "past" | "pending" = "past",
+  tense: "past" | "done" | "pending" = "past",
 ): string {
   const pending = tense === "pending";
+  const named = tense !== "past";
   const time = (frame: number) =>
     timeline ? formatTimecode(frame, timeline.fps) : `frame ${frame}`;
   const clips = timeline?.clips ?? [];
@@ -36,6 +40,15 @@ export function editLabel(
     return names.length > 2
       ? `${names[0]} and ${names.length - 1} more clips`
       : names.join(" and ");
+  };
+  /** A length as people say it: whole tenths of a second, or frames. */
+  const span = (frames: number) => {
+    const seconds = timeline
+      ? (frames * timeline.fps.den) / timeline.fps.num
+      : 0;
+    return seconds >= 1 && Number.isInteger(Number((seconds * 10).toFixed(6)))
+      ? `${Number(seconds.toFixed(1))} s`
+      : `${frames} ${frames === 1 ? "frame" : "frames"}`;
   };
   const trackName = (index: number) => {
     const track = timeline?.tracks.find((track) => track.index === index);
@@ -73,20 +86,27 @@ export function editLabel(
             parts[0] = `to ${time(clip.start + command.by)}`;
           return `Move ${target(command.clipIds)}${parts.length ? ` ${parts.join(" and ")}` : ""}`;
         }
-        return `Moved ${parts.join(" and ")}`;
+        return `Moved ${named ? `${target(command.clipIds)} ` : ""}${parts.join(" and ")}`;
       }
-      case "trim":
+      case "trim": {
+        const clip = clips.find((clip) => clip.id === command.clipId);
+        if (tense === "done" && clip) {
+          const grew =
+            command.edge === "end"
+              ? command.to - clip.start - clip.duration
+              : clip.start - command.to;
+          return `${grew > 0 ? "Extended" : "Shortened"} ${target([clip.id])} by ${span(Math.abs(grew))}${command.edge === "start" ? " at its start" : ""}${command.ripple ? ", with ripple" : ""}`;
+        }
         return pending
           ? `${command.ripple ? "Ripple trim" : "Trim"} ${command.edge} of ${target([command.clipId])} to ${time(command.to)}`
-          : `${command.ripple ? "Ripple trimmed" : "Trimmed"} ${command.edge} to ${time(command.to)}`;
+          : `${command.ripple ? "Ripple trimmed" : "Trimmed"} ${command.edge}${named ? ` of ${target([command.clipId])}` : ""} to ${time(command.to)}`;
+      }
       case "split":
-        return `Split${pending ? ` ${target(command.clipIds ?? [])}` : ""} at ${time(command.at)}`;
+        return `Split${named ? ` ${target(command.clipIds ?? [])}` : ""} at ${time(command.at)}`;
       case "remove":
         return pending
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
-          : command.ripple
-            ? "Ripple deleted clips"
-            : "Lifted clips";
+          : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
       case "paste":
         return `${pending ? "Paste" : "Pasted"} clips${pending || command.mode === "insert" ? ` with ${command.mode}` : ""} at ${time(command.at)}`;
       case "insert": {
@@ -102,7 +122,7 @@ export function editLabel(
         }
         return pending
           ? `Add ${name} at ${time(command.at)}${command.mode !== "place" ? ` with ${command.mode}` : ""}`
-          : `Added ${command.clip.kind} at ${time(command.at)}`;
+          : `Added ${named ? name : command.clip.kind} at ${time(command.at)}`;
       }
       case "setClip": {
         const parts: string[] = [];
@@ -164,7 +184,7 @@ export function editLabel(
           );
         if (pending && command.automation !== undefined)
           parts.push("Clear automation");
-        return `${parts.join("; ") || (pending ? fallback : "")}${pending ? ` for ${target([command.clipId])}` : ""}`;
+        return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
       }
       case "setTiming": {
         const parts: string[] = [];
@@ -174,7 +194,7 @@ export function editLabel(
           parts.push(
             `Set source in to ${timeline ? time(toFrames(command.mediaStart, timeline.fps)) : `${command.mediaStart}s`}`,
           );
-        return `${parts.join("; ") || (pending ? fallback : "")}${pending ? ` for ${target([command.clipId])}` : ""}`;
+        return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
       }
       case "setTrack": {
         const creating =
@@ -226,7 +246,7 @@ export function editLabel(
           ].join("; ");
         return (
           (parts.join("; ") || fallback) +
-          (pending && trackName(command.index)
+          (named && trackName(command.index)
             ? ` ${trackName(command.index)}`
             : "")
         );
@@ -234,7 +254,7 @@ export function editLabel(
       case "removeTrack":
         return pending
           ? `Remove empty ${trackName(command.index)}`
-          : "Removed empty track";
+          : `Removed empty ${named ? trackName(command.index) : "track"}`;
       case "setMarker": {
         if (!pending)
           return command.frame === undefined

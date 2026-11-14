@@ -42,6 +42,8 @@ export const agentMessageSchema = z.object({
   tool: z.string().optional(),
   /** What a tool call acted on, such as a file path or command, kept after its result arrives. */
   target: z.string().optional(),
+  /** What a finished edit did, in the editor's words; it replaces the verb and target. */
+  summary: z.string().optional(),
 });
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
 

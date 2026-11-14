@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { AGENT_HEADER } from "../src/shared/review";
-import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import {
+  EDIT_SUMMARY_HEADER,
+  TimelineViewSchema,
+} from "../src/shared/timeline/schema";
 import { createReviewService } from "../src/server/projects/review";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { projectFixture } from "./project-fixture";
@@ -248,6 +251,7 @@ test("an unlabelled agent edit is named from its commands, and unaccepted agent 
       }),
     });
     expect(response.status, await response.clone().text()).toBe(200);
+    return decodeURIComponent(response.headers.get(EDIT_SUMMARY_HEADER)!);
   };
   try {
     await send([{ type: "setClip", clipId: "title", opacity: 0.5 }], true);
@@ -255,6 +259,18 @@ test("an unlabelled agent edit is named from its commands, and unaccepted agent 
       (edit) => edit.clipId === "title",
     );
     expect(named?.label).toBe("Set opacity to 50%");
+    // The film grows with its last clip. That row sits in Review away from the clip, so it
+    // says what happened to which clip instead of "Edited index.html composition".
+    const grown = await send(
+      [{ type: "trim", clipId: "title", edge: "end", to: 60 }],
+      true,
+    );
+    expect(grown).toBe("Extended a text clip by 1 s");
+    expect(
+      (await read()).clipEdits
+        ?.filter((edit) => edit.clipId === null)
+        .map((edit) => edit.label),
+    ).toEqual(["Extended a text clip by 1 s"]);
     await send(
       Array.from({ length: 210 }, (_, index) => ({
         type: "setClip",

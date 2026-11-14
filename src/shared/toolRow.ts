@@ -313,11 +313,18 @@ export const editsProject = (tool = "") => stepKind(tool) === "edit";
 
 /** One line for a tool call: a verb and what it acted on. */
 export function describeTool(
-  { tool = "Tool", target }: Pick<AgentMessage, "tool" | "target">,
+  {
+    tool = "Tool",
+    target,
+    summary,
+  }: Pick<AgentMessage, "tool" | "target" | "summary">,
   mode: Mode = "done",
 ) {
   const pick = (verb: Verb) => verb[form[mode]];
   const { name, own, native } = lookup(tool);
+  // A saved edit reads as its own sentence: "Extended still.png by 1 s".
+  const [, did, what] = /^(\S+)\s+(.+)$/s.exec(summary ?? "") ?? [];
+  if (mode === "done" && did && what) return { verb: did, object: what };
   if (own) return { verb: pick(own.verb), object: own.object(target) };
   if (native) return { verb: pick(native.verb), object: target ?? "" };
   const words = name.split(/[_-]+/).filter(Boolean);
@@ -421,6 +428,15 @@ function resultText(text: string) {
       : [],
   );
   return parts.length ? parts.join("\n") : text;
+}
+
+/** What a timeline edit did: the sentence Cutroom's MCP server ends the call's result with. */
+export function editSummary(tool = "", text: string) {
+  const { server, name } = parseTool(tool);
+  if (server !== CUTROOM_SERVER || name !== "timeline_edit") return undefined;
+  const last = resultText(text).trimEnd().split("\n").at(-1)?.trim();
+  // Without a sentence the result ends with the view's closing brace.
+  return last && !/^[\]}]/.test(last) ? last : undefined;
 }
 
 /** The line of a failed call's output that says what went wrong, shown without opening the row. */

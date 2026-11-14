@@ -18,6 +18,7 @@ import { createMcpHttpHandler, localApiBase } from "../src/server/mcp/server";
 import { projectFixture } from "./project-fixture";
 import { z } from "zod";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { editSummary } from "../src/shared/toolRow";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
 
 test("marker names and colours round-trip through MCP, disk, and undo history", async () => {
@@ -468,11 +469,15 @@ test("title text edits through MCP write the source, undo in one step, and refus
         },
       });
     expect(text(await read())).toBe("Launch cut");
-    const edited = resultSchema.parse(await setText("Spring\nlaunch"))
-      .structuredContent.result;
+    const answer = await setText("Spring\nlaunch");
+    const edited = resultSchema.parse(answer).structuredContent.result;
     expect(text(edited)).toBe("Spring\nlaunch");
     expect(await Bun.file(file).text()).toContain(">Spring<br>launch</div>");
     expect(edited.clipEdits?.[0]?.label).toBe("Set text to “Spring launch”");
+    // The agent panel's row reads the sentence that ends the call's result.
+    expect(
+      editSummary("cutroom_studio: timeline_edit", JSON.stringify(answer)),
+    ).toBe("Set text to “Spring launch” for Project title");
     await client.callTool({
       name: "history_undo",
       arguments: { projectId: project.id },

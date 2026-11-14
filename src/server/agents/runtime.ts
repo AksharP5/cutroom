@@ -8,7 +8,7 @@ import type {
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
-import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
+import { CUTROOM_SERVER, editSummary, parseTool } from "../../shared/toolRow";
 import { reviewReplyGuidance } from "../../shared/review";
 import type { ToolNames } from "./tool-subject";
 
@@ -109,10 +109,13 @@ export function toolCalls(cwd: string) {
     },
     finish(id: string, text: string, failed: boolean): AgentMessage {
       const call = calls.get(id);
+      // Read from the whole result: the row keeps only its tail.
+      const summary = failed ? undefined : editSummary(call?.tool, text);
       const message: AgentMessage = {
         ...(call ?? completeMessage("", "tool", id, "Tool")),
         text: text.slice(-32_000),
         status: failed ? "failed" : "complete",
+        ...(summary && { summary }),
       };
       calls.set(id, message);
       return message;
