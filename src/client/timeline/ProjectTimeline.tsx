@@ -12,7 +12,9 @@ import {
   nextTrackIndex,
   shownTracks,
 } from "../../shared/timeline/tracks";
+import { addTitleCommands } from "../edit/addTitle";
 import { editKeys, trimmedPlayhead } from "../edit/keys";
+import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
 import {
   clipboardEdit,
@@ -167,6 +169,33 @@ export function ProjectTimeline({
       },
     ],
   );
+  /** Adds a title at the playhead and hands its placeholder words to the inspector's Text field. */
+  const addTitle = () => {
+    revealTimeline();
+    const at = clock.frame();
+    void editTimeline(
+      projectId,
+      "Add title",
+      (current) =>
+        addTitleCommands(
+          current,
+          destinationTracks(
+            current.tracks,
+            useViewSettings.getState().destinations,
+          ).video,
+          at,
+        ),
+      undefined,
+      (_, commands) => {
+        const id = commands.find((command) => command.type === "insert")?.clip
+          .id;
+        if (id === undefined) return;
+        useTimeline.setState({ selection: { ids: new Set([id]), anchor: id } });
+        useWorkspace.setState({ inspector: true });
+        useTextEdit.setState({ clipId: id });
+      },
+    );
+  };
   const clipboard = (action: Parameters<typeof clipboardEdit>[1]) => {
     if (action !== "copy") revealTimeline();
     clipboardEdit(projectId, action, clock.frame());
@@ -241,6 +270,7 @@ export function ProjectTimeline({
       destinationKey("audio", (current) => current - 1),
     editAudioMoveTrackDestinationDown: () =>
       destinationKey("audio", (current) => current + 1),
+    cutroomAddTitle: addTitle,
     editCopy: () => clipboard("copy"),
     editCut: () => clipboard("cut"),
     editPaste: () => clipboard("overwrite"),
@@ -406,6 +436,7 @@ export function ProjectTimeline({
         run: () => saveViewSettings({ ...viewSettings, density, heights: {} }),
       })),
       "separator",
+      { action: "cutroomAddTitle" },
       { label: "Add video track", run: () => addTrack("video") },
       { label: "Add audio track", run: () => addTrack("audio") },
       // A row the timeline does not hold yet has nothing to remove.
