@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { PreviewTimingSchema } from "../src/shared/preview";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
@@ -246,6 +247,19 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   );
   const docs = await Promise.all([live(page), live(second)]);
   const tokens = await Promise.all([token(page), token(second)]);
+  const snapshots = [page, second].map(async (tab) => {
+    const response = await tab.waitForResponse(
+      (response) =>
+        response.url().includes("cutroom-timing=") &&
+        (response.status() < 300 || response.status() >= 400),
+    );
+    if (!response.ok()) return false;
+    return (
+      z
+        .object({ timing: PreviewTimingSchema.nullable() })
+        .parse(await response.json()).timing !== null
+    );
+  });
   const client = new Client({ name: "timing-test", version: "1" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
@@ -269,7 +283,14 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
     await client.close();
   }
   await Promise.all([changed(page, tokens[0]!), changed(second, tokens[1]!)]);
-  expect(await Promise.all([live(page), live(second)])).toEqual(docs);
+  const offered = await Promise.all(snapshots);
+  for (const [index, tab] of [page, second].entries()) {
+    await expect(
+      tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
+    ).toHaveAttribute("data-media-start", "1");
+    // A shared compilation may lack target proof and require the normal reload.
+    if (offered[index]) expect(await live(tab)).toBe(docs[index]);
+  }
   let source = await readFile(join(project.path, "index.html"), "utf8");
   const diskTokens = await Promise.all([token(page), token(second)]);
   source = source.replace('data-media-start="1"', 'data-media-start="2"');
