@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { TrackGainPreviewSchema } from "../../shared/preview";
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
@@ -31,6 +32,8 @@ export type Zoom = "fit" | "actual";
 
 /** Includes navigation, preparation, and the first fully visible paint. */
 const READY_TIMEOUT = 15_000;
+/** An optional fader update must not hold up normal preview preparation. */
+const MIX_TIMEOUT = 500;
 /**
  * Warm one candidate over the last confirmed picture. Only a visible paint can
  * confirm its replacement; a failed or superseded candidate is retired.
@@ -456,7 +459,8 @@ export function Viewer({
       }}
       data-preview-timing-ready={timingReady === live?.gen || undefined}
       data-preview-ready={
-        handoff.kind === "showing" && handoff.confirmed?.revision === revision
+        handoff.kind === "showing" &&
+        (handoff.confirmed?.revision === revision || mixedRevision === revision)
           ? revision
           : undefined
       }

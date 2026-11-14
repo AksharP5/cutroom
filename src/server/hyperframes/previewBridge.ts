@@ -814,6 +814,10 @@ function installPreviewBridge(
       return Number.isFinite(value) && value > 0 ? value : fallback;
     };
     return {
+      mixSignature:
+        document
+          .querySelector('meta[name="cutroom-mix-signature"]')
+          ?.getAttribute("content") ?? undefined,
       ready: Boolean(win.__player),
       root: Boolean(root),
       error: win.__hfStartupError
@@ -832,6 +836,7 @@ function installPreviewBridge(
     id?: string,
     error?: string,
     hits?: ReturnType<typeof clipsAt>,
+    mixApplied?: boolean,
   ) => {
     const diagnostics = win.__cutroomReadDiagnostics?.();
     parent.postMessage(
@@ -842,6 +847,7 @@ function installPreviewBridge(
         ...(timingRevision ? { timingRevision } : {}),
         error,
         hits,
+        mixApplied,
         ...(diagnostics?.length ? { diagnostics } : {}),
       },
       "*",
@@ -1260,6 +1266,56 @@ function installPreviewBridge(
     const id = data.id;
     void (async () => {
       switch (data.action) {
+        case "track-gains": {
+          if (
+            !("signature" in data) ||
+            data.signature !== state().mixSignature ||
+            !("gains" in data) ||
+            !Array.isArray(data.gains)
+          ) {
+            reply(id, undefined, undefined, false);
+            return;
+          }
+          const changes: { element: Element; volume: number }[] = [];
+          for (const gain of data.gains) {
+            if (
+              !gain ||
+              typeof gain !== "object" ||
+              !("id" in gain) ||
+              typeof gain.id !== "string" ||
+              !("volume" in gain) ||
+              typeof gain.volume !== "number" ||
+              !Number.isFinite(gain.volume) ||
+              gain.volume < 0
+            ) {
+              reply(id, undefined, undefined, false);
+              return;
+            }
+            const element = document.getElementById(gain.id);
+            if (
+              element?.tagName.toLowerCase() !== "hf-audio-group" ||
+              !element.hasAttribute("data-cutroom-track")
+            ) {
+              reply(id, undefined, undefined, false);
+              return;
+            }
+            changes.push({ element, volume: gain.volume });
+          }
+          if (
+            new Set(changes.map((change) => change.element)).size !==
+            document.querySelectorAll("hf-audio-group[data-cutroom-track]")
+              .length
+          ) {
+            reply(id, undefined, undefined, false);
+            return;
+          }
+          for (const { element, volume } of changes)
+            if (element.getAttribute("data-volume") !== String(volume)) {
+              element.setAttribute("data-volume", String(volume));
+            }
+          reply(id, undefined, undefined, true);
+          return;
+        }
         case "observe-position":
           if (
             !("clipId" in data) ||
@@ -1637,6 +1693,7 @@ export function previewDocument(
   html: string,
   composition = "index.html",
   dependencies: string | null = null,
+  mixSignature?: string,
 ) {
   if (!html.includes("data-hf-cutroom-clip-id="))
     html = withPreviewClipIdentities(html);
@@ -1750,7 +1807,7 @@ export function previewDocument(
     sourceTexts,
     timing && { ...timing, clips: timing.clips.map(({ id }) => ({ id })) },
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

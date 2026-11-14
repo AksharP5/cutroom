@@ -4,6 +4,7 @@ import { openContextMenu } from "../components/ContextMenu";
 import type { MenuItem } from "../components/menu";
 import { openClipMenu } from "../edit/openClipMenu";
 import { useStore } from "zustand";
+import { audioGainToText } from "@hyperframes/core/audio-gain";
 import { useEffect, useMemo, useState } from "react";
 import type { ReviewItem, ReviewStatus } from "../../shared/review";
 import { toFrames } from "../../shared/timeline/apply";
@@ -35,6 +36,8 @@ import {
   saveViewSettings,
   useViewSettings,
 } from "./viewSettings";
+import { TrackGainDialog } from "./TrackGain";
+import { clipName } from "../../shared/timeline/labels";
 import { MarkerEditor } from "./MarkerEditor";
 import type { Marker, Track } from "../../shared/timeline/schema";
 import type { TimelineClock, TimelinePin, TimelineProps } from "./Timeline";
@@ -104,6 +107,7 @@ export function ProjectTimeline({
     state.kind === "recording" ? state : null,
   );
   const view = useTimeline((state) => state.view);
+  const [gainTrack, setGainTrack] = useState<Track | null>(null);
   const [editingMarker, setEditingMarker] = useState<{
     marker: Marker;
     anchor: { x: number; y: number };
@@ -389,6 +393,18 @@ export function ProjectTimeline({
     void editTimeline(projectId, `Add ${kind} track`, (timeline) => [
       { type: "setTrack", index: nextTrackIndex(timeline.tracks), kind },
     ]);
+  const setTrackGain: TimelineProps["onTrackGain"] = (track, volume) => {
+    const excluded = view.timeline.clips.filter(
+      (clip) => clip.track === track.index && clip.trackGainWarning,
+    );
+    if (excluded.length)
+      showToast(
+        `Track gain does not apply to ${excluded.map(clipName).join(", ")}: authored audio group membership is preserved.`,
+      );
+    void editTimeline(projectId, "Track gain", () => [
+      { type: "setTrack", index: track.index, kind: track.kind, volume },
+    ]);
+  };
   /** A header's switches, the track density, and adding or removing a track. */
   const trackMenu = (row: Row | null): MenuItem[] => {
     const track = row?.track;
@@ -423,6 +439,16 @@ export function ProjectTimeline({
                 (!armed && track.locked) ||
                 (state.kind !== "idle" && state.kind !== "armed"),
               run: () => voiceover.toggleArm(track),
+            },
+            { label: "Set gain...", run: () => setGainTrack(track) },
+            {
+              // A compact header has no room for the level, so the menu names it.
+              label:
+                track.volume === 1
+                  ? "Reset gain"
+                  : `Reset gain (${audioGainToText(track.volume)})`,
+              disabled: track.volume === 1,
+              run: () => setTrackGain(track, 1),
             },
           ]
         : []),
@@ -462,6 +488,13 @@ export function ProjectTimeline({
   };
   return (
     <>
+      {gainTrack && (
+        <TrackGainDialog
+          track={gainTrack}
+          onCommit={(volume) => setTrackGain(gainTrack, volume)}
+          onClose={() => setGainTrack(null)}
+        />
+      )}
       <Timeline
         recording={
           recording ? { track: recording.track, start: recording.start } : null
@@ -511,6 +544,7 @@ export function ProjectTimeline({
             },
           ])
         }
+        onTrackGain={setTrackGain}
         onTrackMenu={(event, anchor, row) =>
           openContextMenu(
             event,

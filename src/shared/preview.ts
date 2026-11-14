@@ -1,8 +1,22 @@
+import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { z } from "zod";
 
 export type EditFrame = { clipId: string; time: number };
 
+export const TrackGainPreviewSchema = z.object({
+  compositions: z.array(z.string()),
+  signature: z.string(),
+  gains: z.array(
+    z.object({
+      id: z.string().min(1),
+      volume: z.number().nonnegative().max(MAX_AUDIO_GAIN),
+    }),
+  ),
+});
+export type TrackGainPreview = z.infer<typeof TrackGainPreviewSchema>;
+
 export const PreviewStateSchema = z.object({
+  mixSignature: z.string().optional(),
   ready: z.boolean(),
   root: z.boolean(),
   error: z.string().nullable(),
@@ -85,6 +99,7 @@ export const PreviewReplySchema = z.object({
   error: z.string().optional(),
   hits: z.array(PictureHitSchema).optional(),
   timingRevision: z.string().optional(),
+  mixApplied: z.boolean().optional(),
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 

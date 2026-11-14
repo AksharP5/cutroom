@@ -20,6 +20,7 @@ import type {
   PictureHit,
   PlaybackClock,
   PreviewState,
+  TrackGainPreview,
 } from "../../shared/preview";
 import { z } from "zod";
 import type { RuntimePlayer } from "./transport";
@@ -371,6 +372,11 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   return {
     player,
+    async mix(snapshot: TrackGainPreview) {
+      if (!state.mixSignature || snapshot.signature !== state.mixSignature)
+        return false;
+      return (await request("track-gains", snapshot)).mixApplied === true;
+    },
     signal: closing.signal,
     async activate() {
       positionTargets.add(position);
