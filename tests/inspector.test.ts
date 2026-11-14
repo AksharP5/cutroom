@@ -246,6 +246,12 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
     await edit("headline", "Agent title", true);
     await edit("headline", "Agent second edit", true);
     const view = await edit("caption", "Agent caption", true);
+    const captionEdit = view.clipEdits!.find(
+      (edit) => edit.clipId === "caption",
+    )!;
+    expect(captionEdit.label).toBe(
+      'Renamed to Agent caption; Agent label: "Agent caption"',
+    );
     expect(view.clipEdits?.map((edit) => edit.by)).toEqual([
       "human",
       "agent",
@@ -280,15 +286,15 @@ test("the Changes ledger credits owner and agent, accepts one edit at a time and
     await edit("caption", "Getting started", false);
     expect((await read()).agentChanges).toEqual([]);
     expect(
-      (await read()).clipEdits!.find((edit) => edit.label === "Agent caption"),
+      (await read()).clipEdits!.find((edit) => edit.id === captionEdit.id),
     ).toMatchObject({ accepted: false, resolution: "source" });
     await fixture.request(`${path}/history/undo`, "POST");
     expect((await read()).agentChanges).toEqual(["caption"]);
     expect(
-      (await read()).clipEdits!.find((edit) => edit.label === "Agent caption"),
+      (await read()).clipEdits!.find((edit) => edit.id === captionEdit.id),
     ).toMatchObject({ accepted: false });
     expect(
-      (await read()).clipEdits!.find((edit) => edit.label === "Agent caption")
+      (await read()).clipEdits!.find((edit) => edit.id === captionEdit.id)
         ?.resolution,
     ).toBeUndefined();
   } finally {

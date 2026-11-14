@@ -724,7 +724,10 @@ export function createReviewService(store: ProjectStore) {
       token: string | undefined,
       work: () => Promise<T>,
       noteId?: string,
-      options: { create?: boolean; label?: string } = {},
+      options: {
+        create?: boolean;
+        label?: string | ((result: T) => string);
+      } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
@@ -788,7 +791,9 @@ export function createReviewService(store: ProjectStore) {
           actor,
           noteIds,
           pendingRows,
-          options.label,
+          typeof options.label === "function"
+            ? options.label(result)
+            : options.label,
         );
         return result;
       }),

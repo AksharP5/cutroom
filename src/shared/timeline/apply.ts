@@ -46,7 +46,7 @@ interface Batch {
 interface ApplyOptions {
   clipboards?: Batch["clipboards"];
   /** Observe each admitted command before the batch is written. */
-  onApply?: (before: Timeline, after: Timeline) => void;
+  onApply?: (before: Timeline, after: Timeline, command: Command) => void;
   /** Source-restricted auto-select razor targets left whole by this batch. */
   onSkip?: Batch["onSkip"];
   onCreate?: OnCreate;
@@ -224,7 +224,7 @@ export function applyAll(
   const result = commands.reduce((current, command, index) => {
     try {
       const next = applyIn(current, command, batch);
-      onApply?.(current, next);
+      onApply?.(current, next, command);
       return next;
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;

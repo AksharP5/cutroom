@@ -12,6 +12,16 @@ export const clipName = (clip: Pick<Clip, "id" | "label" | "src">) =>
 export const formatPercent = (value: number) =>
   `${Number((value * 100).toFixed(4))}%`;
 
+const truncate = (text: string, length: number) =>
+  Array.from(text).slice(0, length).join("");
+
+/** Deduplicates command sentences and caps saved labels without splitting a code point. */
+export function joinEditLabels(labels: string[], fallback: string) {
+  return (
+    truncate([...new Set(labels)].filter(Boolean).join("; "), 120) || fallback
+  );
+}
+
 /**
  * Command sentences shared by history, the inspector, review and agent approvals. `past` reads
  * beside the clip it changed, `done` names the clip so it reads anywhere, `pending` asks.
@@ -147,7 +157,7 @@ export function editLabel(
         if (command.text !== undefined) {
           const words = command.text.replaceAll("\n", " ");
           parts.push(
-            `Set text to “${words.length > 40 ? `${words.slice(0, 40).trimEnd()}…` : words}”`,
+            `Set text to “${words.length > 40 ? `${truncate(words, 40).trimEnd()}…` : words}”`,
           );
         }
         if (command.opacity !== undefined)
@@ -274,7 +284,7 @@ export function editLabel(
           const note = command.note.replace(/\s+/g, " ").trim();
           parts.push(
             note
-              ? `note to "${note.length > 80 ? `${note.slice(0, 80).trimEnd()}…` : note}"`
+              ? `note to "${note.length > 80 ? `${truncate(note, 80).trimEnd()}…` : note}"`
               : "clear note",
           );
         }
@@ -309,6 +319,7 @@ export function editLabel(
           : "Changed in/out range";
     }
   });
-  const label = [...new Set(labels)].filter(Boolean).join("; ");
-  return (pending ? label : label.slice(0, 120)) || fallback;
+  return pending
+    ? [...new Set(labels)].filter(Boolean).join("; ") || fallback
+    : joinEditLabels(labels, fallback);
 }
