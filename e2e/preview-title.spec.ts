@@ -192,7 +192,7 @@ async function parity(
   await fresh.goto("about:blank");
 }
 
-test("every inspector title control retains the paused document and matches fresh entrance, hold and exit PNGs", async ({
+test("inspector title controls and supported motion retain the paused document and match fresh PNGs", async ({
   page,
   request,
 }, info) => {
@@ -265,7 +265,7 @@ test("every inspector title control retains the paused document and matches fres
       .locator("#lower");
     await expect(shown.locator("b, script")).toHaveCount(0);
     await expect(shown.locator("br")).toHaveCount(2);
-    for (const preset of ["none", "fade", "scale", "wipe", "slide"] as const) {
+    for (const preset of ["none", "fade", "wipe", "slide"] as const) {
       await afterPaint(page, () =>
         edit([
           {
@@ -299,6 +299,46 @@ test("every inspector title control retains the paused document and matches fres
   } finally {
     await fresh.close();
   }
+});
+
+test("loaded Scale titles reload font, size, plate and words from the saved document", async ({
+  page,
+  request,
+}) => {
+  const { edit } = await fixture(request, page);
+  await afterPaint(page, () =>
+    edit([
+      {
+        type: "setClip",
+        clipId: "lower",
+        title: { in: { preset: "scale" }, out: { preset: "scale" } },
+      },
+    ]),
+  );
+  await page.reload();
+  await ready(page);
+  await seekFrame(page, 90);
+  const changes: CommandInput[] = [
+    { type: "setClip", clipId: "lower", title: { font: "Mono" } },
+    { type: "setClip", clipId: "lower", title: { size: 42 } },
+    { type: "setClip", clipId: "lower", title: { plate: "#77442299" } },
+    { type: "setClip", clipId: "lower", text: "Changed & owner\nSecond line" },
+  ];
+  for (const command of changes) {
+    const original = await live(page);
+    await afterPaint(page, () => edit([command]));
+    expect(await live(page)).not.toBe(original);
+  }
+  const title = page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("#lower");
+  await expect(title).toHaveAttribute("data-title-font", "Mono");
+  await expect(title).toHaveAttribute("data-title-size", "42px");
+  await expect(title).toHaveAttribute("data-title-plate", "#77442299");
+  await expect(title).toHaveAttribute("data-title-in", "scale");
+  await expect(title).toHaveAttribute("data-title-out", "scale");
+  expect(await title.innerText()).toBe("Changed & owner\nSecond line");
 });
 
 test("MCP title edits and history update both tabs through the same revisioned live operation", async ({
@@ -385,7 +425,7 @@ for (const failure of [
   "discovery",
   "seek style",
   "seek attribute",
-  "font and motion",
+  "scale",
 ] as const)
   test(`title ${failure} uncertainty falls back to the saved document`, async ({
     page,
@@ -447,8 +487,8 @@ for (const failure of [
           text: "Saved words",
           title: {
             size: 48,
-            in: { preset: failure === "font and motion" ? "scale" : "slide" },
-            ...(failure === "font and motion"
+            in: { preset: failure === "scale" ? "scale" : "slide" },
+            ...(failure === "scale"
               ? { font: "Mono", out: { preset: "slide" as const } }
               : {}),
           },

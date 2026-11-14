@@ -1596,22 +1596,25 @@ function installPreviewBridge(
                 )
               )
                 throw new Error("This title needs animation discovery.");
-              // A combined font/motion change can paint different scaled pixels despite
-              // identical computed styles. Preserve fresh-load fidelity with a reload.
-              const changed = values.filter(
-                ([name, value]) => element.getAttribute(name) !== value,
-              );
+              // Scaled titles can paint different pixels even when their computed
+              // state matches a fresh load. Keep those edits on the canonical reload path.
+              const changed =
+                values.some(
+                  ([name, value]) => element.getAttribute(name) !== value,
+                ) ||
+                JSON.stringify(titleNodes(element)) !==
+                  JSON.stringify(title.text) ||
+                nextTitleStyle !== titleStyle;
               if (
-                changed.some(([name]) => name === "data-title-font") &&
-                changed.some(
-                  ([name]) =>
-                    name.startsWith("data-title-in") ||
-                    name.startsWith("data-title-out"),
+                changed &&
+                values.some(
+                  ([name, value]) =>
+                    (name === "data-title-in" || name === "data-title-out") &&
+                    (value === "scale" ||
+                      element.getAttribute(name) === "scale"),
                 )
               )
-                throw new Error(
-                  "Combined title font and motion changes require fresh layout.",
-                );
+                throw new Error("Scale titles require fresh rasterization.");
               text = title.text;
             } else if (title !== null)
               throw new Error("The preview titles changed.");
