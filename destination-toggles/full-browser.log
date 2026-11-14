@@ -1,0 +1,619 @@
+
+Running 402 tests using 1 worker
+
+  ✓    1 e2e/agent-cancel.spec.ts:37:2 › Stop cancels turn preparation, keeps the draft, and does not appear for model changes (1.2s)
+  ✓    2 e2e/agent-cancel.spec.ts:136:2 › Stop during conversation creation prevents a late response from starting a turn (911ms)
+  ✓    3 e2e/agent-marks.spec.ts:11:2 › a rendered GSAP tween edit produces one composition row and no clip underlines (2.2s)
+  ✓    4 e2e/agent-marks.spec.ts:156:4 › a rendered timeline receiver edit stays visible as a composition row (2.1s)
+  ✓    5 e2e/agent-marks.spec.ts:156:4 › a rendered timeline delay edit stays visible as a composition row (2.1s)
+  ✓    6 e2e/agent-marks.spec.ts:156:4 › a rendered timeline defaults edit stays visible as a composition row (2.1s)
+  ✓    7 e2e/agent-marks.spec.ts:217:2 › replacing rendered media reviews its clip and keeps owner replacements unmarked (2.9s)
+  ✓    8 e2e/agent-requests.spec.ts:61:2 › a long agent question keeps its answer and the composer in a short window (426ms)
+  ✓    9 e2e/agent-requests.spec.ts:98:2 › an approval shows the full target and scoped Always allow in a short window (1.4s)
+  ✓   10 e2e/agent-transcript.spec.ts:39:2 › a formed group keeps its focused disclosure when running calls fail (545ms)
+  ✓   11 e2e/agent-transcript.spec.ts:91:2 › a turn's tool calls fold into one step group that counts in place, with failures and edits kept in view (845ms)
+  ✓   12 e2e/agent-transcript.spec.ts:176:2 › a staged approval lists each command, keeps raw input collapsed, and answers from the keyboard (958ms)
+  ✓   13 e2e/agent-transcript.spec.ts:276:2 › a command approval shows the whole command below a plain question (498ms)
+  ✓   14 e2e/agent-transcript.spec.ts:319:2 › a live timeline approval names its marker and MCP clients receive the reply guidance (898ms)
+  ✓   15 e2e/agent-transcript.spec.ts:376:2 › approval move destinations follow preceding commands without changing the project (1.1s)
+  ✓   16 e2e/animated-title.spec.ts:21:2 › an outside MCP client follows the animated-title recipe on a fresh offline project (7.7s)
+  ✓   17 e2e/animation-feedback-attribution.spec.ts:55:2 › qualified selectors leave a shot and clip-local host quiet, then warn only for the title (2.3s)
+  ✓   18 e2e/animation-feedback-attribution.spec.ts:109:2 › animation toast expires at the existing four-second hold without a dismiss action (5.6s)
+  ✓   19 e2e/animation-feedback-attribution.spec.ts:131:2 › HTTP MCP gets its edit result first and an animation notification afterward (1.4s)
+  ✓   20 e2e/animation-feedback-attribution.spec.ts:178:2 › only the initiating tab warns and leaving the project clears its action (3.0s)
+{"r2":"external","before":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   21 e2e/animation-feedback-r2.spec.ts:13:4 › R2 external: Inspector move warns and preserves unrelated animation (1.8s)
+{"r2":"negativeDelay","before":[{"id":"cta","owner":"cta","at":0},{"id":"shot-b","owner":"shot-b","at":6}],"after":[{"id":"cta","owner":"cta","at":0},{"id":"shot-b","owner":"shot-b","at":6}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   22 e2e/animation-feedback-r2.spec.ts:13:4 › R2 negativeDelay: Inspector move warns and preserves unrelated animation (1.6s)
+{"r2":"aliasedDefaults","before":[{"id":"cta","owner":"cta","at":36}],"after":[{"id":"cta","owner":"cta","at":37}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   23 e2e/animation-feedback-r2.spec.ts:13:4 › R2 aliasedDefaults: Inspector move warns and preserves unrelated animation (1.7s)
+{"r2":"computedMethod","before":[{"id":"cta","owner":"cta","at":36}],"after":[{"id":"cta","owner":"cta","at":37}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   24 e2e/animation-feedback-r2.spec.ts:13:4 › R2 computedMethod: Inspector move warns and preserves unrelated animation (1.7s)
+{"r2":"duplicateId","before":[{"id":"cta","owner":"cta","at":36},{"id":"cta","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"cta","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   25 e2e/animation-feedback-r2.spec.ts:13:4 › R2 duplicateId: Inspector move warns and preserves unrelated animation (1.7s)
+{"r2":"membership","before":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"after":[{"id":"cta","owner":"cta","at":36},{"id":"shot-b","owner":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   26 e2e/animation-feedback-r2.spec.ts:13:4 › R2 membership: Inspector move warns and preserves unrelated animation (1.7s)
+  ✓   27 e2e/animation-feedback-r2.spec.ts:112:2 › R2 Map.set does not claim that a clip has animation (1.6s)
+{"r3":"nested","before":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":4},{"id":"cta","host":"child","at":4}]},"after":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":4},{"id":"cta","host":"child","at":4}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   28 e2e/animation-feedback-r3.spec.ts:17:4 › R3 nested: move warns and preserves rendered animation (7.1s)
+{"r3":"quirks","before":{"mode":"BackCompat","tweens":[{"id":"cta","host":"main","at":4},{"id":"CTA","host":"main","at":4}]},"after":{"mode":"BackCompat","tweens":[{"id":"cta","host":"main","at":4},{"id":"CTA","host":"main","at":4}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   29 e2e/animation-feedback-r3.spec.ts:17:4 › R3 quirks: move warns and preserves rendered animation (2.1s)
+{"r3":"precision","before":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":10000000000000000}]},"after":{"mode":"CSS1Compat","tweens":[{"id":"cta","host":"main","at":10000000000000000}]},"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   30 e2e/animation-feedback-r3.spec.ts:17:4 › R3 precision: move warns and preserves rendered animation (1.9s)
+{"r4":"autoVideoFront","before":[{"id":"hf-video-0","tag":"VIDEO","at":4},{"id":"hf-video-0","tag":"SPAN","at":4}],"after":[{"id":"hf-video-0","tag":"VIDEO","at":4},{"id":"hf-video-0","tag":"SPAN","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":71200}
+  ✓   31 e2e/animation-feedback-r4.spec.ts:31:4 › R4 autoVideoFront: edit preserves tween seconds in the editor and MP4 (5.0s)
+{"r4":"noscriptScript","before":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"after":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓   32 e2e/animation-feedback-r4.spec.ts:31:4 › R4 noscriptScript: edit preserves tween seconds in the editor and MP4 (5.7s)
+{"r4":"pastedExecutable","before":[{"id":"cta","tag":"DIV","at":4}],"after":[{"id":"cta","tag":"DIV","at":4},{"id":"other","tag":"DIV","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓   33 e2e/animation-feedback-r4.spec.ts:31:4 › R4 pastedExecutable: edit preserves tween seconds in the editor and MP4 (6.7s)
+{"r4":"svgUse","before":[{"id":"word","tag":"text","at":4}],"after":[{"id":"word","tag":"text","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":3468}
+  ✓   34 e2e/animation-feedback-r4.spec.ts:31:4 › R4 svgUse: edit preserves tween seconds in the editor and MP4 (6.9s)
+{"r4":"smil","before":[{"id":"","tag":"text","at":4},{"id":"","tag":"text","at":4}],"after":[{"id":"","tag":"text","at":4},{"id":"","tag":"text","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":4222}
+  ✓   35 e2e/animation-feedback-r4.spec.ts:31:4 › R4 smil: edit preserves tween seconds in the editor and MP4 (6.9s)
+{"r4":"tableOwner","before":[{"id":"word","tag":"SPAN","at":4}],"after":[{"id":"word","tag":"SPAN","at":4}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss","exportBrightPixels":7860}
+  ✓   36 e2e/animation-feedback-r4.spec.ts:31:4 › R4 tableOwner: edit preserves tween seconds in the editor and MP4 (7.1s)
+{"name":"relative","before":[{"id":"cta","at":36},{"id":"shot-b","at":36}],"after":[{"id":"cta","at":36},{"id":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   37 e2e/animation-feedback-safety.spec.ts:17:4 › R1 relative: Inspector move preserves authored script and every runtime tween, with a toast (1.6s)
+{"name":"mutablePosition","before":[{"id":"cta","at":40}],"after":[{"id":"cta","at":40}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   38 e2e/animation-feedback-safety.spec.ts:17:4 › R1 mutablePosition: Inspector move preserves authored script and every runtime tween, with a toast (1.5s)
+{"name":"mutableTarget","before":[{"id":"shot-b","at":36}],"after":[{"id":"shot-b","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   39 e2e/animation-feedback-safety.spec.ts:17:4 › R1 mutableTarget: Inspector move preserves authored script and every runtime tween, with a toast (1.7s)
+{"name":"nestedScaled","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   40 e2e/animation-feedback-safety.spec.ts:17:4 › R1 nestedScaled: Inspector move preserves authored script and every runtime tween, with a toast (1.7s)
+{"name":"helperMap","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   41 e2e/animation-feedback-safety.spec.ts:17:4 › R1 helperMap: Inspector move preserves authored script and every runtime tween, with a toast (1.7s)
+{"name":"wrongTimeline","before":[{"id":"cta","at":36}],"after":[{"id":"cta","at":36}],"scriptUnchanged":true,"toast":"cta's animation stayed behind.\nAsk agent\nDismiss"}
+  ✓   42 e2e/animation-feedback-safety.spec.ts:17:4 › R1 wrongTimeline: Inspector move preserves authored script and every runtime tween, with a toast (1.6s)
+  ✓   43 e2e/animation-feedback.spec.ts:98:2 › W ripple warns about the checkpoint title; script and exported animation remain unchanged (8.1s)
+  ✓   44 e2e/animation-feedback.spec.ts:213:2 › timeline move, Inspector Start and real MCP moves all warn without changing scripts (1.7s)
+  ✓   45 e2e/animation-feedback.spec.ts:295:2 › animation shows one dismissible Ask agent toast, saving a Review note only on request (2.7s)
+  ✓   46 e2e/animation-feedback.spec.ts:372:2 › several animated clips share one toast and Ask agent adds a note to each (1.9s)
+  ✓   47 e2e/animation-feedback.spec.ts:398:2 › W overlap warns once for the shortened lower third and later title; Ask agent saves both notes (3.2s)
+  ✓   48 e2e/appearance.spec.ts:92:4 › workspace keeps the preview and controls usable at 956×1050 (2.1s)
+  ✓   49 e2e/appearance.spec.ts:92:4 › workspace keeps the preview and controls usable at 1440×900 (2.4s)
+  ✓   50 e2e/appearance.spec.ts:92:4 › workspace keeps the preview and controls usable at 1720×1050 (2.3s)
+  ✓   51 e2e/appearance.spec.ts:196:2 › review and agent drafts survive workspace tabs, panels, and resizing (2.3s)
+  ✓   52 e2e/approval-review.spec.ts:9:4 › 30 pending commands scroll while approval actions stay visible (1.8s)
+  ✓   53 e2e/approval-review.spec.ts:9:4 › 1000 pending commands scroll while approval actions stay visible (2.4s)
+  ✓   54 e2e/approval-review.spec.ts:114:2 › an approval for another composition uses honest track and marker fallbacks (470ms)
+  ✓   55 e2e/async-composition-errors.spec.ts:54:4 › interval retains its composition filename in the header and MCP (1.8s)
+  ✓   56 e2e/async-composition-errors.spec.ts:54:4 › animation frame retains its composition filename in the header and MCP (1.7s)
+  ✓   57 e2e/async-composition-errors.spec.ts:54:4 › event handler retains its composition filename in the header and MCP (1.7s)
+  ✓   58 e2e/async-composition-errors.spec.ts:54:4 › promise rejection retains its composition filename in the header and MCP (1.8s)
+  ✓   59 e2e/async-composition-errors.spec.ts:54:4 › saved rejection stack retains its composition filename in the header and MCP (1.7s)
+  ✓   60 e2e/async-composition-errors.spec.ts:54:4 › module rejection retains its composition filename in the header and MCP (1.9s)
+  ✓   61 e2e/async-composition-errors.spec.ts:54:4 › unknown rejection retains its composition filename in the header and MCP (1.7s)
+  ✓   62 e2e/audio-clip-finish.spec.ts:9:2 › five tracks fit, fade handles spare labels and follow a held roll, and edges trim through gain (2.6s)
+  ✓   63 e2e/clip-bodies.spec.ts:11:6 › clip bodies at DPR 1 › video inserts draw filmstrips and linked waveforms, and a silent video shows no sound (3.7s)
+  ✓   64 e2e/clip-bodies.spec.ts:11:6 › clip bodies at DPR 2 › video inserts draw filmstrips and linked waveforms, and a silent video shows no sound (4.0s)
+  ✓   65 e2e/clip-bodies.spec.ts:142:2 › exact filmstrip frames follow the view: on a cold cache, after a scroll, after an edit, and after a resize (5.0s)
+  ✓   66 e2e/clipboard.spec.ts:9:2 › clipboard keys overwrite, lift and insert linked clips, each edit undoing once (3.8s)
+  ✓   67 e2e/clipboard.spec.ts:175:2 › clipboard names restricted clips and insert preserves the auto-select refusal (1.4s)
+  ✓   68 e2e/composition-errors.spec.ts:28:4 › root composition failures reach the header and an outside MCP client (1.9s)
+  ✓   69 e2e/composition-errors.spec.ts:28:4 › nested composition failures reach the header and an outside MCP client (1.7s)
+[WebServer] [Bundler] Skipping sub-composition "compositions/absent.html": the file is empty (0 bytes or whitespace-only).
+[WebServer] [Bundler] Skipping sub-composition "compositions/absent.html": the file is empty (0 bytes or whitespace-only).
+  ✓   70 e2e/composition-errors.spec.ts:28:4 › missing composition failures reach the header and an outside MCP client (1.8s)
+  ✓   71 e2e/composition-errors.spec.ts:28:4 › startup composition failures reach the header and an outside MCP client (2.0s)
+  ✓   72 e2e/composition-errors.spec.ts:28:4 › uncaught composition failures reach the header and an outside MCP client (1.8s)
+  ✓   73 e2e/composition-errors.spec.ts:28:4 › syntax composition failures reach the header and an outside MCP client (1.9s)
+  ✓   74 e2e/composition-errors.spec.ts:28:4 › nested-startup composition failures reach the header and an outside MCP client (2.0s)
+  ✓   75 e2e/context-menus.spec.ts:76:2 › the clip menu acts on the selection through the same edits as the keys (2.8s)
+  ✓   76 e2e/context-menus.spec.ts:176:2 › the track menu presses the header's switches and returns focus to the header (2.2s)
+  ✓   77 e2e/context-menus.spec.ts:239:2 › the media menu places a file at the playhead, and the desktop reveals it (2.4s)
+  ✓   78 e2e/context-menus.spec.ts:303:2 › a project tile's menu opens it, and a browser has no file manager to offer (758ms)
+  ✓   79 e2e/context-menus.spec.ts:336:2 › a right-click on the picture picks the clip drawn there and opens its menu (1.5s)
+  ✓   80 e2e/context-menus.spec.ts:384:2 › Ctrl+Alt+K lists every binding from the keymap, searchable, and closes with Escape (1.7s)
+  ✓   81 e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP (6.8s)
+  ✓   82 e2e/destination-tracks.spec.ts:340:2 › a missing destination names the absent track instead of swallowing its key (1.6s)
+  ✓   83 e2e/destination-tracks.spec.ts:367:2 › placed media goes to the destination tracks chosen in the headers by click and key (4.7s)
+  ✓   84 e2e/destination-tracks.spec.ts:453:2 › an overwrite that takes part of another clip says so, with Undo (2.3s)
+  ✓   85 e2e/destination-tracks.spec.ts:477:2 › an agent reads and sets the destinations, and the open editor follows (2.0s)
+  ✓   86 e2e/destination-tracks.spec.ts:527:2 › a project's destinations show after a switch made while the last project is still saving (3.1s)
+  ✓   87 e2e/destination-tracks.spec.ts:571:2 › a destination answer read before a newer choice never replaces it (2.7s)
+  ✓   88 e2e/editing-keys.spec.ts:93:2 › Q, W, E and Shift+X cut a sequence, each one undo step (3.2s)
+  ✓   89 e2e/editing-keys.spec.ts:166:2 › Q on a later shot parks at its start before the server answers and preserves a later seek (1.4s)
+  ✓   90 e2e/editing-keys.spec.ts:191:4 › a server-refused Q restores the playhead (1.3s)
+  ✓   91 e2e/editing-keys.spec.ts:191:4 › a server-refused Q preserves a later seek (1.5s)
+  ✓   92 e2e/editing-keys.spec.ts:221:2 › a server-refused W on the last clip puts the playhead back where it was (1.4s)
+  ✓   93 e2e/editing-keys.spec.ts:250:2 › a refused edit is taken back and the header shows the engine's reason (2.6s)
+  ✓   94 e2e/editing-keys.spec.ts:319:2 › a cut the server has not seen keeps its id, so its selection survives an agent's cut (1.4s)
+  ✓   95 e2e/editing-keys.spec.ts:348:2 › X on a clip an agent deleted is refused, even after the agent cuts where it was (1.2s)
+  ✓   96 e2e/editing-keys.spec.ts:370:2 › X never lifts an agent's piece over the same frames as the editor's refused cut (1.5s)
+  ✓   97 e2e/editing-keys.spec.ts:403:2 › D and then X act on the editor's piece while an agent cuts elsewhere (1.7s)
+  ✓   98 e2e/editing-keys.spec.ts:439:2 › a key pressed right after an agent's edit is applied on top of it (1.3s)
+  ✓   99 e2e/editing-keys.spec.ts:455:2 › when a cut is refused, a queued X on its piece is taken back too (1.4s)
+  ✓  100 e2e/editing-keys.spec.ts:490:2 › a title shortened by ripple keeps its id, so queued X lifts the whole title (1.6s)
+  ✓  101 e2e/editing-keys.spec.ts:527:2 › Q and E pressed on a selected shot act on that shot only, even after an agent removes it (1.7s)
+  ✓  102 e2e/editing-keys.spec.ts:563:2 › an X on a shortened title is refused when the ripple is refused (1.5s)
+  ✓  103 e2e/editing-keys.spec.ts:610:4 › Q and E at absolute frames are refused when an agent ripple trims the shot before first (1.5s)
+  ✓  104 e2e/editing-keys.spec.ts:610:4 › Q and E at absolute frames are refused when an agent moves the shot first (1.6s)
+  ✓  105 e2e/editing-keys.spec.ts:639:4 › y selects forward on auto-select unlocked tracks at a clip boundary (1.8s)
+  ✓  106 e2e/editing-keys.spec.ts:639:4 › Alt+y selects forward on all unlocked tracks at a clip boundary (1.8s)
+  ✓  107 e2e/editing-keys.spec.ts:639:4 › Control+y selects backward on auto-select unlocked tracks at a clip boundary (1.8s)
+  ✓  108 e2e/editing-keys.spec.ts:639:4 › Control+Alt+y selects backward on all unlocked tracks at a clip boundary (1.7s)
+  ✓  109 e2e/editing-keys.spec.ts:714:2 › Q and W at a cut preserve the incoming clip and the rest of the film, including MCP (2.1s)
+  ✓  110 e2e/export.spec.ts:95:2 › Export waits for edits, continues when hidden and opens the completed MP4 (6.0s)
+  ✓  111 e2e/export.spec.ts:186:2 › two default exports choose distinct names, show size and keep the tool row still (7.6s)
+  ✓  112 e2e/export.spec.ts:249:2 › changing the export folder refreshes the suggested name and preserves a typed name (1.2s)
+  ✓  113 e2e/export.spec.ts:270:2 › Export reports a refused pending edit instead of rendering the saved version (1.7s)
+  ✓  114 e2e/export.spec.ts:311:2 › Location initializes before accepting edits and keeps the typed destination (1.2s)
+  ✓  115 e2e/export.spec.ts:345:2 › the embedded editor exports a local composition and downloads a playable MP4 (4.2s)
+  ✓  116 e2e/export.spec.ts:381:2 › Shift+8 defaults to marked frames and exports their exact duration (4.7s)
+  ✓  117 e2e/export.spec.ts:424:2 › Cancel stops the real render and removes a named partial file (1.5s)
+  ✓  118 e2e/export.spec.ts:451:2 › Export explains a range it can't render instead of blanking the editor (1.2s)
+  ✓  119 e2e/export.spec.ts:484:2 › Shift+8 then Enter starts Export instead of closing, including slow defaults (5.0s)
+  ✓  120 e2e/gestures.spec.ts:134:4 › a held drag refuses an agent's change to shot-4 (1.6s)
+  ✓  121 e2e/gestures.spec.ts:134:4 › a held drag refuses an agent's change to partner (1.6s)
+  ✓  122 e2e/gestures.spec.ts:168:2 › unrelated agent edits leave a held drag's original destination intact (1.8s)
+  ✓  123 e2e/gestures.spec.ts:197:2 › an agent changing a linked partner before send also refuses the released drag (1.6s)
+  ✓  124 e2e/gestures.spec.ts:238:6 › an agent's move into an empty overwrite destination refuses the held drag (2.4s)
+  ✓  125 e2e/gestures.spec.ts:238:6 › an agent's move into an empty overwrite destination refuses the retry drag (2.5s)
+  ✓  126 e2e/gestures.spec.ts:238:6 › an agent's insert into an empty overwrite destination refuses the held drag (2.5s)
+  ✓  127 e2e/gestures.spec.ts:238:6 › an agent's insert into an empty overwrite destination refuses the retry drag (2.4s)
+  ✓  128 e2e/gestures.spec.ts:349:4 › c changes a stationary drag's snap before release (1.7s)
+  ✓  129 e2e/gestures.spec.ts:349:4 › Control changes a stationary drag's snap before release (1.7s)
+  ✓  130 e2e/gestures.spec.ts:349:4 › Meta changes a stationary drag's snap before release (1.6s)
+  ✓  131 e2e/gestures.spec.ts:381:2 › dragging a clip moves it along its track and onto another, one undo step each (3.3s)
+  ✓  132 e2e/gestures.spec.ts:442:2 › a drag overwrites and splits the covered clip, with one undo step (2.7s)
+  ✓  133 e2e/gestures.spec.ts:520:2 › edges resize with Select and ripple or roll with Trim, and the blade cuts where it clicks (3.2s)
+  ✓  134 e2e/gestures.spec.ts:584:2 › a rolled clip's duration rides its held edge, reads the held length, and hides whole when the clip gets narrow (3.0s)
+  ✓  135 e2e/gestures.spec.ts:646:2 › Esc cancels a drag and keeps the tool and the selection (1.5s)
+  ✓  136 e2e/gestures.spec.ts:679:2 › media dragged from the Media panel lands on a track as one undo step (3.4s)
+  ✓  137 e2e/gestures.spec.ts:783:4 › a refused audio drop explains the destination track kind (1.8s)
+  ✓  138 e2e/gestures.spec.ts:783:4 › a refused audio drop explains the destination track kind with an outside notice before (3.9s)
+  ✓  139 e2e/gestures.spec.ts:783:4 › a refused audio drop explains the destination track kind with an outside notice after (3.0s)
+  ✓  140 e2e/gestures.spec.ts:888:2 › a refused move names its locked destination (1.5s)
+  ✓  141 e2e/gestures.spec.ts:904:2 › a trim after an overwrite names the short sound partner (1.6s)
+  ✓  142 e2e/gestures.spec.ts:952:2 › a Media-panel drag begun while an agent's edit lengthens the timeline keeps its scale and aimed drop frame (5.3s)
+  ✓  143 e2e/gestures.spec.ts:1038:2 › a ruler scrub after an agent's edit lengthens the timeline reads the scale it opened at (3.3s)
+  ✓  144 e2e/gestures.spec.ts:1101:2 › an external file drag holds the timeline while over it and releases on exit (3.2s)
+  ✓  145 e2e/home-linked.spec.ts:9:2 › Home refreshes its last-edited date after MCP edits a linked composition (5.9s)
+  ✓  146 e2e/home.spec.ts:16:2 › home is the first-run hero until a project exists, then the projects (924ms)
+  ✓  147 e2e/home.spec.ts:48:2 › projects are ordered by last edit, and an edit elsewhere reorders an open home (672ms)
+  ✓  148 e2e/home.spec.ts:80:2 › the keyboard walks the grid and opens a project (792ms)
+  ✓  149 e2e/home.spec.ts:105:2 › a poster is a placeholder until its frame has rendered (1.4s)
+  ✓  150 e2e/home.spec.ts:152:2 › home dates direct composition and document edits (758ms)
+  ✓  151 e2e/inspector-audio.spec.ts:14:2 › linked inspector audio edits, fades, undo, MCP acceptance and preview/export levels (19.8s)
+  ✓  152 e2e/inspector-audio.spec.ts:378:2 › linked Changes has one row per history entry and keeps review and session state (3.8s)
+  ✓  153 e2e/inspector-position-live.spec.ts:10:2 › 500 clips: position scrubs paint live, cancel cleanly and commit one undo step (5.6s)
+  ✓  154 e2e/inspector-position-live.spec.ts:134:2 › delayed promotion preserves a second Position drag and returning step keys to the saved value retires its draft (2.4s)
+  ✓  155 e2e/inspector-position-warning.spec.ts:22:2 › translate animation warns only at frames where it overrides Position (3.4s)
+  ✓  156 e2e/inspector-position-warning.spec.ts:106:2 › ancestor scale, rotation and clip zoom warn without blocking edits; the clip's own scale and rotation do not (2.7s)
+  ✓  157 e2e/inspector-position-warning.spec.ts:185:2 › paused video observes the held picture when zoom reduces the Position offset (1.5s)
+  ✓  158 e2e/inspector-position-warning.spec.ts:232:2 › the Position warning timecode seeks to its displayed frame and stops playback (3.0s)
+  ✓  159 e2e/inspector-position.spec.ts:45:2 › Position fields and MCP retain media offsets and GSAP motion in export without warning flicker (15.4s)
+  ✓  160 e2e/inspector.spec.ts:14:2 › inspector commits, scrubs, cancels, accepts real MCP edits and exports the shown opacity (9.4s)
+  ✓  161 e2e/inspector.spec.ts:363:2 › the inspector starts closed in a narrow window (1.1s)
+  ✓  162 e2e/inspector.spec.ts:382:2 › Changes stays bounded and fields, sections, selection and the drawer behave like the inspector (3.7s)
+  ✓  163 e2e/keep-tracks.spec.ts:75:2 › lifting starter clips keeps V1-V3 through reload, and an interview drop on V1 preserves the title (3.8s)
+  ✓  164 e2e/keep-tracks.spec.ts:141:4 › a whole-clip drop overwrite names the replaced clip with working Undo (2.1s)
+  ✓  165 e2e/keep-tracks.spec.ts:141:4 › a whole-clip paste overwrite names the replaced clip with working Undo (2.0s)
+  ✓  166 e2e/keyboard-focus.spec.ts:18:2 › Space activates a toolbar button reached by keyboard without playing (1.2s)
+  ✓  167 e2e/keyboard-focus.spec.ts:42:2 › Space plays after mouse activation of toolbar and transport buttons (1.4s)
+  ✓  168 e2e/keyboard-focus.spec.ts:63:2 › Space stays native in text fields, dialogs and viewer menus (1.6s)
+  ✓  169 e2e/keyboard-focus.spec.ts:101:2 › Projects to New project focuses the name for immediate typing (2.3s)
+  ✓  170 e2e/keyboard-focus.spec.ts:128:2 › Escape closes Edit marker after Tab moves past Save (1.4s)
+  ✓  171 e2e/mcp-export.spec.ts:29:2 › stdio and HTTP MCP export marked and whole timelines, share the indicator, and cancel mid-capture (18.2s)
+  ✓  172 e2e/mcp-export.spec.ts:249:2 › switching projects keeps export cancellation live and allows the next editor export (8.5s)
+  ✓  173 e2e/mcp-export.spec.ts:335:2 › a reload in another project finds the running export and can cancel it (3.2s)
+  ✓  174 e2e/media-drops.spec.ts:80:2 › media overwrite, modifier insert and edge tracks match MCP and undo one step each (4.0s)
+  ✓  175 e2e/media-drops.spec.ts:287:2 › overwriting V2 previews and cuts A2 while preserving the V1/A1 pair (2.4s)
+  ✓  176 e2e/media-files.spec.ts:101:2 › Rename in a media row's menu renames the file and every clip that plays it, in one undo step (3.0s)
+  ✓  177 e2e/media-files.spec.ts:171:2 › Remove asks before taking a file the timeline uses, and Undo brings it back (3.1s)
+  ✓  178 e2e/media-files.spec.ts:209:2 › the delete keys remove the file reached by keyboard, and stay the timeline's after a click (2.5s)
+  ✓  179 e2e/media-files.spec.ts:253:2 › review: undo or MCP rename cannot leave a missing source available to Insert (3.3s)
+  ✓  180 e2e/media-refresh.spec.ts:112:4 › replacing an open image refreshes filmstrip and thumbnail without reload (1.6s)
+  ✓  181 e2e/media-refresh.spec.ts:112:4 › replacing an open video refreshes filmstrip, thumbnail, peaks and probe without reload (5.8s)
+  ✓  182 e2e/mix.spec.ts:84:2 › drag clip gain and fades in single undo steps, then match stereo preview levels to export (16.8s)
+  ✓  183 e2e/mix.spec.ts:318:2 › pressing the curved envelope changes gain without moving the clip, in one undo step (2.0s)
+  ✓  184 e2e/mix.spec.ts:407:2 › trim and roll out and back keep edge fades and each gesture undoes exactly (4.5s)
+  ✓  185 e2e/mix.spec.ts:547:2 › a fade drag that returns to its start redraws the fade it began with (1.8s)
+  ✓  186 e2e/mix.spec.ts:603:2 › gain follows the pointer, Shift adjusts finely, horizontal presses move clips, and baked ramps clear explicitly in one undo step (4.5s)
+  ✓  187 e2e/mix.spec.ts:738:2 › cold audio starting at five seconds drives meters, clipping latches until click or restart, and stop clears peak markers (8.8s)
+  ✓  188 e2e/mix.spec.ts:873:2 › a gain line answers its first pixel, and a press without a drag changes nothing (1.7s)
+  ✓  189 e2e/mix.spec.ts:906:2 › a pixel of wobble on the gain line still lets a sideways drag move the clip (1.8s)
+  ✓  190 e2e/mix.spec.ts:944:2 › a quick click that wobbles on the gain line selects the clip and leaves the mix alone (2.1s)
+  ✓  191 e2e/mix.spec.ts:988:2 › releasing Shift mid-drag leaves the gain line where it is, under the pointer (1.7s)
+  ✓  192 e2e/mix.spec.ts:1024:2 › a gain drag inside a fade keeps the line under the pointer (1.7s)
+  ✓  193 e2e/mix.spec.ts:1053:2 › a gain drag keeps the line and its level under the pointer, scales the waveform, and matches a command (4.3s)
+  ✓  194 e2e/mix.spec.ts:1172:2 › a horizontal drag from the gain line moves the whole selection, as a body drag does (1.9s)
+  ✓  195 e2e/mix.spec.ts:1219:4 › a vertical drag from the middle of an audio clip moves it to another track, at unity and at bed levels, on compact tracks (5.5s)
+  ✓  196 e2e/mix.spec.ts:1219:4 › a vertical drag from the middle of an audio clip moves it to another track, at unity and at bed levels, on normal tracks (5.7s)
+  ✓  197 e2e/mix.spec.ts:1219:4 › a vertical drag from the middle of an audio clip moves it to another track, at unity and at bed levels, on tall tracks (5.7s)
+  ✓  198 e2e/navigation.spec.ts:29:2 › a saved review note opens its own composition and frame (1.7s)
+  ✓  199 e2e/navigation.spec.ts:82:2 › a canceled project creation cannot reopen itself or erase a later dialog (2.6s)
+  ✓  200 e2e/navigation.spec.ts:180:2 › folder navigation cannot attach a file from the previous listing (1.1s)
+  ✓  201 e2e/navigation.spec.ts:291:2 › an anonymous second media clip keeps its script selected through a full cut and restore (1.6s)
+  ✓  202 e2e/navigation.spec.ts:418:2 › saving one review draft cannot clear a newer draft in the same project (1.9s)
+  ✓  203 e2e/navigation.spec.ts:514:2 › a project an agent creates after the page loads opens without a reload (1.1s)
+  ✓  204 e2e/notes.spec.ts:64:2 › a five-note pass keeps its pins and strokes when the same tool row edits the timeline (3.8s)
+  ✓  205 e2e/notes.spec.ts:139:2 › a comment pins where you click, takes every key while you type, and stays put through a resize (1.7s)
+  ✓  206 e2e/notes.spec.ts:209:2 › a drawing holds several strokes, Ctrl+Z takes back the last, and saved notes show only at their time (2.8s)
+  ✓  207 e2e/notes.spec.ts:330:2 › ruler scrubbing returns focus to an open note and exit io never edits the timeline (1.6s)
+  ✓  208 e2e/notes.spec.ts:387:4 › chat includes a note image when sent before its capture finishes (1.4s)
+  ✓  209 e2e/notes.spec.ts:387:4 › chat continues after the capture timeout without an image (4.6s)
+  ✓  210 e2e/notes.spec.ts:495:2 › a project switch aborts its pending capture refresh without a toast (1.8s)
+  ✓  211 e2e/notes.spec.ts:579:2 › Review rows appear within one second of Enter while frame captures are held (1.7s)
+  ✓  212 e2e/notes.spec.ts:650:2 › switching projects aborts the old capture and preserves the saved note and destination notebook (1.5s)
+  ✓  213 e2e/notes.spec.ts:754:2 › drafts and a two-stroke failed save recover in their project after switching away (2.8s)
+  ✓  214 e2e/notes.spec.ts:835:2 › a notebook arriving before its POST response never duplicates a note or advances its next number (1.4s)
+  ✓  215 e2e/notes.spec.ts:891:4 › popover stays fully visible with 8px clearance at 1280x720 (2.8s)
+  ✓  216 e2e/notes.spec.ts:891:4 › popover stays fully visible with 8px clearance at 1024x640 (2.8s)
+  ✓  217 e2e/notes.spec.ts:948:2 › text undo precedes stroke undo, stroke redo returns it, and saved-note undo offers Redo (2.6s)
+  ✓  218 e2e/notes.spec.ts:990:4 › saved-note undo waits for the save request and offers Redo before the notebook refreshes (2.1s)
+  ✓  219 e2e/notes.spec.ts:990:4 › saved-note undo waits for the save acknowledgement and offers Redo before the notebook refreshes (2.1s)
+  ✓  220 e2e/notes.spec.ts:1056:2 › undo still repairs unreadable note metadata when its review snapshot fails (1.4s)
+  ✓  221 e2e/notes.spec.ts:1078:2 › single-frame notes stay readable in playback and acceptance removes both pin and strokes (3.5s)
+  ✓  222 e2e/notes.spec.ts:1149:2 › finishing another stroke moves the popover clear of all ink and a slow 400px line stores under 80 points (9.0s)
+  ✓  223 e2e/notes.spec.ts:1199:2 › ink spanning the whole picture gets space beside the picture (3.8s)
+  ✓  224 e2e/notes.spec.ts:1237:2 › six alternating notes on one frame keep their drafted numbers when the first capture is late (2.8s)
+  ✓  225 e2e/notes.spec.ts:1327:2 › Esc after setting or clearing a note end discards the note and keeps its tool armed (1.9s)
+  ✓  226 e2e/notes.spec.ts:1360:2 › six notes capture the sandboxed picture with both strokes and no black frames (6.2s)
+  ✓  227 e2e/on-picture.spec.ts:118:2 › a click on the picture selects the topmost clip drawn there and leaves the note tools alone (1.5s)
+  ✓  228 e2e/on-picture.spec.ts:168:2 › the outline follows the selected clip through seeks and playback (1.9s)
+  ✓  229 e2e/on-picture.spec.ts:194:2 › the cached outline follows ancestor CSS motion and text resizing (4.1s)
+  ✓  230 e2e/on-picture.spec.ts:234:2 › dragging on the picture moves Position live, commits one undo step, and Escape restores (2.7s)
+  ✓  231 e2e/on-picture.spec.ts:313:2 › a resting pointer outlines the clip a press would take and shows the move cursor (1.4s)
+  ✓  232 e2e/on-picture.spec.ts:379:2 › a seek under a resting pointer drops the move cursor with the outline (1.1s)
+  ✓  233 e2e/on-picture.spec.ts:395:2 › a double-click on a text clip puts its words in the Text field (2.5s)
+  ✓  234 e2e/on-picture.spec.ts:447:2 › a drag leaves the clip on whole pixels and keeps a typed fraction on the axis it did not move (2.0s)
+  ✓  235 e2e/on-picture.spec.ts:501:4 › the open inspector leaves the picture and transport whole at 1280x800 (1.5s)
+  ✓  236 e2e/on-picture.spec.ts:501:4 › the open inspector leaves the picture and transport whole at 1024x700 (1.4s)
+  ✓  237 e2e/on-picture.spec.ts:550:2 › arrow keys nudge the selected clip while the picture has focus (1.7s)
+  ✓  238 e2e/on-picture.spec.ts:611:4 › a superseded handoff keeps a cancelled drag grabbed when pointerup is before the restore (1.9s)
+  ✓  239 e2e/on-picture.spec.ts:611:4 › a superseded handoff keeps a cancelled drag grabbed when pointerup is after the restore (1.9s)
+  ✓  240 e2e/on-picture.spec.ts:729:2 › the inspector edits a title's words in one undo step and refuses text with markup (2.2s)
+  ✓  241 e2e/on-picture.spec.ts:785:2 › a held picture drag refuses a concurrent edit to the same clip (1.5s)
+  ✓  242 e2e/on-picture.spec.ts:825:2 › a border paints only its edges when choosing a clip (1.1s)
+  ✓  243 e2e/on-picture.spec.ts:845:2 › changing tools releases the picture's arrow keys and hides the grab handles (1.2s)
+  ✓  244 e2e/on-picture.spec.ts:875:2 › class-targeted script text saves and warns only where the shown frame replaces it (1.8s)
+  ✓  245 e2e/on-picture.spec.ts:917:2 › inline pre-line edits retain both lines and uncertain stylesheet whitespace is disabled (2.1s)
+  ✓  246 e2e/on-picture.spec.ts:965:2 › pointer-events stays authored in editor, thumbnail, timeline_view and MP4 (4.7s)
+  ✓  247 e2e/on-picture.spec.ts:1059:4 › data-hf-id clips use their timeline identity for picture picks, outlines and drafts (1.5s)
+  ✓  248 e2e/on-picture.spec.ts:1059:4 › generated clips use their timeline identity for picture picks, outlines and drafts (1.4s)
+  ✓  249 e2e/on-picture.spec.ts:1107:4 › scale(2) border picks its painted edge and leaves the centre empty (1.2s)
+  ✓  250 e2e/on-picture.spec.ts:1107:4 › rotate(30deg) border picks its painted edge and leaves the centre empty (1.2s)
+  ✓  251 e2e/on-picture.spec.ts:1107:4 › ancestor scale and rotate border picks its painted edge and leaves the centre empty (1.2s)
+  ✓  252 e2e/panel-keys.spec.ts:81:2 › one key moves the keyboard from the timeline to Media and back, where it took a run of Tabs (1.3s)
+  ✓  253 e2e/panel-keys.spec.ts:118:2 › the viewer and inspector keys show their panel and take the keyboard there (1.5s)
+  ✓  254 e2e/panel-keys.spec.ts:165:2 › panel keys leave a text field with its text kept, and a dialog keeps the keyboard (1.5s)
+  ✓  255 e2e/panel-keys.spec.ts:194:2 › after a click on a media file the arrows stay the playhead's (1.0s)
+  ✓  256 e2e/panel-keys.spec.ts:212:2 › the Media panel key reclaims arrows on the already-focused clicked row (1.2s)
+  ✓  257 e2e/project-switch.spec.ts:23:2 › rapid project switches during playback and edit reloads produce no reports or page errors (16.7s)
+  ✓  258 e2e/project-switch.spec.ts:141:2 › an active project's failed frame capture toasts the renderer's actual cause (1.2s)
+  ✓  259 e2e/project-watchers.spec.ts:6:2 › open projects refresh from disk and reopen with edits made while closed (2.0s)
+  ✓  260 e2e/queue-ruler.spec.ts:9:2 › queue names stay whole and agent replies expand while MCP works a note (2.6s)
+  ✓  261 e2e/queue-ruler.spec.ts:163:2 › marker names and token colours edit in place and remain readable through MCP and undo (2.7s)
+  ✓  262 e2e/queue-ruler.spec.ts:326:2 › background requests do not delay note thumbnails or the captures queued behind them (2.6s)
+  ✓  263 e2e/razor-partial.spec.ts:9:2 › E cuts video under an id-animated title, reports the skip, and undoes in one step (1.7s)
+  ✓  264 e2e/razor-partial.spec.ts:136:4 › q shortens an id-animated title in place and honors its auto-select opt-out (2.4s)
+  ✓  265 e2e/razor-partial.spec.ts:136:4 › w shortens an id-animated title in place and honors its auto-select opt-out (2.2s)
+  ✓  266 e2e/razor-partial.spec.ts:136:4 › Shift+x shortens an id-animated title in place and honors its auto-select opt-out (2.6s)
+  ✓  267 e2e/review.spec.ts:8:2 › review notes stay grouped by state until the owner accepts, answers, or restores them (1.5s)
+  ✓  268 e2e/review.spec.ts:114:2 › an unreadable review file shows its error without the empty state (584ms)
+  ✓  269 e2e/review.spec.ts:134:2 › the owner can return a stuck claim to the queue (950ms)
+  ✓  270 e2e/review.spec.ts:169:2 › typing a note after a stroke never drives the editor, and another note keeps the typed words (1.5s)
+  ✓  271 e2e/review.spec.ts:226:2 › owner queue order and withdrawal survive reload, and Accept clears the changed clip underline (2.2s)
+  ✓  272 e2e/ripple-feedback.spec.ts:49:2 › a multi-track Q reports removed time and deleted clips, and its Undo restores the edit (2.7s)
+  ✓  273 e2e/ripple-feedback.spec.ts:71:2 › later history removes the ripple Undo even when the timeline is unchanged (1.3s)
+  ✓  274 e2e/ripple-feedback.spec.ts:96:2 › a simple same-track Q stays silent (2.1s)
+  ✓  275 e2e/ripple-feedback.spec.ts:111:2 › an outside notice waits behind ripple Undo without resetting its hold (1.8s)
+  ✓  276 e2e/ripple-feedback.spec.ts:151:2 › owner imports, media drops, view preferences and source saves stay silent (2.8s)
+  ✓  277 e2e/ripple-feedback.spec.ts:229:2 › outside agent moves coalesce by clip, preserve focus, and expire (6.3s)
+  ✓  278 e2e/ripple-feedback.spec.ts:281:2 › title text uses its first line at normal and compact heights and refreshes after a file edit (2.7s)
+  ✓  279 e2e/ripple-titles.spec.ts:11:2 › ripple delete and Q/W keep a title editable as one attributed clip, with MCP parity and one-step undo (4.3s)
+  ✓  280 e2e/ripple-titles.spec.ts:180:2 › a shortened linked title still moves both audio pieces after ripple, undo and redo (1.8s)
+  ✓  281 e2e/select-all.spec.ts:10:2 › Ctrl+A selects unlocked clips and preserves native text selection (1.6s)
+  ✓  282 e2e/select-menu.spec.ts:8:2 › the quality listbox opens from the keyboard, navigates, selects and returns focus (2.7s)
+  ✓  283 e2e/select-menu.spec.ts:95:2 › agent, footage and viewer pickers share mouse and keyboard selection (4.3s)
+  ✓  284 e2e/shortcut-hints.spec.ts:6:2 › the home screen shows the keymap's draw and comment keys (293ms)
+  ✓  285 e2e/shortcut-hints.spec.ts:29:4 › new viewer tool hints match the keys that select them (1.1s)
+  ✓  286 e2e/shortcut-hints.spec.ts:29:4 › embedded viewer tool hints match the keys that select them (1.7s)
+  ✓  287 e2e/source-editor.spec.ts:8:2 › source editing saves, updates the preview, and supports native editor undo (3.1s)
+  ✓  288 e2e/source-editor.spec.ts:128:2 › autosave preserves an outside edit that lands before its queued file read (2.2s)
+  ✓  289 e2e/source-editor.spec.ts:259:2 › successive local edits remain saveable while an earlier source save is queued (2.0s)
+  ✓  290 e2e/source-viewer.spec.ts:164:2 › a part marked in the source viewer goes on the timeline by key, button and drag (4.0s)
+  ✓  291 e2e/source-viewer.spec.ts:359:2 › audio shows its waveform and a still runs five seconds, each on a track of its kind (5.5s)
+  ✓  292 e2e/source-viewer.spec.ts:420:2 › F9 and F10 from Source reveal Timeline after a successful placement (2.2s)
+  ✓  293 e2e/source-viewer.spec.ts:462:2 › timeline edit keys immediately edit and reveal Timeline while Source is shown (7.3s)
+  ✓  294 e2e/source-viewer.spec.ts:534:2 › source marks survive reload and project switches without entering undo history (6.0s)
+  ✓  295 e2e/source-viewer.spec.ts:685:2 › review: saves stay ordered and coalesce across source navigation (2.0s)
+  ✓  296 e2e/source-viewer.spec.ts:736:2 › review: an older read cannot replace a newer cross-tab mark (2.9s)
+  ✓  297 e2e/source-viewer.spec.ts:797:2 › review: a one-frame NTSC source range stays nonempty at 24 fps (3.7s)
+  ✓  298 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from network without replaying identity conflicts (5.8s)
+  ✓  299 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 503 without replaying identity conflicts (5.7s)
+  ✓  300 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 503-after-ready without replaying identity conflicts (5.9s)
+  ✓  301 e2e/source-viewer.spec.ts:847:4 › restart: source saves recover from 409 without replaying identity conflicts (5.7s)
+  ✓  302 e2e/starter.spec.ts:4:2 › a fresh starter loads its local font and keeps the same picture after seeking backwards (1.9s)
+  ✓  303 e2e/state.spec.ts:22:2 › changing projects closes a saved review frame and clears project-local review state (1.1s)
+  ✓  304 e2e/state.spec.ts:81:2 › an in-flight agent submission cannot switch conversations or erase the next draft (916ms)
+  ✓  305 e2e/state.spec.ts:162:2 › a transcription job survives leaving its project and retries a temporary polling failure (4.0s)
+  ✓  306 e2e/state.spec.ts:270:2 › streamed deltas remain ordered through the final idle event (681ms)
+  ✓  307 e2e/state.spec.ts:333:2 › a frame capture finishing in an old project cannot clear a new project's draft (2.2s)
+  ✓  308 e2e/timeline.spec.ts:9:2 › Fit returns a scrolled timeline to frame zero with whole ruler labels (1.6s)
+  ✓  309 e2e/timeline.spec.ts:72:2 › the new editor's timeline scrubs, selects clips, and zooms at the cursor (3.4s)
+  ✓  310 e2e/timeline.spec.ts:258:4 › ripple and history keep clip coordinates and scroll bounds aligned (4s pieces) (2.1s)
+  ✓  311 e2e/timeline.spec.ts:258:4 › ripple and history keep clip coordinates and scroll bounds aligned (12000s pieces) (2.1s)
+  ✓  312 e2e/timeline.spec.ts:322:2 › edits, history and agent changes keep the timeline's zoom, and only Fit rescales it (4.4s)
+  ✓  313 e2e/timeline.spec.ts:474:8 › a long placement at 1280x800 › F9 with a clip longer than the view brings the playhead on screen at the same zoom (1.5s)
+  ✓  314 e2e/timeline.spec.ts:474:8 › a long placement at 1280x800 › F10 with a clip longer than the view brings the playhead on screen at the same zoom (1.2s)
+  ✓  315 e2e/timeline.spec.ts:474:8 › a long placement at 1720x1050 › F9 with a clip longer than the view brings the playhead on screen at the same zoom (1.6s)
+  ✓  316 e2e/timeline.spec.ts:474:8 › a long placement at 1720x1050 › F10 with a clip longer than the view brings the playhead on screen at the same zoom (1.2s)
+  ✓  317 e2e/track-heights.spec.ts:35:4 › overwrite preview pieces stay inside a 28px row (1.5s)
+  ✓  318 e2e/track-heights.spec.ts:71:6 › new video track preview matches the created track beside a 28px row (1.6s)
+  ✓  319 e2e/track-heights.spec.ts:71:6 › new audio track preview matches the created track beside a 28px row (1.7s)
+  ✓  320 e2e/track-heights.spec.ts:153:6 › gain readout keeps +12 dB at its limit on a 28px row (1.4s)
+  ✓  321 e2e/track-heights.spec.ts:153:6 › gain readout keeps silence at its limit on a 28px row (1.4s)
+  ✓  322 e2e/track-heights.spec.ts:35:4 › overwrite preview pieces stay inside a 200px row (1.6s)
+  ✓  323 e2e/track-heights.spec.ts:71:6 › new video track preview matches the created track beside a 200px row (1.7s)
+  ✓  324 e2e/track-heights.spec.ts:71:6 › new audio track preview matches the created track beside a 200px row (1.7s)
+  ✓  325 e2e/track-heights.spec.ts:153:6 › gain readout keeps +12 dB at its limit on a 200px row (1.4s)
+  ✓  326 e2e/track-heights.spec.ts:153:6 › gain readout keeps silence at its limit on a 200px row (1.4s)
+  ✓  327 e2e/track-heights.spec.ts:197:2 › track height and density survive reload, gain follows the pointer at each, and view changes leave undo to edits (8.7s)
+  ✓  328 e2e/track-stacking.spec.ts:91:2 › rendered video tracks stack upward after insert and track moves, while authored z-index wins (5.4s)
+  ✓  329 e2e/track-stacking.spec.ts:257:2 › inserted 4K video and images fill and letterbox above V1 in preview and export (10.6s)
+  ✓  330 e2e/track-stacking.spec.ts:361:2 › authored utility layers and first-child styles survive a duration edit (249ms)
+  ✓  331 e2e/track-stacking.spec.ts:386:4 › parent stacking leaves inline scene content alone (662ms)
+  ✓  332 e2e/track-stacking.spec.ts:386:4 › parent stacking leaves external scene content alone (1.0s)
+  ✓  333 e2e/track-stacking.spec.ts:450:2 › editing only an external scene keeps entry-page utility layers above its defaults (246ms)
+  ✓  334 e2e/tracks.spec.ts:141:2 › starter layout keeps new-track drops inside the lanes at 1440 by 900 (1.7s)
+  ✓  335 e2e/tracks.spec.ts:216:2 › build and mix picture, voice and music with track drops, then export exactly what is audible (19.9s)
+  ✓  336 e2e/tracks.spec.ts:391:2 › browser-probed exports honor mute and solo for authored video sound while keeping its picture (17.9s)
+  ✓  337 e2e/trim-preview.spec.ts:130:4 › in shows source edge frames and restores the playhead (3.5s)
+  ✓  338 e2e/trim-preview.spec.ts:130:4 › out shows source edge frames and restores the playhead (3.1s)
+  ✓  339 e2e/trim-preview.spec.ts:130:4 › roll shows source edge frames and restores the playhead (3.3s)
+  ✓  340 e2e/trim-preview.spec.ts:130:4 › ripple-in shows source edge frames and restores the playhead (3.2s)
+  ✓  341 e2e/trim-preview.spec.ts:130:4 › ripple-out shows source edge frames and restores the playhead (3.4s)
+  ✓  342 e2e/trim-preview.spec.ts:130:4 › audio shows source edge frames and restores the playhead (2.5s)
+  ✓  343 e2e/trim-preview.spec.ts:130:4 › linked-audio shows source edge frames and restores the playhead (3.2s)
+  ✓  344 e2e/trim-preview.spec.ts:234:4 › lostpointercapture discards a trim and restores the playhead before pointerup (1.7s)
+  ✓  345 e2e/trim-preview.spec.ts:234:4 › blur discards a trim and restores the playhead before pointerup (1.7s)
+  ✓  346 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 16-9 picture at 1280x800 (1.7s)
+  ✓  347 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 1-1 picture at 1280x800 (2.1s)
+  ✓  348 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 9-16 picture at 1280x800 (1.6s)
+  ✓  349 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 16-9 picture at 1720x1050 (1.7s)
+  ✓  350 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 1-1 picture at 1720x1050 (1.7s)
+  ✓  351 e2e/trim-preview.spec.ts:308:6 › roll labels fit the visible 9-16 picture at 1720x1050 (2.3s)
+  ✓  352 e2e/viewer.spec.ts:10:2 › queued preview state cannot undo a seek before playback commands arrive (1.5s)
+  ✓  353 e2e/viewer.spec.ts:148:2 › three editor tabs share project and preview events without exhausting HTTP connections (3.4s)
+  ✓  354 e2e/viewer.spec.ts:215:2 › a sandboxed viewer cannot navigate to an unrestricted preview and send an external request (1.7s)
+  ✓  355 e2e/viewer.spec.ts:301:2 › the new viewer refuses composition API calls and parent access while remaining playable (1.3s)
+  ✓  356 e2e/viewer.spec.ts:367:2 › the new editor plays, steps, and marks in and out as undoable timeline edits (1.8s)
+  ✓  357 e2e/viewer.spec.ts:457:2 › a composition that cannot play keeps the last picture and says why (1.6s)
+  ✓  358 e2e/viewer.spec.ts:492:2 › a timeline the engine refuses stays reported after the picture reloads (1.8s)
+  ✓  359 e2e/workspace.spec.ts:24:2 › visual review, native skill selection, and script edits survive real workspace use (11.6s)
+  ✓  360 e2e/workspace.spec.ts:249:2 › media panel follows project media and imports files into assets (1.8s)
+  ✘  361 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 1 › 132 px headers show short codes and every toggle without overflow (16.3s)
+  ✘  362 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 2 › 132 px headers show short codes and every toggle without overflow (16.4s)
+  ✓  363 e2e/timeline-headers.spec.ts:197:8 › media drag at 1280x800, 28px tracks › keeps lanes still and previews the track created above them (1.5s)
+  ✓  364 e2e/timeline-headers.spec.ts:197:8 › media drag at 1280x800, 200px tracks › keeps lanes still and previews the track created above them (1.4s)
+  ✘  365 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 1 › 132 px headers show short codes and every toggle without overflow (16.3s)
+  ✘  366 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 2 › 132 px headers show short codes and every toggle without overflow (16.4s)
+  ✓  367 e2e/timeline-headers.spec.ts:197:8 › media drag at 1720x1050, 28px tracks › keeps lanes still and previews the track created above them (1.5s)
+  ✓  368 e2e/timeline-headers.spec.ts:197:8 › media drag at 1720x1050, 200px tracks › keeps lanes still and previews the track created above them (1.4s)
+  ✓  369 e2e/timeline-headers.spec.ts:258:2 › track density uses the shared menu keyboard controls (2.2s)
+  ✓  370 e2e/timeline-headers.spec.ts:311:2 › Normal and Tall keep the 132 px name row, meter and separate controls (2.5s)
+BLANK CONTEXTS []
+  ✓  371 e2e/viewer-media.spec.ts:318:2 › the composited sampler catches a one-animation-frame blank (464ms)
+  ✓  372 e2e/viewer-media.spec.ts:439:4 › a delayed loading paint retains the previous picture (2.0s)
+  ✓  373 e2e/viewer-media.spec.ts:439:4 › a delayed promotion paint retains the previous picture (2.2s)
+FRAME SAMPLES {"label":"razor 0103","count":30,"bad":[]}
+FRAME SAMPLES {"label":"razor 0207","count":31,"bad":[]}
+FRAME SAMPLES {"label":"razor 0311","count":30,"bad":[]}
+FRAME SAMPLES {"label":"razor 0419","count":25,"bad":[]}
+FRAME SAMPLES {"label":"razor 0513","count":13,"bad":[]}
+FRAME SAMPLES {"label":"razor 0617","count":9,"bad":[]}
+FRAME SAMPLES {"label":"razor 0719","count":14,"bad":[]}
+FRAME SAMPLES {"label":"razor 0811","count":32,"bad":[]}
+FRAME SAMPLES {"label":"razor 0923","count":35,"bad":[]}
+FRAME SAMPLES {"label":"razor 1017","count":30,"bad":[]}
+FRAME SAMPLES {"label":"razor 1117","count":32,"bad":[]}
+  ✓  374 e2e/viewer-media.spec.ts:491:2 › razor at fractional-second playheads never blanks the visible picture (8.0s)
+FRAME SAMPLES {"label":"unavailable native snapshot","count":28,"bad":[]}
+  ✓  375 e2e/viewer-media.spec.ts:524:2 › the held picture survives native snapshot loss and retirement (2.2s)
+FRAME SAMPLES {"label":"MCP split","count":23,"bad":[]}
+FRAME SAMPLES {"label":"undo","count":25,"bad":[]}
+FRAME SAMPLES {"label":"redo","count":23,"bad":[]}
+FRAME SAMPLES {"label":"ripple delete","count":19,"bad":[]}
+FRAME SAMPLES {"label":"MCP overwrite insert","count":15,"bad":[]}
+FRAME SAMPLES {"label":"media drop","count":33,"bad":[]}
+  ✓  376 e2e/viewer-media.spec.ts:603:2 › MCP split, undo, redo, ripple deletion and a media drop keep the picture (4.6s)
+HOLD PIXELS fill {"mean":0.2464229150947885,"max":63,"fractionAbove3":0.03219700831805483}
+HOLD PIXELS contain {"mean":0.6426808100170118,"max":129,"fractionAbove3":0.042861989251597524}
+HOLD NEGATIVE CONTROLS {"shifted":{"mean":1.5462825815198418,"max":123,"fractionAbove3":0.06358390075431614},"wrongFrame":{"mean":2.944983182834689,"max":138,"fractionAbove3":0.07463447460184751}}
+HOLD PIXELS cover {"mean":0.20828752872636314,"max":53,"fractionAbove3":0.02804076162015761}
+HOLD PIXELS none {"mean":0.1469912320867683,"max":34,"fractionAbove3":0.019294476196125905}
+HOLD PIXELS scale-down {"mean":0.6426808100170118,"max":129,"fractionAbove3":0.042861989251597524}
+CUT PLAYBACK {"frames":70,"maxGap":66.60000000000002,"averageGap":33.814492753623185}
+  ✓  377 e2e/viewer-media.spec.ts:737:2 › paused holds match native object-fit, transforms, opacity and stacking, then release for playback (6.1s)
+  ✓  378 e2e/viewer-media.spec.ts:943:2 › the ordinary paused picture is pixel-identical and a timed-out hold keeps it (10.3s)
+  ✓  379 e2e/viewer-media.spec.ts:1002:2 › a paused hold preserves fractional flex layout and normal-flow stacking (1.4s)
+  ✓  380 e2e/viewer-media.spec.ts:1297:2 › a navigation that never loads expires and keeps the confirmed picture (16.7s)
+STALLED PICTURE {"edits":50,"samples":1459,"bad":[]}
+  ✓  381 e2e/viewer-media.spec.ts:1339:2 › stalled candidate replacements never expose the viewer background (26.1s)
+  ✓  382 e2e/viewer-media.spec.ts:1410:2 › a reload of the live preview reconnects playback to the editor clock (1.7s)
+  ✓  383 e2e/viewer-media.spec.ts:1448:4 › a live preview reload preserves play intent while preparing (1.9s)
+  ✓  384 e2e/viewer-media.spec.ts:1448:4 › a live preview reload preserves resume intent while preparing (2.0s)
+  ✓  385 e2e/viewer-media.spec.ts:1448:4 › a live preview reload preserves pause intent while preparing (1.8s)
+  ✓  386 e2e/voiceover.spec.ts:141:4 › removing an armed track through header releases the microphone and Record uses the surviving track (3.0s)
+  ✓  387 e2e/voiceover.spec.ts:141:4 › removing an armed track through MCP releases the microphone and Record uses the surviving track (2.6s)
+  ✓  388 e2e/voiceover.spec.ts:267:2 › fake microphone records over the cut, preserves audio, undoes once, and exports in sync (10.7s)
+  ✓  389 e2e/voiceover.spec.ts:604:2 › arming is exclusive, device choice persists, and microphone denial is explained (3.7s)
+  ✓  390 e2e/voiceover.spec.ts:707:2 › project switches and reload refuse to abandon a recording or a failed save (3.7s)
+  ✓  391 e2e/voiceover.spec.ts:804:2 › playback click times survive capture alignment and a latency change after arming (3.6s)
+  ✓  392 e2e/voiceover.spec.ts:946:4 › a microphone disconnect during save-failed preserves the take and its navigation guard (2.3s)
+  ✓  393 e2e/voiceover.spec.ts:946:4 › a microphone disconnect during saving preserves the take and its navigation guard (2.2s)
+  ✓  394 e2e/voiceover.spec.ts:1052:2 › recording and failed-save controls stay visible through recovery (4.2s)
+  ✓  395 e2e/voiceover.spec.ts:1215:2 › a dropped microphone block stays silent without losing or shifting the take (2.6s)
+  ✓  396 e2e/voiceover.spec.ts:1334:2 › the compact microphone meter shows and clears clipping after the input falls silent (1.4s)
+  ✓  397 e2e/voiceover.spec.ts:1395:2 › occupied takes preview their destination and reuse A2 until the growing range overlaps (5.1s)
+  ✓  398 e2e/voiceover.spec.ts:1529:2 › recording clears its resolved error and a clean save preserves an unrelated toast (2.8s)
+  ✓  399 e2e/voiceover.spec.ts:1605:2 › recording region follows live row resizing at 28 and 200px before release (3.2s)
+  ✓  400 e2e/voiceover.spec.ts:1665:4 › unarmed Record via button starts a take and creates its audio track in one undo step (3.1s)
+  ✓  401 e2e/voiceover.spec.ts:1665:4 › unarmed Record via shortcut starts a take and creates its audio track in one undo step (2.9s)
+  ✓  402 e2e/voiceover.spec.ts:1749:2 › unarmed Record skips locked and occupied audio tracks (2.5s)
+
+
+  1) e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 1 › 132 px headers show short codes and every toggle without overflow 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+    Expected: "Interview picture: destination for Insert and Overwrite"
+    Received: "Turn off V1 for Insert and Overwrite"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id') with timeout 15000ms
+      - waiting for getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="true" aria-label="V1 destination" title="Turn off V1 for Insert and Overwrite">V1</button>
+           - unexpected value "Turn off V1 for Insert and Overwrite"
+
+
+      115 |         await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+      116 |         // The code's tooltip keeps the name a compact row hides, and says what a click does.
+    > 117 |         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
+          |                                                      ^
+      118 |           "title",
+      119 |           "Interview picture: destination for Insert and Overwrite",
+      120 |         );
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/timeline-headers.spec.ts:117:54)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-1303e-ery-toggle-without-overflow/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-full/results/timeline-headers-compact-h-1303e-ery-toggle-without-overflow/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-1303e-ery-toggle-without-overflow/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-full/results/timeline-headers-compact-h-1303e-ery-toggle-without-overflow/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 2 › 132 px headers show short codes and every toggle without overflow 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+    Expected: "Interview picture: destination for Insert and Overwrite"
+    Received: "Turn off V1 for Insert and Overwrite"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id') with timeout 15000ms
+      - waiting for getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="true" aria-label="V1 destination" title="Turn off V1 for Insert and Overwrite">V1</button>
+           - unexpected value "Turn off V1 for Insert and Overwrite"
+
+
+      115 |         await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+      116 |         // The code's tooltip keeps the name a compact row hides, and says what a click does.
+    > 117 |         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
+          |                                                      ^
+      118 |           "title",
+      119 |           "Interview picture: destination for Insert and Overwrite",
+      120 |         );
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/timeline-headers.spec.ts:117:54)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-95735-ery-toggle-without-overflow/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-full/results/timeline-headers-compact-h-95735-ery-toggle-without-overflow/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-95735-ery-toggle-without-overflow/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-full/results/timeline-headers-compact-h-95735-ery-toggle-without-overflow/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 1 › 132 px headers show short codes and every toggle without overflow 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+    Expected: "Interview picture: destination for Insert and Overwrite"
+    Received: "Turn off V1 for Insert and Overwrite"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id') with timeout 15000ms
+      - waiting for getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="true" aria-label="V1 destination" title="Turn off V1 for Insert and Overwrite">V1</button>
+           - unexpected value "Turn off V1 for Insert and Overwrite"
+
+
+      115 |         await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+      116 |         // The code's tooltip keeps the name a compact row hides, and says what a click does.
+    > 117 |         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
+          |                                                      ^
+      118 |           "title",
+      119 |           "Interview picture: destination for Insert and Overwrite",
+      120 |         );
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/timeline-headers.spec.ts:117:54)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-b7b7e-ery-toggle-without-overflow/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-full/results/timeline-headers-compact-h-b7b7e-ery-toggle-without-overflow/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-b7b7e-ery-toggle-without-overflow/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-full/results/timeline-headers-compact-h-b7b7e-ery-toggle-without-overflow/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 2 › 132 px headers show short codes and every toggle without overflow 
+
+    Error: expect(locator).toHaveAttribute(expected) failed
+
+    Locator:  getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+    Expected: "Interview picture: destination for Insert and Overwrite"
+    Received: "Turn off V1 for Insert and Overwrite"
+    Timeout:  15000ms
+
+    Call log:
+      - Expect "toHaveAttribute" getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id') with timeout 15000ms
+      - waiting for getByRole('group', { name: 'V1: Interview picture', exact: true }).locator('.tl-head-id')
+        34 × locator resolved to <button class="tl-head-id" aria-pressed="true" aria-label="V1 destination" title="Turn off V1 for Insert and Overwrite">V1</button>
+           - unexpected value "Turn off V1 for Insert and Overwrite"
+
+
+      115 |         await expect(picture.locator(".tl-head-id")).toHaveText("V1");
+      116 |         // The code's tooltip keeps the name a compact row hides, and says what a click does.
+    > 117 |         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
+          |                                                      ^
+      118 |           "title",
+      119 |           "Interview picture: destination for Insert and Overwrite",
+      120 |         );
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/timeline-headers.spec.ts:117:54)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-beece-ery-toggle-without-overflow/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-full/results/timeline-headers-compact-h-beece-ery-toggle-without-overflow/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-full/results/timeline-headers-compact-h-beece-ery-toggle-without-overflow/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-full/results/timeline-headers-compact-h-beece-ery-toggle-without-overflow/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4 failed
+    e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 1 › 132 px headers show short codes and every toggle without overflow 
+    e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 2 › 132 px headers show short codes and every toggle without overflow 
+    e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 1 › 132 px headers show short codes and every toggle without overflow 
+    e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 2 › 132 px headers show short codes and every toggle without overflow 
+  398 passed (21.0m)

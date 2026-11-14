@@ -1,0 +1,1007 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/agent-boundary.test.ts:
+(pass) an active conversation cannot write another project's JavaScript or add its annotations through MCP [73.02ms]
+(pass) a source-write approval ignores a spoofed file_path and names the path MCP writes [0.38ms]
+(pass) every project mutation rejects cross-project and ended-run tokens before parsing or repair [27.47ms]
+(pass) repair and non-HTML fast paths validate the binding even when called directly [4.31ms]
+(pass) creation and import require a live token but have no target-project grant [4.63ms]
+(pass) native tokens cannot change agent controls, grants, owner review actions, or delete render jobs [15.44ms]
+(pass) transcription cancellation checks the job's project before cancelling it [11.98ms]
+
+tests/agent-changes.test.ts:
+(pass) agent clip marks survive reload, clear on Accept or return to accepted source, and include source changes [104.97ms]
+(pass) unreadable review metadata does not block timeline reads or source repairs [17.93ms]
+(pass) two claimed notes own their individual edits, and accepting either clears only its clips [53.91ms]
+(pass) an unlabelled agent edit is named from its commands, and unaccepted agent work outlives the ledger cap [136.22ms]
+(pass) shared script edits make one composition row that accepts, undoes, and redoes without clip marks [34.13ms]
+
+tests/agent-naming.test.ts:
+(pass) codex keeps streaming, cancels, accepts the next message, and shows approvals with a stuck clip lookup [622.28ms]
+(pass) claude keeps streaming, cancels, accepts the next message, and shows approvals with a stuck clip lookup [628.85ms]
+
+tests/agent-permissions.test.ts:
+(pass) claiming, finishing, blocking, and releasing a note and choosing destination tracks never ask, while edits, withdrawals, and exports still do [1.13ms]
+(pass) native permission rules match every tool advertised over MCP [12.01ms]
+(pass) native factories wire scoped rules into fresh and resumed sessions [2002.83ms]
+
+tests/agent-replies.test.ts:
+(pass) native agents and MCP clients allow explicit note questions and blocker explanations [2.35ms]
+
+tests/agents.test.ts:
+(pass) agent conversations > streams a native reply, persists it, and resumes the recorded native session [9.48ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > a tool call names its project file from start through result and reload [3.82ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > waits for an approval and refuses stale answers [3.00ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > admits only one turn while native skill validation is pending [2.11ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > stopping a turn during skill discovery prevents it from starting [2.25ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > shutdown cancels admission instead of starting a native process afterward [1.15ms]
+(pass) agent conversations > disposed native runtimes cannot change or interrupt the next conversation turn [3.40ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > an approval save failure denies the native request instead of stranding it [2.44ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) agent conversations > validates routes and project attachment boundaries [3.38ms]
+(pass) Codex protocol preserves explicit skill inputs, approvals, and native errors [22.21ms]
+(pass) Codex accepts nullable running command output and streams it before completion [17.63ms]
+(pass) Codex emits tool rows and failures in order without waiting for late clip names [20.04ms]
+(pass) tool targets read relative to the project [0.06ms]
+(pass) Always allow is saved per project, rejects other tools, and revocation cancels a pending run [4.84ms]
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) Codex uses privileged MCP approval metadata, honors explicit prompt rules, and never auto-answers server forms or other tools [40.23ms]
+Failed to interrupt agent session bd6734f4-3346-43d9-ab0c-2625bf4ed926; closing it. 1046 |           await new Promise<void>((resolve) => {
+1047 |             state.release = resolve;
+1048 |           });
+1049 |         },
+1050 |         interrupt: async () => {
+1051 |           throw new Error("Native interrupt failed");
+                           ^
+error: Native interrupt failed
+      at interrupt (/home/akshar/.cache/cutroom-implementation/toggle-destinations/tests/agents.test.ts:1051:21)
+      at interrupt (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/agents/service.ts:527:21)
+      at setPermissions (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/agents/service.ts:150:20)
+      at async <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/tests/agents.test.ts:1084:24)
+
+(pass) revoke disposes every project session even if one native interrupt fails [6.49ms]
+
+tests/animation-feedback.test.ts:
+Review notes could not be returned to the queue: 25 |     throw new HttpError(403, "That path is outside the project.");
+26 |   const canonical = await realpath(target).catch(async (error: unknown) => {
+27 |     if (!isMissing(error)) throw error;
+28 |     // dirname(".") cannot make progress once the project folder itself is gone.
+29 |     if (!allowMissing || rel === "")
+30 |       throw new HttpError(404, "Project file not found.");
+                 ^
+HttpError: Project file not found.
+ status: 404,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/path.ts:30:13)
+
+(pass) remove keeps a spanning title's animation origin and warns only for the displaced title [23.07ms]
+(pass) trim start keeps a spanning title's animation origin and warns only for the displaced title [17.65ms]
+(pass) trim end keeps a spanning title's animation origin and warns only for the displaced title [18.47ms]
+(pass) W overlap warns for both the shortened/displaced lower third and later title without touching script [19.00ms]
+(pass) pure head/tail trims and a batch returning to its original origin stay quiet [40.48ms]
+(pass) head trim plus displacement in one batch warns, without leaking source offsets [13.34ms]
+(pass) R1 relative is toast-only [13.42ms]
+(pass) R1 mutablePosition is toast-only [14.44ms]
+(pass) R1 mutableTarget is toast-only [13.94ms]
+(pass) R1 nestedScaled is toast-only [14.71ms]
+(pass) R1 helperMap is toast-only [13.92ms]
+(pass) R1 wrongTimeline is toast-only [12.81ms]
+(pass) R1 laterInline is toast-only [12.45ms]
+(pass) R1 loop is toast-only [13.70ms]
+(pass) R2 external is toast-only [13.16ms]
+(pass) R2 negativeDelay is toast-only [12.74ms]
+(pass) R2 aliasedDefaults is toast-only [12.80ms]
+(pass) R2 computedMethod is toast-only [18.32ms]
+(pass) R2 duplicateId is toast-only [11.43ms]
+(pass) R2 membership is toast-only [11.77ms]
+(pass) R3 nested is toast-only [17.10ms]
+(pass) R3 inline is toast-only [30.70ms]
+(pass) R3 quirks is toast-only [31.99ms]
+(pass) R3 precision is toast-only [34.43ms]
+(pass) R3 plain is toast-only [42.00ms]
+(pass) R4 autoVideoFront is toast-only [28.73ms]
+(pass) R4 noscriptScript is toast-only [23.65ms]
+(pass) R4 svgUse is toast-only [26.91ms]
+(pass) R4 smil is toast-only [24.14ms]
+(pass) R4 tableOwner is toast-only [18.13ms]
+(pass) razor pieces and pasted copies warn from their source animation [28.60ms]
+(pass) unrelated Map.set and file-based clip-local animation stay silent [22.54ms]
+(pass) razoring an unrelated clip stays quiet when the parser cannot expand a chained title timeline [21.13ms]
+(pass) complete selector ".clip.title" leaves unrelated shots quiet [19.68ms]
+(pass) complete selector "div.clip.title" leaves unrelated shots quiet [18.80ms]
+(pass) complete selector `.clip.title` leaves unrelated shots quiet [27.57ms]
+(pass) complete selector selector leaves unrelated shots quiet [22.92ms]
+(pass) sub-composition hosts never warn, even when a root tween names the host [11.72ms]
+(pass) MCP acknowledges an edit before its warning follow-up [15.50ms]
+(pass) media elements carrying composition-host attributes never warn [10.82ms]
+(pass) resolved GSAP target ignores unrelated lookup const shot=document.getElementById("shot-b"); [28.34ms]
+(pass) resolved GSAP target ignores unrelated lookup const byId=new Map();byId.set("#shot-b",{label:"Shot"}); [21.81ms]
+(pass) literal computed GSAP member warns: gsap["to"]("#cta",{x:100,duration:1,delay:36}); [19.82ms]
+(pass) literal computed GSAP member warns: const tl=gsap["timeline"]({paused:true});tl["to"]("#cta",{x:100},36);window.__timelines.main=tl; [21.55ms]
+(pass) rapid MCP edit notifications identify their request and saved revision [96.80ms]
+(pass) project SSE delivers animation feedback only to the command's tab origin [112.95ms]
+
+tests/approval-labels.test.ts:
+(pass) pending command sentences name their targets and use the composition's frame rate [1.05ms]
+(pass) a pending command without its composition shows exact frames rather than guessing a frame rate [0.12ms]
+(pass) overwrite approvals distinguish destination tracks and the covered interval [0.83ms]
+(pass) marker approvals name every changed field [0.09ms]
+(pass) creating a track includes its supplied name and settings [0.39ms]
+(pass) missing composition context uses track indices and neutral marker wording [0.15ms]
+
+tests/asset-changes.test.ts:
+(pass) src fingerprints only the referencing clips, including same-size replacements [1.41ms]
+(pass) poster fingerprints only the referencing clips, including same-size replacements [0.81ms]
+(pass) srcset fingerprints only the referencing clips, including same-size replacements [0.72ms]
+(pass) inline style fingerprints only the referencing clips, including same-size replacements [0.81ms]
+(pass) source child fingerprints only the referencing clips, including same-size replacements [0.87ms]
+(pass) linked audio fingerprints only the referencing clips, including same-size replacements [1.30ms]
+(pass) media referenced by CSS marks one composition row [7.10ms]
+(pass) media referenced by script marks one composition row [5.56ms]
+(pass) media referenced by external CSS marks one composition row [5.87ms]
+(pass) media referenced by external script marks one composition row [6.10ms]
+(pass) asset replacement, deletion, acceptance and unchanged revisions use the existing review ledger [14.81ms]
+(pass) watcher attributes direct media writes to the active turn, while owner uploads stay owner writes [96.75ms]
+(pass) view writes under an active agent turn emit no project events, review rows, or agent marks [371.72ms]
+(pass) asset snapshots preserve exclusive turn admission [1.73ms]
+
+tests/capture-lifecycle.test.ts:
+(pass) SIGKILL of the server process group stops Chromium and the next capture reclaims its profile [2278.08ms]
+Capture cleanup failed: 24 |   const closed = worker.exited.then((code) => {
+25 |     ready.reject(
+26 |       new Error(`The capture browser owner exited with code ${code}.`),
+27 |     );
+28 |     if (code !== 0)
+29 |       throw new Error(`The capture browser owner exited with code ${code}.`);
+                     ^
+error: The capture browser owner exited with code 137.
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/hyperframes/captureBrowser.ts:29:17)
+
+(pass) SIGKILL of the owner stops Chromium and the next capture reclaims its profile [1952.98ms]
+(pass) starting another capture owner preserves a live owner's profile and browser [2204.74ms]
+(pass) SIGTERM of a server after a real capture leaves no Chromium or profile [1316.30ms]
+(pass) SIGINT of a server after a real capture leaves no Chromium or profile [2416.36ms]
+(pass) SIGKILL of a server after a real capture leaves no Chromium or profile [1352.19ms]
+(pass) SIGTERM of a server after a real capture leaves no unresponsive Chromium or profile [6455.89ms]
+(pass) process.exit closes the capture browser and removes its profile [866.92ms]
+(pass) a failed browser launch reports the cause and removes its profile [237.92ms]
+
+tests/capture-profiles.test.ts:
+(pass) capture startup sweeps only marked directories with a dead owner [4.31ms]
+Could not remove the abandoned capture profile cutroom-capture-2387207-abcdef: EACCES: permission denied, rm '/tmp/cap-profiles-Dd0e8a/cutroom-capture-2387207-abcdef'
+(pass) an abandoned profile that cannot be removed does not stop a new capture profile [4.74ms]
+
+tests/composition-changes.test.ts:
+(pass) timeline receiver produces one composition row and no clip marks [16.72ms]
+(pass) timeline delay produces one composition row and no clip marks [20.38ms]
+(pass) timeline defaults produces one composition row and no clip marks [15.38ms]
+(pass) wrapper transform produces one composition row and no clip marks [12.63ms]
+(pass) wrapper font produces one composition row and no clip marks [12.88ms]
+(pass) body background produces one composition row and no clip marks [11.88ms]
+(pass) cloned template produces one composition row and no clip marks [12.42ms]
+(pass) a clip's own attribute edit marks only that clip [11.68ms]
+(pass) a clip's own text edit marks only that clip [8.23ms]
+(pass) legacy changes pending work survives an unrelated agent edit and reload [19.16ms]
+(pass) legacy clipEdits pending work survives an unrelated agent edit and reload [16.11ms]
+(pass) legacy history-backed pending work survives an unrelated agent edit and reload [20.79ms]
+(pass) legacy v2 pending work survives an unrelated agent edit and reload [18.36ms]
+(pass) sub-composition script edits appear in entry and scene reviews [10.70ms]
+(pass) clip review stays pending across other edits, resolves on returning to accepted bytes, and survives undo/redo [35.28ms]
+(pass) composition review stays pending across other edits, resolves on returning to accepted bytes, and survives undo/redo [33.62ms]
+(pass) every source byte is covered, including anonymous clips, invalid timelines and DOM order [1.00ms]
+(pass) accepting an earlier clip row updates the accepted bytes without accepting the later edit [18.47ms]
+(pass) accepting an earlier composition row updates the accepted bytes without accepting the later edit [22.19ms]
+(pass) an owner replacement cannot dismiss a pending clip [13.62ms]
+(pass) an external replacement cannot dismiss a pending clip [11.08ms]
+(pass) an authored animation.js edit produces one file row in entry Review [10.27ms]
+(pass) an authored styles.css edit produces one file row in entry Review [8.72ms]
+(pass) several sub-composition clip edits produce one entry row without underlining the host [8.90ms]
+
+tests/desktop-lifecycle.test.ts:
+(pass) cancelling desktop startup stops its owned backend before returning [85.93ms]
+(skip) quitting the native app during startup leaves no backend process
+(skip) normal quit of the native app after a capture leaves no backend, Chromium, or profile
+(skip) SIGKILL quit of the native app after a capture leaves no backend, Chromium, or profile
+
+tests/desktop-runtime.test.ts:
+(pass) desktop reuses only a Cutroom server and leaves its lifetime with its owner [4.30ms]
+(pass) desktop validates the local origin and reports a missing Bun runtime without hanging [82.69ms]
+(skip) native Electron window opens the real workspace with renderer isolation, muted media, and owned-server cleanup
+
+tests/edit-keys.test.ts:
+(pass) Q and W ripple trim the first clip under the playhead, skipping tracks with auto-select off [0.82ms]
+(pass) a selected clip under the playhead is trimmed even on a track with auto-select off [0.05ms]
+(pass) Q parks at the surviving start and W at the new end, including a later clip [0.46ms]
+(pass) E and Ctrl+\ razor the selected clips under the playhead, or every unlocked auto-select track [0.38ms]
+(pass) X lifts and Shift+X ripple deletes the selection, and do nothing without one [0.27ms]
+(pass) D turns each selected clip on or off, and M adds one marker at the playhead [0.34ms]
+(pass) a cut belongs to the incoming V1 clip, never the spanning music [0.13ms]
+(pass) trim targets use track order even when the input clips are unordered [0.06ms]
+
+tests/editor-api.test.ts:
+(pass) HyperFrames editor integration > serves real project files, self-hosted runtime, and a seekable preview [66.26ms]
+(pass) HyperFrames editor integration > canvas mutations share project history, undo restores source, and stale writes conflict [21.59ms]
+(pass) HyperFrames editor integration > an outside file edit invalidates the cached preview [243.99ms]
+
+tests/editor-render.test.ts:
+(pass) a saved canvas edit appears identically in frame capture and an encoded MP4 [2967.53ms]
+
+tests/export-estimate.test.ts:
+(pass) startup progress cannot become a time-left estimate [0.10ms]
+(pass) a new stage or retried capture needs its own measured throughput [0.03ms]
+
+tests/export-name.test.ts:
+(pass) export defaults read the chosen folder, fill numbering gaps and never reserve a file [4.70ms]
+
+tests/export-output.test.ts:
+(pass) cancelling a whole export removes the producer's scratch beside its output [33.14ms]
+(pass) cancelling a marked export removes the producer's scratch beside its output [32.36ms]
+(pass) a finished export moves into place and leaves no scratch beside it [31.09ms]
+(pass) a file that appears at the destination during an export is kept when it finishs [41.36ms]
+(pass) a file that appears at the destination during an export is kept when it cancels [41.48ms]
+(pass) cancelling after the export folder moved reports that its partial render remains [32.55ms]
+(pass) a cancel that arrives once the file is published leaves the export complete [327.24ms]
+(pass) a colliding output file is kept and the real error reaches the job [10.79ms]
+
+tests/export-range.test.ts:
+(pass) both marks default to In to Out, with an exclusive engine Out [0.11ms]
+(pass) a single mark defaults to the whole timeline and refuses an explicit marked export [0.07ms]
+(pass) empty, reversed and out-of-bounds ranges cannot start an export [0.04ms]
+(pass) an Out left past the end by a ripple delete stops at the end, as playback does
+(pass) export names cannot direct writes to other files [0.49ms]
+
+tests/export-render.test.ts:
+(pass) native marked exports capture only N frames and preserve both video and audio edges at integer and NTSC fps [19978.91ms]
+(pass) marked export planning refuses links outside the project before copying them [402.47ms]
+(pass) review: marked export preparation skips the project trash [2295.02ms]
+
+tests/frame-capture.test.ts:
+(pass) MCP, editor frames, and MP4 exports seek after asynchronous scene setup [8021.88ms]
+(pass) a failed scene setup returns an error instead of caching a time-zero frame [1014.97ms]
+(pass) upgrading the renderer invalidates legacy cached MCP, poster, note and download frames [4314.97ms]
+(pass) cancelling timeline_view aborts both fetches and releases the capture queue [1164.21ms]
+(pass) a readiness timeout names the composition and the 20-second limit [20787.41ms]
+
+tests/gesture.test.ts:
+(pass) the outer six pixels trim through the gain band, while the middle adjusts gain [0.46ms]
+(pass) a horizontal envelope press hands off to a move once, while a vertical drag is gain from its first pixel [0.27ms]
+(pass) a quick click that wobbles on a gain line is a click, and anything more commits [0.15ms]
+(pass) a fade drag leaves a clip's authored volume automation alone [1.29ms]
+(pass) fade drags on a clip shorter than its fades keep both handles where they are drawn [0.62ms]
+(pass) frozen edit anchors include linked partners and ripple followers but ignore unrelated clips [1.64ms]
+(pass) an overwrite freezes empty destination occupancy against both moved and inserted clips [0.71ms]
+(pass) destination snapshots include linked tracks, preserve selection gaps, and use exclusive ends [0.58ms]
+(pass) a press arms, three pixels of travel start the drag, and a release commits it [0.13ms]
+(pass) Esc cancels an armed press or a drag, and a second press never replaces the first [0.11ms]
+(pass) a press means move, resize, ripple, roll, or razor by tool and by where it lands [0.27ms]
+(pass) edges snap to the nearest target in reach and to nothing beyond it [0.13ms]
+(pass) snap targets are the playhead, markers, in and out, and edges of clips that stay put [0.12ms]
+(pass) dragging a clip moves it and its linked partner; Alt moves it alone [1.20ms]
+(pass) a move snaps, stops at the timeline's start, and carries only its own kind across tracks [1.45ms]
+(pass) an overwrite drag previews both surviving pieces and anchors the covered clip [0.96ms]
+(pass) Select resizes an edge up to its neighbour and its source; Trim ripples it [2.23ms]
+(pass) a roll moves the cut and leaves both clips' far edges where they were [0.95ms]
+(pass) the blade cuts the clip under it at that frame, snapped only inside the clip [0.21ms]
+(pass) media drops overwrite by default, insert explicitly, and refuse the wrong kind of track [1.24ms]
+(pass) a range marked in the source viewer lands with its start and every one of its frames [0.27ms]
+
+tests/home.test.ts:
+(pass) last edited reads as an age for a week, then as a date [0.76ms]
+(pass) durations drop the hours until there are any [0.09ms]
+(pass) aspect is a small ratio when one exists and a decimal otherwise [0.10ms]
+(pass) the poster is the frame a second in, or the middle of a shorter project [0.08ms]
+(pass) arrow keys walk a grid whose last row is short [0.07ms]
+
+tests/inspector.test.ts:
+(pass) an unaccepted mark written by #30 survives the new opacity projection and can be accepted [14.49ms]
+(pass) inspector fields parse timecode, frames, seconds and percentages without accepting trailing junk [0.52ms]
+(pass) a percentage shows every digit the engine keeps [0.06ms]
+(pass) inspector timing uses normal move and trim, changes linked source timing, and refuses overlaps and exhausted media [1.54ms]
+(pass) static opacity preserves other CSS, reads back exactly, and takes one undo step; timing refuses unsupported clips [33.91ms]
+(pass) the Changes ledger credits owner and agent, accepts one edit at a time and preserves other clips' marks [80.36ms]
+(pass) undo hides owner and agent rows; redo restores the same pending edit without accepting it [73.55ms]
+(pass) Changes shows five recent rows, always includes older pending work, and expands in date order [0.25ms]
+(pass) edit labels describe the commands with past tense and the actual values [0.47ms]
+(pass) a complete linked selection is one picture subject with its audio, while unrelated and partial selections remain multiple [0.45ms]
+(pass) gain fields round-trip linear gain through signed dB, including silence and fine steps [0.27ms]
+(pass) position fields accept signed pixels and step at composition scale [0.07ms]
+(pass) position round-trips native baselines, preserves CSS and linked audio, and undoes as one step [45.53ms]
+(pass) position edits name the distance moved rather than an absolute coordinate [0.42ms]
+
+tests/install.test.ts:
+(pass) desktop installation survives spaces, preserves arguments, clears Electron's CLI mode, and reuses a managed version [15.67ms]
+(pass) installation refuses an existing unrelated launcher before creating an app install [0.93ms]
+
+tests/jobs.test.ts:
+(pass) jobs reject skipped and terminal transitions and validate progress [0.46ms]
+(pass) cancellation cannot complete successfully or restart after it settles [0.11ms]
+(pass) cancellation cleanup failures remain visible as failed jobs [0.03ms]
+
+tests/keep-tracks.test.ts:
+(pass) lift retains track settings through HTML readback until explicit removal [1.34ms]
+(pass) explicit track removal refuses occupied, locked and missing tracks atomically [0.44ms]
+(pass) first lifts persist inferred tracks on disk, with history and MCP targeting of empty rows [86.13ms]
+
+tests/keymap.test.ts:
+(pass) key presses name their combo by key position, as the keymap writes it [0.15ms]
+(pass) every combo in the keymap is bound to exactly one action [0.06ms]
+(pass) the keyboard docs show the keymap as it is [0.61ms]
+
+tests/mcp-export.test.ts:
+(pass) MCP exports share dialog defaults, frame ranges, naming and cancel cleanup [54.23ms]
+(pass) exports accept chosen presets and folders, refuse invalid destinations/ranges and expose errors [25.08ms]
+(pass) native cancellation authorizes the job's project and owner-started jobs are visible over MCP [17.64ms]
+(pass) one active export refuses overlapping MCP and editor starts across projects [20.49ms]
+
+tests/mcp-project.test.ts:
+(pass) marker names and colours round-trip through MCP, disk, and undo history [64.87ms]
+(pass) an external MCP client edits the same project and undo history as the UI [39.16ms]
+(pass) the stdio bridge refuses remote or credential-bearing API origins [0.09ms]
+(pass) the published stdio entry point connects an outside agent to the running server [91.22ms]
+(pass) MCP transcription status retains the legacy job shape through successful and failed shared jobs [28.71ms]
+(pass) review_list gives an agent every stroke, the pin, and the range of a note made on the picture [17.66ms]
+(pass) title text edits through MCP write the source, undo in one step, and refuse nested markup [33.76ms]
+
+tests/mcp-sessions.test.ts:
+(pass) 150 disconnected SDK clients expire and server.close ends their streams [144.19ms]
+(pass) activity refreshes only that session's idle deadline and disposal cancels expiry [9.76ms]
+(pass) a running tool cannot expire, and its completion starts a fresh idle period [1.60ms]
+
+tests/media-files.test.ts:
+(pass) review: rename resolves references from their declaring file without changing another folder's media [30.75ms]
+(pass) review: an SVG can be renamed and restored with its references [19.80ms]
+(pass) review: CSS backgrounds and composition script dependencies require removal confirmation [21.49ms]
+(pass) review: saved source marks follow rename, undo and redo outside history [206.10ms]
+(pass) a rename moves the file and every source reference in one undo step [27.58ms]
+(pass) a rename is the owner's edit on every clip that plays the file [17.65ms]
+(pass) a rename refuses names that would lose or replace a file [14.37ms]
+(pass) remove moves an unused file to the project trash and undo brings it back [27.08ms]
+(pass) remove asks before taking a file the timeline still uses [16.33ms]
+(pass) removed files leave the project listing and cannot be removed twice [15.13ms]
+(pass) an agent renames, removes, and restores media through MCP as the owner does [47.46ms]
+
+tests/media-lifecycle.test.ts:
+(pass) long filmstrips cannot occupy the peaks and visible-frame slot [89.16ms]
+(pass) a crashed media worker loses its FFmpeg child, and a failed request can retry [188.95ms]
+(pass) media shutdown rejects when cancelled partial files cannot be cleaned [70.63ms]
+(pass) the newest visible frame bypasses 60 stale queued frames [116.42ms]
+(pass) missing streams are rejected from cached probe info without asset workers [45.49ms]
+(pass) default failures outlive a second but edited sources retry immediately [1179.80ms]
+
+tests/media-review.test.ts:
+(pass) impulses 8 ms apart occupy separate 2 ms base buckets [1.14ms]
+(pass) stereo phase and a one-sided mic preserve channel extrema [368.41ms]
+(pass) ranged peaks return only the selected level and buckets with variant ETags [208.65ms]
+(pass) portrait filmstrips work inside percent paths and split after 100 tiles [313.89ms]
+(pass) precise frames reach a blue shot inside a two-second overview tile [231.29ms]
+(pass) a same-size edit with restored mtime invalidates peaks [316.94ms]
+(pass) sparse keyframes fall back to seeking each overview tile [426.84ms]
+(pass) CAF and Wave64 audio and MXF video pass the local format allow-list [591.24ms]
+(pass) a two-hour cached waveform serves a kilobyte overview without sending base samples [1.01ms]
+(pass) three-second GOPs seek tiles at 2, 8, and 14 seconds [728.72ms]
+(pass) NTSC overviews retain keyframe tiles and seek only the missing final slot [833.51ms]
+
+tests/media-version.test.ts:
+(pass) file versions distinguish a path, size, and modification time without reading media [0.09ms]
+
+tests/media.test.ts:
+(pass) PCM extrema survive chunk boundaries, partial buckets, and every mip [0.52ms]
+(pass) media routes generate real peaks and filmstrips, revalidate edits, and reuse disk cache after restart [451.10ms]
+(pass) outside paths, linked caches, and playlist indirection cannot escape the project [87.26ms]
+(pass) media work shares a key, runs two workers, and cancels queued and running jobs before shutdown returns [57.75ms]
+(pass) filmstrip count follows decoded video when audio is longer, and audio-only filmstrips fail without leaving cache files [430.33ms]
+(pass) waveform extrema retain audible high frequencies before bucket reduction [188.79ms]
+(pass) repeated file versions change every derived key and bound persisted artifacts after restart [1123.56ms]
+
+tests/menus.test.ts:
+(pass) a menu row for a keymap action shows the keymap's label and its first key [0.20ms]
+(pass) the clip menu offers an edit only when its key would act on the selection [0.13ms]
+(pass) the shortcut sheet lists every keymap action once [0.24ms]
+(pass) menu keys wrap at the ends and search labels by what was typed [0.22ms]
+
+tests/mix.test.ts:
+(pass) clearing a split's automation removes its baked ramp with exact HTML readback [2.56ms]
+(pass) a gain drag leaves the line under the pointer, lands on unity, and recovers from silence [0.84ms]
+(pass) a drag inside a fade or over automation still keeps the line under the pointer [0.55ms]
+(pass) meters latch clipping through silence and stop, reset peaks on stop and clear on restart [0.08ms]
+(pass) gain and frame fades round-trip exactly through HTML and the producer's audio reader [3.43ms]
+(pass) preview media opts into the opaque frame's CORS audio path without changing script strings [0.24ms]
+(pass) shortening below an authored fade then restoring the edge preserves the native mix [1.53ms]
+(pass) splitting fades preserves the rendered audio, including cuts inside either fade [5641.10ms]
+(pass) trim and Q/W retain authored fades while overwrite and ripple cuts preserve the source envelope [6.20ms]
+(pass) overlapping fades retain authored readback and use the runtime's proportional display lengths [0.46ms]
+(pass) trim, roll, Q/W and split-piece shortening out and back retain native fades and rendered audio [4938.54ms]
+(pass) head trims keep edge fades, and extending a cut ramp reaches its original endpoint [2.32ms]
+(pass) a cut that would exceed HyperFrames' automation limit is refused, not thrown as an internal error [3.70ms]
+(pass) a ducked clip's waveform stays a third of its unity height, and its fade still tapers to nothing [0.43ms]
+(pass) the drawn fade follows core's linear amplitude ramp and reaches its knee and silence [0.72ms]
+
+tests/note-store.test.ts:
+(pass) chat waits for every capture in its own project and a failed capture releases the wait [2.48ms]
+(pass) a capture timeout lets chat continue without forgetting a capture still running [2.25ms]
+(pass) a failed save reaches its caller, allows the next note, and never holds another project [0.27ms]
+(pass) history waits for a pending note post and the next note waits for history [0.14ms]
+
+tests/note-visibility.test.ts:
+(pass) single-frame notes hold for 1s in playback, fade for 200ms, and remain exact when parked [0.15ms]
+(pass) ranged notes remain visible throughout their range and hold on reverse playback [0.03ms]
+
+tests/notes.test.ts:
+(pass) a drawing collects strokes, undo takes back the last one, and commit hands it to saving [0.37ms]
+(pass) a comment needs words, Esc discards it, and marking again moves the pin and keeps the words [0.05ms]
+(pass) an end before the note's frame is refused [0.03ms]
+(pass) several notes save at once, and a failed save reopens once no other note is open [0.10ms]
+(pass) measured popovers stay in the stage at corners and clear ink by 24 pixels [0.79ms]
+(pass) popover flips keep a 4px gap from the pin [0.09ms]
+(pass) text since the last stroke undoes before strokes; redo restores the stroke and text [0.07ms]
+(pass) the client id reconciles a notebook update even before the POST resolves [0.08ms]
+(pass) a slow 400px stroke stores fewer than 80 points and keeps its ends [0.22ms]
+(pass) typing undoes by word or pause before strokes, and redo restores each step [0.14ms]
+(pass) typing in a word groups together, but moving the caret starts a separate undo step [0.04ms]
+
+tests/picture-drag.test.ts:
+(pass) a press picks what is drawn on top, unless the selected clip's box lies above it [0.08ms]
+(pass) Alt steps down through the drawn clips and wraps to the top [0.04ms]
+(pass) a drag lands on whole pixels and Shift keeps the larger direction [0.11ms]
+(pass) a box snaps its edges and centre to the frame's, exactly, within reach only [0.06ms]
+
+tests/playback.test.ts:
+(pass) 1x follows the runtime's clock, and stopping lands exactly on the frame it reached [0.66ms]
+(pass) playback stops on the last frame, or starts over with loop on [0.19ms]
+(pass) at 23.976 and 29.97 the runtime stopping at its end ends playback, or loops [0.19ms]
+(pass) reverse steps the runtime frame by frame and stops at the first frame [0.12ms]
+(pass) a looped shuttle wraps inside the in and out range [0.11ms]
+(pass) suspending a reloading document parks the frame and resumes the latest playback intent on attach [0.12ms]
+(pass) a stop during reload stays stopped when the prepared document attaches [0.09ms]
+
+tests/preview-assets.test.ts:
+(pass) preview fetch rejects file and directory symlinks into another project while allowing internal links [398.99ms]
+(pass) timeline_view cannot paint another project's symlinked secret into its frame [921.47ms]
+(pass) export denies cross-project symlink reads and still renders an internal linked asset [1649.63ms]
+
+tests/preview-bridge.test.ts:
+(pass) served split boundaries use exact frames, keeping source offsets and authored fractional timing [1.82ms]
+(pass) preview boundaries follow the composition's rational frame rate and explicit ends [2.49ms]
+(pass) preview clip markers match the timeline for named, anonymous and colliding identities [5.65ms]
+(pass) standalone template previews keep the scoped timeline's generated identities [2.07ms]
+(pass) measured media windows filter the same clips before assigning generated names [1.46ms]
+(pass) script provenance leaves inert project data unchanged [0.31ms]
+
+tests/preview-isolation.test.ts:
+(pass) isolated previews, timeline_view, thumbnails, and exports cannot annotate, approve, read projects, or send external requests [6330.12ms]
+
+tests/project-edited.test.ts:
+(pass) Home dates follow linked authoring sources without counting media, private state or unrelated files [11.27ms]
+(pass) Home dates follow a link added to a file that was already read [1.45ms]
+
+tests/project-store.test.ts:
+(pass) a removed project folder refuses paths that allow missing files [0.68ms]
+(pass) new projects ship a valid, self-contained Instrument Sans composition [31.59ms]
+(pass) projects list most recently edited first [29.49ms]
+(pass) source writes require the exact version and remain undoable [31.29ms]
+(pass) annotations persist with source history and metadata rejects stale replacement [24.27ms]
+(pass) project APIs reject traversal and symlinks outside the registered folder [2.96ms]
+(pass) project shutdown drains admitted edits and refuses new mutations [6.38ms]
+(pass) last edited uses the newest composition or document mtime, not registry activity [3.95ms]
+
+tests/project-watchers.test.ts:
+(pass) listing and resolving closed projects keeps no watches; editor subscriptions share and release them [197.59ms]
+
+tests/render-lifecycle.test.ts:
+(pass) render shutdown reaps an uncooperative worker and its descendants before removing output [90.20ms]
+(pass) a closed thumbnail renderer cannot reopen Chromium for a late capture [0.18ms]
+(pass) a malformed worker event fails the job and still reaps the worker [78.33ms]
+(pass) the HTTP render-cancel route stops its worker without shutdown and propagates cleanup failure [88.87ms]
+(pass) a worker startup failure retains its cause instead of only the Node version [31.21ms]
+
+tests/review.test.ts:
+(pass) claim, complete, block, and release only write review.json on a project with no history [8.21ms]
+(pass) review transitions > open --{"type":"send"} by {"kind":"human"}--> queued [0.06ms]
+(pass) review transitions > queued --{"type":"claim"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> working [0.02ms]
+(pass) review transitions > open --{"type":"claim"} by {"kind":"agent","turn":{"id":"external:server","kind":"external"}}--> working
+(pass) review transitions > blocked --{"type":"claim","answer":"The white one."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> working
+(pass) review transitions > working --{"type":"complete","note":"Done."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> done
+(pass) review transitions > open --{"type":"complete","note":"Done."} by {"kind":"agent","turn":{"id":"external:server","kind":"external"}}--> done
+(pass) review transitions > blocked --{"type":"complete","note":"Done."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> done
+(pass) review transitions > working --{"type":"block","question":"Which?"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> blocked
+(pass) review transitions > working --{"type":"release"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> queued
+(pass) review transitions > working --{"type":"release"} by {"kind":"human"}--> queued
+(pass) review transitions > blocked --{"type":"reply","note":"The blue one."} by {"kind":"human"}--> queued
+(pass) review transitions > done --{"type":"accept"} by {"kind":"human"}--> accepted
+(pass) review transitions > done --{"type":"reject","note":"Still too small."} by {"kind":"human"}--> queued
+(pass) review transitions > queued --{"type":"withdraw","reason":"Never mind."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> withdrawn
+(pass) review transitions > done --{"type":"withdraw","reason":"Never mind."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}--> withdrawn
+(pass) review transitions > blocked --{"type":"withdraw","reason":"Never mind."} by {"kind":"agent","turn":{"id":"external:server","kind":"external"}}--> withdrawn
+(pass) review transitions > done --{"type":"withdraw","reason":"Never mind."} by {"kind":"human"}--> withdrawn
+(pass) review transitions > open --{"type":"withdraw","reason":"Never mind."} by {"kind":"human"}--> withdrawn
+(pass) review transitions > withdrawn --{"type":"restore"} by {"kind":"human"}--> queued
+(pass) review transitions > refuses open --{"type":"send"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}} [0.05ms]
+(pass) review transitions > refuses working --{"type":"claim"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses blocked --{"type":"claim"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses queued --{"type":"claim"} by {"kind":"human"}
+(pass) review transitions > refuses working --{"type":"complete","note":"Done."} by {"kind":"human"}
+(pass) review transitions > refuses done --{"type":"accept"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses queued --{"type":"accept"} by {"kind":"human"}
+(pass) review transitions > refuses done --{"type":"reject","note":"No."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses queued --{"type":"reply","note":"Yes."} by {"kind":"human"}
+(pass) review transitions > refuses queued --{"type":"release"} by {"kind":"human"}
+(pass) review transitions > refuses open --{"type":"withdraw","reason":"Never mind."} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses accepted --{"type":"withdraw","reason":"Never mind."} by {"kind":"human"}
+(pass) review transitions > refuses withdrawn --{"type":"restore"} by {"kind":"agent","turn":{"id":"message-1","kind":"message","token":"token-1"}}
+(pass) review transitions > refuses accepted --{"type":"restore"} by {"kind":"human"}
+(pass) review transitions > records who withdrew a note, the message that did it, and its replacement [0.07ms]
+(pass) review transitions > owner instructions accumulate and survive later transitions [0.08ms]
+(pass) notes persist until the agent finishes or withdraws them, then the owner accepts [45.19ms]
+(pass) an unrelated follow-up still carries every unfinished note [46.79ms]
+(pass) a claim left by a closed run returns to the queue [13.88ms]
+(pass) notes saved before the review queue keep their meaning [22.15ms]
+(pass) late frame attachments preserve sent notes, MCP review_list, and the note's undo step [43.47ms]
+(pass) review queue regressions > owner instructions survive a claim and an interrupted run [75.87ms]
+(pass) review queue regressions > a chat message can answer a blocked note [46.96ms]
+(pass) review queue regressions > an outside MCP client can work fresh notes, and its claims recover after a restart [14.98ms]
+(pass) review queue regressions > submitted notes must be withdrawn, not deleted [36.73ms]
+(pass) review queue regressions > one conversation per project works at a time [21.05ms]
+(pass) review queue regressions > agent withdrawal follows one rule across turn kinds [34.38ms]
+(pass) review queue regressions > project documents never echo a stale legacy status [7.27ms]
+(pass) review queue regressions > a failed runtime start does not leave the review turn registered [15.27ms]
+Review notes could not be returned to the queue: 184 |       return { schemaVersion: 1, items: [], changes: [], clipEdits: [] };
+185 |     let json: unknown;
+186 |     try {
+187 |       json = JSON.parse(raw);
+188 |     } catch {
+189 |       throw new ReviewFileError();
+                  ^
+HttpError: Review status in .cutroom/review.json is unreadable. Repair the file to keep reviewing; until then no note changes status and undo, redo, and restore are blocked so no sent request is lost.
+ status: 422,
+
+      at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/review.ts:189:13)
+      at async <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/src/server/projects/review.ts:256:25)
+
+(pass) review queue regressions > a corrupt review file leaves transcripts and chat working [28.96ms]
+(pass) review round 2 regressions > deleting a draft cannot race a message that submits it [34.10ms]
+(pass) review round 2 regressions > undo of a submitted note withdraws it visibly, and redo keeps it withdrawn [48.15ms]
+(pass) review round 2 regressions > an outside client acting during a native turn keeps its own identity [40.95ms]
+(pass) review round 2 regressions > claiming a blocked note records the owner's chat answer [29.56ms]
+(pass) review round 2 regressions > a submitted note's text cannot be rewritten [29.29ms]
+(pass) review round 2 regressions > the owner can return a stuck claim to the queue [15.08ms]
+(pass) the editor's own undo button withdraws a sent note as the owner [40.38ms]
+(pass) review round 3 regressions > an outside removal stays withdrawn after the file comes back [16.61ms]
+(pass) review round 3 regressions > undo of a legacy sent note before any review change withdraws it [14.04ms]
+(pass) review round 3 regressions > undo that changes a sent request's text withdraws it and keeps what was sent [48.70ms]
+(pass) review identity binding > a conversation's token is refused when its run is not active [38.33ms]
+(pass) review identity binding > a conversation's token cannot act on another project [41.69ms]
+(pass) owner actions over MCP > an outside client acts for the owner, but Cutroom's agent cannot accept its own work [31.67ms]
+(pass) review round 4 regressions > reading the queue twice does not rewrite review.json [37.47ms]
+(pass) review round 4 regressions > a refused action still saves the withdrawal it detected [16.66ms]
+(pass) review round 4 regressions > review_add checks a conversation's token like every other action [31.45ms]
+(pass) review round 4 regressions > undo can repair an unreadable cutroom.json [36.88ms]
+(pass) history changes nothing while review.json is unreadable, even if cutroom.json is too [47.24ms]
+(pass) annotations accept one validated client id and reject duplicates [19.17ms]
+(pass) owner reorders persist through reload, agent cannot reorder, and withdrawal keeps its reason [31.14ms]
+
+tests/ripple-feedback.test.ts:
+(pass) ripple reports use the edit interval even when an unrelated longer track determines duration [1.38ms]
+(pass) ripple delete reports deletions, while lift stays silent [0.59ms]
+(pass) ripple drops and Paste Insert report time opened on other tracks [0.50ms]
+(pass) ripple drops include a newly created destination track in the affected count [0.33ms]
+(pass) outside edits ignore attribution-only refreshes and distinguish moves, title updates and removal [0.44ms]
+(pass) the existing HTML parse supplies decoded first-line title text without scripts or inert templates [0.56ms]
+(pass) owner history rows stay silent while unrelated agent and disk edits are reported [0.32ms]
+(pass) composition reads wait for an admitted edit and return its source with its attribution [9.58ms]
+(pass) overwrite feedback names whole and partial replacements once, while a moved clip's partial cut and insert stay silent [1.27ms]
+(pass) outside notices retain the caller name [0.19ms]
+
+tests/seek-queue.test.ts:
+(pass) seeks coalesce per animation frame, replace the waiting target, and restore after the in-flight seek [0.49ms]
+
+tests/server-lifecycle.test.ts:
+(pass) shutdown closes admission immediately and repeated callers share cleanup [2.31ms]
+(pass) the copied external MCP command connects to the selected local port [108.94ms]
+
+tests/source-boundary.test.ts:
+(pass) agent source writes refuse permissions, instructions, and non-composition files [8.30ms]
+(pass) human source writes refuse permissions, instructions, and non-composition files [4.88ms]
+(pass) embedded source mutations, renames, and uploads cannot reach protected paths [3.55ms]
+(pass) composition source types, nested source creation, and media file management still work [153.14ms]
+(pass) renaming an asset cannot rewrite a native settings reference [1.86ms]
+(pass) undo and restore refuse to rewrite an instruction file [14.46ms]
+(pass) deleting a directory cannot remove its nested agent instructions [1.62ms]
+(pass) app metadata cannot be symlinked onto native permissions [7.37ms]
+
+tests/source-create.test.ts:
+(pass) source creation is exclusive, undoable, and uses the existing source path protections [42.09ms]
+
+tests/source-marks-review.test.ts:
+(pass) review: a save for the old media identity is refused after replacement [218.87ms]
+(pass) review: one malformed source entry does not discard valid sources or timeline preferences [241.50ms]
+
+tests/source-marks.test.ts:
+(pass) source marks share the view save queue, survive reopening, and ignore renamed or replaced files [584.02ms]
+
+tests/source-view-identity.test.ts:
+(pass) identical media survives touch and restore; superseded versions stay bounded and rename moves pending marks [1280.04ms]
+(pass) legacy versions collapse to one entry per path while missing files remain dormant [244.06ms]
+(pass) an unmarked rename clears the destination's previous marks without changing other preferences [437.59ms]
+
+tests/timecode.test.ts:
+(pass) timecode counts frames at the nominal rate, without drop frames [0.09ms]
+(pass) typed digits fill from the right [0.10ms]
+(pass) parse and format agree on every rate [0.13ms]
+(pass) frames past the rate carry, and nothing else parses [0.02ms]
+
+tests/timeline-api.test.ts:
+(pass) a project summary reports the picture size and length the editor would show [3.63ms]
+(pass) outside HTML uses persisted mute and solo on read without a history write or undo loop [27.29ms]
+(pass) a command batch is atomic, one undo step, and refuses stale revisions [37.21ms]
+(pass) Q through a spanning music bed persists exact NTSC HTML and undo restores it [16.25ms]
+(pass) an id is spent for good: a piece named after an undone clip is refused, and redo still works [38.26ms]
+(pass) ripple delete can shorten an L-cut tail linked to an unchanged locked picture [34.47ms]
+(pass) ripple delete can shorten an L-cut tail linked to an unchanged autoSelect picture [38.72ms]
+(pass) an MCP agent reads and edits the timeline through the batch endpoint [66.89ms]
+(pass) the entry document reads its live tree and a scene file its template [18.05ms]
+(pass) ./index.html, /index.html, and index.html are one composition with one revision [12.44ms]
+(pass) a file ffprobe cannot read is probed once per version, not on every read [38.65ms]
+(pass) media without data-duration is measured with ffprobe [74.47ms]
+(pass) timeline reads refuse HLS playlists that reference outside files or network media [152.95ms]
+(pass) a scene edit declares the entry layer in the same undo step [14.57ms]
+(pass) ordinary MCP video inserts create linked audio by default, with exact readback and one undo step [201.23ms]
+(pass) MCP gain, authored fades and cleared automation read back exactly and undo in one step [30.70ms]
+(pass) MCP keeps place as the default and routes explicit V2 overwrite to A2, preserving V1/A1 [123.67ms]
+(pass) MCP reports clips left whole by auto-select razor and refuses an explicit razor [35.26ms]
+(pass) Q returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [62.58ms]
+(pass) W returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [47.38ms]
+(pass) Shift+X returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [45.74ms]
+(pass) ripple extension returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [43.01ms]
+(pass) insert ripple returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [41.46ms]
+(pass) HTTP and MCP paste route linked sound to a new track and preserve another pair [174.08ms]
+(pass) HTTP and MCP paste route linked sound to a free track and preserve another pair [174.28ms]
+(pass) HTTP and MCP paste route linked sound to a partner track and preserve another pair [177.89ms]
+(pass) MCP clipboard snapshots survive cuts and timeline switches, paste once, and refuse other projects [171.13ms]
+(pass) clipboard copy refuses id-styled clips and stale revisions without changing files [4.35ms]
+(pass) track view settings stay outside history and survive real-edit undo and redo [481.35ms]
+(pass) destination tracks are read and set by themselves, outside history and other view preferences [493.08ms]
+(pass) missing or malformed view preferences use defaults and do not block timeline edits [169.08ms]
+
+tests/timeline-apply.test.ts:
+(pass) remove shortens spanning text and stills without copying them [0.65ms]
+(pass) trim start shortens spanning text and stills without copying them [0.23ms]
+(pass) trim end shortens spanning text and stills without copying them [0.18ms]
+(pass) a shortened element keeps both audio pieces linked after removing 60 frames [0.25ms]
+(pass) a shortened element keeps both audio pieces linked after removing 180 frames [0.11ms]
+(pass) a shortened image keeps both audio pieces linked after removing 60 frames [0.08ms]
+(pass) a shortened image keeps both audio pieces linked after removing 180 frames [0.09ms]
+(pass) auto-select razor cuts supported clips and reports the title it leaves whole [0.37ms]
+(pass) auto-select leaves a restricted clip's linked group whole [0.10ms]
+(pass) Q refuses a spanning restricted element atomically until its track opts out [0.34ms]
+(pass) Q refuses a spanning restricted audio atomically until its track opts out [0.14ms]
+(pass) W refuses a spanning restricted element atomically until its track opts out [0.11ms]
+(pass) W refuses a spanning restricted audio atomically until its track opts out [0.09ms]
+(pass) Shift+X refuses a spanning restricted element atomically until its track opts out [0.10ms]
+(pass) Shift+X refuses a spanning restricted audio atomically until its track opts out [0.11ms]
+(pass) ripple extension refuses a spanning restricted element atomically until its track opts out [0.12ms]
+(pass) ripple extension refuses a spanning restricted audio atomically until its track opts out [0.14ms]
+(pass) insert ripple refuses a spanning restricted element atomically until its track opts out [0.21ms]
+(pass) insert ripple refuses a spanning restricted audio atomically until its track opts out [0.13ms]
+(pass) a ripple refuses a fully covered clip whose source cannot be removed [0.11ms]
+(pass) lift leaves the gap and ripple delete closes it on auto-select tracks [0.12ms]
+(pass) ripple edits skip locked and deselected tracks and locked clips refuse edits [0.25ms]
+(pass) Q and W trim to the playhead and ripple the rest of the edit [0.23ms]
+(pass) a trim past an overwritten sound partner names the sound, not the picture [0.27ms]
+(pass) a refused move names the locked destination track [0.18ms]
+(pass) a picture refused on an audio track uses the right article [0.11ms]
+(pass) a linked group is one unit: trims move every partner's same edge [0.22ms]
+(pass) Q removes exactly [30, 60), including partial overlaps on other tracks [0.23ms]
+(pass) Q leaves locked spanning clips alone and names linked blockers [0.46ms]
+(pass) Q leaves autoSelect spanning clips alone and names linked blockers [0.13ms]
+(pass) W removes exactly [30, 60), including partial overlaps on other tracks [0.11ms]
+(pass) W leaves locked spanning clips alone and names linked blockers [0.20ms]
+(pass) W leaves autoSelect spanning clips alone and names linked blockers [0.11ms]
+(pass) delete removes exactly [30, 60), including partial overlaps on other tracks [0.17ms]
+(pass) delete leaves locked spanning clips alone and names linked blockers [0.15ms]
+(pass) delete leaves autoSelect spanning clips alone and names linked blockers [0.10ms]
+(pass) Q ripples explicitly edited auto-select-off tracks and their partners [0.14ms]
+(pass) W ripples explicitly edited auto-select-off tracks and their partners [0.04ms]
+(pass) Shift+X ripples explicitly edited auto-select-off tracks and their partners [0.04ms]
+(pass) Q on the first clip cuts a music bed at zero without pulling it before the timeline [0.10ms]
+(pass) ripple delete cuts a linked L-cut tail under B-roll and preserves the earlier shot [0.14ms]
+(pass) ripple delete trims a J-cut head under B-roll and keeps its surviving source in sync [0.12ms]
+(pass) ripple cuts linked spanning clips into matching groups on either side [0.12ms]
+(pass) ripple extensions cut overlapping clips and open exactly the added time [0.22ms]
+(pass) ripple delete removes the union of selected linked spans without a smallest-gap holdback [0.22ms]
+(pass) deleting a J-cut pair trims the preceding picture inside the selected union [0.09ms]
+(pass) separate ripple deletions preserve the unselected interval between them [0.08ms]
+(pass) range trims unlink survivors when their only overlap was removed [0.11ms]
+(pass) linked interval sweep lifts only surviving overlapping partners after Q, W, and delete [226.38ms]
+(pass) cuts keep a piece linked while it still overlaps its partner [0.38ms]
+(pass) a linked group that cannot move together is refused by name [0.38ms]
+(pass) razor cuts auto-select tracks and linked partners, which stay linked [0.38ms]
+(pass) insert edits place, overwrite, or push the timeline [0.71ms]
+(pass) commands that cannot apply exactly fail with typed errors [0.66ms]
+(pass) moves overwrite partial and full clips without rippling or changing the moved source [0.18ms]
+(pass) an overwrite move splits a spanning clip with a fresh stable id [0.53ms]
+(pass) linked moves overwrite each partner's own range, including on a deselected track [0.52ms]
+(pass) a moving selection never overwrites itself, including mixed kinds changing tracks [0.33ms]
+(pass) a batch never reuses an id, so every copy comes from original markup [0.29ms]
+(pass) placing the first clip in an empty composition keeps its length [0.13ms]
+(pass) a root kept shorter than its content does not grow after a ripple delete [0.06ms]
+(pass) track kinds are stored, so an empty locked audio track stays audio [0.33ms]
+(pass) every piece a command cuts takes the caller's ids in order, and spent ids are refused [0.57ms]
+(pass) a video's sound goes to the audio track the command names, edited as the picture's track is [0.61ms]
+(pass) video overwrite clears matching picture-sound ranges, including fully covered picture, without rippling music [0.35ms]
+(pass) video overwrite routes sound to the overwritten picture's partner instead of another pair [0.67ms]
+(pass) overwriting a silent picture never cuts another picture's sound on the fallback track [0.31ms]
+(pass) overwrite keeps the existing audio fallback without a partner and refuses multiple partner destinations [0.32ms]
+(pass) setMarker on an existing marker changes only the fields it names [0.29ms]
+(pass) paste overwrite routes linked sound to a new track without cutting another pair [0.42ms]
+(pass) paste overwrite routes linked sound to a free track without cutting another pair [0.16ms]
+(pass) paste overwrite routes linked sound to a partner track without cutting another pair [0.20ms]
+(pass) paste into an empty composition retains picture tracks and reserves standalone audio before routing sound [0.45ms]
+(pass) linked paste needs room for the whole J-cut sound span and skips locked or music tracks [0.32ms]
+(pass) standalone audio paste keeps the same overwrite semantics as an audio drop [0.40ms]
+(pass) paste keeps relative timing and J-cut partners on their tracks with fresh ids and links [0.52ms]
+(pass) paste overwrite clears each copied interval; insert opens the whole span once across auto-select tracks [0.39ms]
+(pass) copy and paste refuse restricted clips by name, and insert keeps the existing auto-select hint [0.74ms]
+(pass) paste insert refuses a linked partner on an excluded track and a locked destination [0.39ms]
+
+tests/timeline-html.test.ts:
+(pass) split leaves an auto-select id-animated title whole [5.56ms]
+(pass) overwrite moves read back exactly at 30000/1001 with linked cuts and source offsets [2.13ms]
+(pass) the projection reads clips, references, and fps from HTML [2.03ms]
+(pass) edits change only the attributes they need and keep references [3.53ms]
+(pass) a disabled clip is data-hidden, which HyperFrames leaves out of preview and render [4.64ms]
+(pass) split, ripple delete, and insert round-trip without touching other markup [1.54ms]
+(pass) visual placements maintain track stacking without rewriting authored styles [1.81ms]
+(pass) audio placement leaves stacking and authored markup alone [0.66ms]
+(pass) track defaults precede authored cascade layers and leave first-child selectors intact [0.57ms]
+(pass) a scene's defaults survive template loading without entering its clip children [0.70ms]
+(pass) duration edits establish stacking, while label edits do not [0.69ms]
+(pass) a managed stylesheet moved by hand is relocated rather than duplicated [0.77ms]
+(pass) noncanonical and legacy track values are normalized when defaults are written [0.86ms]
+(pass) managed CSS never makes a numeric clip id look like an authored reference [0.90ms]
+(pass) compositions that cannot be edited exactly are refused [1.43ms]
+(pass) frame rates HyperFrames ignores are refused instead of read as 30 fps [0.86ms]
+(pass) element boundaries follow the HTML spec tree, including implied end tags [0.93ms]
+(pass) markup the browser moves out of a table is never removed with the table [0.98ms]
+(pass) inert template content never becomes the root or answers an id [0.98ms]
+(pass) an entry document uses its live tree and a sub-composition its template [0.37ms]
+(pass) a sub-composition edits its first template even when a later one is named for it [0.65ms]
+(pass) text the browser fosters out of a table row is never cut with the row [1.69ms]
+(pass) a clip is removed or copied only when its bytes hold its text and end tags too [1.06ms]
+(pass) frames are the ones the runtime shows, and moves keep the source in sync [0.81ms]
+(pass) a start a hair past a frame never yields a negative source offset [1.50ms]
+(pass) source offsets stay exact through retimes, repeated trims, and inserts [2.70ms]
+(pass) Q writes exact NTSC cuts, links and retimed source offsets and reads them back [0.92ms]
+(pass) W writes exact NTSC cuts, links and retimed source offsets and reads them back [0.72ms]
+(pass) delete writes exact NTSC cuts, links and retimed source offsets and reads them back [0.78ms]
+(pass) Q at NTSC frame one writes source offsets rounded once to the microsecond [0.36ms]
+(pass) Q trims a referenced music bed in place without copying its script target [0.58ms]
+(pass) a range cut removes stale links in HTML so lifting the picture keeps the surviving audio [0.30ms]
+(pass) removing an anonymous clip writes ids on the clips it would renumber [0.34ms]
+(pass) media without data-duration takes its length from the measured source [0.30ms]
+(pass) position captures both native baselines and clearing one axis keeps the other offset exact [0.99ms]
+(pass) a text edit replaces only the words, escaping them and writing line breaks as <br> [1.33ms]
+(pass) text with markup inside or a script that writes it is shown but never rewritten [2.43ms]
+(pass) inline pre-line keeps source newlines in the field and in a text edit [0.74ms]
+(pass) uncertain stylesheet whitespace preserves source newlines and refuses a lossy edit [0.98ms]
+
+tests/timeline-performance.test.ts:
+(pass) frame budget for run maxima [ 80, 171, 90 ] [0.19ms]
+(pass) frame budget for run maxima [ 171, 141, 164 ] [0.03ms]
+
+tests/timeline-view.test.ts:
+(pass) the ruler picks the smallest step that keeps labels 96px apart [0.19ms]
+(pass) ruler steps count 30 frames per second at 29.97, as its timecode does [0.02ms]
+(pass) 24 fps seconds divide into two-frame ticks, since five and ten do not fit
+(pass) labelled ticks cover the mounted range from the step before it [0.06ms]
+(pass) a pixel maps to the frame under it and zoom holds the anchor frame still [0.04ms]
+(pass) zooming in from a wide fit keeps the frame under the cursor, though the scroller keeps whole pixels [0.10ms]
+(pass) a scroll by the person, or the scroller's bounds, replaces the remembered offset [0.01ms]
+(pass) looped playback pages once per wrap, and once each time the playhead nears the edge [0.15ms]
+(pass) reverse playback pages at the left edge, and back to a playhead that is ahead of the view [0.03ms]
+(pass) fit shows the whole timeline and the slider runs from fit to the closest zoom [0.05ms]
+(pass) video tracks stack upward from the divider and audio downward [0.27ms]
+(pass) new-track bands use the same row geometry as the created tracks [0.11ms]
+(pass) the mounted range holds until the view leaves it or it grows too long [0.05ms]
+(pass) only clips touching the range are mounted, including a long clip that starts before it [0.15ms]
+(pass) a click selects a clip with its linked partner; Alt leaves the partner out [0.19ms]
+(pass) Ctrl-click adds and removes a clip without touching the rest [0.08ms]
+(pass) Shift-click selects everything between the anchor and the clip, across the tracks between [0.08ms]
+(pass) clips on a locked track cannot be selected by click, marquee, or Shift+V [0.10ms]
+(pass) a marquee selects what it touches, plus linked partners, and adds to a held selection [0.05ms]
+(pass) Shift+V skips tracks with auto-select off [0.05ms]
+(pass) Y selections compare starts, skip locked tracks, and do not pull in links from excluded tracks [0.13ms]
+(pass) a selection drops clips that were removed or whose track was locked [0.09ms]
+(pass) motion durations read the same from dev and minified CSS [0.03ms]
+(pass) the canvas eases a sliding clip on the same curve the browser eases its box [0.21ms]
+(pass) a waveform is drawn from the coarsest level that still gives every pixel its own bucket [0.11ms]
+(pass) filmstrip tiles start on the clip's first frame and show the source from its media start [0.12ms]
+(pass) a trimmed clip's first tile is its first frame, never footage from before the trim [0.04ms]
+(pass) filmstrip frames come from the sprite until a tile is shorter than its two seconds [0.01ms]
+(pass) a media source resolves to one project file for the server and the timeline [0.05ms]
+(pass) waveform dB mapping hides the noise floor and gives speech room without hitting the edges [0.05ms]
+
+tests/tool-approval.test.ts:
+(pass) an approval names the note, clips, or file, and never an id or tool identifier [4.00ms]
+(pass) native and outside tools ask in plain words [0.21ms]
+(pass) a transcript row and its approval name the same thing, from the project as it is [1.00ms]
+(pass) unnamed text clips use their kind or count, keeping raw ids inside Details [2.83ms]
+(pass) a stuck name lookup falls back within a bounded approval wait and aborts immediately [251.63ms]
+(pass) every Cutroom tool has its own wording [0.08ms]
+
+tests/tool-row.test.ts:
+(pass) tool calls read as a verb and what it acted on [0.24ms]
+(pass) a Cutroom edit names its clips or note, and another server's tool never borrows that wording [0.08ms]
+(pass) routine steps fold into counts while failures and project edits keep their rows [0.80ms]
+(pass) a summary counts the running step in the present tense, and one routine step stays a row [0.11ms]
+(pass) a failed call says why on one line [0.39ms]
+
+tests/track-basics.test.ts:
+(pass) preview readback applies each scene's mix to every bundled instance [2.77ms]
+(pass) track enable, mute and multiple solos persist exactly without changing clip gain or enable [4.35ms]
+(pass) a linked insert reuses free picture-sound tracks, or creates one, and exports sound once [2.04ms]
+(pass) overwrite never cuts another pair's sound, and reuses a free picture sound track while leaving Music and VO alone [1.08ms]
+(pass) adding an empty track and a clip on it is an exact command batch, including a muted destination [1.08ms]
+(pass) mute and solo suppress embedded video sound without hiding picture or losing authored mute and gain [4.31ms]
+
+tests/transcript-edit.test.ts:
+(pass) script cuts alter real media offsets, ripple one lane, restore, and share undo [86.44ms]
+(pass) a script cut that removes the original piece spends its id, so restoring the word never duplicates it [102.33ms]
+(pass) script edits reject unknown words, stale versions, and unsupported linked media [32.18ms]
+(pass) moving then fully cutting and restoring a clip preserves its lane, position, and word seeking [29.51ms]
+(skip) installed local Whisper produces a real word-timed transcript
+(pass) transcription admission is exclusive and shutdown prevents a late start [1.73ms]
+(pass) a cancelled transcription cannot import a late successful engine result [1.63ms]
+(pass) a cancelled transcript import waiting for a history transaction makes no edit [9.59ms]
+(pass) notebook refreshes exclude transcript words and only revise when script data changes [21.98ms]
+(pass) transcript views share a current source snapshot and refresh after outside moves [13.55ms]
+(pass) script cuts ripple implicit track zero without moving a nested scene's internal clips [20.62ms]
+(pass) script changes preserve outside source-offset and nested-source edits by refusing ambiguous cuts [16.00ms]
+(pass) script cuts recheck links and animation added after transcript import [16.89ms]
+(pass) word seeking follows outside trims and playback-rate changes without changing cut ownership [14.91ms]
+(pass) transcript imports use canonical source and media identity instead of path or index aliases [48.14ms]
+(pass) anonymous media gains stable transcript identity before another clip is split [36.68ms]
+(pass) the footage picker retains leading-cut and fully cut media so its script can be restored [48.36ms]
+(pass) malformed media URLs do not hide valid footage or escape the import boundary [51.91ms]
+(pass) a cancellation arriving after a transcript write commits still reports its successful import [35.17ms]
+(pass) cancelled transcription reports failure when read-only scratch cannot be cleaned [3.94ms]
+(pass) an agent's script cut marks every rewritten element, including editor identity stamps [41.09ms]
+
+tests/transport.test.ts:
+(pass) L plays, and each repeat doubles the speed up to 8x [0.13ms]
+(pass) J mirrors L in reverse, starting at 1x [0.04ms]
+(pass) the opposite direction drops to 1x that way [0.03ms]
+(pass) Shift starts a shuttle at 4x and keeps doubling from there [0.06ms]
+(pass) K stops from any motion; Space toggles between stopped and playing [0.04ms]
+(pass) scrubbing holds until release, which stops [0.03ms]
+
+tests/viewer-handoff.test.ts:
+(pass) a superseded promotion cannot confirm or fail the newer candidate [0.15ms]
+(pass) promotion keeps the navigation deadline and failure reports only once without losing the picture [0.06ms]
+(pass) a reload of the confirmed document is prepared and painted again; other loads change nothing [0.05ms]
+(pass) document teardown starts the reload deadline before load and stale teardown cannot restart a handoff [0.03ms]
+(pass) a document reloading during promotion must prepare again within its original deadline [0.04ms]
+
+tests/voiceover-worklet.test.ts:
+(pass) a missing render quantum stays a gap instead of shifting captured samples [3.48ms]
+
+tests/voiceover.test.ts:
+(pass) sample-clock crop removes a fractional-frame delay and writes portable PCM WAV [0.26ms]
+(pass) a gap keeps every surviving sample at its exact position [0.06ms]
+(pass) recorded takes use the engine, preserve occupied audio, and undo leaves the media file [174.29ms]
+(pass) desktop microphone permission is audio-only and restricted to the editor main frame [0.17ms]
+(pass) non-overlapping takes reuse the first free audio lane and overlaps preserve earlier work [0.67ms]
+
+tests/workspace-boundary.test.ts:
+(pass) foreign browser origins and rebinding hosts cannot access local projects [1.73ms]
+(pass) cross-site reads can reach only isolated previews, while trusted parent loads and native clients keep working [53.06ms]
+(pass) every mutation requires an explicit workspace Origin, including approval, upstream, and MCP routes [2.46ms]
+(pass) annotation captures cannot write through a project symlink [2.19ms]
+(pass) user-selected attachments are copied into the project and project files are reused [2.13ms]
+(pass) review captures stay out of the project file list [4.97ms]
+
+5 tests skipped:
+(skip) quitting the native app during startup leaves no backend process
+(skip) normal quit of the native app after a capture leaves no backend, Chromium, or profile
+(skip) SIGKILL quit of the native app after a capture leaves no backend, Chromium, or profile
+(skip) native Electron window opens the real workspace with renderer isolation, muted media, and owned-server cleanup
+(skip) installed local Whisper produces a real word-timed transcript
+
+ 691 pass
+ 5 skip
+ 0 fail
+ 34614 expect() calls
+Ran 696 tests across 76 files. [126.42s]

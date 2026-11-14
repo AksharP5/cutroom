@@ -1,0 +1,22 @@
+
+Running 17 tests using 1 worker
+
+  ✓   1 e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP (5.5s)
+  ✓   2 e2e/destination-tracks.spec.ts:340:2 › a missing destination names the absent track instead of swallowing its key (1.6s)
+  ✓   3 e2e/destination-tracks.spec.ts:367:2 › placed media goes to the destination tracks chosen in the headers by click and key (4.1s)
+  ✓   4 e2e/destination-tracks.spec.ts:453:2 › an overwrite that takes part of another clip says so, with Undo (2.1s)
+  ✓   5 e2e/destination-tracks.spec.ts:477:2 › an agent reads and sets the destinations, and the open editor follows (1.9s)
+  ✓   6 e2e/destination-tracks.spec.ts:527:2 › a project's destinations show after a switch made while the last project is still saving (2.7s)
+  ✓   7 e2e/destination-tracks.spec.ts:571:2 › a destination answer read before a newer choice never replaces it (2.6s)
+  ✓   8 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 1 › 132 px headers show short codes and every toggle without overflow (1.2s)
+  ✓   9 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1280x800, DPR 2 › 132 px headers show short codes and every toggle without overflow (1.6s)
+  ✓  10 e2e/timeline-headers.spec.ts:197:8 › media drag at 1280x800, 28px tracks › keeps lanes still and previews the track created above them (1.5s)
+  ✓  11 e2e/timeline-headers.spec.ts:197:8 › media drag at 1280x800, 200px tracks › keeps lanes still and previews the track created above them (1.4s)
+  ✓  12 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 1 › 132 px headers show short codes and every toggle without overflow (1.5s)
+  ✓  13 e2e/timeline-headers.spec.ts:85:8 › compact headers at 1720x1050, DPR 2 › 132 px headers show short codes and every toggle without overflow (1.7s)
+  ✓  14 e2e/timeline-headers.spec.ts:197:8 › media drag at 1720x1050, 28px tracks › keeps lanes still and previews the track created above them (1.5s)
+  ✓  15 e2e/timeline-headers.spec.ts:197:8 › media drag at 1720x1050, 200px tracks › keeps lanes still and previews the track created above them (1.5s)
+  ✓  16 e2e/timeline-headers.spec.ts:258:2 › track density uses the shared menu keyboard controls (2.3s)
+  ✓  17 e2e/timeline-headers.spec.ts:311:2 › Normal and Tall keep the 132 px name row, meter and separate controls (2.6s)
+
+  17 passed (38.7s)

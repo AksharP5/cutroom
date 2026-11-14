@@ -1,0 +1,44 @@
+bun test v1.4.4 (38afee6c8)
+
+tests/keymap.test.ts:
+(pass) key presses name their combo by key position, as the keymap writes it [0.17ms]
+(pass) every combo in the keymap is bound to exactly one action [0.20ms]
+(pass) the keyboard docs show the keymap as it is [0.73ms]
+
+tests/timeline-api.test.ts:
+(pass) a project summary reports the picture size and length the editor would show [22.23ms]
+(pass) outside HTML uses persisted mute and solo on read without a history write or undo loop [60.45ms]
+(pass) a command batch is atomic, one undo step, and refuses stale revisions [60.87ms]
+(pass) Q through a spanning music bed persists exact NTSC HTML and undo restores it [28.75ms]
+(pass) an id is spent for good: a piece named after an undone clip is refused, and redo still works [67.70ms]
+(pass) ripple delete can shorten an L-cut tail linked to an unchanged locked picture [34.44ms]
+(pass) ripple delete can shorten an L-cut tail linked to an unchanged autoSelect picture [33.59ms]
+(pass) an MCP agent reads and edits the timeline through the batch endpoint [108.96ms]
+(pass) the entry document reads its live tree and a scene file its template [23.49ms]
+(pass) ./index.html, /index.html, and index.html are one composition with one revision [17.74ms]
+(pass) a file ffprobe cannot read is probed once per version, not on every read [45.68ms]
+(pass) media without data-duration is measured with ffprobe [80.05ms]
+(pass) timeline reads refuse HLS playlists that reference outside files or network media [152.86ms]
+(pass) a scene edit declares the entry layer in the same undo step [17.40ms]
+(pass) ordinary MCP video inserts create linked audio by default, with exact readback and one undo step [178.73ms]
+(pass) MCP gain, authored fades and cleared automation read back exactly and undo in one step [31.66ms]
+(pass) MCP keeps place as the default and routes explicit V2 overwrite to A2, preserving V1/A1 [117.89ms]
+(pass) MCP reports clips left whole by auto-select razor and refuses an explicit razor [35.97ms]
+(pass) Q returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [43.52ms]
+(pass) W returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [43.61ms]
+(pass) Shift+X returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [45.73ms]
+(pass) ripple extension returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [42.27ms]
+(pass) insert ripple returns the same atomic refusal over HTTP and MCP, then ripples only opted-in tracks [42.04ms]
+(pass) HTTP and MCP paste route linked sound to a new track and preserve another pair [176.73ms]
+(pass) HTTP and MCP paste route linked sound to a free track and preserve another pair [193.67ms]
+(pass) HTTP and MCP paste route linked sound to a partner track and preserve another pair [200.29ms]
+(pass) MCP clipboard snapshots survive cuts and timeline switches, paste once, and refuse other projects [221.41ms]
+(pass) clipboard copy refuses id-styled clips and stale revisions without changing files [6.76ms]
+(pass) track view settings stay outside history and survive real-edit undo and redo [490.91ms]
+(pass) destination tracks are read and set by themselves, outside history and other view preferences [478.87ms]
+(pass) missing or malformed view preferences use defaults and do not block timeline edits [169.76ms]
+
+ 34 pass
+ 0 fail
+ 319 expect() calls
+Ran 34 tests across 2 files. [3.47s]

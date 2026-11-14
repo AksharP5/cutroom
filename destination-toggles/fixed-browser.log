@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP (6.2s)
+
+  1 passed (7.1s)

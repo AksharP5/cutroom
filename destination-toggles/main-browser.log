@@ -1,0 +1,131 @@
+
+Running 2 tests using 1 worker
+
+  ✘  1 e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP (3.8s)
+  ✘  2 e2e/destination-tracks.spec.ts:325:2 › a missing destination names the absent track instead of swallowing its key (17.4s)
+
+
+  1) e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP 
+
+    Error: expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  3
+    + Received  + 27
+
+    @@ -1,23 +1,47 @@
+      Array [
+        Object {
+          "automation": null,
+    -     "duration": 180,
+    +     "duration": 90,
+    +     "enabled": true,
+    +     "fadeIn": 0,
+    +     "fadeOut": 0,
+    +     "hasAudio": true,
+    +     "id": "broll-audio-qpln77",
+    +     "kind": "audio",
+    +     "label": null,
+    +     "link": "broll-hxvcah",
+    +     "mediaStart": 0,
+    +     "opacity": null,
+    +     "playbackRate": 1,
+    +     "sourceDuration": 3,
+    +     "src": "broll.mp4",
+    +     "start": 0,
+    +     "startRef": null,
+    +     "text": null,
+    +     "track": 1,
+    +     "volume": null,
+    +     "x": null,
+    +     "y": null,
+    +   },
+    +   Object {
+    +     "automation": null,
+    +     "duration": 90,
+          "enabled": true,
+          "fadeIn": 0,
+          "fadeOut": 0,
+          "hasAudio": true,
+          "id": "sound",
+          "kind": "audio",
+          "label": null,
+          "link": "pair",
+    -     "mediaStart": 0,
+    +     "mediaStart": 3,
+          "opacity": null,
+          "playbackRate": 1,
+          "sourceDuration": 8,
+          "src": "interview.mp4",
+    -     "start": 0,
+    +     "start": 90,
+          "startRef": null,
+          "text": null,
+          "track": 1,
+          "volume": null,
+          "x": null,
+
+      191 |     JSON.stringify(picture.timeline.clips, null, 2),
+      192 |   );
+    > 193 |   expect(picture.timeline.clips.filter((c) => c.kind === "audio")).toEqual(
+          |                                                                    ^
+      194 |     before.clips.filter((c) => c.kind === "audio"),
+      195 |   );
+      196 |   expect(
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/destination-tracks.spec.ts:193:68)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-before/results/destination-tracks-disable-3eb02-menu-persist-and-follow-MCP/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-before/results/destination-tracks-disable-3eb02-menu-persist-and-follow-MCP/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-before/results/destination-tracks-disable-3eb02-menu-persist-and-follow-MCP/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-before/results/destination-tracks-disable-3eb02-menu-persist-and-follow-MCP/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/destination-tracks.spec.ts:325:2 › a missing destination names the absent track instead of swallowing its key 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('status')
+    Expected substring: "No A2 yet"
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" getByRole('status') with timeout 15000ms
+      - waiting for getByRole('status')
+        8 × locator resolved to <div class="toast" role="status" data-tone="info">…</div>
+          - unexpected value "Outside edit updated timeline.Dismiss"
+
+
+      346 |   await page.keyboard.press("Control+Alt+2");
+      347 |   await page.screenshot({ path: info.outputPath("missing-a2.png") });
+    > 348 |   await expect(page.getByRole("status")).toContainText("No A2 yet");
+          |                                          ^
+      349 |   await expect.poll(destinations).toEqual(["A1", "V1"]);
+      350 | });
+      351 |
+        at <anonymous> (/home/akshar/.cache/cutroom-implementation/toggle-destinations/e2e/destination-tracks.spec.ts:348:42)
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../pr3-before/results/destination-tracks-a-missi-383a6-stead-of-swallowing-its-key/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../pr3-before/results/destination-tracks-a-missi-383a6-stead-of-swallowing-its-key/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../pr3-before/results/destination-tracks-a-missi-383a6-stead-of-swallowing-its-key/trace.zip
+    Usage:
+
+        npx playwright show-trace ../pr3-before/results/destination-tracks-a-missi-383a6-stead-of-swallowing-its-key/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e/destination-tracks.spec.ts:138:2 › disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP 
+    e2e/destination-tracks.spec.ts:325:2 › a missing destination names the absent track instead of swallowing its key 
