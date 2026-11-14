@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { TrackGainPreviewSchema } from "../../shared/preview";
 import type { EditorMode } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
@@ -30,6 +31,8 @@ export type Zoom = "fit" | "actual";
 
 /** Includes navigation, preparation, and the first fully visible paint. */
 const READY_TIMEOUT = 15_000;
+/** An optional fader update must not hold up normal preview preparation. */
+const MIX_TIMEOUT = 500;
 /**
  * Warm one candidate over the last confirmed picture. Only a visible paint can
  * confirm its replacement; a failed or superseded candidate is retired.
@@ -37,6 +40,7 @@ const READY_TIMEOUT = 15_000;
 export function Viewer({
   projectId,
   revision,
+  mixPath = null,
   zoom,
   mode,
   notes,
@@ -46,6 +50,7 @@ export function Viewer({
   projectId: string;
   /** Changes whenever the composition changes on disk. */
   revision: number;
+  mixPath?: string | null;
   zoom: Zoom;
   mode: EditorMode;
   notes: readonly ReviewItem[];
@@ -79,6 +84,7 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const [mixedRevision, setMixedRevision] = useState<number | null>(null);
   const dismissFailure = useRef<(() => void) | undefined>(undefined);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [handoff, transition] = useReducer(transitionHandoff, {
@@ -105,12 +111,55 @@ export function Viewer({
   }, []);
 
   useLayoutEffect(() => {
-    latest.current += 1;
-    transition({
-      type: "navigate",
-      gen: latest.current,
-      deadline: performance.now() + READY_TIMEOUT,
-    });
+    const closing = new AbortController();
+    const navigate = () => {
+      if (closing.signal.aborted) return;
+      transition({
+        type: "navigate",
+        gen: ++latest.current,
+        deadline: performance.now() + READY_TIMEOUT,
+      });
+    };
+    const picture = handoff.kind === "showing" ? handoff.confirmed : null;
+    const connection = picture && connections.current.get(picture.gen);
+    if (!mixPath || !connection) {
+      navigate();
+      return () => closing.abort();
+    }
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/projects/${encodeURIComponent(projectId)}/isolated-preview?cutroom-mix=1&v=${revision}`,
+          {
+            signal: AbortSignal.any([
+              closing.signal,
+              AbortSignal.timeout(MIX_TIMEOUT),
+            ]),
+          },
+        );
+        if (!response.ok) {
+          navigate();
+          return;
+        }
+        const snapshot = TrackGainPreviewSchema.parse(await response.json());
+        if (
+          mixPath !== "cutroom.json" &&
+          !snapshot.compositions.includes(mixPath)
+        ) {
+          navigate();
+          return;
+        }
+        if (closing.signal.aborted) return;
+        if (await connection.mix(snapshot)) {
+          if (!closing.signal.aborted) setMixedRevision(revision);
+          return;
+        }
+      } catch {
+        // A missing or stale snapshot uses the normal preview preparation path.
+      }
+      navigate();
+    })();
+    return () => closing.abort();
   }, [revision]);
 
   useLayoutEffect(() => {
@@ -300,7 +349,8 @@ export function Viewer({
           useTimeline.setState({ selection: emptySelection });
       }}
       data-preview-ready={
-        handoff.kind === "showing" && handoff.confirmed?.revision === revision
+        handoff.kind === "showing" &&
+        (handoff.confirmed?.revision === revision || mixedRevision === revision)
           ? revision
           : undefined
       }

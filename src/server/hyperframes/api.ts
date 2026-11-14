@@ -21,7 +21,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
-import { getHyperframeRuntimeScript } from "@hyperframes/core/runtime-script";
+import { previewRuntimeScript } from "./previewRuntime";
 import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
 import {
   DELETED_VERSION,
@@ -62,6 +62,7 @@ import {
 } from "../timeline/composition";
 import { mediaFacts } from "../timeline/media";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
 
 export interface FileChange {
@@ -421,6 +422,14 @@ export function createHyperframesApi(
         activeCompositionPath,
         mediaSources(source.content, scope),
       );
+      const document = await store.document(currentProject);
+      html = mixCompositionInstances(
+        html,
+        document.timelines[activeCompositionPath] ?? emptyTimelineSettings(),
+        activeCompositionPath,
+        activeCompositionPath,
+        lengths,
+      );
       return injectDeterministicFontFaces(
         withPreviewClipIdentities(html, source.content, scope, lengths),
       );
@@ -528,15 +537,26 @@ export function createHyperframesApi(
       )
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
+    const mix = trackGainPreview(html, activeCompositionPath);
+    if (url.searchParams.get("cutroom-mix") === "1") {
+      headers.set("Content-Type", "application/json");
+      return new Response(JSON.stringify(mix), {
+        status: response.status,
+        headers,
+      });
+    }
     // The HTTP CSP applies before any authored markup, including malformed documents.
-    return new Response(withPreviewBridge(html, activeCompositionPath), {
-      status: response.status,
-      headers,
-    });
+    return new Response(
+      withPreviewBridge(html, activeCompositionPath, mix.signature),
+      {
+        status: response.status,
+        headers,
+      },
+    );
   });
 
   api.get("/runtime.js", (c) =>
-    c.body(getHyperframeRuntimeScript(), 200, {
+    c.body(previewRuntimeScript(), 200, {
       "content-type": "application/javascript",
       "cache-control": "public, max-age=3600",
     }),

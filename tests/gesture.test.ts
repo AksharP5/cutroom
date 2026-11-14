@@ -73,6 +73,7 @@ const sequence = (tracks: Partial<Track>[] = []): Timeline =>
       enabled: true,
       muted: false,
       solo: false,
+      volume: 1,
       ...tracks.find((track) => track.index === index),
     })),
     clips: [

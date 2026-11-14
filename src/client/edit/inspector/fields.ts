@@ -23,6 +23,21 @@ export type FieldUnit = "timecode" | "percent" | "gain" | "pixels";
 const SILENCE_DB = -60;
 export type TimingField = "start" | "duration" | "speed" | "sourceIn";
 
+/** Typed gain as linear gain: dB with or without the unit, and -∞ or anything from -60 dB down as silence. */
+export function parseGain(text: string) {
+  const input = text.trim();
+  if (/^-\s*(?:∞|inf(?:inity)?)(?:\s*dB)?$/i.test(input)) return 0;
+  if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:dB)?$/i.test(input))
+    throw new Error("Enter gain in dB, such as -6 dB, or -∞ for silence.");
+  const db = Number.parseFloat(input);
+  // The timeline line and stepping treat -60 dB as silence; typing below it means the same.
+  if (db <= SILENCE_DB) return 0;
+  const gain = audioDbToGain(db);
+  if (!Number.isFinite(db) || !Number.isFinite(gain) || gain === 0)
+    throw new Error("Gain is outside the supported range.");
+  return gain;
+}
+
 export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
   const input = text.trim();
   if (unit === "pixels") {
@@ -33,18 +48,7 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
       throw new Error("Enter a position in pixels, such as -40 px.");
     return Number.parseFloat(input);
   }
-  if (unit === "gain") {
-    if (/^-\s*(?:∞|inf(?:inity)?)(?:\s*dB)?$/i.test(input)) return 0;
-    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:dB)?$/i.test(input))
-      throw new Error("Enter gain in dB, such as -6 dB, or -∞ for silence.");
-    const db = Number.parseFloat(input);
-    // The timeline line and stepping treat -60 dB as silence; typing below it means the same.
-    if (db <= SILENCE_DB) return 0;
-    const gain = audioDbToGain(db);
-    if (!Number.isFinite(db) || !Number.isFinite(gain) || gain === 0)
-      throw new Error("Gain is outside the supported range.");
-    return gain;
-  }
+  if (unit === "gain") return parseGain(input);
   if (unit === "timecode") {
     if (/^\d+(?:\.\d+)?\s*s$/.test(input))
       return toFrames(Number.parseFloat(input), fps);

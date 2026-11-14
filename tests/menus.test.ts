@@ -20,6 +20,7 @@ const timeline = normalizeTimeline({
       enabled: true,
       muted: false,
       solo: false,
+      volume: 1,
     },
   ],
   clips: [

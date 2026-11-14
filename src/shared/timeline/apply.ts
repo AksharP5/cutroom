@@ -883,6 +883,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             ...(command.enabled !== undefined && { enabled: command.enabled }),
             ...(command.muted !== undefined && { muted: command.muted }),
             ...(command.solo !== undefined && { solo: command.solo }),
+            ...(command.volume !== undefined && { volume: command.volume }),
           },
         ],
       };

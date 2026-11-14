@@ -8,7 +8,8 @@ import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
-import { ClipMix } from "./mix";
+import { ClipMix, mixBody } from "./mix";
+import { TrackGain } from "./TrackGain";
 import { AudioMeters } from "./meters";
 import {
   memo,
@@ -134,6 +135,8 @@ export interface TimelineProps {
     setting: "locked" | "autoSelect" | "enabled" | "muted" | "solo",
   ): void;
   onRenameTrack(track: Track, name: string): void;
+  /** A track's gain was set from its header, as linear gain. */
+  onTrackGain(track: Track, volume: number): void;
   /**
    * A right-click or the menu key on a track header, or on the empty space under the headers.
    * `anchor` is the header, which a menu opened from the keyboard hangs from.
@@ -425,6 +428,8 @@ const TrackHeads = memo(function TrackHeads({
   onDestination,
   onToggleTrack,
   onRenameTrack,
+  onTrackGain,
+  onGesture,
   audioControls,
   resize,
   onHeight,
@@ -434,6 +439,8 @@ const TrackHeads = memo(function TrackHeads({
   onDestination: TimelineProps["onDestination"];
   onToggleTrack: TimelineProps["onToggleTrack"];
   onRenameTrack: TimelineProps["onRenameTrack"];
+  onTrackGain: TimelineProps["onTrackGain"];
+  onGesture: TimelineProps["onGesture"];
   audioControls: TimelineProps["audioControls"];
   resize: ReturnType<typeof useTrackResize>;
   onHeight(row: Row, height: number): void;
@@ -484,6 +491,15 @@ const TrackHeads = memo(function TrackHeads({
                 event.currentTarget.blur();
             }}
           />
+          {track.kind === "audio" && (
+            <TrackGain
+              track={track}
+              id={id}
+              body={mixBody(height)}
+              onCommit={(volume) => onTrackGain(track, volume)}
+              onGesture={onGesture}
+            />
+          )}
           {track.kind === "audio" && audioControls?.(track, id, "title")}
         </div>
         <div className="tl-head-buttons">
@@ -621,6 +637,7 @@ export function Timeline({
   audioControls,
   recording,
   onRenameTrack,
+  onTrackGain,
   onTrackMenu,
   onClipMenu,
   onOpenPin,
@@ -1072,6 +1089,8 @@ export function Timeline({
               onDestination={onDestination}
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
+              onTrackGain={onTrackGain}
+              onGesture={onGesture}
               audioControls={audioControls}
               resize={resize}
               onHeight={(row, height) =>
