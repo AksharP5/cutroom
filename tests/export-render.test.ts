@@ -258,43 +258,48 @@ test("marked export planning refuses links outside the project before copying th
   }
 });
 
-test("review: marked export preparation skips the project trash", async () => {
-  const root = await mkdtemp(join(tmpdir(), "export-trash-"));
-  const project = join(root, "project");
-  const workers = createRenderWorkers();
-  try {
-    await mkdir(join(project, "trash"), { recursive: true });
-    await writeFile(join(root, "private.txt"), "not part of the export");
-    await symlink(
-      join(root, "private.txt"),
-      join(project, "trash/ignored.txt"),
-    );
-    await writeFile(
-      join(project, "index.html"),
-      '<main data-composition-id="main" data-width="160" data-height="120" data-duration="1" style="background:orange"></main>',
-    );
-    const state = workers.start(
-      {
-        project: { id: "trash", dir: project },
-        outputPath: join(root, "out.mp4"),
-        format: "mp4",
-        fps: { num: 30, den: 1 },
-        quality: "draft",
-        jobId: "trash",
-      },
-      { filename: "out.mp4", directory: root, range: { start: 5, end: 10 } },
-    );
-    const deadline = Date.now() + 30000;
-    while (state.status === "rendering" && Date.now() < deadline)
-      await Bun.sleep(20);
-    expect(state.error).toBeUndefined();
-    expect(state.status).toBe("complete");
-    expect(await Bun.file(join(root, "out.mp4")).exists()).toBe(true);
-    expect(await Bun.file(join(project, "trash/ignored.txt")).text()).toBe(
-      "not part of the export",
-    );
-  } finally {
-    await workers.cancelAll();
-    await rm(root, { recursive: true, force: true });
-  }
-}, 40000);
+// The editor rewrites .cutroom during an export, so the copy must not walk it either.
+test.each(["trash", ".cutroom/cache"])(
+  "review: marked export preparation skips %s",
+  async (skipped) => {
+    const root = await mkdtemp(join(tmpdir(), "export-trash-"));
+    const project = join(root, "project");
+    const workers = createRenderWorkers();
+    try {
+      await mkdir(join(project, skipped), { recursive: true });
+      await writeFile(join(root, "private.txt"), "not part of the export");
+      await symlink(
+        join(root, "private.txt"),
+        join(project, skipped, "ignored.txt"),
+      );
+      await writeFile(
+        join(project, "index.html"),
+        '<main data-composition-id="main" data-width="160" data-height="120" data-duration="1" style="background:orange"></main>',
+      );
+      const state = workers.start(
+        {
+          project: { id: "trash", dir: project },
+          outputPath: join(root, "out.mp4"),
+          format: "mp4",
+          fps: { num: 30, den: 1 },
+          quality: "draft",
+          jobId: "trash",
+        },
+        { filename: "out.mp4", directory: root, range: { start: 5, end: 10 } },
+      );
+      const deadline = Date.now() + 30000;
+      while (state.status === "rendering" && Date.now() < deadline)
+        await Bun.sleep(20);
+      expect(state.error).toBeUndefined();
+      expect(state.status).toBe("complete");
+      expect(await Bun.file(join(root, "out.mp4")).exists()).toBe(true);
+      expect(await Bun.file(join(project, skipped, "ignored.txt")).text()).toBe(
+        "not part of the export",
+      );
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  40000,
+);
