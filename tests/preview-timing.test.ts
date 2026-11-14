@@ -437,3 +437,77 @@ test("scripted preview responses skip dependency and timing work, including forg
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a compile whose source changes after signing cannot approve the signed version", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-stale-sign-"));
+  const store = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  let afterSignature: (() => Promise<void>) | null = null;
+  const signature = hyperframes.createProjectSignatureAsync;
+  const spy = spyOn(
+    hyperframes,
+    "createProjectSignatureAsync",
+  ).mockImplementation(async (...args) => {
+    const result = await signature(...args);
+    const hook = afterSignature;
+    afterSignature = null;
+    await hook?.();
+    return result;
+  });
+  try {
+    const project = await store.create({
+      name: "Stale signature",
+      width: 320,
+      height: 240,
+      duration: 4,
+    });
+    const path = join(project.path, "index.html");
+    const plain =
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+    const scripted = plain.replace(
+      "</main>",
+      "</main><script>document.body.dataset.authored='1'</script>",
+    );
+    const iframe = {
+      headers: { "sec-fetch-dest": "iframe", "sec-fetch-site": "same-origin" },
+    };
+    const previewUrl = async (document: string, query = "") =>
+      (
+        await app.request(
+          `/api/projects/${project.id}/isolated-preview?document=${document}${query}`,
+        )
+      ).headers.get("location")!;
+
+    // The scripted version sits in the upstream compiled cache.
+    await writeFile(path, scripted);
+    expect((await app.request(await previewUrl("warm"))).status).toBe(200);
+
+    // A capture compile signs the scripted version, then the plain one lands before the compiler reads.
+    afterSignature = () => writeFile(path, plain);
+    expect(
+      (await app.request(await previewUrl("capture", "&hf-capture=1"))).status,
+    ).toBe(200);
+
+    const loaded = await previewUrl("loaded");
+    expect((await app.request(loaded, iframe)).status).toBe(200);
+    expect(
+      await (await app.request(`${loaded}&cutroom-status=1`)).json(),
+    ).toEqual({ allowed: true });
+
+    // Undo back to the cached scripted version: it must not be treated as script-free.
+    await writeFile(path, scripted);
+    const timing = (await (
+      await app.request(`${loaded}&cutroom-timing=1`)
+    ).json()) as { timing: unknown };
+    expect(timing.timing).toBeNull();
+  } finally {
+    spy.mockRestore();
+    await editor.dispose();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

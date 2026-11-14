@@ -434,7 +434,11 @@ export function createHyperframesApi(
         if (build.signature) {
           const key = `${dir}\0${build.signature}`;
           timingPolicies.delete(key);
-          if (build.allowed) {
+          // The signature was taken before the compiler read the files; approve only if they did not change in between.
+          if (
+            build.allowed &&
+            (await createProjectSignatureAsync(dir)) === build.signature
+          ) {
             timingPolicies.add(key);
             if (timingPolicies.size > 64)
               timingPolicies.delete(timingPolicies.values().next().value!);
