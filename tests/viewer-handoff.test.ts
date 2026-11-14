@@ -158,3 +158,26 @@ test("a document reloading during promotion must prepare again within its origin
     }).kind,
   ).toBe("promoting");
 });
+
+test("a live acknowledgment advances only its confirmed document, never a newer reload or revision", () => {
+  const updated = transitionHandoff(showing, {
+    type: "updated",
+    gen: 1,
+    revision: 3,
+  });
+  expect(updated).toMatchObject({
+    kind: "showing",
+    confirmed: { ...confirmed, revision: 3 },
+  });
+  expect(
+    transitionHandoff(updated, { type: "updated", gen: 1, revision: 2 }),
+  ).toBe(updated);
+  const loading = transitionHandoff(updated, {
+    type: "navigate",
+    gen: 2,
+    deadline: 15000,
+  });
+  expect(
+    transitionHandoff(loading, { type: "updated", gen: 1, revision: 4 }),
+  ).toBe(loading);
+});

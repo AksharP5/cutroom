@@ -163,6 +163,9 @@ for (const operation of [
       const previewSrc = await page
         .locator("iframe[data-live]")
         .getAttribute("src");
+      const previewRevision = await page
+        .locator(".edit-stage")
+        .getAttribute("data-preview-ready");
       await page.mouse.move(from.x, from.y);
       await page.mouse.down();
       for (const [index, delta] of [6, 12, 18, 24].entries()) {
@@ -205,10 +208,11 @@ for (const operation of [
               ?.duration;
           })
           .toBe(operation === "roll" ? 144 : 96);
-        await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-          "src",
-          previewSrc!,
-        );
+        await page.waitForFunction((previous) => {
+          const stage = document.querySelector(".edit-stage");
+          const next = stage?.getAttribute("data-preview-ready");
+          return next != null && next !== previous;
+        }, previewRevision);
         await expect(page.locator(".edit-stage")).toHaveAttribute(
           "data-preview-ready",
         );

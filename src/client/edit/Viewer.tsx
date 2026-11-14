@@ -36,7 +36,7 @@ const READY_TIMEOUT = 15_000;
  */
 export function Viewer({
   projectId,
-  revision,
+  change,
   zoom,
   mode,
   notes,
@@ -44,14 +44,15 @@ export function Viewer({
   onSaveNote,
 }: {
   projectId: string;
-  /** Changes whenever the composition changes on disk. */
-  revision: number;
+  /** The preview watcher owns invalidation, including edits from other tabs and disk. */
+  change: { revision: number; path: string; version: string | null };
   zoom: Zoom;
   mode: EditorMode;
   notes: readonly ReviewItem[];
   onOpenNote(id: string): void;
   onSaveNote: SaveNote;
 }) {
+  const { revision } = change;
   const stage = useRef<HTMLDivElement>(null);
   const editLabels = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -76,6 +77,7 @@ export function Viewer({
   const drawing = useProjectNotes(
     (state) => !!state.projects[projectId]?.draft?.strokes.length,
   );
+  const attached = useRef<ReturnType<typeof connectPreview> | null>(null);
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
@@ -104,13 +106,71 @@ export function Viewer({
     return () => observer.disconnect();
   }, []);
 
+  const patching = useRef(false);
+  const seenRevision = useRef(-1);
   useLayoutEffect(() => {
-    latest.current += 1;
-    transition({
-      type: "navigate",
-      gen: latest.current,
-      deadline: performance.now() + READY_TIMEOUT,
+    const readyDeadline = performance.now() + READY_TIMEOUT;
+    const reload = () => {
+      latest.current += 1;
+      transition({
+        type: "navigate",
+        gen: latest.current,
+        deadline: readyDeadline,
+      });
+    };
+    const sequential = revision === seenRevision.current + 1;
+    seenRevision.current = revision;
+    const picture = handoff.kind === "showing" ? handoff.confirmed : null;
+    const preview = picture && connections.current.get(picture.gen);
+    if (
+      !sequential ||
+      !picture ||
+      !preview ||
+      patching.current ||
+      change.path !== "index.html" ||
+      !change.version ||
+      useTransport.getState().state.kind !== "stopped" ||
+      editPicture()
+    ) {
+      reload();
+      return;
+    }
+    const closing = new AbortController();
+    const abandon = () => {
+      if (closing.signal.aborted) return;
+      closing.abort();
+      stop();
+      clearTimeout(deadline);
+      reload();
+    };
+    const deadline = window.setTimeout(abandon, 2000);
+    patching.current = true;
+    // Playback, scrubbing or another invalidation retires the live attempt. Its late
+    // acknowledgment cannot suppress a reload or confirm a newer document.
+    const stop = useTransport.subscribe((state, previous) => {
+      if (state.state.kind !== "stopped" || state.frame !== previous.frame)
+        abandon();
     });
+    const { frame, fps } = useTransport.getState();
+    void preview
+      .updateTiming(change.version, frameTime(frame, fps), closing.signal)
+      .then(() => {
+        if (!closing.signal.aborted)
+          transition({ type: "updated", gen: picture.gen, revision });
+      })
+      .catch(() => {
+        if (!closing.signal.aborted) reload();
+      })
+      .finally(() => {
+        clearTimeout(deadline);
+        stop();
+        patching.current = false;
+      });
+    return () => {
+      clearTimeout(deadline);
+      closing.abort();
+      stop();
+    };
   }, [revision]);
 
   useLayoutEffect(() => {
@@ -194,7 +254,10 @@ export function Viewer({
         height: picture.height,
       },
     });
-    transport.attach(preview.player, picture.shown);
+    if (attached.current !== preview) {
+      transport.attach(preview.player, picture.shown);
+      attached.current = preview;
+    }
     reportEditorError("viewer", null);
     dismissFailure.current?.();
     dismissFailure.current = undefined;
