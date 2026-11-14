@@ -1,0 +1,2685 @@
+{
+  "baseline": "6ea9beba4ba52e709a93f65de7203aa61985bf2c",
+  "comparisonBase": "6ea9beba4ba52e709a93f65de7203aa61985bf2c",
+  "environment": {
+    "scope": "Matched hardware before/after single edits and bursts",
+    "date": "2026-11-14",
+    "bun": "1.4.4",
+    "chromium": "155.0.8059.84",
+    "cpu": "Intel Core i5-14400F",
+    "ramGB": 32,
+    "renderer": "Hardware ANGLE on NVIDIA GeForce RTX 5060, OpenGL ES 3.2",
+    "viewport": [1720, 1050],
+    "audio": "muted",
+    "host": "shared",
+    "build": "production"
+  },
+  "method": "Both builds start from identical copies of one saved filesystem/database snapshot, including generated media, settings and edit history. Five native ArrowUp then Enter Start commits per project after 4.5 seconds warm-up. Keydown to confirmed stage after decoded hold capture and paint. Eight-key bursts repeat three times per requested rate. Acceptance requires confirmed stage plus live timing equal to the final saved snapshot. Earlier unpaired runs are retained locally and are not used for this comparison.",
+  "fixtures": {
+    "plain": "240 linked video/audio pairs and 20 titles, over a generated 60-second H.264/AAC file. scripts/timeline-performance.ts timelineWorkload(500).",
+    "interview": "10 linked interview cuts, four b-roll pieces, music and four titles with an authored GSAP timeline, from the ownership-study recipe. Always reloads."
+  },
+  "singleEdits": {
+    "before": [
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 0,
+        "ms": 873.7000000029802,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 1,
+        "ms": 864.5,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 2,
+        "ms": 834.7000000029802,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 3,
+        "ms": 817.6999999955297,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "i": 4,
+        "ms": 825.9000000059605,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 0,
+        "ms": 344.80000000447035,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 1,
+        "ms": 329.6000000014901,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 2,
+        "ms": 329.8999999985099,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 3,
+        "ms": 329.30000000447035,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "i": 4,
+        "ms": 344.19999999552965,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      }
+    ],
+    "after": [
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 0,
+        "ms": 449.79999999701977,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 1,
+        "ms": 425.80000000447035,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 2,
+        "ms": 420.09999999403954,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 3,
+        "ms": 410.79999999701977,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "i": 4,
+        "ms": 390.80000000447035,
+        "retained": true,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 0,
+        "ms": 374.8999999985099,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 1,
+        "ms": 341.1000000014901,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 2,
+        "ms": 345.80000000447035,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 3,
+        "ms": 346.80000000447035,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "i": 4,
+        "ms": 344.69999999552965,
+        "retained": false,
+        "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 5060/PCIe/SSE2, OpenGL ES 3.2)"
+      }
+    ]
+  },
+  "bursts": {
+    "before": [
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 4,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 1745.6000000014901,
+        "lastKeyToFinalMs": 1249.2999999970198,
+        "liveStart": "38.93333333333333",
+        "savedStart": 38.93333333333333,
+        "events": [
+          {
+            "type": "key",
+            "t": 5733.60000000149
+          },
+          {
+            "type": "save",
+            "t": 5805.20000000298
+          },
+          {
+            "type": "key",
+            "t": 5979.10000000149
+          },
+          {
+            "type": "save",
+            "t": 6155.70000000298
+          },
+          {
+            "type": "key",
+            "t": 6235.39999999851
+          },
+          {
+            "type": "save",
+            "t": 6435.10000000149
+          },
+          {
+            "type": "key",
+            "t": 6474.89999999851
+          },
+          {
+            "type": "key",
+            "t": 6723.30000000447
+          },
+          {
+            "type": "save",
+            "t": 6757.5
+          },
+          {
+            "type": "key",
+            "t": 6976.39999999851
+          },
+          {
+            "type": "save",
+            "t": 7124.5
+          },
+          {
+            "type": "key",
+            "t": 7259.39999999851
+          },
+          {
+            "type": "save",
+            "t": 7463.70000000298
+          },
+          {
+            "type": "key",
+            "t": 7479.20000000298
+          },
+          {
+            "type": "save",
+            "t": 7818.30000000447
+          },
+          {
+            "type": "save",
+            "t": 7922.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 8728.5
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 4,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 1751.5,
+        "lastKeyToFinalMs": 1287.6000000014901,
+        "liveStart": "39.2",
+        "savedStart": 39.2,
+        "events": [
+          {
+            "type": "key",
+            "t": 8905.10000000149
+          },
+          {
+            "type": "save",
+            "t": 8979.20000000298
+          },
+          {
+            "type": "key",
+            "t": 9151.20000000298
+          },
+          {
+            "type": "save",
+            "t": 9304.70000000298
+          },
+          {
+            "type": "key",
+            "t": 9407.30000000447
+          },
+          {
+            "type": "save",
+            "t": 9653.30000000447
+          },
+          {
+            "type": "key",
+            "t": 9663.80000000447
+          },
+          {
+            "type": "key",
+            "t": 9905.30000000447
+          },
+          {
+            "type": "save",
+            "t": 9954.80000000447
+          },
+          {
+            "type": "key",
+            "t": 10198.89999999851
+          },
+          {
+            "type": "save",
+            "t": 10270.39999999851
+          },
+          {
+            "type": "key",
+            "t": 10403.5
+          },
+          {
+            "type": "save",
+            "t": 10609.20000000298
+          },
+          {
+            "type": "key",
+            "t": 10656.60000000149
+          },
+          {
+            "type": "save",
+            "t": 10916
+          },
+          {
+            "type": "save",
+            "t": 11098.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 11944.20000000298
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 4,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 1754.1999999955297,
+        "lastKeyToFinalMs": 1350.7000000029802,
+        "liveStart": "39.46666666666667",
+        "savedStart": 39.46666666666667,
+        "events": [
+          {
+            "type": "key",
+            "t": 12105.30000000447
+          },
+          {
+            "type": "save",
+            "t": 12176.30000000447
+          },
+          {
+            "type": "key",
+            "t": 12356.30000000447
+          },
+          {
+            "type": "save",
+            "t": 12557.89999999851
+          },
+          {
+            "type": "key",
+            "t": 12634.80000000447
+          },
+          {
+            "type": "key",
+            "t": 12863.89999999851
+          },
+          {
+            "type": "save",
+            "t": 12875.10000000149
+          },
+          {
+            "type": "key",
+            "t": 13107.30000000447
+          },
+          {
+            "type": "save",
+            "t": 13210.89999999851
+          },
+          {
+            "type": "key",
+            "t": 13406.20000000298
+          },
+          {
+            "type": "save",
+            "t": 13559.80000000447
+          },
+          {
+            "type": "key",
+            "t": 13608.39999999851
+          },
+          {
+            "type": "key",
+            "t": 13859.5
+          },
+          {
+            "type": "save",
+            "t": 13894.10000000149
+          },
+          {
+            "type": "save",
+            "t": 14001.20000000298
+          },
+          {
+            "type": "save",
+            "t": 14355.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 15210.20000000298
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 8,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 873.6999999955297,
+        "lastKeyToFinalMs": 1868.5,
+        "liveStart": "39.733333333333334",
+        "savedStart": 39.733333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5594.20000000298
+          },
+          {
+            "type": "save",
+            "t": 5665.60000000149
+          },
+          {
+            "type": "key",
+            "t": 5728.70000000298
+          },
+          {
+            "type": "key",
+            "t": 5841.89999999851
+          },
+          {
+            "type": "save",
+            "t": 5948.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6025.79999999702
+          },
+          {
+            "type": "key",
+            "t": 6094.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6216.39999999851
+          },
+          {
+            "type": "save",
+            "t": 6267.89999999851
+          },
+          {
+            "type": "key",
+            "t": 6341.20000000298
+          },
+          {
+            "type": "key",
+            "t": 6467.89999999851
+          },
+          {
+            "type": "save",
+            "t": 6484.29999999702
+          },
+          {
+            "type": "save",
+            "t": 6816.5
+          },
+          {
+            "type": "save",
+            "t": 6920.20000000298
+          },
+          {
+            "type": "save",
+            "t": 7180.39999999851
+          },
+          {
+            "type": "save",
+            "t": 7519.5
+          },
+          {
+            "type": "shown",
+            "t": 8336.39999999851
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 8,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 879.3999999985099,
+        "lastKeyToFinalMs": 1622.8000000044703,
+        "liveStart": "40",
+        "savedStart": 40,
+        "events": [
+          {
+            "type": "key",
+            "t": 8417.39999999851
+          },
+          {
+            "type": "save",
+            "t": 8486.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8543.60000000149
+          },
+          {
+            "type": "key",
+            "t": 8668.5
+          },
+          {
+            "type": "save",
+            "t": 8763.79999999702
+          },
+          {
+            "type": "key",
+            "t": 8843.39999999851
+          },
+          {
+            "type": "key",
+            "t": 8923.70000000298
+          },
+          {
+            "type": "key",
+            "t": 9048.79999999702
+          },
+          {
+            "type": "save",
+            "t": 9107.10000000149
+          },
+          {
+            "type": "key",
+            "t": 9198.60000000149
+          },
+          {
+            "type": "save",
+            "t": 9215.89999999851
+          },
+          {
+            "type": "key",
+            "t": 9296.79999999702
+          },
+          {
+            "type": "save",
+            "t": 9589.39999999851
+          },
+          {
+            "type": "save",
+            "t": 9699
+          },
+          {
+            "type": "save",
+            "t": 10028.89999999851
+          },
+          {
+            "type": "save",
+            "t": 10202.5
+          },
+          {
+            "type": "shown",
+            "t": 10919.60000000149
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "plain",
+        "hz": 8,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 874,
+        "lastKeyToFinalMs": 1886.3999999985099,
+        "liveStart": "40.266666666666666",
+        "savedStart": 40.266666666666666,
+        "events": [
+          {
+            "type": "key",
+            "t": 11109.10000000149
+          },
+          {
+            "type": "save",
+            "t": 11172.70000000298
+          },
+          {
+            "type": "key",
+            "t": 11233
+          },
+          {
+            "type": "key",
+            "t": 11359.29999999702
+          },
+          {
+            "type": "save",
+            "t": 11442.10000000149
+          },
+          {
+            "type": "key",
+            "t": 11525
+          },
+          {
+            "type": "key",
+            "t": 11609.39999999851
+          },
+          {
+            "type": "key",
+            "t": 11783.10000000149
+          },
+          {
+            "type": "save",
+            "t": 11793.89999999851
+          },
+          {
+            "type": "key",
+            "t": 11867.39999999851
+          },
+          {
+            "type": "save",
+            "t": 11950.60000000149
+          },
+          {
+            "type": "key",
+            "t": 11983.10000000149
+          },
+          {
+            "type": "save",
+            "t": 12308.60000000149
+          },
+          {
+            "type": "save",
+            "t": 12463.39999999851
+          },
+          {
+            "type": "save",
+            "t": 12708.20000000298
+          },
+          {
+            "type": "save",
+            "t": 13030.5
+          },
+          {
+            "type": "shown",
+            "t": 13869.5
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 4,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 7,
+        "keySpanMs": 1744.8999999985099,
+        "lastKeyToFinalMs": 290.5,
+        "liveStart": "23.933333333333334",
+        "savedStart": 23.933333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5299.60000000149
+          },
+          {
+            "type": "save",
+            "t": 5331.30000000447
+          },
+          {
+            "type": "key",
+            "t": 5548.89999999851
+          },
+          {
+            "type": "save",
+            "t": 5574.5
+          },
+          {
+            "type": "key",
+            "t": 5799.60000000149
+          },
+          {
+            "type": "save",
+            "t": 5824.10000000149
+          },
+          {
+            "type": "shown",
+            "t": 5872.70000000298
+          },
+          {
+            "type": "key",
+            "t": 6047.20000000298
+          },
+          {
+            "type": "save",
+            "t": 6075.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 6105.39999999851
+          },
+          {
+            "type": "key",
+            "t": 6295.20000000298
+          },
+          {
+            "type": "save",
+            "t": 6317.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 6354.5
+          },
+          {
+            "type": "key",
+            "t": 6544.70000000298
+          },
+          {
+            "type": "save",
+            "t": 6571.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 6588.30000000447
+          },
+          {
+            "type": "key",
+            "t": 6795.10000000149
+          },
+          {
+            "type": "save",
+            "t": 6820.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 6838.20000000298
+          },
+          {
+            "type": "key",
+            "t": 7044.5
+          },
+          {
+            "type": "save",
+            "t": 7065.89999999851
+          },
+          {
+            "type": "shown",
+            "t": 7088
+          },
+          {
+            "type": "shown",
+            "t": 7335
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 4,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 6,
+        "keySpanMs": 1749,
+        "lastKeyToFinalMs": 280.20000000298023,
+        "liveStart": "24.2",
+        "savedStart": 24.2,
+        "events": [
+          {
+            "type": "key",
+            "t": 7522.5
+          },
+          {
+            "type": "save",
+            "t": 7544.5
+          },
+          {
+            "type": "key",
+            "t": 7767.5
+          },
+          {
+            "type": "save",
+            "t": 7788.5
+          },
+          {
+            "type": "key",
+            "t": 8023.30000000447
+          },
+          {
+            "type": "save",
+            "t": 8045
+          },
+          {
+            "type": "shown",
+            "t": 8087.60000000149
+          },
+          {
+            "type": "key",
+            "t": 8267.60000000149
+          },
+          {
+            "type": "save",
+            "t": 8288.30000000447
+          },
+          {
+            "type": "shown",
+            "t": 8308.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8522.10000000149
+          },
+          {
+            "type": "save",
+            "t": 8544.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 8570.80000000447
+          },
+          {
+            "type": "key",
+            "t": 8767.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 8809
+          },
+          {
+            "type": "save",
+            "t": 8851.20000000298
+          },
+          {
+            "type": "key",
+            "t": 9018.80000000447
+          },
+          {
+            "type": "save",
+            "t": 9043.39999999851
+          },
+          {
+            "type": "key",
+            "t": 9271.5
+          },
+          {
+            "type": "save",
+            "t": 9291.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 9337.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 9551.70000000298
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 4,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 8,
+        "keySpanMs": 1750,
+        "lastKeyToFinalMs": 263.29999999701977,
+        "liveStart": "24.466666666666665",
+        "savedStart": 24.466666666666665,
+        "events": [
+          {
+            "type": "key",
+            "t": 9605.60000000149
+          },
+          {
+            "type": "save",
+            "t": 9626.70000000298
+          },
+          {
+            "type": "key",
+            "t": 9857.30000000447
+          },
+          {
+            "type": "shown",
+            "t": 9872.10000000149
+          },
+          {
+            "type": "save",
+            "t": 9879.5
+          },
+          {
+            "type": "key",
+            "t": 10107.30000000447
+          },
+          {
+            "type": "save",
+            "t": 10129.89999999851
+          },
+          {
+            "type": "shown",
+            "t": 10154.20000000298
+          },
+          {
+            "type": "key",
+            "t": 10357.20000000298
+          },
+          {
+            "type": "save",
+            "t": 10379.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 10404.39999999851
+          },
+          {
+            "type": "key",
+            "t": 10608
+          },
+          {
+            "type": "save",
+            "t": 10631.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 10654.5
+          },
+          {
+            "type": "key",
+            "t": 10855.80000000447
+          },
+          {
+            "type": "save",
+            "t": 10878.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 10904
+          },
+          {
+            "type": "key",
+            "t": 11105.39999999851
+          },
+          {
+            "type": "save",
+            "t": 11127.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 11143.39999999851
+          },
+          {
+            "type": "key",
+            "t": 11355.60000000149
+          },
+          {
+            "type": "save",
+            "t": 11377.30000000447
+          },
+          {
+            "type": "shown",
+            "t": 11391.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 11618.89999999851
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 8,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 893.5,
+        "lastKeyToFinalMs": 376.1000000014901,
+        "liveStart": "24.733333333333334",
+        "savedStart": 24.733333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5266.10000000149
+          },
+          {
+            "type": "save",
+            "t": 5299.70000000298
+          },
+          {
+            "type": "key",
+            "t": 5395.5
+          },
+          {
+            "type": "save",
+            "t": 5444.4000000059605
+          },
+          {
+            "type": "key",
+            "t": 5534.20000000298
+          },
+          {
+            "type": "save",
+            "t": 5583.70000000298
+          },
+          {
+            "type": "key",
+            "t": 5672.4000000059605
+          },
+          {
+            "type": "save",
+            "t": 5738.4000000059605
+          },
+          {
+            "type": "key",
+            "t": 5808.4000000059605
+          },
+          {
+            "type": "save",
+            "t": 5880.4000000059605
+          },
+          {
+            "type": "key",
+            "t": 5915.10000000149
+          },
+          {
+            "type": "key",
+            "t": 6029.4000000059605
+          },
+          {
+            "type": "save",
+            "t": 6060.30000000447
+          },
+          {
+            "type": "key",
+            "t": 6159.60000000149
+          },
+          {
+            "type": "save",
+            "t": 6176.80000000447
+          },
+          {
+            "type": "save",
+            "t": 6255.30000000447
+          },
+          {
+            "type": "shown",
+            "t": 6535.70000000298
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 8,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 901.1000000014901,
+        "lastKeyToFinalMs": 357.20000000298023,
+        "liveStart": "25",
+        "savedStart": 25,
+        "events": [
+          {
+            "type": "key",
+            "t": 6594.10000000149
+          },
+          {
+            "type": "save",
+            "t": 6617.20000000298
+          },
+          {
+            "type": "key",
+            "t": 6733.20000000298
+          },
+          {
+            "type": "key",
+            "t": 6857.80000000447
+          },
+          {
+            "type": "save",
+            "t": 6876.80000000447
+          },
+          {
+            "type": "save",
+            "t": 6951.30000000447
+          },
+          {
+            "type": "key",
+            "t": 6965.70000000298
+          },
+          {
+            "type": "save",
+            "t": 7032.30000000447
+          },
+          {
+            "type": "key",
+            "t": 7096.80000000447
+          },
+          {
+            "type": "save",
+            "t": 7122.70000000298
+          },
+          {
+            "type": "key",
+            "t": 7222.70000000298
+          },
+          {
+            "type": "save",
+            "t": 7263.9000000059605
+          },
+          {
+            "type": "key",
+            "t": 7358.20000000298
+          },
+          {
+            "type": "save",
+            "t": 7400.80000000447
+          },
+          {
+            "type": "key",
+            "t": 7495.20000000298
+          },
+          {
+            "type": "save",
+            "t": 7540.60000000149
+          },
+          {
+            "type": "shown",
+            "t": 7852.4000000059605
+          }
+        ]
+      },
+      {
+        "mode": "before",
+        "name": "interview",
+        "hz": 8,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 908.6999999955297,
+        "lastKeyToFinalMs": 462.40000000596046,
+        "liveStart": "25.266666666666666",
+        "savedStart": 25.266666666666666,
+        "events": [
+          {
+            "type": "key",
+            "t": 7914.80000000447
+          },
+          {
+            "type": "save",
+            "t": 7940.20000000298
+          },
+          {
+            "type": "key",
+            "t": 8047.60000000149
+          },
+          {
+            "type": "save",
+            "t": 8105.20000000298
+          },
+          {
+            "type": "key",
+            "t": 8167.4000000059605
+          },
+          {
+            "type": "save",
+            "t": 8223.90000000596
+          },
+          {
+            "type": "key",
+            "t": 8316.30000000447
+          },
+          {
+            "type": "save",
+            "t": 8375.60000000149
+          },
+          {
+            "type": "key",
+            "t": 8447.90000000596
+          },
+          {
+            "type": "key",
+            "t": 8541.40000000596
+          },
+          {
+            "type": "save",
+            "t": 8578
+          },
+          {
+            "type": "key",
+            "t": 8664.5
+          },
+          {
+            "type": "save",
+            "t": 8675.40000000596
+          },
+          {
+            "type": "key",
+            "t": 8823.5
+          },
+          {
+            "type": "save",
+            "t": 8841.5
+          },
+          {
+            "type": "save",
+            "t": 8986.60000000149
+          },
+          {
+            "type": "shown",
+            "t": 9285.90000000596
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 4,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 8,
+        "keySpanMs": 1742.8999999985099,
+        "lastKeyToFinalMs": 1028.7000000029802,
+        "liveStart": "38.93333333333333",
+        "savedStart": 38.93333333333333,
+        "events": [
+          {
+            "type": "key",
+            "t": 5810.20000000298
+          },
+          {
+            "type": "save",
+            "t": 5880.10000000149
+          },
+          {
+            "type": "key",
+            "t": 6055.30000000447
+          },
+          {
+            "type": "shown",
+            "t": 6207.5
+          },
+          {
+            "type": "save",
+            "t": 6253.20000000298
+          },
+          {
+            "type": "key",
+            "t": 6316.10000000149
+          },
+          {
+            "type": "key",
+            "t": 6562.20000000298
+          },
+          {
+            "type": "save",
+            "t": 6575.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 6594.9000000059605
+          },
+          {
+            "type": "key",
+            "t": 6815.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 6895.9000000059605
+          },
+          {
+            "type": "save",
+            "t": 6929.9000000059605
+          },
+          {
+            "type": "key",
+            "t": 7061.4000000059605
+          },
+          {
+            "type": "save",
+            "t": 7279.5
+          },
+          {
+            "type": "shown",
+            "t": 7283.20000000298
+          },
+          {
+            "type": "key",
+            "t": 7314.60000000149
+          },
+          {
+            "type": "key",
+            "t": 7553.10000000149
+          },
+          {
+            "type": "save",
+            "t": 7617.4000000059605
+          },
+          {
+            "type": "shown",
+            "t": 7619.60000000149
+          },
+          {
+            "type": "shown",
+            "t": 7896.60000000149
+          },
+          {
+            "type": "save",
+            "t": 7896.80000000447
+          },
+          {
+            "type": "save",
+            "t": 8227.60000000149
+          },
+          {
+            "type": "shown",
+            "t": 8230
+          },
+          {
+            "type": "shown",
+            "t": 8581.80000000447
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 4,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 7,
+        "keySpanMs": 1749.7999999970198,
+        "lastKeyToFinalMs": 974.3999999985099,
+        "liveStart": "39.2",
+        "savedStart": 39.2,
+        "events": [
+          {
+            "type": "key",
+            "t": 8687.90000000596
+          },
+          {
+            "type": "save",
+            "t": 8759.5
+          },
+          {
+            "type": "key",
+            "t": 8937
+          },
+          {
+            "type": "shown",
+            "t": 9075
+          },
+          {
+            "type": "save",
+            "t": 9123.20000000298
+          },
+          {
+            "type": "key",
+            "t": 9192.90000000596
+          },
+          {
+            "type": "save",
+            "t": 9408
+          },
+          {
+            "type": "shown",
+            "t": 9425
+          },
+          {
+            "type": "key",
+            "t": 9452.5
+          },
+          {
+            "type": "key",
+            "t": 9702
+          },
+          {
+            "type": "shown",
+            "t": 9793
+          },
+          {
+            "type": "save",
+            "t": 9799.60000000149
+          },
+          {
+            "type": "key",
+            "t": 9937.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 10166.5
+          },
+          {
+            "type": "save",
+            "t": 10193.40000000596
+          },
+          {
+            "type": "key",
+            "t": 10196.40000000596
+          },
+          {
+            "type": "save",
+            "t": 10289.30000000447
+          },
+          {
+            "type": "key",
+            "t": 10437.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 10642.10000000149
+          },
+          {
+            "type": "save",
+            "t": 10685.5
+          },
+          {
+            "type": "shown",
+            "t": 11014.60000000149
+          },
+          {
+            "type": "save",
+            "t": 11076.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 11412.10000000149
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 4,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 3,
+        "keySpanMs": 1738.6000000014901,
+        "lastKeyToFinalMs": 617.2999999970198,
+        "liveStart": "39.46666666666667",
+        "savedStart": 39.46666666666667,
+        "events": [
+          {
+            "type": "key",
+            "t": 11489.20000000298
+          },
+          {
+            "type": "save",
+            "t": 11552.10000000149
+          },
+          {
+            "type": "key",
+            "t": 11727.5
+          },
+          {
+            "type": "shown",
+            "t": 11890.30000000447
+          },
+          {
+            "type": "save",
+            "t": 11916.60000000149
+          },
+          {
+            "type": "key",
+            "t": 11988.80000000447
+          },
+          {
+            "type": "key",
+            "t": 12228
+          },
+          {
+            "type": "save",
+            "t": 12245.80000000447
+          },
+          {
+            "type": "shown",
+            "t": 12270.90000000596
+          },
+          {
+            "type": "key",
+            "t": 12479.10000000149
+          },
+          {
+            "type": "save",
+            "t": 12637.20000000298
+          },
+          {
+            "type": "key",
+            "t": 12733.5
+          },
+          {
+            "type": "save",
+            "t": 12963.40000000596
+          },
+          {
+            "type": "key",
+            "t": 12979.20000000298
+          },
+          {
+            "type": "save",
+            "t": 13138.20000000298
+          },
+          {
+            "type": "key",
+            "t": 13227.80000000447
+          },
+          {
+            "type": "save",
+            "t": 13254.20000000298
+          },
+          {
+            "type": "save",
+            "t": 13479.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 13845.10000000149
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 8,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 4,
+        "keySpanMs": 871.2000000029802,
+        "lastKeyToFinalMs": 1486,
+        "liveStart": "39.733333333333334",
+        "savedStart": 39.733333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5736.89999999851
+          },
+          {
+            "type": "save",
+            "t": 5811.20000000298
+          },
+          {
+            "type": "key",
+            "t": 5864.10000000149
+          },
+          {
+            "type": "key",
+            "t": 5988.89999999851
+          },
+          {
+            "type": "save",
+            "t": 6078.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6108.89999999851
+          },
+          {
+            "type": "key",
+            "t": 6237.39999999851
+          },
+          {
+            "type": "key",
+            "t": 6365.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 6428.20000000298
+          },
+          {
+            "type": "save",
+            "t": 6479.89999999851
+          },
+          {
+            "type": "key",
+            "t": 6490.10000000149
+          },
+          {
+            "type": "key",
+            "t": 6608.10000000149
+          },
+          {
+            "type": "shown",
+            "t": 6853
+          },
+          {
+            "type": "save",
+            "t": 6865.10000000149
+          },
+          {
+            "type": "save",
+            "t": 6956.79999999702
+          },
+          {
+            "type": "save",
+            "t": 7217.79999999702
+          },
+          {
+            "type": "save",
+            "t": 7470.5
+          },
+          {
+            "type": "shown",
+            "t": 7779.5
+          },
+          {
+            "type": "save",
+            "t": 7788.70000000298
+          },
+          {
+            "type": "shown",
+            "t": 8094.10000000149
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 8,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 3,
+        "keySpanMs": 881,
+        "lastKeyToFinalMs": 1274.2000000029802,
+        "liveStart": "40",
+        "savedStart": 40,
+        "events": [
+          {
+            "type": "key",
+            "t": 8173.79999999702
+          },
+          {
+            "type": "key",
+            "t": 8297.70000000298
+          },
+          {
+            "type": "save",
+            "t": 8388.29999999702
+          },
+          {
+            "type": "key",
+            "t": 8426.79999999702
+          },
+          {
+            "type": "save",
+            "t": 8473.70000000298
+          },
+          {
+            "type": "key",
+            "t": 8559.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8673.5
+          },
+          {
+            "type": "save",
+            "t": 8746.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8804.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8925.10000000149
+          },
+          {
+            "type": "key",
+            "t": 9054.79999999702
+          },
+          {
+            "type": "shown",
+            "t": 9069.70000000298
+          },
+          {
+            "type": "save",
+            "t": 9096.60000000149
+          },
+          {
+            "type": "save",
+            "t": 9335.20000000298
+          },
+          {
+            "type": "save",
+            "t": 9609.20000000298
+          },
+          {
+            "type": "shown",
+            "t": 9852.5
+          },
+          {
+            "type": "save",
+            "t": 9929.10000000149
+          },
+          {
+            "type": "save",
+            "t": 10006.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 10329
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "plain",
+        "hz": 8,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 3,
+        "keySpanMs": 873.5,
+        "lastKeyToFinalMs": 1512,
+        "liveStart": "40.266666666666666",
+        "savedStart": 40.266666666666666,
+        "events": [
+          {
+            "type": "key",
+            "t": 10398.10000000149
+          },
+          {
+            "type": "key",
+            "t": 10519.5
+          },
+          {
+            "type": "key",
+            "t": 10643.5
+          },
+          {
+            "type": "save",
+            "t": 10675.29999999702
+          },
+          {
+            "type": "save",
+            "t": 10766.60000000149
+          },
+          {
+            "type": "key",
+            "t": 10772.39999999851
+          },
+          {
+            "type": "key",
+            "t": 10892.70000000298
+          },
+          {
+            "type": "key",
+            "t": 11020.70000000298
+          },
+          {
+            "type": "save",
+            "t": 11036.60000000149
+          },
+          {
+            "type": "key",
+            "t": 11144.5
+          },
+          {
+            "type": "key",
+            "t": 11271.60000000149
+          },
+          {
+            "type": "save",
+            "t": 11380.79999999702
+          },
+          {
+            "type": "shown",
+            "t": 11758.70000000298
+          },
+          {
+            "type": "save",
+            "t": 11760
+          },
+          {
+            "type": "save",
+            "t": 12013.89999999851
+          },
+          {
+            "type": "shown",
+            "t": 12319.10000000149
+          },
+          {
+            "type": "save",
+            "t": 12365.39999999851
+          },
+          {
+            "type": "save",
+            "t": 12453.29999999702
+          },
+          {
+            "type": "shown",
+            "t": 12783.60000000149
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 4,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 2,
+        "keySpanMs": 1751.3999999985099,
+        "lastKeyToFinalMs": 352.3999999985099,
+        "liveStart": "23.933333333333334",
+        "savedStart": 23.933333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5300.39999999851
+          },
+          {
+            "type": "save",
+            "t": 5330.0999999940395
+          },
+          {
+            "type": "key",
+            "t": 5550.79999999702
+          },
+          {
+            "type": "save",
+            "t": 5574.0999999940395
+          },
+          {
+            "type": "key",
+            "t": 5802.29999999702
+          },
+          {
+            "type": "save",
+            "t": 5828.19999999553
+          },
+          {
+            "type": "key",
+            "t": 6050.0999999940395
+          },
+          {
+            "type": "save",
+            "t": 6078.69999999553
+          },
+          {
+            "type": "key",
+            "t": 6298.79999999702
+          },
+          {
+            "type": "save",
+            "t": 6324.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6551.89999999851
+          },
+          {
+            "type": "save",
+            "t": 6576.29999999702
+          },
+          {
+            "type": "shown",
+            "t": 6623.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6830.39999999851
+          },
+          {
+            "type": "save",
+            "t": 6866.5
+          },
+          {
+            "type": "key",
+            "t": 7051.79999999702
+          },
+          {
+            "type": "save",
+            "t": 7074.5999999940395
+          },
+          {
+            "type": "shown",
+            "t": 7404.19999999553
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 4,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 6,
+        "keySpanMs": 1758.2000000029802,
+        "lastKeyToFinalMs": 299.19999999552965,
+        "liveStart": "24.2",
+        "savedStart": 24.2,
+        "events": [
+          {
+            "type": "key",
+            "t": 7463.79999999702
+          },
+          {
+            "type": "save",
+            "t": 7486.89999999851
+          },
+          {
+            "type": "key",
+            "t": 7719
+          },
+          {
+            "type": "save",
+            "t": 7742.89999999851
+          },
+          {
+            "type": "shown",
+            "t": 7790.39999999851
+          },
+          {
+            "type": "key",
+            "t": 7970
+          },
+          {
+            "type": "save",
+            "t": 7993.69999999553
+          },
+          {
+            "type": "shown",
+            "t": 8027.69999999553
+          },
+          {
+            "type": "key",
+            "t": 8218.29999999702
+          },
+          {
+            "type": "save",
+            "t": 8238
+          },
+          {
+            "type": "shown",
+            "t": 8258.09999999404
+          },
+          {
+            "type": "key",
+            "t": 8462.19999999553
+          },
+          {
+            "type": "save",
+            "t": 8491.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 8525.79999999702
+          },
+          {
+            "type": "key",
+            "t": 8723.19999999553
+          },
+          {
+            "type": "save",
+            "t": 8746.39999999851
+          },
+          {
+            "type": "key",
+            "t": 8972.5
+          },
+          {
+            "type": "save",
+            "t": 8998.39999999851
+          },
+          {
+            "type": "key",
+            "t": 9222
+          },
+          {
+            "type": "save",
+            "t": 9242.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 9274.39999999851
+          },
+          {
+            "type": "shown",
+            "t": 9521.19999999553
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 4,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 1754.1000000014901,
+        "lastKeyToFinalMs": 473.8999999985099,
+        "liveStart": "24.466666666666665",
+        "savedStart": 24.466666666666665,
+        "events": [
+          {
+            "type": "key",
+            "t": 9709.39999999851
+          },
+          {
+            "type": "save",
+            "t": 9734.09999999404
+          },
+          {
+            "type": "key",
+            "t": 9964.39999999851
+          },
+          {
+            "type": "save",
+            "t": 9983.79999999702
+          },
+          {
+            "type": "key",
+            "t": 10248.19999999553
+          },
+          {
+            "type": "save",
+            "t": 10349.89999999851
+          },
+          {
+            "type": "key",
+            "t": 10466.09999999404
+          },
+          {
+            "type": "save",
+            "t": 10546.5
+          },
+          {
+            "type": "key",
+            "t": 10712.5
+          },
+          {
+            "type": "save",
+            "t": 10734
+          },
+          {
+            "type": "key",
+            "t": 10967.89999999851
+          },
+          {
+            "type": "save",
+            "t": 10991.89999999851
+          },
+          {
+            "type": "key",
+            "t": 11216.79999999702
+          },
+          {
+            "type": "save",
+            "t": 11245.79999999702
+          },
+          {
+            "type": "key",
+            "t": 11463.5
+          },
+          {
+            "type": "save",
+            "t": 11485.5
+          },
+          {
+            "type": "shown",
+            "t": 11937.39999999851
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 8,
+        "run": 0,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 884,
+        "lastKeyToFinalMs": 506.3999999985099,
+        "liveStart": "24.733333333333334",
+        "savedStart": 24.733333333333334,
+        "events": [
+          {
+            "type": "key",
+            "t": 5255.89999999851
+          },
+          {
+            "type": "save",
+            "t": 5282
+          },
+          {
+            "type": "key",
+            "t": 5404.39999999851
+          },
+          {
+            "type": "key",
+            "t": 5550.60000000149
+          },
+          {
+            "type": "save",
+            "t": 5579.10000000149
+          },
+          {
+            "type": "key",
+            "t": 5633.29999999702
+          },
+          {
+            "type": "save",
+            "t": 5650.89999999851
+          },
+          {
+            "type": "save",
+            "t": 5682.29999999702
+          },
+          {
+            "type": "key",
+            "t": 5762.5
+          },
+          {
+            "type": "save",
+            "t": 5799.5
+          },
+          {
+            "type": "key",
+            "t": 5889.39999999851
+          },
+          {
+            "type": "save",
+            "t": 5912.69999999553
+          },
+          {
+            "type": "key",
+            "t": 6009.79999999702
+          },
+          {
+            "type": "save",
+            "t": 6043.89999999851
+          },
+          {
+            "type": "key",
+            "t": 6139.89999999851
+          },
+          {
+            "type": "save",
+            "t": 6174.69999999553
+          },
+          {
+            "type": "shown",
+            "t": 6646.29999999702
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 8,
+        "run": 1,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 884,
+        "lastKeyToFinalMs": 468.8999999985099,
+        "liveStart": "25",
+        "savedStart": 25,
+        "events": [
+          {
+            "type": "key",
+            "t": 6710.10000000149
+          },
+          {
+            "type": "save",
+            "t": 6734.29999999702
+          },
+          {
+            "type": "key",
+            "t": 6837.79999999702
+          },
+          {
+            "type": "save",
+            "t": 6875.69999999553
+          },
+          {
+            "type": "key",
+            "t": 6966.79999999702
+          },
+          {
+            "type": "save",
+            "t": 6989.10000000149
+          },
+          {
+            "type": "key",
+            "t": 7091.89999999851
+          },
+          {
+            "type": "save",
+            "t": 7161
+          },
+          {
+            "type": "key",
+            "t": 7207.89999999851
+          },
+          {
+            "type": "save",
+            "t": 7241.89999999851
+          },
+          {
+            "type": "key",
+            "t": 7392.89999999851
+          },
+          {
+            "type": "key",
+            "t": 7470.79999999702
+          },
+          {
+            "type": "save",
+            "t": 7484.60000000149
+          },
+          {
+            "type": "save",
+            "t": 7516.79999999702
+          },
+          {
+            "type": "key",
+            "t": 7594.10000000149
+          },
+          {
+            "type": "save",
+            "t": 7666.69999999553
+          },
+          {
+            "type": "shown",
+            "t": 8063
+          }
+        ]
+      },
+      {
+        "mode": "after",
+        "name": "interview",
+        "hz": 8,
+        "run": 2,
+        "keys": 8,
+        "saves": 8,
+        "confirmations": 1,
+        "keySpanMs": 887.5,
+        "lastKeyToFinalMs": 656.6999999955297,
+        "liveStart": "25.266666666666666",
+        "savedStart": 25.266666666666666,
+        "events": [
+          {
+            "type": "key",
+            "t": 8118.60000000149
+          },
+          {
+            "type": "save",
+            "t": 8142.89999999851
+          },
+          {
+            "type": "key",
+            "t": 8259.29999999702
+          },
+          {
+            "type": "save",
+            "t": 8311
+          },
+          {
+            "type": "key",
+            "t": 8372.29999999702
+          },
+          {
+            "type": "save",
+            "t": 8399.19999999553
+          },
+          {
+            "type": "key",
+            "t": 8539.79999999702
+          },
+          {
+            "type": "key",
+            "t": 8625.89999999851
+          },
+          {
+            "type": "save",
+            "t": 8637
+          },
+          {
+            "type": "save",
+            "t": 8682.10000000149
+          },
+          {
+            "type": "key",
+            "t": 8751.5
+          },
+          {
+            "type": "save",
+            "t": 8775.5
+          },
+          {
+            "type": "key",
+            "t": 8871.69999999553
+          },
+          {
+            "type": "save",
+            "t": 8900.29999999702
+          },
+          {
+            "type": "key",
+            "t": 9006.10000000149
+          },
+          {
+            "type": "save",
+            "t": 9224.5
+          },
+          {
+            "type": "shown",
+            "t": 9662.79999999702
+          }
+        ]
+      }
+    ]
+  },
+  "parity": "Eight persistent-live-page versus fresh-document PNG pairs: six NTSC cut checkpoints, undo and redo. Linked source-in/rate, linked one-frame duration trim, title move, 30000/1001. An authored init-time GSAP case reloads and also matches a fresh page.",
+  "policy": "Inspect source with the same HTML parser as the compiler, before runtime injection; include template contents and hoisted fallback markup. No authored scripts. Only exact pinned GSAP library bytes are exempt. Parent eligibility comes from a server record for its navigation, never iframe messages. Compare current live DOM before a patch; fail closed on divergence.",
+  "budget": {
+    "definition": "Median of five live commits < 80% of median of five direct-reload controls, alternating order on the same runner and identical document. Parent HTTP authorization is disabled for the control; it does not pay the live timing-snapshot request first.",
+    "rationale": "The old 600 ms ceiling failed in CI at 627/647 ms. A relative check guards a material saving across hardware speed differences.",
+    "browserSettings": "Playwright defaults, no explicit hardware-GL override",
+    "finalFullSuite": {
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 906.1000000014901
+        },
+        {
+          "mode": "live",
+          "ms": 420
+        },
+        {
+          "mode": "live",
+          "ms": 428.29999999701977
+        },
+        {
+          "mode": "reload",
+          "ms": 959.7999999970198
+        },
+        {
+          "mode": "reload",
+          "ms": 912.7999999970198
+        },
+        {
+          "mode": "live",
+          "ms": 391.5
+        },
+        {
+          "mode": "live",
+          "ms": 500.29999999701977
+        },
+        {
+          "mode": "reload",
+          "ms": 960.6000000014901
+        },
+        {
+          "mode": "reload",
+          "ms": 1008
+        },
+        {
+          "mode": "live",
+          "ms": 395.19999999552965
+        }
+      ],
+      "live": 420,
+      "reload": 959.7999999970198
+    },
+    "latestBaseCheck": {
+      "samples": [
+        {
+          "mode": "reload",
+          "ms": 936.6000000014901
+        },
+        {
+          "mode": "live",
+          "ms": 387.19999999552965
+        },
+        {
+          "mode": "live",
+          "ms": 405.80000000447035
+        },
+        {
+          "mode": "reload",
+          "ms": 1031.8999999985099
+        },
+        {
+          "mode": "reload",
+          "ms": 954.1000000014901
+        },
+        {
+          "mode": "live",
+          "ms": 411.80000000447035
+        },
+        {
+          "mode": "live",
+          "ms": 430.29999999701977
+        },
+        {
+          "mode": "reload",
+          "ms": 990.2000000029802
+        },
+        {
+          "mode": "reload",
+          "ms": 899
+        },
+        {
+          "mode": "live",
+          "ms": 454.1000000014901
+        }
+      ],
+      "live": 411.80000000447035,
+      "reload": 954.1000000014901
+    },
+    "negativeControl": {
+      "stallMs": 800,
+      "result": {
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 993.1000000014901
+          },
+          {
+            "mode": "live",
+            "ms": 1189.8999999985099
+          },
+          {
+            "mode": "live",
+            "ms": 1215.5
+          },
+          {
+            "mode": "reload",
+            "ms": 874.7000000029802
+          },
+          {
+            "mode": "reload",
+            "ms": 1024.3000000044703
+          },
+          {
+            "mode": "live",
+            "ms": 1258
+          },
+          {
+            "mode": "live",
+            "ms": 1237
+          },
+          {
+            "mode": "reload",
+            "ms": 885.1000000014901
+          },
+          {
+            "mode": "reload",
+            "ms": 873.8999999985099
+          },
+          {
+            "mode": "live",
+            "ms": 1211.5
+          }
+        ],
+        "live": 1215.5,
+        "reload": 885.1000000014901
+      },
+      "limitMs": 708.0800000011922,
+      "expectedFailure": true
+    },
+    "ci": {
+      "head": "15d5d10bffd9a246a60d9705499e5ecedfec43c1",
+      "run": "https://github.com/AksharP5/cutroom/actions/runs/43593292646",
+      "job": "https://github.com/AksharP5/cutroom/actions/runs/43593292646/job/132442388013",
+      "result": {
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 894.7999999999884
+          },
+          {
+            "mode": "live",
+            "ms": 474.1000000000058
+          },
+          {
+            "mode": "live",
+            "ms": 494.80000000001746
+          },
+          {
+            "mode": "reload",
+            "ms": 786.5999999999767
+          },
+          {
+            "mode": "reload",
+            "ms": 887.3000000000175
+          },
+          {
+            "mode": "live",
+            "ms": 444.69999999998254
+          },
+          {
+            "mode": "live",
+            "ms": 548.9000000000233
+          },
+          {
+            "mode": "reload",
+            "ms": 882.5999999999767
+          },
+          {
+            "mode": "reload",
+            "ms": 871.7999999999884
+          },
+          {
+            "mode": "live",
+            "ms": 449.8999999999651
+          }
+        ],
+        "live": 474.1000000000058,
+        "reload": 882.5999999999767
+      },
+      "passed": true
+    },
+    "finalStandalone": {
+      "base": "ddba1259d0b26a64f2314a53ce318328c8b45672",
+      "result": {
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 950
+          },
+          {
+            "mode": "live",
+            "ms": 395.1000000014901
+          },
+          {
+            "mode": "live",
+            "ms": 443.8999999985099
+          },
+          {
+            "mode": "reload",
+            "ms": 906.8000000044703
+          },
+          {
+            "mode": "reload",
+            "ms": 926.2999999970198
+          },
+          {
+            "mode": "live",
+            "ms": 408
+          },
+          {
+            "mode": "live",
+            "ms": 455.30000000447035
+          },
+          {
+            "mode": "reload",
+            "ms": 890.2999999970198
+          },
+          {
+            "mode": "reload",
+            "ms": 896.2999999970198
+          },
+          {
+            "mode": "live",
+            "ms": 395.09999999403954
+          }
+        ],
+        "live": 408,
+        "reload": 906.8000000044703
+      },
+      "passed": true,
+      "log": "final-base-perf.log"
+    }
+  },
+  "validation": {
+    "fullSuiteBase": "6ea9beba4ba52e709a93f65de7203aa61985bf2c",
+    "unit": {
+      "passed": 720,
+      "skipped": 5,
+      "failed": 0,
+      "seconds": 123.45,
+      "skips": "Four opt-in native Electron checks and installed local Whisper"
+    },
+    "e2e": {
+      "passed": 426,
+      "failed": 0,
+      "minutes": 21.9
+    },
+    "performance": {
+      "passed": 9,
+      "failed": 0,
+      "minutes": 6.5
+    },
+    "latestRebase": "ddba1259d0b26a64f2314a53ce318328c8b45672",
+    "latestFocused": {
+      "unitPassed": 37,
+      "e2ePassed": 5,
+      "standalonePerformancePassed": 9,
+      "performanceMinutes": 6.5,
+      "pairedBudgetPassed": true,
+      "typeCheck": "passed",
+      "formatCheck": "passed"
+    },
+    "ports": "App servers 4950/4951, Playwright 4959, existing restart server 4952; two unit fixture ports temporarily remapped to 4953/4954 and restored.",
+    "memory": "free -g checked before heavy runs; final full unit retry began at 12 GiB available, final export workflows and standalone performance at 14 GiB.",
+    "previousFocused": {
+      "base": "0eac21dada579942a0c5158f2bb0cf2f882285c4",
+      "unitPassed": 109,
+      "e2ePassed": 36,
+      "pairedBudgetPassed": true,
+      "typeCheck": "passed"
+    },
+    "latestFullSuite": {
+      "base": "7752e03911f3af5c709cf8365d2d84b9eff62c3f",
+      "unit": {
+        "passed": 757,
+        "skipped": 5,
+        "failed": 0,
+        "seconds": 119.86
+      },
+      "e2e": {
+        "passed": 432,
+        "failed": 0,
+        "minutes": 25
+      },
+      "firstUnitAttempt": {
+        "passed": 756,
+        "skipped": 5,
+        "failed": 1,
+        "seconds": 330.41,
+        "failure": "native factory fixture exceeded its five-second deadline; isolated rerun and unchanged full retry passed"
+      }
+    }
+  },
+  "localEvidence": "/home/akshar/.cache/cutroom-preview-r2-evidence; raw drivers, logs, screenshots and earlier unpaired measurements retained. Generated projects, databases, worktrees and servers are cleaned after publishing.",
+  "comparisonImplementation": "Script-free timing policy and coalescing later committed as 15d5d10, measured on 6ea9beb before the later rebases. The saved input snapshots, including edit history, were identical."
+}
