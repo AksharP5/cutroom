@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { writeFile, readFile, mkdir, chmod, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -102,6 +103,32 @@ async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   await edit([{ type: "move", clipIds: ["title"], by: -1, mode: "overwrite" }]);
   await page.goto(`/#project/${project.id}`);
   await ready(page);
+  if (!scripts) {
+    const approved = async () =>
+      z
+        .object({ allowed: z.boolean() })
+        .parse(
+          await (
+            await request.get(`${await live(page)}&cutroom-status=1`)
+          ).json(),
+        ).allowed;
+    if (!(await approved())) {
+      // A thumbnail may own the initial compilation, which safely lacks live proof.
+      // Establish an approved document before asserting the timing-only fast path.
+      for (const by of [1, -1]) {
+        const previous = await token(page);
+        await edit([
+          { type: "move", clipIds: ["title"], by, mode: "overwrite" },
+        ]);
+        await changed(page, previous);
+      }
+      await expect.poll(approved).toBe(true);
+    }
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-preview-timing-ready",
+      "true",
+    );
+  }
   return { project, read, edit };
 }
 
@@ -213,6 +240,10 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   const second = await page.context().newPage();
   await second.goto(`/#project/${project.id}`);
   await ready(second);
+  await expect(second.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-timing-ready",
+    "true",
+  );
   const docs = await Promise.all([live(page), live(second)]);
   const tokens = await Promise.all([token(page), token(second)]);
   const client = new Client({ name: "timing-test", version: "1" });

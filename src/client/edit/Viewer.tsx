@@ -113,6 +113,7 @@ export function Viewer({
 
   const shownHandoff = useRef(handoff);
   const timingEligible = useRef(false);
+  const [timingReady, setTimingReady] = useState<number | null>(null);
   const settled = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     shownHandoff.current = handoff;
@@ -184,7 +185,10 @@ export function Viewer({
               });
             return;
           } catch {
-            if (!preview.timingAllowed) timingEligible.current = false;
+            if (!preview.timingAllowed) {
+              timingEligible.current = false;
+              setTimingReady(null);
+            }
             if (closing.signal.aborted || !isLatest()) return;
           } finally {
             clearTimeout(timer);
@@ -353,16 +357,19 @@ export function Viewer({
           .then(() => {
             if (gen !== latest.current || preview.signal.aborted) return;
             timingEligible.current = preview.timingAllowed;
+            setTimingReady(preview.timingAllowed ? gen : null);
             if (!timingEligible.current) resume();
           })
           .catch(() => {
             if (gen === latest.current) {
               timingEligible.current = false;
+              setTimingReady(null);
               resume();
             }
           });
       } else {
         timingEligible.current = false;
+        setTimingReady(null);
         resume();
       }
       while (!preview.state.ready || preview.state.error) {
@@ -447,6 +454,7 @@ export function Viewer({
         )
           useTimeline.setState({ selection: emptySelection });
       }}
+      data-preview-timing-ready={timingReady === live?.gen || undefined}
       data-preview-ready={
         handoff.kind === "showing" && handoff.confirmed?.revision === revision
           ? revision
