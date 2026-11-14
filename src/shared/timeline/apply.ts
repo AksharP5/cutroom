@@ -1244,10 +1244,11 @@ function removeTime(
     )
       continue;
     const spans = clip.start < start && clipEnd(clip) > end;
-    // Text and stills have no different source material to preserve after the gap.
+    // Graphics have no video or audio source frames to preserve after the gap.
     if (
       spans &&
       (clip.kind === "image" ||
+        clip.kind === "composition" ||
         (clip.kind === "element" && (clip.text !== null || clip.textPreview)))
     ) {
       shortened.add(clip.id);
