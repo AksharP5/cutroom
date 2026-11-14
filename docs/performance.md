@@ -230,11 +230,11 @@ Scrubbing used the same late-frame comparison until November 14, 2026. It failed
 Scrubbing now runs five pairs of 90 ruler steps, alternating which condition goes first, and gates on two measured quantities:
 
 - Position work per scrub step: the selected run's observation and outline-read durations summed and divided by 90, median of five runs, below 2 ms. This catches reads that each stay under the 5 ms per-read budget but add up on every seek.
-- Main-thread CPU ratio: the renderer main thread's CPU time (`ThreadTime` from Chromium's `Performance.getMetrics`) over the scrub with the title selected, divided by the paired unselected scrub, median of five pairs, below 1.3. CPU time does not grow when a busy runner deschedules the browser. This catches editor-side cost outside the two measured spans, at roughly 4 ms per step and above on this workload.
+- Editor CPU ratio: the editor main thread's CPU time (`ThreadTime` from Chromium's `Performance.getMetrics`) over the scrub with the title selected, divided by the paired unselected scrub, median of five pairs, below 1.3. CPU time does not grow when a busy runner deschedules the browser. This catches the editor's own cost of following the selected clip, such as handling each warning, at roughly 4 ms per step and above on this workload. The sandboxed preview runs in another process, where the runtime uses about 50 ms of CPU per step; Position work there is too small to see against that, which is why it is measured directly.
 
 Scrub late-frame counts stay in the attachment but no longer gate. Local results on November 14, 2026, installed Chromium at 1720×1050:
 
-| Condition                        | Position ms per step | Median CPU ratio | Result |
+| Condition                        | Position ms per step | Editor CPU ratio | Result |
 | -------------------------------- | -------------------: | ---------------: | ------ |
 | Idle, three runs                 |         0.53 to 0.59 |     1.04 to 1.14 | pass   |
 | 24 busy loops on 16 cores, three |         0.56 to 0.95 |     0.98 to 1.12 | pass   |

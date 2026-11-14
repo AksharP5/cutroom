@@ -91,9 +91,10 @@ test(
       }, editorStall);
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Performance.enable");
-    // CPU time the page's main thread has used, which a busy runner cannot inflate by
-    // descheduling the browser. The preview iframe shares that thread.
-    const mainThreadMs = async () => {
+    // CPU time the editor's main thread has used, which a busy runner cannot inflate by
+    // descheduling the browser. The sandboxed preview is another process: its Position work
+    // is the two measures collected below.
+    const editorCpuMs = async () => {
       const { metrics } = await cdp.send("Performance.getMetrics");
       return (
         metrics.find((metric) => metric.name === "ThreadTime")!.value * 1000
@@ -119,7 +120,7 @@ test(
       maxObservation: number;
       lateFrames: number;
       positionMs: number;
-      mainThreadMs: number;
+      editorCpuMs: number;
     }[] = [];
     for (const { run, mode, selected } of conditions) {
       await page.goto("about:blank");
@@ -179,7 +180,7 @@ test(
         };
         requestAnimationFrame(sample);
       });
-      const mainThreadStart = await mainThreadMs();
+      const editorCpuStart = await editorCpuMs();
       if (mode === "playback") {
         await page
           .getByRole("button", { name: "Play forward", exact: true })
@@ -206,7 +207,7 @@ test(
         ).toBeVisible();
       }
       await waitFrames(page, 2);
-      const mainThreadEnd = await mainThreadMs();
+      const editorCpuEnd = await editorCpuMs();
       const samples = await preview.evaluate(() => {
         const stats = (window as unknown as MeasuredWindow).positionPerf;
         stats.running = false;
@@ -231,7 +232,7 @@ test(
         positionMs:
           sum(samples.observations.map((entry) => entry.duration)) +
           sum(samples.boxes),
-        mainThreadMs: mainThreadEnd - mainThreadStart,
+        editorCpuMs: editorCpuEnd - editorCpuStart,
       });
     }
     const summary = (["playback", "scrub"] as const).flatMap((mode) =>
@@ -261,7 +262,7 @@ test(
             runs.map((result) => result.lateFrames / result.frames.length),
           ),
           positionMs: runs.map((result) => result.positionMs),
-          mainThreadMs: runs.map((result) => result.mainThreadMs),
+          editorCpuMs: runs.map((result) => result.editorCpuMs),
         };
       }),
     );
@@ -270,13 +271,13 @@ test(
         (result) => result.mode === "scrub" && result.selected === selected,
       )!;
     const positionMsPerStep = median(scrub(true).positionMs) / scrubSteps;
-    const mainThreadRatios = scrub(true).mainThreadMs.map(
-      (ms, run) => ms / scrub(false).mainThreadMs[run]!,
+    const editorCpuRatios = scrub(true).editorCpuMs.map(
+      (ms, run) => ms / scrub(false).editorCpuMs[run]!,
     );
     const scrubCost = {
       positionMsPerStep,
-      mainThreadRatios,
-      medianMainThreadRatio: median(mainThreadRatios),
+      editorCpuRatios,
+      medianEditorCpuRatio: median(editorCpuRatios),
     };
     const evidence = JSON.stringify(
       {
@@ -339,10 +340,10 @@ test(
       positionMsPerStep,
       "scrub: Position observation and outline reads per scrub step, ms",
     ).toBeLessThan(2);
-    // Editor-side work the two measures above cannot see, such as handling the warning.
+    // The editor's own work for the selected clip, such as handling each warning.
     expect(
-      scrubCost.medianMainThreadRatio,
-      "scrub: main-thread CPU with the positioned title selected, relative to nothing selected",
+      scrubCost.medianEditorCpuRatio,
+      "scrub: editor main-thread CPU with the positioned title selected, relative to nothing selected",
     ).toBeLessThan(1.3);
   },
 );
