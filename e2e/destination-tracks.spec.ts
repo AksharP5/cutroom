@@ -623,3 +623,60 @@ test("a destination answer read before a newer choice never replaces it", async 
   await page.waitForTimeout(300);
   expect(await b.destinations()).toEqual(["A1", "V2"]);
 });
+
+test("source marks entered before their first read are placed and saved", async ({
+  page,
+  request,
+}) => {
+  const { api, clips, seek } = await open(page, request);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reading = () => {};
+  const requested = new Promise<void>((resolve) => {
+    reading = resolve;
+  });
+  await page.route("**/source-marks?*", async (route) => {
+    if (route.request().method() === "GET") {
+      reading();
+      await held;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.keyboard.press("Alt+2");
+    await page.keyboard.press("Control+Alt+2");
+    await page.locator('.media-row[data-path="interview.mp4"]').dblclick();
+    await requested;
+    const source = page.getByRole("group", { name: "Source", exact: true });
+    await expect(source).toBeVisible();
+    await page.keyboard.press("Shift+ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("o");
+    await expect(source.locator(".edit-source-length")).toHaveText(
+      "00:00:01:00",
+    );
+    await page.keyboard.press("Alt+q");
+    await seek("200");
+    await page.keyboard.press("F9");
+    await expect
+      .poll(async () => (await clips()).filter((clip) => Number(clip[1]) >= 2))
+      .toEqual([
+        ["video", 2, 60, 30],
+        ["audio", 3, 60, 30],
+      ]);
+    release();
+    await expect
+      .poll(async () =>
+        (await request.get(`${api}/source-marks?path=interview.mp4`)).json(),
+      )
+      .toMatchObject({ in: null, out: 1 });
+    await page.locator('.media-row[data-path="interview.mp4"]').dblclick();
+    await expect(source.locator(".edit-source-length")).toHaveText(
+      "00:00:01:00",
+    );
+  } finally {
+    release();
+  }
+});

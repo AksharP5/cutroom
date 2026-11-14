@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { frameTime, toFrames } from "../../shared/timeline/apply";
 import { SourceViewSchema, emptySourceMarks } from "../../shared/timeline/view";
+import type { SourceMarks } from "../../shared/timeline/view";
 import { createViewPreferences } from "../viewPreferences";
 import type { Timeline } from "../../shared/timeline/schema";
 import { placedMedia } from "../timeline/gesture";
@@ -28,13 +29,15 @@ const preferences = createViewPreferences(SourceViewSchema, () => ({
 
 /** The source's own playhead, counted in frames at the timeline's rate. */
 export const sourcePlayer = createTransport();
+// Controls are usable before the first read supplies the media identity needed to save.
+let pendingMarks: SourceMarks | null = null;
 
 function sync() {
   const { file } = useSource.getState();
   if (!file) return;
   const { fps } = useTransport.getState();
   const duration = placedMedia(file, fps).frames;
-  const marks = preferences.use.getState();
+  const marks = pendingMarks ?? preferences.use.getState();
   const start =
     marks.in === null
       ? null
@@ -75,12 +78,19 @@ export function openSource(file: MediaDrag) {
 
 /** Follows the mounted media's marks and reloads them when the media refreshes. */
 export function openSourceMarks(projectId: string, path: string) {
+  pendingMarks = null;
   sourcePlayer.seek(0);
   let loaded = false;
   return preferences.open(
     projectId,
     `/projects/${encodeURIComponent(projectId)}/source-marks?path=${encodeURIComponent(path)}`,
     () => {
+      const { identity } = preferences.use.getState();
+      if (pendingMarks && identity !== null) {
+        const marks = pendingMarks;
+        pendingMarks = null;
+        preferences.save({ identity, ...marks });
+      }
       if (loaded) return;
       loaded = true;
       // A late load must not move a playhead the owner has already moved.
@@ -107,13 +117,17 @@ export function closeSource() {
 export function markSource(range: Marks) {
   if (!useSource.getState().file) return;
   const { identity } = preferences.use.getState();
-  if (identity === null) return;
   const { fps } = sourcePlayer.use.getState();
-  preferences.save({
-    identity,
+  const marks = {
     in: range.in === null ? null : frameTime(range.in, fps),
     out: range.out === null ? null : frameTime(range.out, fps),
-  });
+  };
+  if (identity === null) {
+    pendingMarks = marks;
+    sync();
+    return;
+  }
+  preferences.save({ identity, ...marks });
 }
 
 /** What Insert, Overwrite and a drag take from the loaded file: in to out, or all of it. */
