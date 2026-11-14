@@ -47,7 +47,7 @@ import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
-import { showToast, useWorkspace } from "./workspace";
+import { clearToasts, showToast, useWorkspace } from "./workspace";
 import { actionFor, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
 
@@ -361,7 +361,7 @@ export function App() {
     window.location.hash = `project/${encodeURIComponent(next.id)}?v=1&rc=1&tv=1`;
     setProjectId(next.id);
     setDialog(null);
-    showToast("");
+    clearToasts();
     document.title = `${next.name} · Cutroom`;
   }
   const onContext = useCallback((value: EditorContext) => {
@@ -812,7 +812,7 @@ export function App() {
               const operation = {};
               projectOpening.current = operation;
               setCreating(true);
-              showToast("");
+              clearToasts();
               void api("/projects", ProjectSchema, json("POST", { name }))
                 .then(async (created) => {
                   await loadProjects();

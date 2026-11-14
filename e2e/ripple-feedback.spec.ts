@@ -148,6 +148,40 @@ test("an outside notice waits behind ripple Undo without resetting its hold", as
   await expect(outside).toHaveCount(0);
 });
 
+test("a plain notice waits behind a toast with an action instead of replacing it", async ({
+  page,
+  request,
+}) => {
+  const { seek } = await open(page, request, otherTracks);
+  await seek("2717");
+  await page.clock.install();
+  const status = (text: string) =>
+    page.getByRole("status").filter({ hasText: text });
+  // With no source open, the Source viewer key and Insert each answer with a plain notice.
+  const seen = status("Open a file from Media to see its source.");
+  const waiting = status("Open a file from Media to place it.");
+  await page.keyboard.press("Control+3");
+  await expect(seen).toBeVisible();
+  await page.clock.fastForward(2500);
+  await page.keyboard.press("q");
+  const undo = status("Removed 27:17").getByRole("button", {
+    name: "Undo",
+    exact: true,
+  });
+  await expect(undo).toBeVisible();
+  await page.keyboard.press("F9");
+  await page.clock.fastForward(1000);
+  await expect(undo).toBeVisible();
+  // Once Undo's hold ends, the notice that arrived under it gets its own.
+  await page.clock.fastForward(3500);
+  await expect(waiting).toBeVisible();
+  await page.clock.fastForward(1000);
+  await expect(waiting).toBeVisible();
+  // The first notice was read for most of its hold before Undo covered it. It stays gone.
+  await page.clock.fastForward(4000);
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
+
 test("owner imports, media drops, view preferences and source saves stay silent", async ({
   page,
   request,
