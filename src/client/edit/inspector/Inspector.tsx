@@ -167,6 +167,20 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  // Several clips that are not one linked subject still share a gain field, as in Resolve.
+  const sound =
+    timeline && !subject && selection.ids.size > 1
+      ? timeline.clips.filter(
+          (item) =>
+            selection.ids.has(item.id) &&
+            item.hasAudio &&
+            !timeline.tracks.find((track) => track.index === item.track)
+              ?.locked,
+        )
+      : [];
+  const mixedGain = sound.some(
+    (item) => (item.volume ?? 1) !== (sound[0]!.volume ?? 1),
+  );
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
     observePosition(
@@ -277,7 +291,52 @@ export function Inspector({ projectId }: { projectId: string }) {
         </button>
       </header>
       {selection.ids.size > 1 && !subject ? (
-        <p className="inspector-empty">{selection.ids.size} clips selected</p>
+        <div className="inspector-content">
+          <p className="inspector-empty">{selection.ids.size} clips selected</p>
+          {timeline && sound.length > 0 && (
+            <details
+              open={audioOpen}
+              onToggle={(event) => setAudioOpen(event.currentTarget.open)}
+              className="inspector-section inspector-audio"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Audio · {sound.length} {sound.length === 1 ? "clip" : "clips"}
+              </summary>
+              {sound.some((clip) => clip.trackGainWarning) && (
+                <p className="inspector-warning" role="note">
+                  Track gain does not apply to selected clips with an authored
+                  audio group.
+                </p>
+              )}
+              <ValueField
+                key={`${selection.anchor}:gain`}
+                label="Gain"
+                value={mixedGain ? null : (sound[0]!.volume ?? 1)}
+                mixed={mixedGain}
+                unit="gain"
+                max={MAX_AUDIO_GAIN}
+                fps={timeline.fps}
+                onCommit={(volume) => {
+                  const ids = new Set(sound.map((clip) => clip.id));
+                  // One batch, so the whole selection is one undo step.
+                  void editTimeline(projectId, "Edit gain", (current) =>
+                    current.clips
+                      .filter(
+                        (clip) =>
+                          ids.has(clip.id) && (clip.volume ?? 1) !== volume,
+                      )
+                      .map((clip) => ({
+                        type: "setClip",
+                        clipId: clip.id,
+                        volume,
+                      })),
+                  );
+                }}
+              />
+            </details>
+          )}
+        </div>
       ) : !clip || !timeline ? (
         <p className="inspector-empty">Select a clip to inspect it.</p>
       ) : (
@@ -415,6 +474,11 @@ export function Inspector({ projectId }: { projectId: string }) {
                   Audio
                   {subject.audio.length > 1 && ` · ${audio.label || audio.id}`}
                 </summary>
+                {audio.trackGainWarning && (
+                  <p className="inspector-warning" role="note">
+                    {audio.trackGainWarning}
+                  </p>
+                )}
                 <ValueField
                   key={`${audio.id}:gain`}
                   label="Gain"

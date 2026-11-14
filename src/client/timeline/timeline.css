@@ -414,6 +414,31 @@
 .tl-head-name:focus {
   background: var(--surface-active);
 }
+/* Track gain in dB. At 0 dB it recedes; any other level is an exception, as a lit button is. */
+.tl-track-gain {
+  flex: none;
+  height: 100%;
+  padding: 0 var(--stroke-rail);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-2xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  text-align: right;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.tl-track-gain[data-unity] {
+  color: var(--text-tertiary);
+}
+input.tl-track-gain {
+  width: 6ch;
+  background: var(--surface-active);
+  cursor: text;
+  user-select: text;
+}
 .tl-head-buttons {
   display: flex;
   gap: 2px;
@@ -1144,6 +1169,7 @@
   margin-left: var(--stroke-rail);
 }
 .tl-head[data-compact] .tl-head-name,
+.tl-head[data-compact] .tl-track-gain,
 .tl-head[data-compact] .tl-head-title > .tl-meters-compact {
   display: none;
 }

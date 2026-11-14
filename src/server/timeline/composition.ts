@@ -7,6 +7,7 @@ import {
   rewriteSrcsetUrls,
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
+import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import {
   canonicalText,
@@ -625,6 +626,9 @@ export function parseComposition(
         }),
     });
   }
+  const managedGroups = new Set(
+    managedAudioGroups(root).map((bus) => bus.attrs.id),
+  );
   const clips = rows.map(({ id, element, read, start, end }): Clip => {
     const kind = clipKind(element);
     const title =
@@ -637,7 +641,15 @@ export function parseComposition(
     const referenced = reference && clipIds.get(reference);
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
+    const group = element.attrs["data-audio-group"];
+    const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
+    const hasAudio =
+      isAudioKind(kind) ||
+      (kind === "video" &&
+        (element.attrs.muted === undefined ||
+          element.attrs["data-cutroom-muted"] !== undefined) &&
+        (element.attrs["data-has-audio"] ?? "true") === "true");
     return {
       id,
       track: read.trackIndex,
@@ -660,18 +672,17 @@ export function parseComposition(
             ? null
             : sourceOf(element),
       sourceDuration: lengthOf(element),
-      hasAudio:
-        isAudioKind(kind) ||
-        (kind === "video" &&
-          (element.attrs.muted === undefined ||
-            element.attrs["data-cutroom-muted"] !== undefined) &&
-          (element.attrs["data-has-audio"] ?? "true") === "true"),
+      hasAudio,
       link: element.attrs["data-link"] || null,
       label:
         element.attrs["data-timeline-label"] ??
         element.attrs["data-label"] ??
         null,
       ...(kind === "element" && { textPreview: firstTextLine(element.text) }),
+      ...(authoredGroup &&
+        hasAudio && {
+          trackGainWarning: `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`,
+        }),
       volume: volume !== null && volume >= 0 ? volume : null,
       opacity: readOpacity(element.attrs.style),
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
@@ -926,6 +937,24 @@ function applyEdits(source: string, edits: Edit[]): string {
   return output + source.slice(cursor);
 }
 
+/** Only buses in this composition belong to its tracks, never those inside a scene or clip. */
+function managedAudioGroups(root: SourceElement): SourceElement[] {
+  return root.children.flatMap((element) => {
+    if (
+      element.tag === "hf-audio-group" &&
+      element.attrs["data-cutroom-track"] !== undefined
+    )
+      return [element];
+    if (
+      isSubCompositionHost(element) ||
+      element.attrs["data-start"] !== undefined ||
+      element.tag === "template"
+    )
+      return [];
+    return managedAudioGroups(element);
+  });
+}
+
 /** The attribute changes that turn `before` into `after` on `element`. */
 function clipChanges(
   before: Clip,
@@ -1062,17 +1091,99 @@ export function applyTrackMix(parsed: ParsedComposition): string {
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   const mix = trackMix(timeline.tracks);
-  return applyEdits(
-    html,
-    timeline.clips.flatMap((clip) => {
-      const element = parsed.elements.get(clip.id)!;
-      return attributeEdits(
-        openingTag(spans, element, clip.id),
-        html,
-        clipChanges(clip, clip, element, timeline.fps, false, mix),
+  const edits: Edit[] = [];
+  const groups = managedAudioGroups(parsed.root);
+  const used = new Set([
+    ...parsed.ids,
+    ...timeline.clips.map((clip) => clip.id),
+  ]);
+  const memberships = new Map<number, string>();
+  const inserted: string[] = [];
+  for (const track of timeline.tracks) {
+    if (
+      track.kind !== "audio" &&
+      !timeline.clips.some(
+        (clip) => clip.track === track.index && clip.hasAudio,
+      )
+    )
+      continue;
+    const group = groups.find(
+      (element) => element.attrs["data-cutroom-track"] === String(track.index),
+    );
+    let id = group?.attrs.id;
+    if (!id) {
+      const base = `cutroom-${parsed.root.attrs["data-composition-id"]}-track-${track.index}`;
+      id = base;
+      for (let suffix = 2; used.has(id); suffix++) id = `${base}-${suffix}`;
+      used.add(id);
+      inserted.push(
+        `<hf-audio-group id="${escapeAttribute(id)}" data-cutroom-track="${track.index}" data-volume="${track.volume}"></hf-audio-group>`,
       );
-    }),
+    } else {
+      edits.push(
+        ...attributeEdits(openingTag(spans, group!, id), html, [
+          ["data-volume", String(track.volume)],
+        ]),
+      );
+    }
+    memberships.set(track.index, id);
+  }
+  for (const group of groups) {
+    if ([...memberships.values()].includes(group.attrs.id!)) continue;
+    edits.push({ start: group.start, end: group.end, text: "" });
+  }
+  if (inserted.length)
+    edits.push({
+      start: parsed.root.openEnd,
+      end: parsed.root.openEnd,
+      text: inserted.join("\n"),
+    });
+  // Adding membership changes HyperFrames' generated identity hash. Preserve existing preview
+  // identities when routing is first persisted, so a fader need not replace the playing document.
+  const joining = timeline.clips.some((clip) => {
+    const attrs = parsed.elements.get(clip.id)!.attrs;
+    return (
+      clip.hasAudio &&
+      !clip.trackGainWarning &&
+      attrs.id &&
+      !attrs["data-hf-id"] &&
+      attrs["data-audio-group"] !== memberships.get(clip.track)
+    );
+  });
+  const identities = new Map(
+    joining
+      ? scopeElements(
+          parseElements(ensureHfIds(html)).roots,
+          parsed.scope,
+        ).flatMap(({ attrs }) =>
+          attrs.id && attrs["data-hf-id"]
+            ? [[attrs.id, attrs["data-hf-id"]] as const]
+            : [],
+        )
+      : [],
   );
+  for (const clip of timeline.clips) {
+    const element = parsed.elements.get(clip.id)!;
+    const changes = clipChanges(clip, clip, element, timeline.fps, false, mix);
+    if (clip.hasAudio && !clip.trackGainWarning) {
+      changes.push(["data-audio-group", memberships.get(clip.track)!]);
+      if (!element.attrs["data-hf-id"] && identities.has(clip.id))
+        changes.push(["data-hf-id", identities.get(clip.id)!]);
+      // Anonymous media needs a stable id for HyperFrames' render group discovery.
+      if (parsed.anonymous.has(clip.id)) changes.push(["id", clip.id]);
+    } else if (
+      !clip.hasAudio &&
+      groups.some(
+        (group) => group.attrs.id === element.attrs["data-audio-group"],
+      )
+    ) {
+      changes.push(["data-audio-group", null]);
+    }
+    edits.push(
+      ...attributeEdits(openingTag(spans, element, clip.id), html, changes),
+    );
+  }
+  return applyEdits(html, edits);
 }
 
 /** Sidecar settings belong to a file, including every instance of that file in a preview bundle. */
@@ -1223,6 +1334,9 @@ function copyMarkup(
     ...attributeEdits(first!, source, [
       ["id", clip.id],
       ["data-hf-id", null],
+      ...(!template.trackGainWarning && template.hasAudio
+        ? [["data-audio-group", null] as const]
+        : []),
       ...clipChanges(
         template,
         clip,
@@ -1659,7 +1773,26 @@ export function patchComposition(
         ["data-duration", String(toSeconds(after.duration, fps))],
       ]),
     );
-  return applyEdits(html, edits);
+  const output = applyEdits(html, edits);
+  // Unity buses are projected for playback; persist routing only once a track fader is used.
+  if (
+    !after.tracks.some((track) => track.volume !== 1) &&
+    !managedAudioGroups(parsed.root).length
+  )
+    return output;
+  return applyTrackMix(
+    parseComposition(output, settingsOf(after), {
+      scope: parsed.scope,
+      fonts: parsed.fonts,
+      mediaLengths: new Map(
+        after.clips.flatMap((clip) =>
+          clip.src && clip.sourceDuration
+            ? [[clip.src, clip.sourceDuration] as const]
+            : [],
+        ),
+      ),
+    }),
+  );
 }
 
 /** A copied element keeps its media paths when pasted into another composition folder. */

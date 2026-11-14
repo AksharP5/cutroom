@@ -10,7 +10,10 @@ const frames = z.number().int().positive();
 const clipId = z.string().min(1).max(200);
 const label = z.string().max(500);
 /** Static gain as written to `data-volume`: 0 is silence, MAX_AUDIO_GAIN is +12 dB. */
-const volume = z.number().min(0).max(MAX_AUDIO_GAIN);
+const volume = z
+  .number()
+  .min(0)
+  .max(MAX_AUDIO_GAIN, "Gain goes up to +12 dB per stage.");
 /** Static CSS values are canonical to six decimals, beyond CSS parser float precision. */
 const opacity = z
   .number()
@@ -147,6 +150,12 @@ export const ClipSchema = z.object({
   sourceDuration: z.number().positive().nullable(),
   /** Whether the clip plays sound: audio, and video that is neither muted nor declared silent. */
   hasAudio: z.boolean(),
+  trackGainWarning: z
+    .string()
+    .optional()
+    .describe(
+      "When present, track gain does not apply to this clip. Its authored audio group is preserved.",
+    ),
   link: z.string().nullable(),
   label: z.string().nullable(),
   /** First authored line of text, projected from the parsed composition for timeline labels. */
@@ -215,6 +224,11 @@ export const TrackSchema = z.object({
   enabled: z.boolean().default(true),
   muted: z.boolean().default(false),
   solo: z.boolean().default(false),
+  volume: volume
+    .default(1)
+    .describe(
+      "Linear track gain on top of each clip's gain: 0 is silence, 1 = 0 dB. Independent group stage, up to +12 dB per stage; authored-group clips are excluded and carry trackGainWarning",
+    ),
 });
 
 export const MarkerColorSchema = z.enum([
@@ -513,9 +527,14 @@ export const CommandSchema = z.discriminatedUnion("type", [
       enabled: z.boolean().optional(),
       muted: z.boolean().optional(),
       solo: z.boolean().optional(),
+      volume: volume
+        .optional()
+        .describe(
+          "Linear track gain, 0 for silence, 1 = 0 dB, up to +12 dB. Independent audio group stage in preview and export, up to +12 dB per stage. Clips already in an authored audio group are excluded; read trackGainWarning on each clip",
+        ),
     })
     .describe(
-      "Create a track or change its name, lock, auto-select, enable, mute or solo. Mute covers all sound on the track, including embedded video audio. Solo selects audio tracks and affects preview and export.",
+      "Create a track or change its name, lock, auto-select, enable, mute, solo or gain. Mute covers all sound on the track, including embedded video audio. Gain excludes clips with trackGainWarning. Solo selects audio tracks and affects preview and export.",
     ),
   z
     .object({

@@ -85,7 +85,9 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   );
   await page.locator('[data-clip="music"]').click({ modifiers: ["Control"] });
   await expect(inspector).toContainText("3 clips selected");
-  await expect(gain).toHaveCount(0);
+  // Several clips share one Gain field; the muted picture has no sound to set.
+  await expect(inspector).toContainText("Audio · 2 clips");
+  await expect(gain).toHaveValue("Mixed");
   await page.locator('[data-clip="picture"]').click();
   const set = async (label: string, value: string, finish = "Enter") => {
     const field = inspector.getByRole("textbox", { name: label, exact: true });
