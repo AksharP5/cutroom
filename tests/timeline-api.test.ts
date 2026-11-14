@@ -1863,7 +1863,12 @@ test("destination tracks are read and set by themselves, outside history and oth
       [1, "video"],
       [2, "video"],
     ]);
-    const initial = { video: 0, audio: 3 };
+    const initial = {
+      video: 0,
+      audio: 3,
+      videoEnabled: true,
+      audioEnabled: true,
+    };
     expect((await destinations()).body).toEqual(initial);
     const spare = 4;
     expect(
@@ -1883,7 +1888,15 @@ test("destination tracks are read and set by themselves, outside history and oth
     const files = await fixture.files();
     expect(await destinations("PUT", { video: spare })).toEqual({
       status: 200,
-      body: { video: spare, audio: initial.audio },
+      body: { ...initial, video: spare },
+    });
+    expect(
+      (await destinations("PUT", { audioEnabled: false })).body,
+    ).toMatchObject({
+      video: spare,
+      audio: initial.audio,
+      videoEnabled: true,
+      audioEnabled: false,
     });
     await ledger.checkpoint();
     expect(ledger.list()).toHaveLength(entries);
@@ -1893,7 +1906,7 @@ test("destination tracks are read and set by themselves, outside history and oth
     ).toEqual({
       density: "compact",
       heights: { "0": 120 },
-      destinations: { video: spare },
+      destinations: { video: spare, audioEnabled: false },
     });
     // A track of the other kind, or one the timeline lacks, is refused and nothing changes.
     for (const wrong of [{ audio: spare }, { video: spare + 5 }])
@@ -1903,7 +1916,10 @@ test("destination tracks are read and set by themselves, outside history and oth
     expect(
       (await fixture.request(`${endpoint}/history/undo`, "POST", {})).status,
     ).toBe(200);
-    expect((await destinations()).body).toEqual(initial);
+    expect((await destinations()).body).toMatchObject({
+      ...initial,
+      audioEnabled: false,
+    });
   } finally {
     await fixture.close();
   }

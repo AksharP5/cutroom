@@ -463,8 +463,16 @@ export function createTimelineRoutes(
     tracks: readonly Track[],
     settings: TimelineViewSettings,
   ) => {
-    const { video, audio } = destinationTracks(tracks, settings.destinations);
-    return { video: video.index, audio: audio.index };
+    const { video, audio, videoEnabled, audioEnabled } = destinationTracks(
+      tracks,
+      settings.destinations,
+    );
+    return {
+      video: video.index,
+      audio: audio.index,
+      videoEnabled,
+      audioEnabled,
+    };
   };
   api.get("/projects/:id/timeline-destinations", async (c) => {
     const project = await store.get(c.req.param("id"));

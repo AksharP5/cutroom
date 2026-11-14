@@ -24,7 +24,7 @@ import { transport, useTransport, velocity } from "../edit/transport";
 import { isTyping, useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
-import { reportEditorError, useWorkspace } from "../workspace";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
 import type { Row } from "./math";
 import { Timeline } from "./Timeline";
@@ -176,10 +176,27 @@ export function ProjectTimeline({
     index,
   }: Pick<Track, "kind" | "index">) => {
     const settings = useViewSettings.getState();
+    const tracks = useTimeline.getState().view?.timeline.tracks;
+    if (!tracks) return;
+    const current = destinationTracks(tracks, settings.destinations);
+    const enabled = kind === "video" ? "videoEnabled" : "audioEnabled";
     saveViewSettings({
       ...settings,
-      destinations: { ...settings.destinations, [kind]: index },
+      destinations: {
+        ...settings.destinations,
+        [kind]: index,
+        [enabled]: current[kind].index !== index || !current[enabled],
+      },
     });
+  };
+  const toggleDestinations = (kinds: readonly Track["kind"][]) => {
+    const settings = useViewSettings.getState();
+    const destinations = { ...settings.destinations };
+    const enabled = !kinds.some(
+      (kind) => destinations[`${kind}Enabled`] !== false,
+    );
+    for (const kind of kinds) destinations[`${kind}Enabled`] = enabled;
+    saveViewSettings({ ...settings, destinations });
   };
   /** Picks a destination by its place among the tracks of its kind, counted from V1 or A1. */
   const destinationKey = (
@@ -193,15 +210,28 @@ export function ProjectTimeline({
       useViewSettings.getState().destinations,
     )[kind];
     const ofKind = shownTracks(tracks).filter((track) => track.kind === kind);
-    const track =
-      ofKind[place(ofKind.findIndex(({ index }) => index === current.index))];
+    const ordinal = place(
+      ofKind.findIndex(({ index }) => index === current.index),
+    );
+    const track = ofKind[ordinal];
     if (track) chooseDestination(track);
+    else if (ordinal >= 0)
+      showToast(`No ${kind === "video" ? "V" : "A"}${ordinal + 1} yet`, null, {
+        tone: "info",
+        transient: true,
+      });
   };
   useKeymap({
     editTrackDestinationSelectionTargetV: (key) =>
       destinationKey("video", () => key),
     editTrackDestinationSelectionTargetA: (key) =>
       destinationKey("audio", () => key),
+    editTrackDestinationSelectionTargetVideoAll: () =>
+      toggleDestinations(["video"]),
+    editTrackDestinationSelectionTargetAudioAll: () =>
+      toggleDestinations(["audio"]),
+    timelineTrackDestinationSelectionTargetAudioVideoAll: () =>
+      toggleDestinations(["video", "audio"]),
     // Up is the header above: a higher video track, a lower audio track.
     editVideoMoveTrackDestinationUp: () =>
       destinationKey("video", (current) => current + 1),
@@ -416,8 +446,8 @@ export function ProjectTimeline({
         viewSettings={viewSettings}
         onViewSettings={saveViewSettings}
         destinations={{
-          video: destinations.video.index,
-          audio: destinations.audio.index,
+          video: destinations.videoEnabled ? destinations.video.index : null,
+          audio: destinations.audioEnabled ? destinations.audio.index : null,
         }}
         onDestination={chooseDestination}
         timeline={view.timeline}
