@@ -87,7 +87,7 @@ for (const command of [
   { type: "trim", clipId: "shot", edge: "start", to: 90, ripple: true },
   { type: "trim", clipId: "shot", edge: "end", to: 90, ripple: true },
 ] satisfies CommandInput[]) {
-  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} shortens spanning text and stills without copying them`, () => {
+  test(`${command.type}${"edge" in command ? ` ${command.edge}` : ""} shortens spanning text, stills and recipe compositions without copying them`, () => {
     const state = timeline([
       clip("shot", 0, 60, 60),
       clip("lower", 1, 15, 180, {
@@ -104,10 +104,15 @@ for (const command of [
       }),
       clip("picture", 3, 0, 240),
       clip("music", 4, 0, 240, { kind: "audio" }),
+      clip("recipe", 5, 15, 180, {
+        kind: "composition",
+        src: "compositions/lower.html",
+        mediaStart: 0.5,
+      }),
     ]);
     const result = run(state, command);
     const removed = command.type === "remove" ? 60 : 30;
-    for (const id of ["lower", "still"]) {
+    for (const id of ["lower", "still", "recipe"]) {
       const original = state.clips.find((clip) => clip.id === id)!;
       expect(result.clips.find((clip) => clip.id === id)).toEqual({
         ...original,
@@ -134,7 +139,7 @@ for (const command of [
   });
 }
 
-for (const kind of ["element", "image"] as const) {
+for (const kind of ["element", "image", "composition"] as const) {
   for (const [start, duration] of [
     [60, 60],
     [30, 180],
@@ -145,7 +150,12 @@ for (const kind of ["element", "image"] as const) {
         clip("lower", 1, 0, 240, {
           kind,
           text: kind === "element" ? "Grace Hopper" : null,
-          src: kind === "image" ? "still.png" : null,
+          src:
+            kind === "image"
+              ? "still.png"
+              : kind === "composition"
+                ? "compositions/lower.html"
+                : null,
           mediaStart: null,
           link: "pair",
         }),
