@@ -42,6 +42,7 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import { trackMix } from "../../shared/timeline/tracks";
 import type { TrackMix } from "../../shared/timeline/tracks";
+import { readTitle, titleAttributes, titleStyle } from "./titles";
 import type {
   Clip,
   ClipKind,
@@ -49,6 +50,7 @@ import type {
   InsertClip,
   Timeline,
   TimelineSettings,
+  Title,
 } from "../../shared/timeline/schema";
 
 /** One element of the source, located by byte offsets so edits can leave everything else untouched. */
@@ -215,6 +217,12 @@ function clipKind(element: SourceElement): ClipKind {
   if (element.tag === "video") return "video";
   if (element.tag === "img") return "image";
   return isSubCompositionHost(element) ? "composition" : "element";
+}
+
+/** A title's settings, or null for an element that is not one or whose settings do not read. */
+function titleOf(element: SourceElement, fps: Fps): Title | null {
+  const read = readTitle(element.attrs, fps);
+  return read && "title" in read ? read.title : null;
 }
 
 const HTML_SPACE = /[\t\n\f\r ]+/g;
@@ -654,6 +662,7 @@ export function parseComposition(
           ? (elementText(element, textLayout.get(element)?.preserveLines)
               ?.text ?? null)
           : null,
+      title: kind === "element" ? titleOf(element, fps) : null,
       fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
       fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       automation: element.attrs["data-automation"]
@@ -977,6 +986,16 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
+  if (after.title && !Bun.deepEquals(before.title, after.title)) {
+    const written = new Map(
+      before.title ? titleAttributes(before.title, fps) : [],
+    );
+    changes.push(
+      ...titleAttributes(after.title, fps).filter(
+        ([name, value]) => (written.get(name) ?? null) !== value,
+      ),
+    );
+  }
   const hidden = !after.enabled || mix.hidden.has(after.track);
   const trackHidden = after.enabled && mix.hidden.has(after.track);
   if (has("data-hidden") !== hidden)
@@ -1011,15 +1030,7 @@ function textEdit(
   return {
     start: element.openEnd + /^[\t\n\f\r ]*/.exec(inner)![0].length,
     end: close[0] - /[\t\n\f\r ]*$/.exec(inner)![0].length,
-    text: text
-      .split("\n")
-      .map((line) =>
-        line
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;"),
-      )
-      .join("<br>"),
+    text: textMarkup(text),
   };
 }
 
@@ -1117,6 +1128,20 @@ function sourceRestrictions(
   parsed: ParsedComposition,
   clip: Clip,
 ): Clip["sourceRestrictions"] {
+  const restrictions = cutAndTextRestrictions(parsed, clip);
+  const read =
+    clip.kind === "element"
+      ? readTitle(parsed.elements.get(clip.id)!.attrs, parsed.timeline.fps)
+      : null;
+  return read && "reason" in read
+    ? { ...restrictions, title: read.reason }
+    : restrictions;
+}
+
+function cutAndTextRestrictions(
+  parsed: ParsedComposition,
+  clip: Clip,
+): Clip["sourceRestrictions"] {
   const element = parsed.elements.get(clip.id)!;
   const text = textRestriction(parsed, clip, element);
   try {
@@ -1193,6 +1218,49 @@ function copyMarkup(
   ]);
 }
 
+/** Markup characters in text content; a newline is written as a line break. */
+const textMarkup = (text: string) =>
+  text
+    .split("\n")
+    .map((line) =>
+      line
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;"),
+    )
+    .join("<br>");
+
+const attributeMarkup = (attributes: AttributeChange[]) =>
+  attributes
+    .map(([name, value]) =>
+      value === null ? ` ${name}` : ` ${name}="${escapeAttribute(value)}"`,
+    )
+    .join("");
+
+/** A new title: a plain text element whose attributes the title stylesheet reads. */
+function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
+  const hidden = mix.hidden.has(clip.track);
+  return `<div${attributeMarkup([
+    ["id", clip.id],
+    ["class", "clip"],
+    ["data-start", String(toSeconds(clip.start, fps))],
+    ["data-duration", String(toSeconds(clip.duration, fps))],
+    ["data-track-index", String(clip.track)],
+    ...(hidden
+      ? [
+          ["data-hidden", ""] as const,
+          ["data-cutroom-track-hidden", ""] as const,
+        ]
+      : []),
+    ...(clip.label !== null
+      ? [["data-timeline-label", clip.label] as const]
+      : []),
+    ...titleAttributes(clip.title!, fps).filter(
+      (attribute): attribute is [string, string] => attribute[1] !== null,
+    ),
+  ])}>${textMarkup(clip.text!)}</div>`;
+}
+
 function insertMarkup(
   clip: Clip,
   input: InsertClip,
@@ -1261,11 +1329,7 @@ function insertMarkup(
         ]
       : []),
   ];
-  const text = attributes
-    .map(([name, value]) =>
-      value === null ? ` ${name}` : ` ${name}="${escapeAttribute(value)}"`,
-    )
-    .join("");
+  const text = attributeMarkup(attributes);
   const tag =
     clip.kind === "image"
       ? "img"
@@ -1391,6 +1455,38 @@ function stackingEdits(
 }
 
 /**
+ * Keeps the title stylesheet current in a composition that has titles: written with the first
+ * title, replaced when it differs from this version or the fonts in use, and otherwise left byte
+ * for byte.
+ */
+function titleStyleEdits(parsed: ParsedComposition, after: Timeline): Edit[] {
+  const titles = after.clips.flatMap((clip) => clip.title ?? []);
+  if (!titles.length) return [];
+  const style = titleStyle(titles.flatMap((title) => title.font ?? []));
+  const styles = [...descendants(parsed.roots, true)].filter(
+    (element) => element.tag === "style",
+  );
+  const [block, ...extra] = styles.filter(
+    (element) => element.attrs["data-cutroom-titles"] !== undefined,
+  );
+  const removed = extra.map(({ start, end }) => ({ start, end, text: "" }));
+  if (block)
+    return parsed.html.slice(block.start, block.end) === style
+      ? removed
+      : [{ start: block.start, end: block.end, text: style }, ...removed];
+  // After the stacking block, which must stay first at its location.
+  const stacking = styles.find(
+    (element) => element.attrs["data-cutroom-track-stacking"] !== undefined,
+  );
+  if (stacking)
+    return [{ start: stacking.end, end: stacking.end, text: `\n${style}` }];
+  const { at, needsHead } = stylesheetLocation(parsed.roots, parsed.scope);
+  // A document without a head gets the block beside its root instead of a second implied head.
+  const start = needsHead ? parsed.root.start : at;
+  return [{ start, end: start, text: `${style}\n` }];
+}
+
+/**
  * Turns an applied timeline into minimal source edits: changed attributes, removed elements, and
  * new clips. Anonymous clips the edit touches or renumbers get their stand-in id written, so the
  * result reads back with the same ids.
@@ -1420,7 +1516,10 @@ export function patchComposition(
   );
   const stacking = stackingEdits(parsed, after, previous);
   const mix = trackMix(after.tracks);
-  const edits: Edit[] = stacking ?? [];
+  const edits: Edit[] = [
+    ...(stacking ?? []),
+    ...titleStyleEdits(parsed, after),
+  ];
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
@@ -1492,7 +1591,11 @@ export function patchComposition(
       const indent = lastClip ? indentOf(html, lastClip[1].start) : "";
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${indent}${insertMarkup(clip, origin.insert, fps, mix)}`,
+        `\n${indent}${
+          origin.insert.kind === "title"
+            ? titleMarkup(clip, fps, mix)
+            : insertMarkup(clip, origin.insert, fps, mix)
+        }`,
       ]);
       continue;
     }

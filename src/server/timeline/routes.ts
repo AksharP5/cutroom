@@ -72,6 +72,7 @@ import {
 import type { ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
+import { declaredFonts } from "./titles";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -154,10 +155,40 @@ export function createTimelineRoutes(
       project,
       composition,
       batch.commands.flatMap((command) =>
-        command.type === "insert" ? [command.clip.src] : [],
+        command.type === "insert" && command.clip.kind !== "title"
+          ? [command.clip.src]
+          : [],
       ),
     );
     const lengths = new Map([...current.lengths, ...inserted.lengths]);
+    // A font no rule declares would fall back to a system face that export may not share.
+    const fonts = new Set(
+      batch.commands.flatMap((command) => {
+        const font =
+          command.type === "setClip"
+            ? command.title?.font
+            : command.type === "insert" && command.clip.kind === "title"
+              ? command.clip.title.font
+              : undefined;
+        return font ? [font] : [];
+      }),
+    );
+    if (fonts.size) {
+      const declared = new Set([
+        ...declaredFonts(current.source.content),
+        ...(composition === "index.html"
+          ? []
+          : declaredFonts((await readSource(project, "index.html")).content)),
+      ]);
+      const missing = [...fonts].find((font) => !declared.has(font));
+      if (missing !== undefined)
+        throw new TimelineError(
+          "unsupported",
+          declared.size
+            ? `No @font-face rule in this project declares "${missing}". Declared fonts: ${[...declared].join(", ")}.`
+            : `No @font-face rule in this project declares "${missing}", or any other font. Leave the title's font unset.`,
+        );
+    }
     const skippedClips = new Map<
       string,
       NonNullable<TimelineView["skippedClips"]>[number]

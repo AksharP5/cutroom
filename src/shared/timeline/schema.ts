@@ -64,6 +64,75 @@ export const ClipKindSchema = z.enum([
   "element",
 ]);
 
+export const TITLE_POSITIONS = [
+  "lower-left",
+  "lower-center",
+  "lower-right",
+  "center",
+  "top",
+] as const;
+export const TITLE_MOTIONS = [
+  "none",
+  "fade",
+  "slide",
+  "scale",
+  "wipe",
+] as const;
+export const TITLE_WEIGHTS = [400, 500, 600, 700] as const;
+export const TITLE_ALIGNMENTS = ["left", "center", "right"] as const;
+
+/**
+ * Every title value is written into an HTML attribute that CSS reads with `attr()`, so each is a
+ * closed set, a number, or a strict pattern: none can carry markup or CSS.
+ */
+const titleColor = (digits: 6 | 8) =>
+  z
+    .string()
+    .regex(
+      new RegExp(`^#[0-9a-fA-F]{${digits}}$`),
+      digits === 6
+        ? "Use a colour as #rrggbb."
+        : "Use a colour with alpha as #rrggbbaa.",
+    )
+    .overwrite((value) => value.toLowerCase());
+const titleMotion = z.object({
+  preset: z.enum(TITLE_MOTIONS),
+  frames: frame.max(100_000).describe("Length in frames; ignored for none"),
+});
+
+export const TitleSchema = z.object({
+  position: z.enum(TITLE_POSITIONS),
+  font: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9](?:[A-Za-z0-9 _-]{0,98}[A-Za-z0-9])?$/,
+      "A font family uses letters, digits, spaces, hyphens and underscores.",
+    )
+    .nullable()
+    .describe(
+      "A font family the composition declares with @font-face; null inherits the composition's font",
+    ),
+  size: z
+    .number()
+    .int()
+    .min(8)
+    .max(2000)
+    .describe("Font size in composition pixels"),
+  weight: z.union(TITLE_WEIGHTS.map((weight) => z.literal(weight))),
+  color: titleColor(6),
+  align: z.enum(TITLE_ALIGNMENTS),
+  plate: titleColor(8)
+    .nullable()
+    .describe("Background plate colour with alpha; null for no plate"),
+  in: titleMotion.describe("Entrance, anchored to the clip's first frame"),
+  out: titleMotion.describe("Exit, ending on the clip's last frame"),
+});
+
+/** A title change: fields left out keep their values, and a motion can change one of its parts. */
+export const TitleEditSchema = TitleSchema.omit({ in: true, out: true })
+  .extend({ in: titleMotion.partial(), out: titleMotion.partial() })
+  .partial();
+
 export const ClipSchema = z.object({
   id: clipId,
   track: frame,
@@ -98,6 +167,11 @@ export const ClipSchema = z.object({
     .describe(
       "The words of a text element, with line breaks at <br> and preserved source newlines; null for media and elements without text. setClip.text replaces them unless sourceRestrictions.text says why it cannot.",
     ),
+  title: TitleSchema.nullable()
+    .default(null)
+    .describe(
+      "A Cutroom title's look and motion; null for every other clip. Change it with setClip.title and its words with setClip.text.",
+    ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
     .default(0)
@@ -127,6 +201,7 @@ export const ClipSchema = z.object({
       copy: z.string().optional(),
       remove: z.string().optional(),
       text: z.string().optional(),
+      title: z.string().optional(),
     })
     .optional(),
 });
@@ -196,6 +271,27 @@ export const InsertClipSchema = z.object({
   label: label.optional(),
   volume: volume.optional(),
   muted: z.boolean().default(false).describe("Video only: drop its sound"),
+});
+
+const titleText = z
+  .string()
+  .max(20_000)
+  .overwrite(canonicalText)
+  .refine((text) => text.length > 0, "Text cannot be empty.");
+
+export const InsertTitleSchema = z.object({
+  id: clipId
+    .optional()
+    .describe(
+      "Element id, never used before in this project; when omitted, title and a random suffix",
+    ),
+  kind: z.literal("title"),
+  text: titleText.describe("The title's words; a newline starts a new line"),
+  duration: frames.describe("Length on the timeline in frames"),
+  title: TitleEditSchema.default({}).describe(
+    "Look and motion. Omitted fields take the defaults: lower-left, the composition's font at 64 px and weight 600, white, left aligned, no plate, a 0.4 s fade in and a 0.3 s fade out.",
+  ),
+  label: label.optional(),
 });
 
 const clipIds = z.array(clipId).min(1).max(10_000);
@@ -312,7 +408,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         ),
       track: frame,
       at: frame,
-      clip: InsertClipSchema,
+      clip: z.discriminatedUnion("kind", [InsertClipSchema, InsertTitleSchema]),
       linkedAudio: z
         .object({
           id: clipId.optional(),
@@ -328,7 +424,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
         ),
       ids: pieceIds,
     })
-    .describe("Add a media clip."),
+    .describe(
+      'Add a media clip, or a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit.',
+    ),
   z
     .object({
       type: z.literal("paste"),
@@ -375,15 +473,14 @@ export const CommandSchema = z.discriminatedUnion("type", [
       opacity: opacity.nullable().optional(),
       x: position.optional(),
       y: position.optional(),
-      text: z
-        .string()
-        .max(20_000)
-        .overwrite(canonicalText)
-        .refine((text) => text.length > 0, "Text cannot be empty.")
+      text: titleText
         .optional()
         .describe(
           "Replace a text element's words. Newlines become <br>; other whitespace collapses as HTML renders it. Refused for media, elements without text, and nested markup, uncertain multiline whitespace, or certain script writes by id. Other scripts can replace the saved words. Verify with timeline_view frames.",
         ),
+      title: TitleEditSchema.optional().describe(
+        "Change a Cutroom title's look or motion; omitted fields keep their values. Refused for clips that are not titles.",
+      ),
       enabled: z
         .boolean()
         .optional()
@@ -549,6 +646,9 @@ export type Track = z.infer<typeof TrackSchema>;
 export type Marker = z.infer<typeof MarkerSchema>;
 export type Timeline = z.infer<typeof TimelineSchema>;
 export type InsertClip = z.infer<typeof InsertClipSchema>;
+export type InsertTitle = z.infer<typeof InsertTitleSchema>;
+export type Title = z.infer<typeof TitleSchema>;
+export type TitleEdit = z.infer<typeof TitleEditSchema>;
 export type Command = z.infer<typeof CommandSchema>;
 export type CommandInput = z.input<typeof CommandSchema>;
 export type CommandBatch = z.infer<typeof CommandBatchSchema>;

@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
+import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
+import { defaultTitle } from "../src/shared/timeline/title";
+
+const fps = { num: 30, den: 1 };
 
 /** The engine benchmark's linked talking-head cuts and titles, with drawable source media. */
 export async function timelineWorkload(
@@ -52,14 +56,23 @@ export async function timelineWorkload(
     return `<video id="talk-${index}" src="talk.mp4" muted data-link="lk-${index}" ${timing} data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>
 <audio id="voice-${index}" src="talk.mp4" data-link="lk-${index}" ${timing} data-track-index="1"></audio>`;
   });
+  // Cutroom titles, so the budgets include their stylesheet and exit animation. No entrance, so a
+  // title is drawn on its first frame, where the picture tests click it.
+  const title = defaultTitle(fps);
+  const titleSettings = titleAttributes(
+    { ...title, in: { ...title.in, preset: "none" } },
+    fps,
+  )
+    .map(([name, value]) => (value === null ? "" : ` ${name}="${value}"`))
+    .join("");
   const titles = Array.from(
     { length: 20 },
     (_, index) =>
-      `<div id="title-${index}" class="clip" data-start="${(index * pairs * 2.5) / 20}" data-duration="4" data-track-index="2" style="position:absolute;top:20px;left:20px;color:white">Chapter ${index + 1}</div>`,
+      `<div id="title-${index}" class="clip" data-start="${(index * pairs * 2.5) / 20}" data-duration="4" data-track-index="2"${titleSettings}>Chapter ${index + 1}</div>`,
   );
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#111}</style></head><body><main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="${pairs * 2.5}" data-fps="30">${[...pieces, ...titles].join("\n")}</main></body></html>`,
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}</style>${titleStyle([])}</head><body><main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="${pairs * 2.5}" data-fps="30">${[...pieces, ...titles].join("\n")}</main></body></html>`,
   );
   for (const kind of ["filmstrip", "peaks"] as const) {
     const deadline = performance.now() + 60_000;

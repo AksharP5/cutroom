@@ -3,6 +3,7 @@ import type { Project } from "../../shared/project";
 import {
   CommandBatchSchema,
   emptyTimelineSettings,
+  firstTextLine,
 } from "../../shared/timeline/schema";
 import type { Clip, Command } from "../../shared/timeline/schema";
 import { CUTROOM_SERVER, parseTool } from "../../shared/toolRow";
@@ -117,7 +118,12 @@ async function editedClips(input: unknown, names?: ToolNames) {
       ...labels.flatMap((label) => label ?? []),
       ...commands.flatMap((command) =>
         command.type === "insert"
-          ? [command.clip.label ?? fileName(command.clip.src)]
+          ? [
+              command.clip.label ??
+                (command.clip.kind === "title"
+                  ? firstTextLine(command.clip.text)
+                  : fileName(command.clip.src)),
+            ]
           : [],
       ),
     ]),

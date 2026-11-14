@@ -60,7 +60,59 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
 
 In the editor, drops, moves and overwrite pastes that remove a whole clip show one short notice naming the replaced clip, with Undo. Media or a paste placed over part of a clip names it as partly replaced in the same notice. A clip moved over part of another, and a trim, stay silent.
 
+### Titles
+
+A title is words on screen with a preset entrance and exit: a lower third, a name, a heading. Add one with a single `insert` command whose `clip.kind` is `"title"`:
+
+```json
+{
+  "type": "insert",
+  "track": 2,
+  "at": 180,
+  "clip": {
+    "kind": "title",
+    "text": "Ada Lovelace\nFounder",
+    "duration": 150,
+    "title": { "position": "lower-left", "plate": "#000000b3" }
+  }
+}
+```
+
+`mode`, `ids` and `clip.id` work as they do for media. A title goes on a video track. `clip.title` takes any of these, and fields left out take the default:
+
+| Field      | Values                                                                        | Default      |
+| ---------- | ----------------------------------------------------------------------------- | ------------ |
+| `position` | `lower-left`, `lower-center`, `lower-right`, `center`, `top`                  | `lower-left` |
+| `font`     | a family the project declares with `@font-face`, or `null`                    | `null`       |
+| `size`     | whole composition pixels, 8 to 2000                                           | `64`         |
+| `weight`   | `400`, `500`, `600`, `700`                                                    | `600`        |
+| `color`    | `#rrggbb`                                                                     | `#ffffff`    |
+| `align`    | `left`, `center`, `right`                                                     | `left`       |
+| `plate`    | `#rrggbbaa` background behind the words, or `null`                            | `null`       |
+| `in`       | `{ "preset": "none" \| "fade" \| "slide" \| "scale" \| "wipe", "frames": n }` | fade, 0.4 s  |
+| `out`      | the same                                                                      | fade, 0.3 s  |
+
+The default size suits 1920x1080; pass a size for other compositions. `font: null` uses the composition's own font. A font no `@font-face` rule in the composition or `index.html` declares is refused with the declared families, because preview and export can resolve a system font to different faces. New projects declare Instrument Sans.
+
+`timeline_read` returns `title` on each title clip and `null` on every other clip. Change the look with `setClip.title`, which keeps the fields you leave out, and the words with `setClip.text`:
+
+```json
+{
+  "type": "setClip",
+  "clipId": "title-k7q2xa",
+  "title": { "size": 72, "in": { "preset": "slide" } }
+}
+```
+
+`setClip.title` on a clip that is not a title is refused with `unsupported`. `x`, `y` and `opacity` work as on any visual clip; `x` and `y` offset the title from its `position`.
+
+The entrance starts on the clip's first frame and the exit ends on its last. Tail trims, head trims, moves, ripples and pastes keep both there with no further command. When they are longer than the clip together, both shorten in proportion. A ripple through the middle of a title shortens it in place. A razor leaves the entrance on the first piece and the exit on the second, with `preset: "none"` at the cut, so the words run straight through it; set either again with `setClip.title`.
+
+In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. If you edit an attribute by hand to a value Cutroom does not write, the clip reads as plain text with `title: null`, and `sourceRestrictions.title` names the attribute. Titles work in scene files as well as `index.html`.
+
 ### Animated titles
+
+For motion the presets do not cover, write the animation yourself as below.
 
 Cutroom never rewrites root animation scripts. Moves can leave their absolute positions behind; new razor pieces and pasted copies also have new IDs that root tweens may not target. Give each animated title its own sub-composition file instead. The HyperFrames runtime places a nested composition's timeline at its host clip's start, so every edit carries the animation with it.
 
