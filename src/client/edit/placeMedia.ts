@@ -6,6 +6,7 @@ import type { MediaDrag } from "../timeline/mediaDrag";
 import { useViewSettings } from "../timeline/viewSettings";
 import { editTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
+import { showToast } from "../workspace";
 
 /**
  * Places media at the playhead on the destination tracks the headers show: picture on the video
@@ -28,21 +29,40 @@ export function placeAtPlayhead(
     projectId,
     "Add media",
     (timeline) => {
-      const { video, audio } = destinationTracks(
+      const { video, audio, videoEnabled, audioEnabled } = destinationTracks(
         timeline.tracks,
         useViewSettings.getState().destinations,
       );
       const placed = placedMedia(media, timeline.fps);
       end = at + placed.frames;
-      if (isAudioKind(media.kind))
-        return dropPreview(timeline, placed, audio, at, at, 0, [], mode)
-          .commands;
-      const sound = placed.kind === "video" && placed.hasAudio;
+      const picture = !isAudioKind(media.kind) && videoEnabled;
+      const sound =
+        audioEnabled &&
+        (isAudioKind(media.kind) ||
+          (placed.kind === "video" && placed.hasAudio === true));
+      if (!picture && !sound) {
+        showToast("Enable a destination to place this source", null, {
+          tone: "info",
+          transient: true,
+        });
+        return [];
+      }
+      if (!picture)
+        return dropPreview(
+          timeline,
+          { ...placed, kind: "audio" },
+          audio,
+          at,
+          at,
+          0,
+          [],
+          mode,
+        ).commands;
       const missing =
         sound && !timeline.tracks.some((track) => track.index === audio.index);
       return dropPreview(
         timeline,
-        placed,
+        { ...placed, hasAudio: sound },
         video,
         at,
         at,

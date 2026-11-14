@@ -1,4 +1,5 @@
 import type { Clip, Track } from "./schema";
+import type { TimelineViewSettings } from "./view";
 
 export const newTrack = (index: number, kind: Track["kind"]): Track => ({
   index,
@@ -33,14 +34,19 @@ export function shownTracks(tracks: readonly Track[]) {
  */
 export function destinationTracks(
   tracks: readonly Track[],
-  chosen: Partial<Record<Track["kind"], number>>,
+  chosen: TimelineViewSettings["destinations"],
 ) {
   const shown = shownTracks(tracks);
   const of = (kind: Track["kind"]) =>
     shown.find(
       (track) => track.kind === kind && track.index === chosen[kind],
     ) ?? shown.find((track) => track.kind === kind)!;
-  return { video: of("video"), audio: of("audio") };
+  return {
+    video: of("video"),
+    audio: of("audio"),
+    videoEnabled: chosen.videoEnabled !== false,
+    audioEnabled: chosen.audioEnabled !== false,
+  };
 }
 
 /** Sound can be muted independently of picture, including embedded audio in authored video. */

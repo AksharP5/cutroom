@@ -135,6 +135,235 @@ const interview = [
   ["audio", 1, 0, 180],
 ];
 
+test("disabled destinations place only picture or only sound through F9, F10 and the media menu, persist, and follow MCP", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const { project, api, before, destinations, place, seek } = await open(
+    page,
+    request,
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=orange:s=320x240:r=30:d=3",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=880:duration=3",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    join(project.path, "broll.mp4"),
+  ]);
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const code = (id: string) =>
+    page.getByRole("button", { name: `${id} destination`, exact: true });
+  const source = page.locator('.media-row[data-path="broll.mp4"]');
+  await expect(source).toHaveAttribute("draggable", "true");
+  await code("V2").click();
+  await code("A1").click();
+  await source.dblclick();
+  await expect(
+    page.getByRole("group", { name: "Source", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("F10");
+  await expect
+    .poll(async () =>
+      (await read()).timeline.clips.some((c) => c.src === "broll.mp4"),
+    )
+    .toBe(true);
+  await page.screenshot({ path: info.outputPath("picture-only.png") });
+  const picture = await read();
+  await writeFile(
+    info.outputPath("picture-only.json"),
+    JSON.stringify(picture.timeline.clips, null, 2),
+  );
+  expect(picture.timeline.clips.filter((c) => c.kind === "audio")).toEqual(
+    before.clips.filter((c) => c.kind === "audio"),
+  );
+  expect(
+    picture.timeline.clips.filter((c) => c.src === "broll.mp4"),
+  ).toMatchObject([{ kind: "video", track: 2, hasAudio: false }]);
+  await expect(code("A1")).toHaveAttribute("aria-pressed", "false");
+  await seek("0000");
+  await page.keyboard.press("F9");
+  await expect
+    .poll(async () =>
+      (await read()).timeline.clips
+        .filter((c) => c.kind === "audio")
+        .map((c) => [c.src, c.start, c.duration]),
+    )
+    .toEqual([["interview.mp4", 90, 180]]);
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(picture.timeline);
+  await expect
+    .poll(async () => (await request.get(`${api}/timeline-view`)).json())
+    .toMatchObject({
+      destinations: { video: 2, audio: 1, audioEnabled: false },
+    });
+  await page.reload();
+  await expect.poll(destinations).toEqual(["V2"]);
+  await page.keyboard.press("Control+Alt+1");
+  await page.keyboard.press("Alt+2");
+  await expect.poll(destinations).toEqual(["A1"]);
+  await page.locator('.media-row[data-path="broll.mp4"]').dblclick();
+  await page.keyboard.press("Alt+q");
+  await seek("0000");
+  await page.keyboard.press("F9");
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.filter(
+          (c) => c.kind === "audio" && c.src === "broll.mp4",
+        ).length,
+    )
+    .toBe(1);
+  expect(
+    (await read()).timeline.clips.filter((c) => c.kind === "video"),
+  ).toHaveLength(2);
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(picture.timeline);
+  await seek("0000");
+  await page.keyboard.press("F10");
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.filter(
+          (c) => c.kind === "audio" && c.src === "broll.mp4",
+        ).length,
+    )
+    .toBe(1);
+  expect(
+    (await read()).timeline.clips.filter((c) => c.kind === "video"),
+  ).toEqual(picture.timeline.clips.filter((c) => c.kind === "video"));
+  await page.screenshot({ path: info.outputPath("sound-only.png") });
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(picture.timeline);
+  await page.keyboard.press("Alt+0");
+  await expect.poll(destinations).toEqual([]);
+  const parked = await page
+    .getByRole("button", { name: /^Current time/ })
+    .textContent();
+  await page.keyboard.press("F10");
+  await expect(page.getByRole("status")).toContainText("Enable a destination");
+  expect((await read()).timeline).toEqual(picture.timeline);
+  await expect
+    .poll(() =>
+      page.getByRole("button", { name: /^Current time/ }).textContent(),
+    )
+    .toBe(parked);
+  await page.keyboard.press("Control+Alt+9");
+  await expect.poll(destinations).toEqual(["A1"]);
+  await seek("0000");
+  await place("broll.mp4", "Overwrite at playhead");
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.filter(
+          (c) => c.kind === "audio" && c.src === "broll.mp4",
+        ).length,
+    )
+    .toBe(1);
+  expect(
+    (await read()).timeline.clips.filter((c) => c.kind === "video"),
+  ).toEqual(picture.timeline.clips.filter((c) => c.kind === "video"));
+  await page.keyboard.press("Control+z");
+  await expect
+    .poll(async () => (await read()).timeline)
+    .toEqual(picture.timeline);
+  const client = new Client({ name: "destination-switches", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+      requestInit: { headers: { origin: baseURL! } },
+    }),
+  );
+  try {
+    const revision = (await read()).revision;
+    const result = await client.callTool({
+      name: "timeline_destinations",
+      arguments: {
+        projectId: project.id,
+        videoEnabled: true,
+        audioEnabled: false,
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(
+      z
+        .object({
+          structuredContent: z.object({
+            result: z.object({
+              video: z.number(),
+              audio: z.number(),
+              videoEnabled: z.boolean(),
+              audioEnabled: z.boolean(),
+            }),
+          }),
+        })
+        .parse(result).structuredContent.result,
+    ).toEqual({ video: 2, audio: 1, videoEnabled: true, audioEnabled: false });
+    await expect.poll(destinations).toEqual(["V2"]);
+    expect((await read()).revision).toBe(revision);
+    await page.reload();
+    await expect.poll(destinations).toEqual(["V2"]);
+    await page.keyboard.press("Alt+9");
+    await expect.poll(destinations).toEqual([]);
+    await page.keyboard.press("Alt+9");
+    await expect.poll(destinations).toEqual(["V2"]);
+    await page.keyboard.press("Alt+0");
+    await expect.poll(destinations).toEqual([]);
+    await page.keyboard.press("Alt+0");
+    await expect.poll(destinations).toEqual(["A1", "V2"]);
+  } finally {
+    await client.close();
+  }
+});
+
+test("a missing destination names the absent track instead of swallowing its key", async ({
+  page,
+  request,
+}, info) => {
+  const { api, destinations } = await open(page, request);
+  const view = TimelineViewSchema.parse(
+    await (await request.get(`${api}/timeline`)).json(),
+  );
+  expect(
+    (
+      await request.post(`${api}/commands`, {
+        data: {
+          expectedRevision: view.revision,
+          commands: [{ type: "removeTrack", index: 3 }],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "A2 destination", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Control+Alt+2");
+  await page.screenshot({ path: info.outputPath("missing-a2.png") });
+  await expect(page.getByRole("status")).toContainText("No A2 yet");
+  await expect.poll(destinations).toEqual(["A1", "V1"]);
+});
+
 test("placed media goes to the destination tracks chosen in the headers by click and key", async ({
   page,
   request,

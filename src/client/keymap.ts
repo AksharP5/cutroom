@@ -166,6 +166,21 @@ export const keymap = {
     keys: digits.map((digit) => `Ctrl+Alt+${digit}`),
     series: true,
   },
+  editTrackDestinationSelectionTargetVideoAll: {
+    area: "Tracks",
+    label: "Toggle video destination",
+    keys: ["Alt+9"],
+  },
+  editTrackDestinationSelectionTargetAudioAll: {
+    area: "Tracks",
+    label: "Toggle audio destination",
+    keys: ["Ctrl+Alt+9"],
+  },
+  timelineTrackDestinationSelectionTargetAudioVideoAll: {
+    area: "Tracks",
+    label: "Toggle video and audio destinations",
+    keys: ["Alt+0"],
+  },
   editVideoMoveTrackDestinationUp: {
     area: "Tracks",
     label: "Video destination up",

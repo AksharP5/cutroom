@@ -101,7 +101,7 @@ export interface TimelineProps {
   viewSettings: TimelineViewSettings;
   onViewSettings(settings: TimelineViewSettings): void;
   /** The index of the track of each kind that media placed without a drag goes to. */
-  destinations: Record<Track["kind"], number>;
+  destinations: Record<Track["kind"], number | null>;
   /** A track's code was clicked: it becomes the destination for its kind. */
   onDestination(track: Track): void;
   /** Where the clips' media is read from: filmstrips and waveforms come from this project's cache. */
@@ -459,7 +459,7 @@ const TrackHeads = memo(function TrackHeads({
             className="tl-head-id"
             aria-label={`${id} destination`}
             aria-pressed={destination}
-            title={`${name}: ${destination ? "" : "make this the "}destination for Insert and Overwrite`}
+            title={`${name}: ${destination ? "turn off" : "choose"} ${id} for Insert and Overwrite`}
             onClick={() => onDestination(track)}
           >
             {id}

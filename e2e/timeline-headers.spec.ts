@@ -116,11 +116,11 @@ for (const [width, height] of [
         // The code's tooltip keeps the name a compact row hides, and says what a click does.
         await expect(picture.locator(".tl-head-id")).toHaveAttribute(
           "title",
-          "Interview picture: destination for Insert and Overwrite",
+          "Interview picture: turn off V1 for Insert and Overwrite",
         );
         await expect(audio.locator(".tl-head-id")).toHaveAttribute(
           "title",
-          "Dialogue and voiceover: destination for Insert and Overwrite",
+          "Dialogue and voiceover: turn off A1 for Insert and Overwrite",
         );
         await expect(page.locator(".tl-head-name:visible")).toHaveCount(0);
         await expect(picture.locator("button:visible")).toHaveCount(4);

@@ -6,6 +6,7 @@ import type {
 import { z } from "zod";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { frameTime } from "../../shared/timeline/apply";
+import { TimelineDestinationsSchema } from "../../shared/timeline/view";
 import {
   CommandBatchSchema,
   CopyClipsSchema,
@@ -86,21 +87,10 @@ export function registerTimelineTools(
     "timeline_destinations",
     {
       description:
-        "Read or set the destination tracks: where the owner's Insert (F9), Overwrite (F10) and Media menu placements put picture and sound, shown on the track headers. Returns the video and audio track indexes. Pass video or audio to change one; the editor follows at once. Destinations are view preferences, outside undo history. To place media there yourself, pass these indexes to a timeline_edit insert as track and linkedAudio.track.",
+        "Read or set destination tracks and enable flags for Insert (F9), Overwrite (F10) and Media menu placements. video/audio are track indexes; videoEnabled/audioEnabled default true. False skips that incoming kind and remembers its track. The editor follows at once; these are view preferences outside undo history. For timeline_edit placement, respect the flags: video with audio off needs clip.muted=true and no linkedAudio; video off with audio on needs an audio clip using the same source and range. Skip placement when neither source kind is enabled.",
       inputSchema: {
         ...input,
-        video: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe("Index of the video track to make the destination"),
-        audio: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .describe("Index of the audio track to make the destination"),
+        ...TimelineDestinationsSchema.shape,
       },
       annotations: {
         readOnlyHint: false,
@@ -108,11 +98,11 @@ export function registerTimelineTools(
         openWorldHint: false,
       },
     },
-    ({ projectId, composition, video, audio }) => {
+    ({ projectId, composition, ...chosen }) => {
       const path = `/projects/${id(projectId)}/timeline-destinations?composition=${id(composition)}`;
-      return video === undefined && audio === undefined
+      return !Object.keys(chosen).length
         ? request(path)
-        : request(path, "PUT", { video, audio });
+        : request(path, "PUT", chosen);
     },
   );
   server.registerTool(
