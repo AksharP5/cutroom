@@ -47,6 +47,8 @@ export function clipMenuItems({
     "separator",
     { action: "editSelectClipsSelectTrackAfter" },
     "separator",
+    { action: "cutroomAddTitle" },
+    "separator",
     {
       label: "Reveal media",
       run: () => onReveal?.(),

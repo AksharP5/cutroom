@@ -96,6 +96,7 @@ test("a menu row for a keymap action shows the keymap's label and its first key"
       label: keymap[action].label,
       keys: keymap[action].keys[0],
     })),
+    { label: "Add title", keys: "Alt+Shift+T" },
     { label: "Reveal media", keys: undefined },
     { label: "Inspector", keys: undefined },
   ]);

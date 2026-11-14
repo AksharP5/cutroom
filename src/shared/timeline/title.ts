@@ -35,3 +35,14 @@ export const cutTitle = (title: Title): { left: Title; right: Title } => ({
   left: { ...title, out: { ...title.out, preset: "none" } },
   right: { ...title, in: { ...title.in, preset: "none" } },
 });
+
+/** Whether two titles hold the same settings, whichever objects carry them. */
+export const sameTitle = (a: Title | null, b: Title | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    (Object.keys(a) as (keyof Title)[]).every((key) =>
+      key === "in" || key === "out"
+        ? a[key].preset === b[key].preset && a[key].frames === b[key].frames
+        : a[key] === b[key],
+    ));

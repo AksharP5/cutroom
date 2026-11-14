@@ -131,7 +131,7 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 
 ### Titles
 
-A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles); controls in the inspector and a key to add one are not built yet. The words are already editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
+A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles); controls in the inspector are not built yet. Alt+Shift+T, or Add title in a clip's, lane's or track header's menu, adds a five-second lower-left title at the playhead on a free video track above the video destination and opens the inspector's Text field on its words; [Keys](keyboard.md) has the track rule. The words are already editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
 
 The entrance belongs to the clip's first frame and the exit to its last:
 

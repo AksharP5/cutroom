@@ -322,6 +322,8 @@ export const keymap = {
     keys: ["Shift+X", "Delete"],
   },
   editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
+  // Shift+T is "add audio-only transition" in the owner's Resolve preset, so a title takes Alt too.
+  cutroomAddTitle: { area: "Edit", label: "Add title", keys: ["Alt+Shift+T"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
   resolveCustomizedActions: {

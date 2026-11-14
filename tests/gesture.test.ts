@@ -5,6 +5,7 @@ import {
   normalizeTimeline,
 } from "../src/shared/timeline/apply";
 import { clipFades } from "../src/shared/timeline/mix";
+import { defaultTitle } from "../src/shared/timeline/title";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
 import {
@@ -891,4 +892,23 @@ test("a range marked in the source viewer lands with its start and every one of 
   expect(
     drop.shown.clips.find((clip) => clip.src === "assets/talk.mp4"),
   ).toMatchObject({ start: 420, duration: 91, mediaStart: 2 });
+});
+
+test("a queued edit to a title still applies after the server answers with a new title object", () => {
+  const title = defaultTitle({ num: 30, den: 1 });
+  const before = sequence();
+  const titled = (change: Partial<typeof title> = {}): Timeline => ({
+    ...before,
+    clips: before.clips.map((clip) =>
+      clip.id === "c" ? { ...clip, title: { ...title, ...change } } : clip,
+    ),
+  });
+  const commands = [
+    CommandSchema.parse({ type: "setClip", clipId: "c", title: { size: 96 } }),
+  ];
+  const shown = titled();
+  const anchors = editAnchors(shown, applyAll(shown, commands), commands);
+  expect(anchors.clips.map(({ id }) => id)).toEqual(["c"]);
+  expect(anchorsChanged(anchors, titled())).toBe(false);
+  expect(anchorsChanged(anchors, titled({ color: "#ff0000" }))).toBe(true);
 });
