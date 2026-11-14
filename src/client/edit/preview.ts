@@ -13,6 +13,7 @@ import {
   PreviewTimingSchema,
   PreviewUnloadedSchema,
   RuntimeStateSchema,
+  TrackGainPreviewSchema,
 } from "../../shared/preview";
 import type {
   CompositionDiagnostic,
@@ -370,24 +371,30 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     }
     pending.clear();
   };
+  /** Applies a snapshot that differs from this document only in Cutroom's track gains. */
+  const mix = async (snapshot: TrackGainPreview, signal = closing.signal) => {
+    if (
+      !state.mixSignature ||
+      snapshot.signature !== state.mixSignature ||
+      snapshot.compositions.some((path) => path !== "index.html")
+    )
+      return false;
+    return (
+      (
+        await request(
+          "track-gains",
+          {
+            ...snapshot,
+            positionDraftClipId: positionDraft?.clipId ?? null,
+          },
+          signal,
+        )
+      ).mixApplied === true
+    );
+  };
   return {
     player,
-    async mix(snapshot: TrackGainPreview, signal = closing.signal) {
-      if (!state.mixSignature || snapshot.signature !== state.mixSignature)
-        return false;
-      return (
-        (
-          await request(
-            "track-gains",
-            {
-              ...snapshot,
-              positionDraftClipId: positionDraft?.clipId ?? null,
-            },
-            signal,
-          )
-        ).mixApplied === true
-      );
-    },
+    mix,
     signal: closing.signal,
     async activate() {
       positionTargets.add(position);
@@ -469,13 +476,18 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         .object({
           version: z.string(),
           timing: PreviewTimingSchema.nullable(),
-          mixSignature: z.string(),
+          mix: TrackGainPreviewSchema,
           live: z.boolean(),
         })
         .parse(await response.json());
       signal.throwIfAborted();
       if (!latest()) return false;
       if (!snapshot.live) timingAllowed = false;
+      // A fader change needs no seek or repaint.
+      if (snapshot.mix.signature === state.mixSignature) {
+        if (await mix(snapshot.mix, signal)) return true;
+        throw new Error("The preview did not accept the track gains.");
+      }
       // Availability of the new snapshot does not change approval of this loaded document.
       if (!snapshot.live || !snapshot.timing)
         throw new Error("This preview requires a reload.");
@@ -483,7 +495,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         "timing",
         {
           timing: snapshot.timing,
-          mixSignature: snapshot.mixSignature,
+          mixSignature: snapshot.mix.signature,
+          gains: snapshot.mix.gains,
           expectedRevision: timingRevision,
           time,
         },

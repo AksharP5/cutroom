@@ -641,7 +641,7 @@ export function createHyperframesApi(
         return c.json({
           version: sourceAfter.version,
           timing: null,
-          mixSignature: mix.signature,
+          mix,
           live: true,
         });
       if (
@@ -656,7 +656,7 @@ export function createHyperframesApi(
       return c.json({
         version: sourceAfter.version,
         timing: document.timing,
-        mixSignature: mix.signature,
+        mix,
         live:
           timingDocuments.get(documentId ?? "")?.projectId === projectId &&
           timingDocuments.get(documentId ?? "")?.allowed === true,

@@ -250,10 +250,7 @@ export function Viewer({
                 await response.json(),
               );
               if (signal.aborted || !isLatest()) return;
-              if (
-                snapshot.compositions.every((path) => path === "index.html") &&
-                (await preview.mix(snapshot, signal))
-              ) {
+              if (await preview.mix(snapshot, signal)) {
                 if (signal.aborted || !isLatest()) return;
                 setMixedRevision(change.revision);
                 transition({ type: "mixed", revision: change.revision });

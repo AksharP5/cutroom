@@ -72,6 +72,26 @@ test("generated HF ids do not force reloads, but ids used by scripts or CSS do",
   );
 });
 
+test("a Cutroom track fader travels with the timing update, but an authored group's fader reloads", () => {
+  const grouped = source.replace(
+    "</main>",
+    '<hf-audio-group id="cutroom-a1" data-cutroom-track="1" data-volume="1"></hf-audio-group><hf-audio-group id="bus" data-volume="1"></hf-audio-group></main>',
+  );
+  expect(
+    snapshot(
+      grouped.replace(
+        'data-track="1" data-volume="1"',
+        'data-track="1" data-volume="0.5"',
+      ),
+    ).structure,
+  ).toBe(snapshot(grouped).structure);
+  expect(
+    snapshot(
+      grouped.replace('id="bus" data-volume="1"', 'id="bus" data-volume="0.5"'),
+    ).structure,
+  ).not.toBe(snapshot(grouped).structure);
+});
+
 test("the signature of other project files belongs to the document revision", () => {
   expect(snapshot(source, "before").structure).not.toBe(
     snapshot(source, "after").structure,

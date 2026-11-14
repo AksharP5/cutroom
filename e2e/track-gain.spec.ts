@@ -3,7 +3,7 @@ import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { CommandInput } from "../src/shared/timeline/schema";
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -962,11 +962,13 @@ test("slow and blocked gain checks retain live audio and recover without a reloa
   }
 });
 
-test("script-free timing edits and track gain keep the preview's sound in sync", async ({
-  page,
-  request,
-}) => {
-  const { project, api, read } = await mixProject(request, "Timing and gain");
+/** The mix project, opened on a document approved for script-free live timing. */
+async function liveTimingProject(
+  page: Page,
+  request: APIRequestContext,
+  name: string,
+) {
+  const { project, api, read } = await mixProject(request, name);
   const edit = async (commands: CommandInput[]) => {
     const response = await request.post(`${api}/commands`, {
       data: { expectedRevision: (await read()).revision, commands },
@@ -989,9 +991,63 @@ test("script-free timing edits and track gain keep the preview's sound in sync",
     }
   }
   await expect(stage).toHaveAttribute("data-preview-timing-ready", "true");
-  const origin = await live
-    .locator("main")
-    .evaluate(() => performance.timeOrigin);
+  const document = () =>
+    live.locator("main").evaluate(() => performance.timeOrigin);
+  return { stage, live, edit, document };
+}
+
+test("paused timing and gain edits update one document, including both in one edit", async ({
+  page,
+  request,
+}) => {
+  const { stage, live, edit, document } = await liveTimingProject(
+    page,
+    request,
+    "Paused timing and gain",
+  );
+  const origin = await document();
+  const bus = live.locator('hf-audio-group[data-cutroom-track="2"]');
+  const changed = async (commands: CommandInput[]) => {
+    const token = await stage.getAttribute("data-preview-ready");
+    await edit(commands);
+    await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    expect(await document()).toBe(origin);
+  };
+  await changed([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.25 }]);
+  await expect(live.locator("#bed-1")).toHaveAttribute(
+    "data-media-start",
+    "0.25",
+  );
+  await changed([{ type: "setTrack", index: 2, volume: 0.5 }]);
+  await expect(bus).toHaveAttribute("data-volume", "0.5");
+  // A trim after a fader change still updates the same document.
+  await changed([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.5 }]);
+  await expect(live.locator("#bed-1")).toHaveAttribute(
+    "data-media-start",
+    "0.5",
+  );
+  await changed([
+    { type: "setTiming", clipId: "bed-1", mediaStart: 0.75 },
+    { type: "setTrack", index: 2, volume: 0.25 },
+  ]);
+  await expect(live.locator("#bed-1")).toHaveAttribute(
+    "data-media-start",
+    "0.75",
+  );
+  await expect(bus).toHaveAttribute("data-volume", "0.25");
+});
+
+test("script-free timing edits and track gain keep the preview's sound in sync", async ({
+  page,
+  request,
+}) => {
+  const { stage, live, edit, document } = await liveTimingProject(
+    page,
+    request,
+    "Timing and gain",
+  );
+  const origin = await document();
   let token = await stage.getAttribute("data-preview-ready");
   await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.25 }]);
   await expect(live.locator("#bed-1")).toHaveAttribute(
@@ -1000,9 +1056,7 @@ test("script-free timing edits and track gain keep the preview's sound in sync",
   );
   await expect(stage).toHaveAttribute("data-preview-ready");
   await expect(stage).not.toHaveAttribute("data-preview-ready", token!);
-  expect(
-    await live.locator("main").evaluate(() => performance.timeOrigin),
-  ).toBe(origin);
+  expect(await document()).toBe(origin);
   token = await stage.getAttribute("data-preview-ready");
   await edit([{ type: "setTrack", index: 2, volume: 0.5 }]);
   const bus = live.locator('hf-audio-group[data-cutroom-track="2"]');
@@ -1023,9 +1077,7 @@ test("script-free timing edits and track gain keep the preview's sound in sync",
   await expect.poll(() => matches(0.5)).toBe(true);
   await edit([{ type: "setTrack", index: 2, volume: 0.25 }]);
   await expect.poll(() => matches(0.25)).toBe(true);
-  expect(
-    await live.locator("main").evaluate(() => performance.timeOrigin),
-  ).toBe(origin);
+  expect(await document()).toBe(origin);
   await page.keyboard.press("k");
   token = await stage.getAttribute("data-preview-ready");
   await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.5 }]);
