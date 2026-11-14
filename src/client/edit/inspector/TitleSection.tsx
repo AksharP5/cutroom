@@ -286,6 +286,33 @@ export function TitleSection({
               className="inspector-segments"
               role="radiogroup"
               aria-label="Align"
+              // A radio group moves its choice with the arrows, as native radios do, so the
+              // timeline's arrow keys never see them.
+              onKeyDown={(event) => {
+                const step = {
+                  ArrowLeft: -1,
+                  ArrowUp: -1,
+                  ArrowRight: 1,
+                  ArrowDown: 1,
+                }[event.key];
+                const last = TITLE_ALIGNMENTS.length - 1;
+                const current = TITLE_ALIGNMENTS.indexOf(title.align);
+                const next =
+                  event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? last
+                      : step === undefined
+                        ? null
+                        : (current + step + last + 1) % (last + 1);
+                if (next === null || disabled) return;
+                event.preventDefault();
+                const align = TITLE_ALIGNMENTS[next]!;
+                if (align !== title.align) edit({ align });
+                event.currentTarget
+                  .querySelectorAll<HTMLButtonElement>("[role=radio]")
+                  [next]?.focus();
+              }}
             >
               {TITLE_ALIGNMENTS.map((align) => {
                 const Icon = ALIGN_ICONS[align];
@@ -295,6 +322,7 @@ export function TitleSection({
                     type="button"
                     role="radio"
                     aria-checked={title.align === align}
+                    tabIndex={title.align === align ? 0 : -1}
                     aria-label={ALIGN_LABELS[align]}
                     title={ALIGN_LABELS[align]}
                     disabled={disabled}

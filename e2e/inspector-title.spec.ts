@@ -124,6 +124,16 @@ test("each Title control changes the picture and is one undo step", async ({
     inspector.getByRole("radio", { name: "Align right" }).click(),
   );
   await expect(shown).toHaveCSS("text-align", "right");
+  // The arrows move the choice like native radios and never reach the timeline's playhead.
+  const now = await page.locator(".edit-now").textContent();
+  await change(() =>
+    inspector.getByRole("radio", { name: "Align right" }).press("ArrowLeft"),
+  );
+  await expect(shown).toHaveCSS("text-align", "center");
+  await expect(
+    inspector.getByRole("radio", { name: "Align centre" }),
+  ).toBeFocused();
+  await expect(page.locator(".edit-now")).toHaveText(now!);
 
   await change(() =>
     inspector.getByRole("checkbox", { name: "Plate" }).check(),
