@@ -97,9 +97,13 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
     const before = await read();
     await page.goto(`/#project/${project.id}`);
     await expect(page.locator('[data-clip="shot"]')).toBeVisible();
+    const confirmed = page.locator(".edit-stage[data-preview-ready]");
+    const uncut = await confirmed.getAttribute("data-preview-ready");
     await page.locator('[data-clip="shot"]').click();
     await page.keyboard.press("Delete");
     await expect(page.locator('[data-clip="shot"]')).toHaveCount(0);
+    // Read the cut document, not the retained picture of the one before it.
+    await expect(confirmed).not.toHaveAttribute("data-preview-ready", uncut!);
     const cut = await read();
     await expect(page.locator(".toast")).toContainText(
       "Later title's animation stayed behind.",
@@ -117,16 +121,35 @@ ${recipe[0]!.replace('data-start="6"', 'data-start="1"').replace('data-track-ind
       await page.keyboard.press("Enter");
     };
     const preview = page.frameLocator("iframe[data-live]");
-    const states = [];
+    // A seek is drawn a few frames after it is asked for. Read the title only from the frame
+    // the preview confirms it painted, so an early read cannot report the frame before it and
+    // a late one cannot hide a title that vanished.
+    const paintedOpacity = (frame: number) =>
+      preview
+        .locator("#lower-text")
+        .first()
+        .evaluate(async (text, time) => {
+          const runtime = window as unknown as {
+            __player: { getTime(): number };
+            __hfWaitForSeekCompletion(): Promise<void>;
+          };
+          const shown = () =>
+            Math.abs(runtime.__player.getTime() - time) < 0.000001;
+          if (!shown()) return null;
+          await runtime.__hfWaitForSeekCompletion();
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          return shown() ? Number(getComputedStyle(text).opacity) : null;
+        }, frame / 30);
+    const states: (number | null)[] = [];
     for (const frame of [54, 59, 61]) {
       await seek(frame);
-      await expect(preview.locator("#lower-text").first()).toBeAttached();
-      states.push(
-        await preview
-          .locator("#lower-text")
-          .first()
-          .evaluate((text) => Number(getComputedStyle(text).opacity)),
-      );
+      let opacity: number | null = null;
+      await expect
+        .poll(async () => (opacity = await paintedOpacity(frame)))
+        .not.toBeNull();
+      states.push(opacity);
       await page.screenshot({ path: info.outputPath(`editor-${frame}.png`) });
     }
     const started = await request.post(`/api/projects/${project.id}/export`, {
