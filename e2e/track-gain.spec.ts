@@ -746,3 +746,66 @@ test("@performance a gain edit changes one group attribute and reaches the previ
   );
   console.log("500 clips track gain", JSON.stringify(measurements));
 });
+
+test("the inspector shows uncapped combined static gain without changing clip gain", async ({
+  page,
+  request,
+}, info) => {
+  const { project, api, read } = await mixProject(
+    request,
+    "Combined static gain",
+  );
+  const source = join(project.path, "index.html");
+  await writeFile(
+    source,
+    (await readFile(source, "utf8"))
+      .replace('id="bed-2"', 'id="bed-2" data-audio-group="authored"')
+      .replace(
+        "</main>",
+        '<hf-audio-group id="authored" data-volume="0.5"></hf-audio-group></main>',
+      ),
+  );
+  const edit = async (commands: CommandInput[]) => {
+    const response = await request.post(`${api}/commands`, {
+      data: { expectedRevision: (await read()).revision, commands },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await edit([
+    { type: "setTrack", index: 2, volume: db(12) },
+    { type: "setClip", clipId: "bed-1", volume: db(12) },
+    { type: "setClip", clipId: "bed-2", volume: db(12) },
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  const select = (id: string, add = false) =>
+    page.locator(`[data-clip="${id}"]`).click({
+      position: { x: 40, y: 7 },
+      modifiers: add ? ["Control"] : [],
+    });
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const combined = inspector.getByRole("status", {
+    name: "Combined static gain",
+  });
+  const gain = inspector.getByRole("textbox", { name: "Gain", exact: true });
+  await select("bed-1");
+  await expect(gain).toHaveValue("+12.0 dB");
+  await expect(combined).toHaveText("+24.0 dB");
+  await page.screenshot({ path: info.outputPath("combined-static-gain.png") });
+  await edit([{ type: "setTrack", index: 2, volume: 0 }]);
+  await expect(combined).toHaveText("-∞ dB");
+  await expect(gain).toHaveValue("+12.0 dB");
+  expect((await request.post(`${api}/history/undo`)).ok()).toBe(true);
+  await expect(combined).toHaveText("+24.0 dB");
+  await select("bed-2");
+  await expect(inspector).toContainText(
+    "Track gain does not apply to this clip",
+  );
+  await expect(combined).toHaveCount(0);
+  await select("bed-1", true);
+  await expect(combined).toHaveText("+24.0 dB");
+  await edit([{ type: "setTrack", index: 1, volume: 0.5 }]);
+  await select("voice");
+  await expect(combined).toHaveText("-12.0 dB");
+  await select("bed-1", true);
+  await expect(combined).toHaveText("Mixed");
+});
