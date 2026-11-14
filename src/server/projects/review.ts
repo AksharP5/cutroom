@@ -468,6 +468,8 @@ export function createReviewService(store: ProjectStore) {
     actor: ReviewActor | undefined,
     noteIds: string[],
     pendingRows: Awaited<ReturnType<typeof currentEdits>>,
+    /** What a timeline edit did, for the row that covers bytes outside any clip. */
+    label?: string,
   ) => {
     const entry = (await store.history(project)).list().at(-1);
     const state = await readState(project);
@@ -491,7 +493,7 @@ export function createReviewService(store: ProjectStore) {
           composition,
           label:
             clipId === null
-              ? `Edited ${composition} composition`
+              ? (label ?? `Edited ${composition} composition`)
               : (entry?.label ?? "Edited source"),
           historyId: entry?.id,
           signature: after.get(clipId) ?? missingSignature,
@@ -722,7 +724,10 @@ export function createReviewService(store: ProjectStore) {
       token: string | undefined,
       work: () => Promise<T>,
       noteId?: string,
-      options: { create?: boolean } = {},
+      options: {
+        create?: boolean;
+        label?: string | ((result: T) => string);
+      } = {},
     ) =>
       serialize(project, async () => {
         authorize(token, project.id);
@@ -786,6 +791,9 @@ export function createReviewService(store: ProjectStore) {
           actor,
           noteIds,
           pendingRows,
+          typeof options.label === "function"
+            ? options.label(result)
+            : options.label,
         );
         return result;
       }),

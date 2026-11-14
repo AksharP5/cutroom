@@ -481,7 +481,7 @@ export const CommandBatchSchema = z.object({
     .max(120)
     .optional()
     .describe(
-      "Past-tense summary the owner sees in history and the inspector, e.g. 'Moved the title 15 frames left'. Omit it to name the edit from its commands.",
+      "Optional edit label, limited to 120 characters. Agent labels are shown as attributed text alongside the factual summary derived from the commands.",
     ),
 });
 
@@ -499,6 +499,8 @@ export const ClipEditSchema = z.object({
 });
 
 export const TAB_ORIGIN_HEADER = "x-cutroom-tab-origin";
+/** On a command batch's answer: what the edit did, naming its clips, URI-encoded. */
+export const EDIT_SUMMARY_HEADER = "x-cutroom-edit-summary";
 export const TabOriginSchema = z.uuid();
 
 export const AnimationLeftBehindSchema = z.object({

@@ -32,6 +32,20 @@ export function groupedChanges(edits: ClipEdits, name: string) {
   });
 }
 
+/**
+ * The review list's rows: one per distinct change, counted when it repeats. Edits with no
+ * sentence of their own share their file's label, so a file edited five times is one row.
+ */
+export function reviewRows(edits: ClipEdits) {
+  const rows = new Map<string, { id: string; label: string; count: number }>();
+  for (const edit of edits) {
+    const row = rows.get(edit.label);
+    if (row) row.count++;
+    else rows.set(edit.label, { id: edit.id, label: edit.label, count: 1 });
+  }
+  return [...rows.values()];
+}
+
 /** Five recent rows, making room for every pending agent edit even when it is older. */
 export function shownChanges<T extends ClipEdits[number]>(
   edits: T[],

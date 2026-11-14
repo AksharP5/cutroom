@@ -34,6 +34,7 @@ import {
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import {
   AnimationFeedbackSchema,
+  EDIT_SUMMARY_HEADER,
   TAB_ORIGIN_HEADER,
   TabOriginSchema,
   CommandBatchSchema,
@@ -55,7 +56,7 @@ import {
   stillMediaExtensions,
   localMediaPath,
 } from "../../shared/media";
-import { editLabel } from "../../shared/timeline/labels";
+import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
 import { projectPath, projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
@@ -137,14 +138,11 @@ export function createTimelineRoutes(
     };
   };
 
-  const edit = async (
+  const prepareEdit = async (
     project: Project,
     batch: CommandBatch,
-  ): Promise<
-    TimelineView & {
-      detectAnimation: () => ReturnType<typeof animationFeedback>;
-    }
-  > => {
+    agent: boolean,
+  ) => {
     const { composition } = batch;
     const current = await read(project, composition);
     if (current.revision !== batch.expectedRevision)
@@ -204,32 +202,36 @@ export function createTimelineRoutes(
           lengths.set(clip.src, clip.sourceDuration);
     const origins = new Map<string, ClipOrigin>();
     const shifts = new Map<string, number>();
+    const labels: string[] = [];
+    const summaries: string[] = [];
+    const hasScript = [current.parsed, ...snapshots.values()].some((source) =>
+      /<script\b/i.test(source.html),
+    );
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
         onCreate: (id, origin) => origins.set(id, origin),
-        onApply: [current.parsed, ...snapshots.values()].some((source) =>
-          /<script\b/i.test(source.html),
-        )
-          ? (before, after) => {
-              const previous = new Map(
-                before.clips.map((clip) => [clip.id, clip]),
+        onApply: (before, after, command) => {
+          labels.push(editLabel([command], before, "Edited timeline"));
+          summaries.push(
+            editLabel([command], before, "Edited timeline", "done"),
+          );
+          if (!hasScript) return;
+          const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
+          for (const clip of after.clips) {
+            const old = previous.get(clip.id);
+            if (!old) continue;
+            const delta = canonicalSeconds(
+              animationOrigin(clip, after.fps) -
+                animationOrigin(old, before.fps),
+            );
+            if (delta)
+              shifts.set(
+                clip.id,
+                canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
               );
-              for (const clip of after.clips) {
-                const old = previous.get(clip.id);
-                if (!old) continue;
-                const delta = canonicalSeconds(
-                  animationOrigin(clip, after.fps) -
-                    animationOrigin(old, before.fps),
-                );
-                if (delta)
-                  shifts.set(
-                    clip.id,
-                    canonicalSeconds((shifts.get(clip.id) ?? 0) + delta),
-                  );
-              }
-            }
-          : undefined,
+          }
+        },
         onSkip: (clip, reason) =>
           skippedClips.set(clip.id, {
             clipId: clip.id,
@@ -282,63 +284,92 @@ export function createTimelineRoutes(
           return source?.content ?? null;
         },
       );
-    // Recorded before the write, so an id is spent even if the write fails.
-    await recordClipIds(
-      project,
-      [current.parsed.timeline, timeline].flatMap(({ clips }) =>
-        clips.map((clip) => clip.id),
-      ),
-    );
-    const files =
-      html === current.source.content
-        ? []
-        : [
-            {
-              sourceFile: composition,
-              absPath: await projectWritePath(project, composition),
-              before: current.source.content,
-              after: html,
-              expectedVersion: current.source.version,
-            },
-          ];
-    if (
-      files.length &&
-      composition !== "index.html" &&
-      html.includes("<style data-cutroom-track-stacking=")
-    ) {
-      const entry = await readSource(project, "index.html");
-      const declared = declareTrackLayer(entry.content);
-      if (declared !== entry.content)
-        files.push({
-          sourceFile: "index.html",
-          absPath: await projectWritePath(project, "index.html"),
-          before: entry.content,
-          after: declared,
-          expectedVersion: entry.version,
-        });
-    }
-    const { timelines } = current.document;
-    // Persist inferred tracks too, before their last source clip can disappear on the next read.
-    if (
-      !Bun.deepEquals(
-        settings,
-        timelines[composition] ?? emptyTimelineSettings(),
-      )
-    ) {
-      if (Bun.deepEquals(settings, emptyTimelineSettings()))
-        delete timelines[composition];
-      else timelines[composition] = settings;
-      await store.writeDocument(project, current.document, files);
-    } else if (files.length) store.writeFiles(project, files);
+    const agentLabel =
+      agent && batch.label ? `; Agent label: "${batch.label}"` : "";
+    const label = agent
+      ? joinEditLabels(labels, "Edited timeline") + agentLabel
+      : (batch.label ?? joinEditLabels(labels, "Edited timeline"));
+    const summary = joinEditLabels(summaries, "Edited timeline") + agentLabel;
+    // Encode before any project write or history window. A label failure cannot follow a saved edit.
+    const encodedSummary = encodeURIComponent(summary);
     return {
-      composition,
-      revision: revisionOf(
-        fileContentVersion(html),
-        timelines[composition] ?? emptyTimelineSettings(),
-      ),
-      timeline: written,
-      detectAnimation,
-      ...(skippedClips.size && { skippedClips: [...skippedClips.values()] }),
+      label,
+      summary,
+      encodedSummary,
+      save: async () => {
+        // Preparation precedes the store queue; preserve other metadata saved while it waited.
+        const document = await store.document(project);
+        const { timelines } = document;
+        if (
+          revisionOf(
+            current.source.version,
+            timelines[composition] ?? emptyTimelineSettings(),
+          ) !== batch.expectedRevision
+        )
+          throw new HttpError(
+            409,
+            "The timeline changed since it was read. Read it again before editing.",
+          );
+        // Recorded before the write, so an id is spent even if the write fails.
+        await recordClipIds(
+          project,
+          [current.parsed.timeline, timeline].flatMap(({ clips }) =>
+            clips.map((clip) => clip.id),
+          ),
+        );
+        const files =
+          html === current.source.content
+            ? []
+            : [
+                {
+                  sourceFile: composition,
+                  absPath: await projectWritePath(project, composition),
+                  before: current.source.content,
+                  after: html,
+                  expectedVersion: current.source.version,
+                },
+              ];
+        if (
+          files.length &&
+          composition !== "index.html" &&
+          html.includes("<style data-cutroom-track-stacking=")
+        ) {
+          const entry = await readSource(project, "index.html");
+          const declared = declareTrackLayer(entry.content);
+          if (declared !== entry.content)
+            files.push({
+              sourceFile: "index.html",
+              absPath: await projectWritePath(project, "index.html"),
+              before: entry.content,
+              after: declared,
+              expectedVersion: entry.version,
+            });
+        }
+        // Persist inferred tracks too, before their last source clip can disappear on the next read.
+        if (
+          !Bun.deepEquals(
+            settings,
+            timelines[composition] ?? emptyTimelineSettings(),
+          )
+        ) {
+          if (Bun.deepEquals(settings, emptyTimelineSettings()))
+            delete timelines[composition];
+          else timelines[composition] = settings;
+          await store.writeDocument(project, document, files);
+        } else if (files.length) store.writeFiles(project, files);
+        return {
+          composition,
+          revision: revisionOf(
+            fileContentVersion(html),
+            timelines[composition] ?? emptyTimelineSettings(),
+          ),
+          timeline: written,
+          detectAnimation,
+          ...(skippedClips.size && {
+            skippedClips: [...skippedClips.values()],
+          }),
+        };
+      },
     };
   };
 
@@ -519,29 +550,29 @@ export function createTimelineRoutes(
     const input = parseInput(CommandBatchSchema, await c.req.json());
     const composition = canonical(input.composition);
     try {
-      // Agents may omit the label; the edit is then named from its commands, as the editor names its own.
-      const label =
-        input.label ??
-        editLabel(
-          input.commands,
-          (await read(project, composition)).parsed.timeline,
-          "Edited timeline",
-        );
-      const batch = { ...input, composition, label };
+      const batch = { ...input, composition };
       const origin =
         parseInput(
           TabOriginSchema.optional(),
           c.req.header(TAB_ORIGIN_HEADER),
         ) ?? null;
-      const { detectAnimation, ...result } = await reviews.editComposition(
+      const {
+        view: { detectAnimation, ...result },
+        encodedSummary,
+      } = await reviews.editComposition(
         project,
         batch.composition,
         c.req.header(AGENT_HEADER),
-        () =>
-          store.mutate(
+        async () => {
+          const prepared = await prepareEdit(
             project,
-            batch.label,
-            () => edit(project, batch),
+            batch,
+            !!c.req.header(AGENT_HEADER),
+          );
+          const result = await store.mutate(
+            project,
+            prepared.label,
+            prepared.save,
             c.req.header(AGENT_HEADER)
               ? {
                   kind: "agent",
@@ -556,13 +587,22 @@ export function createTimelineRoutes(
                     ),
                 }
               : undefined,
-          ),
+          );
+          return {
+            view: result,
+            summary: prepared.summary,
+            encodedSummary: prepared.encodedSummary,
+          };
+        },
         batch.noteId,
+        { label: (result) => result.summary },
       );
       const response = {
         ...result,
         ...(await reviews.clipChanges(project, batch.composition)),
       };
+      // Beside the view, not in it: an edit answers with exactly what a read returns.
+      c.header(EDIT_SUMMARY_HEADER, encodedSummary);
       const followup = async () => {
         // Give the committed edit's response a turn to flush before running source inspection.
         await Bun.sleep(0);

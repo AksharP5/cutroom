@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { AgentMessage } from "../src/shared/agent";
 import {
   describeTool,
+  editSummary,
   failureReason,
   summarizeSteps,
 } from "../src/shared/toolRow";
@@ -57,6 +58,38 @@ test("a Cutroom edit names its clips or note, and another server's tool never bo
   expect(describeTool({ tool: "mcp__other__timeline_edit" })).toEqual({
     verb: "Edited",
     object: "timeline",
+  });
+});
+
+test("a finished timeline edit reads as what it did, not the file it touched", () => {
+  const tool = "mcp__cutroom_studio__timeline_edit";
+  const view = {
+    type: "text",
+    text: JSON.stringify({ revision: "r2" }, null, 2),
+  };
+  const result = [view, { type: "text", text: "Extended still.png by 1 s" }];
+  // Claude passes on the content blocks; Codex wraps them in the call's result.
+  for (const text of [
+    JSON.stringify(result),
+    JSON.stringify({ content: result, structuredContent: {} }),
+  ])
+    expect(editSummary(tool, text)).toBe("Extended still.png by 1 s");
+  expect(
+    editSummary("mcp__other__timeline_edit", JSON.stringify(result)),
+  ).toBeUndefined();
+  expect(editSummary(tool, JSON.stringify([view]))).toBeUndefined();
+  const row = {
+    tool,
+    target: "still.png",
+    summary: "Extended still.png by 1 s",
+  };
+  expect(describeTool(row)).toEqual({
+    verb: "Extended",
+    object: "still.png by 1 s",
+  });
+  expect(describeTool(row, "active")).toEqual({
+    verb: "Editing",
+    object: "still.png",
   });
 });
 

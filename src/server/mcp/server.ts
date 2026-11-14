@@ -21,6 +21,7 @@ import {
   TranscriptImportSchema,
 } from "../../shared/project";
 import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
+import { EDIT_SUMMARY_HEADER } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
@@ -109,6 +110,7 @@ export function createMcpServer(options: McpOptions = {}) {
           );
         }
         const result = first.value.result;
+        const summary = response.headers.get(EDIT_SUMMARY_HEADER);
         setTimeout(() => {
           void (async () => {
             for await (const event of events)
@@ -124,6 +126,15 @@ export function createMcpServer(options: McpOptions = {}) {
         return {
           content: [
             { type: "text" as const, text: JSON.stringify(result, null, 2) },
+            // Last, on its own line, where the agent panel reads the row's sentence.
+            ...(summary
+              ? [
+                  {
+                    type: "text" as const,
+                    text: decodeURIComponent(summary).replace(/\s+/g, " "),
+                  },
+                ]
+              : []),
           ],
           structuredContent: { result },
         };

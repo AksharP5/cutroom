@@ -26,7 +26,7 @@ import { strokePath } from "../edit/notes";
 import { frameCaptureUrl, noteNumbers, toReviewStatuses } from "../review";
 import { useFps } from "../workspace";
 import { useTimeline } from "../edit/timeline";
-import { pendingEdit } from "../edit/inspector/changes";
+import { pendingEdit, reviewRows } from "../edit/inspector/changes";
 import { Modal } from "./Modal";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
@@ -203,10 +203,11 @@ export function ReviewPanel({
 }) {
   const view = useTimeline((state) => state.view);
   const hasChanges = view?.clipEdits?.some(pendingEdit);
-  const compositionChanges =
+  const compositionChanges = reviewRows(
     view?.clipEdits?.filter(
       (edit) => edit.clipId === null && pendingEdit(edit),
-    ) ?? [];
+    ) ?? [],
+  );
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
   const [body, setBody] = useState("");
@@ -498,7 +499,10 @@ export function ReviewPanel({
           aria-label="Composition changes"
         >
           {compositionChanges.map((edit) => (
-            <li key={edit.id}>{edit.label}</li>
+            <li key={edit.id}>
+              {edit.label}
+              {edit.count > 1 && `, ${edit.count} times`}
+            </li>
           ))}
         </ol>
       )}

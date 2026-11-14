@@ -409,7 +409,6 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
       headers: { "x-cutroom-agent": "external" },
       data: {
         expectedRevision: (await read()).revision,
-        label: `Set opacity to ${index}%`,
         commands: [
           { type: "setClip", clipId: "opening-title", opacity: index / 100 },
         ],
