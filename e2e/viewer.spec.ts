@@ -520,3 +520,54 @@ test("a timeline the engine refuses stays reported after the picture reloads", a
   await page.waitForTimeout(500);
   await expect(status).toContainText("Clip extra has no data-duration");
 });
+
+test("a seek made while an edited preview takes the screen is drawn by that preview", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Seek during a handoff", duration: 4 },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  const title = (text: string) =>
+    `<div id="late" class="clip" data-start="1" data-duration="2" data-track-index="3">${text}</div></main>`;
+  const starter = await readFile(index, "utf8");
+  await writeFile(index, starter.replace("</main>", title("Before")));
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-handoff", "showing");
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("#late")).toBeHidden();
+
+  // Hold the next document's confirming paint, so it stays on screen unconfirmed.
+  await page.addInitScript(() => {
+    if (window === window.top) return;
+    let presented = false;
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event.data?.source !== "cutroom-viewer") return;
+        if (event.data.action === "observe-position") presented = true;
+        if (presented && event.data.action === "paint")
+          event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await writeFile(index, starter.replace("</main>", title("After")));
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+  await expect(live.locator("#late")).toHaveText("After");
+  await expect(live.locator("#late")).toBeHidden();
+
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("00000115");
+  await page.keyboard.press("Enter");
+  // The edited document covers the retained one, so it has to show the new frame itself,
+  // well before the held handoff gives up and the retained document returns.
+  await expect(live.locator("#late")).toBeVisible({ timeout: 5_000 });
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+});
