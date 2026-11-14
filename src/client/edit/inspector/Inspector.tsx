@@ -1,5 +1,5 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
-import type { Clip, Fps } from "../../../shared/timeline/schema";
+import type { Clip, Fps, Timeline } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
 import {
@@ -91,6 +91,41 @@ function PositionFields({
   ));
 }
 
+function CombinedGain({
+  clips,
+  tracks,
+}: {
+  clips: readonly Clip[];
+  tracks: Timeline["tracks"];
+}) {
+  const gains = clips
+    .filter((clip) => !clip.trackGainWarning)
+    .map(
+      (clip) =>
+        (clip.volume ?? 1) *
+        tracks.find((track) => track.index === clip.track)!.volume,
+    );
+  const gain = gains[0];
+  if (gain === undefined) return null;
+  const mixed = gains.some((next) => next !== gain);
+  // HyperFrames' clip formatter caps at +12 dB; this product can reach +24 dB.
+  const db = gain > 0 ? Math.round(20 * Math.log10(gain) * 10) / 10 : null;
+  const text = mixed
+    ? "Mixed"
+    : db === null
+      ? "-∞ dB"
+      : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+  return (
+    <div
+      className="inspector-field inspector-combined-gain"
+      title="Clip gain × track gain, before fades and automation. Authored audio groups are excluded."
+    >
+      <span>Combined static gain</span>
+      <output aria-label="Combined static gain">{text}</output>
+    </div>
+  );
+}
+
 export function Inspector({ projectId }: { projectId: string }) {
   const mode = useContext(EditorToolsContext)?.mode;
   const open = useWorkspace((state) => state.inspector);
@@ -167,6 +202,20 @@ export function Inspector({ projectId }: { projectId: string }) {
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  // Several clips that are not one linked subject still share a gain field, as in Resolve.
+  const sound =
+    timeline && !subject && selection.ids.size > 1
+      ? timeline.clips.filter(
+          (item) =>
+            selection.ids.has(item.id) &&
+            item.hasAudio &&
+            !timeline.tracks.find((track) => track.index === item.track)
+              ?.locked,
+        )
+      : [];
+  const mixedGain = sound.some(
+    (item) => (item.volume ?? 1) !== (sound[0]!.volume ?? 1),
+  );
   const warning = usePositionWarning((state) => state.warning);
   useEffect(() => {
     observePosition(
@@ -277,7 +326,53 @@ export function Inspector({ projectId }: { projectId: string }) {
         </button>
       </header>
       {selection.ids.size > 1 && !subject ? (
-        <p className="inspector-empty">{selection.ids.size} clips selected</p>
+        <div className="inspector-content">
+          <p className="inspector-empty">{selection.ids.size} clips selected</p>
+          {timeline && sound.length > 0 && (
+            <details
+              open={audioOpen}
+              onToggle={(event) => setAudioOpen(event.currentTarget.open)}
+              className="inspector-section inspector-audio"
+            >
+              <summary>
+                <CaretRight size={10} aria-hidden />
+                Audio · {sound.length} {sound.length === 1 ? "clip" : "clips"}
+              </summary>
+              {sound.some((clip) => clip.trackGainWarning) && (
+                <p className="inspector-warning" role="note">
+                  Track gain does not apply to selected clips with an authored
+                  audio group.
+                </p>
+              )}
+              <ValueField
+                key={`${selection.anchor}:gain`}
+                label="Gain"
+                value={mixedGain ? null : (sound[0]!.volume ?? 1)}
+                mixed={mixedGain}
+                unit="gain"
+                max={MAX_AUDIO_GAIN}
+                fps={timeline.fps}
+                onCommit={(volume) => {
+                  const ids = new Set(sound.map((clip) => clip.id));
+                  // One batch, so the whole selection is one undo step.
+                  void editTimeline(projectId, "Edit gain", (current) =>
+                    current.clips
+                      .filter(
+                        (clip) =>
+                          ids.has(clip.id) && (clip.volume ?? 1) !== volume,
+                      )
+                      .map((clip) => ({
+                        type: "setClip",
+                        clipId: clip.id,
+                        volume,
+                      })),
+                  );
+                }}
+              />
+              <CombinedGain clips={sound} tracks={timeline.tracks} />
+            </details>
+          )}
+        </div>
       ) : !clip || !timeline ? (
         <p className="inspector-empty">Select a clip to inspect it.</p>
       ) : (
@@ -415,6 +510,11 @@ export function Inspector({ projectId }: { projectId: string }) {
                   Audio
                   {subject.audio.length > 1 && ` · ${audio.label || audio.id}`}
                 </summary>
+                {audio.trackGainWarning && (
+                  <p className="inspector-warning" role="note">
+                    {audio.trackGainWarning}
+                  </p>
+                )}
                 <ValueField
                   key={`${audio.id}:gain`}
                   label="Gain"
@@ -429,6 +529,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                     ]);
                   }}
                 />
+                <CombinedGain clips={[audio]} tracks={timeline.tracks} />
                 {(["fadeIn", "fadeOut"] as const).map((field) => (
                   <ValueField
                     key={`${audio.id}:${field}`}

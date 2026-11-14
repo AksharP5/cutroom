@@ -61,6 +61,7 @@ const timeline = (clips: Clip[], tracks: Partial<Track>[] = []): Timeline =>
       enabled: true,
       muted: false,
       solo: false,
+      volume: 1,
       ...track,
     })),
     clips,

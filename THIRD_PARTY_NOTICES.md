@@ -12,6 +12,8 @@ Cutroom does not include code or assets extracted from the proprietary HyperFram
 
 Cutroom also applies version-checked loading transforms to HyperFrames producer 0.9.26 in `src/server/hyperframes/renderIsolation.ts`. Browser discovery excludes media under `data-hidden`, preserving static parsing's visibility and audio exclusions. Entry and sub-composition compilation accept effective source supplied by Cutroom's render worker, so persisted track mixing also covers outside HTML edits without rewriting project files. Dependency files remain unchanged.
 
+`src/server/hyperframes/previewRuntime.ts` adapts the served runtime in memory, with an exact source-match and version check for core 0.9.26. It refreshes a group's static gain when `data-volume` changes even when that group had no automation lane. This lets a live track fader update the existing Web Audio stage. The published dependency and export runtime files remain unchanged.
+
 ## GSAP
 
 GSAP 3.15.0 retains its [Standard No Charge License](https://gsap.com/community/standard-license/), including restrictions on competing visual animation builders. Cutroom's scope is local video composition and export. The licensor's FAQ permits AI-generated GSAP code and niche visual tools that do not directly compete with Webflow. Reassess that license before adding website-building capabilities or changing the product's scope. GSAP is not covered by Cutroom's MIT license. New projects copy the installed `dist/gsap.min.js` distribution, including its embedded copyright and license notice, into `assets/vendor/` for offline preview and export.

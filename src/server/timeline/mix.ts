@@ -29,9 +29,10 @@ export async function readTrackMix(store: ProjectStore, project: Project) {
       if (!source) return null;
       if (
         !settings.tracks.some(
-          (track) => !track.enabled || track.muted || track.solo,
+          (track) =>
+            !track.enabled || track.muted || track.solo || track.volume !== 1,
         ) &&
-        !/data-cutroom-(track-hidden|muted)/.test(source.content)
+        !/data-cutroom-(track(?:-hidden)?|muted)\b/.test(source.content)
       )
         return null;
       const scope = compositionScope(composition);
