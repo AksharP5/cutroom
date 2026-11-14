@@ -2515,6 +2515,109 @@
       },
       "limitMs": 708.0800000011922,
       "expectedFailure": true
+    },
+    "ci": {
+      "head": "15d5d10bffd9a246a60d9705499e5ecedfec43c1",
+      "run": "https://github.com/AksharP5/cutroom/actions/runs/43593292646",
+      "job": "https://github.com/AksharP5/cutroom/actions/runs/43593292646/job/132442388013",
+      "result": {
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 894.7999999999884
+          },
+          {
+            "mode": "live",
+            "ms": 474.1000000000058
+          },
+          {
+            "mode": "live",
+            "ms": 494.80000000001746
+          },
+          {
+            "mode": "reload",
+            "ms": 786.5999999999767
+          },
+          {
+            "mode": "reload",
+            "ms": 887.3000000000175
+          },
+          {
+            "mode": "live",
+            "ms": 444.69999999998254
+          },
+          {
+            "mode": "live",
+            "ms": 548.9000000000233
+          },
+          {
+            "mode": "reload",
+            "ms": 882.5999999999767
+          },
+          {
+            "mode": "reload",
+            "ms": 871.7999999999884
+          },
+          {
+            "mode": "live",
+            "ms": 449.8999999999651
+          }
+        ],
+        "live": 474.1000000000058,
+        "reload": 882.5999999999767
+      },
+      "passed": true
+    },
+    "finalStandalone": {
+      "base": "ddba1259d0b26a64f2314a53ce318328c8b45672",
+      "result": {
+        "samples": [
+          {
+            "mode": "reload",
+            "ms": 950
+          },
+          {
+            "mode": "live",
+            "ms": 395.1000000014901
+          },
+          {
+            "mode": "live",
+            "ms": 443.8999999985099
+          },
+          {
+            "mode": "reload",
+            "ms": 906.8000000044703
+          },
+          {
+            "mode": "reload",
+            "ms": 926.2999999970198
+          },
+          {
+            "mode": "live",
+            "ms": 408
+          },
+          {
+            "mode": "live",
+            "ms": 455.30000000447035
+          },
+          {
+            "mode": "reload",
+            "ms": 890.2999999970198
+          },
+          {
+            "mode": "reload",
+            "ms": 896.2999999970198
+          },
+          {
+            "mode": "live",
+            "ms": 395.09999999403954
+          }
+        ],
+        "live": 408,
+        "reload": 906.8000000044703
+      },
+      "passed": true,
+      "log": "final-base-perf.log"
     }
   },
   "validation": {
@@ -2536,15 +2639,47 @@
       "failed": 0,
       "minutes": 6.5
     },
-    "latestRebase": "0eac21dada579942a0c5158f2bb0cf2f882285c4",
+    "latestRebase": "ddba1259d0b26a64f2314a53ce318328c8b45672",
     "latestFocused": {
+      "unitPassed": 37,
+      "e2ePassed": 5,
+      "standalonePerformancePassed": 9,
+      "performanceMinutes": 6.5,
+      "pairedBudgetPassed": true,
+      "typeCheck": "passed",
+      "formatCheck": "passed"
+    },
+    "ports": "App servers 4950/4951, Playwright 4959, existing restart server 4952; two unit fixture ports temporarily remapped to 4953/4954 and restored.",
+    "memory": "free -g checked before heavy runs; final full unit retry began at 12 GiB available, final export workflows and standalone performance at 14 GiB.",
+    "previousFocused": {
+      "base": "0eac21dada579942a0c5158f2bb0cf2f882285c4",
       "unitPassed": 109,
       "e2ePassed": 36,
       "pairedBudgetPassed": true,
       "typeCheck": "passed"
     },
-    "ports": "App servers 4950/4951, Playwright 4959, existing restart server 4952; two unit fixture ports temporarily remapped to 4953/4954 and restored.",
-    "memory": "free -g checked before heavy runs; final standalone performance suite started with 13 GB available."
+    "latestFullSuite": {
+      "base": "7752e03911f3af5c709cf8365d2d84b9eff62c3f",
+      "unit": {
+        "passed": 757,
+        "skipped": 5,
+        "failed": 0,
+        "seconds": 119.86
+      },
+      "e2e": {
+        "passed": 432,
+        "failed": 0,
+        "minutes": 25
+      },
+      "firstUnitAttempt": {
+        "passed": 756,
+        "skipped": 5,
+        "failed": 1,
+        "seconds": 330.41,
+        "failure": "native factory fixture exceeded its five-second deadline; isolated rerun and unchanged full retry passed"
+      }
+    }
   },
-  "localEvidence": "/home/akshar/.cache/cutroom-preview-r2-evidence; raw drivers, logs, screenshots and earlier unpaired measurements retained. Generated projects, databases, worktrees and servers are cleaned after publishing."
+  "localEvidence": "/home/akshar/.cache/cutroom-preview-r2-evidence; raw drivers, logs, screenshots and earlier unpaired measurements retained. Generated projects, databases, worktrees and servers are cleaned after publishing.",
+  "comparisonImplementation": "Script-free timing policy and coalescing later committed as 15d5d10, measured on 6ea9beb before the later rebases. The saved input snapshots, including edit history, were identical."
 }
