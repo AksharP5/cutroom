@@ -578,6 +578,8 @@ export function createHyperframesApi(
       if (
         !response.ok ||
         sourceBefore?.version !== sourceAfter.version ||
+        dependenciesBefore === null ||
+        dependencies === null ||
         dependenciesBefore !== dependencies
       )
         return c.json(
