@@ -72,6 +72,7 @@ import {
 import type { ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
+import { declaredFonts, undeclaredFontReason } from "./titles";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -125,6 +126,12 @@ export function createTimelineRoutes(
       composition,
       mediaSources(source.content, scope),
     );
+    const fonts = new Set([
+      ...declaredFonts(source.content),
+      ...(composition === "index.html"
+        ? []
+        : declaredFonts((await readSource(project, "index.html")).content)),
+    ]);
     return {
       source,
       document,
@@ -133,6 +140,7 @@ export function createTimelineRoutes(
       parsed: parseComposition(source.content, settings, {
         scope,
         mediaLengths: lengths,
+        fonts,
       }),
       revision: revisionOf(source.version, settings),
     };
@@ -154,10 +162,33 @@ export function createTimelineRoutes(
       project,
       composition,
       batch.commands.flatMap((command) =>
-        command.type === "insert" ? [command.clip.src] : [],
+        command.type === "insert" && command.clip.kind !== "title"
+          ? [command.clip.src]
+          : [],
       ),
     );
     const lengths = new Map([...current.lengths, ...inserted.lengths]);
+    // A font no rule declares would fall back to a system face that export may not share.
+    const fonts = new Set(
+      batch.commands.flatMap((command) => {
+        const font =
+          command.type === "setClip"
+            ? command.title?.font
+            : command.type === "insert" && command.clip.kind === "title"
+              ? command.clip.title.font
+              : undefined;
+        return font ? [font] : [];
+      }),
+    );
+    if (fonts.size) {
+      const declared = current.parsed.fonts;
+      const missing = [...fonts].find((font) => !declared.has(font));
+      if (missing !== undefined)
+        throw new TimelineError(
+          "unsupported",
+          undeclaredFontReason(missing, declared),
+        );
+    }
     const skippedClips = new Map<
       string,
       NonNullable<TimelineView["skippedClips"]>[number]
@@ -253,6 +284,7 @@ export function createTimelineRoutes(
     const writtenSource = parseComposition(html, settings, {
       scope: current.scope,
       mediaLengths: lengths,
+      fonts: current.parsed.fonts,
     });
     const written = writtenSource.timeline;
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))

@@ -1,5 +1,14 @@
 import { firstTextLine, isAudioKind } from "./schema";
-import type { Clip, Command, Fps, InsertClip, Timeline, Track } from "./schema";
+import type {
+  Clip,
+  Command,
+  Fps,
+  InsertClip,
+  InsertTitle,
+  Timeline,
+  Track,
+} from "./schema";
+import { cutTitle, defaultTitle, editTitle } from "./title";
 import { TimelineError } from "./errors";
 import { windowMix } from "./mix";
 import { newTrack, nextTrackIndex } from "./tracks";
@@ -13,7 +22,7 @@ export type { TimelineErrorCode } from "./errors";
  */
 export type ClipOrigin =
   | { copyOf: string }
-  | { insert: InsertClip }
+  | { insert: InsertClip | InsertTitle }
   | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
 /**
@@ -490,10 +499,17 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "Only video can have linked audio.",
         );
       // A file name is quoted so it reads as written, never as a clip id.
-      assertTrackKind(input.kind, trackAt(track), input.id ?? `"${input.src}"`);
+      assertTrackKind(
+        input.kind === "title" ? "element" : input.kind,
+        trackAt(track),
+        input.id ?? (input.kind === "title" ? "title" : `"${input.src}"`),
+      );
       const id =
         input.id === undefined
-          ? mint.name(slug(input.src, input.kind), null)
+          ? mint.name(
+              input.kind === "title" ? "title" : slug(input.src, input.kind),
+              null,
+            )
           : claim(input.id);
       const end = at + input.duration;
       const separate =
@@ -502,7 +518,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         !batch.silentMedia.has(input.src);
       // A named sound track is edited as the picture's is; left out, the sound is routed to room.
       const soundTrack = separate ? command.linkedAudio?.track : undefined;
-      if (soundTrack !== undefined)
+      if (soundTrack !== undefined && input.kind === "video")
         assertTrackKind("audio", trackAt(soundTrack), `"${input.src}" sound`);
       let next = clips;
       if (mode === "overwrite")
@@ -521,6 +537,41 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           if (clip.sourceRestrictions?.copy) refuseRippleCut(clip, timeline);
         next = splitClips(next, targets, at, fps, mint);
         next = shiftAfter(next, tracks, () => at, input.duration);
+      }
+      if (input.kind === "title") {
+        onCreate(id, { insert: input });
+        return {
+          ...timeline,
+          clips: [
+            ...next,
+            {
+              id,
+              track,
+              kind: "element",
+              start: at,
+              duration: input.duration,
+              mediaStart: null,
+              playbackRate: 1,
+              src: null,
+              sourceDuration: null,
+              hasAudio: false,
+              link: null,
+              label: input.label ?? null,
+              textPreview: firstTextLine(input.text),
+              volume: null,
+              opacity: null,
+              x: null,
+              y: null,
+              text: input.text,
+              title: editTitle(defaultTitle(fps), input.title),
+              fadeIn: 0,
+              fadeOut: 0,
+              automation: null,
+              enabled: true,
+              startRef: null,
+            },
+          ],
+        };
       }
       const video = separate ? { ...input, muted: true } : input;
       onCreate(id, { insert: video });
@@ -549,6 +600,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         x: null,
         y: null,
         text: null,
+        title: null,
         fadeIn: 0,
         fadeOut: 0,
         automation: null,
@@ -759,6 +811,12 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             target.sourceRestrictions.text,
           );
       }
+      if (command.title !== undefined && target.title === null)
+        throw new TimelineError(
+          "unsupported",
+          target.sourceRestrictions?.title ??
+            `${target.label ?? target.id} is not a Cutroom title.`,
+        );
       const fadeIn = command.fadeIn ?? target.fadeIn;
       const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
@@ -783,6 +841,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...(command.opacity !== undefined && {
                   opacity: command.opacity,
                 }),
+                ...(command.title !== undefined &&
+                  clip.title && {
+                    title: editTitle(clip.title, command.title),
+                  }),
                 ...(command.enabled !== undefined && {
                   enabled: command.enabled,
                 }),
@@ -1448,12 +1510,18 @@ function splitClips(
       ...windowClip(clip, at, clipEnd(clip), fps),
       id,
       startRef: null,
+      ...(clip.title && { title: cutTitle(clip.title).right }),
     };
   });
   const ids = new Set(targets.map((clip) => clip.id));
   const cut = [
     ...clips.map((clip) =>
-      ids.has(clip.id) ? windowClip(clip, clip.start, at, fps) : clip,
+      ids.has(clip.id)
+        ? {
+            ...windowClip(clip, clip.start, at, fps),
+            ...(clip.title && { title: cutTitle(clip.title).left }),
+          }
+        : clip,
     ),
     ...rights,
   ];

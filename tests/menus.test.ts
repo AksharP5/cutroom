@@ -40,6 +40,7 @@ const timeline = normalizeTimeline({
       x: null,
       y: null,
       text: null,
+      title: null,
       fadeIn: 0,
       fadeOut: 0,
       automation: null,

@@ -1,6 +1,6 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { toFrames } from "./apply";
-import { isAudioKind } from "./schema";
+import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
 
@@ -121,9 +121,11 @@ export function editLabel(
         return `${pending ? "Paste" : "Pasted"} clips${pending || command.mode === "insert" ? ` with ${command.mode}` : ""} at ${time(command.at)}`;
       case "insert": {
         const name =
-          command.clip.label ??
-          command.clip.src.split("/").at(-1) ??
-          command.clip.kind;
+          command.clip.kind === "title"
+            ? `title "${firstTextLine(command.clip.text)}"`
+            : (command.clip.label ??
+              command.clip.src.split("/").at(-1) ??
+              command.clip.kind);
         if (pending && command.mode === "overwrite") {
           const tracks = [trackName(command.track)];
           if (command.linkedAudio?.track !== undefined)
@@ -159,6 +161,43 @@ export function editLabel(
           parts.push(
             `Set text to “${words.length > 40 ? `${truncate(words, 40).trimEnd()}…` : words}”`,
           );
+        }
+        if (command.title !== undefined) {
+          const { in: entrance, out: exit, ...look } = command.title;
+          const names = {
+            position: "position",
+            font: "font",
+            size: "size",
+            weight: "weight",
+            color: "colour",
+            align: "alignment",
+            plate: "plate",
+          } as const;
+          for (const [field, name] of Object.entries(names) as [
+            keyof typeof names,
+            string,
+          ][]) {
+            const value = look[field];
+            if (value === undefined) continue;
+            parts.push(
+              value === null
+                ? field === "plate"
+                  ? `${pending ? "Remove" : "Removed"} title plate`
+                  : "Set title font to the composition's font"
+                : `Set title ${name} to ${value}${field === "size" ? " px" : ""}`,
+            );
+          }
+          for (const [name, motion] of [
+            ["entrance", entrance],
+            ["exit", exit],
+          ] as const) {
+            if (!motion) continue;
+            const length =
+              motion.frames === undefined ? [] : [time(motion.frames)];
+            parts.push(
+              `Set title ${name} to ${[...(motion.preset ? [motion.preset] : []), ...length].join(", ")}`,
+            );
+          }
         }
         if (command.opacity !== undefined)
           parts.push(

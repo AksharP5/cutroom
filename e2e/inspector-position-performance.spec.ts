@@ -410,8 +410,9 @@ test(
       for (let press = 0; press < 10; press++) {
         const title = press % 2 === 1;
         await page.mouse.click(
-          picture.x + (title ? 80 : 900) * scale,
-          picture.y + (title ? 30 : 600) * scale,
+          // The workload's titles sit lower left; title-0 is offset 40 px right.
+          picture.x + (title ? 220 : 900) * scale,
+          picture.y + (title ? 935 : 600) * scale,
         );
         await expect(positionField(page)).toHaveValue(title ? "40 px" : "0 px");
         await expect

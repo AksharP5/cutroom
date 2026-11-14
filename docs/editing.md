@@ -126,7 +126,29 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 - `setClip.opacity` sets static inline opacity from 0 to 1, at six-decimal precision. `null` removes the override. Source styles and animations otherwise remain in control.
 - `setClip.x` and `setClip.y` set additive offsets in composition pixels, with positive X moving right and positive Y moving down. Null or zero clears an axis. These edit only the named visual clip, leaving linked audio in place. Preview and export use the same captured native baselines. [Position semantics and runtime limits](mcp.md#timeline).
 - `setClip.text` replaces a text element's words. Newlines become `<br>`, the words are HTML-escaped, and the whitespace around them in the source stays. Media, elements without text, text with markup inside it, preformatted text, and text a script writes by id are refused. [Text semantics](mcp.md#timeline).
+- `insert` with `clip.kind: "title"` adds a title, and `setClip.title` changes its look and motion. [Titles](#titles) describes how they follow edits.
 - `setTiming` changes media `playbackRate` or `mediaStart` in seconds, together with linked partners. Duration stays fixed. Source-in shifts partners by the same source offset; speed preserves source sync at the selected clip's start, including split edits. Locked tracks, non-media clips, and insufficient source media are refused.
+
+### Titles
+
+A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles); controls in the inspector and a key to add one are not built yet. The words are already editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
+
+The entrance belongs to the clip's first frame and the exit to its last:
+
+- Trimming the tail moves the exit to the new last frame. Trimming the head plays the whole entrance from the new first frame, like a fade handle, where video would start partway into its source.
+- Moves, ripples, copies and pastes carry both with the clip.
+- Removing time through the middle of a title shortens it in place, so it still enters once and exits once.
+- A razor cut gives the first piece the entrance and the second piece the exit. Neither animates at the cut, so the words hold across it. Each piece's missing motion reads None and can be set again.
+- When the entrance and exit together are longer than the clip, both shorten in proportion, as audio fades do.
+
+A title is one element in the composition's HTML plus one stylesheet block Cutroom keeps current, with no script. Preview, `timeline_view` and export read the same attributes through the same HyperFrames runtime, so they agree. Two limits follow from how it is built:
+
+- The stylesheet uses typed CSS `attr()`, which needs Chromium 133 or newer. The desktop app, frame capture and export all qualify. If you open the editor in Firefox or Safari, titles show unstyled and unanimated in the viewer; the exported video is still correct.
+- A title can only use a font the project declares with an uncommented `@font-face` rule. A system font can resolve to a different face in export than in the viewer.
+
+If a source edit gives a title an undeclared font, invalid settings, markup other than `<br>`, or empty words, the timeline reads it as an ordinary element with `title: null` and a reason in `sourceRestrictions.title`. Repair its source before changing title settings.
+
+Titles an agent wrote as sub-composition files or root scripts are left as they are and keep the behavior described above.
 
 These cuts follow Resolve's sync-preserving Edit-page ripple model introduced in [DaVinci Resolve 20.2, New Features Guide, pages 7-8](https://documents.blackmagicdesign.com/SupportNotes/DaVinci_Resolve_20.2_New_Features_Guide.pdf#page=7). Earlier Resolve versions mainly moved clips starting after the edit, leaving spanning music or titles uncut. Resolve 20.2 also added independent Sync Lock controls, explained on page 12. Cutroom currently uses auto-select for ripple participation and refuses linked edits across excluded tracks; it does not expose Resolve's separate Sync Lock toggle or its preference to restore the older ripple behavior.
 
