@@ -243,6 +243,8 @@ Scrub late-frame counts stay in the attachment but no longer gate. Local results
 | 6 ms stall handling each warning |                 0.60 |             1.46 | fail   |
 | 4 ms stall handling each warning |                 0.54 |             1.42 | fail   |
 
+Four CI runs of this change on GitHub's runners, whose scrub late-frame rates with nothing selected ranged from 18% to 39%, measured 0.54 to 0.67 ms per step and CPU ratios of 1.09 to 1.11.
+
 The stalls are `CUTROOM_POSITION_READ_STALL_MS`, `CUTROOM_POSITION_OBSERVATION_STALL_MS` and `CUTROOM_POSITION_EDITOR_STALL_MS`. In those four stalled runs the old late-frame difference was 4.5, -1.7, -3.0 and 0.0 points, all inside its limit.
 
 ### Track heights
