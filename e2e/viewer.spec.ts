@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { expect, test } from "./fixtures";
 import type { Request } from "@playwright/test";
 import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
@@ -519,4 +521,216 @@ test("a timeline the engine refuses stays reported after the picture reloads", a
   await expect(status).toContainText("Clip extra has no data-duration");
   await page.waitForTimeout(500);
   await expect(status).toContainText("Clip extra has no data-duration");
+});
+
+test("a seek made while an edited preview takes the screen is drawn by that preview", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Seek during a handoff", duration: 4 },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  const title = (text: string) =>
+    `<div id="late" class="clip" data-start="1" data-duration="2" data-track-index="3">${text}</div></main>`;
+  const starter = await readFile(index, "utf8");
+  await writeFile(index, starter.replace("</main>", title("Before")));
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-handoff", "showing");
+  const live = page.frameLocator("iframe[data-live]");
+  await expect(live.locator("#late")).toBeHidden();
+
+  // Hold the next document's confirming paint, so it stays on screen unconfirmed.
+  await page.addInitScript(() => {
+    if (window === window.top) return;
+    let presented = false;
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event.data?.source !== "cutroom-viewer") return;
+        if (event.data.action === "observe-position") presented = true;
+        if (presented && event.data.action === "paint")
+          event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await writeFile(index, starter.replace("</main>", title("After")));
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+  await expect(live.locator("#late")).toHaveText("After");
+  await expect(live.locator("#late")).toBeHidden();
+
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("00000115");
+  await page.keyboard.press("Enter");
+  // The edited document covers the retained one, so it has to show the new frame itself,
+  // well before the held handoff gives up and the retained document returns.
+  await expect(live.locator("#late")).toBeVisible({ timeout: 5_000 });
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+});
+
+test("playback keeps its sound and its place when a promoted preview is replaced or fails", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  // Each preview reports its runtime clock and the peak of what it sends to the speakers.
+  await page.addInitScript(() => {
+    if (window === window.top) {
+      const samples: { gen: string; time: number; level: number }[] = [];
+      Object.assign(window, { playbackSamples: samples });
+      window.addEventListener("message", (event) => {
+        if (!event.data?.playbackSample) return;
+        const frame = [...document.querySelectorAll("iframe")].find(
+          (frame) => frame.contentWindow === event.source,
+        );
+        if (!frame) return;
+        samples.push({
+          gen: new URL(frame.src).searchParams.get("v")!,
+          time: event.data.time,
+          level: event.data.level,
+        });
+      });
+      return;
+    }
+    const taps: AnalyserNode[] = [];
+    const connect = AudioNode.prototype.connect as (
+      this: AudioNode,
+      destination: AudioNode | AudioParam,
+      output?: number,
+      input?: number,
+    ) => AudioNode | undefined;
+    AudioNode.prototype.connect = function (destination, output, input) {
+      if (destination === this.context.destination) {
+        const analyser = this.context.createAnalyser();
+        analyser.fftSize = 512;
+        connect.call(this, analyser);
+        taps.push(analyser);
+      }
+      return connect.call(this, destination, output, input);
+    } as typeof connect as typeof AudioNode.prototype.connect;
+    const buffer = new Float32Array(512);
+    const sample = () => {
+      const player = (
+        window as unknown as {
+          __player?: { getTime(): number; isPlaying(): boolean };
+        }
+      ).__player;
+      if (player?.isPlaying() && taps.length)
+        parent.postMessage(
+          {
+            playbackSample: true,
+            time: player.getTime(),
+            level: Math.max(
+              ...taps.map((tap) => {
+                tap.getFloatTimeDomainData(buffer);
+                return buffer.reduce(
+                  (peak, value) => Math.max(peak, Math.abs(value)),
+                  0,
+                );
+              }),
+            ),
+          },
+          "*",
+        );
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Playback through a handoff", duration: 60 },
+      })
+    ).json(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=320x180:r=30:d=60",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=60",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    join(project.path, "av.mp4"),
+  ]);
+  const index = join(project.path, "index.html");
+  const source = (title: string) =>
+    `<!doctype html><html><head><style>html,body{margin:0;background:#112244;color:white}video{position:absolute;width:1920px;height:1080px}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="1920" data-height="1080" data-fps="30" data-duration="60"><video id="picture" muted src="av.mp4" data-start="0" data-duration="60" data-track-index="0"></video><audio id="sound" src="av.mp4" data-start="0" data-duration="60" data-track-index="1"></audio><div id="title" class="clip" data-start="0" data-duration="60" data-track-index="2">${title}</div></main></body></html>`;
+  await writeFile(index, source("Before"));
+  await page.goto(`/#project/${project.id}`);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-handoff", "showing");
+  const live = page.frameLocator("iframe[data-live]");
+  // Samples from whichever documents are playing, in the order they were heard.
+  const heard = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            playbackSamples: { gen: string; time: number; level: number }[];
+          }
+        ).playbackSamples,
+    );
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  await expect
+    .poll(async () => (await heard()).filter((s) => s.level > 0.05).length)
+    .toBeGreaterThan(30);
+  const before = (await heard()).length;
+
+  // Hold each next document's confirming paint, so it stays promoted but unconfirmed.
+  await page.addInitScript(() => {
+    if (window === window.top) return;
+    let presented = false;
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event.data?.source !== "cutroom-viewer") return;
+        if (event.data.action === "observe-position") presented = true;
+        if (presented && event.data.action === "paint")
+          event.stopImmediatePropagation();
+      },
+      true,
+    );
+  });
+  await writeFile(index, source("Held first"));
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+  await expect(live.locator("#title")).toHaveText("Held first");
+  await page.waitForTimeout(500);
+  // A newer edit retires the promoted document, and its own promotion then times out.
+  await writeFile(index, source("Held second"));
+  await expect(live.locator("#title")).toHaveText("Held second");
+  await expect(stage).toHaveAttribute("data-handoff", "promoting");
+  await expect(stage).toHaveAttribute("data-handoff", "showing", {
+    timeout: 20_000,
+  });
+  await expect(live.locator("#title")).toHaveText("Before");
+  await page.waitForTimeout(500);
+
+  const samples = (await heard()).slice(before);
+  expect(samples.length).toBeGreaterThan(60);
+  expect(
+    samples.filter((sample, index) => sample.time < samples[index - 1]?.time!),
+    "playback never jumps backward",
+  ).toEqual([]);
+  expect(
+    samples.filter((sample) => sample.level < 0.01),
+    "playback never goes silent",
+  ).toEqual([]);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
 });

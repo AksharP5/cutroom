@@ -315,6 +315,25 @@ export function Viewer({
     if (live) connections.current.get(live.gen)?.present();
   }, [live]);
 
+  // A promoted candidate covers the retained picture before it owns playback, so it must
+  // draw each frame the playhead is parked on. The retained document keeps the transport,
+  // and with it the sound, until the candidate is confirmed: it can still fail or be replaced.
+  useLayoutEffect(() => {
+    if (handoff.kind !== "promoting") return;
+    const { player } = connections.current.get(handoff.candidate.gen) ?? {};
+    if (!player) return;
+    const show = ({ frame, fps }: ReturnType<typeof useTransport.getState>) =>
+      player.seek(frameTime(frame, fps));
+    const now = useTransport.getState();
+    if (now.state.kind !== "playing" && now.frame !== handoff.candidate.shown)
+      show(now);
+    return useTransport.subscribe((state, previous) => {
+      if (state.state.kind === "playing") return;
+      if (state.frame !== previous.frame || previous.state.kind === "playing")
+        show(state);
+    });
+  }, [handoff]);
+
   useEffect(() => {
     if (!candidate) return;
     const timer = window.setTimeout(
@@ -461,19 +480,29 @@ export function Viewer({
       if (!preview.state.root)
         throw new Error("The preview has no element with data-composition-id.");
       const { player } = preview;
-      // Seek until the frame on screen is the latest one asked for.
       let shown = -1;
-      while (shown !== useTransport.getState().frame) {
-        shown = useTransport.getState().frame;
-        player.seek(frameTime(shown, useTransport.getState().fps));
-        await preview.painted();
-        preview.signal.throwIfAborted();
-        if (gen !== latest.current) return;
-        if (useTransport.getState().state.kind !== "stopped") break;
-      }
+      /** Seeks until the frame painted is the latest one asked for. False once superseded. */
+      const showLatest = async () => {
+        while (shown !== useTransport.getState().frame) {
+          shown = useTransport.getState().frame;
+          player.seek(frameTime(shown, useTransport.getState().fps));
+          await preview.painted();
+          preview.signal.throwIfAborted();
+          if (gen !== latest.current) return false;
+          if (useTransport.getState().state.kind !== "stopped") break;
+        }
+        return true;
+      };
+      if (!(await showLatest())) return;
       await preview.activate();
       preview.signal.throwIfAborted();
       if (gen !== latest.current) return;
+      // Activation waits for a paint, and a parked playhead can be moved meanwhile.
+      if (
+        useTransport.getState().state.kind === "stopped" &&
+        !(await showLatest())
+      )
+        return;
       const { width, height } = preview.state;
       transition({
         type: "prepared",
