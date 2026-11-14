@@ -11,9 +11,10 @@ const TITLE_SECONDS = 5;
 const TITLE_WORDS = "Title";
 
 /**
- * A new title at `at`, drawn over the picture: on the first unlocked video track above the video
- * destination with those five seconds free, or on a new track at the top when there is none. It
- * never lands on a clip, so adding a title cuts nothing.
+ * A new title at `at`, drawn over the picture: on the first unlocked, enabled video track above the
+ * video destination with those five seconds free, or on a new track at the top when there is none.
+ * It never lands on a clip, so adding a title cuts nothing. It has no entrance, so the words being
+ * typed are visible at the playhead; the exit keeps its default.
  */
 export function addTitleCommands(
   timeline: Timeline,
@@ -28,6 +29,7 @@ export function addTitleCommands(
     .find(
       (track) =>
         !track.locked &&
+        track.enabled &&
         !timeline.clips.some(
           (clip) =>
             clip.track === track.index &&
@@ -51,7 +53,12 @@ export function addTitleCommands(
       type: "insert",
       track,
       at,
-      clip: { kind: "title", text: TITLE_WORDS, duration },
+      clip: {
+        kind: "title",
+        text: TITLE_WORDS,
+        duration,
+        title: { in: { preset: "none" } },
+      },
     },
   ];
 }

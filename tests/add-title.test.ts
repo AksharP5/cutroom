@@ -116,3 +116,15 @@ test("on an empty timeline the title goes above V1, which stays the destination"
   ]);
   expect(after.clips).toMatchObject([{ track: 1, text: "Title" }]);
 });
+
+test("a title added at the playhead is visible there and skips a disabled track", () => {
+  const timeline = layout([0, 1, 4]);
+  const disabled = {
+    ...timeline,
+    tracks: timeline.tracks.map((track) =>
+      track.index === 1 ? { ...track, enabled: false } : track,
+    ),
+  };
+  const { title } = add(disabled);
+  expect(title).toMatchObject({ track: 4, title: { in: { preset: "none" } } });
+});
