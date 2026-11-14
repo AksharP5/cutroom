@@ -67,8 +67,10 @@ export function createTimelineMedia(
     let path = paths.get(src);
     if (path === undefined) {
       const resolved = localMediaPath(composition, src);
+      // Null is the watcher's word that the file is gone: renamed or removed while a clip
+      // still names it. There is nothing to ask the server for.
       path =
-        resolved === null
+        resolved === null || versions[resolved] === null
           ? null
           : {
               path: resolved,
@@ -236,9 +238,13 @@ export function createTimelineMedia(
   return {
     /** Only a source already used by this canvas needs its decoded media replaced. */
     updateVersions(next: Readonly<Record<string, string | null>>) {
-      const changed = [...paths.values()].some(
-        (path) => path !== null && versions[path.path] !== next[path.path],
-      );
+      const changed = [...paths.entries()].some(([src, path]) => {
+        const file = path?.path ?? localMediaPath(composition, src);
+        // A file reported gone and a file the listing no longer has are the same state.
+        return (
+          file !== null && (versions[file] ?? null) !== (next[file] ?? null)
+        );
+      });
       versions = next;
       return changed;
     },

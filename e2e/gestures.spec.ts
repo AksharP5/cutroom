@@ -885,6 +885,30 @@ for (const noticeTiming of [null, "before", "after"] as const) {
   });
 }
 
+test("the Trim tool grabs a clip's end on the last pixel of its span", async ({
+  page,
+  request,
+}) => {
+  const { read, at } = await open(page, request, "Trim seam");
+  const initial = await read();
+  await page.keyboard.press("t");
+  // A clip's box stops one pixel short of its span. Shot 4 is last on V1, so nothing takes
+  // the press on that pixel for it.
+  const end = await at(360);
+  const shorter = await at(330);
+  await page.mouse.move(end.x - 0.5, end.y);
+  await page.mouse.down();
+  await page.mouse.move(shorter.x, shorter.y, { steps: 12 });
+  await page.mouse.up();
+  await expect
+    .poll(read)
+    .toEqual(
+      initial.map((clip) =>
+        clip[0] === "shot-4" ? ["shot-4", 0, 270, 60] : clip,
+      ),
+    );
+});
+
 test("a refused move names its locked destination", async ({
   page,
   request,

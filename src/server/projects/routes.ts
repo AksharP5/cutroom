@@ -166,6 +166,14 @@ export function createProjectRoutes(
       ),
     );
   });
+  /** The editor asks this before it removes, so its question is not a refused request. */
+  api.get("/projects/:id/media/uses", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const { path } = parseInput(MediaRemoveSchema.pick({ path: true }), {
+      path: c.req.query("path"),
+    });
+    return c.json({ uses: await mediaUses(project, path) });
+  });
   api.post("/projects/:id/media/remove", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(MediaRemoveSchema, await c.req.json());

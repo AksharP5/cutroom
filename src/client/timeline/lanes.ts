@@ -419,9 +419,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   function hitAt(event: PointerEvent): Hit | null {
     if (!(event.target instanceof Element)) return null;
-    const element = event.target.closest<HTMLElement>(
-      "[data-clip], [data-clip-mix]",
-    );
+    const boxes = "[data-clip], [data-clip-mix]";
+    const element =
+      event.target.closest<HTMLElement>(boxes) ??
+      // A clip's box stops one pixel short of its span so a cut shows. That seam is still the
+      // clip's last frame, so a press on it grabs the clip's end like the pixel before it.
+      (event.target.matches(".tl-lane")
+        ? document
+            .elementFromPoint(event.clientX - 1, event.clientY)
+            ?.closest<HTMLElement>(boxes)
+        : null);
     const clip = latest.current.timeline.clips.find(
       (item) => item.id === (element?.dataset.clip ?? element?.dataset.clipMix),
     );

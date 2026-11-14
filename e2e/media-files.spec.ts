@@ -206,6 +206,44 @@ test("Remove asks before taking a file the timeline uses, and Undo brings it bac
   await expect(media.getByRole("listitem")).toHaveCount(4);
 });
 
+test("renaming a still on the timeline, then asking to remove it, makes no request the server refuses", async ({
+  page,
+  request,
+}) => {
+  const { project, timeline, row, sources } = await open(page, request);
+  const index = join(project.path, "index.html");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "</main>",
+      '<img src="assets/still.png" id="card" class="clip" data-start="4" data-duration="2" data-track-index="0"></main>',
+    ),
+  );
+  await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+  // Let the still's picture load before the rename, as it has for anyone who can see it.
+  await page.waitForLoadState("networkidle");
+  const refused: string[] = [];
+  page.on("response", (response) => {
+    if (response.status() >= 400)
+      refused.push(`${response.status()} ${new URL(response.url()).pathname}`);
+  });
+
+  await row("still.png").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await page.keyboard.type("logo-card");
+  await page.keyboard.press("Enter");
+  await expect(row("logo-card.png")).toBeVisible();
+  await expect.poll(sources).toContain("assets/logo-card.png");
+  await page.waitForLoadState("networkidle");
+
+  await row("logo-card.png").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove logo-card.png?" });
+  await expect(dialog).toContainText("This file has 1 use in the project.");
+  await dialog.getByRole("button", { name: "Keep file" }).click();
+  expect(refused).toEqual([]);
+});
+
 test("the delete keys remove the file reached by keyboard, and stay the timeline's after a click", async ({
   page,
   request,
