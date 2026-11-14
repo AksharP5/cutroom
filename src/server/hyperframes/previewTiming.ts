@@ -4,6 +4,14 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { parse, serialize } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
+import { parseFpsWithDefault } from "@hyperframes/core";
+import { canonicalText } from "../../shared/timeline/schema";
+import {
+  declaredFonts,
+  readTitle,
+  titleAttributes,
+  titleStyle,
+} from "../timeline/titles";
 import type { PreviewTiming } from "../../shared/preview";
 
 /** Only these attributes are re-read by the pinned runtime's timing observer. */
@@ -16,12 +24,139 @@ const timingAttributes = [
   "data-playback-rate",
 ] as const;
 
+/** Validate the owned title contract before masking any saved values or generating CSS. */
+function titleContract(
+  document: DefaultTreeAdapterTypes.Document,
+  html: string,
+) {
+  const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
+  const elements: DefaultTreeAdapterTypes.Element[] = [];
+  const collect = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+    for (const node of nodes) {
+      if (!("tagName" in node)) continue;
+      elements.push(node);
+      // Inert templates and mounted scenes are not part of the owned title contract.
+      collect(node.childNodes);
+    }
+  };
+  collect(document.childNodes);
+  const attribute = (node: DefaultTreeAdapterTypes.Element, name: string) =>
+    node.attrs.find((attr) => attr.name === name)?.value;
+  const roots = elements.filter(
+    (node) => attribute(node, "data-composition-id") !== undefined,
+  );
+  const titles = elements.filter(
+    (node) => attribute(node, "data-cutroom-title") !== undefined,
+  );
+  const styles = elements.filter(
+    (node) =>
+      node.tagName === "style" &&
+      attribute(node, "data-cutroom-titles") !== undefined,
+  );
+  const titleData = new Map<
+    DefaultTreeAdapterTypes.Element,
+    NonNullable<PreviewTiming["clips"][number]["title"]>
+  >();
+  let expectedStyle: string | null = null;
+  if (roots.length === 1 && titles.length) {
+    const fps = parseFpsWithDefault(attribute(roots[0]!, "data-fps"));
+    const fonts = new Set(declaredFonts(html));
+    const usedFonts = new Set<string>();
+    for (const node of titles) {
+      const attrs = Object.fromEntries(
+        node.attrs.map(({ name, value }) => [name, value]),
+      );
+      const read = fps.ok && readTitle(attrs, fps.value, fonts);
+      if (
+        !read ||
+        !("title" in read) ||
+        attrs["data-cutroom-title"] !== "1" ||
+        !attrs["data-hf-cutroom-clip-id"] ||
+        attrs["data-composition-id"] !== undefined ||
+        attrs["data-composition-src"] !== undefined ||
+        node.childNodes.some(
+          (child) =>
+            child.nodeName !== "#text" &&
+            !(
+              "tagName" in child &&
+              child.tagName === "br" &&
+              child.attrs.every(
+                ({ name, value }) =>
+                  name === "data-hf-id" && !references.includes(value),
+              )
+            ),
+        )
+      )
+        break;
+      const text = node.childNodes.map((child) =>
+        "value" in child
+          ? child.value
+          : {
+              br:
+                "attrs" in child
+                  ? (child.attrs.find(({ name }) => name === "data-hf-id")
+                      ?.value ?? null)
+                  : null,
+            },
+      );
+      if (
+        !canonicalText(
+          text.map((part) => (typeof part === "string" ? part : "\n")).join(""),
+        )
+      )
+        break;
+      if (read.title.font) usedFonts.add(read.title.font);
+      // Keep the decoded strings from the actual saved/compiled document, including exact
+      // seconds and text-node boundaries. Validation never regenerates or rounds a live value.
+      titleData.set(node, {
+        attributes: titleAttributes(read.title, fps.value)
+          .filter(([name]) => name !== "data-cutroom-title")
+          .map(([name]) => [name, attrs[name] ?? null]),
+        text,
+      });
+    }
+    if (titleData.size === titles.length) expectedStyle = titleStyle(usedFonts);
+    else titleData.clear();
+  }
+  return { titleData, expectedStyle, styles, elements };
+}
+
 /** Compare the compiled document, including scripts, styles and nested compositions.
- * Only numeric timing on identified leaf clips may differ. Root/nested timing reloads.
+ * Only numeric timing and validated Cutroom title data on identified leaf clips may differ.
  */
 export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   const document = parse(html);
   const clips: PreviewTiming["clips"] = [];
+  const { titleData, expectedStyle, styles, elements } = titleContract(
+    document,
+    html,
+  );
+  // The compiler may merge the owned rules into an adjacent stylesheet. Match only
+  // the exact generated CSS, once, and retain everything around it in the structure hash.
+  const css = expectedStyle
+    ?.slice(expectedStyle.indexOf(">") + 1, -"</style>".length)
+    .trim();
+  const allStyles = elements.filter((node) => node.tagName === "style");
+  const matches = css
+    ? allStyles.filter((node) => serialize(node).includes(css))
+    : [];
+  const managedStyle = matches.length === 1 ? matches[0] : undefined;
+  const content = managedStyle && serialize(managedStyle);
+  const allowed = Boolean(
+    css &&
+    managedStyle &&
+    content &&
+    content.indexOf(css) === content.lastIndexOf(css) &&
+    styles.length <= 1 &&
+    (!styles.length || styles[0] === managedStyle) &&
+    managedStyle.attrs.every(
+      ({ name, value }) =>
+        name === "data-cutroom-track-stacking" ||
+        (name === "data-cutroom-titles" && value === "1"),
+    ),
+  );
+  const sheet = allowed ? css! : null;
+  if (!sheet) titleData.clear();
   // Generated HF ids include timing in their hash. Retain any id referenced by
   // scripts/CSS/markup; changing one of those must still reload the document.
   const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
@@ -53,12 +188,19 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
                 Number(value) >= 0),
           )
         ) {
-          clips.push({ id, values });
+          const title = titleData.get(node) ?? null;
+          clips.push({ id, values, title });
           node.attrs = node.attrs.filter(
             ({ name }) =>
-              !timingAttributes.some((attribute) => attribute === name),
+              !timingAttributes.some((attribute) => attribute === name) &&
+              !title?.attributes.some(([attribute]) => attribute === name),
           );
+          if (title) node.childNodes = [];
         }
+      }
+      if (sheet && node === managedStyle) {
+        for (const child of node.childNodes)
+          if ("value" in child) child.value = child.value.replace(sheet, "");
       }
       // Track gains travel with each timing update, so a fader change is not structure.
       if (node.tagName === "hf-audio-group" && attrs.has("data-cutroom-track"))
@@ -93,8 +235,9 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
 
   return {
     structure,
-    revision: hash(structure + JSON.stringify(clips)),
+    revision: hash(structure + JSON.stringify(clips) + JSON.stringify(sheet)),
     clips,
+    titleStyle: sheet,
   };
 }
 
