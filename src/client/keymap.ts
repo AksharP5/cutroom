@@ -450,7 +450,9 @@ export function focusPanel(panel: HTMLElement | null) {
 
 /** Pointer menus give editing back to the field they interrupted, or to the timeline. */
 export function menuFocusTarget(target: Element | null, pointer: boolean) {
-  if (!(target instanceof HTMLElement)) return null;
+  // Nothing was focused: the timeline is looked up when the menu closes, once it exists.
+  if (!(target instanceof HTMLElement) || target === target.ownerDocument.body)
+    return null;
   if (
     !pointer ||
     target.closest(
