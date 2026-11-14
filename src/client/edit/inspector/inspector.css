@@ -203,17 +203,17 @@
   gap: var(--space-2);
   min-height: var(--size-row);
 }
-.inspector-field label {
+.inspector-field :is(label, .inspector-label) {
   color: var(--text-tertiary);
   font-size: var(--type-xs);
   cursor: ew-resize;
   user-select: none;
   touch-action: none;
 }
-.inspector-field label[aria-disabled="true"] {
+.inspector-field :is(label[aria-disabled="true"], .inspector-label) {
   cursor: default;
 }
-.inspector-field input {
+.inspector-field input:is([type="text"]) {
   width: 100%;
   min-width: 0;
   height: var(--size-field);
@@ -309,4 +309,80 @@
   font-stretch: var(--stretch-mono);
   text-decoration: underline;
   text-underline-offset: var(--stroke-bracket);
+}
+
+/* Menus, toggles and swatches share a field row with typed values, at the same height and fill. */
+.inspector-value .select-trigger {
+  flex: 1 1 0;
+  height: var(--size-field);
+  min-height: 0;
+  padding: 0 var(--space-2);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: var(--type-xs);
+}
+.inspector-value .select-trigger:disabled {
+  color: var(--text-tertiary);
+}
+.inspector-value .select-trigger:disabled {
+  background: var(--surface-panel);
+}
+/* A preset and its length split the row evenly. */
+.inspector-value:has(.select-trigger) input[type="text"] {
+  flex: 1 1 0;
+  width: 0;
+}
+.inspector-segments {
+  display: flex;
+  gap: var(--stroke-hair);
+  margin-left: auto;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.inspector-segments button {
+  display: grid;
+  place-items: center;
+  width: var(--size-row);
+  height: var(--size-field);
+  min-height: 0;
+  padding: 0;
+  color: var(--text-secondary);
+}
+.inspector-segments button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.inspector-value input[type="checkbox"] {
+  flex: none;
+  margin: 0 auto 0 0;
+  accent-color: var(--text-primary);
+}
+/* The one place a user's colour shows; the line keeps black and white visible on the panel. */
+.inspector-swatch {
+  flex: none;
+  width: var(--size-field);
+  height: var(--size-field);
+  padding: 0;
+  border: var(--stroke-hair) solid var(--line);
+  border-radius: var(--radius-control);
+  background: none;
+  overflow: hidden;
+}
+.inspector-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.inspector-swatch::-webkit-color-swatch {
+  border: 0;
+}
+.inspector-swatch:disabled {
+  opacity: 0.4;
+}
+.inspector-value input[aria-label="Plate opacity"] {
+  flex: 0 0 calc(var(--size-row) * 2);
+}
+.inspector-reason {
+  margin: 0;
+  padding-bottom: var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--type-2xs);
 }

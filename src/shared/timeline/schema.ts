@@ -249,6 +249,13 @@ export const TimelineSchema = z.object({
   clips: z.array(ClipSchema),
   markers: z.array(MarkerSchema),
   range: RangeSchema,
+  /** Projected by the parser from the project's `@font-face` rules, never written back. */
+  fonts: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Font families the project declares; a title's font is one of these or null. Omitted when it declares none.",
+    ),
 });
 
 export const InsertClipSchema = z.object({
