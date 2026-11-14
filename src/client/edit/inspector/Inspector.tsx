@@ -1,5 +1,5 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
-import type { Clip, Fps } from "../../../shared/timeline/schema";
+import type { Clip, Fps, Timeline } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
 import {
@@ -89,6 +89,41 @@ function PositionFields({
       }}
     />
   ));
+}
+
+function CombinedGain({
+  clips,
+  tracks,
+}: {
+  clips: readonly Clip[];
+  tracks: Timeline["tracks"];
+}) {
+  const gains = clips
+    .filter((clip) => !clip.trackGainWarning)
+    .map(
+      (clip) =>
+        (clip.volume ?? 1) *
+        tracks.find((track) => track.index === clip.track)!.volume,
+    );
+  const gain = gains[0];
+  if (gain === undefined) return null;
+  const mixed = gains.some((next) => next !== gain);
+  // HyperFrames' clip formatter caps at +12 dB; this product can reach +24 dB.
+  const db = gain > 0 ? Math.round(20 * Math.log10(gain) * 10) / 10 : null;
+  const text = mixed
+    ? "Mixed"
+    : db === null
+      ? "-∞ dB"
+      : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
+  return (
+    <div
+      className="inspector-field inspector-combined-gain"
+      title="Clip gain × track gain, before fades and automation. Authored audio groups are excluded."
+    >
+      <span>Combined static gain</span>
+      <output aria-label="Combined static gain">{text}</output>
+    </div>
+  );
 }
 
 export function Inspector({ projectId }: { projectId: string }) {
@@ -334,6 +369,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                   );
                 }}
               />
+              <CombinedGain clips={sound} tracks={timeline.tracks} />
             </details>
           )}
         </div>
@@ -493,6 +529,7 @@ export function Inspector({ projectId }: { projectId: string }) {
                     ]);
                   }}
                 />
+                <CombinedGain clips={[audio]} tracks={timeline.tracks} />
                 {(["fadeIn", "fadeOut"] as const).map((field) => (
                   <ValueField
                     key={`${audio.id}:${field}`}
