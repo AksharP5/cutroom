@@ -7,11 +7,15 @@ import type {
   Timeline,
   Transition,
 } from "../../shared/timeline/schema";
-import { formatTimecode } from "../../shared/timeline/timecode";
+import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
 import {
   TRANSITION_NAMES,
   framesBefore,
 } from "../../shared/timeline/transition";
+
+/** A transition's length without its zero groups: `24` frames, `1:00` for a second. */
+export const transitionLength = (duration: number, fps: Timeline["fps"]) =>
+  quietTimecode(formatTimecode(duration, fps)).value.replace(/^0(?=\d)/, "");
 
 /** How close to either end of a transition a press takes its length instead of selecting it. */
 const EDGE_PX = 6;
@@ -72,11 +76,21 @@ export function TransitionMark({
     element.style.setProperty("--s", String(clip.start - before));
     element.style.setProperty("--d", String(duration));
   };
+  /** The printed length, on the text layer, hides while a drag changes it. */
+  const showLength = (shown: boolean) => {
+    const length = mark.current
+      ?.closest(".tl-time")
+      ?.querySelector<HTMLElement>(
+        `[data-transition-length="${CSS.escape(clip.id)}"]`,
+      );
+    if (length) length.hidden = !shown;
+  };
   const end = (commit: boolean) => {
     const held = drag.current;
     if (!held) return;
     drag.current = null;
     held.cancel();
+    showLength(true);
     onGesture(false);
     if (commit && from && held.duration !== transition.duration)
       onEdit({
@@ -115,6 +129,7 @@ export function TransitionMark({
       room: cutRoom(timeline, from, clip, transition.alignment).frames,
       cancel: () => document.removeEventListener("keydown", key, true),
     };
+    showLength(false);
     onGesture(true);
   }
 
@@ -143,5 +158,34 @@ export function TransitionMark({
       onPointerCancel={() => end(false)}
       onLostPointerCapture={() => end(false)}
     />
+  );
+}
+
+/**
+ * A transition's length, printed over its middle on the text layer so a zoom never stretches it.
+ * timeline.css shows it once the transition is 28px wide.
+ */
+export function TransitionLength({
+  clip,
+  transition,
+  fps,
+  selected,
+}: {
+  clip: Clip;
+  transition: Transition;
+  fps: Timeline["fps"];
+  selected: boolean;
+}) {
+  const start = clip.start - framesBefore(transition);
+  return (
+    <i
+      className={`tl-transition-length${selected ? " selected" : ""}`}
+      data-transition-length={clip.id}
+      style={{ "--s": start, "--d": transition.duration }}
+    >
+      <span data-unscaled style={{ "--f": start + transition.duration / 2 }}>
+        {transitionLength(transition.duration, fps)}
+      </span>
+    </i>
   );
 }

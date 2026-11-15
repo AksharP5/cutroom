@@ -21,6 +21,7 @@ import {
 } from "../timeline/mediaDrag";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { showToast, useFps, useWorkspace } from "../workspace";
+import { TimecodeText } from "./TimecodeText";
 import { openContextMenu, revealRows } from "./ContextMenu";
 import { Modal } from "./Modal";
 
@@ -291,7 +292,9 @@ function MediaRow({
       <span className="media-duration mono">
         {kind === "image"
           ? "Still"
-          : duration !== null && frameTimecode(duration, fps)}
+          : duration !== null && (
+              <TimecodeText timecode={frameTimecode(duration, fps)} />
+            )}
       </span>
     </li>
   );

@@ -14,6 +14,22 @@ export function formatTimecode(frame: number, fps: Fps): string {
   return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}:${pad(frame % rate)}`;
 }
 
+/**
+ * A timecode cut where its zeros carry nothing: the leading groups that are all zero, and with
+ * `trailing`, a frames group of `00` after a value (the ruler, whose labels fall on whole
+ * seconds). The value is never empty: the frames group always stays in it or in `tail`.
+ * The three parts joined are the timecode unchanged.
+ */
+export function quietTimecode(
+  timecode: string,
+  { trailing = false }: { trailing?: boolean } = {},
+): { lead: string; value: string; tail: string } {
+  const lead = /^(?:00:){0,3}/.exec(timecode)![0];
+  const rest = timecode.slice(lead.length);
+  const tail = trailing && rest.length > 2 && rest.endsWith(":00") ? ":00" : "";
+  return { lead, value: rest.slice(0, rest.length - tail.length), tail };
+}
+
 /** Up to eight typed digits, filled from the right: `1204` is `00:00:12:04`. */
 export const timecodeDigits = (digits: string) =>
   digits.slice(-8).padStart(8, "0");

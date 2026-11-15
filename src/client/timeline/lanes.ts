@@ -17,7 +17,7 @@ import type {
   Fps,
   Timeline,
 } from "../../shared/timeline/schema";
-import { formatTimecode } from "../../shared/timeline/timecode";
+import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "../edit/anchors";
 import { clearEditFrame, previewEditFrame } from "../edit/editFrame";
 import type { Bodies } from "./bodies";
@@ -98,6 +98,9 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   const hoveredMix = useRef<HTMLElement | null>(null);
+  /** The clip the hover box was last put on, by where it was, so an edit that moved it moves the box. */
+  const hovered = useRef("");
+  const hoverBox = useRef<HTMLElement>(null);
   /** Snap targets for the blade's hover, made again when the timeline or playhead changes. */
   const hoverTargets = useRef<{
     timeline: Timeline;
@@ -272,8 +275,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
         const resized = at !== undefined && at.scale !== 1;
         if (!old || (!resized && !element.style.getPropertyValue("--grow")))
           continue;
-        const length = element.querySelector(".tl-length")?.firstChild;
-        if (!length) continue;
+        const length = element.querySelector(".tl-length");
+        // The value's text node; the quiet zeros before it are a span of their own.
+        const text = [...(length?.childNodes ?? [])].find(
+          (node) => node.nodeType === Node.TEXT_NODE,
+        );
+        if (!length || !text) continue;
         const duration = resized ? at.duration : old.duration;
         if (resized)
           element.style.setProperty(
@@ -285,8 +292,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
           "data-short",
           resized && duration * ppf < LENGTH_MIN_WIDTH,
         );
-        // React keeps this text node, so its value is written, never replaced.
-        length.nodeValue = formatTimecode(duration, shown.fps);
+        // React keeps these text nodes, so their values are written, never replaced.
+        const { lead, value } = quietTimecode(
+          formatTimecode(duration, shown.fps),
+        );
+        const quiet = length.querySelector(".timecode-quiet")?.firstChild;
+        if (quiet) quiet.nodeValue = lead;
+        text.nodeValue = quiet ? value : lead + value;
       }
     const remixing = new Set<string>();
     for (const clip of shown.clips) {
@@ -688,10 +700,29 @@ export function useLaneGestures(options: LaneGestureOptions) {
       );
   }
 
+  /** Lays the hover box over a clip, or takes it away. Only a change of clip writes to it. */
+  function hoverClip(clip: Clip | null) {
+    const element = hoverBox.current;
+    const row = clip && rowOf(clip.track);
+    const key =
+      clip && row
+        ? `${clip.id}:${clip.start}:${clip.duration}:${row.top}:${row.height}`
+        : "";
+    if (!element || key === hovered.current) return;
+    hovered.current = key;
+    element.hidden = !(clip && row);
+    if (!clip || !row) return;
+    element.style.setProperty("--s", String(clip.start));
+    element.style.setProperty("--d", String(clip.duration));
+    element.style.top = `${row.top}px`;
+    element.style.height = `${row.height - 2}px`;
+  }
+
   function hover(event: PointerEvent) {
     const { tool, timeline, lanes, playhead } = latest.current;
     const root = lanes.current;
     const hit = hitAt(event);
+    hoverClip(hit?.clip ?? null);
     const mix =
       hit &&
       root?.querySelector<HTMLElement>(
@@ -744,6 +775,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || gesture.current.phase !== "idle") return;
+    hoverClip(null);
     const { tool, timeline, rows, selection, onSelect, onGesture, playhead } =
       latest.current;
     const hit = hitAt(event);
@@ -995,6 +1027,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onLostPointerCapture: () => end("cancel"),
       onPointerLeave: () => {
         if (gesture.current.phase === "idle") {
+          hoverClip(null);
           hoveredMix.current?.removeAttribute("data-hover");
           hoveredMix.current = null;
           mark(bladeLine.current, null);
@@ -1007,7 +1040,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       onDragLeave,
       onDrop,
     },
-    marks: { snapLine, bladeLine, ghost, readout, marquee, pieces },
+    marks: { snapLine, bladeLine, ghost, readout, marquee, pieces, hoverBox },
     held,
     /** The view scrolled or zoomed: a drag under way is drawn again from where the pointer is. */
     refresh() {

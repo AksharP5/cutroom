@@ -29,6 +29,7 @@ import {
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
+import { TimecodeText } from "../../components/TimecodeText";
 import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { TransitionSection } from "./TransitionSection";
@@ -451,7 +452,11 @@ export function Inspector({
                   ? "Text"
                   : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
               on {track?.id} ·{" "}
-              <time>{formatTimecode(clip.start, timeline.fps)}</time>
+              <time>
+                <TimecodeText
+                  timecode={formatTimecode(clip.start, timeline.fps)}
+                />
+              </time>
             </span>
           </div>
           <ChangeList

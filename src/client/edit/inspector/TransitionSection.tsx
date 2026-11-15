@@ -5,6 +5,7 @@ import {
 } from "../../../shared/timeline/schema";
 import type { Timeline, Transition } from "../../../shared/timeline/schema";
 import { formatTimecode } from "../../../shared/timeline/timecode";
+import { TimecodeText } from "../../components/TimecodeText";
 import { TRANSITION_NAMES } from "../../../shared/timeline/transition";
 import { SelectMenu } from "../../components/SelectMenu";
 import { trackRows } from "../../timeline/math";
@@ -61,7 +62,9 @@ export function TransitionSection({
         <strong>{TRANSITION_NAMES[transition.kind]}</strong>
         <span>
           Transition on {track?.id} ·{" "}
-          <time>{formatTimecode(to.start, timeline.fps)}</time>
+          <time>
+            <TimecodeText timecode={formatTimecode(to.start, timeline.fps)} />
+          </time>
         </span>
       </div>
       <section className="inspector-section inspector-transition">

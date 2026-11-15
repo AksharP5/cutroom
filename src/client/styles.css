@@ -157,6 +157,10 @@ kbd,
   font-stretch: var(--stretch-mono);
   font-variant-numeric: tabular-nums;
 }
+/* Quiet zeros: the timecode groups that carry nothing (TimecodeText). */
+.timecode-quiet {
+  color: var(--text-quiet);
+}
 
 /* Hover is a white overlay faded in by opacity; press is a scale. Nothing animates color. */
 :is(

@@ -12,6 +12,7 @@ import type { Fps } from "../../shared/timeline/schema";
 import { actionFor, comboOf, keymap } from "../keymap";
 import { noteNumbers } from "../review";
 import { formatTimecode } from "../../shared/timeline/timecode";
+import { TimecodeText } from "../components/TimecodeText";
 import {
   committable,
   noNotes,
@@ -455,7 +456,9 @@ export function NoteLayer({
               data-ranged={draft.end !== null || undefined}
             >
               <span className="edit-note-time">
-                <span className="mono">{formatTimecode(draft.frame, fps)}</span>
+                <span className="mono">
+                  <TimecodeText timecode={formatTimecode(draft.frame, fps)} />
+                </span>
                 <NoteEnd draft={draft} fps={fps} dispatch={dispatch} />
               </span>
               <span className="edit-grow" />
@@ -509,7 +512,9 @@ function NoteEnd({
         title="Clear the end"
         onClick={() => dispatch({ type: "end", frame: null })}
       >
-        <span className="mono">to {formatTimecode(draft.end, fps)}</span>
+        <span className="mono">
+          to <TimecodeText timecode={formatTimecode(draft.end, fps)} />
+        </span>
         <X size={10} />
       </button>
     );

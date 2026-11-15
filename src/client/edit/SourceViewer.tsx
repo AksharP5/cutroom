@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
 import { mediaSettings, peakLevels } from "../../shared/media";
 import { formatTimecode } from "../../shared/timeline/timecode";
+import { TimecodeText } from "../components/TimecodeText";
 import { mediaUrl } from "../api";
 import { openContextMenu } from "../components/ContextMenu";
 import { blurPointerButton, hint, keymap } from "../keymap";
@@ -322,7 +323,7 @@ function PlacedLength() {
   );
   return (
     <span className="edit-source-length" title="Length to place">
-      {formatTimecode(frames, fps)}
+      <TimecodeText timecode={formatTimecode(frames, fps)} />
     </span>
   );
 }

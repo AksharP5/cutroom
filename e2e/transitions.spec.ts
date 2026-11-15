@@ -87,6 +87,10 @@ test("Ctrl+T adds a cross dissolve the viewer mixes; its end drags its length; D
   await page.keyboard.press("Control+t");
   // The cut and its linked sound each show the transition.
   await expect(page.locator("[data-transition]")).toHaveCount(2);
+  // Wide enough, a transition prints its length.
+  const length = page.locator('[data-transition-length="b"]');
+  await expect(length).toHaveText("1:00");
+  await expect(length.locator("span")).toBeVisible();
   await expect.poll(read).toEqual({
     kind: "dissolve",
     duration: 30,
@@ -113,8 +117,11 @@ test("Ctrl+T adds a cross dissolve the viewer mixes; its end drags its length; D
   await page.mouse.move(cut + box.width, box.y + box.height / 2, {
     steps: 5,
   });
+  // The printed length steps aside while the drag changes it.
+  await expect(length).toBeHidden();
   await page.mouse.up();
   await expect.poll(async () => (await read())?.duration).toBe(60);
+  await expect(length).toHaveText("2:00");
   await expect(mark).toHaveClass(/selected/);
 
   // Selected, it shows in the inspector, and Delete removes it from both cuts.

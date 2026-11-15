@@ -28,6 +28,7 @@ import { useFps } from "../workspace";
 import { useTimeline } from "../edit/timeline";
 import { pendingEdit, reviewRows } from "../edit/inspector/changes";
 import { Modal } from "./Modal";
+import { TimecodeText } from "./TimecodeText";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
 /** A question stalls the agent, so blocked notes lead To review. */
@@ -297,7 +298,7 @@ export function ReviewPanel({
               })()}
               onClick={() => onSeek(item)}
             >
-              {timecode(item)}
+              <TimecodeText timecode={timecode(item)} />
             </button>
             <span className="note-element" title={name}>
               {name}
@@ -535,7 +536,7 @@ export function ReviewPanel({
               {draft.strokes.length ? <PencilSimple /> : <ChatTeardropText />}
               Note at{" "}
               <span className="mono">
-                {frameTimecode(draft.time, draftFps)}
+                <TimecodeText timecode={frameTimecode(draft.time, draftFps)} />
               </span>
             </span>
             <button
@@ -623,7 +624,10 @@ export function ReviewPanel({
         <Modal
           title={
             <>
-              Review at <span className="mono">{timecode(details)}</span>
+              Review at{" "}
+              <span className="mono">
+                <TimecodeText timecode={timecode(details)} />
+              </span>
             </>
           }
           onClose={() => setDetailsId(null)}

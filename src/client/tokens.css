@@ -61,6 +61,7 @@
   --text-primary: #ededed; /* 16.0 / 15.0 / 14.6 / 13.4 / 12.1 */
   --text-secondary: #a8a8a8; /* 7.9 / 7.4 / 7.2 / 6.6 / 5.9 */
   --text-tertiary: #929292; /* 6.0 / 5.7 / 5.5 / 5.1 / 4.55 */
+  --text-quiet: #6a6a6a; /* 3.5 on panel; quiet zeros in timecode only, never a whole value */
   --glyph-faint: #5c5c5c; /* non-text only: idle keyframe diamonds, empty step boxes, accepted pin ring */
 
   /* Signals. Yellow is a human mark. Blue is agent work: active OR awaiting review. */
@@ -76,11 +77,17 @@
   --accepted: var(--text-tertiary); /* accepted agent work turns neutral */
   --playhead: #ff4f3a; /* 5.7 on panel; playhead and meter clip only */
   --danger: #ff7a6b; /* 7.4 on panel; errors */
-  --selection: #ededed; /* paper: selection outline, brackets, in/out, armed tool */
+  --selection: #ededed; /* paper: selection outline, brackets, in/out, armed tool, a selected clip's name strip */
   --on-selection: #111111; /* icons and text on paper, 16.0 */
+  --on-selection-meta: #3d3d3d; /* durations on paper, 9.3 */
+  --on-selection-quiet: #7a7a7a; /* quiet zeros on paper, 3.7 */
   --selection-hover: #a8a8a8; /* the clip a press on the picture would take */
   --range-band: rgb(237 237 237 / 0.08); /* in/out band in the ruler */
   --range-line: rgb(237 237 237 / 0.28); /* 1px in/out lines through tracks */
+  --transition-fill: rgb(237 237 237 / 0.1); /* a transition over its cut */
+  --transition-fill-selected: rgb(237 237 237 / 0.24);
+  --transition-line: rgb(237 237 237 / 0.75); /* its diagonal and ends, 3:1+ on any clip body */
+  --transition-length-backing: rgb(10 10 10 / 0.7); /* under its printed length */
 
   /* Focus, text selection, caret, scrollbars */
   --focus-ring-color: #ededed; /* paper; on every focusable control via :focus-visible */
@@ -98,7 +105,7 @@
   --clip-disabled-filter: saturate(0); /* static, never animated */
   --clip-disabled-opacity: 0.4; /* with the filter, a clip that is off reads at a glance */
 
-  /* Markers: graphic only (3:1+ on panel). Names use --text-secondary. No yellow, blue or red. */
+  /* Markers: flags and names in the marker's colour (7.1:1+ on panel). No yellow, blue or red. */
   --marker-grey: #a8a8a8; /* default */
   --marker-green: #84bd86;
   --marker-violet: #a994dc;
@@ -148,9 +155,9 @@
   --weight-semibold: 600;
   --weight-bold: 700;
 
-  --type-micro: 9px; /* ruler labels, meter scale (mono) */
+  --type-micro: 9px; /* meter scale, transition lengths (mono) */
   --type-field-tight: 9.5px; /* timecode in a paired inspector field, so two fit at 300px */
-  --type-2xs: 10px; /* clip name strip, track ids, small timecode */
+  --type-2xs: 10px; /* ruler labels, marker names, clip name strip, track ids, small timecode */
   --type-xs: 11px; /* meta, durations, status bar, transport duration */
   --type-sm: 12px; /* body, controls, panel titles */
   --type-md: 13px; /* chat */
@@ -195,10 +202,10 @@
   --size-media-row: 30px;
   --size-ledger-row: 24px; /* inspector change and marker rows */
   --size-status: 24px;
-  --size-ruler: 28px; /* bands: pins 2-8, labels 10-19, flags and playhead head 19-28 */
+  --size-ruler: 32px; /* bands: pins 2-8, labels 9-19, flags, marker names and playhead head 21-31 */
   --ruler-pin-top: 2px;
-  --ruler-label-top: 10px;
-  --ruler-flag-top: 19px;
+  --ruler-label-top: 9px;
+  --ruler-flag-top: 21px;
   --size-track-head: 132px;
   --size-track-video: 56px;
   --size-track-audio: 44px;
@@ -216,7 +223,7 @@
   --size-pin-viewer: 16px;
   --size-pin-ruler: 6px;
   --size-playhead-head-w: 11px;
-  --size-playhead-head-h: 9px; /* the 19-28 band; the stem starts at its tip */
+  --size-playhead-head-h: 9px; /* in the flag band; the stem starts at its tip */
   --size-zoom-slider: 48px;
   --stage-margin: 12px;
 
@@ -230,7 +237,7 @@
   --width-inspector: 300px;
   --width-inspector-min: 264px;
   --width-centre-min: 736px;
-  --timeline-height: 337px; /* 29 ruler + 3x57 video + 2 divider + 3x45 audio */
+  --timeline-height: 341px; /* 33 ruler + 3x57 video + 2 divider + 3x45 audio */
 
   /* Radii */
   --radius-clip: 2px;
