@@ -139,3 +139,6 @@
   opacity: 0.4;
   transform: none;
 }
+.modal-actions .export-still {
+  margin-right: auto;
+}

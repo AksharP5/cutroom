@@ -2,7 +2,7 @@
 
 Cutroom's own editor is the default: a tool row, the viewer, the transport, and a timeline below a draggable split. Review notes and word-based edits share its project history.
 
-Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels, frame capture, and export settings with a cancel button. The switch goes away when those arrive.
+Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels, and export settings with a cancel button. The switch goes away when those arrive.
 
 ## Editor
 
@@ -15,6 +15,8 @@ With Select, the picture is a direct surface. Rest the pointer on a clip and a t
 A text clip has a Text section above Transform. Double-click the clip on the picture to open the inspector on that field with the words selected, ready to type over. Enter or leaving the field saves the words as one undo step, Shift+Enter starts a new line, and Esc discards the typing. Line breaks are written as `<br>`; other whitespace collapses as HTML renders it by default. The field is shown but disabled, with the reason under it, when the text has markup inside it, keeps its exact spacing (`<pre>` or an inline `white-space: pre`), or a script writes it by id. Shapes and media have no Text section.
 
 The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. The picture outline turns yellow while Draw or Comment is armed.
+
+Ctrl+Alt+G, or Save frame as PNG in the Export dialog, saves the frame at the playhead as a PNG at the composition's size. It goes beside the exports in `.cutroom/renders`, named after the project and the timecode, such as `Launch 00-00-03-12.png`, with a number added when that name is taken. A toast names the file, and the desktop app can reveal it.
 
 Notes are made on the picture. Comment drops a numbered pin where you click and opens a note beside it; Enter adds it, Shift+Enter starts a new line, and Esc discards it. Draw keeps every stroke on the picture until the note is added, and Ctrl+Z takes back the last stroke while the note is open, never the project's last edit. A drawing needs no words. Set end ends a note at the playhead, so it covers a range. Clicking the picture again before adding a note moves its pin and keeps what you typed and drew. The tool stays armed, so the next click starts the next note while the last one saves. A note that fails to save reopens with the reason. Saved notes keep their pins and strokes on the picture while the playhead is on their frame or range, and clicking a pin shows the note in Review. Pins on the picture, dots on the ruler, and rows in Review share one number per note.
 

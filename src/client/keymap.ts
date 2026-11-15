@@ -402,6 +402,11 @@ export const keymap = {
   cutroomAddTitle: { area: "Edit", label: "Add title", keys: ["Alt+Shift+T"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
+  viewStillsStillGrab: {
+    area: "View",
+    label: "Save frame as PNG",
+    keys: ["Ctrl+Alt+G"],
+  },
   resolveCustomizedActions: {
     area: "View",
     label: "Keyboard shortcuts",
