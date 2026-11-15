@@ -7,10 +7,17 @@ import type {
   InsertTitle,
   Timeline,
   Track,
+  Transition,
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle } from "./title";
 import { TimelineError } from "./errors";
-import { windowMix } from "./mix";
+import { clipFades, windowMix } from "./mix";
+import {
+  framesAfter,
+  framesBefore,
+  sameTransition,
+  takesTransition,
+} from "./transition";
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 
@@ -178,7 +185,7 @@ export function apply(
     retired = new Set(),
   }: ApplyOptions = {},
 ): Timeline {
-  return applyIn(timeline, command, {
+  const next = applyIn(timeline, command, {
     clipboards,
     reserved: usedNames(timeline, retired),
     retired,
@@ -188,6 +195,7 @@ export function apply(
     silentMedia,
     newId,
   });
+  return next === timeline ? timeline : fitTransitions(next);
 }
 
 /** Applies a batch atomically: the first failure throws with its command index. */
@@ -246,10 +254,12 @@ export function applyAll(
     }
   }, observed);
   if (result === observed) return timeline;
-  if (!onApply) return result;
+  // A roll trims both sides of a cut in turn, so transitions are settled once the batch is done.
+  const fitted = fitTransitions(result);
+  if (!onApply) return fitted;
   return {
-    ...result,
-    clips: result.clips.map((clip: ObservedClip) => {
+    ...fitted,
+    clips: fitted.clips.map((clip: ObservedClip) => {
       const { [animationSource]: _offset, ...written } = clip;
       return written;
     }),
@@ -576,6 +586,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               title: editTitle(defaultTitle(fps), input.title),
               fadeIn: 0,
               fadeOut: 0,
+              transitionIn: null,
+              transitionOut: null,
               automation: null,
               enabled: true,
               startRef: null,
@@ -617,6 +629,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         title: null,
         fadeIn: 0,
         fadeOut: 0,
+        transitionIn: null,
+        transitionOut: null,
         automation: null,
         enabled: true,
         startRef: null,
@@ -774,6 +788,59 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: [...next, ...added] };
     }
+    case "setTransition": {
+      const from = find(command.from);
+      const to = find(command.to);
+      if (from.track !== to.track || clipEnd(from) !== to.start)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(from)} does not end where ${clipName(to)} starts on the same track.`,
+        );
+      for (const clip of [from, to])
+        if (!takesTransition(clip))
+          throw new TimelineError(
+            "unsupported",
+            `Transitions join video, image and audio clips, and ${clipName(clip)} is not one.`,
+          );
+      const { transition } = command;
+      const cuts = linkedCuts(clips, from, to);
+      if (transition)
+        for (const [outgoing, incoming] of cuts) {
+          const room = transitionRoom(
+            fps,
+            outgoing,
+            incoming,
+            transition.alignment,
+          );
+          if (transition.duration > room.frames)
+            throw new TimelineError(
+              "out_of_bounds",
+              room.frames
+                ? `Only ${room.frames} ${room.frames === 1 ? "frame fits" : "frames fit"} at this cut: ${room.reason}.`
+                : `No transition fits at this cut: ${room.reason}.`,
+            );
+        }
+      const outgoing = new Set(cuts.map(([clip]) => clip.id));
+      const incoming = new Set(cuts.map(([, clip]) => clip.id));
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          outgoing.has(clip.id)
+            ? {
+                ...clip,
+                transitionOut: transition,
+                ...(transition && { fadeOut: 0 }),
+              }
+            : incoming.has(clip.id)
+              ? {
+                  ...clip,
+                  transitionIn: transition,
+                  ...(transition && { fadeIn: 0 }),
+                }
+              : clip,
+        ),
+      };
+    }
     case "setTiming": {
       const target = find(command.clipId);
       const targets = withPartners(clips, [target]);
@@ -840,6 +907,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           target.sourceRestrictions?.title ??
             `${target.label ?? target.id} is not a Cutroom title.`,
         );
+      for (const [fade, transition] of [
+        [command.fadeIn, target.transitionIn],
+        [command.fadeOut, target.transitionOut],
+      ] as const)
+        if (fade && transition)
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} has a transition on that edge, which sets its fade. Change the transition instead.`,
+          );
       const fadeIn = command.fadeIn ?? target.fadeIn;
       const fadeOut = command.fadeOut ?? target.fadeOut;
       return {
@@ -1492,12 +1568,218 @@ function windowClip(
     start,
     duration,
     mediaStart: advance(clip, start - clip.start, fps),
+    // A piece cut from a clip keeps a transition only on an edge it still has.
+    ...(mode === "cut" && start !== clip.start && { transitionIn: null }),
+    ...(mode === "cut" && end !== clipEnd(clip) && { transitionOut: null }),
     ...(clip[animationSource] !== undefined && {
       [animationSource]:
         clip[animationSource] +
         frameTime(start - clip.start, fps) * clip.playbackRate,
     }),
   };
+}
+
+const clipName = (clip: Clip) =>
+  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+
+/** The cut itself, then each pair of linked partners meeting at the same frame on one track. */
+function linkedCuts(clips: Clip[], from: Clip, to: Clip): [Clip, Clip][] {
+  const cut = clipEnd(from);
+  const partners = (clip: Clip) =>
+    clip.link === null
+      ? []
+      : clips.filter(
+          (item) =>
+            item.link === clip.link &&
+            item.id !== from.id &&
+            item.id !== to.id &&
+            takesTransition(item),
+        );
+  const incoming = partners(to);
+  return [
+    [from, to],
+    ...partners(from).flatMap((outgoing): [Clip, Clip][] => {
+      const partner = incoming.find(
+        (clip) =>
+          clip.track === outgoing.track &&
+          clip.start === cut &&
+          clipEnd(outgoing) === cut,
+      );
+      return partner ? [[outgoing, partner]] : [];
+    }),
+  ];
+}
+
+/** Whole frames of media a clip has after its out point; unbounded for stills and unmeasured media. */
+function framesAfterOut(clip: Clip, fps: Fps) {
+  if (clip.mediaStart === null || clip.sourceDuration === null) return Infinity;
+  return (
+    toFrames((clip.sourceDuration - clip.mediaStart) / clip.playbackRate, fps) -
+    clip.duration
+  );
+}
+
+/** Whole frames of media a clip has before its in point. */
+function framesBeforeIn(clip: Clip, fps: Fps) {
+  if (clip.mediaStart === null) return Infinity;
+  return Math.floor(
+    (clip.mediaStart / clip.playbackRate) * (fps.num / fps.den) + 1e-6,
+  );
+}
+
+/**
+ * The longest transition with this alignment that fits a cut, and what limits it: media past the
+ * outgoing clip's out point and before the incoming clip's in point, each clip's length beside its
+ * other transition or sound fade, and the start of the timeline.
+ */
+export function transitionRoom(
+  fps: Fps,
+  from: Clip,
+  to: Clip,
+  alignment: Transition["alignment"],
+): { frames: number; reason: string } {
+  const count = (frames: number) =>
+    `${frames} ${frames === 1 ? "frame" : "frames"}`;
+  const limit = (limits: [number, () => string][]) => {
+    const [frames, reason] = limits.reduce((least, next) =>
+      next[0] < least[0] ? next : least,
+    );
+    return { frames: Math.max(0, frames), reason };
+  };
+  const inSide = from.transitionIn
+    ? framesAfter(from.transitionIn)
+    : from.hasAudio
+      ? clipFades(from).fadeIn
+      : 0;
+  const outSide = to.transitionOut
+    ? framesBefore(to.transitionOut)
+    : to.hasAudio
+      ? clipFades(to).fadeOut
+      : 0;
+  const before = limit([
+    [
+      framesBeforeIn(to, fps),
+      () =>
+        `${clipName(to)} has ${count(framesBeforeIn(to, fps))} of media before its in point`,
+    ],
+    [
+      from.duration - inSide,
+      () =>
+        inSide
+          ? `${clipName(from)} has ${count(from.duration - inSide)} beside its ${from.transitionIn ? "other transition" : "fade in"}`
+          : `${clipName(from)} is ${count(from.duration)} long`,
+    ],
+    [to.start, () => `the cut is ${count(to.start)} from the timeline start`],
+  ]);
+  const after = limit([
+    [
+      framesAfterOut(from, fps),
+      () =>
+        `${clipName(from)} has ${count(framesAfterOut(from, fps))} of media after its out point`,
+    ],
+    [
+      to.duration - outSide,
+      () =>
+        outSide
+          ? `${clipName(to)} has ${count(to.duration - outSide)} beside its ${to.transitionOut ? "other transition" : "fade out"}`
+          : `${clipName(to)} is ${count(to.duration)} long`,
+    ],
+  ]);
+  const side =
+    alignment === "start"
+      ? { frames: after.frames, limit: after }
+      : alignment === "end"
+        ? { frames: before.frames, limit: before }
+        : 2 * before.frames + 1 <= 2 * after.frames
+          ? { frames: 2 * before.frames + 1, limit: before }
+          : { frames: 2 * after.frames, limit: after };
+  return { frames: side.frames, reason: side.limit.reason() };
+}
+
+/** The longest transition that fits a cut and every linked cut beside it. */
+export function cutRoom(
+  timeline: Timeline,
+  from: Clip,
+  to: Clip,
+  alignment: Transition["alignment"],
+) {
+  return linkedCuts(timeline.clips, from, to)
+    .map(([outgoing, incoming]) =>
+      transitionRoom(timeline.fps, outgoing, incoming, alignment),
+    )
+    .reduce((least, next) => (next.frames < least.frames ? next : least));
+}
+
+/**
+ * A transition stays on a cut while both of its edges still meet there; a clip moved away or
+ * deleted takes it with it. One that no longer fits shortens to the longest that does, earliest
+ * cut first, and goes when nothing fits.
+ */
+function fitTransitions(timeline: Timeline): Timeline {
+  if (!timeline.clips.some((clip) => clip.transitionIn || clip.transitionOut))
+    return timeline;
+  const byId = new Map(timeline.clips.map((clip) => [clip.id, clip]));
+  const meets = (outgoing: Clip, incoming: Clip) =>
+    outgoing.id !== incoming.id &&
+    outgoing.track === incoming.track &&
+    clipEnd(outgoing) === incoming.start &&
+    sameTransition(outgoing.transitionOut, incoming.transitionIn) &&
+    takesTransition(outgoing) &&
+    takesTransition(incoming);
+  const cuts: [string, string][] = [];
+  for (const incoming of timeline.clips) {
+    if (!incoming.transitionIn) continue;
+    const outgoing = timeline.clips.find((clip) => meets(clip, incoming));
+    if (outgoing) cuts.push([outgoing.id, incoming.id]);
+  }
+  const set = (id: string, edges: Partial<Clip>) =>
+    byId.set(id, { ...byId.get(id)!, ...edges });
+  for (const clip of timeline.clips) {
+    const unpaired = {
+      ...(clip.transitionIn &&
+        !cuts.some(([, incoming]) => incoming === clip.id) && {
+          transitionIn: null,
+        }),
+      ...(clip.transitionOut &&
+        !cuts.some(([outgoing]) => outgoing === clip.id) && {
+          transitionOut: null,
+        }),
+    };
+    if (Object.keys(unpaired).length) set(clip.id, unpaired);
+  }
+  for (const [outgoingId, incomingId] of cuts.toSorted(
+    ([a], [b]) =>
+      byId.get(a)!.track - byId.get(b)!.track ||
+      byId.get(a)!.start - byId.get(b)!.start,
+  )) {
+    const outgoing = byId.get(outgoingId)!;
+    const incoming = byId.get(incomingId)!;
+    const transition = incoming.transitionIn!;
+    const { frames } = transitionRoom(
+      timeline.fps,
+      outgoing,
+      incoming,
+      transition.alignment,
+    );
+    const fitted =
+      transition.duration <= frames
+        ? transition
+        : frames > 0
+          ? { ...transition, duration: frames }
+          : null;
+    if (fitted !== transition) {
+      set(outgoingId, { transitionOut: fitted });
+      set(incomingId, { transitionIn: fitted });
+    }
+  }
+  // A start written as a reference to another clip cannot also begin before the cut.
+  for (const clip of byId.values())
+    if (clip.startRef && clip.transitionIn && framesBefore(clip.transitionIn))
+      set(clip.id, { startRef: null });
+  const clips = timeline.clips.map((clip) => byId.get(clip.id)!);
+  return clips.every((clip, index) => clip === timeline.clips[index])
+    ? timeline
+    : { ...timeline, clips };
 }
 
 /** The timeline as it reads back once written: source offsets at their canonical microsecond. */

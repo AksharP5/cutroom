@@ -98,6 +98,8 @@ export const TITLE_MOTIONS = [
   "wipe",
 ] as const;
 export const TITLE_WEIGHTS = [400, 500, 600, 700] as const;
+export const TRANSITION_KINDS = ["dissolve", "dip"] as const;
+export const TRANSITION_ALIGNMENTS = ["center", "start", "end"] as const;
 export const TITLE_ALIGNMENTS = ["left", "center", "right"] as const;
 
 /**
@@ -145,6 +147,24 @@ export const TitleSchema = z.object({
     .describe("Background plate colour with alpha; null for no plate"),
   in: titleMotion.describe("Entrance, anchored to the clip's first frame"),
   out: titleMotion.describe("Exit, ending on the clip's last frame"),
+});
+
+/**
+ * A transition across a cut, stored on both clips' edges. The outgoing clip's media runs on past
+ * the cut and the incoming clip's starts before it, so both play while the transition runs.
+ */
+export const TransitionSchema = z.object({
+  kind: z
+    .enum(TRANSITION_KINDS)
+    .describe(
+      "dissolve mixes the pictures; dip fades to black and back. Sound always crossfades",
+    ),
+  duration: frames.max(100_000).describe("Length in frames"),
+  alignment: z
+    .enum(TRANSITION_ALIGNMENTS)
+    .describe(
+      "center straddles the cut; start begins on it; end finishes on it",
+    ),
 });
 
 /** A title change: fields left out keep their values, and a motion can change one of its parts. */
@@ -223,6 +243,16 @@ export const ClipSchema = z.object({
     .default(0)
     .describe(
       "Authored fade-out frames. Effective fades are proportionally clamped to duration",
+    ),
+  transitionIn: TransitionSchema.nullable()
+    .default(null)
+    .describe(
+      "The transition from the clip ending where this one starts on its track; null for a cut",
+    ),
+  transitionOut: TransitionSchema.nullable()
+    .default(null)
+    .describe(
+      "The transition to the clip starting where this one ends; the same value as that clip's transitionIn",
     ),
   /** HyperFrames clip-local automation, stored in its native attribute format. */
   automation: z
@@ -559,6 +589,25 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .describe("Change clip properties. Null clears a property."),
   z
     .object({
+      type: z.literal("setTransition"),
+      from: clipId.describe("The outgoing clip, ending at the cut"),
+      to: clipId.describe(
+        "The incoming clip, starting at the cut on the same track",
+      ),
+      transition: z
+        .object({
+          kind: TransitionSchema.shape.kind.default("dissolve"),
+          duration: TransitionSchema.shape.duration,
+          alignment: TransitionSchema.shape.alignment.default("center"),
+        })
+        .nullable()
+        .describe("null removes the transition"),
+    })
+    .describe(
+      "Set or remove the transition on a cut between two video, image or audio clips. Linked partners meeting at the same cut get it too. The outgoing clip needs media past its out point and the incoming clip before its in point; a length that does not fit is refused with the longest that does. A transition owns its audio edge fades. Trims keep it on the cut and shorten it to fit; moving a clip away or deleting one removes it.",
+    ),
+  z
+    .object({
       type: z.literal("setTiming"),
       clipId,
       playbackRate: z
@@ -723,6 +772,7 @@ export type Timeline = z.infer<typeof TimelineSchema>;
 export type InsertClip = z.infer<typeof InsertClipSchema>;
 export type InsertTitle = z.infer<typeof InsertTitleSchema>;
 export type Title = z.infer<typeof TitleSchema>;
+export type Transition = z.infer<typeof TransitionSchema>;
 export type TitleEdit = z.infer<typeof TitleEditSchema>;
 export type Command = z.infer<typeof CommandSchema>;
 export type CommandInput = z.input<typeof CommandSchema>;

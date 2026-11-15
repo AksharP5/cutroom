@@ -10,6 +10,19 @@ import { localMediaPath } from "../../shared/media";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import {
+  framesAfter,
+  framesBefore,
+  takesTransition,
+} from "../../shared/timeline/transition";
+import {
+  elementClip,
+  isCrossfadeAutomation,
+  readTransitions,
+  TRANSITION_STYLE_ATTRIBUTE,
+  transitionAttributes,
+  transitionStyle,
+} from "./transitions";
+import {
   canonicalText,
   firstTextLine,
   isAudioKind,
@@ -35,6 +48,7 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import {
   TimelineError,
   canonicalSeconds,
+  clipEnd,
   frameTime,
   normalizeTimeline,
   toFrames,
@@ -488,6 +502,7 @@ function projectComposition(
     read: Timing;
     start: number;
     end: number | null;
+    edges: ReturnType<typeof readTransitions>;
   }[] = [];
   const clipIds = new Map<SourceElement, string>();
   const used = new Set<string>();
@@ -501,10 +516,20 @@ function projectComposition(
         "unsupported",
         `Clip ${element.attrs.id || element.attrs["data-hf-id"] || "clip"} has a negative data-track-index.`,
       );
-    const start = toFrames(read.begin, fps);
-    const end = read.finish === null ? null : toFrames(read.finish, fps);
+    let start = toFrames(read.begin, fps);
+    let end = read.finish === null ? null : toFrames(read.finish, fps);
     // Shorter than a frame is never on screen, and the editor cannot address it.
     if (end !== null && end <= start) continue;
+    // The clip is the element less the media it plays under its transitions.
+    let edges = takesTransition({ kind: clipKind(element) })
+      ? readTransitions(element.attrs, fps)
+      : { in: null, out: null };
+    const before = edges.in ? framesBefore(edges.in) : 0;
+    const after = edges.out ? framesAfter(edges.out) : 0;
+    if (end !== null && end - start - before - after >= 1) {
+      start += before;
+      end -= after;
+    } else edges = { in: null, out: null };
     // Clips without a unique id get a positional stand-in; edits locate them by offset, not id.
     let id = element.attrs.id || element.attrs["data-hf-id"];
     while (!id || used.has(id) || (id !== element.attrs.id && byId.has(id)))
@@ -512,7 +537,7 @@ function projectComposition(
     if (!element.attrs.id) anonymous.add(id);
     used.add(id);
     clipIds.set(element, id);
-    rows.push({ id, element, read, start, end });
+    rows.push({ id, element, read, start, end, edges });
   }
 
   return {
@@ -577,7 +602,7 @@ export function parseComposition(
     timing,
     lengthOf,
   } = projectComposition(html, { scope, mediaLengths, rootId });
-  const rows = projected.map(({ id, element, read, start, end }) => {
+  const rows = projected.map(({ id, element, read, start, end, edges }) => {
     const name = element.attrs.id || element.attrs["data-hf-id"] || "clip";
     if (end === null)
       throw new TimelineError(
@@ -586,7 +611,7 @@ export function parseComposition(
           ? `Clip ${name} has no data-duration and its media length could not be measured.`
           : `Clip ${name} has no data-duration. Add one to edit it on the timeline.`,
       );
-    return { id, element, read, start, end };
+    return { id, element, read, start, end, edges };
   });
 
   // CSS selectors, inheritance and external sheets are not a CSS cascade we
@@ -629,7 +654,7 @@ export function parseComposition(
   const managedGroups = new Set(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
   );
-  const clips = rows.map(({ id, element, read, start, end }): Clip => {
+  const clips = rows.map(({ id, element, read, start, end, edges }): Clip => {
     const kind = clipKind(element);
     const title =
       kind === "element" ? readElementTitle(element, fps, fonts) : null;
@@ -651,7 +676,7 @@ export function parseComposition(
         (element.attrs.muted === undefined ||
           element.attrs["data-cutroom-muted"] !== undefined) &&
         (element.attrs["data-has-audio"] ?? "true") === "true");
-    return {
+    const clip: Clip = {
       id,
       track: read.trackIndex,
       kind,
@@ -698,8 +723,15 @@ export function parseComposition(
               ?.text ?? null)
           : null,
       title: title && "title" in title ? title.title : null,
-      fadeIn: toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
-      fadeOut: toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
+      // A transition's crossfade is its own, not the clip's fade.
+      fadeIn: edges.in
+        ? 0
+        : toFrames(readFadeSeconds(element.attrs["data-fade-in"]), fps),
+      fadeOut: edges.out
+        ? 0
+        : toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
+      transitionIn: edges.in,
+      transitionOut: edges.out,
       automation: element.attrs["data-automation"]
         ? serializeAutomation(parseAutomation(element.attrs["data-automation"]))
         : null,
@@ -714,6 +746,10 @@ export function parseComposition(
             }
           : null,
     };
+    // The crossfade envelope is the transitions', not the clip's own automation.
+    return isCrossfadeAutomation(element.attrs["data-automation"], clip, fps)
+      ? { ...clip, automation: null }
+      : clip;
   });
 
   const rootDuration = parseNumeric(root.attrs["data-duration"]);
@@ -761,7 +797,8 @@ export function parseComposition(
           element.tag === "script" ||
           (element.tag === "style" &&
             element.attrs["data-cutroom-track-stacking"] === undefined &&
-            element.attrs["data-cutroom-titles"] === undefined),
+            element.attrs["data-cutroom-titles"] === undefined &&
+            element.attrs[TRANSITION_STYLE_ATTRIBUTE] === undefined),
       )
       .map((element) => html.slice(element.openEnd, element.end)),
     fonts,
@@ -1339,6 +1376,7 @@ function copyMarkup(
   clip: Clip,
   normalizeTracks: boolean,
   mix: TrackMix,
+  under: { in: boolean; out: boolean },
 ): string {
   const element = parsed.elements.get(template.id)!;
   if (template.sourceRestrictions?.copy)
@@ -1357,13 +1395,14 @@ function copyMarkup(
         ? [["data-audio-group", null] as const]
         : []),
       ...clipChanges(
-        template,
-        clip,
+        elementClip(template, parsed.timeline.fps),
+        elementClip(clip, parsed.timeline.fps),
         element,
         parsed.timeline.fps,
         normalizeTracks,
         mix,
       ),
+      ...transitionChanges(element.attrs, clip, under, parsed.timeline.fps),
       ...(origin !== undefined &&
       clip.link !== null &&
       clip.link !== template.link
@@ -1428,6 +1467,7 @@ function insertMarkup(
   input: InsertClip,
   fps: Fps,
   mix: TrackMix,
+  transitions: AttributeChange[],
 ): string {
   const attributes: AttributeChange[] = [
     ["id", clip.id],
@@ -1490,6 +1530,7 @@ function insertMarkup(
             : (["data-has-audio", String(clip.hasAudio)] as const),
         ]
       : []),
+    ...transitions.filter(([, value]) => value !== null),
   ];
   const text = attributeMarkup(attributes);
   const tag =
@@ -1621,22 +1662,27 @@ function stackingEdits(
  * title, replaced when it differs from this version or the fonts in use, and otherwise left byte
  * for byte.
  */
-function titleStyleEdits(parsed: ParsedComposition, after: Timeline): Edit[] {
-  const titles = after.clips.flatMap((clip) => clip.title ?? []);
-  if (!titles.length) return [];
-  const style = titleStyle(titles.flatMap((title) => title.font ?? []));
+/**
+ * Keeps one Cutroom stylesheet block current: rewritten when stale, deduplicated, and added after
+ * the stacking block, which must stay first at its location. Unused blocks are left in place.
+ */
+function managedStyleEdits(
+  parsed: ParsedComposition,
+  attribute: string,
+  style: string | null,
+): Edit[] {
+  if (style === null) return [];
   const styles = scopeElements(parsed.roots, parsed.scope).filter(
     (element) => element.tag === "style",
   );
   const [block, ...extra] = styles.filter(
-    (element) => element.attrs["data-cutroom-titles"] !== undefined,
+    (element) => element.attrs[attribute] !== undefined,
   );
   const removed = extra.map(({ start, end }) => ({ start, end, text: "" }));
   if (block)
     return parsed.html.slice(block.start, block.end) === style
       ? removed
       : [{ start: block.start, end: block.end, text: style }, ...removed];
-  // After the stacking block, which must stay first at its location.
   const stacking = styles.find(
     (element) => element.attrs["data-cutroom-track-stacking"] !== undefined,
   );
@@ -1646,6 +1692,56 @@ function titleStyleEdits(parsed: ParsedComposition, after: Timeline): Edit[] {
   // A document without a head gets the block beside its root instead of a second implied head.
   const start = needsHead ? parsed.root.start : at;
   return [{ start, end: start, text: `${style}\n` }];
+}
+
+/**
+ * Which edges of a dissolve draw under their partner. The clip later in the document is drawn on
+ * top and fades; new clips go after every existing one, and a piece right after its source clip.
+ */
+function dissolveLayers(
+  parsed: ParsedComposition,
+  after: Timeline,
+  origins: ReadonlyMap<string, ClipOrigin>,
+) {
+  const existing = new Set(parsed.timeline.clips.map((clip) => clip.id));
+  const position = (id: string): number => {
+    const origin = origins.get(id);
+    if (existing.has(id)) return parsed.elements.get(id)!.start;
+    return origin && "copyOf" in origin
+      ? position(origin.copyOf) + 0.5
+      : Infinity;
+  };
+  const above = (a: Clip, b: Clip) =>
+    position(a.id) - position(b.id) || a.start - b.start;
+  const under = new Map<string, { in: boolean; out: boolean }>();
+  const flag = (id: string, edge: "in" | "out") =>
+    under.set(id, { in: false, out: false, ...under.get(id), [edge]: true });
+  for (const incoming of after.clips) {
+    if (incoming.transitionIn?.kind !== "dissolve") continue;
+    const outgoing = after.clips.find(
+      (clip) =>
+        clip.track === incoming.track &&
+        clipEnd(clip) === incoming.start &&
+        clip.transitionOut !== null,
+    );
+    if (!outgoing) continue;
+    if (above(incoming, outgoing) > 0) flag(outgoing.id, "out");
+    else flag(incoming.id, "in");
+  }
+  return (id: string) => under.get(id) ?? { in: false, out: false };
+}
+
+/** The transition attributes an element needs, as changes from what it has. */
+function transitionChanges(
+  attrs: SourceElement["attrs"],
+  clip: Clip,
+  under: { in: boolean; out: boolean },
+  fps: Fps,
+): AttributeChange[] {
+  return [
+    ...transitionAttributes("in", clip.transitionIn, under.in, fps),
+    ...transitionAttributes("out", clip.transitionOut, under.out, fps),
+  ].filter(([name, value]) => (attrs[name] ?? null) !== value);
 }
 
 /**
@@ -1680,21 +1776,38 @@ export function patchComposition(
   const mix = trackMix(after.tracks);
   const edits: Edit[] = [
     ...(stacking ?? []),
-    ...titleStyleEdits(parsed, after),
+    ...managedStyleEdits(
+      parsed,
+      "data-cutroom-titles",
+      after.clips.some((clip) => clip.title)
+        ? titleStyle(after.clips.flatMap((clip) => clip.title?.font ?? []))
+        : null,
+    ),
+    ...managedStyleEdits(
+      parsed,
+      TRANSITION_STYLE_ATTRIBUTE,
+      after.clips.some((clip) => clip.transitionIn || clip.transitionOut)
+        ? transitionStyle()
+        : null,
+    ),
   ];
+  const under = dissolveLayers(parsed, after, origins);
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
     const element = parsed.elements.get(clip.id)!;
     const next = current.get(clip.id);
     if (next) {
-      const changes = clipChanges(
-        clip,
-        next,
-        element,
-        fps,
-        stacking !== null,
-        mix,
-      );
+      const changes = [
+        ...clipChanges(
+          elementClip(clip, fps),
+          elementClip(next, fps),
+          element,
+          fps,
+          stacking !== null,
+          mix,
+        ),
+        ...transitionChanges(element.attrs, next, under(next.id), fps),
+      ];
       if (
         parsed.anonymous.has(clip.id) &&
         (changes.length ||
@@ -1756,7 +1869,13 @@ export function patchComposition(
         `\n${indent}${
           origin.insert.kind === "title"
             ? titleMarkup(clip, fps, mix)
-            : insertMarkup(clip, origin.insert, fps, mix)
+            : insertMarkup(
+                elementClip(clip, fps),
+                origin.insert,
+                fps,
+                mix,
+                transitionChanges({}, clip, under(clip.id), fps),
+              )
         }`,
       ]);
       continue;
@@ -1771,7 +1890,7 @@ export function patchComposition(
         : parsed.root.openEnd;
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${copyMarkup(snapshot, template, clip, stacking !== null, mix)}`,
+        `\n${copyMarkup(snapshot, template, clip, stacking !== null, mix, under(clip.id))}`,
       ]);
       continue;
     }
@@ -1780,7 +1899,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix)}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix, under(clip.id))}`,
     ]);
   }
   for (const [at, texts] of inserts)
