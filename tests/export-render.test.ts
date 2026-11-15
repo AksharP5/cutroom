@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -305,4 +312,82 @@ test.each(["trash", ".cutroom/cache"])(
     }
   },
   40000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "a repeated marked export reuses the frames the first extracted, in a cache trimmed before each export",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-frames-"));
+    const project = join(root, "project");
+    const cache = join(root, "frames");
+    const workers = createRenderWorkers({
+      scratchDir: join(root, "scratch"),
+      frameCache: { dir: cache, maxBytes: 1024 ** 2 },
+    });
+    try {
+      await mkdir(project);
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x120:rate=30:duration=2",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        join(project, "source.mp4"),
+      ]);
+      await writeFile(
+        join(project, "index.html"),
+        `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;overflow:hidden}video{position:absolute;inset:0;width:160px;height:120px}</style></head><body><main data-composition-id="main" data-width="160" data-height="120" data-fps="30" data-duration="2" style="position:relative;width:160px;height:120px"><video id="picture" class="clip" src="source.mp4" muted data-start="0" data-duration="2" data-media-start="0" data-track-index="0"></video></main></body></html>`,
+      );
+      // An entry from a recent export, over the limit on its own. HyperFrames' own sweep spares
+      // entries used within the hour; Cutroom trims before each export, when no render reads them.
+      const stale = join(cache, "hfcache-v8-0123456789abcdef");
+      await mkdir(stale, { recursive: true });
+      await writeFile(
+        join(stale, "frame_00001.jpg"),
+        Buffer.alloc(2 * 1024 ** 2),
+      );
+      await writeFile(join(stale, ".hf-complete"), "");
+      const entries = async () =>
+        (await readdir(cache)).filter((name) => name.startsWith("hfcache-"));
+      const kept: string[][] = [];
+      for (const name of ["first", "second"]) {
+        const state = workers.start(
+          {
+            project: { id: "frames", dir: project },
+            outputPath: join(root, `${name}.mp4`),
+            format: "mp4",
+            fps: { num: 30, den: 1 },
+            quality: "draft",
+            jobId: name,
+          },
+          {
+            filename: `${name}.mp4`,
+            directory: root,
+            range: { start: 15, end: 30 },
+          },
+        );
+        const deadline = Date.now() + 45000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(20);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        kept.push(await entries());
+      }
+      const [first, second] = kept;
+      expect(first).not.toContain("hfcache-v8-0123456789abcdef");
+      expect(first?.length).toBeGreaterThan(0);
+      expect(second).toEqual(first);
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  120_000,
 );

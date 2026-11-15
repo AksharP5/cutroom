@@ -47,6 +47,7 @@ export function registerRenderIsolation(
       { fps: Fps; frames: NonNullable<ExportOptions["range"]> } | undefined;
     progress: (job: RenderJob) => void;
     scratchDir: string;
+    projectDir: string;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -82,6 +83,9 @@ export function registerRenderIsolation(
   );
   const colour = JSON.stringify(
     new URL("./videoColour.ts", import.meta.url).href,
+  );
+  const frameCache = JSON.stringify(
+    new URL("./frameCache.ts", import.meta.url).href,
   );
   let producerLoaded = false;
   let captureLoaded = false;
@@ -121,6 +125,15 @@ export function registerRenderIsolation(
           '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
           url,
         );
+        if (range?.range) {
+          source = `import { frameCacheSource as cutroomFrameCacheSource } from ${frameCache};\n${source}`;
+          source = replaceOnce(
+            source,
+            "    const cacheKeyInputs = resolvedVideos.map(({ video, videoPath }) => {\n        const stat = readKeyStat(videoPath);",
+            `    const cacheKeyInputs = resolvedVideos.map(({ video, videoPath: cutroomCopy }) => {\n        const videoPath = cutroomFrameCacheSource(cutroomCopy, ${JSON.stringify(range.projectDir)});\n        const stat = readKeyStat(videoPath);`,
+            url,
+          );
+        }
         extractorLoaded = true;
         return { ...loaded, source };
       }
