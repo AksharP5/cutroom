@@ -146,6 +146,20 @@ export function createHyperframesApi(
     timingBuild.getStore() ? next() : timingBuild.run({}, next);
   api.use("/projects/:id/preview", previewContext);
   api.use("/projects/:id/preview/*", previewContext);
+  // Upstream signs the project, then compiles. A body compiled from files that changed in
+  // between must not carry the older signature's ETag: after an undo back to that version,
+  // a browser revalidating with it would get a 304 and keep showing the newer picture.
+  const unstampStaleCompile: MiddlewareHandler = async (c, next) => {
+    await next();
+    const signed = timingBuild.getStore()?.signature;
+    if (c.res.status !== 200 || !signed || !c.res.headers.has("ETag")) return;
+    const project = await store.get(c.req.param("id") ?? "");
+    if ((await createProjectSignatureAsync(project.path)) === signed) return;
+    c.res.headers.delete("ETag");
+    c.res.headers.set("Cache-Control", "no-store");
+  };
+  api.use("/projects/:id/preview", unstampStaleCompile);
+  api.use("/projects/:id/preview/comp/*", unstampStaleCompile);
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<
     string,
