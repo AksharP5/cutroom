@@ -273,6 +273,9 @@ export function Viewer({
             } finally {
               clearTimeout(timingTimer);
               stop();
+              // Only the page's update runs to its end. A newer edit still aborts the
+              // reload or gain check this attempt falls back to.
+              checking.current ??= attempt;
             }
           }
           if (
