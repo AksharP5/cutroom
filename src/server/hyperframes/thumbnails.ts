@@ -1,6 +1,7 @@
 // Preview capture follows the Apache-2.0 HyperFrames Studio vite.browser.ts and vite.thumbnail.ts.
 // https://github.com/heygen-com/hyperframes/tree/v0.9.26/packages/studio
 import {
+  createProjectSignatureAsync,
   getElementScreenshotClip,
   thumbnailDeviceScaleFactor,
 } from "@hyperframes/studio-server";
@@ -28,16 +29,55 @@ interface PreviewWindow extends DiagnosticWindow {
   gsap?: { ticker?: { tick?: () => void } };
 }
 
-/** One browser is reused; individual captures own isolated, cancellable pages. */
+/** Long enough to cover an agent's burst of frame checks, short enough to free the page's decoders. */
+const idlePageTimeout = 30_000;
+
+/** A loaded composition page and the project signature its compiled preview was built from. */
+interface LoadedPage {
+  page: Page;
+  previewUrl: string;
+  viewport: string;
+  signature: string;
+}
+
+/**
+ * One browser is reused; each capture owns an isolated, cancellable page. The last
+ * successful page stays loaded so the next frame only seeks, but it is reused only
+ * while the project on disk still has the signature its preview was compiled from.
+ */
 export function createThumbnailRenderer() {
   let browser: ReturnType<typeof launchCaptureBrowser> | undefined;
   let closing: Promise<void> | undefined;
+  let idle:
+    { loaded: LoadedPage; timer: ReturnType<typeof setTimeout> } | undefined;
+  const takeIdle = () => {
+    const current = idle;
+    if (!current) return undefined;
+    clearTimeout(current.timer);
+    idle = undefined;
+    return current.loaded;
+  };
+  // At most one page is kept, so memory stays at one loaded composition.
+  const keepIdle = (loaded: LoadedPage) => {
+    void takeIdle()
+      ?.page.close()
+      .catch(() => {});
+    const timer = setTimeout(() => {
+      if (idle?.loaded === loaded)
+        void takeIdle()
+          ?.page.close()
+          .catch(() => {});
+    }, idlePageTimeout);
+    timer.unref();
+    idle = { loaded, timer };
+  };
   const getBrowser = () =>
     (browser ??= (async () => {
       const instance = await launchCaptureBrowser();
       void instance.closed
         .finally(() => {
           browser = undefined;
+          takeIdle();
         })
         .catch((error: unknown) =>
           console.error("Capture cleanup failed:", error),
@@ -51,33 +91,61 @@ export function createThumbnailRenderer() {
   return {
     async capture(options: ThumbnailOptions): Promise<Buffer | null> {
       if (closing || options.signal.aborted) return null;
+      const viewport = JSON.stringify([
+        options.width,
+        options.height,
+        thumbnailDeviceScaleFactor(options),
+      ]);
       let page: Page | undefined;
+      let loaded: LoadedPage | undefined;
       const abort = () => {
         void page?.close().catch(() => {});
       };
       options.signal.addEventListener("abort", abort, { once: true });
       try {
-        const { browser: instance } = await getBrowser();
+        // Take the idle page before any await so concurrent captures never share it.
+        const candidate = takeIdle();
+        if (candidate) {
+          page = candidate.page;
+          const reusable =
+            candidate.previewUrl === options.previewUrl &&
+            candidate.viewport === viewport &&
+            candidate.signature ===
+              (await createProjectSignatureAsync(options.project.dir));
+          if (reusable) loaded = candidate;
+          else {
+            page = undefined;
+            await candidate.page.close().catch(() => {});
+          }
+        }
         if (closing || options.signal.aborted) return null;
-        page = await instance.newPage();
-        const assets = new URL(options.previewUrl);
-        const prefix = assets.pathname.match(/^\/api\/isolated\/[\w-]+\//)?.[0];
-        if (!prefix)
-          throw new Error("Frame capture requires an isolated preview URL.");
-        assets.pathname = prefix;
-        await isolateCapturePage(page, assets.href);
-        await page.setViewport({
-          width: options.width,
-          height: options.height,
-          deviceScaleFactor: thumbnailDeviceScaleFactor(options),
-        });
-        await page.goto(options.previewUrl, {
-          // Seek, fonts, and paint below own visual readiness. Background requests
-          // must not hold this capture and every note behind it in the shared queue.
-          waitUntil: "load",
-          timeout: 20_000,
-        });
-        await page.evaluate(
+        if (!page) {
+          const { browser: instance } = await getBrowser();
+          if (closing || options.signal.aborted) return null;
+          // Headless tabs share one window and pause animation frames in all but the newest,
+          // so a kept page and a concurrent capture each need their own window.
+          page = await instance.newPage({ type: "window" });
+          const assets = new URL(options.previewUrl);
+          const prefix = assets.pathname.match(
+            /^\/api\/isolated\/[\w-]+\//,
+          )?.[0];
+          if (!prefix)
+            throw new Error("Frame capture requires an isolated preview URL.");
+          assets.pathname = prefix;
+          await isolateCapturePage(page, assets.href);
+          await page.setViewport({
+            width: options.width,
+            height: options.height,
+            deviceScaleFactor: thumbnailDeviceScaleFactor(options),
+          });
+          await page.goto(options.previewUrl, {
+            // Seek, fonts, and paint below own visual readiness. Background requests
+            // must not hold this capture and every note behind it in the shared queue.
+            waitUntil: "load",
+            timeout: 20_000,
+          });
+        }
+        const signature = await page.evaluate(
           async (time: number, composition: string) => {
             const preview = window as PreviewWindow;
             // Load can precede authored scripts, sub-compositions, and buildReady.
@@ -127,15 +195,21 @@ export function createThumbnailRenderer() {
             preview.gsap?.ticker?.tick?.();
             await preview.__hfWaitForSeekCompletion?.();
             await document.fonts.ready;
+            // The preview route stamps the signature it compiled this document from.
+            return document
+              .querySelector('meta[name="hyperframes-project-signature"]')
+              ?.getAttribute("content");
           },
           options.seekTime,
           options.compPath,
         );
-        for (const content of await studioRenderScripts(
-          options.project.dir,
-          options.compPath,
-        ))
-          await page.addScriptTag({ content });
+        // The render scripts wrap seeking and expose re-apply hooks, so a loaded page keeps them.
+        if (!loaded)
+          for (const content of await studioRenderScripts(
+            options.project.dir,
+            options.compPath,
+          ))
+            await page.addScriptTag({ content });
         await page.evaluate(async () => {
           const preview = window as PreviewWindow;
           await new Promise<void>((done) =>
@@ -164,17 +238,26 @@ export function createThumbnailRenderer() {
             ? { type: "png", ...(clip ? { clip } : {}) }
             : { type: "jpeg", quality: 80, ...(clip ? { clip } : {}) },
         );
+        loaded ??= signature
+          ? { page, previewUrl: options.previewUrl, viewport, signature }
+          : undefined;
         return Buffer.from(image);
       } catch (error) {
+        loaded = undefined;
         if (closing || options.signal.aborted) return null;
         throw error;
       } finally {
         options.signal.removeEventListener("abort", abort);
-        await page?.close().catch(() => {});
+        // Failures, diagnostics, and cancellation discard the page instead of keeping it.
+        if (loaded && !closing && !options.signal.aborted) keepIdle(loaded);
+        else await page?.close().catch(() => {});
       }
     },
     close() {
       closing ??= (async () => {
+        await takeIdle()
+          ?.page.close()
+          .catch(() => {});
         const current = browser;
         if (current) await (await current).close();
       })();
