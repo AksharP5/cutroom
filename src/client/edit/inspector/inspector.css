@@ -155,46 +155,70 @@
   padding: var(--space-3);
   color: var(--text-tertiary);
 }
-.inspector-section .inspector-empty {
-  padding: var(--space-1) 0;
-}
-.inspector-changes {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.inspector-changes li {
+.inspector-section > h3 {
+  min-height: var(--size-section-head);
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--size-row);
+  margin: 0;
+  font: inherit;
+  font-weight: var(--weight-semibold);
 }
-.inspector-changes li::before {
-  content: "";
-  width: var(--size-pin-ruler);
-  height: var(--size-pin-ruler);
-  flex-shrink: 0;
-  background: var(--agent);
+/* A ledger: one row per change or marker, verb or name first, time on the right. */
+:is(.inspector-changes, .inspector-markers) {
+  margin: 0 calc(-1 * var(--space-3));
+  padding: 0;
+  list-style: none;
 }
-.inspector-changes li[data-by="human"]::before {
-  background: var(--human);
+:is(.inspector-changes, .inspector-markers) li {
+  display: flex;
+  align-items: center;
+  min-height: var(--size-ledger-row);
+  padding-right: var(--space-3);
 }
-.inspector-changes li > span {
+/* Agent work waiting for review carries the agent's rule until it is accepted. */
+.inspector-changes li[data-pending] {
+  box-shadow: inset var(--stroke-rail) 0 var(--agent);
+}
+.clip-inspector :is(.inspector-change, .inspector-markers button) {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--size-ledger-row);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-radius: 0;
+  text-align: left;
+  font: inherit;
+}
+.inspector-change-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-secondary);
+}
+.inspector-change-text strong {
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+:is(.inspector-change, .inspector-markers button) time {
+  flex: none;
+  color: var(--text-tertiary);
+  font: var(--weight-regular) var(--type-2xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
 }
 .inspector-changes small {
+  flex: none;
   color: var(--text-tertiary);
   font-size: var(--type-xs);
-}
-.inspector-changes button {
-  font-weight: var(--weight-semibold);
-}
-.inspector-changes small {
   white-space: nowrap;
+}
+.clip-inspector .inspector-accept {
+  flex: none;
+  font-weight: var(--weight-semibold);
 }
 .inspector-show-all {
   color: var(--text-secondary);
@@ -499,4 +523,70 @@
   padding-bottom: var(--space-1);
   color: var(--text-tertiary);
   font-size: var(--type-2xs);
+}
+
+/* With nothing selected: the timeline's name, format and markers. */
+.inspector-timeline {
+  padding: var(--space-3);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.inspector-timeline strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-facts {
+  display: grid;
+  grid-template-columns: var(--size-inspector-label) minmax(0, 1fr);
+  column-gap: var(--space-2);
+  margin: 0;
+}
+.inspector-facts :is(dt, dd) {
+  min-height: var(--size-ledger-row);
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+.inspector-facts dt {
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
+}
+.inspector-facts dd {
+  gap: 1ch;
+  font: var(--weight-medium) var(--type-xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+}
+.inspector-facts dd span {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-regular);
+}
+/* The flag the ruler draws, in the marker's own colour (see .tl-marker). */
+.inspector-markers button::before {
+  content: "";
+  flex: none;
+  width: var(--size-marker-w);
+  height: var(--size-marker-h);
+  background: var(--marker, var(--marker-grey));
+  clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
+}
+.inspector-markers button span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-markers [data-color="green"] {
+  --marker: var(--marker-green);
+}
+.inspector-markers [data-color="purple"] {
+  --marker: var(--marker-violet);
+}
+.inspector-markers :is([data-color="pink"], [data-color="red"]) {
+  --marker: var(--marker-rose);
+}
+.inspector-markers [data-color="yellow"] {
+  --marker: var(--marker-sand);
 }

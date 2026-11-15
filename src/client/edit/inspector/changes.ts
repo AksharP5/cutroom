@@ -5,7 +5,7 @@ export const pendingEdit = (edit: ClipEdits[number]) =>
   edit.by === "agent" && !edit.accepted && !edit.resolution;
 
 /** Linked partners share a history entry, but keep their own review records. */
-export function groupedChanges(edits: ClipEdits, name: string) {
+export function groupedChanges(edits: ClipEdits) {
   const groups = new Map<string, ClipEdits>();
   for (const edit of edits) {
     const key = edit.historyId ?? edit.id;
@@ -19,14 +19,10 @@ export function groupedChanges(edits: ClipEdits, name: string) {
       members.find(pendingEdit) ??
       members.find((edit) => edit.resolution) ??
       members[0]!;
-    const label = [...new Set(members.map((edit) => edit.label))].join("; ");
     return {
       ...edit,
       id: members[0]!.id,
-      label:
-        new Set(members.map((edit) => edit.clipId)).size > 1
-          ? `${name} · ${label}`
-          : label,
+      label: [...new Set(members.map((edit) => edit.label))].join("; "),
       members,
     };
   });
@@ -46,13 +42,29 @@ export function reviewRows(edits: ClipEdits) {
   return [...rows.values()];
 }
 
-/** Five recent rows, making room for every pending agent edit even when it is older. */
+export type ChangeRow = ReturnType<typeof groupedChanges>[number];
+
+/**
+ * The timeline's own ledger: one row per history step, worded as the step's factual summary
+ * when it has one, rather than as the part one clip played in it.
+ */
+export function ledgerChanges(edits: ClipEdits): ChangeRow[] {
+  return groupedChanges(edits).map((edit) => ({
+    ...edit,
+    label: (
+      edit.members.find((member) => member.clipId === null) ?? edit.members[0]!
+    ).label,
+  }));
+}
+
+/** `limit` recent rows, making room for every pending agent edit even when it is older. */
 export function shownChanges<T extends ClipEdits[number]>(
   edits: T[],
   expanded: boolean,
+  limit: number,
 ): T[] {
   const recent = edits.toReversed();
   if (expanded) return recent;
-  let slots = Math.max(0, 5 - edits.filter(pendingEdit).length);
+  let slots = Math.max(0, limit - edits.filter(pendingEdit).length);
   return recent.filter((edit) => pendingEdit(edit) || slots-- > 0);
 }

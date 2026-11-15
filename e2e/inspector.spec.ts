@@ -55,7 +55,6 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   await expect(inspector).toContainText("Picture");
   await expect(inspector).toContainText("Video on V1");
-  await inspector.locator(".inspector-history > summary").click();
   const set = async (label: string, value: string) => {
     await inspector
       .getByRole("textbox", { name: label, exact: true })
@@ -225,7 +224,11 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
     await expect(page.locator('[data-agent-change="picture"]')).toHaveCount(1);
     await agentRow.getByRole("button", { name: "Accept", exact: true }).click();
     await expect(page.locator('[data-agent-change="picture"]')).toHaveCount(0);
-    await expect(agentRow).toContainText("Accepted");
+    // Accepted work settles quietly: no rule, no button.
+    await expect(
+      agentRow.getByRole("button", { name: "Accept", exact: true }),
+    ).toHaveCount(0);
+    await expect(agentRow).not.toHaveAttribute("data-pending", "true");
   } finally {
     await client.close();
   }
@@ -433,11 +436,6 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="opening-title"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
-  await expect(inspector.locator(".inspector-history")).not.toHaveAttribute(
-    "open",
-    "",
-  );
-  await inspector.locator(".inspector-history > summary").click();
   const rows = inspector.getByRole("listitem");
   await expect(inspector.locator(".inspector-clip strong")).toHaveText(
     "Opening title",
@@ -455,12 +453,15 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
     "open",
     "",
   );
-  await expect(rows).toHaveCount(5);
+  // Three rows by default, so the clip's own fields stay in view.
+  await expect(rows).toHaveCount(3);
   const pending = rows.filter({ hasText: "Set opacity to 1%" });
   await expect(
     pending.getByRole("button", { name: "Accept", exact: true }),
   ).toBeVisible();
-  const title = await pending.locator(":scope > span").getAttribute("title");
+  const title = await pending
+    .locator(".inspector-change")
+    .getAttribute("title");
   expect(title).toContain("Set opacity to 1%");
   expect(title).not.toMatch(/T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
   expect(title).toMatch(/\d{1,2}:\d{2}/);
@@ -480,7 +481,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await inspector
     .getByRole("button", { name: "Show less", exact: true })
     .click();
-  await expect(rows).toHaveCount(5);
+  await expect(rows).toHaveCount(3);
   const opacity = inspector.getByRole("textbox", {
     name: "Opacity",
     exact: true,
@@ -534,7 +535,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(autoRow).toHaveCount(0);
   await expect(opacity).toHaveValue("30%");
-  for (const name of ["Text", "Changes", "Composite", "Timing"])
+  for (const name of ["Text", "Composite", "Timing"])
     await inspector
       .locator("summary")
       .filter({ hasText: new RegExp(`^${name}(?:\\s*\\d+)?$`) })
@@ -550,7 +551,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await expect(inspector).toContainText("3 clips selected");
   await expect(opacity).toHaveCount(0);
   await page.locator('[data-clip="opening-title"]').click();
-  for (const name of ["Changes", "Composite", "Timing"])
+  for (const name of ["Composite", "Timing"])
     await inspector
       .locator("summary")
       .filter({ hasText: new RegExp(`^${name}(?:\\s*\\d+)?$`) })
@@ -581,7 +582,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.setViewportSize({ width: 1280, height: 800 });
   await inspector
     .locator("summary")
-    .filter({ hasText: /^Changes/ })
+    .filter({ hasText: /^Timing/ })
     .focus();
   await page.keyboard.press("Escape");
   await expect(inspector).toBeHidden();
@@ -612,4 +613,67 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
   await page.keyboard.press("Escape");
   await expect(inspector).toBeHidden();
   await expect(toggle).toBeFocused();
+});
+
+test("with nothing selected the inspector shows the timeline, its markers and its changes, and rows seek", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Overview" },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-fps="30" data-duration="10"><div id="intro" class="clip" data-label="Intro" data-start="0" data-duration="3" data-track-index="0">Intro</div><div id="outro" class="clip" data-label="Outro" data-start="6" data-duration="4" data-track-index="0">Outro</div></main></body></html>`,
+  );
+  const path = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${path}/timeline`)).json(),
+    );
+  const edit = async (commands: unknown[], agent = false) =>
+    expect(
+      (
+        await request.post(`${path}/commands`, {
+          ...(agent && { headers: { "x-cutroom-agent": "external" } }),
+          data: { expectedRevision: (await read()).revision, commands },
+        })
+      ).ok(),
+    ).toBe(true);
+  await edit([
+    { type: "setMarker", frame: 240, name: "Ending" },
+    { type: "setMarker", frame: 45, name: "Hook" },
+    { type: "setRange", in: 30, out: 120 },
+  ]);
+  await edit([{ type: "setClip", clipId: "outro", opacity: 0.5 }], true);
+  await page.goto(`/#project/${project.id}`);
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(inspector.locator(".inspector-timeline")).toHaveText("Overview");
+  const facts = inspector.locator(".inspector-facts");
+  await expect(facts).toContainText("640 × 360");
+  await expect(facts).toContainText("30 fps");
+  await expect(facts).toContainText("00:00:10:00");
+  await expect(facts).toContainText("00:00:01:00 to 00:00:03:29");
+  const clock = page.getByRole("button", { name: /^Current time/ });
+
+  // Markers list in time order; a click seeks there.
+  const markers = inspector.locator(".inspector-markers li");
+  await expect(markers).toHaveText(["Hook00:00:01:15", "Ending00:00:08:00"]);
+  await markers.filter({ hasText: "Ending" }).getByRole("button").click();
+  await expect(clock).toHaveText("00:00:08:00");
+
+  // The project's ledger: a click seeks to the changed clip and selects it.
+  const change = inspector
+    .locator(".inspector-changes li")
+    .filter({ hasText: "Set opacity to 50%" });
+  await expect(change).toHaveAttribute("data-pending", "true");
+  await change.locator(".inspector-change").click();
+  await expect(clock).toHaveText("00:00:06:00");
+  await expect(inspector.locator(".inspector-clip strong")).toHaveText("Outro");
+  await expect(page.locator("[data-clip].selected")).toHaveCount(1);
+  await expect(page.locator('[data-clip="outro"]')).toHaveClass(/selected/);
 });

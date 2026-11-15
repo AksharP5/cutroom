@@ -17,7 +17,11 @@ import {
   inspectorSubject,
   stepField,
 } from "../src/client/edit/inspector/fields";
-import { reviewRows, shownChanges } from "../src/client/edit/inspector/changes";
+import {
+  ledgerChanges,
+  reviewRows,
+  shownChanges,
+} from "../src/client/edit/inspector/changes";
 import { editLabel } from "../src/shared/timeline/labels";
 import { projectFixture } from "./project-fixture";
 
@@ -383,7 +387,7 @@ test("undo hides owner and agent rows; redo restores the same pending edit witho
   }
 });
 
-test("Changes shows five recent rows, always includes older pending work, and expands in date order", () => {
+test("Changes shows its limit of recent rows, always includes older pending work, and expands in date order", () => {
   const edits = Array.from({ length: 15 }, (_, index) => ({
     id: String(index),
     clipId: "title",
@@ -393,7 +397,7 @@ test("Changes shows five recent rows, always includes older pending work, and ex
     at: "",
     accepted: true,
   }));
-  expect(shownChanges(edits, false).map((edit) => edit.id)).toEqual([
+  expect(shownChanges(edits, false, 5).map((edit) => edit.id)).toEqual([
     "14",
     "13",
     "12",
@@ -402,20 +406,45 @@ test("Changes shows five recent rows, always includes older pending work, and ex
   ]);
   const pending = { ...edits[0]!, by: "agent" as const, accepted: false };
   const withPending = [pending, ...edits.slice(1)];
-  expect(shownChanges(withPending, false).map((edit) => edit.id)).toEqual([
+  expect(shownChanges(withPending, false, 5).map((edit) => edit.id)).toEqual([
     "14",
     "13",
     "12",
     "11",
     "0",
   ]);
-  expect(shownChanges(withPending, true)).toEqual(withPending.toReversed());
+  expect(shownChanges(withPending, true, 5)).toEqual(withPending.toReversed());
   const allPending = edits.map((edit) => ({
     ...edit,
     by: "agent" as const,
     accepted: false,
   }));
-  expect(shownChanges(allPending, false)).toHaveLength(15);
+  expect(shownChanges(allPending, false, 5)).toHaveLength(15);
+});
+
+test("the timeline's ledger is one row per history step, in the step's own words", () => {
+  const edit = (id: string, clipId: string | null, label: string) => ({
+    id,
+    clipId,
+    composition: "index.html",
+    label,
+    historyId: "step",
+    by: "agent" as const,
+    at: "",
+    accepted: false,
+  });
+  const rows = ledgerChanges([
+    edit("a", "a1", "Added video at 00:00:00:00"),
+    edit("b", "b1", "Added video at 00:00:00:00"),
+    edit("c", null, "Added interview_a.mp4 and interview_b.mp4"),
+  ]);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.label).toBe("Added interview_a.mp4 and interview_b.mp4");
+  expect(rows[0]!.members.map((member) => member.clipId)).toEqual([
+    "a1",
+    "b1",
+    null,
+  ]);
 });
 
 test("away from its clip, an edit label names the clip and says how far it changed", () => {

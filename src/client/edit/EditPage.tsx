@@ -547,7 +547,7 @@ export function EditPage({
           voiceover={sourceShown ? undefined : voiceover}
         />
       </section>
-      <Inspector projectId={projectId} />
+      <Inspector projectId={projectId} projectName={projectName} />
       <div
         className="edit-split"
         role="separator"

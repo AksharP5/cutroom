@@ -248,13 +248,16 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
       x: null,
       y: null,
     });
-    await inspector.locator(".inspector-history > summary").click();
     const row = inspector
       .getByRole("listitem")
       .filter({ hasText: "Moved 40 px right; Moved 10 px up" });
     await expect(row).toBeVisible();
     await row.getByRole("button", { name: "Accept", exact: true }).click();
-    await expect(row).toContainText("Accepted");
+    // Accepted work settles quietly: no rule, no button.
+    await expect(
+      row.getByRole("button", { name: "Accept", exact: true }),
+    ).toHaveCount(0);
+    await expect(row).not.toHaveAttribute("data-pending", "true");
     await expect(field("Position X")).toHaveValue("40 px");
     // Clearing only X must retain Y without turning either authored baseline into an offset.
     await set("Position X", "0");

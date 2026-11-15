@@ -171,11 +171,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   await gain.fill("-9 dB");
   await page.locator('[data-clip="music"]').click();
   await expect.poll(async () => (await sound()).volume).toBe(10 ** (-9 / 20));
-  await expect(inspector.locator("summary")).toHaveText([
-    "Audio",
-    "Timing",
-    /^Changes\s*\d+$/,
-  ]);
+  await expect(inspector.locator("summary")).toHaveText(["Audio", "Timing"]);
   await page.locator('[data-clip="picture"]').click();
   await undo.click();
   await expect(gain).toHaveValue("-6.0 dB");
@@ -242,12 +238,15 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
       }),
     );
     await expect(gain).toHaveValue("+6.0 dB");
-    await inspector.locator(".inspector-history > summary").click();
     const row = inspector
       .getByRole("listitem")
       .filter({ hasText: "Set gain to +6.0 dB" });
     await row.getByRole("button", { name: "Accept", exact: true }).click();
-    await expect(row).toContainText("Accepted");
+    // Accepted work settles quietly: no rule, no button.
+    await expect(
+      row.getByRole("button", { name: "Accept", exact: true }),
+    ).toHaveCount(0);
+    await expect(row).not.toHaveAttribute("data-pending", "true");
   } finally {
     await client.close();
   }
@@ -421,16 +420,16 @@ test("linked Changes has one row per history entry and keeps review and session 
   await page.locator('[data-clip="picture"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   const history = inspector.locator(".inspector-history");
-  const summary = history.locator("summary");
+  const summary = history.locator("h3");
   const rows = history.getByRole("listitem");
   await expect(inspector.locator("summary")).toHaveText([
     "Transform",
     "Composite",
     "Audio",
     "Timing",
-    "Changes 0",
   ]);
-  await expect(history).not.toHaveAttribute("open", "");
+  // No changes, no section.
+  await expect(history).toHaveCount(0);
   const duration = inspector.getByRole("textbox", {
     name: "Duration",
     exact: true,
@@ -438,11 +437,8 @@ test("linked Changes has one row per history entry and keeps review and session 
   await duration.fill("60f");
   await duration.press("Enter");
   await expect(summary).toHaveText("Changes 1");
-  await summary.click();
   await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText(
-    "Interview (picture and sound) · Trimmed end to 00:00:02:00",
-  );
+  await expect(rows).toContainText("Trimmed end to 00:00:02:00");
   await expect
     .poll(
       async () =>
@@ -450,8 +446,7 @@ test("linked Changes has one row per history entry and keeps review and session 
     )
     .toBe(2);
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(summary).toHaveText("Changes 0");
-  await expect(rows).toHaveCount(0);
+  await expect(history).toHaveCount(0);
   await page.getByRole("button", { name: "Redo", exact: true }).click();
   await expect(rows).toHaveCount(1);
   const view = await read();
@@ -478,7 +473,11 @@ test("linked Changes has one row per history entry and keeps review and session 
     ).ok(),
   ).toBe(true);
   await agentRow.getByRole("button", { name: "Accept", exact: true }).click();
-  await expect(agentRow).toContainText("Accepted");
+  // Accepted work settles quietly: no rule, no button.
+  await expect(
+    agentRow.getByRole("button", { name: "Accept", exact: true }),
+  ).toHaveCount(0);
+  await expect(agentRow).not.toHaveAttribute("data-pending", "true");
   await expect
     .poll(async () =>
       (await read())
@@ -486,19 +485,12 @@ test("linked Changes has one row per history entry and keeps review and session 
         .every((edit) => edit.accepted),
     )
     .toBe(true);
+  // Changes leads the inspector for any clip, open, above the clip's own sections.
   await page.locator('[data-clip="sound"]').click();
-  await expect(history).toHaveAttribute("open", "");
-  // The section saves its state from the toggle event, which lands a task after the attribute.
-  const saved = () =>
-    page.evaluate(() => sessionStorage.getItem("cutroom.inspector.changes"));
-  await expect.poll(saved).toBe("true");
-  await page.reload();
-  await page.locator('[data-clip="picture"]').click();
-  await expect(history).toHaveAttribute("open", "");
-  await summary.click();
-  await expect(history).not.toHaveAttribute("open", "");
-  await expect.poll(saved).toBe("false");
-  await page.reload();
-  await page.locator('[data-clip="picture"]').click();
-  await expect(history).not.toHaveAttribute("open", "");
+  await expect(history).toBeVisible();
+  const [changesTop, audioTop] = await Promise.all([
+    history.boundingBox(),
+    inspector.locator("summary", { hasText: "Audio" }).boundingBox(),
+  ]);
+  expect(changesTop!.y).toBeLessThan(audioTop!.y);
 });
