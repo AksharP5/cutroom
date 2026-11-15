@@ -601,7 +601,7 @@ test("approvals describe title edits in plain words", () => {
       title: { size: 72, plate: null, in: { preset: "wipe", frames: 15 } },
     }),
   ).toBe(
-    "Set title size to 72 px; Remove title plate; Set title entrance to wipe, 00:00:00:15 for a text clip",
+    "Set title size to 72 px; Remove title plate; Set title entrance to wipe, 00:00:00:15 for Ada Lovelace",
   );
 });
 

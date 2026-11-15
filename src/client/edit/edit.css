@@ -284,6 +284,17 @@
 }
 .edit-select[data-active][data-grabbed]:focus .edit-select-outline b {
   display: block;
+  pointer-events: auto;
+  cursor: nwse-resize;
+}
+.edit-select-outline b:is([data-corner="ne"], [data-corner="sw"]) {
+  cursor: nesw-resize;
+}
+/* A larger target than the mark itself, centred on it. */
+.edit-select-outline b::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
 }
 .edit-select-guides i[data-axis="x"] {
   height: 100%;

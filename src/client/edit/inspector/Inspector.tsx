@@ -304,6 +304,7 @@ export function Inspector({ projectId }: { projectId: string }) {
     clip &&
     (clip.label?.trim() ||
       clip.src?.split("/").at(-1) ||
+      (clip.title && clip.textPreview) ||
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));

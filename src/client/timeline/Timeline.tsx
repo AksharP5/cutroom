@@ -251,6 +251,7 @@ const ClipLabel = memo(function ClipLabel({
   timed: boolean;
 }) {
   const end = clip.start + clip.duration;
+  const name = clipName(clip);
   return (
     <div
       className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}`}
@@ -263,9 +264,9 @@ const ClipLabel = memo(function ClipLabel({
         data-unscaled
         style={{ "--f": clip.start, "--e": end }}
       >
-        {clipName(clip)}
+        {name}
       </span>
-      {clip.textPreview && (
+      {clip.textPreview && clip.textPreview !== name && (
         <span className="tl-text-line">
           <span
             className="tl-name tl-text"

@@ -251,3 +251,43 @@ test("a title Cutroom cannot read shows why in place of its controls", async ({
   await expect(controls).toHaveCount(0);
   await expect(inspector).toContainText("Title on V4");
 });
+
+test("a title goes by its first line and its length fields show every digit", async ({
+  page,
+  request,
+}) => {
+  const { project, edit, title } = await titleProject(request, "Title name");
+  const inspector = await openTitle(page, project.id);
+  const header = inspector.locator(".inspector-clip strong");
+  const label = page.locator('[data-clip-label="lower"]');
+  await expect(header).toHaveText("Ada Lovelace");
+  await expect(label.locator(".tl-name").first()).toHaveText("Ada Lovelace");
+  // The name already is the first line, so the label does not repeat it underneath.
+  await expect(label.locator(".tl-text")).toHaveCount(0);
+
+  await edit([
+    { type: "setClip", clipId: "lower", text: "Grace Hopper\nRear Admiral" },
+  ]);
+  await expect(header).toHaveText("Grace Hopper");
+  await expect(label.locator(".tl-name").first()).toHaveText("Grace Hopper");
+  expect((await title())?.id).toBe("lower");
+
+  // The default 0.4 s entrance is 00:00:00:12 at 30 fps: the field must show its last digit,
+  // also when the inspector scrolls. Headless Chromium hides scrollbars, so the content gives up
+  // the width the app's own scrollbar takes.
+  await inspector
+    .locator(".inspector-content")
+    .evaluate((content: HTMLElement) => {
+      content.style.paddingRight = "var(--scrollbar-size)";
+    });
+  for (const name of ["In", "Out"]) {
+    const field = inspector.getByRole("textbox", { name, exact: true });
+    await expect(field).toHaveValue(/^00:00:00:\d\d$/);
+    // Text wider than the field scrolls inside it instead of showing.
+    expect(
+      await field.evaluate(
+        (input: HTMLInputElement) => input.scrollWidth - input.clientWidth,
+      ),
+    ).toBe(0);
+  }
+});
