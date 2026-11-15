@@ -199,6 +199,9 @@
 .edit-frame:not([data-live]):not([data-held]) {
   opacity: 0.01;
 }
+.edit-frame[data-retiring] {
+  visibility: hidden;
+}
 .edit-edge-labels {
   position: absolute;
   inset: 0;
