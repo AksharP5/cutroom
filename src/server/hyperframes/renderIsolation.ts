@@ -5,8 +5,22 @@ import { previewPolicy } from "./isolation.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
+import type { AudioStage } from "./directExport.ts";
 
 let rangeProgress: ((job: RenderJob) => void) | undefined;
+let audioStage: AudioStage | undefined;
+
+/** The producer hands over its audio stage as it loads, so a direct export mixes sound the same way. */
+export function provideAudioStage(stage: AudioStage) {
+  audioStage = stage;
+}
+export const directAudioStage = () => {
+  if (!audioStage)
+    throw new Error(
+      "The HyperFrames audio stage did not load. Export was refused.",
+    );
+  return audioStage;
+};
 let reportedAt = 0;
 let reportedCode: RenderJob["stageProgress"];
 
@@ -144,7 +158,13 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = replaceOnce(
+          source,
+          "function runAudioStage(input) {",
+          "cutroomProvideAudioStage(runAudioStage);\nfunction runAudioStage(input) {",
+          url,
+        );
         source = replaceOnce(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
