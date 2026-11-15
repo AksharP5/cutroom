@@ -149,6 +149,7 @@ export function ProjectTimeline({
           frame: clock.frame(),
         };
         let parked: number | null = null;
+        let saved = () => {};
         void editTimeline(
           projectId,
           label,
@@ -157,11 +158,12 @@ export function ProjectTimeline({
           (next, built) => {
             const frame = trimmedPlayhead(next, built);
             if (frame === null) return;
-            transport.seek(frame);
+            saved = transport.follow(frame);
             // A trim at the end shortens the timeline, and the transport parks on its last frame.
             parked = Math.min(frame, next.duration - 1);
           },
         ).then((accepted) => {
+          saved();
           if (
             !accepted &&
             parked !== null &&

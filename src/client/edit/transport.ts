@@ -19,6 +19,7 @@ export type TransportEvent =
   | { type: "release" };
 
 const stopped: TransportState = { kind: "stopped" };
+type Hold = false | "saving" | "saved";
 const doubled: Record<Speed, Speed> = { 1: 2, 2: 4, 4: 8, 8: 8 };
 
 /**
@@ -95,12 +96,19 @@ export function createTransport() {
     range: { in: null, out: null } as Timeline["range"],
     loop: false,
     muted: false,
+    /**
+     * The playhead last moved with an edit, and the documents from before the edit still show
+     * the frame they showed. Until the edit is `saved`, anything read from disk can predate it
+     * too. Any playback or seek paints the playhead's frame again.
+     */
+    held: false as Hold,
   }));
 
   const get = use.getState;
   const set = use.setState;
   let player: RuntimePlayer | null = null;
   let tick = 0;
+  let follows = 0;
   let origin = { frame: 0, at: 0 };
 
   const clamp = (frame: number) =>
@@ -120,11 +128,11 @@ export function createTransport() {
       : { first: 0, end: duration };
   }
 
-  function park(frame: number) {
+  function park(frame: number, held: Hold = false) {
     cancelAnimationFrame(tick);
     player?.pause();
-    set({ state: stopped, frame });
-    show(frame);
+    set({ state: stopped, frame, held });
+    if (!held) show(frame);
   }
 
   function restart(frame: number) {
@@ -177,7 +185,7 @@ export function createTransport() {
       previous.kind === "playing" && player
         ? clamp(frameAt(player.time()))
         : get().frame;
-    set({ state: next, frame });
+    set({ state: next, frame, held: false });
     const speed = velocity(next);
     if (!speed) {
       show(frame);
@@ -212,6 +220,19 @@ export function createTransport() {
       }
       park(clamp(frame));
     },
+    /**
+     * Moves the playhead with an edit, such as Q's ripple trim or a placement, and stops.
+     * The document on screen predates the edit, so any other frame of it can be the wrong
+     * picture: it keeps the one it shows until the edited document draws the new frame.
+     * Call the returned function once the server has answered the edit.
+     */
+    follow(frame: number) {
+      const id = ++follows;
+      park(clamp(frame), "saving");
+      return () => {
+        if (id === follows && get().held === "saving") set({ held: "saved" });
+      };
+    },
     step(frames: number) {
       transport.seek(get().frame + frames);
     },
@@ -241,14 +262,17 @@ export function createTransport() {
       cancelAnimationFrame(tick);
       player = null;
     },
-    /** Hands the playhead to a newly loaded player, which already shows frame `shown`. */
+    /**
+     * Hands the playhead to a newly loaded player, which already shows frame `shown`. While
+     * the playhead is held, a document from before the edit keeps that frame.
+     */
     attach(next: RuntimePlayer | null, shown?: number) {
       player?.pause();
       player = next;
       if (!next) return park(get().frame);
       next.setMuted(get().muted);
-      const { state, frame } = get();
-      if (velocity(state) || shown !== frame) restart(frame);
+      const { state, frame, held } = get();
+      if (velocity(state) || (shown !== frame && !held)) restart(frame);
       if (velocity(state)) {
         cancelAnimationFrame(tick);
         tick = requestAnimationFrame(advance);

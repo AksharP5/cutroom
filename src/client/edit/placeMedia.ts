@@ -25,6 +25,7 @@ export function placeAtPlayhead(
   // The playhead stops on the last frame, so from there the clip goes after it, at the end.
   const at = duration > 0 && frame === duration - 1 ? duration : frame;
   let end = at;
+  let saved = () => {};
   return editTimeline(
     projectId,
     "Add media",
@@ -77,8 +78,8 @@ export function placeAtPlayhead(
     },
     undefined,
     () => {
-      transport.seek(end);
+      saved = transport.follow(end);
       onPlace?.();
     },
-  );
+  ).finally(() => saved());
 }
