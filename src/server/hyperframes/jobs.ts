@@ -9,13 +9,14 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { tmpdir } from "node:os";
+import { freemem, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
+import { planCaptureBrowsers } from "./exportMemory";
 import {
   createOwnedDirectory,
   sweepOwnedDirectories,
@@ -111,6 +112,10 @@ export function createRenderWorkers(configuration: {
   scratchDir: string;
   workerPath?: string;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
+  /** Sizes the export's capture browsers to the memory free when it starts. */
+  workload?: (
+    projectId: string,
+  ) => Promise<{ mediaClips: number; durationFrames: number }>;
   stopTimeoutMs?: number;
   startupTimeoutMs?: number;
   removeScratch?: (path: string) => Promise<void>;
@@ -268,6 +273,17 @@ export function createRenderWorkers(configuration: {
           throw new Error(
             `A file named "${basename(outputPath)}" is already there. Choose another name.`,
           );
+        const workload = await configuration.workload?.(options.project.id);
+        const plan =
+          workload &&
+          planCaptureBrowsers({
+            available: freemem(),
+            mediaClips: workload.mediaClips,
+            frames: output?.range
+              ? output.range.end - output.range.start
+              : workload.durationFrames,
+          });
+        if (plan && "refusal" in plan) throw new Error(plan.refusal);
         for (const path of leftovers)
           await remove(path).then(
             () => leftovers.delete(path),
@@ -330,6 +346,15 @@ export function createRenderWorkers(configuration: {
               TMPDIR: temporary,
               // Per export, so a cache keyed on per-export paths cannot grow without bound.
               HYPERFRAMES_EXTRACT_CACHE_DIR: join(scratch, "frames"),
+              ...(plan
+                ? {
+                    PRODUCER_MAX_WORKERS: String(plan.browsers),
+                    // HyperFrames otherwise starts two browsers for 120 frames or more, whatever the limit.
+                    PRODUCER_MIN_PARALLEL_FRAMES: String(
+                      Number.MAX_SAFE_INTEGER,
+                    ),
+                  }
+                : {}),
             },
           },
         );

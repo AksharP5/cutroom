@@ -65,7 +65,10 @@ import {
   mediaSources,
 } from "../timeline/composition";
 import { mediaFacts } from "../timeline/media";
-import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import {
+  emptyTimelineSettings,
+  isAudioKind,
+} from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
 
@@ -171,6 +174,15 @@ export function createHyperframesApi(
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
     scratchDir: join(store.dataDir, "scratch"),
+    workload: async (id) => {
+      const timeline = await readTimeline(id);
+      return {
+        mediaClips: timeline.clips.filter(
+          (clip) => clip.kind === "video" || isAudioKind(clip.kind),
+        ).length,
+        durationFrames: timeline.duration,
+      };
+    },
     sourceOverrides: async (id) =>
       Object.fromEntries(
         (await readTrackMix(store, await store.get(id))).map(
