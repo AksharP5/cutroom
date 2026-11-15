@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
-import { prepareTimingPreview, waitForPreview } from "./preview-ready";
+import { waitForPreview } from "./preview-ready";
 
 declare global {
   interface Window {
@@ -575,7 +575,7 @@ for (const route of ["in place", "by reload"] as const)
       );
       expect(response.ok()).toBe(true);
       await waitForPreview(page, { after: loaded });
-      await prepareTimingPreview(page, request);
+      await waitForPreview(page, { timing: true });
     }
     await seek("0400");
     const capture = await capturePicture(page, blue);
@@ -1487,7 +1487,7 @@ test("coalesced stalled replacements keep the picture and finish the latest save
 }, testInfo) => {
   test.setTimeout(120_000);
   const { project, read, seek } = await openMedia(page, request);
-  await prepareTimingPreview(page, request);
+  await waitForPreview(page, { timing: true });
   await seek("0311");
   const { gate } = await gatePaint(page, "promotion");
   // The last edit halves the red picture's opacity over the dark background.

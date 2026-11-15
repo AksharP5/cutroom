@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseHTML } from "linkedom";
 
@@ -8,6 +8,9 @@ const gsap = readFileSync(
   "utf8",
 );
 
+/** Cutroom's own state: media caches, review and view state, attachments, exports. */
+export const APP_STATE_DIR = ".cutroom";
+
 /** The sole policy for live attribute updates, including script-free Cutroom titles.
  * Project markup cannot opt arbitrary scripts in.
  * Run on the compiler's source reads, before it adds its runtime and bootstrap scripts.
@@ -15,12 +18,20 @@ const gsap = readFileSync(
 export function previewTimingPolicy(dir: string) {
   let allowed = true;
   const root = realpathSync(dir);
+  // The preview signature does not cover app state, so a compile must not read source from it.
+  const unsigned = (path: string) => {
+    const within = relative(root, path);
+    return (
+      within.startsWith("..") ||
+      isAbsolute(within) ||
+      within.split(sep)[0] === APP_STATE_DIR
+    );
+  };
   const read = (file: string) => {
     if (!allowed || !/\.html?$/i.test(file)) return;
     try {
       const path = realpathSync(file);
-      const within = relative(root, path);
-      if (within.startsWith("..") || isAbsolute(within)) {
+      if (unsigned(path)) {
         allowed = false;
         return;
       }
@@ -56,12 +67,7 @@ export function previewTimingPolicy(dir: string) {
               // Only the actual pinned library is exempt, never a filename or authored marker.
               const local = resolve(dirname(path), src);
               const script = realpathSync(local);
-              const relativeScript = relative(root, script);
-              if (
-                relativeScript.startsWith("..") ||
-                isAbsolute(relativeScript) ||
-                readFileSync(script, "utf8") !== gsap
-              )
+              if (unsigned(script) || readFileSync(script, "utf8") !== gsap)
                 allowed = false;
             }
           }

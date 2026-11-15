@@ -9,7 +9,7 @@ import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
-import { prepareTimingPreview, waitForPreview } from "./preview-ready";
+import { waitForPreview } from "./preview-ready";
 
 const token = (page: Page) =>
   page.locator(".edit-stage").getAttribute("data-preview-ready");
@@ -91,7 +91,7 @@ async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   await edit([{ type: "move", clipIds: ["title"], by: -1, mode: "overwrite" }]);
   await page.goto(`/#project/${project.id}`);
   await waitForPreview(page);
-  if (!scripts) await prepareTimingPreview(page, request);
+  if (!scripts) await waitForPreview(page, { timing: true });
   return { project, read, edit };
 }
 
@@ -214,7 +214,7 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
   const second = await page.context().newPage();
   await second.goto(`/#project/${project.id}`);
   await waitForPreview(second);
-  await prepareTimingPreview(second, request);
+  await waitForPreview(second, { timing: true });
   const docs = await Promise.all([live(page), live(second)]);
   const tokens = await Promise.all([token(page), token(second)]);
   const client = new Client({ name: "timing-test", version: "1" });
@@ -353,7 +353,7 @@ test("rapid edits and missing, failed or late acknowledgments fall back without 
     .toBe(String((38 * 1001) / 30000));
   await waitForPreview(page);
   for (const failure of ["missing", "late", "error"] as const) {
-    await prepareTimingPreview(page, request);
+    await waitForPreview(page, { timing: true });
     const intercepted = page.waitForEvent("console", {
       predicate: (message) => message.text() === `timing fault: ${failure}`,
     });

@@ -36,6 +36,7 @@ import {
   fileContentVersion,
   getMimeType,
   identifyFileWrite,
+  registerRenderOutput,
   requestSubPath,
 } from "@hyperframes/studio-server";
 import type {
@@ -54,7 +55,7 @@ import {
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
-import { previewTimingPolicy } from "./previewTimingPolicy";
+import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
 import { readTrackMix } from "../timeline/mix";
@@ -411,6 +412,10 @@ export function createHyperframesApi(
     return watcher;
   };
 
+  // HyperFrames signs every project file it does not know to skip. Media caches written
+  // during a compile would otherwise fail its post-compile check and withhold live timing.
+  // The watcher and timing dependencies already treat app state as outside the preview.
+  const unsignedAppState = new Map<string, Promise<void>>();
   const resolveProject = async (
     id: string,
   ): Promise<ResolvedProject | null> => {
@@ -426,6 +431,20 @@ export function createHyperframesApi(
       ...STUDIO_SIGNATURE_MANIFEST_PATHS,
     ])
       await projectStatePath(project, path, true);
+    let registered = unsignedAppState.get(project.path);
+    if (!registered) {
+      registered = registerRenderOutput(
+        project.path,
+        join(project.path, APP_STATE_DIR),
+      ).catch((error: unknown) =>
+        console.error(
+          "Cannot exclude app state from the preview signature:",
+          error,
+        ),
+      );
+      unsignedAppState.set(project.path, registered);
+    }
+    await registered;
     const resolved = { id: project.id, dir: project.path, title: project.name };
     return resolved;
   };
