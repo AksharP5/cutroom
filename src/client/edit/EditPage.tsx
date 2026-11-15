@@ -3,13 +3,8 @@ import type { PointerEvent } from "react";
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
-  ChatCircle,
-  Cursor,
   Folder,
-  Knife,
   Magnet,
-  PencilSimple,
-  SplitHorizontal,
 } from "@phosphor-icons/react";
 import { z } from "zod";
 import type { EditorContext } from "../../shared/editor";
@@ -23,7 +18,6 @@ import {
   focusPanel,
   hint,
   isTyping,
-  keymap,
   missingNotice,
   useKeymap,
 } from "../keymap";
@@ -48,7 +42,7 @@ import {
   stepHistory,
   useTimeline,
 } from "./timeline";
-import { useVoiceover } from "../voiceover/Voiceover";
+import { DiscardRecording, useVoiceover } from "../voiceover/Voiceover";
 import {
   closeSource,
   markSource,
@@ -59,6 +53,7 @@ import {
   useSource,
 } from "./source";
 import { SourceViewer } from "./SourceViewer";
+import { ToolButtons } from "./ToolButtons";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
@@ -90,14 +85,6 @@ function edits({ clips, tracks }: Timeline) {
     ),
   ].sort((a, b) => a - b);
 }
-
-const tools = [
-  { mode: "select", action: "editPointer", icon: Cursor },
-  { mode: "trim", action: "editTrim", icon: SplitHorizontal },
-  { mode: "blade", action: "editBlade", icon: Knife },
-  { mode: "draw", action: "cutroomDraw", icon: PencilSimple },
-  { mode: "comment", action: "cutroomComment", icon: ChatCircle },
-] as const;
 
 /** Cutroom's own editor: tool row, viewer, transport, and the timeline below a split. */
 export function EditPage({
@@ -464,22 +451,7 @@ export function EditPage({
         aria-label="Tools"
         onClick={blurPointerButton}
       >
-        {tools.map((tool) => (
-          <button
-            key={tool.mode}
-            className="edit-tool"
-            aria-pressed={mode === tool.mode}
-            title={hint(tool.action)}
-            onClick={() => setMode(tool.mode)}
-          >
-            <tool.icon
-              size={14}
-              weight={mode === tool.mode ? "fill" : "regular"}
-            />
-            <span>{keymap[tool.action].label}</span>
-            <kbd>{keymap[tool.action].keys[0]}</kbd>
-          </button>
-        ))}
+        <ToolButtons mode={mode} onMode={setMode} />
         {source && (
           <>
             <span className="edit-separator" />
@@ -600,6 +572,7 @@ export function EditPage({
           onOpenNote={onOpenNote}
         />
       </section>
+      <DiscardRecording session={voiceover} />
     </div>
   );
 }

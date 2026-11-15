@@ -78,27 +78,44 @@
   padding: 0 var(--space-2);
   font-weight: var(--weight-medium);
 }
-.edit-tool kbd {
-  margin-left: 2px;
+/* Tools are icons; the armed one is a paper tile. Names and keys are in the tooltip. */
+.edit-tool-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.edit-tool-group .edit-tool {
+  width: var(--size-icon-button);
+  padding: 0;
+}
+.edit-tool-group .edit-tool[aria-pressed="true"] {
+  background: var(--selection);
+  color: var(--on-selection);
+}
+.edit-tooltip {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-xs) / var(--leading-tight)
+    var(--font-sans);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.edit-tooltip:popover-open {
+  display: flex;
+}
+.edit-tooltip kbd {
   font: var(--weight-medium) var(--type-2xs) / 1 var(--font-mono);
   font-stretch: var(--stretch-mono);
   color: var(--text-tertiary);
-}
-/* A narrow editor drops the key hints, then the names; the names stay for screen readers. */
-@container edit-tools (width < 760px) {
-  .edit-tool kbd {
-    display: none;
-  }
-}
-@container edit-tools (width < 640px) {
-  .edit-tool span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
 }
 .edit-grow {
   flex: 1;
@@ -133,25 +150,10 @@
   opacity: 1;
   color: var(--text-secondary);
 }
-/* The switch between a loaded source and the timeline. It takes the key hints' room first. */
+/* The switch between a loaded source and the timeline. */
 .edit-views {
   display: flex;
   gap: 2px;
-}
-@container edit-tools (width < 1040px) {
-  .edit-tools:has(.edit-views) .edit-tool kbd {
-    display: none;
-  }
-}
-@container edit-tools (width < 820px) {
-  .edit-tools:has(.edit-views) .edit-tool span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
 }
 .edit-zoom {
   height: var(--size-tool-button);
@@ -468,11 +470,12 @@ button.edit-note-pin {
   gap: 10px;
 }
 .edit-now {
-  height: 24px;
+  height: var(--size-transport-button);
   margin: 0 -6px;
   padding: 0 6px;
   font: inherit;
-  font-size: var(--type-md);
+  font-size: var(--type-clock);
+  font-weight: var(--weight-medium);
   color: var(--text-primary);
 }
 button.edit-now {

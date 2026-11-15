@@ -970,7 +970,8 @@ test("paused holds match native object-fit, transforms, opacity and stacking, th
   const bounds = {
     fill: { mean: 0.25, max: 65, fractionAbove3: 0.0327 },
     contain: { mean: 0.655, max: 131, fractionAbove3: 0.0435 },
-    cover: { mean: 0.212, max: 55, fractionAbove3: 0.0285 },
+    // Resampling noise depends on the fitted size; measured with the 40px transport.
+    cover: { mean: 0.224, max: 61, fractionAbove3: 0.0296 },
     none: { mean: 0.15, max: 36, fractionAbove3: 0.0197 },
     "scale-down": { mean: 0.655, max: 131, fractionAbove3: 0.0435 },
   };

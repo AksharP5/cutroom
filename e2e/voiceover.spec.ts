@@ -233,9 +233,7 @@ for (const removal of ["header", "MCP"] as const)
     expect(
       removed.tracks.filter((track) => track.kind === "audio"),
     ).toHaveLength(1);
-    await page
-      .getByRole("button", { name: "Record voiceover", exact: true })
-      .click();
+    await page.keyboard.press("Control+Alt+Shift+V");
     await expect(page.locator(".toast")).toContainText("Recording on A1.");
     await expect.poll(streamStates).toEqual(["ended", "live"]);
     await expect(
@@ -1112,12 +1110,19 @@ test("recording and failed-save controls stay visible through recovery", async (
   expect(
     headBox.x + headBox.width - micBox.x - micBox.width,
   ).toBeGreaterThanOrEqual(4);
+  // The armed track carries the record control, inside its own header.
+  const recordBox = (await record.boundingBox())!;
+  expect(recordBox.x).toBeGreaterThan(micBox.x);
+  expect(
+    headBox.x + headBox.width - recordBox.x - recordBox.width,
+  ).toBeGreaterThanOrEqual(4);
   const clock = page.getByRole("button", { name: /^Current time/ });
   const idle = (await clock.boundingBox())!.x;
   await record.click();
   const stopButton = page.getByRole("button", { name: "Stop voiceover" });
   await stopButton.hover();
-  await expect(stopButton).toHaveCSS("color", "rgb(255, 122, 107)");
+  // Red is the playhead's; it shows on the control only while a take runs.
+  await expect(stopButton).toHaveCSS("color", "rgb(255, 79, 58)");
   await page.waitForTimeout(1200);
   await expect(
     page.getByRole("status").filter({ hasText: "Recording" }),
@@ -1661,90 +1666,85 @@ test("recording region follows live row resizing at 28 and 200px before release"
   await expect(region).toHaveCount(0);
 });
 
-for (const trigger of ["button", "shortcut"] as const) {
-  test(`unarmed Record via ${trigger} starts a take and creates its audio track in one undo step`, async ({
-    page,
-    request,
-  }, info) => {
-    const project = ProjectSchema.parse(
-      await (
-        await request.post("/api/cutroom/projects", {
-          data: { name: "One press voiceover" },
-        })
-      ).json(),
+test("unarmed Record via the shortcut starts a take and creates its audio track in one undo step", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "One press voiceover" },
+      })
+    ).json(),
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
     );
-    const api = `/api/cutroom/projects/${project.id}`;
-    const read = async () =>
-      TimelineViewSchema.parse(
-        await (await request.get(`${api}/timeline`)).json(),
-      );
-    const before = (await read()).timeline;
-    expect(before.tracks.some((track) => track.kind === "audio")).toBe(false);
-    await page.goto(`/#project/${project.id}`);
-    await expect(
-      page.getByRole("button", { name: "Record voiceover", exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("button", { name: "Microphone input A1", exact: true })
-      .click();
-    await page.screenshot({ path: info.outputPath("microphone-panel.png") });
-    await page.keyboard.press("Escape");
-    if (trigger === "button")
-      await page
-        .getByRole("button", { name: "Record voiceover", exact: true })
-        .click();
-    else await page.keyboard.press("Control+Alt+Shift+v");
-    await expect(
-      page.getByRole("button", { name: "Stop voiceover", exact: true }),
-    ).toBeVisible();
-    await expect(page.locator(".toast")).toContainText(
-      "Recording on a new audio track.",
+  const before = (await read()).timeline;
+  expect(before.tracks.some((track) => track.kind === "audio")).toBe(false);
+  await page.goto(`/#project/${project.id}`);
+  await page
+    .getByRole("button", { name: "Microphone input A1", exact: true })
+    .click();
+  await page.screenshot({ path: info.outputPath("microphone-panel.png") });
+  await page.keyboard.press("Escape");
+  // Nothing red rests in the transport: record lives on an armed track, or this key.
+  await expect(
+    page.getByRole("button", { name: "Record voiceover", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Control+Alt+Shift+v");
+  await expect(
+    page.getByRole("button", { name: "Stop voiceover", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".toast")).toContainText(
+    "Recording on a new audio track.",
+  );
+  await page.screenshot({ path: info.outputPath("one-press-recording.png") });
+  await page.waitForTimeout(1200);
+  await page
+    .getByRole("button", { name: "Stop voiceover", exact: true })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.filter(
+          (clip) => clip.kind === "voiceover",
+        ).length,
+    )
+    .toBe(1);
+  await page.screenshot({ path: info.outputPath("one-press-saved.png") });
+  const client = new Client({ name: "one-press-recording", version: "1" });
+  const base = new URL(page.url()).origin;
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", base), {
+        requestInit: { headers: { origin: base } },
+      }),
     );
-    await page.screenshot({ path: info.outputPath("one-press-recording.png") });
-    await page.waitForTimeout(1200);
-    await page
-      .getByRole("button", { name: "Stop voiceover", exact: true })
-      .click();
-    await expect
-      .poll(
-        async () =>
-          (await read()).timeline.clips.filter(
-            (clip) => clip.kind === "voiceover",
-          ).length,
-      )
-      .toBe(1);
-    await page.screenshot({ path: info.outputPath("one-press-saved.png") });
-    const client = new Client({ name: "one-press-recording", version: "1" });
-    const base = new URL(page.url()).origin;
-    try {
-      await client.connect(
-        new StreamableHTTPClientTransport(new URL("/mcp", base), {
-          requestInit: { headers: { origin: base } },
+    const result = z
+      .object({ structuredContent: z.object({ result: TimelineViewSchema }) })
+      .parse(
+        await client.callTool({
+          name: "timeline_read",
+          arguments: { projectId: project.id },
         }),
-      );
-      const result = z
-        .object({ structuredContent: z.object({ result: TimelineViewSchema }) })
-        .parse(
-          await client.callTool({
-            name: "timeline_read",
-            arguments: { projectId: project.id },
-          }),
-        ).structuredContent.result;
-      expect(result.timeline).toEqual((await read()).timeline);
-      expect(
-        (
-          await client.callTool({
-            name: "history_undo",
-            arguments: { projectId: project.id },
-          })
-        ).isError,
-      ).not.toBe(true);
-      await expect.poll(async () => (await read()).timeline).toEqual(before);
-    } finally {
-      await client.close();
-    }
-  });
-}
+      ).structuredContent.result;
+    expect(result.timeline).toEqual((await read()).timeline);
+    expect(
+      (
+        await client.callTool({
+          name: "history_undo",
+          arguments: { projectId: project.id },
+        })
+      ).isError,
+    ).not.toBe(true);
+    await expect.poll(async () => (await read()).timeline).toEqual(before);
+  } finally {
+    await client.close();
+  }
+});
 
 test("unarmed Record skips locked and occupied audio tracks", async ({
   page,
@@ -1791,9 +1791,8 @@ test("unarmed Record skips locked and occupied audio tracks", async ({
     ).ok(),
   ).toBe(true);
   await page.goto(`/#project/${project.id}`);
-  await page
-    .getByRole("button", { name: "Record voiceover", exact: true })
-    .click();
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page.keyboard.press("Control+Alt+Shift+V");
   await expect(
     page.getByRole("button", { name: "Arm A3", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");

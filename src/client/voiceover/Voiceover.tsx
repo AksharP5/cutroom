@@ -79,7 +79,8 @@ function InputLevel({ session }: { session: VoiceoverSession }) {
   return <AudioMeters source={source} compact label="Microphone input level" />;
 }
 
-export function VoiceoverTransport({ session }: { session: VoiceoverSession }) {
+/** The armed track's own record control: neutral until a take is running. */
+function RecordButton({ session }: { session: VoiceoverSession }) {
   const state = useStore(session.store, ({ state }) => state);
   const recording = state.kind === "recording";
   const discard = useStore(session.store, ({ discard }) => discard);
@@ -97,25 +98,27 @@ export function VoiceoverTransport({ session }: { session: VoiceoverSession }) {
     }
   }, [discard, state.kind]);
   return (
-    <>
-      <button
-        ref={button}
-        className={`edit-icon vo-record${recording ? " recording" : ""}`}
-        aria-label={recording ? "Stop voiceover" : "Record voiceover"}
-        aria-pressed={recording}
-        disabled={state.kind === "arming" || state.kind === "saving"}
-        title={hint("cutroomRecordVoiceover")}
-        onClick={session.toggleRecord}
-      >
-        {recording ? (
-          <Stop size={14} weight="fill" />
-        ) : (
-          <Record size={16} weight="fill" />
-        )}
-      </button>
-      <DiscardTake session={session} source="recording" />
-    </>
+    <button
+      ref={button}
+      className={`vo-record${recording ? " recording" : ""}`}
+      aria-label={recording ? "Stop voiceover" : "Record voiceover"}
+      aria-pressed={recording}
+      disabled={state.kind === "arming" || state.kind === "saving"}
+      title={hint("cutroomRecordVoiceover")}
+      onClick={session.toggleRecord}
+    >
+      {recording ? (
+        <Stop size={12} weight="fill" />
+      ) : (
+        <Record size={12} weight="fill" />
+      )}
+    </button>
   );
+}
+
+/** Asks before a take stopped with Esc is thrown away. Mounted with the editor, wherever the take was started. */
+export function DiscardRecording({ session }: { session: VoiceoverSession }) {
+  return <DiscardTake session={session} source="recording" />;
 }
 
 function DiscardTake({
@@ -237,6 +240,7 @@ export function VoiceoverHeader({
       >
         <Microphone size={12} />
       </button>
+      {active && <RecordButton session={session} />}
       <div
         ref={panel}
         popover="auto"
