@@ -163,6 +163,18 @@ If a source edit gives a title an undeclared font, invalid settings, markup othe
 
 Titles an agent wrote as sub-composition files or root scripts are left as they are and keep the behavior described above.
 
+### Transitions
+
+A cross dissolve or a dip to black sits on a cut between two video, image or audio clips, and their linked sound crossfades with it. It plays the media past each clip's edit point, as Resolve does: centred on the cut, the outgoing clip runs on for half its length and the incoming clip starts half its length early. A transition that needs more media than the clips have is refused with the longest that fits. Agents set them with [`setTransition`](mcp.md#transitions).
+
+- A roll moves the transition with the cut. A trim that leaves less room shortens it.
+- A razor elsewhere in either clip keeps it on the piece that still meets the cut, and adds none at the razor.
+- Moving either clip away, a trim that opens a gap, or deleting either clip removes it.
+- Its edges own their fades: change the transition instead.
+- Sound crossfades on equal-power curves, so related and unrelated sound both hold their level through the cut.
+
+In the source, each clip's element runs past the cut by its share, with `data-transition-*` attributes, and one stylesheet block Cutroom keeps current ramps the picture. Like titles, it needs Chromium 133 or newer in the viewer; the export is correct regardless.
+
 These cuts follow Resolve's sync-preserving Edit-page ripple model introduced in [DaVinci Resolve 20.2, New Features Guide, pages 7-8](https://documents.blackmagicdesign.com/SupportNotes/DaVinci_Resolve_20.2_New_Features_Guide.pdf#page=7). Earlier Resolve versions mainly moved clips starting after the edit, leaving spanning music or titles uncut. Resolve 20.2 also added independent Sync Lock controls, explained on page 12. Cutroom currently uses auto-select for ripple participation and refuses linked edits across excluded tracks; it does not expose Resolve's separate Sync Lock toggle or its preference to restore the older ripple behavior.
 
 The [Resolve 21 Reference Manual](https://documents.blackmagicdesign.com/UserManuals/DaVinci_Resolve_21_Reference_Manual.pdf) describes ripple delete in "Deleting Clips From the Timeline", page 933, the shared ripple rules and cuts in "Ripple Editing Rules", page 1100 and "Sync Lock Controls" on page 1101, and the playhead trim commands in "Trim Start and Trim End" and "Resize, Ripple, and Roll Start and End Commands", pages 1115-1117. Q and W are the owner's bindings, not Resolve's factory shortcuts. The interval cases above make the documented before/after sync rule deterministic for Cutroom; the manuals do not enumerate each partial-overlap case or document a linked smallest-gap exception.

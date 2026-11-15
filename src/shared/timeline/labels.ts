@@ -3,6 +3,7 @@ import { toFrames } from "./apply";
 import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
+import { TRANSITION_NAMES } from "./transition";
 
 /** A clip's name as the timeline shows it. A title without a label goes by its first line. */
 export const clipName = (
@@ -302,6 +303,21 @@ export function editLabel(
         if (pending && command.automation !== undefined)
           parts.push("Clear automation");
         return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
+      }
+      case "setTransition": {
+        const cut = named
+          ? ` between ${target([command.from, command.to])}`
+          : "";
+        const { transition } = command;
+        if (!transition)
+          return `${pending ? "Remove" : "Removed"} the transition${cut}`;
+        const existing = clips.find(
+          (clip) => clip.id === command.to,
+        )?.transitionIn;
+        const what = `${span(transition.duration)} ${TRANSITION_NAMES[transition.kind].toLowerCase()}`;
+        return existing
+          ? `${pending ? "Change" : "Changed"} the transition${cut} to ${what}`
+          : `${pending ? "Add" : "Added"} ${what}${cut}`;
       }
       case "setTiming": {
         const parts: string[] = [];

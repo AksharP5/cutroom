@@ -142,6 +142,27 @@ The entrance starts on the clip's first frame and the exit ends on its last. Tai
 
 In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. A title must contain non-empty plain text, with `<br>` allowed for line breaks, and any named font must have an uncommented `@font-face` declaration in the composition or `index.html`. Invalid content, an undeclared font or an attribute value Cutroom does not write gives `title: null` and a reason in `sourceRestrictions.title`; the element stays on the timeline. Titles work in scene files as well as `index.html`.
 
+### Transitions
+
+A transition sits on a cut between two video, image or audio clips on one track. Set it with `setTransition`, naming the clip that ends at the cut and the one that starts there:
+
+```json
+{
+  "type": "setTransition",
+  "from": "talk-1",
+  "to": "talk-2",
+  "transition": { "kind": "dissolve", "duration": 30, "alignment": "center" }
+}
+```
+
+`kind` is `dissolve` (the default) or `dip`, to black and back. `duration` is in frames. `alignment` is `center` (the default), `start`, which begins on the cut, or `end`, which finishes on it. `transition: null` removes it. Linked partners that meet at the same frame get the same transition, so a shot's sound crossfades with its picture. Sound always crossfades on equal-power curves, whatever the kind.
+
+Both clips keep their start and length at the cut in `timeline_read`; each carries the transition, as `transitionOut` on the first clip and `transitionIn` on the second. A transition plays the media past each clip's edit point: the outgoing clip needs frames after its out point and the incoming clip frames before its in point, half each for `center`. A length that does not fit is refused with `out_of_bounds`, naming the longest that does and what limits it, such as "Only 13 frames fit at this cut: talk.mp4 has 6 frames of media before its in point." Stills have no limit.
+
+A transition owns the fades on its edges: `setClip.fadeIn` or `fadeOut` there is refused. It stays on its cut through a roll, a razor elsewhere in either clip, and moves and ripples that keep the two clips together. A trim that leaves less room shortens it to fit. Moving either clip away, a trim that opens a gap, or deleting either clip removes it.
+
+In the source each clip's element runs past the cut by its share of the transition, with `data-transition-in` or `data-transition-out` and their `-duration` and `-align` attributes. One `<style data-cutroom-transitions>` block ramps the picture: a dissolve fades the clip later in the document, and marks the other `-under`. Sound plays a generated `data-automation` volume envelope; a clip with its own volume automation keeps it and crossfades with straight `data-fade-in`/`data-fade-out` instead. Preview, `timeline_view` and export play the same attributes through the same runtime.
+
 ### Animated titles
 
 For motion the presets do not cover, write the animation yourself as below.
