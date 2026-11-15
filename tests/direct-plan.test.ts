@@ -165,7 +165,7 @@ test("of two full-frame videos, the one painted last exports from its source", (
   ).toBe("frame 0 shows 2 clips in an authored order");
 });
 
-test("an export with more than three runs for the browser captures every frame, starting browsers once", () => {
+test("every run under a title is captured, however many, and the frames between draw from the source", () => {
   const title = (start: number) =>
     `<div id="t${start}" class="clip" data-start="${start}" data-duration="0.5" data-track-index="1">Hi</div>`;
   const long = (titles: number[]) =>
@@ -174,7 +174,9 @@ test("an export with more than three runs for the browser captures every frame, 
         video().replace('data-duration="2"', 'data-duration="5"') +
         titles.map(title).join(""),
     }).replace('data-duration="2" class', 'data-duration="5" class');
-  expect(sources(long([1, 2, 3]))).toEqual([
+  expect(sources(long([1, 2, 3, 4]))).toEqual([
+    "v.mp4",
+    "capture",
     "v.mp4",
     "capture",
     "v.mp4",
@@ -183,9 +185,6 @@ test("an export with more than three runs for the browser captures every frame, 
     "capture",
     "v.mp4",
   ]);
-  expect(sources(long([1, 2, 3, 4]))).toBe(
-    "4 runs of frames need the browser, first t1 is not a video",
-  );
 });
 
 test("the page the cases below change exports from the source", () => {

@@ -1,4 +1,17 @@
+import { cpus } from "node:os";
+
 const GiB = 1024 ** 3;
+/** FFmpeg encodes an export runs at once, source parts or captured runs; x264 threads within each. */
+export const PARALLEL_ENCODES = Math.max(
+  1,
+  Math.min(4, Math.floor(cpus().length / 4)),
+);
+/**
+ * What one source-part encoder holds while frame capture runs beside it: four measured 3.0 GB
+ * together at 1080p, each decoding up to four sources. Scaled by frame size, never below that.
+ */
+const sourceEncoderBytes = (pixels: number) =>
+  0.8 * GiB * Math.max(1, pixels / (1920 * 1080));
 /**
  * One capture browser. Every capture page loads every media element, so measured Chromium PSS
  * was 0.72 GiB plus about 11 MB per video or audio clip: 0.90, 2.08 and 3.82 GiB at 16, 120
@@ -26,13 +39,20 @@ export function planCaptureBrowsers({
   available,
   mediaClips,
   frames,
+  sourcePixels = 0,
 }: {
   available: number;
   mediaClips: number;
   frames: number;
+  /** The frame size, when FFmpeg encodes source parts while the browsers capture. */
+  sourcePixels?: number;
 }): { browsers: number } | { refusal: string } {
   const first = browserBytes(mediaClips);
-  const needed = reserveBytes + sharedBytes(frames) + first;
+  const needed =
+    reserveBytes +
+    sharedBytes(frames) +
+    first +
+    (sourcePixels ? PARALLEL_ENCODES * sourceEncoderBytes(sourcePixels) : 0);
   if (available < needed)
     return {
       refusal: `This export needs about ${(needed / GiB).toFixed(1)} GB of free memory and ${(available / GiB).toFixed(1)} GB is free. Close other apps and try again.`,

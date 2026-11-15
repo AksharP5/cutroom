@@ -341,14 +341,28 @@ export function createRenderWorkers(configuration: {
           ? await directPlan(options, sources, output?.range)
           : undefined;
         const workload = await configuration.workload?.(options.project.id);
+        // One set of browsers captures every run the browser draws, sized to those frames.
+        const captured = direct?.plan.segments.reduce(
+          (frames, segment) =>
+            segment.kind === "capture"
+              ? frames + segment.end - segment.start
+              : frames,
+          0,
+        );
         const plan =
           workload &&
           planCaptureBrowsers({
             available: freemem(),
             mediaClips: workload.mediaClips,
-            frames: output?.range
-              ? output.range.end - output.range.start
-              : workload.durationFrames,
+            frames:
+              captured ||
+              (output?.range
+                ? output.range.end - output.range.start
+                : workload.durationFrames),
+            sourcePixels:
+              captured && direct
+                ? direct.plan.width * direct.plan.height
+                : undefined,
           });
         // An export drawn wholly from its sources needs no browser. If a source turns out to need
         // one, the worker fails with this refusal rather than starting browsers that would not fit.
