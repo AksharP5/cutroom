@@ -7,6 +7,7 @@ import {
   cancelTransformPreview,
   commitTransformPreview,
   previewTransform,
+  usePictureScale,
 } from "../preview";
 import { ValueField } from "./ValueField";
 import type { FieldUnit } from "./fields";
@@ -29,6 +30,9 @@ export function TransformFields({
   disabled: boolean | undefined;
 }) {
   const [linked, setLinked] = useState(clip.scaleX === clip.scaleY);
+  // A scale on the picture's handles shows here while it lasts.
+  const gesture = usePictureScale((state) => state.scale);
+  const shown = gesture?.clipId === clip.id ? gesture : clip;
   const field = (
     label: string,
     value: number,
@@ -76,14 +80,14 @@ export function TransformFields({
     <>
       {field(
         "Scale X",
-        clip.scaleX ?? 1,
+        shown.scaleX ?? 1,
         "percent",
         (value) => (linked ? { scale: value } : { scaleX: value }),
         scale,
       )}
       {field(
         "Scale Y",
-        clip.scaleY ?? 1,
+        shown.scaleY ?? 1,
         "percent",
         (value) => (linked ? { scale: value } : { scaleY: value }),
         scale,

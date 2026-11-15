@@ -6,14 +6,19 @@ import { SNAP_PX } from "../timeline/gesture";
 import { clickSelection, emptySelection } from "../timeline/selection";
 import { useWorkspace } from "../workspace";
 import { inspectorSubject } from "./inspector/fields";
-import { contains, dragOffset, pickHit } from "./pictureDrag";
+import { contains, cornerScale, dragOffset, pickHit } from "./pictureDrag";
+import { editTransform } from "../../shared/timeline/transform";
 import {
   cancelPositionPreview,
+  cancelTransformPreview,
   commitPositionPreview,
+  commitTransformPreview,
   hitPicture,
   pictureBox,
   previewPosition,
+  previewTransform,
   usePictureMove,
+  usePictureScale,
   usePositionWarning,
   useTextEdit,
 } from "./preview";
@@ -97,6 +102,19 @@ interface Hover {
   hits: readonly PictureHit[] | null;
 }
 
+/** A corner handle held down: the clip scales about its centre, in composition pixels. */
+interface Scaling {
+  timeline: Timeline;
+  clip: Clip;
+  center: Offset;
+  /** Where the handle was pressed, from the centre. */
+  press: Offset;
+  pointer: Offset;
+  free: boolean;
+  from: Offset;
+  to: Offset;
+}
+
 interface Press {
   timeline: Timeline;
   /** Where it landed, in screen and composition pixels. */
@@ -163,6 +181,7 @@ export function PictureSelect({
     hits: null,
   });
   const nudge = useRef<(Move & { keys: Set<string> }) | null>(null);
+  const scaling = useRef<Scaling | null>(null);
 
   const draw = () => {
     const element = outline.current;
@@ -312,6 +331,68 @@ export function PictureSelect({
     usePictureMove.setState({ move: null });
   };
 
+  /** A handle drag draws through the same drafts as the inspector's Scale fields. */
+  const scaleTo = (current: Scaling) => {
+    const factor = cornerScale(
+      current.press,
+      {
+        x: current.pointer.x - current.center.x,
+        y: current.pointer.y - current.center.y,
+      },
+      current.free,
+    );
+    const scale = (from: number, by: number) =>
+      Math.min(100, Math.max(0.01, Number((from * by).toFixed(3))));
+    current.to = {
+      x: scale(current.from.x, factor.x),
+      y: scale(current.from.y, factor.y),
+    };
+    previewTransform(
+      current.clip.id,
+      editTransform(current.clip, {
+        scaleX: current.to.x,
+        scaleY: current.to.y,
+      }),
+      current.clip,
+    );
+    usePictureScale.setState({
+      scale: {
+        clipId: current.clip.id,
+        scaleX: current.to.x,
+        scaleY: current.to.y,
+      },
+    });
+  };
+  /** Release saves one edit, so one undo step; Esc or a lost pointer puts the clip back. */
+  const endScale = (cancel: boolean) => {
+    const current = scaling.current;
+    scaling.current = null;
+    if (!current) return;
+    useWorkspace.setState({ gesture: false });
+    usePictureScale.setState({ scale: null });
+    const { clip, from, to } = current;
+    if (cancel || (to.x === from.x && to.y === from.y)) {
+      cancelTransformPreview(clip.id, clip);
+      return;
+    }
+    void commitTransformPreview(clip, () =>
+      editTimeline(
+        latest.current.projectId,
+        "Edit scale",
+        () => [
+          {
+            type: "setClip",
+            clipId: clip.id,
+            ...(to.x === to.y
+              ? { scale: to.x }
+              : { scaleX: to.x, scaleY: to.y }),
+          },
+        ],
+        current.timeline,
+      ),
+    );
+  };
+
   const select = (hit: PictureHit | null, toggle: boolean) => {
     const { view, selection } = useTimeline.getState();
     // Ctrl on nothing keeps what is selected, as on the timeline.
@@ -442,6 +523,18 @@ export function PictureSelect({
         if (hover.current.hits) drawHover();
         else probe();
       }
+      const scale = scaling.current;
+      if (scale) {
+        if (event.key === "Escape" && event.type === "keydown") {
+          event.preventDefault();
+          event.stopPropagation();
+          endScale(true);
+        } else if (scale.free !== event.shiftKey) {
+          scale.free = event.shiftKey;
+          scaleTo(scale);
+        }
+        return;
+      }
       if (!current?.drag) return;
       if (event.key === "Escape" && event.type === "keydown") {
         event.preventDefault();
@@ -454,6 +547,7 @@ export function PictureSelect({
       act(current);
     };
     const blur = () => {
+      endScale(true);
       end(true);
       endNudge(false);
     };
@@ -476,6 +570,7 @@ export function PictureSelect({
       document.removeEventListener("keyup", key, true);
       document.removeEventListener("pointerdown", leave, true);
       window.removeEventListener("blur", blur);
+      endScale(true);
       end(true);
       endNudge(true);
     };
@@ -483,6 +578,7 @@ export function PictureSelect({
   // Another tool, or another clip, ends what the last one started.
   useEffect(() => {
     if (active) return;
+    endScale(true);
     end(true);
     endNudge(false);
     dropHover();
@@ -514,6 +610,41 @@ export function PictureSelect({
       onPointerDown={(event) => {
         const timeline = useTimeline.getState().view?.timeline;
         if (!active || !timeline || event.button !== 0 || press.current) return;
+        const shown = pictureBox.current();
+        // The handles show only on a grabbed, unlocked selection.
+        if (
+          event.target instanceof Element &&
+          event.target.matches("[data-corner]") &&
+          clip &&
+          !locked &&
+          !clip.sourceRestrictions?.transform &&
+          shown?.clipId === clip.id &&
+          shown.box
+        ) {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const pointer = {
+            x: (event.clientX - bounds.left) / scale.x,
+            y: (event.clientY - bounds.top) / scale.y,
+          };
+          const center = {
+            x: shown.box.x + shown.box.width / 2,
+            y: shown.box.y + shown.box.height / 2,
+          };
+          const from = { x: clip.scaleX ?? 1, y: clip.scaleY ?? 1 };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          useWorkspace.setState({ gesture: true });
+          scaling.current = {
+            timeline,
+            clip,
+            center,
+            press: { x: pointer.x - center.x, y: pointer.y - center.y },
+            pointer,
+            free: event.shiftKey,
+            from,
+            to: from,
+          };
+          return;
+        }
         // A press still ends typing elsewhere, as a click on any other part of the editor does.
         const focused = document.activeElement;
         if (focused instanceof HTMLElement && focused !== event.currentTarget)
@@ -562,6 +693,16 @@ export function PictureSelect({
         );
       }}
       onPointerMove={(event) => {
+        if (scaling.current) {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          scaling.current.pointer = {
+            x: (event.clientX - bounds.left) / scale.x,
+            y: (event.clientY - bounds.top) / scale.y,
+          };
+          scaling.current.free = event.shiftKey;
+          scaleTo(scaling.current);
+          return;
+        }
         const current = press.current;
         if (!current) {
           if (!active) return;
@@ -623,9 +764,18 @@ export function PictureSelect({
           () => {},
         );
       }}
-      onPointerUp={() => end(false)}
-      onPointerCancel={() => end(true)}
-      onLostPointerCapture={() => end(true)}
+      onPointerUp={() => {
+        endScale(false);
+        end(false);
+      }}
+      onPointerCancel={() => {
+        endScale(true);
+        end(true);
+      }}
+      onLostPointerCapture={() => {
+        endScale(true);
+        end(true);
+      }}
       onContextMenu={(event) => {
         const surface = event.currentTarget;
         const bounds = surface.getBoundingClientRect();
@@ -768,10 +918,10 @@ export function PictureSelect({
         <i />
         <i />
         <i />
-        <b />
-        <b />
-        <b />
-        <b />
+        <b data-corner="nw" />
+        <b data-corner="ne" />
+        <b data-corner="sw" />
+        <b data-corner="se" />
       </div>
     </div>
   );

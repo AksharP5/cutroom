@@ -87,3 +87,21 @@ export function dragOffset(
   );
   return { dx: x.by, dy: y.by, guides: { x: x.guide, y: y.guide } };
 }
+
+/**
+ * How much a corner handle scales a clip: the pointer's travel from the clip's centre against
+ * where it was pressed. Together, both axes take the press direction's share of the travel, so
+ * the corner follows the pointer along the diagonal; `free` (Shift) scales each axis alone.
+ */
+export function cornerScale(press: Point, pointer: Point, free: boolean) {
+  if (!free) {
+    const along =
+      (pointer.x * press.x + pointer.y * press.y) /
+      (press.x * press.x + press.y * press.y || 1);
+    return { x: along, y: along };
+  }
+  return {
+    x: press.x ? pointer.x / press.x : 1,
+    y: press.y ? pointer.y / press.y : 1,
+  };
+}

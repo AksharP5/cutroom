@@ -100,6 +100,11 @@ export const usePictureMove = create<{
   move: { clipId: string; x: number; y: number } | null;
 }>(() => ({ move: null }));
 
+/** A scale under way on the picture's corner handles, which the inspector's Scale fields show. */
+export const usePictureScale = create<{
+  scale: { clipId: string; scaleX: number; scaleY: number } | null;
+}>(() => ({ scale: null }));
+
 /** A text clip whose words the inspector should take the keyboard for, asked from the picture. */
 export const useTextEdit = create<{ clipId: string | null }>(() => ({
   clipId: null,
