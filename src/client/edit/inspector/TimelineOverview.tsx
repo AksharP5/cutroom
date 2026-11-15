@@ -1,5 +1,6 @@
 import type { Timeline, TimelineView } from "../../../shared/timeline/schema";
 import { formatTimecode } from "../../../shared/timeline/timecode";
+import { TimecodeText } from "../../components/TimecodeText";
 import { useWorkspace } from "../../workspace";
 import { showSource } from "../source";
 import { transport } from "../transport";
@@ -23,7 +24,9 @@ export function TimelineOverview({
 }) {
   const composition = useWorkspace((state) => state.composition);
   const { fps, duration, range, markers } = timeline;
-  const time = (frame: number) => formatTimecode(frame, fps);
+  const time = (frame: number) => (
+    <TimecodeText timecode={formatTimecode(frame, fps)} />
+  );
   const seek = (frame: number) => {
     showSource(false);
     transport.seek(frame);

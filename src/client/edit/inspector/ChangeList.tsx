@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import type { Timeline } from "../../../shared/timeline/schema";
 import { formatTimecode } from "../../../shared/timeline/timecode";
+import { TimecodeText } from "../../components/TimecodeText";
 import { api, json } from "../../api";
 import { clickSelection } from "../../timeline/selection";
 import { showToast } from "../../workspace";
@@ -125,7 +126,11 @@ export function ChangeList({
                   )}
               </span>
               {clip && times && (
-                <time>{formatTimecode(clip.start, timeline.fps)}</time>
+                <time>
+                  <TimecodeText
+                    timecode={formatTimecode(clip.start, timeline.fps)}
+                  />
+                </time>
               )}
             </>
           );
