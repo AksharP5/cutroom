@@ -16,7 +16,10 @@ import * as hyperframes from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createProjectStore } from "../src/server/projects/store";
 import { createReviewService } from "../src/server/projects/review";
-import { previewDocument } from "../src/server/hyperframes/previewBridge";
+import {
+  liveUpdatePlan,
+  previewDocument,
+} from "../src/server/hyperframes/previewBridge";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { PreviewTimingSchema } from "../src/shared/preview";
@@ -141,21 +144,20 @@ test("saved timing snapshots use the fresh preview's rational boundaries and inc
   expect(after.clips[0]!.values).toEqual(after.clips[1]!.values);
 });
 
+/** What a loaded `before` document does when `after` is saved: reload, or the in-place plan. */
+const liveChange = (before: string, after: string) => {
+  const [from, to] = [snapshot(before), snapshot(after)];
+  if (from.structure !== to.structure) return "reload";
+  const plan = liveUpdatePlan(from.clips, to.clips);
+  return "refuse" in plan ? "reload" : plan;
+};
+
 for (const [name, change] of [
   ["script", source.replace("answer=42", "answer=43")],
   ["CSS", source.replace("position:absolute", "position:fixed")],
   ["source", source.replace('src="a.mp4"', 'src="b.mp4"')],
   ["stacking", source.replace('id="v"', 'id="v" data-track-index="2"')],
-  [
-    "addition",
-    source.replace(
-      "</main>",
-      '<div class="clip" data-start="0" data-duration="1">New</div></main>',
-    ),
-  ],
-  ["removal", source.replace(/<video.*?<\/video>/, "")],
   ["text", source.replace("Words", "Other")],
-  ["root duration", source.replace('data-duration="10"', 'data-duration="11"')],
   [
     "sub-composition",
     source.replace(
@@ -163,10 +165,70 @@ for (const [name, change] of [
       'id="title" data-composition-src="nested.html"',
     ),
   ],
+  ["order", source.replace(/(<video.*?<\/video>)(<audio.*?<\/audio>)/, "$2$1")],
 ] as const)
   test(`${name} changes require a fresh document`, () => {
-    expect(snapshot(change).structure).not.toBe(snapshot(source).structure);
+    expect(liveChange(source, change)).toBe("reload");
   });
+
+test("removing clips and changing the composition's length keep the loaded document", () => {
+  const shorter = source
+    .replace(/<audio.*?<\/audio>/, "")
+    .replace('data-duration="10"', 'data-duration="7.5"');
+  expect(liveChange(source, shorter)).toEqual({ remove: ["a"] });
+  expect(snapshot(shorter).duration).toBe("7.5");
+  // Undo adds the clip back, which needs a fresh document until additions are live.
+  expect(liveChange(shorter, source)).toBe("reload");
+});
+
+test("a removed clip takes the whitespace before it, so indented sources stay live", () => {
+  const indented = source.replace(/(<video|<audio|<div)/g, "\n    $1");
+  const lifted = indented.replace(/\n {4}<audio.*?<\/audio>/, "");
+  expect(liveChange(indented, lifted)).toEqual({ remove: ["a"] });
+  expect(snapshot(indented).clips.map(({ space }) => space)).toEqual([
+    "\n    ",
+    "\n    ",
+    "\n    ",
+  ]);
+  // Whitespace left behind is structure: it would draw differently in some layouts.
+  const leftBehind = indented.replace(/<audio.*?<\/audio>/, "");
+  expect(liveChange(indented, leftBehind)).toBe("reload");
+});
+
+test("a clip holding a stylesheet is structure, so CSS inside it reloads", () => {
+  const styled = (css: string) =>
+    source.replace("Words</div>", `<style>${css}</style>Words</div>`);
+  const before = styled("main{background:#111}");
+  expect(snapshot(before).clips.find(({ id }) => id === "title")?.slot).toBe(
+    null,
+  );
+  expect(
+    liveChange(
+      before,
+      styled(
+        "video{animation:spin 2s infinite}@keyframes spin{to{rotate:1turn}}",
+      ),
+    ),
+  ).toBe("reload");
+  expect(liveChange(before, before.replace(/<div.*?<\/div>/, ""))).toBe(
+    "reload",
+  );
+});
+
+test("a clip holding another clip or a composition is structure, not a movable clip", () => {
+  const holding = source
+    .replace(/ id="(v|a|title)"/g, ' id="$1" data-hf-cutroom-clip-id="$1"')
+    .replace(
+      "Words</div>",
+      'Words<span data-hf-cutroom-clip-id="inner" data-start="0" data-duration="1"></span></div>',
+    );
+  expect(snapshot(holding).clips.find(({ id }) => id === "title")?.slot).toBe(
+    null,
+  );
+  expect(liveChange(holding, holding.replace(/<div.*?<\/div>/, ""))).toBe(
+    "reload",
+  );
+});
 
 test("generated HF ids do not force reloads, but ids used by scripts or CSS do", () => {
   const generated = source.replace('id="v"', 'data-hf-id="hf-old" id="v"');
@@ -174,10 +236,12 @@ test("generated HF ids do not force reloads, but ids used by scripts or CSS do",
     snapshot(generated.replace("hf-old", "hf-new")).structure,
   );
   const referenced = generated.replace("answer=42", 'answer="hf-old"');
-  expect(snapshot(referenced).structure).not.toBe(
-    snapshot(referenced.replace('data-hf-id="hf-old"', 'data-hf-id="hf-new"'))
-      .structure,
-  );
+  expect(
+    liveChange(
+      referenced,
+      referenced.replace('data-hf-id="hf-old"', 'data-hf-id="hf-new"'),
+    ),
+  ).toBe("reload");
 });
 
 test("a Cutroom track fader travels with the timing update, but an authored group's fader reloads", () => {

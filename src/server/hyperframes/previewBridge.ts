@@ -5,6 +5,10 @@ import {
 import type { DiagnosticWindow } from "./diagnostics";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 import { compositionClipLocations } from "../timeline/composition";
@@ -29,6 +33,8 @@ interface PreviewWindow extends DiagnosticWindow {
     }[];
   };
   __hf?: Window["__hf"] & {
+    /** The runtime's resolved window of a clip, in composition seconds. */
+    clipWindow?: (element: Element) => { start: number; end: number } | null;
     audioMeter?: {
       start(): void;
       stop(): void;
@@ -48,16 +54,59 @@ interface PreviewWindow extends DiagnosticWindow {
   }) => Promise<void>;
 }
 
+type LiveClip = Pick<
+  PreviewTiming["clips"][number],
+  "id" | "slot" | "body" | "space"
+>;
+
+/**
+ * How a loaded document becomes a saved one in place, or why it must reload. Both come
+ * from the server: clips that stay keep their place, their other attributes and their
+ * order; removed clips leave the structure with the whitespace they own.
+ * Runs inside the preview too, so it uses nothing outside itself.
+ */
+export function liveUpdatePlan(
+  current: readonly LiveClip[],
+  next: readonly LiveClip[],
+): { remove: string[] } | { refuse: string } {
+  const before = new Map(current.map((clip) => [clip.id, clip]));
+  const after = new Map(next.map((clip) => [clip.id, clip]));
+  if (before.size !== current.length || after.size !== next.length)
+    return { refuse: "The preview clips are ambiguous." };
+  for (const clip of next) {
+    const old = before.get(clip.id);
+    if (!old) return { refuse: "Added clips need a fresh document." };
+    if (
+      old.slot !== clip.slot ||
+      old.body !== clip.body ||
+      old.space !== clip.space
+    )
+      return { refuse: "A clip changed more than its timing." };
+  }
+  const removed = current.filter((clip) => !after.has(clip.id));
+  if (removed.some((clip) => clip.slot === null))
+    return { refuse: "This clip is part of the document's structure." };
+  const kept = current.filter((clip) => after.has(clip.id));
+  if (kept.some((clip, index) => clip.id !== next[index]!.id))
+    return { refuse: "The clips changed order." };
+  return { remove: removed.map((clip) => clip.id) };
+}
+
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
+  plan: typeof liveUpdatePlan,
+  /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
+  [minRate, maxRate]: [number, number],
   texts: [string, string[]][],
   initialTiming:
-    | (Pick<PreviewTiming, "structure" | "revision" | "titleStyle"> & {
-        clips: {
-          id: string;
+    | (Pick<
+        PreviewTiming,
+        "structure" | "revision" | "titleStyle" | "duration"
+      > & {
+        clips: (LiveClip & {
           titleAttributes: string[] | null;
           animated: boolean;
-        }[];
+        })[];
       })
     | null,
 ) {
@@ -65,17 +114,69 @@ function installPreviewBridge(
   const titleAnimations = new Map<string, Set<Animation>>();
   let timingRevision = initialTiming?.revision;
   let titleStyle = initialTiming?.titleStyle;
+  // The clips and length of the document as last confirmed; edits can add and remove clips.
+  let liveClips = initialTiming?.clips ?? [];
   let updatingTiming = false;
   let confirmedStructure: string | null = null;
-  // Attribute writes made synchronously by the pinned runtime during a parent seek may
-  // change visibility. Remember their exact before/after values without cloning per frame.
-  // An outside write before or after those operations must still fail the DOM comparison.
+  // Attribute writes made by the pinned runtime for a parent seek may change visibility.
+  // Remember their exact before/after values without cloning per frame. The runtime can
+  // apply a seek after its images decode, so the record runs until the seek settles.
+  // An outside write before or after that must still fail the DOM comparison.
   const seekAttributes = new Map<
     Element,
     Map<string, { before: string | null; after: string | null }>
   >();
   let seekDiverged = false;
-  const seekMutations = new MutationObserver(() => {});
+  let seekGeneration = 0;
+  let recording = false;
+  const recordSeek = (records: MutationRecord[]) => {
+    const seen = new Map<Element, Set<string>>();
+    for (const record of records) {
+      const element = record.target;
+      const name = record.attributeName;
+      if (!(element instanceof Element) || !name) continue;
+      // Decoded-frame handoff flags and canvases can finish asynchronously and are
+      // already excluded from the divergence comparison below.
+      if (
+        (element === document.documentElement &&
+          (name === "data-hf-preview-seek-hold" ||
+            name === "data-cutroom-media-corrections")) ||
+        (element.tagName === "VIDEO" &&
+          (name === "data-cutroom-held" || name === "data-cutroom-flow")) ||
+        (element instanceof HTMLMediaElement && name === "preload") ||
+        element.matches(
+          "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+        ) ||
+        (element.matches("hf-audio-group[data-cutroom-track]") &&
+          name === "data-volume")
+      )
+        continue;
+      const names = seen.get(element) ?? new Set<string>();
+      if (names.has(name)) continue;
+      names.add(name);
+      seen.set(element, names);
+      const attributes =
+        seekAttributes.get(element) ??
+        new Map<string, { before: string | null; after: string | null }>();
+      const prior = attributes.get(name);
+      if (prior && prior.after !== record.oldValue) seekDiverged = true;
+      attributes.set(name, {
+        before: prior ? prior.before : record.oldValue,
+        after: element.getAttribute(name),
+      });
+      seekAttributes.set(element, attributes);
+    }
+  };
+  // Records delivered after a seek returns reach the callback; the rest are taken directly.
+  const seekMutations = new MutationObserver(recordSeek);
+  const flushSeek = () => recordSeek(seekMutations.takeRecords());
+  /** Ends the current record, so the bridge's own writes that follow are not the seek's. */
+  const stopRecording = () => {
+    flushSeek();
+    seekMutations.disconnect();
+    recording = false;
+    seekGeneration += 1;
+  };
   const seekRuntime = (time: number) => {
     if (!initialTiming || confirmedStructure === null) {
       win.__player?.seek(time);
@@ -86,51 +187,37 @@ function installPreviewBridge(
       attributes: true,
       attributeOldValue: true,
     });
+    recording = true;
+    const generation = ++seekGeneration;
     try {
       win.__player?.seek(time);
     } finally {
-      const records = seekMutations.takeRecords();
-      seekMutations.disconnect();
-      const seen = new Map<Element, Set<string>>();
-      for (const record of records) {
-        const element = record.target;
-        const name = record.attributeName;
-        if (!(element instanceof Element) || !name) continue;
-        // Decoded-frame handoff flags can finish asynchronously and are already
-        // excluded from the divergence comparison below.
-        if (
-          (element === document.documentElement &&
-            name === "data-hf-preview-seek-hold") ||
-          (element.tagName === "VIDEO" &&
-            (name === "data-cutroom-held" || name === "data-cutroom-flow")) ||
-          (element.matches("hf-audio-group[data-cutroom-track]") &&
-            name === "data-volume")
-        )
-          continue;
-        const names = seen.get(element) ?? new Set<string>();
-        if (names.has(name)) continue;
-        names.add(name);
-        seen.set(element, names);
-        const attributes =
-          seekAttributes.get(element) ??
-          new Map<string, { before: string | null; after: string | null }>();
-        const prior = attributes.get(name);
-        if (prior && prior.after !== record.oldValue) seekDiverged = true;
-        attributes.set(name, {
-          before: prior ? prior.before : record.oldValue,
-          after: element.getAttribute(name),
-        });
-        seekAttributes.set(element, attributes);
-      }
+      flushSeek();
+      // The runtime keeps the old clips visible until the new ones have decoded a frame.
+      const settled = win.__hfWaitForSeekCompletion?.();
+      if (!settled) seekMutations.disconnect();
+      else
+        void settled
+          .catch(() => {})
+          .then(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+          .then(() => {
+            if (generation === seekGeneration) stopRecording();
+          });
     }
   };
   const liveStructure = () => {
+    flushSeek();
     if (seekDiverged)
       throw new Error("The live preview changed between seeks.");
     const root = document.documentElement.cloneNode(true);
     if (!(root instanceof Element))
       throw new Error("The preview document is unavailable.");
     for (const [element, attributes] of seekAttributes) {
+      // An edit removed it; nothing of it remains to compare.
+      if (!element.isConnected) {
+        seekAttributes.delete(element);
+        continue;
+      }
       const path: number[] = [];
       let node: Node | null = element;
       while (node && node !== document.documentElement) {
@@ -155,6 +242,7 @@ function installPreviewBridge(
       }
     }
     root.removeAttribute("data-hf-preview-seek-hold");
+    root.removeAttribute("data-cutroom-media-corrections");
     // These canvases and flags belong to this bridge, not the composition.
     for (const hold of root.querySelectorAll(
       "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
@@ -164,6 +252,11 @@ function installPreviewBridge(
       video.removeAttribute("data-cutroom-held");
       video.removeAttribute("data-cutroom-flow");
     }
+    // The runtime raises media near the playhead to preload on its own schedule. It
+    // decides only what loads early, never what plays or shows. "none" also keeps these
+    // cloned elements from loading their media.
+    for (const media of root.querySelectorAll("video, audio"))
+      media.setAttribute("preload", "none");
     // Gain checks and timing updates both set these faders in place.
     for (const group of root.querySelectorAll(
       "hf-audio-group[data-cutroom-track]",
@@ -242,7 +335,7 @@ function installPreviewBridge(
   // can still retain their handles. Collect them before the parent's first seek.
   const rememberTitleAnimations = () => {
     if (!initialTiming || !win.__player) return;
-    for (const clip of initialTiming.clips) {
+    for (const clip of liveClips) {
       if (!clip.titleAttributes) continue;
       const element = clipElement(clip.id);
       if (!element) continue;
@@ -1484,11 +1577,64 @@ function installPreviewBridge(
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
   };
+  /**
+   * Where the runtime places a constant-rate video's media at the playhead, from its own
+   * resolved clip window. Null when it cannot be known here, such as for speed ramps.
+   */
+  const expectedMediaTime = (video: HTMLVideoElement) => {
+    const clip = win.__hf?.clipWindow?.(video);
+    const time = win.__player?.getTime();
+    const automation = video.getAttribute("data-automation");
+    // The runtime's root: the composition marked as root, or else the first one.
+    const marked = document.querySelector(
+      '[data-composition-id][data-root="true"]',
+    );
+    const root =
+      marked instanceof HTMLElement
+        ? marked
+        : document.querySelector("[data-composition-id]");
+    // Only the root composition's clips are timed against the player's clock.
+    if (
+      !clip ||
+      time === undefined ||
+      video.closest("[data-composition-id]") !== root ||
+      video.loop ||
+      (automation !== null && /"target"\s*:\s*"(?!volume")/.test(automation))
+    )
+      return null;
+    // Read exactly as the runtime reads them: an offset is a whole non-negative number,
+    // the playback start before the media start; a rate is clamped to its bounds.
+    const offset = (name: string) => {
+      const value = video.getAttribute(name);
+      if (value === null || value.trim() === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? number : null;
+    };
+    const start =
+      offset("data-playback-start") ?? offset("data-media-start") ?? 0;
+    const authored = Number.parseFloat(
+      video.getAttribute("data-playback-rate") ?? "",
+    );
+    const given =
+      Number.isFinite(authored) && authored > 0
+        ? authored
+        : video.defaultPlaybackRate;
+    const rate =
+      Number.isFinite(given) && given > 0
+        ? Math.max(minRate, Math.min(maxRate, given))
+        : 1;
+    const media =
+      start + rate * Math.max(0, Math.min(time, clip.end) - clip.start);
+    return Number.isFinite(video.duration)
+      ? Math.min(media, video.duration)
+      : media;
+  };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
       throw new Error("The preview cannot confirm that it drew the frame.");
     let timer = 0;
+    const corrected = new Set<HTMLVideoElement>();
     try {
       await Promise.race([
         (async () => {
@@ -1502,6 +1648,36 @@ function installPreviewBridge(
                 `The preview could not load ${failed.getAttribute("src")}.`,
               );
             if (videos.some((video) => video.readyState < 2 || video.seeking)) {
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+              );
+              continue;
+            }
+            // A video the runtime has not moved to this time would be held at its old frame,
+            // for instance one that came back into view while its seek stalled. Move it.
+            // Each video is moved at most once for this picture; if it is still off once that
+            // seek has settled, the runtime's own placement stands, as it did before.
+            const stale = videos.flatMap((video) => {
+              const time = expectedMediaTime(video);
+              return time !== null &&
+                !corrected.has(video) &&
+                Math.abs(mediaTime.get!.call(video) - time) > 0.02
+                ? [{ video, time }]
+                : [];
+            });
+            if (stale.length) {
+              for (const { video, time } of stale) {
+                corrected.add(video);
+                mediaTime.set!.call(video, time + 1e-5);
+              }
+              const root = document.documentElement;
+              root.setAttribute(
+                "data-cutroom-media-corrections",
+                String(
+                  Number(root.getAttribute("data-cutroom-media-corrections")) +
+                    stale.length,
+                ),
+              );
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );
@@ -1989,6 +2165,11 @@ function installPreviewBridge(
             positionFrame = requestAnimationFrame(writePosition);
           return;
         case "timing": {
+          // A seek still settling belongs to its record, including its late writes.
+          if (recording) {
+            await win.__hfWaitForSeekCompletion?.().catch(() => {});
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+          }
           if (
             !initialTiming ||
             confirmedStructure === null ||
@@ -2024,10 +2205,12 @@ function installPreviewBridge(
             typeof timing.revision !== "string" ||
             !("clips" in timing) ||
             !Array.isArray(timing.clips) ||
-            timing.clips.length !== initialTiming.clips.length ||
-            !("titleStyle" in timing)
+            !("titleStyle" in timing) ||
+            !("duration" in timing) ||
+            !(timing.duration === null || typeof timing.duration === "string")
           )
             throw new Error("The preview document changed.");
+          const nextDuration = timing.duration;
           const nextTitleStyle = timing.titleStyle;
           if (
             !(nextTitleStyle === null || typeof nextTitleStyle === "string") ||
@@ -2068,19 +2251,55 @@ function installPreviewBridge(
             "data-playback-rate",
           ];
           const clips: unknown[] = timing.clips;
-          for (const [index, clip] of clips.entries()) {
+          const incoming = clips.map((clip): LiveClip => {
             if (
               !clip ||
               typeof clip !== "object" ||
               !("id" in clip) ||
               typeof clip.id !== "string" ||
-              clip.id !== initialTiming.clips[index]?.id ||
+              !("slot" in clip) ||
+              !(clip.slot === null || typeof clip.slot === "string") ||
+              !("body" in clip) ||
+              !(clip.body === null || typeof clip.body === "string") ||
+              !("space" in clip) ||
+              typeof clip.space !== "string"
+            )
+              throw new Error("The preview clips changed.");
+            return {
+              id: clip.id,
+              slot: clip.slot,
+              body: clip.body,
+              space: clip.space,
+            };
+          });
+          const change = plan(liveClips, incoming);
+          if ("refuse" in change) throw new Error(change.refuse);
+          const previous = new Map(liveClips.map((clip) => [clip.id, clip]));
+          // A removed clip goes with the whitespace before it. Check both before any write.
+          const removals = change.remove.map((id) => {
+            const element = elements.get(id);
+            const space = previous.get(id)!.space;
+            const before = element?.previousSibling;
+            if (
+              !element ||
+              (space && !(before instanceof Text && before.data === space))
+            )
+              throw new Error("The preview clip is missing.");
+            return { id, element, space: space ? before! : null };
+          });
+          const root = document.querySelector("[data-composition-id]");
+          if (!root) throw new Error("The preview composition is missing.");
+          for (const [index, clip] of clips.entries()) {
+            if (
+              !clip ||
+              typeof clip !== "object" ||
               !("values" in clip) ||
               !clip.values ||
               typeof clip.values !== "object"
             )
               throw new Error("The preview clips changed.");
-            const element = elements.get(clip.id);
+            const { id } = incoming[index]!;
+            const element = elements.get(id);
             if (!element) throw new Error("The preview clip is missing.");
             const values: [string, string | null][] = [];
             for (const name of attributes) {
@@ -2096,7 +2315,7 @@ function installPreviewBridge(
               values.push([name, value]);
             }
             const title: unknown = Reflect.get(clip, "title");
-            const expected = initialTiming.clips[index]!;
+            const expected = previous.get(id)!;
             let text:
               | NonNullable<PreviewTiming["clips"][number]["title"]>["text"]
               | null = null;
@@ -2132,7 +2351,7 @@ function installPreviewBridge(
               // The pinned CSS adapter discovers animated elements at initialization.
               // A title loaded with both directions None needs that fresh discovery.
               if (
-                !animatedTitles.has(clip.id) &&
+                !animatedTitles.has(id) &&
                 values.some(
                   ([name, value]) =>
                     (name === "data-title-in" || name === "data-title-out") &&
@@ -2162,26 +2381,70 @@ function installPreviewBridge(
               text = title.text;
             } else if (title !== null)
               throw new Error("The preview titles changed.");
-            writes.push({ id: clip.id, element, values, text });
+            writes.push({ id, element, values, text });
           }
           const gains = trackGains(data.gains);
           if (!gains) throw new Error("The preview track gains changed.");
           updatingTiming = true;
           try {
+            stopRecording();
             seekAttributes.clear();
             rememberTitleAnimations();
+            // Each write records its inverse, so a refused result leaves the page as it was
+            // before anything paints. Reading animations here also settles the old styles.
+            const undo: (() => void)[] = [];
+            const write = (
+              element: Element,
+              name: string,
+              value: string | null,
+            ) => {
+              const old = element.getAttribute(name);
+              if (old === value) return false;
+              undo.push(() =>
+                old === null
+                  ? element.removeAttribute(name)
+                  : element.setAttribute(name, old),
+              );
+              if (value === null) element.removeAttribute(name);
+              else element.setAttribute(name, value);
+              return true;
+            };
+            const running = new Set(document.getAnimations());
             // Synchronous writes are one MutationObserver batch to the runtime.
+            for (const { id, element, space } of removals) {
+              const parent = element.parentNode!;
+              const next = element.nextSibling;
+              undo.push(() => {
+                parent.insertBefore(element, next);
+                if (space) element.before(space);
+              });
+              // A removed video's held picture stays until the new frame replaces it.
+              space?.remove();
+              element.remove();
+              sourceTexts.delete(id);
+              titleAnimations.delete(id);
+              animatedTitles.delete(id);
+              if (element instanceof HTMLVideoElement)
+                deferredSeeks.delete(element);
+              if (
+                element instanceof HTMLElement ||
+                element instanceof SVGElement
+              ) {
+                positions.delete(element);
+                transforms.delete(element);
+              }
+            }
+            write(root, "data-duration", nextDuration);
             const changedTitles = new Set<Element>();
             for (const { id, element, values, text } of writes) {
-              for (const [name, value] of values) {
-                if (element.getAttribute(name) === value) continue;
-                if (value === null) element.removeAttribute(name);
-                else element.setAttribute(name, value);
-                if (text) changedTitles.add(element);
-              }
+              for (const [name, value] of values)
+                if (write(element, name, value) && text)
+                  changedTitles.add(element);
               if (text) {
                 const current = titleNodes(element);
                 if (JSON.stringify(current) !== JSON.stringify(text)) {
+                  const old = [...element.childNodes];
+                  undo.push(() => element.replaceChildren(...old));
                   element.replaceChildren(
                     ...text.map((part) => {
                       if (typeof part === "string")
@@ -2213,10 +2476,11 @@ function installPreviewBridge(
               }
             }
             for (const { element, volume } of gains)
-              if (element.getAttribute("data-volume") !== volume)
-                element.setAttribute("data-volume", volume);
+              write(element, "data-volume", volume);
             if (titleStyle && nextTitleStyle && nextTitleStyle !== titleStyle) {
               const style = styles[0]!;
+              const old = style.textContent;
+              undo.push(() => (style.textContent = old));
               // A replacer function keeps $-sequences in the CSS literal.
               style.textContent = style.textContent!.replace(
                 titleStyle,
@@ -2224,6 +2488,26 @@ function installPreviewBridge(
               );
               for (const { element, text } of writes)
                 if (text) changedTitles.add(element);
+            }
+            // The runtime finds CSS animations and transitions only when a document loads.
+            // Authored rules such as :has() or :nth-child() can start one on any element when
+            // clips come and go, and it would run in real time. Only changed titles, which are
+            // recreated below, may start one.
+            const started = document.getAnimations().filter((animation) => {
+              if (running.has(animation)) return false;
+              const target =
+                animation.effect instanceof KeyframeEffect
+                  ? animation.effect.target
+                  : null;
+              return ![...changedTitles].some(
+                (title) => target && title.contains(target),
+              );
+            });
+            if (started.length) {
+              for (const step of undo.reverse()) step();
+              for (const animation of document.getAnimations())
+                if (!running.has(animation)) animation.cancel();
+              throw new Error("This edit needs animation discovery.");
             }
             // Resolve new font metrics before recreating animation effects.
             for (const element of changedTitles)
@@ -2295,7 +2579,7 @@ function installPreviewBridge(
               throw new Error("The title animations did not retire.");
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
-            win.__player.seek(data.time);
+            seekRuntime(data.time);
             document
               .querySelector('meta[name="cutroom-mix-signature"]')
               ?.setAttribute("content", data.mixSignature);
@@ -2313,7 +2597,21 @@ function installPreviewBridge(
             clearEditPicture();
             if (liveStructure() !== expectedStructure)
               throw new Error("The live preview changed while drawing.");
+            const ids = new Set(incoming.map(({ id }) => id));
+            if (
+              [...document.querySelectorAll("[data-hf-cutroom-clip-id]")]
+                .map((element) =>
+                  element.getAttribute("data-hf-cutroom-clip-id")!,
+                )
+                .filter((id) => ids.has(id))
+                .join("\0") !== incoming.map(({ id }) => id).join("\0")
+            )
+              throw new Error("The preview clips are out of order.");
             confirmedStructure = expectedStructure;
+            liveClips = incoming.map((clip) => ({
+              ...previous.get(clip.id)!,
+              ...clip,
+            }));
             timingRevision = timing.revision;
             titleStyle = nextTitleStyle;
             scheduleObservation();
@@ -2457,7 +2755,7 @@ function installPreviewBridge(
           await picture;
           await paint();
           if (initialTiming && confirmedStructure === null) {
-            for (const clip of initialTiming.clips) {
+            for (const clip of liveClips) {
               const element = clipElement(clip.id);
               if (
                 clip.animated &&
@@ -2694,8 +2992,11 @@ export function previewDocument(
     sourceTexts,
     timing && {
       ...timing,
-      clips: timing.clips.map(({ id, title }) => ({
+      clips: timing.clips.map(({ id, title, slot, body, space }) => ({
         id,
+        slot,
+        body,
+        space,
         titleAttributes: title?.attributes.map(([name]) => name) ?? null,
         animated: Boolean(
           title?.attributes.some(
@@ -2707,7 +3008,7 @@ export function previewDocument(
       })),
     },
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

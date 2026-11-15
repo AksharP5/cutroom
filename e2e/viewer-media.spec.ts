@@ -282,15 +282,16 @@ async function keepPicture(
   label: string,
   change: () => Promise<unknown>,
 ) {
-  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  const before = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
   capture.reset();
   let result;
   try {
     await change();
-    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-      "src",
-      before!,
-    );
+    // A new document or the same one updated in place: either way, the edit is drawn.
+    await waitForPreview(page, { after: before });
+    await waitForPreview(page);
     await expect(page.locator(".edit-frame")).toHaveCount(1);
   } finally {
     result = await capture.read();
@@ -613,6 +614,17 @@ test("Q during an earlier edit's preview swap keeps the picture it already shows
     video: redThenBlue,
   });
   await seek("0400");
+  // Later documents arrive slowly, so the razor's is still loading when Q comes.
+  // A navigation's redirect is not reliably routed, so hold the first request too.
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/isolated-preview") ||
+      (url.pathname.endsWith("/preview") && url.searchParams.has("document")),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue().catch(() => {});
+    },
+  );
   const capture = await capturePicture(page, blue);
   try {
     capture.reset();

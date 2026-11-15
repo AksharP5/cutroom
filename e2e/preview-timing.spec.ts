@@ -23,7 +23,12 @@ async function replaceIndex(dir: string, html: string) {
   await rename(pending, join(dir, "index.html"));
 }
 
-async function fixture(request: APIRequestContext, page: Page, scripts = "") {
+async function fixture(
+  request: APIRequestContext,
+  page: Page,
+  scripts = "",
+  css = "",
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -55,7 +60,7 @@ async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   ]);
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`,
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`,
   );
 
   const read = async () =>
@@ -180,6 +185,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
         contentType: "image/png",
       });
       expect(patched.equals(fresh), step).toBe(true);
+      expect(await corrections(page), step).toBe(0);
       // The reference is a fresh render, not a second editor applying the next history step.
       await control.goto("about:blank");
     }
@@ -191,6 +197,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
       await seek(control, frame);
       const fresh = await control.locator(".edit-picture").screenshot();
       expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
+      expect(await corrections(page), `frame ${frame}`).toBe(0);
       expect(await live(page)).toBe(original);
       if (frame === 76)
         await info.attach("NTSC cut.png", {
@@ -203,6 +210,341 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
     await control.close();
   }
 });
+
+/** How many videos the bridge had to move itself because the runtime left them elsewhere. */
+const corrections = async (page: Page) =>
+  Number(
+    await page
+      .locator("iframe[data-live]")
+      .contentFrame()
+      .locator("html")
+      .getAttribute("data-cutroom-media-corrections"),
+  );
+
+/**
+ * Each frame of the edited tab must equal the same frame of a freshly loaded document. Unless
+ * a test makes a seek land late, neither tab's bridge may have moved a video: a wrong target
+ * would otherwise pass here, since both tabs run the same bridge.
+ */
+async function matchesFresh(
+  page: Page,
+  projectId: string,
+  frames: number[],
+  label: string,
+  { lateSeeks = false } = {},
+) {
+  const control = await page.context().newPage();
+  try {
+    await control.goto(`/#project/${projectId}`);
+    await waitForPreview(control);
+    for (const frame of frames) {
+      await seek(page, frame);
+      await seek(control, frame);
+      const patched = await page.locator(".edit-picture").screenshot();
+      const fresh = await control.locator(".edit-picture").screenshot();
+      if (!patched.equals(fresh)) {
+        // Record what each preview held, so a rare mismatch on CI can be explained.
+        const state = (tab: Page) =>
+          tab
+            .locator("iframe[data-live]")
+            .contentFrame()
+            .locator("main")
+            .evaluate(() => ({
+              time: (
+                window as unknown as { __player?: { getTime(): number } }
+              ).__player?.getTime(),
+              videos: [...document.querySelectorAll("video")].map((video) => ({
+                id: video.id,
+                currentTime: video.currentTime,
+                readyState: video.readyState,
+                seeking: video.seeking,
+                visibility: getComputedStyle(video).visibility,
+                held: video.hasAttribute("data-cutroom-held"),
+                style: video.getAttribute("style"),
+              })),
+              holds: [
+                ...document.querySelectorAll(
+                  "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+                ),
+              ].map((hold) => ({
+                kind: hold.hasAttribute("data-cutroom-video-hold")
+                  ? "hold"
+                  : "edit frame",
+                display: getComputedStyle(hold).display,
+                visibility: getComputedStyle(hold).visibility,
+              })),
+            }));
+        const name = `${label} frame ${frame}`.replace(/\W+/g, "-");
+        await test.info().attach(`${name} patched.png`, {
+          body: patched,
+          contentType: "image/png",
+        });
+        await test.info().attach(`${name} fresh.png`, {
+          body: fresh,
+          contentType: "image/png",
+        });
+        console.log(
+          "PICTURE MISMATCH",
+          name,
+          JSON.stringify({
+            patched: await state(page),
+            fresh: await state(control),
+          }),
+        );
+      }
+      expect(patched.equals(fresh), `${label}, frame ${frame}`).toBe(true);
+      if (!lateSeeks) expect(await corrections(page), label).toBe(0);
+      expect(await corrections(control), label).toBe(0);
+    }
+  } finally {
+    await control.close();
+  }
+}
+
+test("a timing edit after the playhead crosses a cut keeps the document", async ({
+  page,
+  request,
+}) => {
+  const { project, edit } = await fixture(request, page);
+  // The runtime swaps the visible clips once the new one has decoded, after the seek returns.
+  await seek(page, 100);
+  const original = await live(page);
+  const previous = await token(page);
+  await edit([{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [31, 40, 100], "after a seek");
+});
+
+test("a video whose seek lands late as it comes back into view is not confirmed at its old frame", async ({
+  page,
+  request,
+}) => {
+  const { project } = await fixture(request, page);
+  await seek(page, 100);
+  // v1 is hidden here and still at its first frame. Make every seek the runtime gives it
+  // land 1.5 s late, as a slow or reloaded video's can.
+  await page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("#v1")
+    .evaluate((video: HTMLVideoElement) => {
+      const time = Object.getOwnPropertyDescriptor(
+        HTMLMediaElement.prototype,
+        "currentTime",
+      )!;
+      Object.defineProperty(video, "currentTime", {
+        configurable: true,
+        get: () => time.get!.call(video),
+        set: (value: number) => {
+          setTimeout(() => time.set!.call(video, value), 1500);
+        },
+      });
+    });
+  await matchesFresh(page, project.id, [31], "late seek", { lateSeeks: true });
+  expect(await corrections(page)).toBeGreaterThan(0);
+});
+
+// Authored values Cutroom never writes, but an agent or another editor can. The runtime, and
+// so export, reads them its own way; the bridge must agree and leave the video where it is.
+for (const [name, attribute] of [
+  ["a rate above the runtime's limit", 'data-playback-rate="12"'],
+  ["a start with a unit", 'data-playback-start="0.5s"'],
+  ["a negative start", 'data-playback-start="-1"'],
+] as const)
+  test(`a video with ${name} is drawn where the runtime alone draws it`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90000);
+    const { project } = await fixture(request, page);
+    const path = join(project.path, "index.html");
+    const previous = await token(page);
+    await replaceIndex(
+      project.path,
+      (await readFile(path, "utf8")).replace('id="v2"', `id="v2" ${attribute}`),
+    );
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    await seek(page, 80);
+    // The runtime alone: the same document, with its bridge unable to compute a target.
+    const control = await page.context().newPage();
+    try {
+      await control.goto(`/#project/${project.id}`);
+      await waitForPreview(control);
+      await control
+        .locator("iframe[data-live]")
+        .contentFrame()
+        .locator("html")
+        .evaluate(() => {
+          const hf = (window as unknown as { __hf: Record<string, unknown> })
+            .__hf;
+          delete hf.clipWindow;
+        });
+      await seek(control, 80);
+      expect(
+        (await page.locator(".edit-picture").screenshot()).equals(
+          await control.locator(".edit-picture").screenshot(),
+        ),
+      ).toBe(true);
+      expect(await corrections(page)).toBe(0);
+    } finally {
+      await control.close();
+    }
+  });
+
+test("a video still off after one correction is accepted instead of waiting out the frame deadline", async ({
+  page,
+  request,
+}) => {
+  await fixture(request, page);
+  await seek(page, 100);
+  // Every read of a clip's window moves its target, so no seek can ever match it.
+  await page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("html")
+    .evaluate(() => {
+      const hf = (
+        window as unknown as {
+          __hf: {
+            clipWindow: (
+              element: Element,
+            ) => { start: number; end: number } | null;
+          };
+        }
+      ).__hf;
+      const original = hf.clipWindow.bind(hf);
+      let shift = 0;
+      hf.clipWindow = (element) => {
+        const window = original(element);
+        shift += 0.25;
+        return window && { start: window.start - shift, end: Infinity };
+      };
+    });
+  const started = Date.now();
+  await seek(page, 31);
+  expect(Date.now() - started).toBeLessThan(5000);
+  // Once per video per picture: this seek refreshes the picture at most twice.
+  expect(await corrections(page)).toBeGreaterThan(0);
+  expect(await corrections(page)).toBeLessThanOrEqual(2);
+});
+
+test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(150000);
+  const { project, edit } = await fixture(request, page);
+  const picture = page.locator("iframe[data-live]").contentFrame();
+  const undo = async (label: string) => {
+    const previous = await token(page);
+    await page.getByRole("button", { name: /^Current time/ }).focus();
+    await page.keyboard.press("Control+z");
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    await expect(picture.locator("#v1, #a1")).toHaveCount(2);
+    await matchesFresh(page, project.id, [0, 76], label);
+  };
+  // Removing the first pair closes the gap: the second pair and the title move back,
+  // and the composition shortens.
+  await seek(page, 100);
+  let original = await live(page);
+  const length = await picture.locator("main").getAttribute("data-duration");
+  let previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: true }]);
+  await waitForPreview(page, { after: previous });
+  await expect(picture.locator("#v1, #a1")).toHaveCount(0);
+  await expect(picture.locator("main")).not.toHaveAttribute(
+    "data-duration",
+    length!,
+  );
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [0, 43, 44, 100], "ripple delete");
+  // Undo adds the clips back, which still needs a fresh document.
+  await undo("undo ripple delete");
+
+  await seek(page, 40);
+  original = await live(page);
+  previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await expect(picture.locator("#v1, #a1")).toHaveCount(0);
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [0, 40, 75, 76], "lift");
+  await undo("undo lift");
+});
+
+test("lifting a clip matches fresh pictures through a dissolve, a transform and track gain", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(150000);
+  const { project, edit } = await fixture(request, page);
+  let previous = await token(page);
+  await edit([
+    { type: "setClip", clipId: "v2", scale: 1.25, rotation: 5 },
+    {
+      type: "setTransition",
+      from: "v1",
+      to: "v2",
+      transition: { kind: "dissolve", duration: 20, alignment: "center" },
+    },
+    { type: "setTrack", index: 1, volume: 0.5 },
+  ]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page, { timing: true });
+  // A second title keeps its track, and so the track stylesheet, after the lift.
+  previous = await token(page);
+  await edit([
+    {
+      type: "insert",
+      track: 2,
+      at: 200,
+      clip: { kind: "title", id: "late", text: "Later", duration: 60 },
+    },
+  ]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page, { timing: true });
+  const original = await live(page);
+  previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["title"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [60, 70, 76, 80, 86, 150], "lift");
+});
+
+// Authored rules that depend on which clips are present restyle the clips that stay.
+for (const [kind, css] of [
+  [
+    "an animation",
+    "main:not(:has(#a1)) #title{animation:slide 20s linear both}@keyframes slide{to{transform:translateX(400px)}}",
+  ],
+  [
+    "a transition",
+    "#title{transition:transform 6s linear}main:not(:has(#a1)) #title{transform:translateX(300px)}",
+  ],
+] as const)
+  test(`a lift that starts ${kind} on another clip reloads and matches a fresh document`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120000);
+    const { project, edit } = await fixture(request, page, "", css);
+    await seek(page, 40);
+    const original = await live(page);
+    const previous = await token(page);
+    await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    // The runtime discovers CSS animations and transitions only when a document loads.
+    expect(await live(page)).not.toBe(original);
+    await matchesFresh(page, project.id, [40, 60], kind);
+  });
 
 test("MCP and disk timing refresh both tabs, while structural, script and CSS changes reload", async ({
   page,
@@ -493,13 +835,16 @@ for (const [name, scripts] of [
       if (request.url().includes("cutroom-timing=")) snapshots++;
     });
     const { project, edit } = await fixture(request, page, scripts);
-    const doc = await live(page),
-      before = await token(page);
-    await edit([
-      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
-    ]);
-    await waitForPreview(page, { after: before });
-    expect(await live(page)).not.toBe(doc);
+    for (const commands of [
+      [{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }],
+      [{ type: "remove", clipIds: ["v1"], ripple: true }],
+    ] satisfies CommandInput[][]) {
+      const doc = await live(page),
+        before = await token(page);
+      await edit(commands);
+      await waitForPreview(page, { after: before });
+      expect(await live(page)).not.toBe(doc);
+    }
     expect(snapshots).toBe(0);
     if (name === "init-time GSAP") {
       const control = await page.context().newPage();
@@ -528,8 +873,13 @@ for (const [name, scripts] of [
     ).toBe(0);
   });
 
-for (const divergence of ["text", "style", "element"] as const)
-  test(`a script-free document with divergent live ${divergence} fails closed`, async ({
+for (const [divergence, change] of [
+  ["text", "timing"],
+  ["style", "timing"],
+  ["element", "timing"],
+  ["element", "removal"],
+] as const)
+  test(`a script-free document with divergent live ${divergence} fails closed on a ${change} edit`, async ({
     page,
     request,
   }) => {
@@ -546,9 +896,11 @@ for (const divergence of ["text", "style", "element"] as const)
       if (divergence === "element")
         title.append(document.createElement("span"));
     }, divergence);
-    await edit([
-      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
-    ]);
+    await edit(
+      change === "timing"
+        ? [{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]
+        : [{ type: "remove", clipIds: ["v1"], ripple: true }],
+    );
     await waitForPreview(page, { after: before });
     expect(await live(page)).not.toBe(doc);
     const current = (await (await page

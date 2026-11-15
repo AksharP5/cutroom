@@ -2,7 +2,7 @@ import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { parse, serialize } from "parse5";
+import { parse, serialize, serializeOuter } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { canonicalText } from "../../shared/timeline/schema";
@@ -122,7 +122,10 @@ function titleContract(
 }
 
 /** Compare the compiled document, including scripts, styles and nested compositions.
- * Only numeric timing and validated Cutroom title data on identified leaf clips may differ.
+ * Only numeric timing and validated Cutroom title data on identified leaf clips may differ,
+ * along with the top-level composition's length. A clip with no clip or composition inside
+ * it can also come and go: it leaves the structure, and its place, its other attributes and
+ * its markup travel with the snapshot so a loaded document can add or remove it exactly.
  */
 export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   const document = parse(html);
@@ -157,19 +160,57 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   );
   const sheet = allowed ? css! : null;
   if (!sheet) titleData.clear();
+  const attribute = (node: DefaultTreeAdapterTypes.Element, name: string) =>
+    node.attrs.find((attr) => attr.name === name)?.value;
+  const validTiming = (value: string | undefined) =>
+    value === undefined ||
+    (value.trim() !== "" &&
+      Number.isFinite(Number(value)) &&
+      Number(value) >= 0);
+  // The first composition in document order is the top-level one.
+  const root = elements.find(
+    (node) => attribute(node, "data-composition-id") !== undefined,
+  );
+  const duration = (root && attribute(root, "data-duration")) ?? null;
+  if (root && validTiming(duration ?? undefined))
+    root.attrs = root.attrs.filter(({ name }) => name !== "data-duration");
+  const isClip = (node: DefaultTreeAdapterTypes.Element) =>
+    attribute(node, "data-hf-cutroom-clip-id") !== undefined &&
+    attribute(node, "data-composition-id") === undefined &&
+    attribute(node, "data-composition-src") === undefined;
+  // Styles and document metadata inside a clip affect other elements, so that clip is structure.
+  const nested = (node: DefaultTreeAdapterTypes.Element): boolean =>
+    node.childNodes.some(
+      (child) =>
+        "tagName" in child &&
+        (["style", "link", "meta", "base"].includes(child.tagName) ||
+          attribute(child, "data-hf-cutroom-clip-id") !== undefined ||
+          attribute(child, "data-composition-id") !== undefined ||
+          attribute(child, "data-composition-src") !== undefined ||
+          nested(child) ||
+          ("content" in child && child.content.childNodes.length > 0)),
+    );
+  // Markup is read before normalization: it is what the loaded document must receive.
+  const movable = new Map<DefaultTreeAdapterTypes.Element, string>();
+  for (const node of elements)
+    if (
+      isClip(node) &&
+      timingAttributes.every((name) => validTiming(attribute(node, name))) &&
+      !nested(node)
+    )
+      movable.set(node, serializeOuter(node));
+  const hash = (value: string) =>
+    createHash("sha256").update(value).digest("hex");
   // Generated HF ids include timing in their hash. Retain any id referenced by
   // scripts/CSS/markup; changing one of those must still reload the document.
   const references = html.replace(/\sdata-hf-id="[^"]*"/g, "");
+  const clipNodes: DefaultTreeAdapterTypes.Element[] = [];
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
     for (const node of nodes) {
       if (!("tagName" in node)) continue;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const id = attrs.get("data-hf-cutroom-clip-id");
-      if (
-        id &&
-        !attrs.has("data-composition-id") &&
-        !attrs.has("data-composition-src")
-      ) {
+      if (id && isClip(node)) {
         const values = {
           "data-start": attrs.get("data-start") ?? null,
           "data-duration": attrs.get("data-duration") ?? null,
@@ -180,16 +221,21 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
         };
         // References and malformed timing require the full runtime initialization path.
         if (
-          Object.values(values).every(
-            (value) =>
-              value === null ||
-              (value.trim() !== "" &&
-                Number.isFinite(Number(value)) &&
-                Number(value) >= 0),
+          Object.values(values).every((value) =>
+            validTiming(value ?? undefined),
           )
         ) {
           const title = titleData.get(node) ?? null;
-          clips.push({ id, values, title });
+          clipNodes.push(node);
+          clips.push({
+            id,
+            values,
+            title,
+            slot: null,
+            body: null,
+            space: "",
+            html: movable.get(node) ?? null,
+          });
           node.attrs = node.attrs.filter(
             ({ name }) =>
               !timingAttributes.some((attribute) => attribute === name) &&
@@ -229,15 +275,70 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     }
   };
   visit(document.childNodes);
-  const hash = (value: string) =>
-    createHash("sha256").update(value).digest("hex");
+  // Take each movable clip, and whitespace just before it, out of the structure. What
+  // remains around it is structure, so the clip's place is its parent and the gap it fills.
+  const places = new Map<
+    DefaultTreeAdapterTypes.Element,
+    { parent: DefaultTreeAdapterTypes.ParentNode; gap: number; space: string }
+  >();
+  for (const parent of new Set(
+    [...movable.keys()].map((node) => node.parentNode!),
+  )) {
+    const kept: DefaultTreeAdapterTypes.ChildNode[] = [];
+    let space = "";
+    for (const [index, child] of parent.childNodes.entries()) {
+      const next = parent.childNodes[index + 1];
+      if (
+        "value" in child &&
+        /^[\t\n\f\r ]+$/.test(child.value) &&
+        next &&
+        "tagName" in next &&
+        movable.has(next)
+      ) {
+        space = child.value;
+        continue;
+      }
+      if ("tagName" in child && movable.has(child)) {
+        places.set(child, { parent, gap: kept.length, space });
+        space = "";
+        continue;
+      }
+      kept.push(child);
+    }
+    parent.childNodes = kept;
+  }
+  const order = new Map<DefaultTreeAdapterTypes.ParentNode, number>();
+  const number = (nodes: DefaultTreeAdapterTypes.ChildNode[]) => {
+    for (const node of nodes) {
+      if (!("tagName" in node)) continue;
+      order.set(node, order.size);
+      number(node.childNodes);
+    }
+  };
+  number(document.childNodes);
+  for (const [index, node] of clipNodes.entries()) {
+    const place = places.get(node);
+    if (place)
+      clips[index] = {
+        ...clips[index]!,
+        slot: `${order.get(place.parent)}:${place.gap}`,
+        body: hash(serializeOuter(node)),
+        space: place.space,
+      };
+  }
   const structure = hash(dependencies + serialize(document));
 
   return {
     structure,
-    revision: hash(structure + JSON.stringify(clips) + JSON.stringify(sheet)),
+    revision: hash(
+      structure +
+        JSON.stringify(clips) +
+        JSON.stringify(sheet) +
+        JSON.stringify(duration),
+    ),
     clips,
     titleStyle: sheet,
+    duration,
   };
 }
 
