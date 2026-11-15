@@ -569,9 +569,14 @@ test("timeline edit keys immediately edit and reveal Timeline while Source is sh
       }
       await page.keyboard.press("Control+z");
       await expect.poll(read).toEqual(before);
-      // Removing clips prunes selection; restore it for the next selected edit.
+      // Removing clips prunes selection; restore it for the next selected edit, once the
+      // timeline shows them again.
+      await expect(
+        timeline.locator('[data-clip="picture"], [data-clip="sound"]'),
+      ).toHaveCount(2);
       await seek(page, "200");
       await page.keyboard.press("Shift+v");
+      await expect.poll(selected).toEqual(["picture", "sound"]);
     });
   }
 });

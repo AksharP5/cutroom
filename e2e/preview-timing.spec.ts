@@ -245,7 +245,7 @@ test("a timing edit after the playhead crosses a cut keeps the document", async 
   await waitForPreview(page, { after: previous });
   await waitForPreview(page);
   expect(await live(page)).toBe(original);
-  await matchesFresh(page, project.id, [31, 100], "after a seek");
+  await matchesFresh(page, project.id, [40, 100], "after a seek");
 });
 
 test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({

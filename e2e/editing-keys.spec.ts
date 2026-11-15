@@ -70,10 +70,9 @@ async function open(
       const gate = new Promise<void>((resolve) => (open = resolve));
       let held = false;
       await page.route(`**${api}/commands`, async (route) => {
-        if (!held) {
-          held = true;
-          await gate;
-        }
+        if (held) return route.continue();
+        held = true;
+        await gate;
         await route.fulfill({ response: await route.fetch() });
       });
       return open;
