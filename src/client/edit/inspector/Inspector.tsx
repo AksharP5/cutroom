@@ -51,6 +51,10 @@ import {
   useTextEdit,
 } from "../preview";
 
+/** A text field or text area, where typing is under way. */
+const isField = (target: EventTarget | null) =>
+  target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+
 /** A Timing field a key asks for, such as Ctrl+D for Duration, focused once the inspector shows it. */
 export const useTimingEdit = create<{ field: "Duration" | "Speed" | null }>(
   () => ({ field: null }),
@@ -168,6 +172,12 @@ export function Inspector({
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
+  // Changes holds its rows while the inspector is in use, so the fields below never move under
+  // the pointer or a field being typed in. A scrub or drag anywhere holds it until release.
+  const [pointerInside, setPointerInside] = useState(false);
+  const [fieldFocused, setFieldFocused] = useState(false);
+  const gesture = useWorkspace((state) => state.gesture);
+  const holdChanges = pointerInside || fieldFocused || gesture;
   // Its panel key opens it first. Focus waits for that render, since a closed inspector is inert.
   const [focusRequests, setFocusRequests] = useState(0);
   useKeymap({
@@ -353,6 +363,10 @@ export function Inspector({
       data-open={open}
       inert={!open}
       onClick={returnPointerFocus}
+      onPointerEnter={() => setPointerInside(true)}
+      onPointerLeave={() => setPointerInside(false)}
+      onFocus={(event) => setFieldFocused(isField(event.target))}
+      onBlur={(event) => setFieldFocused(isField(event.relatedTarget))}
     >
       <header>
         <strong>Inspector</strong>
@@ -424,6 +438,7 @@ export function Inspector({
           name={projectName}
           timeline={timeline}
           edits={view?.clipEdits ?? []}
+          hold={holdChanges}
         />
       ) : (
         <div className="inspector-content">
@@ -446,6 +461,7 @@ export function Inspector({
             edits={edits}
             limit={3}
             times={false}
+            hold={holdChanges}
           />
           {clip.text !== null && (
             <details

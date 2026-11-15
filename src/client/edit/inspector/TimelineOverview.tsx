@@ -12,11 +12,14 @@ export function TimelineOverview({
   name,
   timeline,
   edits,
+  hold,
 }: {
   projectId: string;
   name: string;
   timeline: Timeline;
   edits: NonNullable<TimelineView["clipEdits"]>;
+  /** Passed to the Changes list: see `ChangeList`. */
+  hold: boolean;
 }) {
   const composition = useWorkspace((state) => state.composition);
   const { fps, duration, range, markers } = timeline;
@@ -85,6 +88,7 @@ export function TimelineOverview({
         timeline={timeline}
         edits={ledgerChanges(edits)}
         limit={8}
+        hold={hold}
       />
     </div>
   );

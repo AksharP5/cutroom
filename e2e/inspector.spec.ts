@@ -500,6 +500,8 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
         )?.opacity,
     )
     .toBe(0.06);
+  // Changes holds new rows while the pointer is over the inspector.
+  await page.mouse.move(700, 400);
   await inspector
     .getByRole("button", { name: "Show all (16)", exact: true })
     .click();
@@ -531,6 +533,7 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
     inspector.getByRole("button", { name: "Restore source opacity" }),
   ).toHaveCount(0);
   const autoRow = rows.filter({ hasText: "Set opacity to Auto" });
+  await page.mouse.move(700, 400);
   await expect(autoRow).toBeVisible();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(autoRow).toHaveCount(0);

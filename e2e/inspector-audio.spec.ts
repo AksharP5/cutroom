@@ -238,6 +238,8 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
       }),
     );
     await expect(gain).toHaveValue("+6.0 dB");
+    // Changes holds new rows while the pointer is over the inspector.
+    await page.mouse.move(700, 400);
     const row = inspector
       .getByRole("listitem")
       .filter({ hasText: "Set gain to +6.0 dB" });

@@ -21,6 +21,7 @@ export function ChangeList({
   edits,
   limit,
   times = true,
+  hold,
 }: {
   projectId: string;
   timeline: Timeline;
@@ -29,6 +30,11 @@ export function ChangeList({
   limit: number;
   /** Each row's clip start. Left out where every row is the same clip. */
   times?: boolean;
+  /**
+   * Keep the rows that are showing, so nothing moves under a pointer or a field in use. Rows
+   * still update in place; new ones arrive together once the hold ends.
+   */
+  hold: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
@@ -39,8 +45,15 @@ export function ChangeList({
     closing.current = controller;
     return () => controller.abort();
   }, [projectId]);
-  if (!edits.length) return null;
-  const shown = shownChanges(edits, expanded, limit);
+  // The rows showing when the hold began; rows still update in place from `edits`.
+  const [held, setHeld] = useState<ChangeRow[] | null>(null);
+  if (hold && !held) setHeld(edits);
+  if (!hold && held) setHeld(null);
+  const latest = new Map(edits.map((edit) => [edit.id, edit]));
+  const rows =
+    hold && held ? held.map((edit) => latest.get(edit.id) ?? edit) : edits;
+  if (!rows.length) return null;
+  const shown = shownChanges(rows, expanded, limit);
   const accept = async (edit: ChangeRow) => {
     setAccepting(edit.id);
     const { signal } = closing.current;
@@ -73,7 +86,7 @@ export function ChangeList({
   return (
     <section className="inspector-section inspector-history">
       <h3>
-        Changes <span className="inspector-count">{edits.length}</span>
+        Changes <span className="inspector-count">{rows.length}</span>
       </h3>
       <ol className="inspector-changes">
         {shown.map((edit) => {
@@ -158,13 +171,13 @@ export function ChangeList({
           );
         })}
       </ol>
-      {(expanded || shown.length < edits.length) && (
+      {(expanded || shown.length < rows.length) && (
         <button
           className="inspector-show-all"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? "Show less" : `Show all (${edits.length})`}
+          {expanded ? "Show less" : `Show all (${rows.length})`}
         </button>
       )}
     </section>
