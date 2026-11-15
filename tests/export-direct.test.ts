@@ -27,6 +27,9 @@ async function command(args: string[]) {
 const BT709 =
   "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv";
 const UNTAGGED = "format=yuv420p";
+/** A PNG without colour chunks, which the browser draws as stored. */
+const UNTAGGED_RGB =
+  "setparams=color_primaries=unknown:color_trc=unknown:colorspace=unknown";
 
 async function source(
   path: string,
@@ -78,10 +81,15 @@ const sound = async (path: string) => {
   ]);
   return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
 };
-const frameNumber = (frame: Uint8Array) => {
+/** Where a point of the source picture lands in the output frame. */
+type Drawn = (x: number, y: number) => [number, number];
+/** The number burned into the frame's band; cells drawn outside the frame read as zero. */
+const frameNumber = (frame: Uint8Array, drawn: Drawn = (x, y) => [x, y]) => {
   let value = 0;
   for (let bit = 0; bit < 16; bit++) {
-    const at = ((BAND / 2) * WIDTH + (bit + 0.5) * (WIDTH / 16)) * 3;
+    const [x, y] = drawn((bit + 0.5) * (WIDTH / 16), BAND / 2).map(Math.round);
+    if (x! < 0 || y! < 0 || x! >= WIDTH || y! >= HEIGHT) continue;
+    const at = (y! * WIDTH + x!) * 3;
     if (frame[at]! + frame[at + 1]! + frame[at + 2]! > 3 * 128)
       value |= 1 << bit;
   }
@@ -141,7 +149,12 @@ ${pictures.join("\n")}
  * (on the interview, direct frames are 48 dB from the source and captured ones 34 dB). A wrong
  * matrix, range, scale or offset moves frames by 5/255 or more, and a wrong frame by far more.
  */
-async function expectParity(direct: string, capture: string, frames: number) {
+async function expectParity(
+  direct: string,
+  capture: string,
+  frames: number,
+  drawn: (frame: number) => Drawn | undefined = () => undefined,
+) {
   const [a, b] = await Promise.all([decode(direct), decode(capture)]);
   const size = WIDTH * HEIGHT * 3;
   expect(a.length / size).toBe(frames);
@@ -149,7 +162,9 @@ async function expectParity(direct: string, capture: string, frames: number) {
   for (let frame = 0; frame < frames; frame++) {
     const x = a.subarray(frame * size, (frame + 1) * size);
     const y = b.subarray(frame * size, (frame + 1) * size);
-    expect(frameNumber(x), `frame ${frame}`).toBe(frameNumber(y));
+    expect(frameNumber(x, drawn(frame)), `frame ${frame}`).toBe(
+      frameNumber(y, drawn(frame)),
+    );
     const bias = [0, 0, 0];
     let difference = 0;
     for (let i = 0; i < size; i++) {
@@ -288,5 +303,162 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     }
   },
   // Six exports, three of them capturing up to 105 frames in Chromium.
+  300_000,
+);
+
+/** The browser's CSS: translate, then rotate, then scale, about the frame's centre. */
+const placedAt =
+  (x: number, y: number, scale: number, degrees: number, squeeze = 1): Drawn =>
+  (source, v) => {
+    const u = WIDTH / 2 + (source - WIDTH / 2) * squeeze;
+    const [cos, sin] = [
+      Math.cos((degrees * Math.PI) / 180),
+      Math.sin((degrees * Math.PI) / 180),
+    ];
+    const [dx, dy] = [(u - WIDTH / 2) * scale, (v - HEIGHT / 2) * scale];
+    return [
+      WIDTH / 2 + x + dx * cos - dy * sin,
+      HEIGHT / 2 + y + dx * sin + dy * cos,
+    ];
+  };
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "clips the inspector moved, scaled, rotated, cropped or faded, and stills, export from the source as frame capture draws them",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-placed-"));
+    const scratchDir = `${root}-scratch`;
+    const direct = createRenderWorkers({ scratchDir });
+    const capture = createRenderWorkers({ scratchDir, directExport: false });
+    try {
+      await Promise.all([
+        source(join(root, "ntsc.mp4"), "640x360", "30000/1001", BT709, true),
+        command([
+          "ffmpeg",
+          ...["-v", "error", "-f", "lavfi", "-i"],
+          "aevalsrc=0.2*sin(2*PI*(150*t+40*t*t)):s=48000:c=stereo:d=6",
+          join(root, "bed.wav"),
+        ]),
+      ]);
+      // Stills of source frame 50: one at the frame's shape, one squeezed to 4:3 as a JPEG, and
+      // one whose lower half is half transparent.
+      const still = (output: string, filter: string, extra: string[] = []) =>
+        command([
+          "ffmpeg",
+          ...["-v", "error", "-i", join(root, "ntsc.mp4"), "-vf"],
+          `select=eq(n\\,50),${filter}`,
+          ...["-frames:v", "1", ...extra, join(root, output)],
+        ]);
+      await Promise.all([
+        still("still.png", `format=rgb24,${UNTAGGED_RGB}`),
+        still("still.jpg", "scale=480:360", ["-q:v", "2"]),
+        still(
+          "alpha.png",
+          `format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(Y,180),255,110)',${UNTAGGED_RGB}`,
+        ),
+      ]);
+      const fps = { num: 30000, den: 1001 };
+      const seconds = (frames: number) =>
+        String(Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6);
+      const box = "position:absolute;inset:0;width:100%;height:100%";
+      const position = (x: number, y: number) =>
+        ` data-x="${x}" data-y="${y}" data-hf-edit-base-x="0" data-hf-edit-base-y="0"`;
+      const runs = [
+        // A plain cut, then the kinds the inspector writes, each on its own.
+        { frames: 8, style: "", drawn: undefined },
+        {
+          // A punch-in that still covers the frame.
+          frames: 12,
+          attributes: position(60, 40),
+          style: ";scale:1.25",
+          drawn: placedAt(60, 40, 1.25, 0),
+        },
+        {
+          // Smaller, turned and moved, over the page colour.
+          frames: 12,
+          attributes: position(20, 15),
+          style: ";scale:0.7;rotate:8deg",
+          drawn: placedAt(20, 15, 0.7, 8),
+        },
+        {
+          // Cropped on three sides and faded over the page colour.
+          frames: 12,
+          style: ";clip-path:inset(0px 40px 30px 20px);opacity:0.6",
+          drawn: undefined,
+        },
+        { frames: 8, still: "still.png", style: "", drawn: undefined },
+        {
+          // Squeezed to 4:3, so it is letterboxed over the page colour.
+          frames: 8,
+          still: "still.jpg",
+          style: "",
+          drawn: placedAt(0, 0, 1, 0, 0.75),
+        },
+        {
+          frames: 8,
+          still: "alpha.png",
+          style: ";scale:0.8",
+          drawn: placedAt(0, 0, 0.8, 0),
+        },
+      ] as const;
+      let start = 0;
+      const clips = runs.map((run, index) => {
+        const timing = `data-start="${seconds(start)}" data-duration="${seconds(run.frames)}" data-track-index="0"`;
+        const at = start;
+        start += run.frames;
+        return "still" in run
+          ? `<img id="c${index}" class="clip" src="${run.still}" style="${box};object-fit:contain${run.style}" ${timing}>`
+          : `<video id="c${index}" src="ntsc.mp4" muted style="${box};object-fit:contain${run.style}" ${timing} data-media-start="${seconds(at)}"${"attributes" in run ? run.attributes : ""}></video>`;
+      });
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html>
+<html lang="en"><head><meta charset="UTF-8">
+<style>* { box-sizing: border-box; } html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style></head>
+<body><main id="main" data-composition-id="main" data-no-timeline data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="0" class="stage">
+${clips.join("\n")}
+<audio id="voice" src="ntsc.mp4" data-start="0" data-duration="${seconds(start)}" data-track-index="1"></audio>
+<audio id="bed" src="bed.wav" data-start="0" data-duration="${seconds(start)}" data-track-index="2" data-volume="0.5"></audio>
+</main></body></html>`,
+      );
+      const outputs = [];
+      for (const [workers, renderer] of [
+        [direct, "direct"],
+        [capture, "capture"],
+      ] as const) {
+        const filename = `${renderer}.mp4`;
+        const state = workers.start(
+          {
+            project: { id: "placed", dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "high",
+            jobId: filename,
+          },
+          { filename, directory: root, range: null },
+        );
+        const deadline = Date.now() + 90_000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(50);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe(renderer);
+        outputs.push(state.outputPath);
+      }
+      const runOf = (frame: number) => {
+        let end = 0;
+        return runs.find((run) => (end += run.frames) > frame);
+      };
+      await expectParity(
+        outputs[0]!,
+        outputs[1]!,
+        start,
+        (frame) => runOf(frame)?.drawn,
+      );
+    } finally {
+      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
   300_000,
 );

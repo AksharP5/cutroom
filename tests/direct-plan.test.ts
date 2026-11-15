@@ -187,6 +187,81 @@ test("every run under a title is captured, however many, and the frames between 
   ]);
 });
 
+const placed = (html: string) => {
+  const plan = planDirectExport(html, fps, null);
+  if ("reason" in plan) return plan.reason;
+  const [segment] = plan.segments;
+  return segment?.kind === "source"
+    ? { still: segment.still, placement: segment.placement }
+    : "capture";
+};
+
+test("the inspector's Position, Scale, Rotation, Crop and Opacity draw from the source over the page colour", () => {
+  expect(
+    placed(
+      page({
+        body: video(
+          ' data-x="40" data-y="-12.5" data-hf-edit-base-x="0" data-hf-edit-base-y="0"',
+          ";scale:0.5 0.6;rotate:12deg;clip-path:inset(4px 8px 0px 2px);opacity:0.75",
+        ),
+      }),
+    ),
+  ).toEqual({
+    still: undefined,
+    placement: {
+      x: 40,
+      y: -12.5,
+      scaleX: 0.5,
+      scaleY: 0.6,
+      rotation: 12,
+      crop: { top: 4, right: 8, bottom: 0, left: 2 },
+      opacity: 0.75,
+      beneath: "#111111",
+    },
+  });
+  // Cutroom's image clips plan as stills; the server reads their size before export.
+  expect(
+    placed(
+      page({
+        body: `<img id="i" class="clip" src="i.png" data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain">`,
+      }),
+    ),
+  ).toMatchObject({ still: { fit: "contain" }, placement: { scaleX: 1 } });
+});
+
+test("a placed clip draws from the source over other clips only where it covers the frame", () => {
+  const under = second(0).replace('id="w"', 'id="under"');
+  // Something other than the page colour lies beneath, so a clip that shows it needs the browser.
+  expect(placed(page({ body: under + video("", ";scale:0.5") }))).toBe(
+    "v shows what lies beneath it",
+  );
+  expect(placed(page({ body: under + video("", ";opacity:0.5") }))).toBe(
+    "v shows what lies beneath it",
+  );
+  // A punch-in covers the frame, whatever lies beneath.
+  expect(
+    placed(page({ body: under + video("", ";scale:1.2") })),
+  ).toHaveProperty("placement.scaleX", 1.2);
+  // A page without a known colour of its own shows the browser's default.
+  expect(
+    placed(
+      page({ body: video("", ";scale:0.5") }).replace(
+        "html,body{margin:0;background:#111}",
+        "html,body{margin:0}",
+      ),
+    ),
+  ).toBe("v shows what lies beneath it");
+  // Two different colours could each show.
+  expect(
+    placed(
+      page({
+        head: "<style>.stage{background:#222}</style>",
+        body: video("", ";scale:0.5"),
+      }),
+    ),
+  ).toBe("v shows what lies beneath it");
+});
+
 test("the page the cases below change exports from the source", () => {
   expect(planDirectExport(page(), fps, null)).toHaveProperty("segments");
 });
@@ -194,9 +269,23 @@ test("the page the cases below change exports from the source", () => {
 // Each of these draws something FFmpeg's plain copy of the source would not, so it must use the browser.
 for (const [name, html] of [
   ["a speed change", page({ body: video(' data-playback-rate="2"') })],
-  ["opacity", page({ body: video("", ";opacity:0.5") })],
-  ["a scale", page({ body: video("", ";scale:1.2") })],
-  ["a crop", page({ body: video("", ";clip-path:inset(10px 0px 0px 0px)") })],
+  ["a translate of its own", page({ body: video("", ";translate:10px 0px") })],
+  ["a transform", page({ body: video("", ";transform:scale(1.2)") })],
+  [
+    "a crop between pixels",
+    page({ body: video("", ";clip-path:inset(10.5px 0px 0px 0px)") }),
+  ],
+  [
+    "an opacity Cutroom cannot read",
+    page({ body: video("", ";opacity:var(--fade)") }),
+  ],
+  ["a position without its baseline", page({ body: video(' data-x="40"') })],
+  [
+    "an image with a class of its own",
+    page({
+      body: `<img id="i" class="clip logo" src="i.png" data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%">`,
+    }),
+  ],
   ["a transition", page({ body: video(' data-transition-in="dissolve"') })],
   ["a class", page({ body: video(' class="clip"') })],
   ["its own sound", page({ body: video().replace(" muted", "") })],

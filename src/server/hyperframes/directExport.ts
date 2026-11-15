@@ -13,7 +13,8 @@ import type { AudioElement, EngineConfig } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
-import type { DirectPlan, SourceSegment } from "./directPlan.ts";
+import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
+import { contentRect, placeOnFrame, visibleRect } from "./directPlacement.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportStage } from "../../shared/export.ts";
 
@@ -99,12 +100,18 @@ export async function prepareDirectExport(
     (segment): segment is SourceSegment => segment.kind === "source",
   );
   const sources = new Map<string, string | undefined>();
-  for (const src of new Set(segments.map((segment) => segment.src))) {
+  for (const { src, still } of segments) {
+    if (sources.has(src)) continue;
     // The browser asks the capture server for the decoded path, which this same boundary checks.
     const path = await Promise.resolve()
       .then(() => projectPath({ path: projectDir }, decodeURIComponent(src)))
       .catch(() => undefined);
     if (!path) return { reason: `${src} is not a file in the project` };
+    // The server read the still's header when it planned the export.
+    if (still) {
+      sources.set(src, path);
+      continue;
+    }
     const metadata = await extractMediaMetadata(path);
     if (metadata.sampleAspectRatio && metadata.sampleAspectRatio !== 1)
       return { reason: `${src} has non-square pixels` };
@@ -119,6 +126,105 @@ export async function prepareDirectExport(
       path: sources.get(segment.src)!,
     })),
   };
+}
+
+/** Pixels of transparent margin around a placed picture, so resampling at its edges blends to nothing. */
+const MARGIN = 2;
+
+/**
+ * The filter graph that draws a placed picture as the browser composites it: cropped in its box,
+ * scaled, rotated and moved about the frame's centre, faded by its opacity, over the page colour
+ * beneath it. It works in RGB, as the browser does, and leaves tagged BT.709 limited-range frames
+ * like the plain parts. Only numbers and validated colours reach the graph.
+ */
+function placed(
+  index: number,
+  fit: "contain" | "cover" | "fill",
+  picture: { width: number; height: number },
+  placement: Placement,
+  frame: { width: number; height: number },
+  rate: string,
+  after: string[],
+  before: string[] = [],
+) {
+  const content = contentRect(fit, picture, frame);
+  const shown = visibleRect(content, placement.crop, frame);
+  if (!shown)
+    throw new Error("A placed clip with nothing visible was planned.");
+  const across = (content.right - content.left) / picture.width;
+  const down = (content.bottom - content.top) / picture.height;
+  // The picture's own pixels that show, which the planner checked are whole.
+  const crop = {
+    x: Math.round((shown.left - content.left) / across),
+    y: Math.round((shown.top - content.top) / down),
+    width: Math.round((shown.right - shown.left) / across),
+    height: Math.round((shown.bottom - shown.top) / down),
+  };
+  // Resample once to about the size it is drawn at, so the warp below moves it by less than a pixel.
+  const size = {
+    width: Math.max(
+      1,
+      Math.round((shown.right - shown.left) * placement.scaleX),
+    ),
+    height: Math.max(
+      1,
+      Math.round((shown.bottom - shown.top) * placement.scaleY),
+    ),
+  };
+  const canvas = {
+    width: Math.max(size.width, frame.width) + 2 * MARGIN,
+    height: Math.max(size.height, frame.height) + 2 * MARGIN,
+  };
+  const place = placeOnFrame(placement, frame);
+  // Where each canvas corner lands, in output pixel indexes: pixel i is centred on i + 0.5.
+  const corner = (x: number, y: number) => {
+    const at = place({
+      x:
+        shown.left +
+        ((x - MARGIN + 0.5) * (shown.right - shown.left)) / size.width,
+      y:
+        shown.top +
+        ((y - MARGIN + 0.5) * (shown.bottom - shown.top)) / size.height,
+    });
+    return [at.x - 0.5 + MARGIN, at.y - 0.5 + MARGIN].map((value) =>
+      value.toFixed(6),
+    );
+  };
+  const [x0, y0] = corner(0, 0);
+  const [x1, y1] = corner(canvas.width, 0);
+  const [x2, y2] = corner(0, canvas.height);
+  const [x3, y3] = corner(canvas.width, canvas.height);
+  const beneath = (placement.beneath ?? "#000000").replace("#", "0x");
+  const picturePart = [
+    ...before,
+    "format=gbrap",
+    ...(crop.x ||
+    crop.y ||
+    crop.width !== picture.width ||
+    crop.height !== picture.height
+      ? [`crop=${crop.width}:${crop.height}:${crop.x}:${crop.y}`]
+      : []),
+    ...(size.width !== crop.width || size.height !== crop.height
+      ? [`scale=${size.width}:${size.height}:flags=bicubic`]
+      : []),
+    `pad=${canvas.width}:${canvas.height}:${MARGIN}:${MARGIN}:color=black@0`,
+    `perspective=x0=${x0}:y0=${y0}:x1=${x1}:y1=${y1}:x2=${x2}:y2=${y2}:x3=${x3}:y3=${y3}:sense=destination`,
+    `crop=${frame.width}:${frame.height}:${MARGIN}:${MARGIN}`,
+    ...(placement.opacity < 1
+      ? [`colorchannelmixer=aa=${placement.opacity}`]
+      : []),
+  ];
+  return [
+    `[${index}:v]${picturePart.join(",")}[q${index}]`,
+    `color=c=${beneath}:s=${frame.width}x${frame.height}:r=${rate},format=gbrp[b${index}]`,
+    `[b${index}][q${index}]${[
+      "overlay=format=gbrp:shortest=1",
+      "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
+      "format=yuv420p",
+      "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+      ...after,
+    ].join(",")}[p${index}]`,
+  ].join(";");
 }
 
 /** Encodes one part's pieces in a single FFmpeg process with the capture path's encoder. */
@@ -136,8 +242,33 @@ async function encodePart(input: {
   const { fps, width, height, pieces } = input;
   const inputs: string[] = [];
   const chains: string[] = [];
+  const rate = `${fps.num}/${fps.den}`;
   for (const [index, piece] of pieces.entries()) {
     const frames = piece.end - piece.start;
+    const frame = { width, height };
+    if (piece.still) {
+      const { still, placement } = piece;
+      if (!placement || !still.width || !still.height)
+        throw new Error(`${piece.src} was planned without its size.`);
+      inputs.push("-framerate", rate, "-i", piece.path);
+      // A still is drawn once, then held for the run.
+      chains.push(
+        placed(
+          index,
+          still.fit,
+          { width: still.width, height: still.height },
+          placement,
+          frame,
+          rate,
+          [
+            "trim=end_frame=1",
+            `loop=loop=${frames - 1}:size=1:start=0`,
+            "setpts=N/FRAME_RATE/TB",
+          ],
+        ),
+      );
+      continue;
+    }
     const layer = await buildVideoLayerInput(
       piece.path,
       piece.mediaStart,
@@ -151,8 +282,20 @@ async function encodePart(input: {
         `FFmpeg cannot draw ${piece.src} from ${piece.mediaStart.toFixed(3)} s as the preview does.`,
       );
     inputs.push(...layer.inputArgs);
+    const trim = [`trim=end_frame=${frames}`, "setpts=PTS-STARTPTS"];
     chains.push(
-      `[${index}:v]${[...layer.filters, `trim=end_frame=${frames}`, "setpts=PTS-STARTPTS"].join(",")}[p${index}]`,
+      piece.placement
+        ? placed(
+            index,
+            "fill",
+            frame,
+            piece.placement,
+            frame,
+            rate,
+            trim,
+            layer.filters,
+          )
+        : `[${index}:v]${[...layer.filters, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);

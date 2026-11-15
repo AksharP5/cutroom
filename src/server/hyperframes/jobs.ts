@@ -19,6 +19,7 @@ import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { planCaptureBrowsers } from "./exportMemory";
 import { planDirectExport } from "./directPlan";
+import { placeStills } from "./directStill";
 import {
   createOwnedDirectory,
   sweepOwnedDirectories,
@@ -153,7 +154,11 @@ async function directPlan(
       throw error;
     }));
   if (html === undefined) return undefined;
-  const plan = planDirectExport(html, options.fps, range ?? null);
+  const planned = planDirectExport(html, options.fps, range ?? null);
+  const plan =
+    "reason" in planned
+      ? planned
+      : await placeStills(planned, options.project.dir);
   if ("reason" in plan) {
     console.info(`Exporting with frame capture: ${plan.reason}.`);
     return undefined;
