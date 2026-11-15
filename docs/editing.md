@@ -144,6 +144,8 @@ Select one title and the inspector shows a Title section between Text and Transf
 - Shadow and Stroke help words read over busy footage without a plate. Shadow drops a soft copy of the words just below them; ticking it starts from black at 70% with a 12 px blur, and the swatch, hex, percentage and Blur beside and below it change those. Stroke draws an outline around the letters, outside their shape so they keep their weight; it starts black and 3 px thick, with its colour and Width beside and below it. Sizes are in composition pixels.
 - In and Out each take a preset and a length, typed as timecode, frames (`12f`) or seconds (`0.4s`). The length is disabled while the preset is None.
 
+To give other titles the same look, right-click a title and choose Copy style, then select the others and choose Paste style. It copies every Title setting, motions and Position included, but not the words, timing or Transform settings, and pasting onto several titles is one undo step. The copied style lasts until the editor reloads and belongs to its project, because fonts do.
+
 The section edits one title at a time. Several selected clips show the clip count, as for every other inspector section. A title Cutroom cannot read shows the reason in the section in place of the controls.
 
 The entrance belongs to the clip's first frame and the exit to its last:

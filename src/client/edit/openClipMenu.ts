@@ -3,6 +3,7 @@ import { openContextMenu } from "../components/ContextMenu";
 import { useWorkspace } from "../workspace";
 import { clipMenuItems } from "./clipMenu";
 import { hasClipboard, useTimeline } from "./timeline";
+import { copyTitleStyle, hasTitleStyle, pasteTitleStyle } from "./titleStyle";
 import { useTransport } from "./transport";
 
 /** The Media row listing a clip's file, when the panel shows it. */
@@ -39,10 +40,17 @@ export function openClipMenu(
       selection: selection.ids,
       frame: useTransport.getState().frame,
       clipboard: hasClipboard(projectId),
+      titleStyle: hasTitleStyle(projectId),
       inspector: useWorkspace.getState().inspector,
       onReveal: row && (() => row.focus()),
       onInspector: () =>
         useWorkspace.setState(({ inspector }) => ({ inspector: !inspector })),
+      onCopyStyle: (title) => copyTitleStyle(projectId, title),
+      onPasteStyle: (titles) =>
+        pasteTitleStyle(
+          projectId,
+          titles.map((title) => title.id),
+        ),
     }),
     anchor,
   );

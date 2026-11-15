@@ -68,9 +68,12 @@ const rows = (
     selection: new Set(state.selected ?? []),
     frame: 0,
     clipboard: false,
+    titleStyle: false,
     inspector: false,
     onReveal: null,
     onInspector() {},
+    onCopyStyle() {},
+    onPasteStyle() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 
