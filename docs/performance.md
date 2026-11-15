@@ -430,6 +430,16 @@ Every captured run of an export now shares one start of its capture browsers, si
 
 On the 300-clip timeline the shared capture holds 9.2 GB of Chromium with two browsers and 4.2 GB with one; the source parts' four FFmpeg encoders beside it hold 3.0 to 3.6 GB, which the browser plan now reserves, so with 19.5 GiB free it starts one browser instead of two. Against main, every one of the 10,500 frames shows the same source frame, with a mean difference of 0.97/255 (1.33 at worst) and at most 0.29/255 bias per channel, and the sound has the same 16,800,000 samples at 48.1 dB SNR, the two paths' AAC encodes. The interview's output is identical to main's. No browser start stalled in any of these exports.
 
+### Placed clips and stills
+
+Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, now draw from their sources too ([architecture](architecture.md#export-dialog)). The workload is the interview above with five cuts edited (punch-ins at 115 to 125%, three of them moved, and one cut at 60%, turned 4 degrees and moved, over the page colour), a 1080p PNG slide and a 4:3 JPEG photo over cuts, b-roll, the music bed and two titles, exported whole at Standard quality.
+
+| Export                       | Before (one capture) | Placed from source | Peak memory, before / after |
+| ---------------------------- | -------------------: | -----------------: | --------------------------: |
+| Edited interview, whole 0:45 |       37.4 s, 38.6 s |     25.8 s, 27.6 s |                9.7 / 8.1 GB |
+
+The photo is letterboxed over an interview cut that shows around it, so it stays in the browser and the server log says why; the titles do too. Against the capture, the frames have a mean difference of 0.40/255 (1.14 at worst) and at most 0.82/255 bias, with sample-identical sound. Every frame whose counter is visible reads the same source frame; in the two punch-ins without an upward move the counter is scaled off the frame, and each of those 266 frames is closer to the capture's same frame (at most 1.14/255) than to either neighbour.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.
