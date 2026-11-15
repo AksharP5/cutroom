@@ -629,6 +629,8 @@ test("Q during an earlier edit's preview swap keeps the picture it already shows
       },
     );
     expect(response.ok()).toBe(true);
+    // Q acts on the timeline on screen, so it must show the razor first.
+    await expect(page.locator('[data-clip^="still"]')).toHaveCount(2);
     await expect(page.locator(".edit-stage")).toHaveAttribute(
       "data-handoff",
       "loading",
