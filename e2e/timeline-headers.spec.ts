@@ -136,6 +136,13 @@ for (const [width, height] of [
             await expect(
               page.locator(".tl-head-title > .tl-meters-compact"),
             ).toBeHidden();
+            // There is room for one of the two: record takes the microphone's place while armed.
+            await expect(
+              audio.getByRole("button", { name: "Record voiceover" }),
+            ).toBeVisible();
+            await expect(
+              audio.getByRole("button", { name: "Microphone input A1" }),
+            ).toBeHidden();
           }
           const controls = await page.locator(".tl-head").evaluateAll((rows) =>
             rows.flatMap((row) => {
@@ -145,27 +152,29 @@ for (const [width, height] of [
                 .getBoundingClientRect();
               return [
                 ...row.querySelectorAll(
-                  ".tl-track-button, .vo-input, .tl-head-id, .tl-track-button > svg, .vo-input > svg",
+                  ".tl-track-button, .vo-input, .vo-record, .tl-head-id, .tl-track-button > svg, .vo-input > svg, .vo-record > svg",
                 ),
-              ].map((element) => {
-                const box = element.getBoundingClientRect();
-                return {
-                  label:
-                    element.getAttribute("aria-label") ??
-                    element.closest("button")?.getAttribute("aria-label") ??
-                    element.tagName,
-                  insetTop: box.top - bounds.top,
-                  insetBottom: bounds.bottom - box.bottom,
-                  insetLeft: box.left - bounds.left,
-                  insetRight: bounds.right - box.right,
-                  height: box.height,
-                  width: box.width,
-                  centerOffset: Math.abs(
-                    box.top + box.height / 2 - code.top - code.height / 2,
-                  ),
-                  button: element.matches("button"),
-                };
-              });
+              ]
+                .filter((element) => element.checkVisibility())
+                .map((element) => {
+                  const box = element.getBoundingClientRect();
+                  return {
+                    label:
+                      element.getAttribute("aria-label") ??
+                      element.closest("button")?.getAttribute("aria-label") ??
+                      element.tagName,
+                    insetTop: box.top - bounds.top,
+                    insetBottom: bounds.bottom - box.bottom,
+                    insetLeft: box.left - bounds.left,
+                    insetRight: bounds.right - box.right,
+                    height: box.height,
+                    width: box.width,
+                    centerOffset: Math.abs(
+                      box.top + box.height / 2 - code.top - code.height / 2,
+                    ),
+                    button: element.matches("button"),
+                  };
+                });
             }),
           );
           for (const control of controls) {

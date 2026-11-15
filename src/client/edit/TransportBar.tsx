@@ -12,10 +12,7 @@ import {
   Stop,
 } from "@phosphor-icons/react";
 import { useShallow } from "zustand/react/shallow";
-import {
-  VoiceoverTransport,
-  VoiceoverRecordMark,
-} from "../voiceover/Voiceover";
+import { VoiceoverRecordMark } from "../voiceover/Voiceover";
 import type { VoiceoverSession } from "../voiceover/session";
 import { blurPointerButton, hint } from "../keymap";
 import {
@@ -262,7 +259,6 @@ export function TransportBar({
           >
             <SkipForward size={16} />
           </button>
-          {voiceover && <VoiceoverTransport session={voiceover} />}
           <span className="edit-shuttle" aria-label="Shuttle speed">
             {shuttle}
           </span>

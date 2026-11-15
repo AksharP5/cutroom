@@ -1,15 +1,26 @@
 .vo-arm.armed,
 .vo-arm.armed:disabled,
-.edit-transport .edit-icon.vo-record,
-.edit-transport .edit-icon.vo-record:hover,
 .vo-record-mark {
   color: var(--danger);
 }
 .vo-arm.armed:disabled {
   opacity: 1;
 }
+/* Neutral while armed; red is the clock's, so it shows only while a take runs. */
 .vo-record.recording {
-  background: var(--surface-active);
+  color: var(--playhead);
+}
+.vo-record:disabled {
+  color: var(--glyph-faint);
+}
+/* A compact header has room for one of the two: record while armed, recovery after a failed save. */
+.tl-head[data-compact] .vo-input:not(.vo-recover):has(+ .vo-record),
+.tl-head[data-compact] .vo-recover + .vo-record {
+  display: none;
+}
+.tl-head[data-compact] .vo-record {
+  width: var(--size-track-button);
+  height: var(--size-track-button);
 }
 .vo-record-mark {
   display: inline-flex;
@@ -28,7 +39,7 @@
   pointer-events: none;
   z-index: var(--z-clip-selected);
 }
-.vo-input {
+:is(.vo-input, .vo-record) {
   display: grid;
   place-items: center;
   flex: none;
