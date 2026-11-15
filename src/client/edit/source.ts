@@ -31,6 +31,8 @@ const preferences = createViewPreferences(SourceViewSchema, () => ({
 export const sourcePlayer = createTransport();
 // Controls are usable before the first read supplies the media identity needed to save.
 let pendingMarks: SourceMarks | null = null;
+/** Where a newly opened file's playhead starts, for match frame; otherwise its in mark. */
+let openingFrame: number | null = null;
 
 function sync() {
   const { file } = useSource.getState();
@@ -70,16 +72,21 @@ const stop = (player: typeof transport) => {
     player.dispatch({ type: "stop" });
 };
 
-/** Loads a file and shows it. The same file keeps its place. */
-export function openSource(file: MediaDrag) {
+/** Loads a file and shows it, at `frame` when given. The same file otherwise keeps its place. */
+export function openSource(file: MediaDrag, frame?: number) {
   stop(transport);
+  const loaded = useSource.getState().file?.path === file.path;
+  openingFrame = loaded ? null : (frame ?? null);
   useSource.setState({ file, shown: true });
+  if (loaded && frame !== undefined) sourcePlayer.seek(frame);
 }
 
 /** Follows the mounted media's marks and reloads them when the media refreshes. */
 export function openSourceMarks(projectId: string, path: string) {
   pendingMarks = null;
-  sourcePlayer.seek(0);
+  const opening = openingFrame;
+  openingFrame = null;
+  sourcePlayer.seek(opening ?? 0);
   let loaded = false;
   return preferences.open(
     projectId,
@@ -91,7 +98,7 @@ export function openSourceMarks(projectId: string, path: string) {
         pendingMarks = null;
         preferences.save({ identity, ...marks });
       }
-      if (loaded) return;
+      if (loaded || opening !== null) return;
       loaded = true;
       // A late load must not move a playhead the owner has already moved.
       const { frame, state, range } = sourcePlayer.use.getState();

@@ -1,5 +1,5 @@
 import { isAudioKind } from "../../shared/timeline/schema";
-import { clipEnd } from "../../shared/timeline/apply";
+import { clipEnd, frameTime, toFrames } from "../../shared/timeline/apply";
 import { TimelineError } from "../../shared/timeline/errors";
 import type {
   Clip,
@@ -7,6 +7,7 @@ import type {
   Timeline,
 } from "../../shared/timeline/schema";
 import type { Action } from "../keymap";
+import type { MediaDrag } from "../timeline/mediaDrag";
 
 /** What an editing key acts on, read when the key is pressed. */
 export interface EditTarget {
@@ -124,6 +125,95 @@ const removeSelection =
     return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
   };
 
+/** Nudge moves the selected clips and their linked partners, overwriting what they land on. */
+const nudge =
+  (by: number) =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
+    return clipIds.length ? [{ type: "move", clipIds, by }] : [];
+  };
+
+/**
+ * Moves the selected clips to the next track of their kind as the headers stack them: up is a
+ * higher video track or a lower audio track. Clips with no track there stay, and a move never
+ * covers another clip. The track furthest along moves first, so selected neighbours make way.
+ */
+const moveTrack =
+  (up: boolean) =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    const groups = new Map<number, string[]>();
+    for (const clip of selectedIn(timeline, target))
+      groups.set(clip.track, [...(groups.get(clip.track) ?? []), clip.id]);
+    if (!groups.size) return [];
+    const moves = [...groups].flatMap(([index, clipIds]) => {
+      const track = timeline.tracks.find((track) => track.index === index);
+      if (!track) return [];
+      const ofKind = timeline.tracks
+        .filter(({ kind }) => kind === track.kind)
+        .toSorted((a, b) => a.index - b.index);
+      const step = (track.kind === "video") === up ? 1 : -1;
+      const place = ofKind.indexOf(track) + step;
+      const to = ofKind[place];
+      return to
+        ? [{ order: place * step, clipIds, trackBy: to.index - index }]
+        : [];
+    });
+    if (!moves.length)
+      throw new TimelineError(
+        "out_of_bounds",
+        `No track ${up ? "above" : "below"} the selected clips.`,
+      );
+    return moves
+      .toSorted((a, b) => b.order - a.order)
+      .map(({ clipIds, trackBy }) => ({
+        type: "move",
+        clipIds,
+        trackBy,
+        mode: "place",
+      }));
+  };
+
+/**
+ * The source file and frame under the playhead, for match frame: from the selected clip under it,
+ * or else the top picture, then the first sound, on unlocked auto-select tracks.
+ */
+export function matchFrame(
+  timeline: Timeline,
+  target: EditTarget,
+): { file: MediaDrag; frame: number } | null {
+  const media = underPlayhead(timeline, target).flatMap((clip) => {
+    const { kind, src, mediaStart, sourceDuration } = clip;
+    if (
+      (kind !== "video" && kind !== "audio" && kind !== "voiceover") ||
+      src === null ||
+      mediaStart === null ||
+      sourceDuration === null
+    )
+      return [];
+    const seconds =
+      mediaStart +
+      frameTime(target.frame - clip.start, timeline.fps) * clip.playbackRate;
+    return [
+      {
+        id: clip.id,
+        file: {
+          kind,
+          path: src,
+          seconds: sourceDuration,
+          hasAudio: clip.hasAudio,
+        },
+        frame: toFrames(seconds, timeline.fps),
+      },
+    ];
+  });
+  return (
+    media.find(({ id }) => target.selection.has(id)) ??
+    media.findLast(({ file }) => file.kind === "video") ??
+    media[0] ??
+    null
+  );
+}
+
 /** The timeline edits bound to keys. Each press is one batch, so one undo step. */
 export const editKeys = {
   trimRippleStartToPlayhead: {
@@ -147,6 +237,12 @@ export const editKeys = {
         enabled: !clip.enabled,
       })),
   },
+  editNudgeTrimStepNudgeReverse: { label: "Nudge", commands: nudge(-1) },
+  editNudgeTrimStepNudgeForward: { label: "Nudge", commands: nudge(1) },
+  editNudgeTrimStepTrimMultiFrameLeft: { label: "Nudge", commands: nudge(-5) },
+  editNudgeTrimStepTrimMultiFrameRight: { label: "Nudge", commands: nudge(5) },
+  editMoveClipsUp: { label: "Move clips up", commands: moveTrack(true) },
+  editMoveClipsDown: { label: "Move clips down", commands: moveTrack(false) },
   markMarkerAdd: {
     label: "Add marker",
     commands: ({ markers }, { frame }) =>

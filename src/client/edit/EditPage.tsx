@@ -24,6 +24,7 @@ import {
   hint,
   isTyping,
   keymap,
+  missingNotice,
   useKeymap,
 } from "../keymap";
 import type { Action } from "../keymap";
@@ -31,7 +32,12 @@ import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { subscribeProjectEvents } from "../api";
 import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import "./edit.css";
-import { Inspector, InspectorToggle } from "./inspector/Inspector";
+import {
+  Inspector,
+  InspectorToggle,
+  useTimingEdit,
+} from "./inspector/Inspector";
+import { matchFrame } from "./keys";
 import { ExportControl } from "./ExportDialog";
 import { SelectMenu } from "../components/SelectMenu";
 import {
@@ -46,6 +52,7 @@ import { useVoiceover } from "../voiceover/Voiceover";
 import {
   closeSource,
   markSource,
+  openSource,
   placeSource,
   showSource,
   sourcePlayer,
@@ -67,6 +74,8 @@ const previewChangeSchema = z.object({
 });
 
 const report = (error: unknown) => reportEditorError("timeline", error);
+const notice = (text: string) =>
+  showToast(text, null, { tone: "info", transient: true });
 
 /** Clip boundaries on tracks that take part in edits, for Up and Down. */
 function edits({ clips, tracks }: Timeline) {
@@ -250,6 +259,16 @@ export function EditPage({
     document.addEventListener("keydown", closeDrawer);
     return () => document.removeEventListener("keydown", closeDrawer);
   }, []);
+  useEffect(() => {
+    const press = (event: KeyboardEvent) => {
+      const text = missingNotice(event);
+      if (!text) return;
+      event.preventDefault();
+      notice(text);
+    };
+    window.addEventListener("keydown", press);
+    return () => window.removeEventListener("keydown", press);
+  }, []);
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else
@@ -293,6 +312,27 @@ export function EditPage({
     return Math.round(fps.num / fps.den);
   };
   const last = () => playing().duration - 1;
+  /** Markers belong to the timeline, so their keys show it even while a source is up. */
+  const marker = (
+    to: (frames: number[], frame: number) => number | undefined,
+    none: string,
+  ) => {
+    const view = useTimeline.getState().view;
+    if (!view) return;
+    const frames = view.timeline.markers
+      .map((marker) => marker.frame)
+      .toSorted((a, b) => a - b);
+    const frame = to(frames, transport.use.getState().frame);
+    if (frame === undefined)
+      return void notice(frames.length ? none : "No markers yet.");
+    showSource(false);
+    transport.seek(frame);
+  };
+  /** Opens the inspector on the selected clip with one of its Timing fields ready to type in. */
+  const timingField = (field: "Duration" | "Speed") => {
+    useWorkspace.setState({ inspector: true });
+    useTimingEdit.setState({ field });
+  };
 
   const handlers: Partial<Record<Action, () => void>> = {
     editPointer: () => setMode("select"),
@@ -318,6 +358,16 @@ export function EditPage({
       jump((stops, frame) => stops.findLast((stop) => stop < frame) ?? 0),
     controlClipNext: () =>
       jump((stops, frame) => stops.find((stop) => stop > frame) ?? last()),
+    controlMarkersPrev: () =>
+      marker(
+        (frames, frame) => frames.findLast((at) => at < frame),
+        "No marker before the playhead.",
+      ),
+    controlMarkersNext: () =>
+      marker(
+        (frames, frame) => frames.find((at) => at > frame),
+        "No marker after the playhead.",
+      ),
     controlTimelineStart: () => player.seek(0),
     controlTimelineEnd: () => player.seek(last()),
     controlFirstFrame: () => player.seek(0),
@@ -373,6 +423,21 @@ export function EditPage({
       focusPanel(timelinePanel.current);
     },
     viewToggleSourceTimeline: () => showSource(!sourceShown),
+    editMatchFrame: () => {
+      const view = useTimeline.getState().view;
+      if (!view) return;
+      const match = matchFrame(view.timeline, {
+        selection: useTimeline.getState().selection.ids,
+        frame: transport.use.getState().frame,
+      });
+      if (!match)
+        return void notice(
+          "Match frame needs a video or audio clip under the playhead.",
+        );
+      openSource(match.file, match.frame);
+    },
+    clipChangeClipDuration: () => timingField("Duration"),
+    clipChangeClipSpeed: () => timingField("Speed"),
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),
     workspaceViewerModeCinemaViewer: toggleFullscreen,

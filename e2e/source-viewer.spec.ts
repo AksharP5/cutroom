@@ -417,6 +417,49 @@ test("audio shows its waveform and a still runs five seconds, each on a track of
   await expect.poll(added).toEqual([["image", 0, 360, 150, null]]);
 });
 
+test("F matches the frame under the playhead in the source viewer, source offset included", async ({
+  page,
+  request,
+}) => {
+  const { project, source, clock } = await open(page, request);
+  const picture = source.locator("video");
+  const api = `/api/cutroom/projects/${project.id}`;
+  const { revision } = TimelineViewSchema.parse(
+    await (await request.get(`${api}/timeline`)).json(),
+  );
+  const response = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: revision,
+      commands: [{ type: "setTiming", clipId: "picture", mediaStart: 1 }],
+    },
+  });
+  expect(response.status(), await response.text()).toBe(200);
+  await page.reload();
+  await expect(page.locator(".tl-grid")).toHaveAttribute(
+    "data-refit",
+    "settled",
+  );
+  // 1:15 into the timeline is 2:15 into the source: green, where the timeline's own time is red.
+  await seek(page, "115");
+  await page.keyboard.press("f");
+  await expect(source).toBeVisible();
+  await expect(clock).toHaveText("00:00:02:15");
+  await expect.poll(() => colour(page, picture)).toBe("green");
+  // With the file already loaded, F moves its playhead.
+  await page.keyboard.press("Control+5");
+  await seek(page, "300");
+  await page.keyboard.press("f");
+  await expect(source).toBeVisible();
+  await expect(clock).toHaveText("00:00:04:00");
+  // Past the clip there is nothing to match.
+  await page.keyboard.press("Control+5");
+  await seek(page, "500");
+  await page.keyboard.press("f");
+  await expect(page.getByRole("status")).toContainText(
+    "Match frame needs a video or audio clip under the playhead.",
+  );
+});
+
 test("F9 and F10 from Source reveal Timeline after a successful placement", async ({
   page,
   request,

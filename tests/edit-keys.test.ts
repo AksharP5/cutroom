@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { applyAll, normalizeTimeline } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import type { Clip, Timeline, Track } from "../src/shared/timeline/schema";
-import { editKeys, trimmedPlayhead } from "../src/client/edit/keys";
+import { editKeys, matchFrame, trimmedPlayhead } from "../src/client/edit/keys";
 import { countingIds } from "./clip-ids";
 
 const clip = (
@@ -247,4 +247,84 @@ test("trim targets use track order even when the input clips are unordered", () 
   expect(press("trimRippleEndToPlayhead", timeline, 50)[0]).toMatchObject({
     clipId: "a-sound",
   });
+});
+
+const tracks = (timeline: Timeline) =>
+  Object.fromEntries(timeline.clips.map((item) => [item.id, item.track]));
+
+test("nudge moves the selection and its linked partners, overwriting, and stops at a locked partner", () => {
+  const timeline = sequence(musicOff);
+  const later = apply(
+    timeline,
+    press("editNudgeTrimStepNudgeForward", timeline, 0, ["a", "a-sound"]),
+  );
+  expect(starts(later)).toMatchObject({ a: 1, "a-sound": 1, b: 101 });
+  expect(later.clips.find((item) => item.id === "b")?.duration).toBe(99);
+  // Selecting only the picture still carries its sound.
+  expect(
+    starts(
+      apply(
+        timeline,
+        press("editNudgeTrimStepTrimMultiFrameRight", timeline, 0, ["b"]),
+      ),
+    ),
+  ).toMatchObject({ b: 105 });
+  const lockedSound = sequence([{ index: 2, locked: true }, ...musicOff]);
+  expect(() =>
+    apply(
+      lockedSound,
+      press("editNudgeTrimStepNudgeForward", lockedSound, 0, ["a"]),
+    ),
+  ).toThrow("locked");
+  expect(() =>
+    apply(timeline, press("editNudgeTrimStepNudgeReverse", timeline, 0, ["a"])),
+  ).toThrow("before the timeline");
+  expect(press("editNudgeTrimStepNudgeForward", timeline, 0)).toEqual([]);
+});
+
+test("Alt+Up and Alt+Down move clips a track within their kind, never over another clip", () => {
+  const timeline = sequence(musicOff);
+  // Up is a higher video track and a lower audio track; the sound on A1 has none and stays.
+  expect(
+    tracks(
+      apply(timeline, press("editMoveClipsUp", timeline, 0, ["a", "a-sound"])),
+    ),
+  ).toMatchObject({ a: 1, "a-sound": 2 });
+  expect(
+    tracks(apply(timeline, press("editMoveClipsDown", timeline, 0, ["title"]))),
+  ).toMatchObject({ title: 0 });
+  // A2 holds the music under the sound, so the move down is refused.
+  expect(() =>
+    apply(timeline, press("editMoveClipsDown", timeline, 0, ["a-sound"])),
+  ).toThrow("overlap");
+  expect(() => press("editMoveClipsUp", timeline, 0, ["title"])).toThrow(
+    "No track above the selected clips.",
+  );
+});
+
+test("match frame finds the source frame under the playhead, preferring the selection, then the top picture", () => {
+  const base = sequence();
+  const timeline = {
+    ...base,
+    clips: base.clips.map((item) => ({
+      ...item,
+      src: `${item.id}.mp4`,
+      sourceDuration: 20,
+      mediaStart: 2,
+      playbackRate: item.id === "b" ? 2 : 1,
+    })),
+  };
+  const at = (frame: number, selected: string[] = []) => {
+    const match = matchFrame(timeline, { selection: new Set(selected), frame });
+    return match && [match.file.path, match.frame];
+  };
+  // 2 s into the source plus 1 s into the clip.
+  expect(at(30)).toEqual(["a.mp4", 90]);
+  expect(at(210)).toEqual(["title.mp4", 70]);
+  expect(at(30, ["music"])).toEqual(["music.mp4", 90]);
+  // Double speed covers two source seconds for each timeline second.
+  expect(at(130)).toEqual(["b.mp4", 120]);
+  expect(
+    matchFrame(sequence(), { selection: new Set(), frame: 30 }),
+  ).toBeNull();
 });
