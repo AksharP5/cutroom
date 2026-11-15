@@ -153,7 +153,10 @@ test("Scale, Rotation and Crop draw live while dragged, Esc restores, and releas
 
   await page.getByRole("button", { name: "Reset transform" }).click();
   await expect(left).toHaveValue("0 px");
-  expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(box);
+  // The field resets at once; the file follows when the edit saves.
+  await expect
+    .poll(async () => readFile(join(project.path, "index.html"), "utf8"))
+    .toBe(box);
 });
 
 test("with GSAP loaded, a Scale drag draws exactly over the folded saved scale and only a scale tween warns", async ({
