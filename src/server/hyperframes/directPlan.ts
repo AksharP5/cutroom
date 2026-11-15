@@ -1,46 +1,15 @@
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
-import { z } from "zod";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
-import { ExportRangeSchema } from "../../shared/export.ts";
+import { readPosition } from "../timeline/position.ts";
+import { readClipStyle } from "../timeline/style.ts";
+import { coversFrame, visibleRect } from "./directPlacement.ts";
+import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 
-type Frames = z.infer<typeof ExportRangeSchema>;
+type Frames = DirectPlan["frames"];
 type Element = DefaultTreeAdapterTypes.Element;
-
-const frame = z.number().int().nonnegative();
-/** A run of frames whose picture is one video clip, full frame, with nothing over it. */
-const SourceSegmentSchema = z.object({
-  kind: z.literal("source"),
-  start: frame,
-  end: frame,
-  /** Project-relative source path, as the clip's `src` names it. */
-  src: z.string().min(1),
-  /** Source seconds shown on the segment's first frame. */
-  mediaStart: z.number().nonnegative(),
-});
-/** A run of frames the browser draws. */
-const CaptureSegmentSchema = z.object({
-  kind: z.literal("capture"),
-  start: frame,
-  end: frame,
-});
-export const DirectPlanSchema = z.object({
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  /** Frames in the whole composition, which the audio mix needs even for a range. */
-  durationFrames: z.number().int().positive(),
-  frames: ExportRangeSchema,
-  /** In frame order, covering the range. At least one draws from a source. */
-  segments: z
-    .array(
-      z.discriminatedUnion("kind", [SourceSegmentSchema, CaptureSegmentSchema]),
-    )
-    .min(1),
-});
-export type SourceSegment = z.infer<typeof SourceSegmentSchema>;
-export type DirectPlan = z.infer<typeof DirectPlanSchema>;
 
 /** Why the export needs the browser, for the logs; never shown as an error. */
 type Refusal = { reason: string };
@@ -95,9 +64,22 @@ const VIDEO_FITS = new Map(
     fit,
   ]),
 );
-const VIDEO_OPTIONAL = new Set(declarationsOf("opacity:1").map(key));
+/** The inline longhands Cutroom's inspector writes, which `readClipStyle` reads. */
+const PLACEMENT_PROPERTIES = new Set([
+  "opacity",
+  "scale",
+  "rotate",
+  "clip-path",
+]);
 
-/** Attributes a plain video clip may carry. Sound attributes are inert on a muted element. */
+/** The Position offset, which the runtime draws as a `translate` of `data-x` less its baseline. */
+const POSITION_ATTRIBUTES = [
+  "data-x",
+  "data-y",
+  "data-hf-edit-base-x",
+  "data-hf-edit-base-y",
+];
+/** Attributes a video clip may carry. Sound attributes are inert on a muted element. */
 const VIDEO_ATTRIBUTES = new Set([
   "id",
   "src",
@@ -116,6 +98,21 @@ const VIDEO_ATTRIBUTES = new Set([
   "data-fade-out",
   "data-cutroom-muted",
   "data-hf-id",
+  ...POSITION_ATTRIBUTES,
+]);
+/** Attributes Cutroom writes on a placed image. */
+const IMAGE_ATTRIBUTES = new Set([
+  "id",
+  "class",
+  "src",
+  "style",
+  "data-start",
+  "data-duration",
+  "data-track-index",
+  "data-label",
+  "data-timeline-label",
+  "data-hf-id",
+  ...POSITION_ATTRIBUTES,
 ]);
 const ROOT_ATTRIBUTES = new Set([
   "id",
@@ -157,8 +154,15 @@ function mayMatch(selector: SelectorComponent[], element: Element) {
   });
 }
 
-/** Stacking from Cutroom's track layer: z-index by `data-track-index`, unless anything else sets one. */
-type Stacking = { trackZ: Map<string, number>; authored: boolean };
+/**
+ * Stacking from Cutroom's track layer: z-index by `data-track-index`, unless anything else sets
+ * one; and the background declarations that may reach the page, body or composition root.
+ */
+type Stacking = {
+  trackZ: Map<string, number>;
+  authored: boolean;
+  backgrounds: { element: Element; declaration: Declaration }[];
+};
 
 /** The one `data-track-index` value a track-layer rule selects, found inside its `:where()`. */
 function trackOf(selectors: SelectorComponent[][]) {
@@ -182,7 +186,7 @@ function trackOf(selectors: SelectorComponent[][]) {
 
 function checkStylesheet(
   css: string,
-  protectedElements: { element: Element; video: boolean }[],
+  protectedElements: { element: Element; clip: boolean }[],
   stacking: Stacking,
 ): string | undefined {
   let refusal: string | undefined;
@@ -223,7 +227,7 @@ function checkStylesheet(
           stacking.trackZ.set(track, declaration.value.value);
         else stacking.authored = true;
       }
-      for (const { element, video } of protectedElements) {
+      for (const { element, clip } of protectedElements) {
         const matching = selectors.filter((selector) =>
           mayMatch(selector, element),
         );
@@ -237,7 +241,7 @@ function checkStylesheet(
           return;
         }
         for (const declaration of declarations) {
-          const allowed = video
+          const allowed = clip
             ? declaration.property === "box-sizing" ||
               declaration.property === "z-index"
             : FREE_PROPERTIES.has(declaration.property) ||
@@ -246,6 +250,11 @@ function checkStylesheet(
             refusal = `a stylesheet sets ${declaration.property} on <${element.tagName}>`;
             return;
           }
+          if (
+            declaration.property === "background" ||
+            declaration.property === "background-color"
+          )
+            stacking.backgrounds.push({ element, declaration });
         }
       }
       visit(rule.value.rules ?? [], tracks);
@@ -354,8 +363,12 @@ export function planDirectExport(
 
   type Clip = { element: Element; start: number; end: number };
   const visual: Clip[] = [];
-  const videos: Element[] = [];
-  const stacking: Stacking = { trackZ: new Map(), authored: false };
+  const pictures: Element[] = [];
+  const stacking: Stacking = {
+    trackZ: new Map(),
+    authored: false,
+    backgrounds: [],
+  };
   let end = 0;
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
@@ -377,7 +390,8 @@ export function planDirectExport(
       };
     end = Math.max(end, last);
     if (element.tagName === "audio") continue;
-    if (element.tagName === "video") videos.push(element);
+    if (element.tagName === "video" || element.tagName === "img")
+      pictures.push(element);
     visual.push({ element, start: first, end: last });
     try {
       if (
@@ -390,8 +404,9 @@ export function planDirectExport(
       stacking.authored = true;
     }
   }
-  for (const video of videos)
+  for (const video of pictures)
     if (
+      video.tagName === "video" &&
       attribute(video, "muted") === undefined &&
       attribute(video, "data-has-audio") !== "false"
     )
@@ -407,16 +422,17 @@ export function planDirectExport(
     return { reason: "the range is outside the composition" };
 
   const protectedElements = [
-    { element: page, video: false },
-    { element: body, video: false },
-    { element: root, video: false },
-    ...videos.map((element) => ({ element, video: true })),
+    { element: page, clip: false },
+    { element: body, clip: false },
+    { element: root, clip: false },
+    ...pictures.map((element) => ({ element, clip: true })),
   ];
   for (const css of styles) {
     const refusal = checkStylesheet(css, protectedElements, stacking);
     if (refusal) return { reason: refusal };
   }
 
+  const colour = pageColour(stacking.backgrounds, { page, body });
   // Clips paint by their track layer's z-index, then in document order. Any other z-index
   // could reorder them, so frames with more than one clip then go to the browser.
   const level = (clip: Clip) =>
@@ -441,14 +457,20 @@ export function planDirectExport(
       (above, clip) => (above && level(above) > level(clip) ? above : clip),
       undefined,
     );
-    const refusal = !top
-      ? `frame ${start} shows no clip`
+    const drawn = !top
+      ? { reason: `frame ${start} shows no clip` }
       : showing.length > 1 && stacking.authored
-        ? `frame ${start} shows ${showing.length} clips in an authored order`
-        : plainVideo(top.element);
+        ? {
+            reason: `frame ${start} shows ${showing.length} clips in an authored order`,
+          }
+        : placedClip(top.element, {
+            width,
+            height,
+            beneath: showing.length === 1 ? colour : null,
+          });
     const previous = segments.at(-1);
-    if (refusal || !top) {
-      reason ??= refusal;
+    if ("reason" in drawn || !top) {
+      reason ??= "reason" in drawn ? drawn.reason : undefined;
       if (previous?.kind === "capture") previous.end = end;
       else segments.push({ kind: "capture", start, end });
       continue;
@@ -457,43 +479,137 @@ export function planDirectExport(
     const mediaStart =
       seconds(attribute(top.element, "data-media-start") ?? "0")! +
       ((start - top.start) * fps.den) / fps.num;
-    segments.push({ kind: "source", start, end, src, mediaStart });
+    segments.push({ kind: "source", start, end, src, mediaStart, ...drawn });
   }
   if (!segments.some((segment) => segment.kind === "source"))
     return { reason: reason ?? "no frame shows a plain video" };
   return { width, height, durationFrames, frames, segments };
 }
 
-/** A video clip drawn as Cutroom places it: full frame, untransformed, opaque, at normal speed. */
-function plainVideo(element: Element): string | undefined {
-  const id = attribute(element, "id") ?? "a clip";
-  if (element.tagName !== "video") return `${id} is not a video`;
-  const extra = element.attrs.find(
-    (entry) => !VIDEO_ATTRIBUTES.has(entry.name),
+/** A `background` or `background-color` that paints one opaque colour, as `#rrggbb`. */
+function solidColour(declaration: Declaration) {
+  const colour =
+    declaration.property === "background-color"
+      ? declaration.value
+      : declaration.property === "background" &&
+          declaration.value.length === 1 &&
+          declaration.value[0]!.image.type === "none"
+        ? declaration.value[0]!.color
+        : undefined;
+  if (typeof colour !== "object" || colour.type !== "rgb" || colour.alpha !== 1)
+    return null;
+  return `#${[colour.r, colour.g, colour.b].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * The colour the browser paints beneath every clip. Only known when the page or body sets one,
+ * since the canvas takes it from them, and every background that may reach the page, body or
+ * composition root is that same opaque colour.
+ */
+function pageColour(
+  found: Stacking["backgrounds"],
+  { page, body }: { page: Element; body: Element },
+) {
+  if (!found.some(({ element }) => element === page || element === body))
+    return null;
+  const colours = new Set(
+    found.map(({ declaration }) => solidColour(declaration)),
   );
-  if (extra) return `${id} has ${extra.name}`;
-  if (elements(element).length) return `${id} has child elements`;
+  const [colour] = colours;
+  return colours.size === 1 && colour ? colour : null;
+}
+
+/**
+ * A video or image clip as Cutroom places it: a box filling the frame, plus the inspector's
+ * Position, Scale, Rotation, whole-pixel Crop and Opacity. A video drawn as a plain copy carries
+ * no placement. One that may leave the frame uncovered or show through needs a known page colour
+ * beneath it. A still's coverage depends on its size, which the server reads before export.
+ */
+function placedClip(
+  element: Element,
+  frame: { width: number; height: number; beneath: string | null },
+): Pick<SourceSegment, "still" | "placement"> | Refusal {
+  const id = attribute(element, "id") ?? "a clip";
+  const image = element.tagName === "img";
+  if (element.tagName !== "video" && !image)
+    return { reason: `${id} is not a video or image` };
+  const allowed = image ? IMAGE_ATTRIBUTES : VIDEO_ATTRIBUTES;
+  const extra = element.attrs.find((entry) => !allowed.has(entry.name));
+  if (extra) return { reason: `${id} has ${extra.name}` };
+  if (image && attribute(element, "class") !== "clip")
+    return { reason: `${id} has a class of its own` };
+  if (elements(element).length) return { reason: `${id} has child elements` };
   const src = attribute(element, "src");
   // The worker checks the path against the project; remote and query URLs go to the browser.
   if (!src || /^[a-z][a-z0-9+.-]*:|^\/\/|[?#]/i.test(src))
-    return `${id} is not a file in the project`;
+    return { reason: `${id} is not a file in the project` };
   if (seconds(attribute(element, "data-media-start") ?? "0") === null)
-    return `${id} has an unreadable media start`;
-  let declarations: string[];
+    return { reason: `${id} has an unreadable media start` };
+  let declarations: Declaration[];
   try {
-    declarations = declarationsOf(attribute(element, "style") ?? "").map(key);
+    declarations = declarationsOf(attribute(element, "style") ?? "");
   } catch {
-    return `${id} has an unreadable style`;
+    return { reason: `${id} has an unreadable style` };
   }
-  const remaining = declarations.filter(
-    (declaration) =>
-      !VIDEO_REQUIRED.includes(declaration) &&
-      !VIDEO_FITS.has(declaration) &&
-      !VIDEO_OPTIONAL.has(declaration),
-  );
+  const keys = declarations.map(key);
   if (
-    remaining.length ||
-    !VIDEO_REQUIRED.every((declaration) => declarations.includes(declaration))
+    !VIDEO_REQUIRED.every((declaration) => keys.includes(declaration)) ||
+    declarations.some(
+      (declaration, index) =>
+        !VIDEO_REQUIRED.includes(keys[index]!) &&
+        !VIDEO_FITS.has(keys[index]!) &&
+        !PLACEMENT_PROPERTIES.has(declaration.property),
+    )
   )
-    return `${id} is not placed full frame`;
+    return { reason: `${id} is not placed in a box filling the frame` };
+  const style = readClipStyle(attribute(element, "style"));
+  if (style.restriction)
+    return { reason: `${id} has a transform the inspector does not write` };
+  if (
+    style.opacity === null &&
+    declarations.some((declaration) => declaration.property === "opacity")
+  )
+    return { reason: `${id} has an opacity Cutroom cannot read` };
+  const attrs = Object.fromEntries(
+    element.attrs.map((entry) => [entry.name, entry.value]),
+  );
+  const based = (axis: "x" | "y") =>
+    attrs[`data-${axis}`] === undefined ||
+    attrs[`data-hf-edit-base-${axis}`] !== undefined;
+  if (!based("x") || !based("y"))
+    return { reason: `${id} has a position without its baseline` };
+  const crop = style.crop ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  if (!Object.values(crop).every(Number.isInteger))
+    return { reason: `${id} crops part of a pixel` };
+  const placement: Placement = {
+    x: readPosition(attrs, "x") ?? 0,
+    y: readPosition(attrs, "y") ?? 0,
+    scaleX: style.scaleX ?? 1,
+    scaleY: style.scaleY ?? 1,
+    rotation: style.rotation ?? 0,
+    crop,
+    opacity: style.opacity ?? 1,
+    beneath: frame.beneath,
+  };
+  const fit =
+    declarations
+      .map((_, index) => VIDEO_FITS.get(keys[index]!))
+      .findLast((value) => value !== undefined) ?? "fill";
+  if (image) return { still: { fit }, placement };
+  const plain =
+    placement.x === 0 &&
+    placement.y === 0 &&
+    placement.scaleX === 1 &&
+    placement.scaleY === 1 &&
+    placement.rotation === 0 &&
+    Object.values(crop).every((edge) => edge === 0) &&
+    placement.opacity === 1;
+  if (plain) return {};
+  // The worker refuses a video whose shape differs from the frame's, so its picture fills the box.
+  const box = { left: 0, top: 0, right: frame.width, bottom: frame.height };
+  const shown = visibleRect(box, crop, frame);
+  if (!shown) return { reason: `${id} is cropped away` };
+  if (!frame.beneath && !coversFrame(placement, shown, frame))
+    return { reason: `${id} shows what lies beneath it` };
+  return { placement };
 }

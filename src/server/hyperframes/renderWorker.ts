@@ -5,7 +5,7 @@ import {
   registerRenderIsolation,
   spliceSourceParts,
 } from "./renderIsolation.ts";
-import { DirectPlanSchema } from "./directPlan.ts";
+import { DirectPlanSchema } from "./directSchema.ts";
 import { ExportRangeSchema } from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
