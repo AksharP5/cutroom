@@ -3,6 +3,7 @@ import {
   link,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   rmdir,
   stat,
@@ -17,6 +18,7 @@ import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { planCaptureBrowsers } from "./exportMemory";
+import { planDirectExport } from "./directPlan";
 import {
   createOwnedDirectory,
   sweepOwnedDirectories,
@@ -42,6 +44,8 @@ type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   finishedAt: number | null;
   estimate: ReturnType<typeof estimateExportStage>;
   stageProgress?: z.infer<typeof ExportStageSchema>;
+  /** How the frames were drawn: straight from the sources, or by capturing the browser. */
+  renderer?: "direct" | "capture";
   sizeBytes?: number;
   cancel: () => Promise<void>;
 };
@@ -55,6 +59,7 @@ const WorkerEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("complete"),
     audioLoweredDb: z.number().optional(),
+    renderer: z.enum(["direct", "capture"]).optional(),
   }),
   z.object({
     type: z.literal("error"),
@@ -106,6 +111,56 @@ async function processGroupExited(pid: number, timeoutMs: number) {
   );
 }
 
+/**
+ * The plan for drawing the export straight from its sources, or undefined when any frame, setting
+ * or document feature needs the browser. Logs why, so a slow export can be explained.
+ */
+async function directPlan(
+  options: RenderOptions,
+  sources: Record<string, string> | undefined,
+  range: ExportOptions["range"] | undefined,
+) {
+  const entry = options.composition ?? "index.html";
+  const unsupported = (
+    [
+      [options.format !== "mp4", "it is not an MP4"],
+      [entry !== "index.html", "it renders a sub-composition"],
+      [options.useGpu, "it encodes on the GPU"],
+      [options.outputResolution, "it changes the output size"],
+      [
+        options.pageMotionBlur && options.pageMotionBlur !== "off",
+        "it adds motion blur",
+      ],
+      [
+        options.variables && Object.keys(options.variables).length,
+        "it sets composition variables",
+      ],
+      [options.keyframeIntervalSeconds !== undefined, "it sets keyframes"],
+      [options.hdrMode !== undefined, "it sets an HDR mode"],
+    ] as const
+  ).find(([applies]) => applies)?.[1];
+  if (unsupported) {
+    console.info(`Exporting with frame capture: ${unsupported}.`);
+    return undefined;
+  }
+  const path = join(options.project.dir, entry);
+  // Without the file there is nothing to plan; frame capture reports the missing entry itself.
+  const html =
+    sources?.[path] ??
+    (await readFile(path, "utf8").catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return undefined;
+      throw error;
+    }));
+  if (html === undefined) return undefined;
+  const plan = planDirectExport(html, options.fps, range ?? null);
+  if ("reason" in plan) {
+    console.info(`Exporting with frame capture: ${plan.reason}.`);
+    return undefined;
+  }
+  return { plan, html };
+}
+
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
 export function createRenderWorkers(configuration: {
   /** Holds each export's extracted frames and range work. Keep it off RAM-backed /tmp. */
@@ -113,6 +168,8 @@ export function createRenderWorkers(configuration: {
   /** Frames extracted for one export, kept for the next. Without it they go with the export's scratch. */
   frameCache?: { dir: string; maxBytes: number };
   workerPath?: string;
+  /** Draw plain footage with FFmpeg instead of the browser where the planner allows. On by default. */
+  directExport?: boolean;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
   workload?: (
@@ -173,6 +230,7 @@ export function createRenderWorkers(configuration: {
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
       let startupTimeout: ReturnType<typeof setTimeout> | undefined;
       const job = createJobMachine();
+      const useDirect = configuration.directExport !== false;
       job.transition({ status: "running", progress: 0 });
       let failure: string | undefined;
       let cleanupFailure: string | undefined;
@@ -275,6 +333,13 @@ export function createRenderWorkers(configuration: {
           throw new Error(
             `A file named "${basename(outputPath)}" is already there. Choose another name.`,
           );
+        const sources = await configuration.sourceOverrides?.(
+          options.project.id,
+        );
+        if (isCancelling()) return;
+        const direct = useDirect
+          ? await directPlan(options, sources, output?.range)
+          : undefined;
         const workload = await configuration.workload?.(options.project.id);
         const plan =
           workload &&
@@ -285,7 +350,9 @@ export function createRenderWorkers(configuration: {
               ? output.range.end - output.range.start
               : workload.durationFrames,
           });
-        if (plan && "refusal" in plan) throw new Error(plan.refusal);
+        // A direct export needs no browser. If a source turns out to need one, the worker fails
+        // with this refusal rather than starting browsers that would not fit.
+        if (plan && "refusal" in plan && !direct) throw new Error(plan.refusal);
         for (const path of leftovers)
           await remove(path).then(
             () => leftovers.delete(path),
@@ -322,10 +389,6 @@ export function createRenderWorkers(configuration: {
           useGpu: options.useGpu,
           pageMotionBlur: options.pageMotionBlur,
         };
-        const sources = await configuration.sourceOverrides?.(
-          options.project.id,
-        );
-        if (isCancelling()) return;
         const child = Bun.spawn(
           [
             node,
@@ -355,7 +418,7 @@ export function createRenderWorkers(configuration: {
                     ),
                   }
                 : {}),
-              ...(plan
+              ...(plan && "browsers" in plan
                 ? {
                     PRODUCER_MAX_WORKERS: String(plan.browsers),
                     // HyperFrames otherwise starts two browsers for 120 frames or more, whatever the limit.
@@ -376,6 +439,11 @@ export function createRenderWorkers(configuration: {
             sources,
             range: output?.range,
             scratchDir: scratch,
+            direct: direct && {
+              ...direct,
+              captureRefusal:
+                plan && "refusal" in plan ? plan.refusal : undefined,
+            },
           }),
         );
         child.stdin.end();
@@ -428,6 +496,7 @@ export function createRenderWorkers(configuration: {
             if (event.type === "complete") {
               completed = true;
               state.audioLoweredDb = event.audioLoweredDb;
+              state.renderer = event.renderer;
             }
           }
         }

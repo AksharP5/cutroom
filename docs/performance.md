@@ -384,6 +384,27 @@ A marked export mixes only the audio heard within a second of its range ([archit
 
 The interview's music bed starts at 0:00, so its 0:30 range still mixes 33 seconds of audio. A second main run of the 500-clip 0:00 case stalled at browser start, an intermittent stall that predates this change, and was cancelled. Forcing the full mix through the same pipeline gives byte-identical AAC packets for both the 500-clip 5:00 range and the interview 0:30 range. Against main, the decoded audio has zero lag, the same sample count and a 37 to 40 dB signal-to-difference ratio, which is main's second AAC encode.
 
+## Exports from the source
+
+An export whose every frame is one plain video clip draws from its sources with FFmpeg and starts no browser ([architecture](architecture.md#export-dialog)). Each case below exports through the editor's export route at Standard quality, one export at a time on a machine shared with other agents, alternating main `f2452ea` and the direct path on the same projects. Main's frame cache was warm, so its figures are its faster repeat-export case. Peak memory is the summed PSS of the export's processes; CPU is their total CPU time.
+
+The interview is 45 seconds at 1080p30: ten linked BT.709 interview cuts with a frame counter burned in, three picture-only b-roll clips on V2 (one 720p, one 23.976 fps), a music bed at -12 dB and two titles. The 300-clip project is `timelineWorkload(300)` on a 720p copy of the interview: 140 linked pairs and 20 titles over 5:50. The plain project is the same layout with 150 pairs and no titles, 6:15 long.
+
+| Export                               |      Main time |    Direct time | Main peak memory | Direct peak memory |   Main CPU | Direct CPU |
+| ------------------------------------ | -------------: | -------------: | ---------------: | -----------------: | ---------: | ---------: |
+| Interview, 5 s (0:05 to 0:10)        | 12.7 s, 13.6 s |   2.1 s, 2.1 s |           4.5 GB |             1.0 GB | 36 to 55 s |       11 s |
+| 300 clips, 5 s (0:05 to 0:10)        | 21.5 s, 19.1 s |   1.8 s, 1.7 s |    9.6 to 9.9 GB |             1.0 GB | 62 to 94 s |       10 s |
+| Plain, 5 s (0:05 to 0:10)            | 20.9 s, 19.2 s |   1.8 s, 1.7 s |  10.4 to 10.6 GB |             1.0 GB | 52 to 94 s |       10 s |
+| Plain, 30 s (0:05 to 0:35)           |         51.2 s |          5.6 s |          10.6 GB |             2.8 GB |      181 s |       59 s |
+| Plain, whole 6:15                    |        471.5 s | 62.1 s, 62.1 s |           9.2 GB |             3.7 GB |     2508 s |      792 s |
+| Interview, 30 s (both capture)       |         34.1 s |         41.4 s |          11.4 GB |            11.3 GB |      177 s |      223 s |
+| Interview, whole 0:45 (both capture) |         42.0 s |         40.6 s |          10.3 GB |            10.3 GB |      238 s |      186 s |
+| 300 clips, 30 s (both capture)       |         50.0 s |         53.1 s |           9.2 GB |             9.8 GB |      188 s |      246 s |
+
+The interview's 30-second range and whole timeline, and the 300-clip project's 30-second range, include b-roll or titles, so both builds capture them in the browser; their times moved with the machine's load (its load average reached 35 during these runs), not the code.
+
+A first export of the interview's 5-second range on main, before its frame cache held those frames, took 16.5 s. Against main's exports, the direct ones show the same source frame in every frame (read from the burned-in counter) of all five direct exports above, including the 11,250 frames of the whole plain timeline, with mean differences of 0.9 to 1.5/255 and no more than 0.32/255 bias per channel. Range exports carry sample-identical sound; the whole timeline has the same 18,000,000 samples at 67 dB SNR, the difference of the two paths' AAC encodes. Compared with the decoded source frames of the interview range, the direct frames measure 47 to 48.5 dB PSNR and main's 34 to 34.6 dB: frame capture reads each frame through a JPEG extraction and a JPEG screenshot.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.

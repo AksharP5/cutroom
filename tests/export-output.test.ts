@@ -369,3 +369,44 @@ test("an export sized beyond free memory fails with the reason before starting a
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a timeline too big to capture still exports from its sources, and a fallback keeps the refusal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-export-direct-memory-"));
+  const workerPath = join(root, "worker.mjs");
+  await writeFile(
+    workerPath,
+    `import {writeFile} from 'node:fs/promises';import {dirname,join} from 'node:path';let raw='';for await(const chunk of process.stdin)raw+=chunk;const input=JSON.parse(raw);await writeFile(join(dirname(dirname(input.outputPath)),'input.json'),JSON.stringify({refusal:input.direct?.captureRefusal,segments:input.direct?.plan.segments.length,min:process.env.PRODUCER_MIN_PARALLEL_FRAMES??null}));await writeFile(input.outputPath,'video');console.log('CUTROOM_RENDER:'+JSON.stringify({type:'complete'}));`,
+  );
+  await writeFile(
+    join(root, "index.html"),
+    `<!doctype html><html><head></head><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="0"><video id="v" src="v.mp4" muted data-start="0" data-duration="10" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`,
+  );
+  const workers = createRenderWorkers({
+    scratchDir: join(root, "scratch"),
+    workerPath,
+    workload: async () => ({ mediaClips: 1_000_000, durationFrames: 300 }),
+  });
+  try {
+    const state = workers.start(
+      {
+        project: { id: "test", dir: root },
+        outputPath: join(root, "internal.mp4"),
+        format: "mp4",
+        fps: { num: 30, den: 1 },
+        quality: "standard",
+        jobId: "test",
+      },
+      { filename: "Cut.mp4", directory: root, range: { start: 0, end: 30 } },
+    );
+    await until(() => state.status !== "rendering");
+    expect(state.status).toBe("complete");
+    const input = z
+      .object({ refusal: z.string(), segments: z.number(), min: z.null() })
+      .parse(JSON.parse(await readFile(join(root, "input.json"), "utf8")));
+    expect(input.segments).toBe(1);
+    expect(input.refusal).toContain("GB of free memory");
+  } finally {
+    await workers.cancelAll();
+    await rm(root, { recursive: true, force: true });
+  }
+});
