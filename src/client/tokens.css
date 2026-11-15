@@ -148,6 +148,7 @@
   --weight-bold: 700;
 
   --type-micro: 9px; /* ruler labels, meter scale (mono) */
+  --type-field-tight: 9.5px; /* timecode in a paired inspector field, so two fit at 300px */
   --type-2xs: 10px; /* clip name strip, track ids, small timecode */
   --type-xs: 11px; /* meta, durations, status bar, transport duration */
   --type-sm: 12px; /* body, controls, panel titles */
@@ -170,7 +171,8 @@
   --size-tab-row: 36px;
   --size-field: 22px;
   --size-section-head: 30px;
-  --size-inspector-label: 70px;
+  --size-inspector-label: 64px;
+  --size-inspector-row: 26px;
   --size-track-id: 24px; /* id slot; names and line-2 buttons share this indent */
   --size-marker-w: 8px;
   --size-marker-h: 10px;

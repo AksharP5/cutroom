@@ -10,7 +10,7 @@ import { z } from "zod";
 import { ProjectDocumentSchema, ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
-import { positionField } from "./position-helpers";
+import { positionField, scrubHandle } from "./position-helpers";
 
 const exec = promisify(execFile);
 const db = (level: number) => 10 ** (level / 20);
@@ -1121,10 +1121,7 @@ test("a gain check retires an undone Position draft and preserves a gesture stil
   const origin = await live
     .locator("main")
     .evaluate(() => performance.timeOrigin);
-  const label = page
-    .getByRole("complementary", { name: "Inspector" })
-    .locator("label")
-    .filter({ hasText: /^Position X$/ });
+  const label = await scrubHandle(page, "Position X");
   const box = await label.boundingBox();
   if (!box) throw new Error("Position label missing");
   const blocked = Promise.withResolvers<void>();

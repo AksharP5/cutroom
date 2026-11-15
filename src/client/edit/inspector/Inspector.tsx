@@ -2,7 +2,13 @@ import { isAudioKind } from "../../../shared/timeline/schema";
 import type { Clip, Fps, Timeline } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
+import {
+  ArrowCounterClockwise,
+  CaretRight,
+  SidebarSimple,
+  Warning,
+  X,
+} from "@phosphor-icons/react";
 import {
   MAX_PLAYBACK_RATE,
   MIN_PLAYBACK_RATE,
@@ -26,7 +32,7 @@ import { formatTimecode } from "../../../shared/timeline/timecode";
 import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { TransitionSection } from "./TransitionSection";
-import { ValueField } from "./ValueField";
+import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { TransformFields } from "./TransformFields";
@@ -77,32 +83,48 @@ function PositionFields({
 }) {
   const move = usePictureMove((state) => state.move);
   const shown = move?.clipId === clip.id ? move : clip;
-  return (["x", "y"] as const).map((axis) => (
-    <ValueField
-      key={`${clip.id}:${axis}`}
-      label={`Position ${axis.toUpperCase()}`}
-      value={shown[axis] ?? 0}
-      unit="pixels"
-      min={-Infinity}
-      fps={fps}
+  return (
+    <FieldRow
+      label="Position"
       disabled={disabled}
-      onPreview={(value) =>
-        previewPosition(
-          clip.id,
-          axis === "x" ? value : (clip.x ?? 0),
-          axis === "y" ? value : (clip.y ?? 0),
-        )
+      onReset={() =>
+        void editTimeline(projectId, "Reset position", () => [
+          { type: "setClip", clipId: clip.id, x: null, y: null },
+        ])
       }
-      onCancel={() => cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)}
-      onCommit={async (value) => {
-        await commitPositionPreview(() =>
-          editTimeline(projectId, "Edit position", () => [
-            { type: "setClip", clipId: clip.id, [axis]: value },
-          ]),
-        );
-      }}
-    />
-  ));
+    >
+      {(["x", "y"] as const).map((axis) => (
+        <ValueCell
+          key={`${clip.id}:${axis}`}
+          axis={axis.toUpperCase()}
+          label={`Position ${axis.toUpperCase()}`}
+          value={shown[axis] ?? 0}
+          initial={0}
+          unit="pixels"
+          min={-Infinity}
+          fps={fps}
+          disabled={disabled}
+          onPreview={(value) =>
+            previewPosition(
+              clip.id,
+              axis === "x" ? value : (clip.x ?? 0),
+              axis === "y" ? value : (clip.y ?? 0),
+            )
+          }
+          onCancel={() =>
+            cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
+          }
+          onCommit={async (value) => {
+            await commitPositionPreview(() =>
+              editTimeline(projectId, "Edit position", () => [
+                { type: "setClip", clipId: clip.id, [axis]: value },
+              ]),
+            );
+          }}
+        />
+      ))}
+    </FieldRow>
+  );
 }
 
 function CombinedGain({
@@ -123,10 +145,10 @@ function CombinedGain({
   if (text === null) return null;
   return (
     <div
-      className="inspector-field inspector-combined-gain"
-      title="Clip gain × track gain, before fades and automation. Authored audio groups are excluded."
+      className="inspector-cell inspector-net"
+      title="Net gain: clip gain × track gain, before fades and automation. Authored audio groups are excluded."
     >
-      <span>Combined static gain</span>
+      <span aria-hidden="true">Net</span>
       <output aria-label="Combined static gain">{text}</output>
     </div>
   );
@@ -268,11 +290,9 @@ export function Inspector({ projectId }: { projectId: string }) {
       return;
     }
     useTimingEdit.setState({ field: null });
-    const input = [
-      ...(root.current?.querySelectorAll<HTMLLabelElement>(
-        ".inspector-timing label",
-      ) ?? []),
-    ].find((label) => label.textContent === timingEdit)?.control;
+    const input = root.current?.querySelector(
+      `.inspector-timing input[aria-label="${timingEdit}"]`,
+    );
     if (input instanceof HTMLInputElement && !input.disabled)
       return focusByKeyboard(input);
     const what = timingEdit.toLowerCase();
@@ -391,10 +411,12 @@ export function Inspector({ projectId }: { projectId: string }) {
                 key={`${selection.anchor}:gain`}
                 label="Gain"
                 value={mixedGain ? null : (sound[0]!.volume ?? 1)}
+                initial={1}
                 mixed={mixedGain}
                 unit="gain"
                 max={MAX_AUDIO_GAIN}
                 fps={timeline.fps}
+                after={<CombinedGain clips={sound} tracks={timeline.tracks} />}
                 onCommit={(volume) => {
                   const ids = new Set(sound.map((clip) => clip.id));
                   // One batch, so the whole selection is one undo step.
@@ -412,7 +434,6 @@ export function Inspector({ projectId }: { projectId: string }) {
                   );
                 }}
               />
-              <CombinedGain clips={sound} tracks={timeline.tracks} />
             </details>
           )}
         </div>
@@ -491,6 +512,34 @@ export function Inspector({ projectId }: { projectId: string }) {
                 <CaretRight size={10} aria-hidden />
                 Transform
               </summary>
+              <button
+                type="button"
+                className="inspector-section-reset"
+                aria-label="Reset transform"
+                title="Reset transform. Double-click a row's label to reset just that row."
+                disabled={
+                  [clip.x, clip.y, clip.scaleX, clip.rotation, clip.crop].every(
+                    (value) => value === null,
+                  ) || track?.track.locked
+                }
+                onClick={() => {
+                  void editTimeline(projectId, "Reset transform", () => [
+                    {
+                      type: "setClip",
+                      clipId: clip.id,
+                      x: null,
+                      y: null,
+                      ...(!clip.sourceRestrictions?.transform && {
+                        scale: null,
+                        rotation: null,
+                        crop: null,
+                      }),
+                    },
+                  ]);
+                }}
+              >
+                <ArrowCounterClockwise size={12} aria-hidden />
+              </button>
               <PositionFields
                 projectId={projectId}
                 clip={clip}
@@ -530,32 +579,6 @@ export function Inspector({ projectId }: { projectId: string }) {
                   </span>
                 </p>
               )}
-              <button
-                type="button"
-                aria-label="Reset transform"
-                disabled={
-                  [clip.x, clip.y, clip.scaleX, clip.rotation, clip.crop].every(
-                    (value) => value === null,
-                  ) || track?.track.locked
-                }
-                onClick={() => {
-                  void editTimeline(projectId, "Reset transform", () => [
-                    {
-                      type: "setClip",
-                      clipId: clip.id,
-                      x: null,
-                      y: null,
-                      ...(!clip.sourceRestrictions?.transform && {
-                        scale: null,
-                        rotation: null,
-                        crop: null,
-                      }),
-                    },
-                  ]);
-                }}
-              >
-                Reset
-              </button>
             </details>
           )}
           {!isAudioKind(clip.kind) && (
@@ -574,6 +597,13 @@ export function Inspector({ projectId }: { projectId: string }) {
                 allowAuto
                 max={1}
                 value={clip.opacity}
+                initial={null}
+                half
+                onReset={() =>
+                  void editTimeline(projectId, "Restore source opacity", () => [
+                    { type: "setClip", clipId: clip.id, opacity: null },
+                  ])
+                }
                 unit="percent"
                 fps={timeline.fps}
                 onCommit={(opacity) => {
@@ -610,38 +640,63 @@ export function Inspector({ projectId }: { projectId: string }) {
                   key={`${audio.id}:gain`}
                   label="Gain"
                   value={audio.volume ?? 1}
+                  initial={1}
                   unit="gain"
                   max={MAX_AUDIO_GAIN}
                   fps={timeline.fps}
                   disabled={locked}
+                  after={
+                    <CombinedGain clips={[audio]} tracks={timeline.tracks} />
+                  }
+                  onReset={() =>
+                    void editTimeline(projectId, "Reset gain", () => [
+                      { type: "setClip", clipId: audio.id, volume: null },
+                    ])
+                  }
                   onCommit={(volume) => {
                     void editTimeline(projectId, "Edit gain", () => [
                       { type: "setClip", clipId: audio.id, volume },
                     ]);
                   }}
                 />
-                <CombinedGain clips={[audio]} tracks={timeline.tracks} />
-                {(["fadeIn", "fadeOut"] as const).map((field) => (
-                  <ValueField
-                    key={`${audio.id}:${field}`}
-                    label={field === "fadeIn" ? "Fade in" : "Fade out"}
-                    value={audio[field]}
-                    unit="timecode"
-                    fps={timeline.fps}
-                    disabled={locked}
-                    hint={
-                      fades[field] !== audio[field]
-                        ? `Effective ${formatTimecode(Math.round(fades[field]), timeline.fps)} (scaled to fit)`
-                        : undefined
-                    }
-                    onCommit={(value) => {
-                      if (value === null) return;
-                      void editTimeline(projectId, "Edit fade", () => [
-                        { type: "setClip", clipId: audio.id, [field]: value },
-                      ]);
-                    }}
-                  />
-                ))}
+                <FieldRow
+                  label="Fade"
+                  disabled={locked}
+                  onReset={() =>
+                    void editTimeline(projectId, "Reset fades", () => [
+                      {
+                        type: "setClip",
+                        clipId: audio.id,
+                        fadeIn: 0,
+                        fadeOut: 0,
+                      },
+                    ])
+                  }
+                >
+                  {(["fadeIn", "fadeOut"] as const).map((field) => (
+                    <ValueCell
+                      key={`${audio.id}:${field}`}
+                      axis={field === "fadeIn" ? "In" : "Out"}
+                      label={field === "fadeIn" ? "Fade in" : "Fade out"}
+                      value={audio[field]}
+                      initial={0}
+                      unit="timecode"
+                      fps={timeline.fps}
+                      disabled={locked}
+                      hint={
+                        fades[field] !== audio[field]
+                          ? `${field === "fadeIn" ? "In" : "Out"} plays as ${formatTimecode(Math.round(fades[field]), timeline.fps)} (scaled to fit)`
+                          : undefined
+                      }
+                      onCommit={(value) => {
+                        if (value === null) return;
+                        void editTimeline(projectId, "Edit fade", () => [
+                          { type: "setClip", clipId: audio.id, [field]: value },
+                        ]);
+                      }}
+                    />
+                  ))}
+                </FieldRow>
                 {audio.automation && (
                   <button
                     className="inspector-clear-automation"
@@ -683,36 +738,42 @@ export function Inspector({ projectId }: { projectId: string }) {
               unit="timecode"
               fps={timeline.fps}
               onCommit={(value) => timing("start", value)}
-            />
-            <ValueField
-              key={`${clip.id}:duration`}
-              label="Duration"
-              value={clip.duration}
-              unit="timecode"
-              fps={timeline.fps}
-              onCommit={(value) => timing("duration", value)}
+              after={
+                <ValueCell
+                  key={`${clip.id}:duration`}
+                  axis="Dur"
+                  label="Duration"
+                  value={clip.duration}
+                  unit="timecode"
+                  fps={timeline.fps}
+                  onCommit={(value) => timing("duration", value)}
+                />
+              }
             />
             {clip.src !== null && clip.mediaStart !== null && (
-              <>
-                <ValueField
-                  key={`${clip.id}:speed`}
-                  label="Speed"
-                  value={clip.playbackRate}
-                  unit="percent"
-                  min={MIN_PLAYBACK_RATE}
-                  max={MAX_PLAYBACK_RATE}
-                  fps={timeline.fps}
-                  onCommit={(value) => timing("speed", value)}
-                />
-                <ValueField
+              <FieldRow label="Source" onReset={() => timing("speed", 1)}>
+                <ValueCell
                   key={`${clip.id}:sourceIn`}
+                  axis="In"
                   label="Source in"
                   value={toFrames(clip.mediaStart, timeline.fps)}
                   unit="timecode"
                   fps={timeline.fps}
                   onCommit={(value) => timing("sourceIn", value)}
                 />
-              </>
+                <ValueCell
+                  key={`${clip.id}:speed`}
+                  axis="Speed"
+                  label="Speed"
+                  value={clip.playbackRate}
+                  initial={1}
+                  unit="percent"
+                  min={MIN_PLAYBACK_RATE}
+                  max={MAX_PLAYBACK_RATE}
+                  fps={timeline.fps}
+                  onCommit={(value) => timing("speed", value)}
+                />
+              </FieldRow>
             )}
           </details>
           <details

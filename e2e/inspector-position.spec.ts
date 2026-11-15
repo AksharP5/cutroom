@@ -11,6 +11,7 @@ import {
   afterPaint,
   createPositionProject,
   positionField,
+  scrubHandle,
   seekFrame,
 } from "./position-helpers";
 
@@ -137,7 +138,7 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
   await field("Position X").fill("99");
   await field("Position X").press("Escape");
   expect((await read()).revision).toBe(revision);
-  const label = inspector.locator("label").filter({ hasText: /^Position X$/ });
+  const label = await scrubHandle(page, "Position X");
   const bounds = await label.boundingBox();
   if (!bounds) throw new Error("Position label missing");
   await page.mouse.move(bounds.x + 10, bounds.y + 5);

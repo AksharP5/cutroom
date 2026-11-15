@@ -25,6 +25,14 @@ export function positionField(page: Page, name = "Position X") {
     });
 }
 
+/** What scrubs a field: its row label, or the short label inside a paired cell such as X. */
+export async function scrubHandle(page: Page, name: string) {
+  const id = await positionField(page, name).getAttribute("id");
+  return page
+    .getByRole("complementary", { name: "Inspector" })
+    .locator(`label[for="${id}"]`);
+}
+
 export async function seekFrame(page: Page, frame: number) {
   await page
     .getByRole("button", {

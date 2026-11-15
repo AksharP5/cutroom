@@ -134,7 +134,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
   await expect(inspector.locator(".inspector-field-hint")).toHaveCount(2);
   await expect(
     inspector.locator(".inspector-field-hint").first(),
-  ).toContainText("Effective 00:00:06:26");
+  ).toContainText("In plays as 00:00:06:26");
   await expect(inspector.getByLabel("Fade in", { exact: true })).toHaveValue(
     "00:00:12:00",
   );

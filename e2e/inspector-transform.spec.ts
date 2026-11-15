@@ -9,6 +9,7 @@ import {
   afterPaint,
   createPositionProject,
   positionField,
+  scrubHandle,
   seekFrame,
   waitFrames,
 } from "./position-helpers";
@@ -73,7 +74,7 @@ test("Scale, Rotation and Crop draw live while dragged, Esc restores, and releas
   await expect.poll(rect).toEqual({ width: 200, height: 100 });
 
   // A label drag scales both axes from the centre with nothing sent until release.
-  const label = inspector.locator("label").filter({ hasText: /^Scale X$/ });
+  const label = await scrubHandle(page, "Scale X");
   const at = (await label.boundingBox())!;
   await page.mouse.move(at.x + 10, at.y + 5);
   await page.mouse.down();
@@ -152,7 +153,7 @@ test("Scale, Rotation and Crop draw live while dragged, Esc restores, and releas
   ]);
 
   await page.getByRole("button", { name: "Reset transform" }).click();
-  await expect(left).toHaveValue("0 px");
+  await expect(left).toHaveValue("0");
   // The field resets at once; the file follows when the edit saves.
   await expect
     .poll(async () => readFile(join(project.path, "index.html"), "utf8"))
@@ -205,7 +206,7 @@ test("with GSAP loaded, a Scale drag draws exactly over the folded saved scale a
         return { width, height, folded: el.style.scale === "none" };
       });
   await expect.poll(rect).toEqual({ width: 300, height: 150, folded: true });
-  const label = inspector.locator("label").filter({ hasText: /^Scale X$/ });
+  const label = await scrubHandle(page, "Scale X");
   const at = (await label.boundingBox())!;
   await page.mouse.move(at.x + 10, at.y + 5);
   await page.mouse.down();
@@ -396,4 +397,93 @@ test("an export draws scale, rotation, crop and position where the preview does"
   // Measured at 0.35 against 66.8 for the untransformed picture.
   expect(matched).toBeLessThan(3);
   expect(untransformed).toBeGreaterThan(30);
+});
+
+test("paired rows: a cell's letter scrubs its value in one undo step, a row's label resets the row, and untouched values recede", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(
+    request,
+    { name: "Paired fields", width: 640, height: 360, duration: 2 },
+    box,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="box"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const commands: unknown[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && r.url().endsWith("/commands"))
+      commands.push(JSON.parse(r.postData()!).commands);
+  });
+  const top = positionField(page, "Crop Top");
+  const right = positionField(page, "Crop Right");
+  await expect(top).toHaveValue("0");
+  const color = (field: typeof top) =>
+    field.evaluate((input) => getComputedStyle(input).color);
+  const untouched = await color(top);
+
+  // T, not the row's label, scrubs Crop Top alone; release saves one command.
+  const handle = await scrubHandle(page, "Crop Top");
+  await expect(handle).toHaveText("T");
+  const at = (await handle.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(at.x + at.width / 2 + 30, at.y + at.height / 2, {
+    steps: 5,
+  });
+  expect(commands).toHaveLength(0);
+  await page.mouse.up();
+  await expect(top).toHaveValue("30");
+  await expect(right).toHaveValue("0");
+  await expect
+    .poll(() => commands)
+    .toEqual([[{ type: "setClip", clipId: "box", crop: { top: 30 } }]]);
+  // A value someone set reads brighter than one nobody touched.
+  expect(await color(top)).not.toBe(untouched);
+  expect(await color(right)).toBe(untouched);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(top).toHaveValue("0");
+
+  const saved = async () =>
+    (
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json()
+    ).timeline.clips.find((clip: { id: string }) => clip.id === "box");
+  // Double-clicking a row's label resets every value in that row and nothing else.
+  const path = `/api/cutroom/projects/${project.id}`;
+  const view = await (await request.get(`${path}/timeline`)).json();
+  expect(
+    (
+      await request.post(`${path}/commands`, {
+        data: {
+          expectedRevision: view.revision,
+          commands: [
+            { type: "setClip", clipId: "box", crop: { top: 12 }, y: -40 },
+          ],
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+  await page.reload();
+  await page.locator('[data-clip="box"]').click();
+  await expect(top).toHaveValue("12");
+  await expect(positionField(page, "Position Y")).toHaveValue("-40 px");
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await inspector
+    .getByRole("group", { name: "Crop", exact: true })
+    .getByText("Crop", { exact: true })
+    .dblclick();
+  await expect(top).toHaveValue("0");
+  await expect(positionField(page, "Position Y")).toHaveValue("-40 px");
+  await expect
+    .poll(async () => {
+      const { crop, y } = await saved();
+      return { crop, y };
+    })
+    .toEqual({ crop: null, y: -40 });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(top).toHaveValue("12");
+  await expect.poll(async () => (await saved()).crop?.top).toBe(12);
 });
