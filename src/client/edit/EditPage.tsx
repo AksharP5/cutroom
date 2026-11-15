@@ -32,6 +32,7 @@ import {
   useTimingEdit,
 } from "./inspector/Inspector";
 import { matchFrame } from "./keys";
+import { editorContext, publishSelection } from "./agentContext";
 import { ExportControl } from "./ExportDialog";
 import { SelectMenu } from "../components/SelectMenu";
 import {
@@ -196,22 +197,16 @@ export function EditPage({
   const contextReport = useRef(onContext);
   contextReport.current = onContext;
   useEffect(() => {
-    const send = ({
-      frame,
-      fps,
-      duration,
-      state,
-    }: ReturnType<typeof useTransport.getState>) =>
-      contextReport.current?.({
-        currentTime: frameTime(frame, fps),
-        duration: frameTime(duration, fps),
-        isPlaying: state.kind !== "stopped",
-        compositionPath: "index.html",
-        selectedElementIds: [],
-      });
-    send(useTransport.getState());
-    return useTransport.subscribe(send);
+    const send = () => contextReport.current?.(editorContext());
+    send();
+    const transportChanged = useTransport.subscribe(send);
+    const timelineChanged = useTimeline.subscribe(send);
+    return () => {
+      transportChanged();
+      timelineChanged();
+    };
   }, []);
+  useEffect(() => publishSelection(projectId), [projectId]);
 
   useEffect(() => {
     const change = () =>
