@@ -132,16 +132,19 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 
 ### Titles
 
-A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles). Alt+Shift+T, or Add title in a clip's, lane's or track header's menu, adds a five-second lower-left title at the playhead on a free video track above the video destination and opens the inspector's Text field on its words; [Keys](keyboard.md) has the track rule. The words are editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip.
+A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe, or None for each. Its words, font, size, weight, colour, alignment, place on the picture, optional plate behind the words, optional shadow and stroke, and the two motions are settings on the clip, so they are edited as data and never by rewriting a script. Agents add and change titles through [`timeline_edit`](mcp.md#titles). Alt+Shift+T, or Add title in a clip's, lane's or track header's menu, adds a five-second lower-left title at the playhead on a free video track above the video destination and opens the inspector's Text field on its words; [Keys](keyboard.md) has the track rule. The words are editable in the inspector's Text section and by double-clicking the title on the picture, and the title can be dragged on the picture like any clip. A title goes by its first line of words on the timeline, in the inspector and in history, and the name follows when the words change; its element id stays the same.
 
-Select one title and the inspector shows a Title section between Text and Transform: Font, Weight, Size, Colour, Align, Position, Plate, In and Out. Every change is one undo step and shows on the picture as soon as it saves.
+Select one title and the inspector shows a Title section between Text and Transform: Font, Weight, Size, Colour, Align, Position, Plate, Shadow, Stroke, In and Out. Every change is one undo step and shows on the picture as soon as it saves.
 
 - Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font. New projects declare Instrument Sans, Oswald, Fraunces and Martian Mono. To add another, put its file in the project and declare it with `@font-face`.
 - Size is in composition pixels; drag its label or use Up and Down, as with Position.
 - Colour is a swatch that opens the system colour picker, with the same colour as six hex digits beside it. Moving through colours in the picker saves once, when the picker closes.
 - Position picks one of five places on the picture and clears any Position X/Y offset in the same undo step, so the title lands on the place you chose.
 - Plate puts a filled box behind the words. Ticking it starts from black at 70%; the swatch, hex and percentage beside it set its colour and opacity.
+- Shadow and Stroke help words read over busy footage without a plate. Shadow drops a soft copy of the words just below them; ticking it starts from black at 70% with a 12 px blur, and the swatch, hex, percentage and Blur beside and below it change those. Stroke draws an outline around the letters, outside their shape so they keep their weight; it starts black and 3 px thick, with its colour and Width beside and below it. Sizes are in composition pixels.
 - In and Out each take a preset and a length, typed as timecode, frames (`12f`) or seconds (`0.4s`). The length is disabled while the preset is None.
+
+To give other titles the same look, right-click a title and choose Copy style, then select the others and choose Paste style. It copies every Title setting, motions and Position included, but not the words, timing or Transform settings, and pasting onto several titles is one undo step. The copied style lasts until the editor reloads and belongs to its project, because fonts do.
 
 The section edits one title at a time. Several selected clips show the clip count, as for every other inspector section. A title Cutroom cannot read shows the reason in the section in place of the controls.
 
@@ -161,6 +164,18 @@ A title is one element in the composition's HTML plus one stylesheet block Cutro
 If a source edit gives a title an undeclared font, invalid settings, markup other than `<br>`, or empty words, the timeline reads it as an ordinary element with `title: null` and a reason in `sourceRestrictions.title`. Repair its source before changing title settings.
 
 Titles an agent wrote as sub-composition files or root scripts are left as they are and keep the behavior described above.
+
+### Transitions
+
+A cross dissolve or a dip to black sits on a cut between two video, image or audio clips, and their linked sound crossfades with it. It plays the media past each clip's edit point, as Resolve does: centred on the cut, the outgoing clip runs on for half its length and the incoming clip starts half its length early. A transition that needs more media than the clips have is refused with the longest that fits. Agents set them with [`setTransition`](mcp.md#transitions).
+
+- A roll moves the transition with the cut. A trim that leaves less room shortens it.
+- A razor elsewhere in either clip keeps it on the piece that still meets the cut, and adds none at the razor.
+- Moving either clip away, a trim that opens a gap, or deleting either clip removes it.
+- Its edges own their fades: change the transition instead.
+- Sound crossfades on equal-power curves, so related and unrelated sound both hold their level through the cut.
+
+In the source, each clip's element runs past the cut by its share, with `data-transition-*` attributes, and one stylesheet block Cutroom keeps current ramps the picture. Like titles, it needs Chromium 133 or newer in the viewer; the export is correct regardless.
 
 These cuts follow Resolve's sync-preserving Edit-page ripple model introduced in [DaVinci Resolve 20.2, New Features Guide, pages 7-8](https://documents.blackmagicdesign.com/SupportNotes/DaVinci_Resolve_20.2_New_Features_Guide.pdf#page=7). Earlier Resolve versions mainly moved clips starting after the edit, leaving spanning music or titles uncut. Resolve 20.2 also added independent Sync Lock controls, explained on page 12. Cutroom currently uses auto-select for ripple participation and refuses linked edits across excluded tracks; it does not expose Resolve's separate Sync Lock toggle or its preference to restore the older ripple behavior.
 

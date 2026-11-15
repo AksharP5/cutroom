@@ -239,6 +239,19 @@ test("inspector title controls and supported motion retain the paused document a
         inspector.getByLabel("Plate colour", { exact: true }).fill("#442266"),
     ],
     ["plate opacity", () => type("Plate opacity", "45")],
+    [
+      "shadow",
+      () => inspector.getByRole("checkbox", { name: "Shadow" }).check(),
+    ],
+    ["shadow colour", () => type("Shadow colour hex", "2244ff")],
+    ["shadow opacity", () => type("Shadow opacity", "90")],
+    ["shadow blur", () => type("Blur", "4")],
+    [
+      "stroke",
+      () => inspector.getByRole("checkbox", { name: "Stroke" }).check(),
+    ],
+    ["stroke colour", () => type("Stroke colour hex", "ff2200")],
+    ["stroke width", () => type("Width", "2")],
     ["font", () => choose("Font", "Mono")],
     ["default font", () => choose("Font", "Default")],
     ["entrance", () => choose("In preset", "Slide")],
@@ -248,6 +261,14 @@ test("inspector title controls and supported motion retain the paused document a
     [
       "remove plate",
       () => inspector.getByRole("checkbox", { name: "Plate" }).uncheck(),
+    ],
+    [
+      "remove shadow",
+      () => inspector.getByRole("checkbox", { name: "Shadow" }).uncheck(),
+    ],
+    [
+      "remove stroke",
+      () => inspector.getByRole("checkbox", { name: "Stroke" }).uncheck(),
     ],
     [
       "text",

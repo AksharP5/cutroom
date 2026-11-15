@@ -48,6 +48,8 @@ const timeline = normalizeTimeline({
       title: null,
       fadeIn: 0,
       fadeOut: 0,
+      transitionIn: null,
+      transitionOut: null,
       automation: null,
       enabled: true,
       hasAudio: false,
@@ -66,9 +68,12 @@ const rows = (
     selection: new Set(state.selected ?? []),
     frame: 0,
     clipboard: false,
+    titleStyle: false,
     inspector: false,
     onReveal: null,
     onInspector() {},
+    onCopyStyle() {},
+    onPasteStyle() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 

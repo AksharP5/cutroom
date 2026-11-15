@@ -108,17 +108,19 @@ A title is words on screen with a preset entrance and exit: a lower third, a nam
 
 `mode`, `ids` and `clip.id` work as they do for media. A title goes on a video track. `clip.title` takes any of these, and fields left out take the default:
 
-| Field      | Values                                                                        | Default      |
-| ---------- | ----------------------------------------------------------------------------- | ------------ |
-| `position` | `lower-left`, `lower-center`, `lower-right`, `center`, `top`                  | `lower-left` |
-| `font`     | a family the project declares with `@font-face`, or `null`                    | `null`       |
-| `size`     | whole composition pixels, 8 to 2000                                           | `64`         |
-| `weight`   | `400`, `500`, `600`, `700`                                                    | `600`        |
-| `color`    | `#rrggbb`                                                                     | `#ffffff`    |
-| `align`    | `left`, `center`, `right`                                                     | `left`       |
-| `plate`    | `#rrggbbaa` background behind the words, or `null`                            | `null`       |
-| `in`       | `{ "preset": "none" \| "fade" \| "slide" \| "scale" \| "wipe", "frames": n }` | fade, 0.4 s  |
-| `out`      | the same                                                                      | fade, 0.3 s  |
+| Field      | Values                                                                                | Default      |
+| ---------- | ------------------------------------------------------------------------------------- | ------------ |
+| `position` | `lower-left`, `lower-center`, `lower-right`, `center`, `top`                          | `lower-left` |
+| `font`     | a family the project declares with `@font-face`, or `null`                            | `null`       |
+| `size`     | whole composition pixels, 8 to 2000                                                   | `64`         |
+| `weight`   | `400`, `500`, `600`, `700`                                                            | `600`        |
+| `color`    | `#rrggbb`                                                                             | `#ffffff`    |
+| `align`    | `left`, `center`, `right`                                                             | `left`       |
+| `plate`    | `#rrggbbaa` background behind the words, or `null`                                    | `null`       |
+| `shadow`   | `{ "color": "#rrggbbaa", "blur": 0 to 200 px }` under the words, or `null`            | `null`       |
+| `stroke`   | `{ "color": "#rrggbb", "width": 1 to 100 px }` outline outside the letters, or `null` | `null`       |
+| `in`       | `{ "preset": "none" \| "fade" \| "slide" \| "scale" \| "wipe", "frames": n }`         | fade, 0.4 s  |
+| `out`      | the same                                                                              | fade, 0.3 s  |
 
 The default size suits 1920x1080; pass a size for other compositions. `font: null` uses the composition's own font. A font no `@font-face` rule in the composition or `index.html` declares is refused with the declared families, because preview and export can resolve a system font to different faces. New projects declare Instrument Sans, Oswald (condensed), Fraunces (serif) and Martian Mono (monospace).
 
@@ -132,11 +134,36 @@ The default size suits 1920x1080; pass a size for other compositions. `font: nul
 }
 ```
 
+`shadow` and `stroke` are set whole: send both parts, or `null` to remove one. They let white words read over busy footage without a plate, for example `"title": { "stroke": { "color": "#000000", "width": 3 }, "shadow": { "color": "#000000b3", "blur": 12 } }`.
+
+To give several titles one look, the way Copy style and Paste style do in the editor, read the source title's `title` from `timeline_read` and send it whole as `setClip.title` for each of the others in one `timeline_edit` batch, which is one undo step.
+
 `setClip.title` on a clip that is not a title is refused with `unsupported`. `x`, `y`, `opacity`, scale, rotation and crop work as on any visual clip; `x` and `y` offset the title from its `position`, and a Wipe replaces the crop while it runs.
 
 The entrance starts on the clip's first frame and the exit ends on its last. Tail trims, head trims, moves, ripples and pastes keep both there with no further command. When they are longer than the clip together, both shorten in proportion. A ripple through the middle of a title shortens it in place. A razor leaves the entrance on the first piece and the exit on the second, with `preset: "none"` at the cut, so the words run straight through it; set either again with `setClip.title`.
 
 In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. A title must contain non-empty plain text, with `<br>` allowed for line breaks, and any named font must have an uncommented `@font-face` declaration in the composition or `index.html`. Invalid content, an undeclared font or an attribute value Cutroom does not write gives `title: null` and a reason in `sourceRestrictions.title`; the element stays on the timeline. Titles work in scene files as well as `index.html`.
+
+### Transitions
+
+A transition sits on a cut between two video, image or audio clips on one track. Set it with `setTransition`, naming the clip that ends at the cut and the one that starts there:
+
+```json
+{
+  "type": "setTransition",
+  "from": "talk-1",
+  "to": "talk-2",
+  "transition": { "kind": "dissolve", "duration": 30, "alignment": "center" }
+}
+```
+
+`kind` is `dissolve` (the default) or `dip`, to black and back. `duration` is in frames. `alignment` is `center` (the default), `start`, which begins on the cut, or `end`, which finishes on it. `transition: null` removes it. Linked partners that meet at the same frame get the same transition, so a shot's sound crossfades with its picture. Sound always crossfades on equal-power curves, whatever the kind.
+
+Both clips keep their start and length at the cut in `timeline_read`; each carries the transition, as `transitionOut` on the first clip and `transitionIn` on the second. A transition plays the media past each clip's edit point: the outgoing clip needs frames after its out point and the incoming clip frames before its in point, half each for `center`. A length that does not fit is refused with `out_of_bounds`, naming the longest that does and what limits it, such as "Only 13 frames fit at this cut: talk.mp4 has 6 frames of media before its in point." Stills have no limit.
+
+A transition owns the fades on its edges: `setClip.fadeIn` or `fadeOut` there is refused. It stays on its cut through a roll, a razor elsewhere in either clip, and moves and ripples that keep the two clips together. A trim that leaves less room shortens it to fit. Moving either clip away, a trim that opens a gap, or deleting either clip removes it.
+
+In the source each clip's element runs past the cut by its share of the transition, with `data-transition-in` or `data-transition-out` and their `-duration` and `-align` attributes. One `<style data-cutroom-transitions>` block ramps the picture: a dissolve fades the clip later in the document, and marks the other `-under`. Sound plays a generated `data-automation` volume envelope; a clip with its own volume automation keeps it and crossfades with straight `data-fade-in`/`data-fade-out` instead. Preview, `timeline_view` and export play the same attributes through the same runtime.
 
 ### Animated titles
 

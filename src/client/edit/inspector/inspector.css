@@ -338,10 +338,11 @@
 .inspector-value .select-trigger:disabled {
   background: var(--surface-panel);
 }
-/* A preset and its length split the row evenly. */
+/* A preset's length is as wide as the timecode it shows; the preset takes the rest. */
 .inspector-value:has(.select-trigger) input[type="text"] {
-  flex: 1 1 0;
-  width: 0;
+  flex: none;
+  width: auto;
+  field-sizing: content;
 }
 .inspector-segments {
   display: flex;
@@ -388,7 +389,7 @@
 .inspector-swatch:disabled {
   opacity: 0.4;
 }
-.inspector-value input[aria-label="Plate opacity"] {
+.inspector-value .inspector-alpha {
   flex: 0 0 calc(var(--size-row) * 2);
 }
 .inspector-reason {
