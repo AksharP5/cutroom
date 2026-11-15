@@ -5,6 +5,7 @@ import type {
   Clip,
   CommandInput,
   Timeline,
+  Track,
   Transition,
 } from "../../shared/timeline/schema";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
@@ -39,6 +40,7 @@ export function TransitionMark({
   timeline,
   clip,
   transition,
+  track,
   selected,
   frameAt,
   onSelect,
@@ -49,6 +51,8 @@ export function TransitionMark({
   /** The incoming clip, which carries the transition in. */
   clip: Clip;
   transition: Transition;
+  /** The kind of track it is on: on sound, which has no name strip, it is full height. */
+  track: Track["kind"];
   selected: boolean;
   frameAt(clientX: number): number;
   onSelect(): void;
@@ -147,7 +151,7 @@ export function TransitionMark({
   return (
     <i
       ref={mark}
-      className={`tl-transition${selected ? " selected" : ""}`}
+      className={`tl-transition on-${track}${selected ? " selected" : ""}`}
       data-transition={clip.id}
       data-kind={transition.kind}
       title={`${TRANSITION_NAMES[transition.kind]}, ${formatTimecode(transition.duration, timeline.fps)}`}
@@ -168,18 +172,20 @@ export function TransitionMark({
 export function TransitionLength({
   clip,
   transition,
+  track,
   fps,
   selected,
 }: {
   clip: Clip;
   transition: Transition;
+  track: Track["kind"];
   fps: Timeline["fps"];
   selected: boolean;
 }) {
   const start = clip.start - framesBefore(transition);
   return (
     <i
-      className={`tl-transition-length${selected ? " selected" : ""}`}
+      className={`tl-transition-length on-${track}${selected ? " selected" : ""}`}
       data-transition-length={clip.id}
       style={{ "--s": start, "--d": transition.duration }}
     >

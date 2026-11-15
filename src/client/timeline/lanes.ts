@@ -101,6 +101,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** The clip the hover box was last put on, by where it was, so an edit that moved it moves the box. */
   const hovered = useRef("");
   const hoverBox = useRef<HTMLElement>(null);
+  /** The hovered clip's label, which shows a name that rests hidden (timeline.css). */
+  const hoverLabel = useRef<HTMLElement | null>(null);
   /** Snap targets for the blade's hover, made again when the timeline or playhead changes. */
   const hoverTargets = useRef<{
     timeline: Timeline;
@@ -710,6 +712,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
         : "";
     if (!element || key === hovered.current) return;
     hovered.current = key;
+    hoverLabel.current?.removeAttribute("data-hover");
+    hoverLabel.current =
+      (clip &&
+        latest.current.lanes.current?.querySelector<HTMLElement>(
+          `[data-clip-label="${CSS.escape(clip.id)}"]`,
+        )) ||
+      null;
+    hoverLabel.current?.setAttribute("data-hover", "");
     element.hidden = !(clip && row);
     if (!clip || !row) return;
     element.style.setProperty("--s", String(clip.start));

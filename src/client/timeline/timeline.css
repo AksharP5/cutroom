@@ -576,6 +576,21 @@ input.tl-track-gain {
 .tl-selected {
   height: calc(100% - 2px);
 }
+/* A clip whose file is gone: a danger rail and name on a dark body that says so. */
+.tl-clip.offline,
+.tl-label.offline {
+  --rail: var(--danger);
+  --head: var(--clip-offline-body);
+  --body: var(--clip-offline-body);
+}
+.tl-label.offline {
+  --clip-head-text: var(--danger);
+}
+.tl-offline {
+  top: calc(var(--size-clip-name) + 4px);
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
+}
 /* A selected clip's name strip and rail turn to paper, with dark text. Instant. */
 .tl-clip.selected,
 .tl-label.selected {
@@ -590,6 +605,71 @@ input.tl-track-gain {
 /* A text clip's words sit on its body, below the strip. */
 .tl-label.selected .tl-text-line {
   color: var(--text-primary);
+}
+/*
+  Sound and titles have no name strip. A waveform takes the whole lane under its kind rail, with
+  the name over it on a backing as wide as the text; a title's words are its body. Selected, the
+  name's backing turns to paper.
+*/
+.tl-clip:is(.on-audio, .titled),
+.tl-clip:is(.on-audio, .titled).selected {
+  --head: var(--body);
+}
+.tl-label.on-audio {
+  --clip-head-text: var(--text-secondary);
+  --clip-head-meta: var(--text-secondary);
+  --text-quiet: inherit;
+}
+.tl-label.on-audio :is(.tl-name, .tl-length) {
+  border-radius: var(--radius-clip);
+  background: var(--clip-name-backing);
+}
+.tl-label.on-audio .tl-name {
+  padding-inline: 2px;
+}
+/* The duration's backing goes with it under the width it shows at. */
+.tl-label.on-audio .tl-length {
+  padding: 1px clamp(0px, (100% - 189px) * 9999, 2px);
+}
+.tl-label.on-audio.selected {
+  --clip-head-text: var(--on-selection);
+  --clip-head-meta: var(--on-selection-meta);
+  --text-quiet: var(--on-selection-quiet);
+}
+.tl-label.on-audio.selected :is(.tl-name, .tl-length) {
+  background: var(--selection);
+}
+.tl-label.on-audio.offline:not(.selected) {
+  --clip-head-text: var(--danger);
+}
+/* Sound right under its own picture repeats the name above it, until it is pointed at or selected. */
+.tl-label.synced:not(.selected, .offline, [data-hover]) > * {
+  visibility: hidden;
+}
+.tl-label.titled {
+  --clip-head-text: var(--text-primary);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  height: calc(100% - 2px);
+  padding-top: calc(var(--stroke-rail) + 3px);
+}
+.tl-label.titled .tl-name {
+  padding: 0;
+  font-size: var(--type-xs);
+  line-height: 13px;
+}
+.tl-label.titled .tl-name + .tl-name {
+  color: var(--text-tertiary);
+  font-size: var(--type-2xs);
+  font-weight: var(--weight-regular);
+}
+.tl-label.titled.selected .tl-name:first-child {
+  margin-left: -2px;
+  padding-inline: 2px;
+  border-radius: var(--radius-clip);
+  background: var(--selection);
+  color: var(--on-selection);
 }
 .tl-clip.locked,
 .tl-label.locked {
@@ -797,6 +877,10 @@ input.tl-track-gain {
   background: var(--head);
   box-shadow: inset 0 var(--stroke-rail) 0 var(--rail);
 }
+.tl-label.on-audio[data-held] {
+  background: none;
+  box-shadow: none;
+}
 /*
   A resized clip's label keeps the width it was laid out at, so its duration is carried to the
   held edge, over the end of a name that no longer fits. Under the width a duration shows at, it
@@ -806,6 +890,13 @@ input.tl-track-gain {
   transform: translateX(var(--grow, 0px));
   background: var(--head);
   box-shadow: -6px 0 0 var(--head);
+}
+.tl-label.on-audio[data-held] .tl-length {
+  background: var(--clip-name-backing);
+  box-shadow: none;
+}
+.tl-label.on-audio.selected[data-held] .tl-length {
+  background: var(--selection);
 }
 .tl-label[data-short] .tl-length {
   visibility: hidden;
@@ -957,6 +1048,10 @@ input.tl-track-gain {
   --transition-fill: var(--transition-fill-selected);
   --transition-line: var(--selection);
   box-shadow: inset 0 0 0 var(--stroke-hair) var(--selection);
+}
+.tl-transition.on-audio,
+.tl-transition-length.on-audio {
+  top: calc(var(--stroke-rail) + 1px);
 }
 /* The length, centred on the transition, once it is 28px wide. */
 .tl-transition-length {

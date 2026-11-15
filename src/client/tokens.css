@@ -131,6 +131,8 @@
   --clip-vo: #d2708f;
   --clip-vo-head: #643b48;
   --clip-vo-body: #3a262d;
+  --clip-offline-body: #1a1414; /* a clip whose file is gone, with a --danger rail and name (7.0) */
+  --clip-name-backing: rgb(22 22 22 / 0.7); /* behind a name drawn over a waveform */
   --clip-head-text: var(--text-primary); /* 6.6 min (audio head) */
   --clip-head-meta: #d0d0d0; /* durations on heads, 5.0 min (audio head) */
   --wave-audio: #77ad69; /* music/effects, 30% less chroma than the rail */

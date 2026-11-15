@@ -14,6 +14,17 @@ export function compositionFps(value: string | null | undefined) {
 }
 
 /**
+ * Whether a project file is gone. The watcher reports a removed file as null. A file already
+ * missing when the project opened is one the Media listing lacks: the listing holds every project
+ * file, the open composition among them, so it has loaded once it holds that.
+ */
+export const fileMissing = (
+  files: Readonly<Record<string, string | null>>,
+  composition: string,
+  path: string,
+) => files[path] === null || (composition in files && !(path in files));
+
+/**
  * Shell-owned editor state. The shell reads and writes only this store;
  * `CutroomEditor` mirrors the panel flags onto whichever editor is embedded.
  */

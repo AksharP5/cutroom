@@ -5,7 +5,9 @@ import {
   trackDensities,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
-import { useWorkspace } from "../workspace";
+import { fileMissing, useWorkspace } from "../workspace";
+import { localMediaPath } from "../../shared/media";
+import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix, mixBody } from "./mix";
@@ -184,6 +186,8 @@ interface Mounted {
 function readSizes(): {
   rows: RowSizes;
   head: number;
+  /** The ruler and its seam, over the lanes in the same scroller. */
+  ruler: number;
   compact: number;
   tall: { video: number; audio: number };
 } {
@@ -197,6 +201,7 @@ function readSizes(): {
       divider: px("--stroke-rail"),
     },
     head: px("--size-track-head"),
+    ruler: px("--size-ruler") + px("--stroke-hair"),
     compact: px("--size-track-compact"),
     tall: {
       video: px("--size-track-video-tall"),
@@ -209,14 +214,16 @@ const ClipBody = memo(function ClipBody({
   clip,
   row,
   selected,
+  offline,
 }: {
   clip: Clip;
   row: Row;
   selected: boolean;
+  offline: boolean;
 }) {
   return (
     <div
-      className={`tl-clip ${clip.kind} on-${row.track.kind}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
+      className={`tl-clip ${clip.kind} on-${row.track.kind}${clip.title ? " titled" : ""}${offline ? " offline" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip={clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     />
@@ -246,6 +253,8 @@ const ClipLabel = memo(function ClipLabel({
   fps,
   timed,
   selected,
+  offline,
+  synced,
 }: {
   clip: Clip;
   row: Row;
@@ -253,15 +262,46 @@ const ClipLabel = memo(function ClipLabel({
   /** Whether the clip can get wide enough to show its duration before labels are mounted again. */
   timed: boolean;
   selected: boolean;
+  offline: boolean;
+  /** Sound right under its own picture, which already names it: shown on hover or selection. */
+  synced: boolean;
 }) {
   const end = clip.start + clip.duration;
   const name = clipName(clip);
+  const className = `tl-label on-${row.track.kind}${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}${offline ? " offline" : ""}${synced ? " synced" : ""}`;
+  const style = { "--s": clip.start, "--d": clip.duration, top: 0 };
+  // A title has no name strip: its words are its body.
+  if (clip.title) {
+    const [first = name, second] = (clip.text ?? name).split("\n");
+    return (
+      <div
+        className={`${className} titled`}
+        data-clip-label={clip.id}
+        data-kind={clip.kind}
+        style={style}
+      >
+        {[first, second].map(
+          (line, index) =>
+            line && (
+              <span
+                key={index}
+                className="tl-name"
+                data-unscaled
+                style={{ "--f": clip.start, "--e": end }}
+              >
+                {line}
+              </span>
+            ),
+        )}
+      </div>
+    );
+  }
   return (
     <div
-      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
+      className={className}
       data-clip-label={clip.id}
       data-kind={clip.kind}
-      style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
+      style={style}
     >
       <span
         className="tl-name"
@@ -281,6 +321,9 @@ const ClipLabel = memo(function ClipLabel({
             {clip.textPreview}
           </span>
         </span>
+      )}
+      {offline && (
+        <span className="tl-text-line tl-offline">Media offline</span>
       )}
       {timed && (
         <span className="tl-length" data-unscaled style={{ "--f": end }}>
@@ -695,6 +738,9 @@ export function Timeline({
   );
   const [sizes] = useState(readSizes);
   const [mounted, setMounted] = useState<Mounted | null>(null);
+  /** The height the lanes have below the ruler, which spare track height is shared from. */
+  const [room, setRoom] = useState(0);
+  const roomShown = useRef(0);
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const slider = useRef<HTMLDivElement>(null);
@@ -724,14 +770,49 @@ export function Timeline({
       heights: viewSettings.heights,
       // Clip moves reveal the bands when the pointer reaches an edge.
       dropZones: draggingMedia || trackDrag,
+      // Compact asks for small tracks, so only the default density grows into empty room.
+      ...(viewSettings.density === "normal" && room > 0
+        ? { fill: { height: room, audio: sizes.tall.audio } }
+        : {}),
     }),
-    [sizes, viewSettings, draggingMedia, trackDrag],
+    [sizes, viewSettings, draggingMedia, trackDrag, room],
   );
   const layout = useMemo(
     () => trackRows(shownTracks, rowSizes),
     [shownTracks, rowSizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+  // As a string, so a file change that leaves the same clips offline renders nothing.
+  const offlineIds = useWorkspace(({ fileChanges }) =>
+    timeline.clips
+      .filter((clip) => {
+        const path = clip.src && localMediaPath(source.composition, clip.src);
+        return path && fileMissing(fileChanges, source.composition, path);
+      })
+      .map((clip) => clip.id)
+      .join("\n"),
+  );
+  const offline = useMemo(() => new Set(offlineIds.split("\n")), [offlineIds]);
+  const synced = useMemo(() => {
+    const pictures = new Map(
+      timeline.clips
+        .filter((clip) => clip.link && !isAudioKind(clip.kind))
+        .map((clip) => [clip.link, clip]),
+    );
+    return new Set(
+      timeline.clips
+        .filter((clip) => {
+          const picture =
+            clip.link && isAudioKind(clip.kind) && pictures.get(clip.link);
+          return (
+            picture &&
+            picture.start === clip.start &&
+            picture.duration === clip.duration
+          );
+        })
+        .map((clip) => clip.id),
+    );
+  }, [timeline.clips]);
   const resize = useTrackResize({
     root: grid,
     tracks: shownTracks,
@@ -800,6 +881,15 @@ export function Timeline({
       (flush) => {
         const state = created.state();
         bodies.current?.view(state);
+        // Scrolls call this too; only a new height renders.
+        const height = Math.max(
+          0,
+          Math.round(state.rows.to - state.rows.from) - sizes.ruler,
+        );
+        if (height !== roomShown.current) {
+          roomShown.current = height;
+          setRoom(height);
+        }
         // Labels start 4px right of their ticks.
         tickLabels.current?.style.setProperty(
           "--cut",
@@ -1181,6 +1271,7 @@ export function Timeline({
                           clip={clip}
                           row={row}
                           selected={selection.ids.has(clip.id)}
+                          offline={offline.has(clip.id)}
                         />
                       ))}
                   </div>
@@ -1255,6 +1346,7 @@ export function Timeline({
                               timeline={timeline}
                               clip={clip}
                               transition={clip.transitionIn}
+                              track={row.track.kind}
                               selected={selection.transition === clip.id}
                               frameAt={(x) =>
                                 viewport.current?.frameAtClient(x) ?? 0
@@ -1310,6 +1402,8 @@ export function Timeline({
                               LENGTH_MIN_WIDTH
                             }
                             selected={selection.ids.has(clip.id)}
+                            offline={offline.has(clip.id)}
+                            synced={synced.has(clip.id)}
                           />
                         ))}
                     {clips
@@ -1321,6 +1415,7 @@ export function Timeline({
                               key={`transition:${clip.id}`}
                               clip={clip}
                               transition={clip.transitionIn}
+                              track={row.track.kind}
                               fps={fps}
                               selected={selection.transition === clip.id}
                             />
