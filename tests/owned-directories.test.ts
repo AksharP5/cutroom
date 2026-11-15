@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { createCaptureProfile } from "../src/server/hyperframes/captureProfiles";
+import { createOwnedDirectory } from "../src/server/hyperframes/ownedDirectories";
 
 test("capture startup sweeps only marked directories with a dead owner", async () => {
   const root = await mkdtemp(join(tmpdir(), "cap-profiles-"));
@@ -32,7 +32,7 @@ test("capture startup sweeps only marked directories with a dead owner", async (
       await writeFile(join(path, "keep"), "profile data");
     }
     await symlink(target, linked, "dir");
-    const created = await createCaptureProfile(root);
+    const created = await createOwnedDirectory(root, "cutroom-capture");
     expect(created).toStartWith(join(root, `cutroom-capture-${process.pid}-`));
     expect(await readdir(root)).not.toContain(basename(dead));
     for (const path of [live, unmarked, unrelated, target, linked])
@@ -55,7 +55,7 @@ test("an abandoned profile that cannot be removed does not stop a new capture pr
     await writeFile(join(stuck, "Default", "keep"), "profile data");
     // Unreadable, like a profile left by another user in a shared temp folder.
     await chmod(stuck, 0o000);
-    const created = await createCaptureProfile(root);
+    const created = await createOwnedDirectory(root, "cutroom-capture");
     expect(created).toStartWith(join(root, `cutroom-capture-${process.pid}-`));
   } finally {
     await chmod(stuck, 0o700);

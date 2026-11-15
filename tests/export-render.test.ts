@@ -38,7 +38,9 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   "native marked exports capture only N frames and preserve both video and audio edges at integer and NTSC fps",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-"));
-    const workers = createRenderWorkers();
+    // The project is the whole folder, so its scratch lives beside it.
+    const scratchDir = `${root}-scratch`;
+    const workers = createRenderWorkers({ scratchDir });
     try {
       const media = join(root, "source.mp4");
       await command([
@@ -216,6 +218,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     } finally {
       await workers.cancelAll();
       await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
     }
   },
   // Captures four Chromium renders, encodes MP4s, and decodes their video and audio edges.
@@ -225,7 +228,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
 test("marked export planning refuses links outside the project before copying them", async () => {
   const root = await mkdtemp(join(tmpdir(), "export-link-"));
   const project = join(root, "project");
-  const workers = createRenderWorkers();
+  const workers = createRenderWorkers({ scratchDir: join(root, "scratch") });
   try {
     await mkdir(project);
     await writeFile(join(root, "private.txt"), "outside the project");
@@ -264,7 +267,7 @@ test.each(["trash", ".cutroom/cache"])(
   async (skipped) => {
     const root = await mkdtemp(join(tmpdir(), "export-trash-"));
     const project = join(root, "project");
-    const workers = createRenderWorkers();
+    const workers = createRenderWorkers({ scratchDir: join(root, "scratch") });
     try {
       await mkdir(join(project, skipped), { recursive: true });
       await writeFile(join(root, "private.txt"), "not part of the export");

@@ -61,7 +61,9 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   "exports draw CSS and video colours as the preview does, tagged BT.709",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-colour-"));
-    const workers = createRenderWorkers();
+    // The project is the whole folder, so its scratch lives beside it.
+    const scratchDir = `${root}-scratch`;
+    const workers = createRenderWorkers({ scratchDir });
     try {
       const bars = colours.map((colour) => `color=c=0x${colour}:s=40x40`);
       const videos = await Promise.all(
@@ -150,6 +152,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     } finally {
       await workers.cancelAll();
       await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
     }
   },
   // Encodes three sources, captures 30 Chromium frames, and decodes one.

@@ -46,6 +46,7 @@ export function registerRenderIsolation(
     range:
       { fps: Fps; frames: NonNullable<ExportOptions["range"]> } | undefined;
     progress: (job: RenderJob) => void;
+    scratchDir: string;
   },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
@@ -164,6 +165,13 @@ export function registerRenderIsolation(
             source,
             "      return firstSegment === void 0 || !PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment);",
             `      if (firstSegment === ${JSON.stringify(MEDIA_TRASH)} || firstSegment === ".cutroom" || (firstSegment !== void 0 && PLAN_PROJECT_DIR_SKIP_SEGMENTS.has(firstSegment))) return false;\n      await projectPath({ path: projectDir }, rel);\n      return true;`,
+            url,
+          );
+          // The span's plan holds a copy of the project and its extracted frames.
+          source = replaceOnce(
+            source,
+            'const workDir = mkdtempSync7(join45(tmpdir4(), "hf-render-span-"));',
+            `const workDir = mkdtempSync7(join45(${JSON.stringify(range.scratchDir)}, "hf-render-span-"));`,
             url,
           );
           // The local chunk engine supports rational fps; the distributed

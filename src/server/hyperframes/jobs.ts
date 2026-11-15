@@ -16,6 +16,10 @@ import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
 import type { StudioApiAdapter } from "@hyperframes/studio-server";
 import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
+import {
+  createOwnedDirectory,
+  sweepOwnedDirectories,
+} from "./ownedDirectories";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { ExportOptions } from "../../shared/export";
@@ -68,6 +72,10 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 
 /** Each export writes into a folder with this prefix beside its destination. */
 export const STAGING_PREFIX = ".cutroom-render-";
+/** Chromium's process-singleton socket must fit a short path, so its temporary folder stays in the system's. */
+const BROWSER_TEMP_PREFIX = "cutroom-render";
+/** Extracted frames and range work, which reach gigabytes, go in the configured scratch folder on disk. */
+const SCRATCH_PREFIX = "render";
 
 async function removeRenderScratch(path: string) {
   await rm(path, { recursive: true, force: true });
@@ -93,21 +101,34 @@ async function processGroupExited(pid: number, timeoutMs: number) {
     await Bun.sleep(10);
   }
   throw new Error(
-    "The export's browser processes did not exit, so its temporary files were left in place.",
+    "The export's browser processes did not exit, so its temporary files were left in place until the next export.",
   );
 }
 
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
-export function createRenderWorkers(
-  configuration: {
-    workerPath?: string;
-    sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
-    stopTimeoutMs?: number;
-    startupTimeoutMs?: number;
-    removeScratch?: (path: string) => Promise<void>;
-  } = {},
-) {
+export function createRenderWorkers(configuration: {
+  /** Holds each export's extracted frames and range work. Keep it off RAM-backed /tmp. */
+  scratchDir: string;
+  workerPath?: string;
+  sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
+  stopTimeoutMs?: number;
+  startupTimeoutMs?: number;
+  removeScratch?: (path: string) => Promise<void>;
+}) {
   const jobs = new Map<string, RenderState>();
+  const remove = configuration.removeScratch ?? removeRenderScratch;
+  /** Scratch whose browsers outlived the cleanup wait. The next export removes it. */
+  const leftovers = new Set<string>();
+  // A crashed or killed server leaves its scratch behind; reclaim it when the next one starts.
+  void Promise.all([
+    sweepOwnedDirectories(tmpdir(), BROWSER_TEMP_PREFIX),
+    sweepOwnedDirectories(configuration.scratchDir, SCRATCH_PREFIX),
+  ]).catch((error: unknown) =>
+    console.warn(
+      "Could not remove an earlier export's temporary files:",
+      error instanceof Error ? error.message : error,
+    ),
+  );
   // A healthy start takes seconds, even for 500 clips. HyperFrames gives a stuck capture page
   // up to about 110 seconds (a 45 s readiness wait, then 60 s without frames) before retrying it.
   const startupTimeoutMs = configuration.startupTimeoutMs ?? 150_000;
@@ -154,6 +175,7 @@ export function createRenderWorkers(
         ? join(output.directory, output.filename)
         : options.outputPath;
       let temporary: string | undefined;
+      let scratch: string | undefined;
       let staging: string | undefined;
       /** From the moment the file is linked into place the export has happened; a late cancel can't undo it. */
       let publishing = false;
@@ -246,8 +268,21 @@ export function createRenderWorkers(
           throw new Error(
             `A file named "${basename(outputPath)}" is already there. Choose another name.`,
           );
+        for (const path of leftovers)
+          await remove(path).then(
+            () => leftovers.delete(path),
+            (error: unknown) =>
+              console.warn(
+                "Could not remove an earlier export's temporary files:",
+                error instanceof Error ? error.message : error,
+              ),
+          );
         // The worker's temporary files stay outside the project, which the producer copies.
-        temporary = await mkdtemp(join(tmpdir(), "cutroom-render-"));
+        temporary = await createOwnedDirectory(tmpdir(), BROWSER_TEMP_PREFIX);
+        scratch = await createOwnedDirectory(
+          configuration.scratchDir,
+          SCRATCH_PREFIX,
+        );
         // The producer puts work and transaction folders beside the file it writes. Writing into an
         // owned folder on the destination's filesystem lets cancellation remove all of it, and the
         // finished file is linked into place without replacing anything that appeared meanwhile.
@@ -293,6 +328,8 @@ export function createRenderWorkers(
                 ? { PRODUCER_HEADLESS_SHELL_PATH: browserExecutable() }
                 : {}),
               TMPDIR: temporary,
+              // Per export, so a cache keyed on per-export paths cannot grow without bound.
+              HYPERFRAMES_EXTRACT_CACHE_DIR: join(scratch, "frames"),
             },
           },
         );
@@ -304,6 +341,7 @@ export function createRenderWorkers(
             options: config,
             sources,
             range: output?.range,
+            scratchDir: scratch,
           }),
         );
         child.stdin.end();
@@ -399,7 +437,13 @@ export function createRenderWorkers(
             signalWorker("SIGKILL");
             // The group includes Chromium, which writes its profile into the scratch folder.
             if (worker && process.platform !== "win32")
-              await processGroupExited(worker.pid, 5000);
+              await processGroupExited(worker.pid, 5000).catch(
+                (error: unknown) => {
+                  for (const path of [temporary, scratch, staging])
+                    if (path) leftovers.add(path);
+                  throw error;
+                },
+              );
             await errors;
             const cleanup: Promise<unknown>[] = [];
             // Cleanup touches only what this job made; the destination is the user's once linked.
@@ -413,8 +457,8 @@ export function createRenderWorkers(
                   { force: true },
                 ),
               );
-            const remove = configuration.removeScratch ?? removeRenderScratch;
             if (temporary) cleanup.push(remove(temporary));
+            if (scratch) cleanup.push(remove(scratch));
             // A folder moved mid-export takes staging with it; say so rather than claim it was removed.
             if (staging)
               cleanup.push(
