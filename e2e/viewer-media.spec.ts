@@ -614,6 +614,11 @@ test("Q during an earlier edit's preview swap keeps the picture it already shows
     video: redThenBlue,
   });
   await seek("0400");
+  // Later documents arrive slowly, so the razor's is still loading when Q comes.
+  await page.route("**/api/isolated/*/preview?*document=*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue().catch(() => {});
+  });
   const capture = await capturePicture(page, blue);
   try {
     capture.reset();
