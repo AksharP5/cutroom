@@ -229,6 +229,7 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
           await client.callTool({
             name: "timeline_edit",
             arguments: {
+              fullTimeline: true,
               projectId: project.id,
               expectedRevision: view.revision,
               commands: [

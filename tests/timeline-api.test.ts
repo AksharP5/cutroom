@@ -479,6 +479,7 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
     const editCall = {
       name: "timeline_edit",
       arguments: {
+        fullTimeline: true,
         projectId: fixture.project.id,
         expectedRevision: read.revision,
         label: "Delay caption",
@@ -501,6 +502,7 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: fixture.project.id,
           expectedRevision: edited.revision,
           label: "Set up the mix",
@@ -555,6 +557,7 @@ test("an MCP agent reads and edits the timeline through the batch endpoint", asy
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: fixture.project.id,
           expectedRevision: edited.revision,
           commands: [
@@ -937,6 +940,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: id,
             expectedRevision: revision,
             commands: [
@@ -1047,6 +1051,7 @@ test("MCP gain, authored fades and cleared automation read back exactly and undo
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: initial.revision,
           commands: [
@@ -1155,6 +1160,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
       const refused = await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: id,
           expectedRevision: initial.revision,
           commands: [insert],
@@ -1167,6 +1173,7 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: id,
             expectedRevision: initial.revision,
             commands: [{ ...insert, mode: "overwrite" }],
@@ -1238,6 +1245,7 @@ test("MCP reports clips left whole by auto-select razor and refuses an explicit 
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: fixture.project.id,
             expectedRevision: before.revision,
             commands: [command],
@@ -1268,6 +1276,7 @@ test("MCP reports clips left whole by auto-select razor and refuses an explicit 
     const refused = await client.callTool({
       name: "timeline_edit",
       arguments: {
+        fullTimeline: true,
         projectId: fixture.project.id,
         expectedRevision: before.revision,
         commands: [{ type: "split", clipIds: ["lower"], at: 90 }],
@@ -1375,6 +1384,7 @@ for (const [name, command, expectedPicture] of [
       const refused = await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: before.revision,
           commands: [command],
@@ -1396,6 +1406,7 @@ for (const [name, command, expectedPicture] of [
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: project.id,
             expectedRevision: optedOut.revision,
             commands: [command],
@@ -1526,6 +1537,7 @@ for (const destination of ["new", "free", "partner"] as const) {
                 await client.callTool({
                   name: "timeline_edit",
                   arguments: {
+                    fullTimeline: true,
                     projectId: project.id,
                     expectedRevision: (await read()).revision,
                     commands,
@@ -1652,6 +1664,7 @@ test("MCP clipboard snapshots survive cuts and timeline switches, paste once, an
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: project.id,
             composition,
             expectedRevision: (await read(composition)).revision,
@@ -1709,6 +1722,7 @@ test("MCP clipboard snapshots survive cuts and timeline switches, paste once, an
     const refused = await client.callTool({
       name: "timeline_edit",
       arguments: {
+        fullTimeline: true,
         projectId: another.id,
         expectedRevision: anotherView.revision,
         commands: [paste],

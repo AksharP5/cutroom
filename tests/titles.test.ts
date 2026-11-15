@@ -593,6 +593,7 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
       client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: (await read()).revision,
           commands,

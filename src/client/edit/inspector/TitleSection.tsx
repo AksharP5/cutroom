@@ -20,6 +20,7 @@ import type {
   TitleEdit,
 } from "../../../shared/timeline/schema";
 import { formatPercent } from "../../../shared/timeline/labels";
+import { reachedByKeyboard, restoreMenuFocus } from "../../keymap";
 import { SelectMenu } from "../../components/SelectMenu";
 import { showToast } from "../../workspace";
 import { editTimeline } from "../timeline";
@@ -156,6 +157,8 @@ function ColourFields({
     const change = () => {
       setPicking(null);
       if (input.value !== saved.current) commit.current(input.value);
+      // A colour picked with the pointer hands the transport keys back, as a toggle click does.
+      if (!reachedByKeyboard(input)) restoreMenuFocus(null);
     };
     input.addEventListener("change", change);
     return () => input.removeEventListener("change", change);

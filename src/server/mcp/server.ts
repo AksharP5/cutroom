@@ -31,6 +31,12 @@ type LocalFetch = (
   url: string,
   init?: RequestInit,
 ) => Promise<Response> | Response;
+export interface RequestOptions {
+  /** Streams the edit's animation inspection after the committed result. */
+  followup?: (data: AnimationFeedback) => Promise<void>;
+  /** Shapes the parsed answer before it becomes the tool's result. */
+  reply?: (result: unknown) => unknown;
+}
 interface McpOptions {
   baseUrl?: string;
   fetch?: LocalFetch;
@@ -82,7 +88,7 @@ export function createMcpServer(options: McpOptions = {}) {
     path: string,
     method = "GET",
     body?: unknown,
-    followup?: (data: AnimationFeedback) => Promise<void>,
+    { followup, reply = (result) => result }: RequestOptions = {},
   ) => {
     try {
       const response = await fetchLocal(`${baseUrl}/api${path}`, {
@@ -109,7 +115,7 @@ export function createMcpServer(options: McpOptions = {}) {
             "Timeline edit did not acknowledge its committed result.",
           );
         }
-        const result = first.value.result;
+        const result = reply(first.value.result);
         const summary = response.headers.get(EDIT_SUMMARY_HEADER);
         setTimeout(() => {
           void (async () => {
@@ -125,7 +131,7 @@ export function createMcpServer(options: McpOptions = {}) {
         }, 0);
         return {
           content: [
-            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+            { type: "text" as const, text: JSON.stringify(result) },
             // Last, on its own line, where the agent panel reads the row's sentence.
             ...(summary
               ? [
@@ -150,11 +156,9 @@ export function createMcpServer(options: McpOptions = {}) {
           ],
           isError: true,
         };
-      const result: unknown = text ? JSON.parse(text) : null;
+      const result = reply(text ? JSON.parse(text) : null);
       return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
         structuredContent: { result },
       };
     } catch (error) {
@@ -173,8 +177,8 @@ export function createMcpServer(options: McpOptions = {}) {
     path: string,
     method?: string,
     body?: unknown,
-    followup?: (data: AnimationFeedback) => Promise<void>,
-  ) => requestApi(`/cutroom${path}`, method, body, followup);
+    options?: RequestOptions,
+  ) => requestApi(`/cutroom${path}`, method, body, options);
   const id = encodeURIComponent;
   const readOnly = {
     readOnlyHint: true,
