@@ -28,6 +28,8 @@ async function fixture(
   page: Page,
   scripts = "",
   css = "",
+  /** One clip per line, as a hand-written or editor-indented source has them. */
+  indented = false,
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -58,9 +60,14 @@ async function fixture(
     "-shortest",
     join(project.path, "talk.mp4"),
   ]);
+  const composition = `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`;
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`,
+    indented
+      ? composition
+          .replace(/<(video|audio|div) /g, "\n    <$1 ")
+          .replace("</main>", "\n  </main>")
+      : composition,
   );
 
   const read = async () =>
@@ -454,6 +461,142 @@ async function meters(page: Page, frame: number) {
   await expect(play).toHaveAttribute("aria-pressed", "false");
   return levels;
 }
+
+/** The clip parent's nodes, whitespace included, with adjacent text merged as a parser would. */
+const clipNodes = (page: Page) =>
+  page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("main")
+    .evaluate((main) =>
+      [...main.childNodes]
+        .filter(
+          (node) =>
+            !(
+              node instanceof Element &&
+              node.matches(
+                "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+              )
+            ),
+        )
+        .map((node) =>
+          node instanceof Text ? node.data : `<${(node as Element).id}>`,
+        )
+        .reduce<string[]>((nodes, node) => {
+          const last = nodes.at(-1);
+          if (
+            !node.startsWith("<") &&
+            last !== undefined &&
+            !last.startsWith("<")
+          )
+            nodes[nodes.length - 1] = last + node;
+          else nodes.push(node);
+          return nodes;
+        }, []),
+    );
+
+test("an indented source keeps its whitespace exactly through lift, razor and undo in place", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180000);
+  const { project, edit } = await fixture(request, page, "", "", true);
+  const original = await live(page);
+  const matches = async (label: string, frames: number[]) => {
+    await waitForPreview(page);
+    expect(await live(page), label).toBe(original);
+    await matchesFresh(page, project.id, frames, label);
+    const control = await page.context().newPage();
+    try {
+      await control.goto(`/#project/${project.id}`);
+      await waitForPreview(control);
+      expect(await clipNodes(page), label).toEqual(await clipNodes(control));
+    } finally {
+      await control.close();
+    }
+  };
+  const undo = async () => {
+    const previous = await token(page);
+    await page.getByRole("button", { name: /^Current time/ }).focus();
+    await page.keyboard.press("Control+z");
+    await waitForPreview(page, { after: previous });
+  };
+  await seek(page, 40);
+  let previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await matches("lift", [40, 76]);
+  await undo();
+  await matches("undo lift", [40, 76]);
+  await seek(page, 150);
+  previous = await token(page);
+  await edit([{ type: "split", at: 150, clipIds: ["v2"] }]);
+  await waitForPreview(page, { after: previous });
+  await matches("razor", [149, 150]);
+  await undo();
+  await matches("undo razor", [150]);
+});
+
+test("a removed clip whose whitespace is not where the snapshot says reloads instead of guessing", async ({
+  page,
+  request,
+}) => {
+  const { project, edit } = await fixture(request, page, "", "", true);
+  await seek(page, 40);
+  const original = await live(page);
+  // The live comparison leaves out the bridge's own canvases, so only the whitespace check
+  // sees one between the removed clip and the whitespace it owns.
+  await page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("#v1")
+    .evaluate((video) => {
+      const canvas = document.createElement("canvas");
+      canvas.setAttribute("data-cutroom-edit-frame", "");
+      video.before(canvas);
+    });
+  const previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).not.toBe(original);
+  const control = await page.context().newPage();
+  try {
+    await control.goto(`/#project/${project.id}`);
+    await waitForPreview(control);
+    expect(await clipNodes(page)).toEqual(await clipNodes(control));
+  } finally {
+    await control.close();
+  }
+});
+
+// Adding a clip back can restyle the clips that stay as well.
+test("an undo that starts an animation on another clip reloads and matches a fresh document", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120000);
+  const { project, edit } = await fixture(
+    request,
+    page,
+    "",
+    "main:has(#a1) #title{animation:slide 20s linear both}@keyframes slide{to{transform:translateX(400px)}}",
+  );
+  await seek(page, 40);
+  const lifted = await live(page);
+  let previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(lifted);
+  previous = await token(page);
+  await page.getByRole("button", { name: /^Current time/ }).focus();
+  await page.keyboard.press("Control+z");
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).not.toBe(lifted);
+  await matchesFresh(page, project.id, [40, 60], "undo");
+});
 
 test("ripple delete, lift, razor, turning clips off and every undo keep the document and match fresh pictures", async ({
   page,

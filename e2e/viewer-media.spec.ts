@@ -610,12 +610,87 @@ for (const route of ["in place", "by reload"] as const)
     else await expect(live).not.toHaveAttribute("src", src!);
   });
 
+test("an edit that would start an animation is taken back before the old picture changes", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  // Authored CSS spins the clip once it has the class, which only a fresh document can
+  // seek. It covers the picture in blue, so a blue frame before the reload is the edit
+  // the bridge refused.
+  const { project, seek } = await openMedia(page, request, {
+    style:
+      ".spinner{position:absolute;inset:0;background:#00f;animation:spin 4s linear infinite}@keyframes spin{to{rotate:1turn}}",
+  });
+  // A clear clip on its own track first; its new track needs a fresh document anyway.
+  const path = join(project.path, "index.html");
+  const loaded = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
+  await writeFile(
+    path,
+    (await readFile(path, "utf8")).replace(
+      "</main>",
+      '<div id="spinner" class="clip" data-start="0" data-duration="12" data-track-index="4"></div>\n    </main>',
+    ),
+  );
+  await waitForPreview(page, { after: loaded });
+  await waitForPreview(page, { timing: true });
+  await seek("0311");
+  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  await page.evaluate((before) => {
+    const switched: number[] = [];
+    Object.assign(window, { switched });
+    new MutationObserver(() => {
+      const src = document
+        .querySelector("iframe[data-live]")
+        ?.getAttribute("src");
+      if (src && src !== before && !switched.length)
+        switched.push((performance.timeOrigin + performance.now()) / 1000);
+    }).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-live", "src"],
+    });
+  }, before);
+  const capture = await capturePicture(page, red());
+  try {
+    capture.reset();
+    await writeFile(
+      path,
+      (await readFile(path, "utf8")).replace(
+        'id="spinner" class="clip"',
+        'id="spinner" class="clip spinner"',
+      ),
+    );
+    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
+      "src",
+      before!,
+    );
+    await waitForPreview(page);
+    const { samples } = await capture.read();
+    const [switched] = await page.evaluate(
+      () => (window as unknown as { switched: number[] }).switched,
+    );
+    const early = samples.filter(({ time }) => time < switched!);
+    expect(early.length).toBeGreaterThan(1);
+    expect(early.filter(({ color }) => !red()(color))).toEqual([]);
+    expect(blue(samples.at(-1)!.color)).toBe(true);
+  } finally {
+    await capture.stop();
+  }
+});
+
 test("Q during an earlier edit's preview swap keeps the picture it already shows", async ({
   page,
   request,
 }) => {
+  // A razor through an animated clip reloads: only a fresh document finds the new piece's
+  // animation. The animation draws nothing.
   const { project, read, seek } = await openMedia(page, request, {
     video: redThenBlue,
+    style:
+      "@keyframes still{to{outline-color:transparent}}.clip{animation:still 1s infinite}",
   });
   await seek("0400");
   // Later documents arrive slowly, so the razor's is still loading when Q comes.
@@ -632,8 +707,8 @@ test("Q during an earlier edit's preview swap keeps the picture it already shows
   const capture = await capturePicture(page, blue);
   try {
     capture.reset();
-    // A razor adds an element, so its preview reloads. That document predates Q and is
-    // still loading when Q moves the playhead to 0, as in a fast W then Q.
+    // The razor's document predates Q and is still loading when Q moves the playhead
+    // to 0, as in a fast W then Q.
     const view = await read();
     const response = await request.post(
       `/api/cutroom/projects/${project.id}/commands`,
