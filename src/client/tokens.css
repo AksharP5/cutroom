@@ -237,7 +237,7 @@
   --width-inspector: 300px;
   --width-inspector-min: 264px;
   --width-centre-min: 736px;
-  --timeline-height: 341px; /* 33 ruler + 3x57 video + 2 divider + 3x45 audio */
+  --timeline-height: 337px; /* the viewer is sized from it, so a taller ruler takes from the tracks */
 
   /* Radii */
   --radius-clip: 2px;
