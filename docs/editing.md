@@ -26,6 +26,8 @@ The viewer also shows one media file at a time as a source, opened from Media. A
 
 When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
 
+The status bar also counts HyperFrames lint errors and warnings, checked when the project opens and again after each source change. Click the count to list the findings, errors first, with any fix hint on hover. Choosing one whose element is a clip on the timeline selects that clip and moves the playhead to its start; any other finding copies its file and line. Agents read the same findings with `project_lint`.
+
 ### Timeline
 
 The timeline reads the same projection MCP clients get from `timeline_read`, so an agent's edit or an undo shows up as soon as the file changes. Video tracks stack upward from the divider and audio tracks downward; each header has the track's id and name, a lock, and auto-select, both saved through `setTrack` as undoable edits. An audio header also has the track's gain, which plays on top of each clip's own. Compact headers offer Set gain... in the header menu. The inspector shows Combined static gain as a read-only clip × track product, including +24 dB from two +12 dB stages. It excludes fades, automation and authored-group clips, and reads Mixed only when the selected clips would show different values. Clips in an authored audio group keep that group and show a warning that track gain does not apply; [how to set it](keyboard.md). Clips on a locked track dim and cannot be selected.
