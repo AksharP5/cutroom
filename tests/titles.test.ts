@@ -131,6 +131,62 @@ test("a new title is one element and one stylesheet, and later edits change only
   );
 });
 
+test("shadow and stroke are attributes on the title that read back, change and clear", () => {
+  const inserted = edit(page(shot), [
+    {
+      type: "insert",
+      track: 1,
+      at: 30,
+      clip: {
+        kind: "title",
+        id: "lower",
+        text: "Ada Lovelace",
+        duration: 120,
+        title: {
+          shadow: { color: "#000000B3", blur: 12 },
+          stroke: { color: "#112233", width: 3 },
+        },
+      },
+    },
+  ]);
+  const tag = titleTag(inserted, "lower");
+  expect(tag).toContain(
+    'data-title-shadow="#000000b3" data-title-shadow-blur="12px" data-title-stroke="#112233" data-title-stroke-width="3px"',
+  );
+  expect(
+    clips(inserted).find((clip) => clip.id === "lower")?.title,
+  ).toMatchObject({
+    shadow: { color: "#000000b3", blur: 12 },
+    stroke: { color: "#112233", width: 3 },
+  });
+
+  const changed = edit(inserted, [
+    {
+      type: "setClip",
+      clipId: "lower",
+      title: { shadow: { color: "#ff000080", blur: 0 }, stroke: null },
+    },
+  ]);
+  const after = titleTag(changed, "lower");
+  expect(after).toContain(
+    'data-title-shadow="#ff000080" data-title-shadow-blur="0px"',
+  );
+  expect(after).not.toContain("data-title-stroke");
+
+  // A hand-edited value is not read as a title setting, and names the attribute.
+  const broken = changed.replace(
+    'data-title-shadow-blur="0px"',
+    'data-title-shadow-blur="soft"',
+  );
+  expect(clips(broken).find((clip) => clip.id === "lower")).toMatchObject({
+    title: null,
+    sourceRestrictions: {
+      title:
+        "This title's data-title-shadow-blur is not a value Cutroom writes. Edit it in the source.",
+    },
+  });
+});
+
 test("timeline edits leave a title's settings alone, and a stale or missing stylesheet is rewritten", () => {
   const inserted = edit(page(shot), [lowerThird]);
   // A tail trim, a head trim and a move write timing only: CSS reads the new length itself.
@@ -440,6 +496,12 @@ test("title values cannot carry markup or CSS into the source", () => {
     { size: 4 },
     { size: 64.5 },
     { size: "64px" },
+    { shadow: { color: "#000000", blur: 8 } },
+    { shadow: { color: "#000000b3", blur: 8.5 } },
+    { shadow: { color: "#000000b3", blur: "8px" } },
+    { shadow: { color: "#000000b3" } },
+    { stroke: { color: "#000000b3", width: 2 } },
+    { stroke: { color: "#000000", width: 0 } },
     { in: { preset: "spin" } },
     { in: { frames: -1 } },
     { out: { frames: 1.5 } },
