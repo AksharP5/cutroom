@@ -5,7 +5,7 @@ import { previewPolicy } from "./isolation.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
-import type { AudioStage } from "./directExport.ts";
+import type { AudioStage, EncodedPart } from "./directExport.ts";
 
 let rangeProgress: ((job: RenderJob) => void) | undefined;
 let audioStage: AudioStage | undefined;
@@ -14,6 +14,51 @@ let audioStage: AudioStage | undefined;
 export function provideAudioStage(stage: AudioStage) {
   audioStage = stage;
 }
+type SpanSlice = { index: number; startFrame: number; endFrame: number };
+type FrameRange = { startFrame: number; endFrame: number };
+let spliced:
+  | { capture: { start: number; end: number }[]; parts: Promise<EncodedPart[]> }
+  | undefined;
+
+/** Has a marked export capture only these runs, and take the frames between from `parts`. */
+export function spliceSourceParts(
+  capture: { start: number; end: number }[],
+  parts: Promise<EncodedPart[]>,
+) {
+  // A failure is reported where the span awaits the parts, after its captures.
+  parts.catch(() => {});
+  spliced = { capture, parts };
+}
+
+/** `renderSpan`'s chunk loop: captures what the browser must draw and returns every part in frame order. */
+export async function spanParts(
+  slices: SpanSlice[],
+  startFrame: number,
+  endFrame: number,
+  capture: (
+    slice: SpanSlice,
+    range: FrameRange,
+    index: number,
+  ) => Promise<string>,
+) {
+  const runs = spliced?.capture ?? [{ start: startFrame, end: endFrame }];
+  const parts: { start: number; path: string }[] = [];
+  for (const run of runs)
+    for (const slice of slices) {
+      const range = {
+        startFrame: Math.max(slice.startFrame, startFrame, run.start),
+        endFrame: Math.min(slice.endFrame, endFrame, run.end),
+      };
+      if (range.endFrame <= range.startFrame) continue;
+      parts.push({
+        start: range.startFrame,
+        path: await capture(slice, range, parts.length),
+      });
+    }
+  if (spliced) parts.push(...(await spliced.parts));
+  return parts.sort((a, b) => a.start - b.start).map((part) => part.path);
+}
+
 export const directAudioStage = () => {
   if (!audioStage)
     throw new Error(
@@ -177,7 +222,7 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress, spanParts as cutroomSpanParts } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -259,6 +304,29 @@ export function registerRenderIsolation(
             source,
             "  job.progress = Math.max(job.progress, boundedProgress);",
             "  job.progress = Math.max(job.progress, boundedProgress);\n  publishRangeProgress(job);",
+            url,
+          );
+          // Frames drawn from the sources are encoded beside the plan; only the rest are captured.
+          source = replaceOnce(
+            source,
+            `    const parts = [];
+    for (const slice of slices) {
+      const range = {
+        startFrame: Math.max(slice.startFrame, startFrame),
+        endFrame: Math.min(slice.endFrame, endFrame)
+      };
+      if (range.endFrame <= range.startFrame) continue;
+      throwIfAborted(config.abortSignal);
+      const part = join45(partsDir, \`part-\${String(parts.length).padStart(4, "0")}.mp4\`);
+      await renderChunk(planDir, slice.index, part, { frameRange: range });
+      parts.push(part);
+    }`,
+            `    const parts = await cutroomSpanParts(slices, startFrame, endFrame, async (slice, range, index) => {
+      throwIfAborted(config.abortSignal);
+      const part = join45(partsDir, \`part-\${String(index).padStart(4, "0")}.mp4\`);
+      await renderChunk(planDir, slice.index, part, { frameRange: range });
+      return part;
+    });`,
             url,
           );
           source = replaceOnce(

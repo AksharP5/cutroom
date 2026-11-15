@@ -1,5 +1,5 @@
 import { transform, transformStyleAttribute } from "lightningcss";
-import type { Declaration, SelectorComponent } from "lightningcss";
+import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
 import { z } from "zod";
 import type { DefaultTreeAdapterTypes } from "parse5";
@@ -10,8 +10,9 @@ type Frames = z.infer<typeof ExportRangeSchema>;
 type Element = DefaultTreeAdapterTypes.Element;
 
 const frame = z.number().int().nonnegative();
-/** A run of frames that shows one video clip and nothing else, full frame. */
-const DirectSegmentSchema = z.object({
+/** A run of frames whose picture is one video clip, full frame, with nothing over it. */
+const SourceSegmentSchema = z.object({
+  kind: z.literal("source"),
   start: frame,
   end: frame,
   /** Project-relative source path, as the clip's `src` names it. */
@@ -19,19 +20,36 @@ const DirectSegmentSchema = z.object({
   /** Source seconds shown on the segment's first frame. */
   mediaStart: z.number().nonnegative(),
 });
+/** A run of frames the browser draws. */
+const CaptureSegmentSchema = z.object({
+  kind: z.literal("capture"),
+  start: frame,
+  end: frame,
+});
 export const DirectPlanSchema = z.object({
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   /** Frames in the whole composition, which the audio mix needs even for a range. */
   durationFrames: z.number().int().positive(),
   frames: ExportRangeSchema,
-  segments: z.array(DirectSegmentSchema).min(1),
+  /** In frame order, covering the range. At least one draws from a source. */
+  segments: z
+    .array(
+      z.discriminatedUnion("kind", [SourceSegmentSchema, CaptureSegmentSchema]),
+    )
+    .min(1),
 });
-export type DirectSegment = z.infer<typeof DirectSegmentSchema>;
+export type SourceSegment = z.infer<typeof SourceSegmentSchema>;
 export type DirectPlan = z.infer<typeof DirectPlanSchema>;
 
 /** Why the export needs the browser, for the logs; never shown as an error. */
 type Refusal = { reason: string };
+
+/**
+ * Each captured run starts its own capture browsers, and a start can stall (HyperFrames gives a
+ * stuck page minutes). Beyond this many runs, capturing the whole export starts browsers once.
+ */
+const MAX_CAPTURE_RUNS = 3;
 
 /** Cutroom's starter page loads GSAP, which does nothing until a script uses it. */
 const LIBRARY_SCRIPTS = new Set(["assets/vendor/gsap.min.js"]);
@@ -145,60 +163,106 @@ function mayMatch(selector: SelectorComponent[], element: Element) {
   });
 }
 
+/** Stacking from Cutroom's track layer: z-index by `data-track-index`, unless anything else sets one. */
+type Stacking = { trackZ: Map<string, number>; authored: boolean };
+
+/** The one `data-track-index` value a track-layer rule selects, found inside its `:where()`. */
+function trackOf(selectors: SelectorComponent[][]) {
+  const found: string[] = [];
+  const walk = (components: SelectorComponent[]) => {
+    for (const component of components) {
+      if (
+        component.type === "attribute" &&
+        component.name === "data-track-index" &&
+        component.operation?.operator === "equal"
+      )
+        found.push(component.operation.value);
+      if ("selectors" in component && Array.isArray(component.selectors))
+        for (const nested of component.selectors)
+          walk(Array.isArray(nested) ? nested : [nested]);
+    }
+  };
+  if (selectors.length === 1) walk(selectors[0]!);
+  return found.length === 1 ? found[0] : undefined;
+}
+
 function checkStylesheet(
   css: string,
   protectedElements: { element: Element; video: boolean }[],
+  stacking: Stacking,
 ): string | undefined {
   let refusal: string | undefined;
-  const refuse = (reason: string) => {
-    refusal ??= reason;
+  const visit = (rules: Rule[], tracks: boolean) => {
+    for (const rule of rules) {
+      if (refusal) return;
+      switch (rule.type) {
+        case "media":
+        case "supports":
+          visit(rule.value.rules ?? [], tracks);
+          continue;
+        case "layer-block":
+          visit(
+            rule.value.rules,
+            tracks || rule.value.name?.join(".") === "cutroom-tracks",
+          );
+          continue;
+        case "layer-statement":
+        case "font-face":
+        case "keyframes":
+          continue;
+        case "style":
+          break;
+        default:
+          refusal = `a stylesheet has an @${rule.type} rule`;
+          return;
+      }
+      const { selectors } = rule.value;
+      const declarations = rule.value.declarations?.declarations ?? [];
+      if (rule.value.declarations?.importantDeclarations?.length) {
+        refusal = "a stylesheet uses !important";
+        return;
+      }
+      for (const declaration of declarations) {
+        if (declaration.property !== "z-index") continue;
+        const track = tracks ? trackOf(selectors) : undefined;
+        if (track !== undefined && declaration.value.type === "integer")
+          stacking.trackZ.set(track, declaration.value.value);
+        else stacking.authored = true;
+      }
+      for (const { element, video } of protectedElements) {
+        const matching = selectors.filter((selector) =>
+          mayMatch(selector, element),
+        );
+        if (!matching.length) continue;
+        if (
+          matching.some((selector) =>
+            selector.some((component) => component.type === "pseudo-element"),
+          )
+        ) {
+          refusal = `a stylesheet draws a pseudo-element on <${element.tagName}>`;
+          return;
+        }
+        for (const declaration of declarations) {
+          const allowed = video
+            ? declaration.property === "box-sizing" ||
+              declaration.property === "z-index"
+            : FREE_PROPERTIES.has(declaration.property) ||
+              PINNED.has(key(declaration));
+          if (!allowed) {
+            refusal = `a stylesheet sets ${declaration.property} on <${element.tagName}>`;
+            return;
+          }
+        }
+      }
+      visit(rule.value.rules ?? [], tracks);
+    }
   };
   transform({
     filename: "composition.css",
     code: Buffer.from(css),
     visitor: {
-      Rule(rule) {
-        switch (rule.type) {
-          case "media":
-          case "supports":
-          case "layer-block":
-          case "layer-statement":
-          case "font-face":
-          case "keyframes":
-            return;
-          case "style":
-            break;
-          default:
-            return refuse(`a stylesheet has an @${rule.type} rule`);
-        }
-        const { selectors, declarations } = rule.value;
-        if (declarations.importantDeclarations.length)
-          return refuse("a stylesheet uses !important");
-        for (const { element, video } of protectedElements) {
-          const matching = selectors.filter((selector) =>
-            mayMatch(selector, element),
-          );
-          if (!matching.length) continue;
-          if (
-            matching.some((selector) =>
-              selector.some((component) => component.type === "pseudo-element"),
-            )
-          )
-            return refuse(
-              `a stylesheet draws a pseudo-element on <${element.tagName}>`,
-            );
-          for (const declaration of declarations.declarations) {
-            const allowed = video
-              ? declaration.property === "box-sizing" ||
-                declaration.property === "z-index"
-              : FREE_PROPERTIES.has(declaration.property) ||
-                PINNED.has(key(declaration));
-            if (!allowed)
-              return refuse(
-                `a stylesheet sets ${declaration.property} on <${element.tagName}>`,
-              );
-          }
-        }
+      StyleSheet(sheet) {
+        visit(sheet.rules, false);
       },
     },
   });
@@ -297,6 +361,7 @@ export function planDirectExport(
   type Clip = { element: Element; start: number; end: number };
   const visual: Clip[] = [];
   const videos: Element[] = [];
+  const stacking: Stacking = { trackZ: new Map(), authored: false };
   let end = 0;
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
@@ -320,6 +385,16 @@ export function planDirectExport(
     if (element.tagName === "audio") continue;
     if (element.tagName === "video") videos.push(element);
     visual.push({ element, start: first, end: last });
+    try {
+      if (
+        declarationsOf(attribute(element, "style") ?? "").some(
+          (declaration) => declaration.property === "z-index",
+        )
+      )
+        stacking.authored = true;
+    } catch {
+      stacking.authored = true;
+    }
   }
   for (const video of videos)
     if (
@@ -344,42 +419,59 @@ export function planDirectExport(
     ...videos.map((element) => ({ element, video: true })),
   ];
   for (const css of styles) {
-    const refusal = checkStylesheet(css, protectedElements);
+    const refusal = checkStylesheet(css, protectedElements, stacking);
     if (refusal) return { reason: refusal };
   }
 
-  // Sweep the range: every frame needs exactly one visual clip, and it must be a plain video.
-  const segments: DirectSegment[] = [];
-  let frame = frames.start;
-  while (frame < frames.end) {
-    const showing = visual.filter(
-      (clip) => clip.start <= frame && frame < clip.end,
-    );
-    if (showing.length !== 1)
-      return {
-        reason: showing.length
-          ? `frame ${frame} shows ${showing.length} clips`
-          : `frame ${frame} shows no clip`,
-      };
-    const clip = showing[0]!;
-    const refusal = plainVideo(clip.element);
-    if (refusal) return { reason: refusal };
-    const next = Math.min(
+  // Clips paint by their track layer's z-index, then in document order. Any other z-index
+  // could reorder them, so frames with more than one clip then go to the browser.
+  const level = (clip: Clip) =>
+    stacking.trackZ.get(attribute(clip.element, "data-track-index") ?? "") ?? 0;
+  const boundaries = [
+    ...new Set([
+      frames.start,
       frames.end,
-      clip.end,
-      ...visual.map((other) => other.start).filter((start) => start > frame),
+      ...visual
+        .flatMap((clip) => [clip.start, clip.end])
+        .filter((at) => at > frames.start && at < frames.end),
+    ]),
+  ].sort((a, b) => a - b);
+  const segments: DirectPlan["segments"] = [];
+  let reason: string | undefined;
+  for (const [index, start] of boundaries.slice(0, -1).entries()) {
+    const end = boundaries[index + 1]!;
+    const showing = visual.filter(
+      (clip) => clip.start <= start && start < clip.end,
     );
-    const mediaStart = seconds(
-      attribute(clip.element, "data-media-start") ?? "0",
-    )!;
-    segments.push({
-      start: frame,
-      end: next,
-      src: attribute(clip.element, "src")!,
-      mediaStart: mediaStart + ((frame - clip.start) * fps.den) / fps.num,
-    });
-    frame = next;
+    const top = showing.reduce<Clip | undefined>(
+      (above, clip) => (above && level(above) > level(clip) ? above : clip),
+      undefined,
+    );
+    const refusal = !top
+      ? `frame ${start} shows no clip`
+      : showing.length > 1 && stacking.authored
+        ? `frame ${start} shows ${showing.length} clips in an authored order`
+        : plainVideo(top.element);
+    const previous = segments.at(-1);
+    if (refusal || !top) {
+      reason ??= refusal;
+      if (previous?.kind === "capture") previous.end = end;
+      else segments.push({ kind: "capture", start, end });
+      continue;
+    }
+    const src = attribute(top.element, "src")!;
+    const mediaStart =
+      seconds(attribute(top.element, "data-media-start") ?? "0")! +
+      ((start - top.start) * fps.den) / fps.num;
+    segments.push({ kind: "source", start, end, src, mediaStart });
   }
+  if (!segments.some((segment) => segment.kind === "source"))
+    return { reason: reason ?? "no frame shows a plain video" };
+  const runs = segments.filter((segment) => segment.kind === "capture").length;
+  if (runs > MAX_CAPTURE_RUNS)
+    return {
+      reason: `${runs} runs of frames need the browser, first ${reason}`,
+    };
   return { width, height, durationFrames, frames, segments };
 }
 
