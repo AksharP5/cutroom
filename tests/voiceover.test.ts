@@ -156,6 +156,7 @@ test("recorded takes use the engine, preserve occupied audio, and undo leaves th
                   fadeIn: 5,
                   fadeOut: 7,
                 },
+                { type: "setTrack", index: 4, kind: "audio" },
                 { type: "move", clipIds: [take.id], trackBy: 1 },
               ],
             },

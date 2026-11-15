@@ -7,6 +7,7 @@ import {
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
+import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import type {
   Clip,
@@ -482,6 +483,32 @@ test("a refused move names the locked destination track", () => {
   expect(() =>
     run(locked, { type: "move", clipIds: ["picture"], trackBy: 1 }),
   ).toThrow("Command 1 (move): Track 1 is locked.");
+});
+
+test("a move to a missing track is refused unless the batch creates the track first", () => {
+  const edit = timeline([clip("picture", 2, 0, 90)]);
+  expect(() =>
+    run(edit, { type: "move", clipIds: ["picture"], trackBy: 5 }),
+  ).toThrow(
+    'Command 1 (move): Track 7 does not exist, so picture cannot move onto it. To create it, add {"type":"setTrack","index":7,"kind":"video"} before the move in the same batch.',
+  );
+  const moved = run(
+    edit,
+    { type: "setTrack", index: 7, kind: "video" },
+    { type: "move", clipIds: ["picture"], trackBy: 5 },
+  );
+  expect(moved.clips.map((clip) => [clip.id, clip.track])).toEqual([
+    ["picture", 7],
+  ]);
+  // The sentence names the track the clip landed on, not only the index distance.
+  const created = run(edit, { type: "setTrack", index: 7, kind: "video" });
+  expect(
+    editLabel(
+      [CommandSchema.parse({ type: "move", clipIds: ["picture"], trackBy: 5 })],
+      created,
+      "Edit",
+    ),
+  ).toBe("Moved 5 tracks up to V2");
 });
 
 test("a picture refused on an audio track uses the right article", () => {
@@ -1286,7 +1313,10 @@ test("linked moves overwrite each partner's own range, including on a deselected
       clip("sound", 2, 0, 30, { kind: "audio", link: "pair" }),
       clip("bed", 2, 0, 120, { kind: "audio" }),
     ],
-    [{ index: 2, kind: "audio", locked: true }],
+    [
+      { index: 1, kind: "video" },
+      { index: 2, kind: "audio", locked: true },
+    ],
   );
   expect(positions(run(vertical, { ...command, by: 0 }))).toEqual({
     picture: [1, 0, 30],

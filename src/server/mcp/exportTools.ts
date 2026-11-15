@@ -1,7 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { join } from "node:path";
 import { ExportStartSchema } from "../../shared/export";
+
+const DefaultsSchema = z.object({
+  result: z.object({ directory: z.string(), filename: z.string() }),
+});
 
 export function registerExportTools(
   server: Pick<McpServer, "registerTool">,
@@ -23,16 +28,38 @@ export function registerExportTools(
     "export_start",
     {
       description:
-        "Export MP4 through the editor's render jobs. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. Never overwrites a file. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
+        "Export MP4 through the editor's render jobs. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
       inputSchema: ExportStartSchema.extend({ projectId: z.string() }),
       annotations: edit,
     },
-    ({ projectId, ...input }) =>
-      request(
-        `/projects/${encodeURIComponent(projectId)}/export`,
-        "POST",
-        input,
-      ),
+    async ({ projectId, ...input }) => {
+      const project = encodeURIComponent(projectId);
+      if (input.filename) {
+        // A taken name otherwise starts a job that only fails when it publishes.
+        const query = new URLSearchParams({
+          filename: input.filename,
+          ...(input.directory && { directory: input.directory }),
+        });
+        const checked = await request(
+          `/cutroom/projects/${project}/export-defaults?${query}`,
+        );
+        if (checked.isError) return checked;
+        const { directory, filename } = DefaultsSchema.parse(
+          checked.structuredContent,
+        ).result;
+        if (filename !== input.filename)
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${join(directory, input.filename)} already exists. Exports never overwrite a file; choose another filename, such as "${filename}".`,
+              },
+            ],
+            isError: true,
+          };
+      }
+      return request(`/projects/${project}/export`, "POST", input);
+    },
   );
   server.registerTool(
     "export_status",
