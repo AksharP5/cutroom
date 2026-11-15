@@ -158,15 +158,20 @@ test("each Title control changes the picture and is one undo step", async ({
     in: { preset: "slide", frames: 20 },
     out: { preset: "none" },
   });
-  // Mid-entrance on the picture: partly faded and still below its resting place.
+  // Mid-entrance on the picture: partly faded and still below its resting place. The resting
+  // place is read after the entrance, once the new preset has reached the picture.
+  const opacity = () =>
+    shown.evaluate((element) => Number(getComputedStyle(element).opacity));
+  await seekFrame(page, 120);
+  await expect.poll(opacity).toBe(1);
   const rest = (await shown.boundingBox())!.y;
   await seekFrame(page, 62);
   await expect
-    .poll(async () =>
-      shown.evaluate((element) => Number(getComputedStyle(element).opacity)),
-    )
-    .toBeLessThan(1);
-  expect((await shown.boundingBox())!.y).toBeGreaterThan(rest);
+    .poll(async () => ({
+      faded: (await opacity()) < 1,
+      below: (await shown.boundingBox())!.y > rest,
+    }))
+    .toEqual({ faded: true, below: true });
   await seekFrame(page, 120);
 
   // A drag off the preset, then a new preset: the offset goes in the same step and comes back
