@@ -185,6 +185,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
         contentType: "image/png",
       });
       expect(patched.equals(fresh), step).toBe(true);
+      expect(await corrections(page), step).toBe(0);
       // The reference is a fresh render, not a second editor applying the next history step.
       await control.goto("about:blank");
     }
@@ -196,6 +197,7 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
       await seek(control, frame);
       const fresh = await control.locator(".edit-picture").screenshot();
       expect(patched.equals(fresh), `frame ${frame}`).toBe(true);
+      expect(await corrections(page), `frame ${frame}`).toBe(0);
       expect(await live(page)).toBe(original);
       if (frame === 76)
         await info.attach("NTSC cut.png", {
@@ -209,12 +211,27 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   }
 });
 
-/** Each frame of the edited tab must equal the same frame of a freshly loaded document. */
+/** How many videos the bridge had to move itself because the runtime left them elsewhere. */
+const corrections = async (page: Page) =>
+  Number(
+    await page
+      .locator("iframe[data-live]")
+      .contentFrame()
+      .locator("html")
+      .getAttribute("data-cutroom-media-corrections"),
+  );
+
+/**
+ * Each frame of the edited tab must equal the same frame of a freshly loaded document. Unless
+ * a test makes a seek land late, neither tab's bridge may have moved a video: a wrong target
+ * would otherwise pass here, since both tabs run the same bridge.
+ */
 async function matchesFresh(
   page: Page,
   projectId: string,
   frames: number[],
   label: string,
+  { lateSeeks = false } = {},
 ) {
   const control = await page.context().newPage();
   try {
@@ -276,6 +293,8 @@ async function matchesFresh(
         );
       }
       expect(patched.equals(fresh), `${label}, frame ${frame}`).toBe(true);
+      if (!lateSeeks) expect(await corrections(page), label).toBe(0);
+      expect(await corrections(control), label).toBe(0);
     }
   } finally {
     await control.close();
@@ -323,7 +342,93 @@ test("a video whose seek lands late as it comes back into view is not confirmed 
         },
       });
     });
-  await matchesFresh(page, project.id, [31], "late seek");
+  await matchesFresh(page, project.id, [31], "late seek", { lateSeeks: true });
+  expect(await corrections(page)).toBeGreaterThan(0);
+});
+
+// Authored values Cutroom never writes, but an agent or another editor can. The runtime, and
+// so export, reads them its own way; the bridge must agree and leave the video where it is.
+for (const [name, attribute] of [
+  ["a rate above the runtime's limit", 'data-playback-rate="12"'],
+  ["a start with a unit", 'data-playback-start="0.5s"'],
+  ["a negative start", 'data-playback-start="-1"'],
+] as const)
+  test(`a video with ${name} is drawn where the runtime alone draws it`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90000);
+    const { project } = await fixture(request, page);
+    const path = join(project.path, "index.html");
+    const previous = await token(page);
+    await replaceIndex(
+      project.path,
+      (await readFile(path, "utf8")).replace('id="v2"', `id="v2" ${attribute}`),
+    );
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    await seek(page, 80);
+    // The runtime alone: the same document, with its bridge unable to compute a target.
+    const control = await page.context().newPage();
+    try {
+      await control.goto(`/#project/${project.id}`);
+      await waitForPreview(control);
+      await control
+        .locator("iframe[data-live]")
+        .contentFrame()
+        .locator("html")
+        .evaluate(() => {
+          const hf = (window as unknown as { __hf: Record<string, unknown> })
+            .__hf;
+          delete hf.clipWindow;
+        });
+      await seek(control, 80);
+      expect(
+        (await page.locator(".edit-picture").screenshot()).equals(
+          await control.locator(".edit-picture").screenshot(),
+        ),
+      ).toBe(true);
+      expect(await corrections(page)).toBe(0);
+    } finally {
+      await control.close();
+    }
+  });
+
+test("a video still off after one correction is accepted instead of waiting out the frame deadline", async ({
+  page,
+  request,
+}) => {
+  await fixture(request, page);
+  await seek(page, 100);
+  // Every read of a clip's window moves its target, so no seek can ever match it.
+  await page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("html")
+    .evaluate(() => {
+      const hf = (
+        window as unknown as {
+          __hf: {
+            clipWindow: (
+              element: Element,
+            ) => { start: number; end: number } | null;
+          };
+        }
+      ).__hf;
+      const original = hf.clipWindow.bind(hf);
+      let shift = 0;
+      hf.clipWindow = (element) => {
+        const window = original(element);
+        shift += 0.25;
+        return window && { start: window.start - shift, end: Infinity };
+      };
+    });
+  const started = Date.now();
+  await seek(page, 31);
+  expect(Date.now() - started).toBeLessThan(5000);
+  // Once per video per picture: this seek refreshes the picture at most twice.
+  expect(await corrections(page)).toBeGreaterThan(0);
+  expect(await corrections(page)).toBeLessThanOrEqual(2);
 });
 
 test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({

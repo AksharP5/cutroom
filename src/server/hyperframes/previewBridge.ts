@@ -5,6 +5,10 @@ import {
 import type { DiagnosticWindow } from "./diagnostics";
 import { parse } from "parse5";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
+import {
+  MAX_PLAYBACK_RATE,
+  MIN_PLAYBACK_RATE,
+} from "@hyperframes/parsers/media-duration";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import { exportClipWindow, parseFpsWithDefault } from "@hyperframes/core";
 import { compositionClipLocations } from "../timeline/composition";
@@ -91,6 +95,8 @@ export function liveUpdatePlan(
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
+  /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
+  [minRate, maxRate]: [number, number],
   texts: [string, string[]][],
   initialTiming:
     | (Pick<
@@ -133,7 +139,8 @@ function installPreviewBridge(
       // already excluded from the divergence comparison below.
       if (
         (element === document.documentElement &&
-          name === "data-hf-preview-seek-hold") ||
+          (name === "data-hf-preview-seek-hold" ||
+            name === "data-cutroom-media-corrections")) ||
         (element.tagName === "VIDEO" &&
           (name === "data-cutroom-held" || name === "data-cutroom-flow")) ||
         (element instanceof HTMLMediaElement && name === "preload") ||
@@ -235,6 +242,7 @@ function installPreviewBridge(
       }
     }
     root.removeAttribute("data-hf-preview-seek-hold");
+    root.removeAttribute("data-cutroom-media-corrections");
     // These canvases and flags belong to this bridge, not the composition.
     for (const hold of root.querySelectorAll(
       "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
@@ -1577,26 +1585,44 @@ function installPreviewBridge(
     const clip = win.__hf?.clipWindow?.(video);
     const time = win.__player?.getTime();
     const automation = video.getAttribute("data-automation");
-    // Only the top-level composition's clips are timed against the player's clock.
+    // The runtime's root: the composition marked as root, or else the first one.
+    const marked = document.querySelector(
+      '[data-composition-id][data-root="true"]',
+    );
+    const root =
+      marked instanceof HTMLElement
+        ? marked
+        : document.querySelector("[data-composition-id]");
+    // Only the root composition's clips are timed against the player's clock.
     if (
       !clip ||
       time === undefined ||
-      video.closest("[data-composition-id]") !==
-        document.querySelector("[data-composition-id]") ||
+      video.closest("[data-composition-id]") !== root ||
       video.loop ||
       (automation !== null && /"target"\s*:\s*"(?!volume")/.test(automation))
     )
       return null;
-    // The same attributes, in the same order, as the runtime reads them.
-    const number = (name: string) => {
-      const value = Number.parseFloat(video.getAttribute(name) ?? "");
-      return Number.isFinite(value) ? value : null;
+    // Read exactly as the runtime reads them: an offset is a whole non-negative number,
+    // the playback start before the media start; a rate is clamped to its bounds.
+    const offset = (name: string) => {
+      const value = video.getAttribute(name);
+      if (value === null || value.trim() === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? number : null;
     };
     const start =
-      number("data-playback-start") ?? number("data-media-start") ?? 0;
-    const given = number("data-playback-rate");
+      offset("data-playback-start") ?? offset("data-media-start") ?? 0;
+    const authored = Number.parseFloat(
+      video.getAttribute("data-playback-rate") ?? "",
+    );
+    const given =
+      Number.isFinite(authored) && authored > 0
+        ? authored
+        : video.defaultPlaybackRate;
     const rate =
-      given !== null && given > 0 ? given : video.defaultPlaybackRate;
+      Number.isFinite(given) && given > 0
+        ? Math.max(minRate, Math.min(maxRate, given))
+        : 1;
     const media =
       start + rate * Math.max(0, Math.min(time, clip.end) - clip.start);
     return Number.isFinite(video.duration)
@@ -1608,6 +1634,7 @@ function installPreviewBridge(
     if (typeof waitForSeek !== "function")
       throw new Error("The preview cannot confirm that it drew the frame.");
     let timer = 0;
+    const corrected = new Set<HTMLVideoElement>();
     try {
       await Promise.race([
         (async () => {
@@ -1628,16 +1655,29 @@ function installPreviewBridge(
             }
             // A video the runtime has not moved to this time would be held at its old frame,
             // for instance one that came back into view while its seek stalled. Move it.
+            // Each video is moved at most once for this picture; if it is still off once that
+            // seek has settled, the runtime's own placement stands, as it did before.
             const stale = videos.flatMap((video) => {
               const time = expectedMediaTime(video);
               return time !== null &&
+                !corrected.has(video) &&
                 Math.abs(mediaTime.get!.call(video) - time) > 0.02
                 ? [{ video, time }]
                 : [];
             });
             if (stale.length) {
-              for (const { video, time } of stale)
+              for (const { video, time } of stale) {
+                corrected.add(video);
                 mediaTime.set!.call(video, time + 1e-5);
+              }
+              const root = document.documentElement;
+              root.setAttribute(
+                "data-cutroom-media-corrections",
+                String(
+                  Number(root.getAttribute("data-cutroom-media-corrections")) +
+                    stale.length,
+                ),
+              );
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );
@@ -2968,7 +3008,7 @@ export function previewDocument(
       })),
     },
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {
