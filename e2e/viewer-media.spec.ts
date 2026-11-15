@@ -27,7 +27,7 @@ test.use({ trace: "off" });
 async function openMedia(
   page: Page,
   request: APIRequestContext,
-  appearance?: { pattern: boolean; style: string },
+  appearance?: { pattern?: boolean; style?: string; video?: string },
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -43,9 +43,10 @@ async function openMedia(
     "-f",
     "lavfi",
     "-i",
-    appearance?.pattern
-      ? "testsrc2=s=640x360:r=30:d=12"
-      : "color=c=red:s=640x360:r=30:d=12",
+    appearance?.video ??
+      (appearance?.pattern
+        ? "testsrc2=s=640x360:r=30:d=12"
+        : "color=c=red:s=640x360:r=30:d=12"),
     "-f",
     "lavfi",
     "-i",
@@ -136,8 +137,14 @@ async function openMedia(
   return { project, read, seek };
 }
 
+type Color = number[];
+const red =
+  (minimum = 230) =>
+  ([r, g, b]: Color) =>
+    r! >= minimum && g! <= 20 && b! <= 20;
+
 /** Decode every compositor screencast frame in the page, including opaque iframes. */
-async function capturePicture(page: Page, minimumRed = 230) {
+async function capturePicture(page: Page, expected = red()) {
   const session = await page.context().newCDPSession(page);
   const box = (await page.locator(".edit-picture").boundingBox())!;
   const samples: { time: number; color: number[] }[] = [];
@@ -190,10 +197,7 @@ async function capturePicture(page: Page, minimumRed = 230) {
       );
       if (metadata.timestamp! < since) return;
       samples.push({ time: metadata.timestamp!, color });
-      if (
-        !blank &&
-        (color[0]! < minimumRed || color[1]! > 20 || color[2]! > 20)
-      ) {
+      if (!blank && !expected(color)) {
         blank = data;
         const contexts = await Promise.all(
           page
@@ -239,7 +243,12 @@ async function capturePicture(page: Page, minimumRed = 230) {
     maxWidth: 860,
     maxHeight: 525,
   });
-  await expect.poll(() => samples.at(-1)?.color[0]).toBeGreaterThan(minimumRed);
+  await expect
+    .poll(() => {
+      const last = samples.at(-1);
+      return last && expected(last.color);
+    })
+    .toBe(true);
   return {
     reset() {
       since = Date.now() / 1000;
@@ -524,6 +533,116 @@ test("razor at fractional-second playheads never blanks the visible picture", as
         .poll(async () => (await read()).timeline.clips.length)
         .toBe(count);
     }
+  } finally {
+    await capture.stop();
+  }
+});
+
+// Red for three seconds, then blue. Q at 4 s trims the first 4 s off and moves the playhead
+// back to 0, so the picture stays blue. Any document from before Q is red at 0.
+const redThenBlue =
+  "color=c=red:s=640x360:r=30:d=12,drawbox=w=iw:h=ih:color=blue:t=fill:enable='gte(t,3)'";
+const blue = ([r, g, b]: Color) => r! <= 20 && g! <= 20 && b! >= 230;
+
+for (const route of ["in place", "by reload"] as const)
+  test(`Q keeps the picture it already shows while the preview updates ${route}`, async ({
+    page,
+    request,
+  }) => {
+    const { project, read, seek } = await openMedia(page, request, {
+      video: redThenBlue,
+    });
+    const stage = page.locator(".edit-stage");
+    // A ripple that shortens the timeline changes the document's length, which reloads it.
+    // A music bed that does not ripple keeps the length, so only clip timing changes. The
+    // first picture timing edit adds the engine's track stacking, so make one beforehand.
+    if (route === "in place") {
+      await waitForPreview(page);
+      const loaded = await stage.getAttribute("data-preview-ready");
+      const view = await read();
+      const music = view.timeline.clips.find((clip) => clip.id === "music")!;
+      const response = await request.post(
+        `/api/cutroom/projects/${project.id}/commands`,
+        {
+          data: {
+            expectedRevision: view.revision,
+            commands: [
+              { type: "setTrack", index: music.track, autoSelect: false },
+              { type: "trim", clipId: "still", edge: "end", to: 359 },
+            ],
+          },
+        },
+      );
+      expect(response.ok()).toBe(true);
+      await waitForPreview(page, { after: loaded });
+      await prepareTimingPreview(page, request);
+    }
+    await seek("0400");
+    const capture = await capturePicture(page, blue);
+    const ready = await stage.getAttribute("data-preview-ready");
+    const live = page.locator("iframe[data-live]");
+    const src = await live.getAttribute("src");
+    try {
+      capture.reset();
+      await page.keyboard.press("q");
+      await expect(
+        page.getByRole("button", { name: /^Current time/ }),
+      ).toHaveText("00:00:00:00");
+      await expect
+        .poll(async () =>
+          (await read()).timeline.clips.map((clip) => clip.duration).sort(),
+        )
+        .toEqual(
+          route === "in place" ? [239, 240, 240, 360] : [240, 240, 240, 240],
+        );
+      await waitForPreview(page, { after: ready });
+      const { samples } = await capture.read();
+      expect(samples.filter(({ color }) => !blue(color))).toEqual([]);
+    } finally {
+      await capture.stop();
+    }
+    if (route === "in place") await expect(live).toHaveAttribute("src", src!);
+    else await expect(live).not.toHaveAttribute("src", src!);
+  });
+
+test("Q during an earlier edit's preview swap keeps the picture it already shows", async ({
+  page,
+  request,
+}) => {
+  const { project, read, seek } = await openMedia(page, request, {
+    video: redThenBlue,
+  });
+  await seek("0400");
+  const capture = await capturePicture(page, blue);
+  try {
+    capture.reset();
+    // A razor adds an element, so its preview reloads. That document predates Q and is
+    // still loading when Q moves the playhead to 0, as in a fast W then Q.
+    const view = await read();
+    const response = await request.post(
+      `/api/cutroom/projects/${project.id}/commands`,
+      {
+        data: {
+          expectedRevision: view.revision,
+          commands: [{ type: "split", at: 300, clipIds: ["still"] }],
+        },
+      },
+    );
+    expect(response.ok()).toBe(true);
+    await expect(page.locator(".edit-stage")).toHaveAttribute(
+      "data-handoff",
+      "loading",
+    );
+    await page.keyboard.press("q");
+    await expect(
+      page.getByRole("button", { name: /^Current time/ }),
+    ).toHaveText("00:00:00:00");
+    await expect(
+      page.frameLocator("iframe[data-live]").locator("#picture"),
+    ).toHaveAttribute("data-media-start", "4", { timeout: 20_000 });
+    await waitForPreview(page);
+    const { samples } = await capture.read();
+    expect(samples.filter(({ color }) => !blue(color))).toEqual([]);
   } finally {
     await capture.stop();
   }
@@ -1372,7 +1491,7 @@ test("coalesced stalled replacements keep the picture and finish the latest save
   await seek("0311");
   const { gate } = await gatePaint(page, "promotion");
   // The last edit halves the red picture's opacity over the dark background.
-  const capture = await capturePicture(page, 120);
+  const capture = await capturePicture(page, red(121));
   capture.reset();
   const finalLabel = `Stalled replacement ${project.id} 49`;
   try {

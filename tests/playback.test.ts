@@ -191,3 +191,20 @@ test("a stop during reload stays stopped when the prepared document attaches", (
   expect(state()).toMatchObject({ state: { kind: "stopped" }, frame: 101 });
   expect(replacement.player.playing()).toBe(false);
 });
+
+test("a playhead moved with an edit leaves documents from before the edit on their frame until the next seek", () => {
+  const previous = open(thirty, 12);
+  transport.seek(120);
+  // Q: the trimmed clip now starts at frame 60 with the picture frame 120 showed.
+  const saved = transport.follow(60);
+  expect(state()).toMatchObject({ frame: 60, held: "saving" });
+  saved();
+  expect(state().held).toBe("saved");
+  // A document loaded before the edit, still on frame 120, takes over.
+  const stale = runtime(12);
+  transport.attach(stale.player, 120);
+  expect([previous.seeks.at(-1), stale.seeks]).toEqual([4, []]);
+  transport.step(1);
+  expect(state()).toMatchObject({ frame: 61, held: false });
+  expect(stale.seeks).toEqual([61 / 30]);
+});

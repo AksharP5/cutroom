@@ -139,6 +139,38 @@ export function Viewer({
         resolve();
       else settled.current = resolve;
     });
+  /**
+   * Documents from before the playhead's last move with an edit, and the frame each keeps.
+   * Any other frame of a document that predates the edit can be the wrong picture.
+   */
+  const pins = useRef(new Map<number, number>());
+  const frameFor = (gen: number) =>
+    pins.current.get(gen) ?? useTransport.getState().frame;
+  useEffect(
+    () =>
+      useTransport.subscribe((state, previous) => {
+        if (!state.held) return pins.current.clear();
+        if (
+          state.held !== "saving" ||
+          (previous.held === "saving" && state.frame === previous.frame)
+        )
+          return;
+        const first = shownHandoff.current.confirmed?.gen ?? 1;
+        for (let gen = first; gen <= latest.current; gen++)
+          if (!pins.current.has(gen)) pins.current.set(gen, previous.frame);
+      }),
+    [],
+  );
+  /** Until the server has an edit that moved the playhead, the preview read can predate it. */
+  const editSaved = () =>
+    new Promise<void>((resolve) => {
+      if (useTransport.getState().held !== "saving") return resolve();
+      const stop = useTransport.subscribe(({ held }) => {
+        if (held === "saving") return;
+        stop();
+        resolve();
+      });
+    });
   const refresh = useRef<ReturnType<
     typeof previewRefresh<typeof change>
   > | null>(null);
@@ -154,6 +186,7 @@ export function Viewer({
     const closing = new AbortController();
     refresh.current = previewRefresh(
       async (change, isLatest) => {
+        await editSaved();
         if (
           timingEligible.current &&
           useTransport.getState().state.kind === "stopped"
@@ -215,12 +248,15 @@ export function Viewer({
                   timingSignal,
                   isLatest,
                 )
-              )
+              ) {
+                // The update drew the playhead's frame, so this document is current.
+                pins.current.delete(picture.gen);
                 transition({
                   type: "updated",
                   gen: picture.gen,
                   revision: change.revision,
                 });
+              }
               return;
             } catch (reason) {
               console.debug("Preview timing fell back to reload:", reason);
@@ -270,6 +306,8 @@ export function Viewer({
               return;
             }
           }
+          // A document requested now must come from after the edit.
+          await editSaved();
           if (!isLatest() || signal.aborted) return;
           reload(change.revision, readyDeadline);
         } finally {
@@ -317,21 +355,25 @@ export function Viewer({
   }, [live]);
 
   // A promoted candidate covers the retained picture before it owns playback, so it must
-  // draw each frame the playhead is parked on. The retained document keeps the transport,
-  // and with it the sound, until the candidate is confirmed: it can still fail or be replaced.
+  // draw each frame the playhead is parked on, unless it predates an edit that moved the
+  // playhead. The retained document keeps the transport, and with it the sound, until the
+  // candidate is confirmed: it can still fail or be replaced.
   useLayoutEffect(() => {
     if (handoff.kind !== "promoting") return;
-    const { player } = connections.current.get(handoff.candidate.gen) ?? {};
+    const { gen, shown } = handoff.candidate;
+    const { player } = connections.current.get(gen) ?? {};
     if (!player) return;
-    const show = ({ frame, fps }: ReturnType<typeof useTransport.getState>) =>
-      player.seek(frameTime(frame, fps));
-    const now = useTransport.getState();
-    if (now.state.kind !== "playing" && now.frame !== handoff.candidate.shown)
-      show(now);
+    const show = () =>
+      player.seek(frameTime(frameFor(gen), useTransport.getState().fps));
+    if (
+      useTransport.getState().state.kind !== "playing" &&
+      frameFor(gen) !== shown
+    )
+      show();
     return useTransport.subscribe((state, previous) => {
-      if (state.state.kind === "playing") return;
+      if (state.state.kind === "playing" || pins.current.has(gen)) return;
       if (state.frame !== previous.frame || previous.state.kind === "playing")
-        show(state);
+        show();
     });
   }, [handoff]);
 
@@ -493,8 +535,8 @@ export function Viewer({
       let shown = -1;
       /** Seeks until the frame painted is the latest one asked for. False once superseded. */
       const showLatest = async () => {
-        while (shown !== useTransport.getState().frame) {
-          shown = useTransport.getState().frame;
+        while (shown !== frameFor(gen)) {
+          shown = frameFor(gen);
           player.seek(frameTime(shown, useTransport.getState().fps));
           await preview.painted();
           preview.signal.throwIfAborted();
