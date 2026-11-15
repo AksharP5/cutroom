@@ -26,6 +26,7 @@ import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
+import { compactLint } from "../../shared/lint";
 
 type LocalFetch = (
   url: string,
@@ -225,6 +226,19 @@ export function createMcpServer(options: McpOptions = {}) {
       annotations: readOnly,
     },
     (input) => request(`/projects/${id(input.projectId)}/document`),
+  );
+  registry.registerTool(
+    "project_lint",
+    {
+      description:
+        "Run HyperFrames lint over every composition. Returns error and warning counts and each finding's severity, code, message, file, line, element id and fix hint.",
+      inputSchema: project,
+      annotations: readOnly,
+    },
+    (input) =>
+      requestApi(`/projects/${id(input.projectId)}/lint`, "GET", undefined, {
+        reply: compactLint,
+      }),
   );
   registry.registerTool(
     "media_list",

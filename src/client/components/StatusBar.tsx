@@ -2,6 +2,7 @@ import type { Project } from "../../shared/project";
 import type { ReviewItem } from "../../shared/review";
 import { useWorkspace } from "../workspace";
 import { toReviewStatuses } from "../review";
+import { LintStatus } from "./LintStatus";
 
 /** Only what the app knows: values it cannot read yet are left out, never guessed. */
 export function StatusBar({
@@ -45,6 +46,7 @@ export function StatusBar({
           {composition.width} x {composition.height}
         </span>
       )}
+      <LintStatus projectId={project.id} />
       {waiting.length > 0 && (
         <button
           onClick={onReview}
