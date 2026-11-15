@@ -12,3 +12,6 @@ coverage/
 .cutroom-dev/
 artifacts/
 .DS_Store
+
+# Private-port Playwright config copies made for local runs
+pw.scratch.config.ts
