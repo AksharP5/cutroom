@@ -204,6 +204,132 @@ test("paused timing keeps the document and matches fresh pictures at NTSC cuts, 
   }
 });
 
+/** Each frame of the edited tab must equal the same frame of a freshly loaded document. */
+async function matchesFresh(
+  page: Page,
+  projectId: string,
+  frames: number[],
+  label: string,
+) {
+  const control = await page.context().newPage();
+  try {
+    await control.goto(`/#project/${projectId}`);
+    await waitForPreview(control);
+    for (const frame of frames) {
+      await seek(page, frame);
+      await seek(control, frame);
+      const patched = await page.locator(".edit-picture").screenshot();
+      const fresh = await control.locator(".edit-picture").screenshot();
+      expect(patched.equals(fresh), `${label}, frame ${frame}`).toBe(true);
+    }
+  } finally {
+    await control.close();
+  }
+}
+
+test("a timing edit after the playhead crosses a cut keeps the document", async ({
+  page,
+  request,
+}) => {
+  const { project, edit } = await fixture(request, page);
+  // The runtime swaps the visible clips once the new one has decoded, after the seek returns.
+  await seek(page, 100);
+  const original = await live(page);
+  const previous = await token(page);
+  await edit([{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [31, 100], "after a seek");
+});
+
+test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(150000);
+  const { project, edit } = await fixture(request, page);
+  const picture = page.locator("iframe[data-live]").contentFrame();
+  const undo = async (label: string) => {
+    const previous = await token(page);
+    await page.getByRole("button", { name: /^Current time/ }).focus();
+    await page.keyboard.press("Control+z");
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    await expect(picture.locator("#v1, #a1")).toHaveCount(2);
+    await matchesFresh(page, project.id, [0, 76], label);
+  };
+  // Removing the first pair closes the gap: the second pair and the title move back,
+  // and the composition shortens.
+  await seek(page, 100);
+  let original = await live(page);
+  const length = await picture.locator("main").getAttribute("data-duration");
+  let previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: true }]);
+  await waitForPreview(page, { after: previous });
+  await expect(picture.locator("#v1, #a1")).toHaveCount(0);
+  await expect(picture.locator("main")).not.toHaveAttribute(
+    "data-duration",
+    length!,
+  );
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [0, 43, 44, 100], "ripple delete");
+  // Undo adds the clips back, which still needs a fresh document.
+  await undo("undo ripple delete");
+
+  await seek(page, 40);
+  original = await live(page);
+  previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await expect(picture.locator("#v1, #a1")).toHaveCount(0);
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [0, 40, 75, 76], "lift");
+  await undo("undo lift");
+});
+
+test("lifting a clip matches fresh pictures through a dissolve, a transform and track gain", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(150000);
+  const { project, edit } = await fixture(request, page);
+  let previous = await token(page);
+  await edit([
+    { type: "setClip", clipId: "v2", scale: 1.25, rotation: 5 },
+    {
+      type: "setTransition",
+      from: "v1",
+      to: "v2",
+      transition: { kind: "dissolve", duration: 20, alignment: "center" },
+    },
+    { type: "setTrack", index: 1, volume: 0.5 },
+  ]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page, { timing: true });
+  // A second title keeps its track, and so the track stylesheet, after the lift.
+  previous = await token(page);
+  await edit([
+    {
+      type: "insert",
+      track: 2,
+      at: 200,
+      clip: { kind: "title", id: "late", text: "Later", duration: 60 },
+    },
+  ]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page, { timing: true });
+  const original = await live(page);
+  previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["title"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [60, 70, 76, 80, 86, 150], "lift");
+});
+
 test("MCP and disk timing refresh both tabs, while structural, script and CSS changes reload", async ({
   page,
   request,
@@ -493,13 +619,16 @@ for (const [name, scripts] of [
       if (request.url().includes("cutroom-timing=")) snapshots++;
     });
     const { project, edit } = await fixture(request, page, scripts);
-    const doc = await live(page),
-      before = await token(page);
-    await edit([
-      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
-    ]);
-    await waitForPreview(page, { after: before });
-    expect(await live(page)).not.toBe(doc);
+    for (const commands of [
+      [{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }],
+      [{ type: "remove", clipIds: ["v1"], ripple: true }],
+    ] satisfies CommandInput[][]) {
+      const doc = await live(page),
+        before = await token(page);
+      await edit(commands);
+      await waitForPreview(page, { after: before });
+      expect(await live(page)).not.toBe(doc);
+    }
     expect(snapshots).toBe(0);
     if (name === "init-time GSAP") {
       const control = await page.context().newPage();
@@ -528,8 +657,13 @@ for (const [name, scripts] of [
     ).toBe(0);
   });
 
-for (const divergence of ["text", "style", "element"] as const)
-  test(`a script-free document with divergent live ${divergence} fails closed`, async ({
+for (const [divergence, change] of [
+  ["text", "timing"],
+  ["style", "timing"],
+  ["element", "timing"],
+  ["element", "removal"],
+] as const)
+  test(`a script-free document with divergent live ${divergence} fails closed on a ${change} edit`, async ({
     page,
     request,
   }) => {
@@ -546,9 +680,11 @@ for (const divergence of ["text", "style", "element"] as const)
       if (divergence === "element")
         title.append(document.createElement("span"));
     }, divergence);
-    await edit([
-      { type: "move", clipIds: ["title"], by: 1, mode: "overwrite" },
-    ]);
+    await edit(
+      change === "timing"
+        ? [{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }]
+        : [{ type: "remove", clipIds: ["v1"], ripple: true }],
+    );
     await waitForPreview(page, { after: before });
     expect(await live(page)).not.toBe(doc);
     const current = (await (await page

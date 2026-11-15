@@ -282,15 +282,16 @@ async function keepPicture(
   label: string,
   change: () => Promise<unknown>,
 ) {
-  const before = await page.locator("iframe[data-live]").getAttribute("src");
+  const before = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
   capture.reset();
   let result;
   try {
     await change();
-    await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
-      "src",
-      before!,
-    );
+    // A new document or the same one updated in place: either way, the edit is drawn.
+    await waitForPreview(page, { after: before });
+    await waitForPreview(page);
     await expect(page.locator(".edit-frame")).toHaveCount(1);
   } finally {
     result = await capture.read();

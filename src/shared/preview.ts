@@ -96,9 +96,22 @@ export const PreviewTimingSchema = z.object({
           ),
         })
         .nullable(),
+      /**
+       * Where a clip that can be added or removed in place sits: its parent and the gap
+       * between that parent's other nodes. Null for a clip that is part of the structure.
+       */
+      slot: z.string().nullable(),
+      /** Hash of the clip's element without its timing and title values. */
+      body: z.string().nullable(),
+      /** The whitespace text just before the clip, which comes and goes with it. */
+      space: z.string(),
+      /** The clip's served markup, for adding it to a loaded document. */
+      html: z.string().nullable(),
     }),
   ),
   titleStyle: z.string().nullable(),
+  /** The top-level composition's data-duration. */
+  duration: z.string().nullable(),
 });
 export type PreviewTiming = z.infer<typeof PreviewTimingSchema>;
 
