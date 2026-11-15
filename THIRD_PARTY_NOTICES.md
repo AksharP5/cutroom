@@ -12,6 +12,8 @@ Cutroom does not include code or assets extracted from the proprietary HyperFram
 
 Cutroom also applies version-checked loading transforms to HyperFrames producer 0.9.26 in `src/server/hyperframes/renderIsolation.ts`. Browser discovery excludes media under `data-hidden`, preserving static parsing's visibility and audio exclusions. Entry and sub-composition compilation accept effective source supplied by Cutroom's render worker, so persisted track mixing also covers outside HTML edits without rewriting project files. Dependency files remain unchanged.
 
+The same file applies one version-checked loading transform to Apache-2.0 `@puppeteer/browsers` 3.2.2 in the render worker: browsers stay in the worker's process group instead of starting their own sessions, so stopping an export also stops its browsers. Dependency files remain unchanged.
+
 `src/server/hyperframes/previewRuntime.ts` adapts the served runtime in memory, with an exact source-match and version check for core 0.9.26. It refreshes a group's static gain when `data-volume` changes even when that group had no automation lane. This lets a live track fader update the existing Web Audio stage. The published dependency and export runtime files remain unchanged.
 
 ## GSAP

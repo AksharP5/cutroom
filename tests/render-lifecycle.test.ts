@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStudioApi } from "@hyperframes/studio-server";
 import { z } from "zod";
-import { createRenderWorkers } from "../src/server/hyperframes/jobs";
+import {
+  STAGING_PREFIX,
+  createRenderWorkers,
+} from "../src/server/hyperframes/jobs";
 import { createThumbnailRenderer } from "../src/server/hyperframes/thumbnails";
 
 async function waitFor(check: () => boolean) {
@@ -230,6 +233,164 @@ test("a worker startup failure retains its cause instead of only the Node versio
     await waitFor(() => state.status === "failed");
     expect(state.error).toContain("missing-worker-dependency.mjs");
     expect(workers.get(state.id)?.error).toBe(state.error);
+  } finally {
+    await workers.cancelAll();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A worker that launches a stand-in browser through Puppeteer's real launcher under the
+ * render isolation hooks, reports browser startup, then stops running JavaScript, so its
+ * SIGTERM handlers and Puppeteer's exit handlers never run. The browser keeps writing
+ * into the worker's temporary folder, as Chromium writes its profile there.
+ */
+async function stalledStartup(directory: string) {
+  const workerPath = join(directory, "worker.mjs");
+  await writeFile(
+    workerPath,
+    `import { writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { registerRenderIsolation } from ${JSON.stringify(join(import.meta.dir, "../src/server/hyperframes/renderIsolation.ts"))};
+let body = ""; for await (const chunk of process.stdin) body += chunk;
+const { outputPath: rendered } = JSON.parse(body);
+registerRenderIsolation();
+const { launch } = await import(${JSON.stringify(import.meta.resolve("@puppeteer/browsers"))});
+const browser = launch({
+  executablePath: "/bin/sh",
+  args: ["-c", 'while :; do mkdir -p "$TMPDIR/profile" && date > "$TMPDIR/profile/state"; sleep 0.01; done'],
+  env: process.env,
+});
+await writeFile(join(dirname(dirname(rendered)), basename(rendered)) + ".json", JSON.stringify({ browser: browser.nodeProcess.pid, scratch: process.env.TMPDIR }));
+console.log("CUTROOM_RENDER:" + JSON.stringify({ type: "progress", progress: 20, stage: "Starting browsers (0/1 ready)", stageProgress: { code: "start_browsers", done: 0, total: 1 } }));
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+`,
+  );
+  return workerPath;
+}
+
+async function startStalled(
+  workers: ReturnType<typeof createRenderWorkers>,
+  directory: string,
+) {
+  const outputPath = join(directory, "render.mp4");
+  const state = workers.start({
+    project: { id: "stalled", dir: directory },
+    outputPath,
+    format: "mp4",
+    fps: { num: 30, den: 1 },
+    quality: "draft",
+    jobId: "stalled",
+  });
+  await waitFor(() => state.stageProgress?.code === "start_browsers");
+  const owned = z
+    .object({ browser: z.number(), scratch: z.string() })
+    .parse(JSON.parse(await readFile(`${outputPath}.json`, "utf8")));
+  return { state, ...owned };
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+test.skipIf(process.platform !== "linux")(
+  "cancelling a stalled browser startup ends cancelled with its browser and scratch gone",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cutroom-render-stall-"));
+    const workers = createRenderWorkers({
+      workerPath: await stalledStartup(directory),
+      stopTimeoutMs: 100,
+    });
+    let browser: number | undefined;
+    try {
+      const { state, scratch, ...started } = await startStalled(
+        workers,
+        directory,
+      );
+      browser = started.browser;
+      await state.cancel();
+      expect(state.status).toBe("cancelled");
+      expect(state.error).toBeUndefined();
+      expect(alive(browser)).toBe(false);
+      expect(existsSync(scratch)).toBe(false);
+      expect(
+        readdirSync(directory).filter((name) =>
+          name.startsWith(STAGING_PREFIX),
+        ),
+      ).toEqual([]);
+    } finally {
+      if (browser && alive(browser)) process.kill(browser, "SIGKILL");
+      await workers.cancelAll().catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a browser startup that never finishes fails the export with a clear cause and cleans up",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cutroom-render-stall-"));
+    const workers = createRenderWorkers({
+      workerPath: await stalledStartup(directory),
+      stopTimeoutMs: 100,
+      startupTimeoutMs: 300,
+    });
+    let browser: number | undefined;
+    try {
+      const { state, scratch, ...started } = await startStalled(
+        workers,
+        directory,
+      );
+      browser = started.browser;
+      await waitFor(() => state.status !== "rendering");
+      expect(state.status).toBe("failed");
+      expect(state.error).toContain("browsers made no progress starting");
+      expect(alive(browser)).toBe(false);
+      expect(existsSync(scratch)).toBe(false);
+    } finally {
+      if (browser && alive(browser)) process.kill(browser, "SIGKILL");
+      await workers.cancelAll().catch(() => {});
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("the startup limit spares a slow startup that keeps advancing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-render-slow-"));
+  const workerPath = join(directory, "worker.mjs");
+  // HyperFrames reports a retry with fewer browsers when a capture page gets stuck.
+  await writeFile(
+    workerPath,
+    `import { writeFile } from "node:fs/promises";
+let body = ""; for await (const chunk of process.stdin) body += chunk;
+const { outputPath } = JSON.parse(body);
+const send = (event) => console.log("CUTROOM_RENDER:" + JSON.stringify(event));
+for (const [stage, total] of [["Starting browsers (0/2 ready)", 2], ["Starting browsers (0/1 ready)", 1]]) {
+  send({ type: "progress", progress: 20, stage, stageProgress: { code: "start_browsers", done: 0, total } });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+}
+await writeFile(outputPath, "video");
+send({ type: "complete" });
+`,
+  );
+  const workers = createRenderWorkers({ workerPath, startupTimeoutMs: 450 });
+  try {
+    const state = workers.start({
+      project: { id: "slow", dir: directory },
+      outputPath: join(directory, "render.mp4"),
+      format: "mp4",
+      fps: { num: 30, den: 1 },
+      quality: "draft",
+      jobId: "slow",
+    });
+    await waitFor(() => state.status !== "rendering");
+    expect(state.error).toBeUndefined();
+    expect(state.status).toBe("complete");
   } finally {
     await workers.cancelAll();
     await rm(directory, { recursive: true, force: true });
