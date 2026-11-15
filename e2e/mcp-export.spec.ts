@@ -108,6 +108,7 @@ test("stdio and HTTP MCP export marked and whole timelines, share the indicator,
       await clients[0].callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: view.revision,
           commands: [{ type: "setRange", in: 15, out: 45 }],

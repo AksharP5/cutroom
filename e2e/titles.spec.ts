@@ -56,6 +56,7 @@ const editor = (client: Client, projectId: string, composition?: string) => {
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId,
             composition,
             expectedRevision: (await read()).revision,

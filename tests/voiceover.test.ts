@@ -145,6 +145,7 @@ test("recorded takes use the engine, preserve occupied audio, and undo leaves th
           await client.callTool({
             name: "timeline_edit",
             arguments: {
+              fullTimeline: true,
               projectId: project.id,
               expectedRevision: readback.structuredContent.result.revision,
               commands: [
@@ -171,8 +172,16 @@ test("recorded takes use the engine, preserve occupied audio, and undo leaves th
         fadeOut: 7,
         track: 4,
       });
+      const ledger = z
+        .object({ structuredContent: z.object({ result: TimelineViewSchema }) })
+        .parse(
+          await client.callTool({
+            name: "timeline_read",
+            arguments: { projectId: project.id, clipEdits: true },
+          }),
+        ).structuredContent.result.clipEdits;
       expect(
-        edited.structuredContent.result.clipEdits?.some(
+        ledger?.some(
           (edit) =>
             edit.clipId === take.id && edit.label.includes("1 track down"),
         ),

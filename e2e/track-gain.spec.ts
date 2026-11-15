@@ -186,6 +186,7 @@ test("a track's gain turns a split music bed down once, and preview, meters and 
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: view.revision,
           commands: [
@@ -410,6 +411,7 @@ test("GSAP silence and independent boosted stages agree in preview meters and ex
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: project.id,
             expectedRevision: before.revision,
             commands: [

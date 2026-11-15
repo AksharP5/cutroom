@@ -551,21 +551,21 @@ test("rapid MCP edit notifications identify their request and saved revision", a
         requests.push(message.id);
       receive(message, extra);
     };
-    let view = await f.read();
+    let { revision } = await f.read();
     for (let i = 0; i < 12; i++) {
       const result = await client.callTool({
         name: "timeline_edit",
         arguments: {
           projectId: f.project.id,
-          expectedRevision: view.revision,
+          expectedRevision: revision,
           commands: [{ type: "move", clipIds: ["cta"], by: 1, mode: "place" }],
         },
       });
       expect(result.isError).not.toBe(true);
-      view = z
-        .object({ result: TimelineViewSchema })
-        .parse(result.structuredContent).result;
-      expected.push({ requestId: requests[i], revision: view.revision });
+      revision = z
+        .object({ result: z.object({ revision: z.string() }) })
+        .parse(result.structuredContent).result.revision;
+      expected.push({ requestId: requests[i], revision });
     }
     await done.promise;
     expect(
