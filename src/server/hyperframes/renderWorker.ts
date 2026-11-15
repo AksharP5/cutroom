@@ -6,6 +6,7 @@ import {
   spliceSourceParts,
 } from "./renderIsolation.ts";
 import { DirectPlanSchema } from "./directSchema.ts";
+import type { VideoEncoder } from "./directExport.ts";
 import { ExportRangeSchema } from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
@@ -17,6 +18,8 @@ const Input = z.object({
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
   scratchDir: z.string(),
+  /** Frames drawn wholly from the sources encode with NVENC, which the server's probe found working. */
+  gpu: z.boolean(),
   /** The server's plan to draw every frame from the sources. The worker still checks each source. */
   direct: z
     .object({
@@ -89,6 +92,7 @@ try {
   });
   const logger = createConsoleLogger("warn");
   let audioLoweredDb: number | undefined;
+  let encoder: VideoEncoder | undefined;
   const direct =
     input.direct &&
     (await prepareDirectExport(input.direct.plan, input.projectDir));
@@ -110,12 +114,13 @@ try {
       bitrate: request.options.videoBitrate,
       maxBitrate: request.options.maxBitrate,
       bufferSize: request.options.bufferSize,
+      gpu: input.gpu,
       engineConfig,
       signal: abort.signal,
     };
   if (encoding && !capture?.length) {
     const { collectRenderMedia } = await import("@hyperframes/producer");
-    ({ audioLoweredDb } = await exportDirect({
+    ({ audioLoweredDb, encoder } = await exportDirect({
       ...encoding,
       projectDir: request.projectDir,
       outputPath: request.outputPath,
@@ -125,10 +130,13 @@ try {
     }));
   } else if (range) {
     // Source frames encode while the span plans and captures; its progress stands for both.
+    // They join HyperFrames' libx264 parts, so they use libx264 too.
     if (encoding && capture)
       spliceSourceParts(
         capture,
-        encodeSourceParts({ ...encoding, onFrames: () => {} }),
+        encodeSourceParts({ ...encoding, gpu: false, onFrames: () => {} }).then(
+          ({ parts }) => parts,
+        ),
       );
     const options = request.options;
     const { num, den } = options.fps;
@@ -180,6 +188,8 @@ try {
     type: "complete",
     audioLoweredDb,
     renderer: !encoding ? "capture" : capture?.length ? "mixed" : "direct",
+    // HyperFrames chooses frame capture's encoder.
+    encoder: encoding ? (encoder ?? "libx264") : undefined,
   });
 } catch (error) {
   send({

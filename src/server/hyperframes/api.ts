@@ -53,6 +53,7 @@ import {
   thumbnailRendererVersion,
 } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
+import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
@@ -185,6 +186,18 @@ export function createHyperframesApi(
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
     scratchDir: join(store.dataDir, "scratch"),
+    gpu:
+      process.env.CUTROOM_EXPORT_GPU === "0"
+        ? undefined
+        : () =>
+            probeNvenc().then((works) => {
+              console.info(
+                works
+                  ? "Exports drawn from their sources encode with NVENC."
+                  : "No working NVENC encoder, so exports encode with libx264.",
+              );
+              return works;
+            }),
     frameCache: {
       dir: join(store.dataDir, "cache", "frames"),
       maxBytes: 2 * 1024 ** 3,

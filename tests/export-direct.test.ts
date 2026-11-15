@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { browserExecutable } from "../src/server/hyperframes/render";
+import { probeNvenc } from "../src/server/hyperframes/nvenc";
 import type { Fps } from "../src/shared/timeline/schema";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
@@ -196,6 +197,9 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     const root = await mkdtemp(join(tmpdir(), "export-direct-"));
     const scratchDir = `${root}-scratch`;
     const direct = createRenderWorkers({ scratchDir });
+    // Where the probe finds no GPU, as in CI, these encode with libx264 too.
+    const gpu = createRenderWorkers({ scratchDir, gpu: probeNvenc });
+    const nvenc = (await probeNvenc()) ? "h264_nvenc" : "libx264";
     const capture = createRenderWorkers({ scratchDir, directExport: false });
     try {
       await Promise.all([
@@ -263,9 +267,12 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
         );
         for (const range of ranges) {
           const outputs = [];
-          for (const [workers, renderer] of [
-            [direct, testCase.renderer],
-            [capture, "capture"],
+          // Captured parts are libx264, so a mixed export's source parts are too.
+          const gpuEncoder = testCase.renderer === "direct" ? nvenc : "libx264";
+          for (const [workers, renderer, encoder] of [
+            [capture, "capture", undefined],
+            [direct, testCase.renderer, "libx264"],
+            [gpu, testCase.renderer, gpuEncoder],
           ] as const) {
             const filename = `export-${exported++}.mp4`;
             const state = workers.start(
@@ -284,25 +291,31 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
               await Bun.sleep(50);
             expect(state.error).toBeUndefined();
             expect(state.renderer).toBe(renderer);
+            expect(state.encoder).toBe(encoder);
             outputs.push(state.outputPath);
           }
           const end = Math.max(
             ...clips.map((clip) => clip.start + clip.frames),
           );
-          await expectParity(
-            outputs[0]!,
-            outputs[1]!,
-            range ? range.end - range.start : end,
-          );
+          for (const output of outputs.slice(1))
+            await expectParity(
+              output,
+              outputs[0]!,
+              range ? range.end - range.start : end,
+            );
         }
       }
     } finally {
-      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await Promise.all([
+        direct.cancelAll(),
+        gpu.cancelAll(),
+        capture.cancelAll(),
+      ]);
       await rm(root, { recursive: true, force: true });
       await rm(scratchDir, { recursive: true, force: true });
     }
   },
-  // Six exports, three of them capturing up to 105 frames in Chromium.
+  // Fifteen exports, five of them capturing up to 105 frames in Chromium.
   300_000,
 );
 
@@ -328,6 +341,8 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     const root = await mkdtemp(join(tmpdir(), "export-placed-"));
     const scratchDir = `${root}-scratch`;
     const direct = createRenderWorkers({ scratchDir });
+    const gpu = createRenderWorkers({ scratchDir, gpu: probeNvenc });
+    const nvenc = (await probeNvenc()) ? "h264_nvenc" : "libx264";
     const capture = createRenderWorkers({ scratchDir, directExport: false });
     try {
       await Promise.all([
@@ -421,11 +436,12 @@ ${clips.join("\n")}
 </main></body></html>`,
       );
       const outputs = [];
-      for (const [workers, renderer] of [
-        [direct, "direct"],
-        [capture, "capture"],
+      for (const [workers, renderer, encoder] of [
+        [capture, "capture", undefined],
+        [direct, "direct", "libx264"],
+        [gpu, "direct", nvenc],
       ] as const) {
-        const filename = `${renderer}.mp4`;
+        const filename = `${renderer}-${outputs.length}.mp4`;
         const state = workers.start(
           {
             project: { id: "placed", dir: root },
@@ -442,20 +458,26 @@ ${clips.join("\n")}
           await Bun.sleep(50);
         expect(state.error).toBeUndefined();
         expect(state.renderer).toBe(renderer);
+        expect(state.encoder).toBe(encoder);
         outputs.push(state.outputPath);
       }
       const runOf = (frame: number) => {
         let end = 0;
         return runs.find((run) => (end += run.frames) > frame);
       };
-      await expectParity(
-        outputs[0]!,
-        outputs[1]!,
-        start,
-        (frame) => runOf(frame)?.drawn,
-      );
+      for (const output of outputs.slice(1))
+        await expectParity(
+          output,
+          outputs[0]!,
+          start,
+          (frame) => runOf(frame)?.drawn,
+        );
     } finally {
-      await Promise.all([direct.cancelAll(), capture.cancelAll()]);
+      await Promise.all([
+        direct.cancelAll(),
+        gpu.cancelAll(),
+        capture.cancelAll(),
+      ]);
       await rm(root, { recursive: true, force: true });
       await rm(scratchDir, { recursive: true, force: true });
     }

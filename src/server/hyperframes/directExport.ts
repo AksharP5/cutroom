@@ -13,6 +13,7 @@ import type { AudioElement, EngineConfig } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
+import { NVENC } from "./nvenc.ts";
 import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
 import { contentRect, placeOnFrame, visibleRect } from "./directPlacement.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
@@ -227,14 +228,77 @@ function placed(
   ].join(";");
 }
 
-/** Encodes one part's pieces in a single FFmpeg process with the capture path's encoder. */
+export type VideoEncoder = "libx264" | "h264_nvenc";
+type EncoderOptions = Parameters<typeof buildEncoderArgs>[0];
+
+/**
+ * The encoder settings for every part of one export: the capture path's libx264 preset, or
+ * NVENC's equivalent tier.
+ */
+export function sourceEncoder(
+  input: Pick<
+    Encoding,
+    "plan" | "fps" | "quality" | "crf" | "bitrate" | "maxBitrate" | "bufferSize"
+  >,
+  encoder: VideoEncoder,
+): EncoderOptions {
+  const preset = getEncoderPreset(input.quality, "mp4");
+  const gpu = encoder === "h264_nvenc" ? NVENC[input.quality] : undefined;
+  return {
+    fps: input.fps,
+    width: input.plan.width,
+    height: input.plan.height,
+    codec: "h264",
+    preset: gpu?.preset ?? preset.preset,
+    quality: gpu?.quality ?? input.crf ?? preset.quality,
+    bitrate: input.crf === undefined ? input.bitrate : undefined,
+    maxBitrate: input.maxBitrate,
+    bufferSize: input.bufferSize,
+    pixelFormat: preset.pixelFormat,
+    useGpu: gpu !== undefined,
+  };
+}
+
+/**
+ * FFmpeg's arguments to encode `frames` frames from `inputArgs` (inputs, graph and map) as one
+ * closed GOP, so parts join without re-encoding.
+ */
+export function partEncoderArgs(
+  encoder: EncoderOptions,
+  frames: number,
+  inputArgs: string[],
+  outputPath: string,
+) {
+  const args = buildEncoderArgs(
+    { ...encoder, lockGopForChunkConcat: true, gopSize: frames },
+    // HyperFrames locks the GOP for libx264 only. NVENC starts each part on an IDR frame and,
+    // without B-frames, references nothing before it; one GOP keeps it free of later I-frames.
+    [
+      ...inputArgs,
+      ...["-frames:v", String(frames)],
+      ...(encoder.useGpu ? ["-g", String(frames)] : []),
+    ],
+    outputPath,
+    encoder.useGpu ? "nvenc" : null,
+  );
+  // The encoder arguments convert screenshots. These frames are converted in the graph.
+  const capture = args.indexOf("-vf");
+  if (capture === -1 || args.lastIndexOf("-vf") !== capture)
+    throw new Error(
+      "Cutroom's direct export no longer matches HyperFrames' encoder arguments. Review the HyperFrames upgrade.",
+    );
+  args.splice(capture, 2);
+  return args;
+}
+
+/** Encodes one part's pieces in a single FFmpeg process. */
 async function encodePart(input: {
   pieces: Piece[];
   outputPath: string;
   fps: Fps;
   width: number;
   height: number;
-  encoder: Parameters<typeof buildEncoderArgs>[0];
+  encoder: EncoderOptions;
   signal: AbortSignal;
   timeout: number;
   onFrames: (frames: number) => void;
@@ -302,26 +366,12 @@ async function encodePart(input: {
   // Frames leave the layer filters in their source matrix and range, tagged as the sRGB the
   // preview draws. The capture path writes the same tagged BT.709 limited-range 4:2:0.
   const graph = `${chains.join(";")};${pieces.map((_, index) => `[p${index}]`).join("")}concat=n=${pieces.length}:v=1:a=0,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv[v]`;
-  const args = buildEncoderArgs(
-    { ...input.encoder, lockGopForChunkConcat: true, gopSize: total },
-    [
-      ...inputs,
-      "-filter_complex",
-      graph,
-      "-map",
-      "[v]",
-      "-frames:v",
-      String(total),
-    ],
+  const args = partEncoderArgs(
+    input.encoder,
+    total,
+    [...inputs, "-filter_complex", graph, "-map", "[v]"],
     input.outputPath,
   );
-  // The encoder arguments convert screenshots. These frames are converted in the graph above.
-  const capture = args.indexOf("-vf");
-  if (capture === -1 || args.lastIndexOf("-vf") !== capture)
-    throw new Error(
-      "Cutroom's direct export no longer matches HyperFrames' encoder arguments. Review the HyperFrames upgrade.",
-    );
-  args.splice(capture, 2);
   let reported = 0;
   const result = await runFfmpeg(args, {
     signal: input.signal,
@@ -352,63 +402,87 @@ type Encoding = {
   bitrate?: string;
   maxBitrate?: string;
   bufferSize?: string;
+  /** Encode with NVENC, which the server's probe found working. */
+  gpu: boolean;
   engineConfig: EngineConfig;
   signal: AbortSignal;
 };
 
 /**
- * Encodes the plan's source runs with the capture path's encoder settings, a few parts at once,
- * each one closed GOP, so they join with captured parts without re-encoding.
+ * Encodes the plan's source runs a few parts at once, each one closed GOP, so they join with
+ * each other and with captured parts without re-encoding. With `gpu`, NVENC encodes them; if any
+ * part fails, libx264 encodes every part again, so an export never mixes the two encoders. A
+ * chosen CRF is libx264's scale, so it always encodes with libx264.
  */
 export async function encodeSourceParts(
   input: Encoding & { onFrames: (frames: number) => void },
-): Promise<EncodedPart[]> {
-  const { plan, fps, signal } = input;
+): Promise<{ parts: EncodedPart[]; encoder: VideoEncoder }> {
+  const { plan, fps } = input;
   const partsDir = join(input.workDir, "parts");
   await mkdir(partsDir, { recursive: true });
-  const preset = getEncoderPreset(input.quality, "mp4");
-  const encoder = {
-    fps,
-    width: plan.width,
-    height: plan.height,
-    codec: "h264" as const,
-    preset: preset.preset,
-    quality: input.crf ?? preset.quality,
-    bitrate: input.crf === undefined ? input.bitrate : undefined,
-    maxBitrate: input.maxBitrate,
-    bufferSize: input.bufferSize,
-    pixelFormat: preset.pixelFormat,
-  };
   const parts = partition(input.pieces, fps).map((pieces, index) => ({
     pieces,
     start: pieces[0]!.start,
     end: pieces.at(-1)!.end,
     path: join(partsDir, `source-${String(index).padStart(4, "0")}.mp4`),
   }));
-  let next = 0;
-  await Promise.all(
-    Array.from(
-      { length: Math.min(PARALLEL_ENCODES, parts.length) },
-      async () => {
-        while (next < parts.length && !signal.aborted) {
-          const part = parts[next++]!;
-          await encodePart({
-            pieces: part.pieces,
-            outputPath: part.path,
-            fps,
-            width: plan.width,
-            height: plan.height,
-            encoder,
-            signal,
-            timeout: input.engineConfig.ffmpegEncodeTimeout,
-            onFrames: input.onFrames,
-          });
-        }
-      },
-    ),
-  );
-  signal.throwIfAborted();
-  return parts.map(({ start, end, path }) => ({ start, end, path }));
+  const encodeAll = async (encoder: VideoEncoder) => {
+    const options = sourceEncoder(input, encoder);
+    // The first failure stops the other parts; every FFmpeg has exited once they settle.
+    const failed = new AbortController();
+    const signal = AbortSignal.any([input.signal, failed.signal]);
+    let next = 0;
+    let encoded = 0;
+    const results = await Promise.allSettled(
+      Array.from(
+        { length: Math.min(PARALLEL_ENCODES, parts.length) },
+        async () => {
+          while (next < parts.length && !signal.aborted) {
+            const part = parts[next++]!;
+            await encodePart({
+              pieces: part.pieces,
+              outputPath: part.path,
+              fps,
+              width: plan.width,
+              height: plan.height,
+              encoder: options,
+              signal,
+              timeout: input.engineConfig.ffmpegEncodeTimeout,
+              onFrames: (frames) => {
+                encoded += frames;
+                input.onFrames(frames);
+              },
+            }).catch((error: unknown) => {
+              failed.abort();
+              throw error;
+            });
+          }
+        },
+      ),
+    );
+    input.signal.throwIfAborted();
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    return { failure, encoded };
+  };
+  const done = (encoder: VideoEncoder) => ({
+    encoder,
+    parts: parts.map(({ start, end, path }) => ({ start, end, path })),
+  });
+  if (input.gpu && input.crf === undefined) {
+    const nvenc = await encodeAll("h264_nvenc");
+    if (!nvenc.failure) return done("h264_nvenc");
+    const { reason } = nvenc.failure;
+    console.warn(
+      "NVENC could not encode this export, so libx264 encodes it:",
+      reason instanceof Error ? reason.message : reason,
+    );
+    input.onFrames(-nvenc.encoded);
+  }
+  const x264 = await encodeAll("libx264");
+  if (x264.failure) throw x264.failure.reason;
+  return done("libx264");
 }
 
 /** Exports a range drawn entirely from its sources, with the planner's own audio mix. */
@@ -471,7 +545,7 @@ export async function exportDirect(
   });
   const stitched = join(input.workDir, "video.mp4");
   const concat = await concatVideoFiles(
-    videoResult.value.map((part) => part.path),
+    videoResult.value.parts.map((part) => part.path),
     stitched,
     signal,
     engineConfig,
@@ -488,5 +562,8 @@ export async function exportDirect(
     frames: plan.frames,
     signal,
   });
-  return { audioLoweredDb: audioResult.value.audioLoweredDb };
+  return {
+    audioLoweredDb: audioResult.value.audioLoweredDb,
+    encoder: videoResult.value.encoder,
+  };
 }

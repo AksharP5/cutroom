@@ -478,6 +478,37 @@ Clips the inspector moved, scaled, rotated, cropped or faded, and image stills, 
 
 The photo is letterboxed over an interview cut that shows around it, so it stays in the browser and the server log says why; the titles do too. Against the capture, the frames have a mean difference of 0.40/255 (1.14 at worst) and at most 0.82/255 bias, with sample-identical sound. Every frame whose counter is visible reads the same source frame; in the two punch-ins without an upward move the counter is scaled off the frame, and each of those 266 frames is closer to the capture's same frame (at most 1.14/255) than to either neighbour.
 
+### GPU encoding
+
+An export drawn wholly from its sources encodes with NVENC when the server's probe finds it working ([architecture](architecture.md#export-dialog)). On November 15, 2026, each case below exported through the export route at Standard quality, alternating main `f736424` and this change on an RTX 5060 (driver 615.78) and an Intel Core i5-14400F shared with other agents, so both columns carry the same load. The fixtures are noisier than the ones above, with light film grain over moving test patterns, which costs libx264 more: the interview is 45 seconds of ten linked 1080p30 BT.709 cuts, three b-roll clips (one 720p, one 23.976 fps), a music bed and two titles; the plain project is 150 linked cuts of a 720p copy, 6:15 long; the 300-clip project is the same with 140 pairs and 20 titles. Quality is measured against the same export at CRF 0, which is lossless, over every frame.
+
+| Export                        |        Main time |       GPU time |     Main CPU |    GPU CPU |    Peak memory, main / GPU | Size, main / GPU | PSNR, main / GPU | VMAF, main / GPU |
+| ----------------------------- | ---------------: | -------------: | -----------: | ---------: | -------------------------: | ---------------: | ---------------: | ---------------: |
+| Interview, 5 s (0:05 to 0:10) |     5.3 s, 4.5 s |   2.6 s, 2.1 s |     31, 33 s |     7, 8 s |               1.1 / 0.5 GB |    10.5 / 8.4 MB |   47.4 / 47.8 dB |    99.88 / 99.90 |
+| Plain, 30 s (0:05 to 0:35)    |   18.2 s, 26.5 s |   6.3 s, 6.7 s |   127, 132 s |   16, 16 s |               2.8 / 1.3 GB |   39.8 / 42.1 MB |   50.0 / 50.7 dB |    99.57 / 99.77 |
+| Plain, whole 6:15             | 243.9 s, 238.4 s | 53.0 s, 57.4 s | 1613, 1604 s | 176, 180 s | 3.7 to 3.8 / 1.7 to 1.8 GB |     498 / 527 MB |                  |                  |
+
+The first GPU export after the server starts includes the 0.4 s probe. Mixed exports keep libx264 for their source parts, because they join HyperFrames' libx264 captured parts: the interview's 30-second range and whole timeline and the 300-clip project's 30-second range produced bit-identical video on both builds (55.8 and 48.1 s, 52.2 and 59.3 s, 37.9 and 35.0 s, moving with the machine's load). The 300-clip whole timeline took 371 s on this change; main's run was refused by the memory check with 11.4 GB free, and its video is the same by the same reasoning.
+
+NVENC's settings for each tier were chosen against libx264's on four 10-second clips: a vertical 1080x1920 camera clip and a 1080p camera clip, both from DNxHR masters, a 1080p screen recording, and 1080p test patterns under film grain. Each was encoded from a lossless copy with the direct path's settings (one closed GOP, no B-frames) and compared with that copy over every frame. The target was NVENC at or above libx264's PSNR and VMAF at a similar size; the table shows the settings that met it.
+
+| Tier, clip                |           libx264 |     NVENC | Size, libx264 / NVENC | PSNR, libx264 / NVENC | VMAF, libx264 / NVENC |
+| ------------------------- | ----------------: | --------: | --------------------: | --------------------: | --------------------: |
+| Standard, vertical camera |    medium, CRF 18 | p5, CQ 23 |        14.1 / 13.9 MB |      48.58 / 49.30 dB |         96.81 / 97.67 |
+| Standard, camera          |    medium, CRF 18 | p5, CQ 23 |          3.3 / 3.7 MB |      49.01 / 49.34 dB |         96.40 / 96.87 |
+| Standard, screen          |    medium, CRF 18 | p5, CQ 23 |        0.15 / 0.17 MB |      52.36 / 52.11 dB |         97.27 / 97.18 |
+| Standard, grain           |    medium, CRF 18 | p5, CQ 23 |        31.5 / 14.7 MB |      40.32 / 40.23 dB |         98.70 / 98.99 |
+| High, vertical camera     |      fast, CRF 15 | p5, CQ 20 |        22.0 / 20.2 MB |      49.91 / 50.28 dB |         98.10 / 98.36 |
+| High, camera              |      fast, CRF 15 | p5, CQ 20 |          4.8 / 6.0 MB |      49.65 / 49.91 dB |         97.10 / 97.39 |
+| High, screen              |      fast, CRF 15 | p5, CQ 20 |        0.17 / 0.20 MB |      52.46 / 52.54 dB |         97.32 / 97.31 |
+| High, grain               |      fast, CRF 15 | p5, CQ 20 |       116.9 / 20.2 MB |      41.85 / 40.28 dB |         98.79 / 99.20 |
+| Draft, vertical camera    | ultrafast, CRF 28 | p3, CQ 30 |          5.2 / 4.9 MB |      43.17 / 46.47 dB |         86.41 / 93.75 |
+| Draft, camera             | ultrafast, CRF 28 | p3, CQ 30 |          2.4 / 1.5 MB |      43.71 / 47.22 dB |         90.07 / 94.06 |
+| Draft, screen             | ultrafast, CRF 28 | p3, CQ 30 |        0.14 / 0.12 MB |      50.21 / 51.39 dB |         95.88 / 96.74 |
+| Draft, grain              | ultrafast, CRF 28 | p3, CQ 30 |          7.6 / 7.6 MB |      37.83 / 39.22 dB |         94.04 / 97.02 |
+
+The screen recording is the one clip where Standard NVENC trails, by 0.25 dB and 0.09 VMAF, at a 160 KB file. NVENC keeps to the H.264 level it signals, 4.0 at 1080p30, so grain at High stops near 16 Mbit/s, where libx264 writes 93 Mbit/s under the same level; its PSNR is 1.6 dB lower there and its VMAF higher. Spatial and temporal AQ, P7 and P6 lowered PSNR and VMAF or cost time without a gain. Encoding the camera clip took NVENC 1.4 s of wall time against libx264's 5.6 s, most of NVENC's CPU being the decoder. Comparing frames with different colour tags makes FFmpeg convert one side first, which cost 16 dB on these measurements before both sides were tagged alike.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.
