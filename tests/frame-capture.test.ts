@@ -538,9 +538,9 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
         );
       expect(await capture()).toBe("blue");
       // Undo restores the signed version. A kept page would match it by stamp and show the edit,
-      // so the next frame must load a new document.
+      // so the next frame must load a new document, and that reload must not revalidate to the edit.
       await writeFile(source, original);
-      await capture();
+      expect(await capture()).toBe("green");
       expect(fixture.documentLoads()).toBe(2);
     } finally {
       spy.mockRestore();
