@@ -19,7 +19,7 @@ Use **Refresh agent configuration** after installing a skill or signing in. The 
 
 ## Local context
 
-Messages include the project path, playhead, active composition, and selected elements. Captured frames of new review notes are sent as images. Files explicitly chosen outside the project are copied into `.cutroom/attachments/` before use; files already inside the project stay in place.
+Messages include the project path, the playhead, the open composition, and the selected clips, each with its id, name, kind, and start and end in seconds. The first selected clip is also published where `hyperframes preview --context --json --context-fields selection --port <Cutroom's port>` reads it, so an agent can check the current selection mid-turn; it carries only that clip's project data. Captured frames of new review notes are sent as images. Files explicitly chosen outside the project are copied into `.cutroom/attachments/` before use; files already inside the project stay in place.
 
 The MCP instructions ask agents to create each animated title as its own sub-composition file with `source_write` and `expectedVersion: null`, so timeline edits carry its animation with it. New projects load their local `assets/vendor/gsap.min.js`; keep that script tag in the root HTML. [Animated titles](mcp.md#animated-titles) has the pattern.
 
