@@ -24,6 +24,7 @@ test("a superseded promotion cannot confirm or fail the newer candidate", () => 
     kind: "loading",
     confirmed,
     candidate: { gen: 3, deadline: 16_000 },
+    retiring: 2,
   });
   expect(transitionHandoff(newer, { type: "painted", gen: 2 })).toBe(newer);
   expect(
@@ -60,7 +61,12 @@ test("promotion keeps the navigation deadline and failure reports only once with
     gen: 2,
     reason: "Deadline",
   });
-  expect(failed).toEqual({ kind: "failed", confirmed, reason: "Deadline" });
+  expect(failed).toEqual({
+    kind: "failed",
+    confirmed,
+    reason: "Deadline",
+    retiring: 2,
+  });
   expect(
     transitionHandoff(failed, {
       type: "failed",
@@ -68,11 +74,52 @@ test("promotion keeps the navigation deadline and failure reports only once with
       reason: "Paint timeout",
     }),
   ).toBe(failed);
-  const reported = transitionHandoff(failed, { type: "reported" });
+  const reported = transitionHandoff(
+    transitionHandoff(failed, { type: "reported" }),
+    { type: "retired", gen: 2 },
+  );
   expect(reported).toEqual(showing);
   expect(transitionHandoff(reported, { type: "painted", gen: 2 })).toBe(
     reported,
   );
+});
+
+test("a dropped promotion stays mounted, hidden, until the parent has painted without it", () => {
+  const promote = (state: Handoff, gen: number) =>
+    transitionHandoff(
+      transitionHandoff(state, { type: "navigate", gen, deadline: 15_000 }),
+      { type: "prepared", picture: { ...confirmed, gen } },
+    );
+  // The covering candidate is superseded; the next navigation must not unmount it early.
+  const superseded = transitionHandoff(promote(showing, 2), {
+    type: "navigate",
+    gen: 3,
+    deadline: 15_000,
+  });
+  const next = transitionHandoff(superseded, {
+    type: "navigate",
+    gen: 4,
+    deadline: 15_000,
+  });
+  expect(next).toMatchObject({ candidate: { gen: 4 }, retiring: 2 });
+  expect(transitionHandoff(next, { type: "retired", gen: 3 })).toBe(next);
+  expect(transitionHandoff(next, { type: "retired", gen: 2 })).toEqual({
+    kind: "loading",
+    confirmed,
+    candidate: { gen: 4, deadline: 15_000 },
+  });
+  // Confirmation and a candidate's own reload keep it; neither drops a covering document.
+  const promoting = promote(showing, 2);
+  expect(
+    transitionHandoff(promoting, { type: "painted", gen: 2 }),
+  ).not.toHaveProperty("retiring");
+  expect(
+    transitionHandoff(promoting, {
+      type: "unloaded",
+      gen: 2,
+      deadline: 20_000,
+    }),
+  ).not.toHaveProperty("retiring");
 });
 
 test("a reload of the confirmed document is prepared and painted again; other loads change nothing", () => {

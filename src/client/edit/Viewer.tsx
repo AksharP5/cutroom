@@ -353,6 +353,15 @@ export function Viewer({
   }, [candidate?.gen, candidate?.deadline]);
 
   useEffect(() => {
+    const gen = handoff.retiring;
+    if (gen === undefined) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => transition({ type: "retired", gen }));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [handoff.retiring]);
+
+  useEffect(() => {
     if (handoff.kind !== "failed") return;
     reportEditorError("viewer", handoff.reason);
     dismissFailure.current?.();
@@ -542,9 +551,10 @@ export function Viewer({
     top: Math.floor((stageSize.height - height) / 2),
   };
   const armed = mode === "draw" || mode === "comment";
-  const slots = [...new Set([handoff.confirmed?.gen, candidate?.gen])].filter(
-    (gen): gen is number => gen != null,
-  );
+  // The next candidate mounts once a dropped one has left: never more than two documents.
+  const slots = [
+    ...new Set([handoff.confirmed?.gen, handoff.retiring ?? candidate?.gen]),
+  ].filter((gen): gen is number => gen != null);
 
   return (
     <div
@@ -591,6 +601,7 @@ export function Viewer({
               src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}&document=${documentId.current}-${gen}`}
               data-live={gen === live?.gen || undefined}
               data-held={Boolean(retained) || undefined}
+              data-retiring={gen === handoff.retiring || undefined}
               style={{
                 width: size.width,
                 height: size.height,

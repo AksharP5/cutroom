@@ -11,7 +11,7 @@ interface Candidate {
   deadline: number;
 }
 
-export type Handoff =
+export type Handoff = (
   | { kind: "showing"; confirmed: Picture | null }
   | {
       kind: "checking";
@@ -24,7 +24,15 @@ export type Handoff =
       confirmed: Picture | null;
       candidate: Candidate & Picture;
     }
-  | { kind: "failed"; confirmed: Picture | null; reason: unknown };
+  | { kind: "failed"; confirmed: Picture | null; reason: unknown }
+) & {
+  /**
+   * A promoted candidate dropped while it still covered the picture. Removing that iframe in
+   * the same commit can composite a frame of bare composition background where it was. It
+   * stays mounted, hidden, until the parent has painted without it.
+   */
+  retiring?: number;
+};
 
 type Event =
   | { type: "check"; revision: number; deadline: number }
@@ -37,10 +45,36 @@ type Event =
   | { type: "painted"; gen: number }
   | { type: "failed"; gen: number; reason: unknown }
   | { type: "updated"; gen: number; revision: number }
-  | { type: "reported" };
+  | { type: "reported" }
+  | { type: "retired"; gen: number };
 
 /** Only a confirmed visible paint can replace the picture we retain. Stale work has no effect. */
 export function transitionHandoff(state: Handoff, event: Event): Handoff {
+  if (event.type === "retired") {
+    if (state.retiring !== event.gen) return state;
+    const next = { ...state };
+    delete next.retiring;
+    return next;
+  }
+  const next = advance(state, event);
+  if (next === state) return state;
+  const dropped =
+    state.kind === "promoting" &&
+    next.confirmed?.gen !== state.candidate.gen &&
+    !(
+      (next.kind === "loading" || next.kind === "promoting") &&
+      next.candidate.gen === state.candidate.gen
+    );
+  const retiring = dropped ? state.candidate.gen : state.retiring;
+  return retiring === undefined || next.retiring === retiring
+    ? next
+    : { ...next, retiring };
+}
+
+function advance(
+  state: Handoff,
+  event: Exclude<Event, { type: "retired" }>,
+): Handoff {
   if (event.type === "updated")
     return (state.kind === "showing" ||
       (state.kind === "checking" && state.check.revision === event.revision)) &&
