@@ -99,15 +99,17 @@ export function publishSelection(projectId: string) {
       signal: request.signal,
       keepalive: selection === null,
     }).catch(() => {});
+  // The viewer reports a clip's box just after it is selected, then on every frame it moves.
+  // Only the first report matters, so the box is listened to only while one is missing.
+  let awaitingBox = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const publish = () => {
     const { view, selection, projectId: shown } = useTimeline.getState();
     if (shown !== projectId) return;
-    // The viewer reports a clip's box just after it is selected; publish again once it has.
+    const primary = view && selectedClips(view)[0];
     const shownBox = pictureBox.current();
-    const boxed =
-      shownBox?.box != null &&
-      view != null &&
-      selectedClips(view)[0]?.id === shownBox.clipId;
+    const boxed = shownBox?.box != null && shownBox.clipId === primary?.id;
+    awaitingBox = primary != null && !boxed;
     const key = `${view?.composition}\n${boxed}\n${[...selection.ids].join("\n")}`;
     if (key === last) return;
     last = key;
@@ -115,12 +117,20 @@ export function publishSelection(projectId: string) {
     request = new AbortController();
     void put(selectionSnapshot(projectId));
   };
+  // Off the input path: a selection paints first, then the copy is sent.
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(publish, 0);
+  };
   publish();
-  const timelineChanged = useTimeline.subscribe(publish);
-  const boxChanged = pictureBox.subscribe(publish);
+  const timelineChanged = useTimeline.subscribe(schedule);
+  const boxChanged = pictureBox.subscribe(() => {
+    if (awaitingBox) schedule();
+  });
   return () => {
     timelineChanged();
     boxChanged();
+    clearTimeout(timer);
     request.abort();
     request = new AbortController();
     void put(null);
