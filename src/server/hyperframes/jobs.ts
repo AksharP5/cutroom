@@ -79,16 +79,38 @@ async function removeRenderScratch(path: string) {
   });
 }
 
+/** Files are removed only after every process that could still write them has exited. */
+async function processGroupExited(pid: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH")
+        return;
+      throw error;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(
+    "The export's browser processes did not exit, so its temporary files were left in place.",
+  );
+}
+
 /** Producer runs in Node because its HTTP adapter changes globals that Bun's API server owns. */
 export function createRenderWorkers(
   configuration: {
     workerPath?: string;
     sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
     stopTimeoutMs?: number;
+    startupTimeoutMs?: number;
     removeScratch?: (path: string) => Promise<void>;
   } = {},
 ) {
   const jobs = new Map<string, RenderState>();
+  // A healthy start takes seconds, even for 500 clips. HyperFrames gives a stuck capture page
+  // up to about 110 seconds (a 45 s readiness wait, then 60 s without frames) before retrying it.
+  const startupTimeoutMs = configuration.startupTimeoutMs ?? 150_000;
   const subscribers = new Set<(job: RenderState) => void>();
   const prune = () => {
     for (const [id, job] of jobs)
@@ -121,6 +143,7 @@ export function createRenderWorkers(
       let worker: ReturnType<typeof Bun.spawn> | undefined;
       let errors: Promise<string> | undefined;
       let stopTimeout: ReturnType<typeof setTimeout> | undefined;
+      let startupTimeout: ReturnType<typeof setTimeout> | undefined;
       const job = createJobMachine();
       job.transition({ status: "running", progress: 0 });
       let failure: string | undefined;
@@ -154,7 +177,7 @@ export function createRenderWorkers(
         signalWorker("SIGTERM");
         stopTimeout ??= setTimeout(() => {
           signalWorker("SIGKILL");
-        }, configuration.stopTimeoutMs ?? 6000);
+        }, configuration.stopTimeoutMs ?? 2000);
       };
       const cancel = () => {
         if (job.state.status === "running" && !publishing) {
@@ -309,11 +332,24 @@ export function createRenderWorkers(
                   Math.min(1, event.progress / 100),
                 ),
               });
+              const advanced = event.stage !== state.stage;
               state.stage = event.stage;
               state.stageProgress = event.stageProgress;
+              if (event.stageProgress?.code !== "start_browsers") {
+                clearTimeout(startupTimeout);
+                startupTimeout = undefined;
+              } else if (advanced || !startupTimeout) {
+                // Each startup step restarts the limit, including HyperFrames moving a stuck page to a fresh browser.
+                clearTimeout(startupTimeout);
+                startupTimeout = setTimeout(() => {
+                  failure = `The export's browsers made no progress starting for ${Math.round(startupTimeoutMs / 1000)} seconds, so it was stopped. Try again, and close other apps if memory is low.`;
+                  stopWorker();
+                }, startupTimeoutMs);
+              }
               rate = sampleExportRate(rate, event.stageProgress, Date.now());
             }
-            if (event.type === "error") {
+            // A worker stopped for a startup stall reports the abort; keep the stall as the cause.
+            if (event.type === "error" && !failure) {
               failure = event.message;
               if (event.cancelled) void cancel().catch(() => {});
             }
@@ -361,6 +397,9 @@ export function createRenderWorkers(
           try {
             await worker?.exited;
             signalWorker("SIGKILL");
+            // The group includes Chromium, which writes its profile into the scratch folder.
+            if (worker && process.platform !== "win32")
+              await processGroupExited(worker.pid, 5000);
             await errors;
             const cleanup: Promise<unknown>[] = [];
             // Cleanup touches only what this job made; the destination is the user's once linked.
@@ -405,6 +444,7 @@ export function createRenderWorkers(
               .join(" ");
           } finally {
             clearTimeout(stopTimeout);
+            clearTimeout(startupTimeout);
             if (cleanupFailure)
               job.transition({
                 status: "failed",

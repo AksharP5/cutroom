@@ -44,10 +44,14 @@ export function registerRenderIsolation(
   range?: { range: Fps | undefined; progress: (job: RenderJob) => void },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
-  for (const name of ["producer", "engine"]) {
+  for (const [name, version] of [
+    ["@hyperframes/producer", "0.9.26"],
+    ["@hyperframes/engine", "0.9.26"],
+    ["@puppeteer/browsers", "3.2.2"],
+  ]) {
     const manifest: unknown = JSON.parse(
       readFileSync(
-        new URL("../package.json", import.meta.resolve(`@hyperframes/${name}`)),
+        new URL("../package.json", import.meta.resolve(name)),
         "utf8",
       ),
     );
@@ -55,10 +59,10 @@ export function registerRenderIsolation(
       !manifest ||
       typeof manifest !== "object" ||
       !("version" in manifest) ||
-      manifest.version !== "0.9.26"
+      manifest.version !== version
     )
       throw new Error(
-        `Cutroom's render isolation requires @hyperframes/${name} 0.9.26.`,
+        `Cutroom's render isolation requires ${name} ${version}.`,
       );
   }
   const isolation = JSON.stringify(
@@ -75,6 +79,19 @@ export function registerRenderIsolation(
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
+      // Puppeteer starts each Chromium in its own session. Keeping it in the worker's
+      // process group lets a stopped export take its browsers with it, even when the
+      // worker is killed before Puppeteer's exit handlers can run.
+      if (url.endsWith("/@puppeteer/browsers/lib/launch.js"))
+        return {
+          ...loaded,
+          source: replaceOnce(
+            String(loaded.source),
+            "opts.detached ??= process.platform !== 'win32';",
+            "opts.detached ??= false;",
+            url,
+          ),
+        };
       if (
         !url.endsWith("/@hyperframes/producer/dist/index.js") &&
         !url.endsWith("/@hyperframes/engine/dist/services/frameCapture.js")
