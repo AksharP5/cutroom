@@ -339,7 +339,7 @@ export function FieldRow({
   children: ReactNode;
 }) {
   return (
-    <div className="inspector-field" role="group" aria-label={label}>
+    <div className="inspector-field">
       <span
         className="inspector-label"
         title={onReset && !disabled ? "Double-click to reset" : undefined}

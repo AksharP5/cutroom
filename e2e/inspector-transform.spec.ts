@@ -471,10 +471,7 @@ test("paired rows: a cell's letter scrubs its value in one undo step, a row's la
   await expect(top).toHaveValue("12");
   await expect(positionField(page, "Position Y")).toHaveValue("-40 px");
   await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
-  await inspector
-    .getByRole("group", { name: "Crop", exact: true })
-    .getByText("Crop", { exact: true })
-    .dblclick();
+  await inspector.getByText("Crop", { exact: true }).dblclick();
   await expect(top).toHaveValue("0");
   await expect(positionField(page, "Position Y")).toHaveValue("-40 px");
   await expect
