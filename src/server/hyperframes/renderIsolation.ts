@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { cpus } from "node:os";
 import { join } from "node:path";
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
+import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportOptions } from "../../shared/export.ts";
@@ -53,9 +53,6 @@ export function capturedFrame(index: number) {
 /** Whether the chunk being captured walks a frame list, so it encodes one part per run. */
 export const capturesList = () => listed !== undefined;
 
-/** Encodes per run at once; x264 threads within each. */
-const PARALLEL_RUNS = Math.max(1, Math.min(4, Math.floor(cpus().length / 4)));
-
 type ChunkEncode = {
   job: RenderJob;
   framesDir: string;
@@ -97,34 +94,37 @@ export async function encodeCaptured<Input extends ChunkEncode>(
   report();
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(PARALLEL_RUNS, runs.length) }, async () => {
-      while (next < runs.length) {
-        const index = next++;
-        const run = runs[index]!;
-        const framesDir = `${input.framesDir}-run-${index}`;
-        await mkdir(framesDir);
-        for (let frame = 0; frame < run.frames; frame++)
-          await rename(
-            join(input.framesDir, name(run.first + frame)),
-            join(framesDir, name(frame)),
-          );
-        const path = `${input.videoOnlyPath}.run-${String(index).padStart(4, "0")}.mp4`;
-        // The run's own job copy keeps the chunk's counts; progress is reported across runs here.
-        await encode({
-          ...input,
-          job: { ...job, totalFrames: 0 },
-          framesDir,
-          outputPath: path,
-          videoOnlyPath: path,
-          gopSize: gopFor(run.frames),
-          chunkedEncodeSize: run.frames,
-        });
-        const start = capture.frames[run.first]!;
-        capture.parts.push({ start, end: start + run.frames, path });
-        encoded += run.frames;
-        report();
-      }
-    }),
+    Array.from(
+      { length: Math.min(PARALLEL_ENCODES, runs.length) },
+      async () => {
+        while (next < runs.length) {
+          const index = next++;
+          const run = runs[index]!;
+          const framesDir = `${input.framesDir}-run-${index}`;
+          await mkdir(framesDir);
+          for (let frame = 0; frame < run.frames; frame++)
+            await rename(
+              join(input.framesDir, name(run.first + frame)),
+              join(framesDir, name(frame)),
+            );
+          const path = `${input.videoOnlyPath}.run-${String(index).padStart(4, "0")}.mp4`;
+          // The run's own job copy keeps the chunk's counts; progress is reported across runs here.
+          await encode({
+            ...input,
+            job: { ...job, totalFrames: 0 },
+            framesDir,
+            outputPath: path,
+            videoOnlyPath: path,
+            gopSize: gopFor(run.frames),
+            chunkedEncodeSize: run.frames,
+          });
+          const start = capture.frames[run.first]!;
+          capture.parts.push({ start, end: start + run.frames, path });
+          encoded += run.frames;
+          report();
+        }
+      },
+    ),
   );
 }
 

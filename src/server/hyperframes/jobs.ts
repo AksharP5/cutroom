@@ -359,6 +359,10 @@ export function createRenderWorkers(configuration: {
               (output?.range
                 ? output.range.end - output.range.start
                 : workload.durationFrames),
+            sourcePixels:
+              captured && direct
+                ? direct.plan.width * direct.plan.height
+                : undefined,
           });
         // An export drawn wholly from its sources needs no browser. If a source turns out to need
         // one, the worker fails with this refusal rather than starting browsers that would not fit.

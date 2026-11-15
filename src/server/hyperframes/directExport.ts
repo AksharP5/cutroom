@@ -1,5 +1,4 @@
 import { mkdir } from "node:fs/promises";
-import { cpus } from "node:os";
 import { join } from "node:path";
 import {
   buildEncoderArgs,
@@ -13,6 +12,7 @@ import {
 import type { AudioElement, EngineConfig } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
+import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import type { DirectPlan, SourceSegment } from "./directPlan.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportStage } from "../../shared/export.ts";
@@ -47,8 +47,6 @@ type Progress = (event: {
 const PART_FRAMES = 300;
 /** Inputs one FFmpeg process opens at a time; each holds a decoder. */
 const PART_INPUTS = 8;
-/** x264 already threads within a part; a few parts at once hide each process's start-up. */
-const PARALLEL_PARTS = Math.max(1, Math.min(4, Math.floor(cpus().length / 4)));
 
 type Piece = SourceSegment & { path: string };
 /** An encoded run of frames, in the export's frame numbers. */
@@ -246,22 +244,25 @@ export async function encodeSourceParts(
   }));
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(PARALLEL_PARTS, parts.length) }, async () => {
-      while (next < parts.length && !signal.aborted) {
-        const part = parts[next++]!;
-        await encodePart({
-          pieces: part.pieces,
-          outputPath: part.path,
-          fps,
-          width: plan.width,
-          height: plan.height,
-          encoder,
-          signal,
-          timeout: input.engineConfig.ffmpegEncodeTimeout,
-          onFrames: input.onFrames,
-        });
-      }
-    }),
+    Array.from(
+      { length: Math.min(PARALLEL_ENCODES, parts.length) },
+      async () => {
+        while (next < parts.length && !signal.aborted) {
+          const part = parts[next++]!;
+          await encodePart({
+            pieces: part.pieces,
+            outputPath: part.path,
+            fps,
+            width: plan.width,
+            height: plan.height,
+            encoder,
+            signal,
+            timeout: input.engineConfig.ffmpegEncodeTimeout,
+            onFrames: input.onFrames,
+          });
+        }
+      },
+    ),
   );
   signal.throwIfAborted();
   return parts.map(({ start, end, path }) => ({ start, end, path }));
