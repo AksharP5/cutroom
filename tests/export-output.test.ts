@@ -314,3 +314,58 @@ test("starting the renderer removes scratch that a crashed server left behind", 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("an export sized beyond free memory fails with the reason before starting a worker", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-export-memory-"));
+  const workerPath = join(root, "worker.mjs");
+  await writeFile(
+    workerPath,
+    `import {writeFile} from 'node:fs/promises';import {dirname,join} from 'node:path';let raw='';for await(const chunk of process.stdin)raw+=chunk;const {outputPath}=JSON.parse(raw);await writeFile(join(dirname(dirname(outputPath)),'limits.json'),JSON.stringify({max:process.env.PRODUCER_MAX_WORKERS,min:process.env.PRODUCER_MIN_PARALLEL_FRAMES}));await writeFile(outputPath,'video');console.log('CUTROOM_RENDER:'+JSON.stringify({type:'complete'}));`,
+  );
+  try {
+    for (const mediaClips of [1_000_000, 2]) {
+      const workers = createRenderWorkers({
+        scratchDir: join(root, "scratch"),
+        workerPath,
+        workload: async () => ({ mediaClips, durationFrames: 300 }),
+      });
+      try {
+        const state = workers.start(
+          {
+            project: { id: "test", dir: root },
+            outputPath: join(root, "internal.mp4"),
+            format: "mp4",
+            fps: { num: 30, den: 1 },
+            quality: "standard",
+            jobId: "test",
+          },
+          {
+            filename: `Cut ${mediaClips}.mp4`,
+            directory: root,
+            range: { start: 0, end: 30 },
+          },
+        );
+        await until(() => state.status !== "rendering");
+        if (mediaClips > 2) {
+          expect(state.status).toBe("failed");
+          expect(state.error).toContain("GB of free memory");
+          expect(existsSync(join(root, "limits.json"))).toBe(false);
+        } else {
+          expect(state.status).toBe("complete");
+          // One browser for 30 frames, and no HyperFrames minimum that could raise it.
+          const limits = z
+            .object({ max: z.string(), min: z.string() })
+            .parse(
+              JSON.parse(await readFile(join(root, "limits.json"), "utf8")),
+            );
+          expect(limits.max).toBe("1");
+          expect(Number(limits.min)).toBeGreaterThan(30);
+        }
+      } finally {
+        await workers.cancelAll();
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
