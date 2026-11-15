@@ -29,6 +29,8 @@ interface PreviewWindow extends DiagnosticWindow {
     }[];
   };
   __hf?: Window["__hf"] & {
+    /** The runtime's resolved window of a clip, in composition seconds. */
+    clipWindow?: (element: Element) => { start: number; end: number } | null;
     audioMeter?: {
       start(): void;
       stop(): void;
@@ -1567,6 +1569,40 @@ function installPreviewBridge(
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;
   };
+  /**
+   * Where the runtime places a constant-rate video's media at the playhead, from its own
+   * resolved clip window. Null when it cannot be known here, such as for speed ramps.
+   */
+  const expectedMediaTime = (video: HTMLVideoElement) => {
+    const clip = win.__hf?.clipWindow?.(video);
+    const time = win.__player?.getTime();
+    const automation = video.getAttribute("data-automation");
+    // Only the top-level composition's clips are timed against the player's clock.
+    if (
+      !clip ||
+      time === undefined ||
+      video.closest("[data-composition-id]") !==
+        document.querySelector("[data-composition-id]") ||
+      video.loop ||
+      (automation !== null && /"target"\s*:\s*"(?!volume")/.test(automation))
+    )
+      return null;
+    // The same attributes, in the same order, as the runtime reads them.
+    const number = (name: string) => {
+      const value = Number.parseFloat(video.getAttribute(name) ?? "");
+      return Number.isFinite(value) ? value : null;
+    };
+    const start =
+      number("data-playback-start") ?? number("data-media-start") ?? 0;
+    const given = number("data-playback-rate");
+    const rate =
+      given !== null && given > 0 ? given : video.defaultPlaybackRate;
+    const media =
+      start + rate * Math.max(0, Math.min(time, clip.end) - clip.start);
+    return Number.isFinite(video.duration)
+      ? Math.min(media, video.duration)
+      : media;
+  };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
@@ -1585,6 +1621,23 @@ function installPreviewBridge(
                 `The preview could not load ${failed.getAttribute("src")}.`,
               );
             if (videos.some((video) => video.readyState < 2 || video.seeking)) {
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve()),
+              );
+              continue;
+            }
+            // A video the runtime has not moved to this time would be held at its old frame,
+            // for instance one that came back into view while its seek stalled. Move it.
+            const stale = videos.flatMap((video) => {
+              const time = expectedMediaTime(video);
+              return time !== null &&
+                Math.abs(mediaTime.get!.call(video) - time) > 0.02
+                ? [{ video, time }]
+                : [];
+            });
+            if (stale.length) {
+              for (const { video, time } of stale)
+                mediaTime.set!.call(video, time + 1e-5);
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );

@@ -225,6 +225,56 @@ async function matchesFresh(
       await seek(control, frame);
       const patched = await page.locator(".edit-picture").screenshot();
       const fresh = await control.locator(".edit-picture").screenshot();
+      if (!patched.equals(fresh)) {
+        // Record what each preview held, so a rare mismatch on CI can be explained.
+        const state = (tab: Page) =>
+          tab
+            .locator("iframe[data-live]")
+            .contentFrame()
+            .locator("main")
+            .evaluate(() => ({
+              time: (
+                window as unknown as { __player?: { getTime(): number } }
+              ).__player?.getTime(),
+              videos: [...document.querySelectorAll("video")].map((video) => ({
+                id: video.id,
+                currentTime: video.currentTime,
+                readyState: video.readyState,
+                seeking: video.seeking,
+                visibility: getComputedStyle(video).visibility,
+                held: video.hasAttribute("data-cutroom-held"),
+                style: video.getAttribute("style"),
+              })),
+              holds: [
+                ...document.querySelectorAll(
+                  "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+                ),
+              ].map((hold) => ({
+                kind: hold.hasAttribute("data-cutroom-video-hold")
+                  ? "hold"
+                  : "edit frame",
+                display: getComputedStyle(hold).display,
+                visibility: getComputedStyle(hold).visibility,
+              })),
+            }));
+        const name = `${label} frame ${frame}`.replace(/\W+/g, "-");
+        await test.info().attach(`${name} patched.png`, {
+          body: patched,
+          contentType: "image/png",
+        });
+        await test.info().attach(`${name} fresh.png`, {
+          body: fresh,
+          contentType: "image/png",
+        });
+        console.log(
+          "PICTURE MISMATCH",
+          name,
+          JSON.stringify({
+            patched: await state(page),
+            fresh: await state(control),
+          }),
+        );
+      }
       expect(patched.equals(fresh), `${label}, frame ${frame}`).toBe(true);
     }
   } finally {
@@ -245,7 +295,35 @@ test("a timing edit after the playhead crosses a cut keeps the document", async 
   await waitForPreview(page, { after: previous });
   await waitForPreview(page);
   expect(await live(page)).toBe(original);
-  await matchesFresh(page, project.id, [40, 100], "after a seek");
+  await matchesFresh(page, project.id, [31, 40, 100], "after a seek");
+});
+
+test("a video whose seek lands late as it comes back into view is not confirmed at its old frame", async ({
+  page,
+  request,
+}) => {
+  const { project } = await fixture(request, page);
+  await seek(page, 100);
+  // v1 is hidden here and still at its first frame. Make every seek the runtime gives it
+  // land 1.5 s late, as a slow or reloaded video's can.
+  await page
+    .locator("iframe[data-live]")
+    .contentFrame()
+    .locator("#v1")
+    .evaluate((video: HTMLVideoElement) => {
+      const time = Object.getOwnPropertyDescriptor(
+        HTMLMediaElement.prototype,
+        "currentTime",
+      )!;
+      Object.defineProperty(video, "currentTime", {
+        configurable: true,
+        get: () => time.get!.call(video),
+        set: (value: number) => {
+          setTimeout(() => time.set!.call(video, value), 1500);
+        },
+      });
+    });
+  await matchesFresh(page, project.id, [31], "late seek");
 });
 
 test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({
