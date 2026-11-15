@@ -338,10 +338,11 @@
 .inspector-value .select-trigger:disabled {
   background: var(--surface-panel);
 }
-/* A preset's length keeps room for a whole timecode; the preset takes the rest. */
+/* A preset's length is as wide as the timecode it shows; the preset takes the rest. */
 .inspector-value:has(.select-trigger) input[type="text"] {
   flex: none;
-  width: calc(11ch + 2 * var(--space-2));
+  width: auto;
+  field-sizing: content;
 }
 .inspector-segments {
   display: flex;
