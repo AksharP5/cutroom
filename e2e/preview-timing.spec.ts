@@ -23,7 +23,12 @@ async function replaceIndex(dir: string, html: string) {
   await rename(pending, join(dir, "index.html"));
 }
 
-async function fixture(request: APIRequestContext, page: Page, scripts = "") {
+async function fixture(
+  request: APIRequestContext,
+  page: Page,
+  scripts = "",
+  css = "",
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -55,7 +60,7 @@ async function fixture(request: APIRequestContext, page: Page, scripts = "") {
   ]);
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`,
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`,
   );
 
   const read = async () =>
@@ -329,6 +334,34 @@ test("lifting a clip matches fresh pictures through a dissolve, a transform and 
   expect(await live(page)).toBe(original);
   await matchesFresh(page, project.id, [60, 70, 76, 80, 86, 150], "lift");
 });
+
+// Authored rules that depend on which clips are present restyle the clips that stay.
+for (const [kind, css] of [
+  [
+    "an animation",
+    "main:not(:has(#a1)) #title{animation:slide 20s linear both}@keyframes slide{to{transform:translateX(400px)}}",
+  ],
+  [
+    "a transition",
+    "#title{transition:transform 6s linear}main:not(:has(#a1)) #title{transform:translateX(300px)}",
+  ],
+] as const)
+  test(`a lift that starts ${kind} on another clip reloads and matches a fresh document`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120000);
+    const { project, edit } = await fixture(request, page, "", css);
+    await seek(page, 40);
+    const original = await live(page);
+    const previous = await token(page);
+    await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    // The runtime discovers CSS animations and transitions only when a document loads.
+    expect(await live(page)).not.toBe(original);
+    await matchesFresh(page, project.id, [40, 60], kind);
+  });
 
 test("MCP and disk timing refresh both tabs, while structural, script and CSS changes reload", async ({
   page,

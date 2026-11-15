@@ -2297,8 +2297,34 @@ function installPreviewBridge(
             stopRecording();
             seekAttributes.clear();
             rememberTitleAnimations();
+            // Each write records its inverse, so a refused result leaves the page as it was
+            // before anything paints. Reading animations here also settles the old styles.
+            const undo: (() => void)[] = [];
+            const write = (
+              element: Element,
+              name: string,
+              value: string | null,
+            ) => {
+              const old = element.getAttribute(name);
+              if (old === value) return false;
+              undo.push(() =>
+                old === null
+                  ? element.removeAttribute(name)
+                  : element.setAttribute(name, old),
+              );
+              if (value === null) element.removeAttribute(name);
+              else element.setAttribute(name, value);
+              return true;
+            };
+            const running = new Set(document.getAnimations());
             // Synchronous writes are one MutationObserver batch to the runtime.
             for (const { id, element, space } of removals) {
+              const parent = element.parentNode!;
+              const next = element.nextSibling;
+              undo.push(() => {
+                parent.insertBefore(element, next);
+                if (space) element.before(space);
+              });
               // A removed video's held picture stays until the new frame replaces it.
               space?.remove();
               element.remove();
@@ -2315,21 +2341,17 @@ function installPreviewBridge(
                 transforms.delete(element);
               }
             }
-            if (root.getAttribute("data-duration") !== nextDuration) {
-              if (nextDuration === null) root.removeAttribute("data-duration");
-              else root.setAttribute("data-duration", nextDuration);
-            }
+            write(root, "data-duration", nextDuration);
             const changedTitles = new Set<Element>();
             for (const { id, element, values, text } of writes) {
-              for (const [name, value] of values) {
-                if (element.getAttribute(name) === value) continue;
-                if (value === null) element.removeAttribute(name);
-                else element.setAttribute(name, value);
-                if (text) changedTitles.add(element);
-              }
+              for (const [name, value] of values)
+                if (write(element, name, value) && text)
+                  changedTitles.add(element);
               if (text) {
                 const current = titleNodes(element);
                 if (JSON.stringify(current) !== JSON.stringify(text)) {
+                  const old = [...element.childNodes];
+                  undo.push(() => element.replaceChildren(...old));
                   element.replaceChildren(
                     ...text.map((part) => {
                       if (typeof part === "string")
@@ -2361,10 +2383,11 @@ function installPreviewBridge(
               }
             }
             for (const { element, volume } of gains)
-              if (element.getAttribute("data-volume") !== volume)
-                element.setAttribute("data-volume", volume);
+              write(element, "data-volume", volume);
             if (titleStyle && nextTitleStyle && nextTitleStyle !== titleStyle) {
               const style = styles[0]!;
+              const old = style.textContent;
+              undo.push(() => (style.textContent = old));
               // A replacer function keeps $-sequences in the CSS literal.
               style.textContent = style.textContent!.replace(
                 titleStyle,
@@ -2372,6 +2395,26 @@ function installPreviewBridge(
               );
               for (const { element, text } of writes)
                 if (text) changedTitles.add(element);
+            }
+            // The runtime finds CSS animations and transitions only when a document loads.
+            // Authored rules such as :has() or :nth-child() can start one on any element when
+            // clips come and go, and it would run in real time. Only changed titles, which are
+            // recreated below, may start one.
+            const started = document.getAnimations().filter((animation) => {
+              if (running.has(animation)) return false;
+              const target =
+                animation.effect instanceof KeyframeEffect
+                  ? animation.effect.target
+                  : null;
+              return ![...changedTitles].some(
+                (title) => target && title.contains(target),
+              );
+            });
+            if (started.length) {
+              for (const step of undo.reverse()) step();
+              for (const animation of document.getAnimations())
+                if (!running.has(animation)) animation.cancel();
+              throw new Error("This edit needs animation discovery.");
             }
             // Resolve new font metrics before recreating animation effects.
             for (const element of changedTitles)
