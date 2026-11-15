@@ -72,6 +72,8 @@ import {
 } from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
+import { scrubPreview } from "../media/routes";
+import type { MediaService } from "../media/service";
 
 export interface FileChange {
   projectId: string;
@@ -95,6 +97,8 @@ const ignored = new Set([
 export function createHyperframesApi(
   store: ProjectStore,
   reviews: ReviewService,
+  /** Serves scrub proxies to the preview; without it the preview always seeks its sources. */
+  media?: MediaService,
 ) {
   const api = new Hono();
   api.use("/projects/:id/thumbnail/*", async (c, next) => {
@@ -586,6 +590,31 @@ export function createHyperframesApi(
     const prefix = `/api/isolated/${key}/`;
     const url = new URL(c.req.url);
     const path = url.pathname.slice(prefix.length);
+    const isolate = (headers: Headers) => {
+      headers.set(
+        "Content-Security-Policy",
+        previewPolicy(`${url.origin}${prefix}`),
+      );
+      headers.set(
+        "Connection-Allowlist",
+        `(${JSON.stringify(`${url.origin}${prefix}*`)})`,
+      );
+      headers.set("X-DNS-Prefetch-Control", "off");
+      headers.set("Access-Control-Allow-Origin", "null");
+      headers.set("X-Content-Type-Options", "nosniff");
+      headers.set("Referrer-Policy", "no-referrer");
+    };
+    if (media && (path === "scrub" || path.startsWith("scrub/"))) {
+      // Returned as built, so Bun answers the video's byte-range requests from the file.
+      const response = await scrubPreview(
+        media,
+        await store.get(projectId),
+        path,
+        url.searchParams.get("path"),
+      );
+      isolate(response.headers);
+      return response;
+    }
     let target =
       path === "runtime.js" || path.startsWith("vendor/npm/")
         ? `/${path}`
@@ -652,18 +681,7 @@ export function createHyperframesApi(
     const headers = new Headers(response.headers);
     if (response.ok && assetContentType)
       headers.set("Content-Type", assetContentType);
-    headers.set(
-      "Content-Security-Policy",
-      previewPolicy(`${url.origin}${prefix}`),
-    );
-    headers.set(
-      "Connection-Allowlist",
-      `(${JSON.stringify(`${url.origin}${prefix}*`)})`,
-    );
-    headers.set("X-DNS-Prefetch-Control", "off");
-    headers.set("Access-Control-Allow-Origin", "null");
-    headers.set("X-Content-Type-Options", "nosniff");
-    headers.set("Referrer-Policy", "no-referrer");
+    isolate(headers);
     if (!headers.get("content-type")?.includes("text/html"))
       return new Response(response.body, { status: response.status, headers });
     const compiled = await response.text();

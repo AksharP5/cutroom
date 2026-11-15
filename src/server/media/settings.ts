@@ -21,3 +21,16 @@ export function scaleFilter(video: {
 }) {
   return `scale=${tileWidth(video)}:${mediaSettings.tileHeight},setsar=1`;
 }
+
+/** Scrub proxies: the shorter side of the displayed picture, never enlarged. */
+const scrubLines = 540;
+export function scrubFilter(video: {
+  width: number;
+  height: number;
+  pixelAspect: number;
+}) {
+  const width = video.width * video.pixelAspect;
+  const scale = Math.min(1, scrubLines / Math.min(width, video.height));
+  const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
+  return `scale=${even(width * scale)}:${even(video.height * scale)},setsar=1`;
+}

@@ -61,3 +61,48 @@ test("seeks coalesce per animation frame, replace the waiting target, and restor
   paint();
   expect(sought).toEqual([3, 999, null]);
 });
+
+test("clearing drops the waiting destination, so an exact seek is never followed by an older one", async () => {
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let id = 0;
+  let finish = () => {};
+  const sought: number[] = [];
+  const queue = seekQueue<number>(
+    async (value) => {
+      sought.push(value);
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    },
+    (error) => {
+      throw error;
+    },
+    (callback) => {
+      callbacks.set(++id, callback);
+      return id;
+    },
+    (id) => {
+      callbacks.delete(id);
+    },
+  );
+  const paint = () => {
+    const pending = [...callbacks.values()];
+    callbacks.clear();
+    for (const callback of pending) callback(0);
+  };
+  queue.push(1);
+  queue.clear();
+  paint();
+  expect(sought).toEqual([]);
+  queue.push(2);
+  paint();
+  queue.push(3);
+  queue.clear();
+  finish();
+  await Bun.sleep(0);
+  paint();
+  expect(sought).toEqual([2]);
+  queue.push(4);
+  paint();
+  expect(sought).toEqual([2, 4]);
+});

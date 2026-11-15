@@ -30,6 +30,12 @@ export function seekQueue<T>(
       latest = { value };
       queue();
     },
+    /** Drops the waiting destination; a seek already started still finishes. */
+    clear() {
+      latest = null;
+      cancel(frame);
+      frame = 0;
+    },
     dispose() {
       disposed = true;
       latest = null;

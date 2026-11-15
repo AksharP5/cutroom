@@ -45,7 +45,7 @@ if(task.kind === "probe") {
   while(!cancelled && !await Bun.file(${JSON.stringify(release)}+"-"+task.time).exists()) await Bun.sleep(5);
   if(cancelled) {console.log(JSON.stringify({type:"error",error:"cancelled"}));process.exit(0);}
  }
- if(task.kind === "filmstrip") {
+ if(task.kind === "filmstrip" || task.kind === "scrub") {
   let cancelled=false;
   process.on("SIGTERM",()=>cancelled=true);
   await Bun.write(join(task.directory,"partial"),"partial");
@@ -93,13 +93,15 @@ console.log(JSON.stringify({type:"done"}));
 }
 
 test.skipIf(!Bun.which("ffmpeg"))(
-  "long filmstrips cannot occupy the peaks and visible-frame slot",
+  "long filmstrips and scrub proxies cannot occupy the peaks and visible-frame slot",
   async () => {
     const f = await controlledFixture();
     try {
       await f.media.request(f.project, "one.mp4", "filmstrip");
       const queued = await f.media.request(f.project, "two.mp4", "filmstrip");
       expect(queued.state.status).toBe("queued");
+      const proxy = await f.media.request(f.project, "one.mp4", "scrub");
+      expect(proxy.state.status).toBe("queued");
       const peaks = await until(
         () => f.media.request(f.project, "audio.wav", "peaks"),
         (result) => !!result.artifact,
@@ -121,6 +123,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(events.filter((event) => event.kind === "filmstrip")).toHaveLength(
         1,
       );
+      expect(events.some((event) => event.kind === "scrub")).toBe(false);
       expect(events.some((event) => event.source.endsWith("two.mp4"))).toBe(
         false,
       );

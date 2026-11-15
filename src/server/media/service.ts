@@ -36,8 +36,14 @@ const artifacts = {
   peaks: "peaks.bin",
   filmstrip: "filmstrip.json",
   frame: "frame.jpg",
+  scrub: "scrub.mp4",
 };
-const priority = { frame: 0, probe: 1, peaks: 1, filmstrip: 2 };
+const priority = { frame: 0, probe: 1, peaks: 1, filmstrip: 2, scrub: 3 };
+/** Whole-file passes share one worker, so peaks and visible frames always have the other. */
+const background = (kind: MediaKind) =>
+  kind === "filmstrip" || kind === "scrub";
+
+export type MediaService = ReturnType<typeof createMediaService>;
 
 export function createMediaService(
   options: {
@@ -93,12 +99,11 @@ export function createMediaService(
           : a.sequence - b.sequence),
     );
     while (!closing && running.size < 2 && queue.length) {
-      // An overview may never occupy the slot needed by peaks or visible frame requests.
-      const overviewRunning = [...running.keys()].some(
-        (job) => job.kind === "filmstrip",
+      const backgroundRunning = [...running.keys()].some((job) =>
+        background(job.kind),
       );
       const index = queue.findIndex(
-        (job) => job.kind !== "filmstrip" || !overviewRunning,
+        (job) => !background(job.kind) || !backgroundRunning,
       );
       if (index === -1) break;
       const job = queue.splice(index, 1)[0]!;
@@ -129,7 +134,7 @@ export function createMediaService(
       info = MediaInfoSchema.parse(await Bun.file(probe.artifact).json());
       if (kind === "peaks" && !info.channels)
         throw new HttpError(422, "The media has no audio stream.");
-      if (kind === "filmstrip" && !info.video)
+      if ((kind === "filmstrip" || kind === "scrub") && !info.video)
         throw new HttpError(422, "The media has no video stream.");
       if (kind === "frame") {
         if (!info.video)
@@ -258,6 +263,9 @@ export function createMediaService(
     request,
     sprite(project: Project, key: string, sheet = 0) {
       return projectPath(project, `.cutroom/cache/${key}/sprite-${sheet}.jpg`);
+    },
+    scrub(project: Project, key: string) {
+      return projectPath(project, `.cutroom/cache/${key}/${artifacts.scrub}`);
     },
     async dispose() {
       closing = true;

@@ -51,6 +51,10 @@ const transfers = new Set([
 const tagged = (value: string | undefined) =>
   value && value !== "unknown" ? value : undefined;
 
+/** The matrix and primaries Chrome assumes for an untagged video. */
+export const chromeColourGuess = (height: number, codec: string) =>
+  height >= 720 && !bt601Codecs.has(codec) ? "bt709" : "smpte170m";
+
 /**
  * FFmpeg filters that give extracted SDR frames the colours Chrome draws for the same video.
  * Chrome fills each untagged field with its BT.601 or BT.709 guess, then converts the gamut and
@@ -58,10 +62,7 @@ const tagged = (value: string | undefined) =>
  * untagged SD H.264 file, exported more saturated than the editor showed it.
  */
 export function chromeSdrColourFilters(metadata: SdrSource) {
-  const guess =
-    metadata.height >= 720 && !bt601Codecs.has(metadata.videoCodec)
-      ? "bt709"
-      : "smpte170m";
+  const guess = chromeColourGuess(metadata.height, metadata.videoCodec);
   const taggedMatrix = tagged(metadata.colorSpace?.colorSpace);
   const matrix = taggedMatrix ?? guess;
   const primary = tagged(metadata.colorSpace?.colorPrimaries) ?? guess;

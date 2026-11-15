@@ -42,7 +42,10 @@ interface PreviewWindow extends DiagnosticWindow {
     getTime(): number;
     isPlaying(): boolean;
   };
-  __hfWaitForSeekCompletion?: () => Promise<void>;
+  /** Without `videoFrames`, it settles everything except native video decodes. */
+  __hfWaitForSeekCompletion?: (options?: {
+    videoFrames?: boolean;
+  }) => Promise<void>;
 }
 
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
@@ -1207,8 +1210,12 @@ function installPreviewBridge(
     }
   >();
   const FRAME_TIMEOUT = 8_000;
+  /** How long a moving playhead must rest before the sources decode its exact frame. */
+  const SCRUB_REST_MS = 60;
   let retired = false;
   let pictureVersion = 0;
+  /** The picture version whose source frames, rather than scrub proxies, are on screen. */
+  let exactVersion = -1;
   let picture = Promise.resolve();
   let editCanvas: HTMLCanvasElement | null = null;
   let editFrames: VideoFrame[] = [];
@@ -1378,6 +1385,105 @@ function installPreviewBridge(
       throw error;
     }
   };
+  /** Draws `frame` in place of `video`; the hold then owns the frame. */
+  const showHold = (
+    video: HTMLVideoElement,
+    frame: VideoFrame,
+    proxy: boolean,
+  ) => {
+    cancelRelease(video);
+    const previous = holds.get(video);
+    video.removeAttribute("data-cutroom-held");
+    try {
+      const style = getComputedStyle(video);
+      const canvas = previous?.canvas ?? document.createElement("canvas");
+      canvas.setAttribute("data-cutroom-video-hold", "");
+      const positioned =
+        style.position === "absolute" || style.position === "fixed";
+      const fixed: Record<string, string> = {
+        "pointer-events": "none",
+        ...(positioned ? { right: "auto", bottom: "auto" } : {}),
+      };
+      // Writing only what changed keeps a scrub's redraws free of style invalidation.
+      for (const name of style) {
+        if (/^(animation|transition)/.test(name)) continue;
+        const value = fixed[name] ?? style.getPropertyValue(name);
+        if (canvas.style.getPropertyValue(name) !== value)
+          canvas.style.setProperty(name, value);
+      }
+      if (canvas.style.animation !== "none") canvas.style.animation = "none";
+      if (canvas.style.transition !== "none") canvas.style.transition = "none";
+      // Keep the source aspect ratio so the browser applies object-fit and
+      // object-position exactly as it does to the replaced video element.
+      let a = video.videoWidth;
+      let b = video.videoHeight;
+      while (b) [a, b] = [b, a % b];
+      const unitWidth = video.videoWidth / a;
+      const unitHeight = video.videoHeight / a;
+      const scale = Math.min(
+        a,
+        Math.max(
+          1,
+          Math.ceil(
+            devicePixelRatio *
+              Math.max(
+                video.clientWidth / unitWidth,
+                video.clientHeight / unitHeight,
+              ),
+          ),
+        ),
+      );
+      // Where object-fit ignores intrinsic size, a proxy frame keeps its own size and
+      // the compositor scales it like the source.
+      const own =
+        proxy && ["fill", "contain", "cover"].includes(style.objectFit);
+      const width = own
+        ? frame.displayWidth
+        : style.objectFit === "none"
+          ? video.videoWidth
+          : unitWidth * scale;
+      const height = own
+        ? frame.displayHeight
+        : style.objectFit === "none"
+          ? video.videoHeight
+          : unitHeight * scale;
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      // The canvas takes the video's place in flow, including flex/grid
+      // layout and paint order. The hidden native video keeps decoding.
+      if (!positioned) video.setAttribute("data-cutroom-flow", "");
+      const context = canvas.getContext("2d");
+      if (!context)
+        throw new Error("The preview could not hold the video frame.");
+      if (!proxy) context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(frame, 0, 0, canvas.width, canvas.height);
+      if (video.nextElementSibling !== canvas) video.after(canvas);
+      previous?.frame.close();
+      holds.set(video, {
+        canvas,
+        frame,
+        display: canvas.style.display,
+      });
+      canvas.toggleAttribute("data-cutroom-proxy", proxy);
+    } finally {
+      const hold = holds.get(video);
+      if (hold) {
+        video.setAttribute("data-cutroom-held", "");
+        hold.canvas.style.setProperty("display", hold.display);
+      }
+    }
+  };
+  /** Videos the composition shows, read without this bridge's suppression. */
+  const visibleVideos = () => {
+    const hidden = new Set([...holds.keys(), ...deferredSeeks.keys()]);
+    for (const video of hidden) video.removeAttribute("data-cutroom-held");
+    const videos = Array.from(document.querySelectorAll("video")).filter(
+      (video) =>
+        video.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+    );
+    for (const video of hidden) video.setAttribute("data-cutroom-held", "");
+    return videos;
+  };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
@@ -1389,21 +1495,7 @@ function installPreviewBridge(
           await waitForSeek();
           for (;;) {
             if (version !== pictureVersion || win.__player?.isPlaying()) return;
-            // Read authored visibility without our native-surface suppression.
-            for (const video of holds.keys()) {
-              video.removeAttribute("data-cutroom-held");
-            }
-            const videos = Array.from(
-              document.querySelectorAll("video"),
-            ).filter((video) =>
-              video.checkVisibility({
-                checkOpacity: true,
-                checkVisibilityCSS: true,
-              }),
-            );
-            for (const video of holds.keys()) {
-              video.setAttribute("data-cutroom-held", "");
-            }
+            const videos = visibleVideos();
             const failed = videos.find((video) => video.error);
             if (failed)
               throw new Error(
@@ -1429,86 +1521,10 @@ function installPreviewBridge(
                 if (!videos.includes(video)) removeHold(video);
               }
               for (const [video, frame] of frames) {
-                cancelRelease(video);
-                const previous = holds.get(video);
-                video.removeAttribute("data-cutroom-held");
-                try {
-                  const style = getComputedStyle(video);
-                  const canvas =
-                    previous?.canvas ?? document.createElement("canvas");
-                  canvas.setAttribute("data-cutroom-video-hold", "");
-                  for (const name of style)
-                    canvas.style.setProperty(
-                      name,
-                      style.getPropertyValue(name),
-                    );
-                  // Keep the source aspect ratio so the browser applies object-fit and
-                  // object-position exactly as it does to the replaced video element.
-                  let a = video.videoWidth;
-                  let b = video.videoHeight;
-                  while (b) [a, b] = [b, a % b];
-                  const unitWidth = video.videoWidth / a;
-                  const unitHeight = video.videoHeight / a;
-                  const scale = Math.min(
-                    a,
-                    Math.max(
-                      1,
-                      Math.ceil(
-                        devicePixelRatio *
-                          Math.max(
-                            video.clientWidth / unitWidth,
-                            video.clientHeight / unitHeight,
-                          ),
-                      ),
-                    ),
-                  );
-                  const width =
-                    style.objectFit === "none"
-                      ? video.videoWidth
-                      : unitWidth * scale;
-                  const height =
-                    style.objectFit === "none"
-                      ? video.videoHeight
-                      : unitHeight * scale;
-                  if (canvas.width !== width) canvas.width = width;
-                  if (canvas.height !== height) canvas.height = height;
-                  if (
-                    style.position === "absolute" ||
-                    style.position === "fixed"
-                  ) {
-                    canvas.style.right = "auto";
-                    canvas.style.bottom = "auto";
-                  } else {
-                    // The canvas takes the video's place in flow, including flex/grid
-                    // layout and paint order. The hidden native video keeps decoding.
-                    video.setAttribute("data-cutroom-flow", "");
-                  }
-                  canvas.style.pointerEvents = "none";
-                  canvas.style.animation = "none";
-                  canvas.style.transition = "none";
-                  const context = canvas.getContext("2d");
-                  if (!context)
-                    throw new Error(
-                      "The preview could not hold the video frame.",
-                    );
-                  context.clearRect(0, 0, canvas.width, canvas.height);
-                  context.drawImage(frame, 0, 0, canvas.width, canvas.height);
-                  if (video.nextElementSibling !== canvas) video.after(canvas);
-                  previous?.frame.close();
-                  holds.set(video, {
-                    canvas,
-                    frame,
-                    display: canvas.style.display,
-                  });
-                  frames.delete(video);
-                } finally {
-                  const hold = holds.get(video);
-                  if (hold) {
-                    video.setAttribute("data-cutroom-held", "");
-                    hold.canvas.style.setProperty("display", hold.display);
-                  }
-                }
+                showHold(video, frame, false);
+                frames.delete(video);
               }
+              exactVersion = version;
             } finally {
               for (const frame of frames.values()) frame.close();
             }
@@ -1529,6 +1545,204 @@ function installPreviewBridge(
       throw error;
     } finally {
       clearTimeout(timer);
+    }
+  };
+  // Scrub proxies: a small all-intra copy of each source, whose frames a moving playhead
+  // draws until the source decodes the exact frame. Paths are the project's, as the media
+  // service names them; the capability prefix is this document's.
+  const capability = /^\/api\/isolated\/[^/]+\//.exec(location.pathname)?.[0];
+  const scrubSources = new Map<
+    string,
+    { key?: string; failed?: boolean; proxy?: HTMLVideoElement; used: number }
+  >();
+  const scrubPath = (video: HTMLVideoElement) => {
+    if (!capability) return null;
+    const url = new URL(video.currentSrc || video.src, location.href);
+    const preview = `${capability}preview/`;
+    if (url.origin !== location.origin || !url.pathname.startsWith(preview))
+      return null;
+    const path = url.pathname.slice(preview.length);
+    if (!path || path.startsWith("comp/")) return null;
+    try {
+      return path.split("/").map(decodeURIComponent).join("/");
+    } catch {
+      return null;
+    }
+  };
+  let discovering = false;
+  /** Asks for every source's proxy, which also starts making the missing ones. */
+  const discoverScrubs = () => {
+    if (discovering || !capability) return;
+    discovering = true;
+    void (async () => {
+      try {
+        for (let pending = true; pending && !retired;) {
+          pending = false;
+          for (const video of document.querySelectorAll("video")) {
+            const path = scrubPath(video);
+            if (!path) continue;
+            const source = scrubSources.get(path) ?? { used: 0 };
+            scrubSources.set(path, source);
+            if (source.key || source.failed) continue;
+            const response = await fetch(
+              `${capability}scrub?path=${encodeURIComponent(path)}`,
+            ).catch(() => null);
+            const body: unknown =
+              response?.status === 200 ? await response.json() : null;
+            if (
+              body &&
+              typeof body === "object" &&
+              "key" in body &&
+              typeof body.key === "string" &&
+              /^[a-f0-9]{64}$/.test(body.key)
+            )
+              source.key = body.key;
+            else if (response?.status === 202) pending = true;
+            else source.failed = true;
+          }
+          if (pending)
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      } finally {
+        discovering = false;
+      }
+    })();
+  };
+  const releaseProxy = (source: { proxy?: HTMLVideoElement }) => {
+    source.proxy?.removeAttribute("src");
+    source.proxy?.load();
+    delete source.proxy;
+  };
+  /** A loaded proxy for a source, or null when it is unknown, missing or slow to load. */
+  const proxyFor = async (video: HTMLVideoElement) => {
+    const path = scrubPath(video);
+    const source = path ? scrubSources.get(path) : undefined;
+    if (path && !source) discoverScrubs();
+    if (!source?.key) return null;
+    source.used = performance.now();
+    if (source.proxy?.error) {
+      releaseProxy(source);
+      source.failed = true;
+      delete source.key;
+      return null;
+    }
+    if (!source.proxy) {
+      const proxy = document.createElement("video");
+      // CORS keeps the opaque document allowed to read its frames.
+      proxy.crossOrigin = "anonymous";
+      proxy.muted = true;
+      proxy.preload = "auto";
+      proxy.src = `${capability}scrub/${source.key}`;
+      source.proxy = proxy;
+      // Each element holds a decoder; keep the four most recently drawn.
+      const loaded = [...scrubSources.values()]
+        .filter((other) => other.proxy)
+        .sort((a, b) => b.used - a.used);
+      for (const other of loaded.slice(4)) releaseProxy(other);
+    }
+    const proxy = source.proxy;
+    // A new document's first scrub waits briefly rather than seeking a source cold.
+    const deadline = performance.now() + 250;
+    while (proxy.readyState < 2 && !proxy.error && performance.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    return proxy.readyState >= 2 ? proxy : null;
+  };
+  // While proxies stand in, the sources seek only once the playhead rests. An abandoned
+  // seek still decodes up to a whole GOP, which starves the proxies' decoder.
+  const mediaTime = Object.getOwnPropertyDescriptor(
+    HTMLMediaElement.prototype,
+    "currentTime",
+  )!;
+  const deferredSeeks = new Map<HTMLVideoElement, number>();
+  let deferring = false;
+  const unsuppress = (video: HTMLVideoElement) => {
+    if (!holds.has(video)) video.removeAttribute("data-cutroom-held");
+  };
+  /** Sources with a loaded proxy defer their seeks; the rest seek as usual. */
+  const deferSeeks = (video: HTMLVideoElement) => {
+    if (Object.hasOwn(video, "currentTime")) return;
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get: () => deferredSeeks.get(video) ?? mediaTime.get!.call(video),
+      set: (time: number) => {
+        const path = deferring ? scrubPath(video) : null;
+        const proxy = path ? scrubSources.get(path)?.proxy : undefined;
+        if (proxy && proxy.readyState >= 2 && !proxy.error) {
+          deferredSeeks.set(video, time);
+          // Its last decoded frame is from another time; hide it until a proxy covers it.
+          video.setAttribute("data-cutroom-held", "");
+          return;
+        }
+        if (deferredSeeks.delete(video)) unsuppress(video);
+        mediaTime.set!.call(video, time);
+      },
+    });
+  };
+  const applySeeks = () => {
+    for (const [video, time] of deferredSeeks) {
+      deferredSeeks.delete(video);
+      unsuppress(video);
+      mediaTime.set!.call(video, time);
+    }
+  };
+  /**
+   * Draws every visible video from its proxy at the time the runtime gave the source.
+   * False when a visible video has no proxy ready, so the caller waits for exact frames.
+   */
+  const showScrubPicture = async (version: number) => {
+    await win.__hfWaitForSeekCompletion?.({ videoFrames: false });
+    // The runtime shows the last picture until each newly active clip has loaded, so
+    // only then does visibility name the clips at this time.
+    const deadline = performance.now() + 1000;
+    while (document.documentElement.hasAttribute("data-hf-preview-seek-hold")) {
+      if (version !== pictureVersion) return true;
+      if (performance.now() > deadline) return false;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    if (version !== pictureVersion) return true;
+    const videos = visibleVideos();
+    const proxies = await Promise.all(
+      videos.map((video) => (video.readyState ? proxyFor(video) : null)),
+    );
+    if (version !== pictureVersion) return true;
+    if (!videos.length || proxies.some((proxy) => !proxy)) return false;
+    const frames = new Map<HTMLVideoElement, VideoFrame>();
+    try {
+      for (const [index, video] of videos.entries()) {
+        const proxy = proxies[index]!;
+        // Media clocks keep microseconds, far finer than any frame.
+        if (Math.abs(proxy.currentTime - video.currentTime) > 1e-4)
+          proxy.currentTime = video.currentTime;
+        const seeked = performance.now() + 1000;
+        while (proxy.seeking) {
+          if (version !== pictureVersion) return true;
+          if (proxy.error || performance.now() > seeked) return false;
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(timer);
+              proxy.removeEventListener("seeked", done);
+              proxy.removeEventListener("error", done);
+              resolve();
+            };
+            const timer = setTimeout(done, 100);
+            proxy.addEventListener("seeked", done);
+            proxy.addEventListener("error", done);
+          });
+        }
+        if (version !== pictureVersion) return true;
+        frames.set(video, new VideoFrame(proxy));
+      }
+      // An exact picture that landed first stays.
+      if (version !== pictureVersion || exactVersion === version) return true;
+      for (const [video] of holds)
+        if (!videos.includes(video)) removeHold(video);
+      for (const [video, frame] of frames) {
+        showHold(video, frame, true);
+        frames.delete(video);
+      }
+      return true;
+    } finally {
+      for (const frame of frames.values()) frame.close();
     }
   };
   const refreshPicture = () => {
@@ -1605,6 +1819,10 @@ function installPreviewBridge(
     )
       return;
     const id = data.id;
+    const scrub =
+      data.action === "seek" && "scrub" in data && data.scrub === true;
+    // Every other command starts from the playhead's true time.
+    if (!scrub && data.action !== "paint") applySeeks();
     void (async () => {
       switch (data.action) {
         case "track-gains": {
@@ -2171,6 +2389,47 @@ function installPreviewBridge(
             await picture;
             break;
           }
+          if (scrub && !win.__player?.isPlaying()) {
+            // A moving playhead answers once proxies show its frame. If no newer seek
+            // arrives meanwhile, the sources then seek and their exact frames replace them.
+            const version = ++pictureVersion;
+            for (const video of document.querySelectorAll("video"))
+              deferSeeks(video);
+            deferring = true;
+            try {
+              seekRuntime(data.time);
+            } finally {
+              deferring = false;
+            }
+            if (await showScrubPicture(version).catch(() => false)) {
+              if (version === pictureVersion) clearEditPicture();
+              picture = new Promise((resolve) =>
+                setTimeout(resolve, SCRUB_REST_MS),
+              ).then(async () => {
+                if (version !== pictureVersion) return;
+                applySeeks();
+                const restored = refreshPicture();
+                const exact = pictureVersion;
+                await restored;
+                if (exact === pictureVersion) clearEditPicture();
+              });
+              picture.catch((error: unknown) =>
+                reply(
+                  undefined,
+                  error instanceof Error ? error.message : String(error),
+                ),
+              );
+            } else if (version === pictureVersion) {
+              applySeeks();
+              const restored = refreshPicture();
+              const exact = pictureVersion;
+              await restored;
+              if (exact === pictureVersion) clearEditPicture();
+            }
+            scheduleObservation();
+            scheduleBox();
+            break;
+          }
           seekRuntime(data.time);
           if (!win.__player?.isPlaying()) {
             const restored = refreshPicture();
@@ -2194,6 +2453,7 @@ function installPreviewBridge(
           );
           break;
         case "paint":
+          discoverScrubs();
           await picture;
           await paint();
           if (initialTiming && confirmedStructure === null) {

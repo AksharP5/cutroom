@@ -30,6 +30,8 @@ function runtime(length: number) {
   let time = 0;
   let playing = false;
   const seeks: number[] = [];
+  /** Each seek's time and whether the playhead was moving, which allows a stand-in picture. */
+  const shown: [number, boolean][] = [];
   const player: RuntimePlayer = {
     play: () => {
       playing = time < length;
@@ -37,9 +39,10 @@ function runtime(length: number) {
     pause: () => {
       playing = false;
     },
-    seek: (seconds) => {
+    seek: (seconds, moving = false) => {
       time = seconds;
       seeks.push(seconds);
+      shown.push([seconds, moving]);
     },
     time: () => time,
     clock: () => ({
@@ -54,6 +57,7 @@ function runtime(length: number) {
   return {
     player,
     seeks,
+    shown,
     /** Advances wall time and the runtime's clock, then runs one animation frame. */
     elapse(seconds: number) {
       now += seconds * 1000;
@@ -142,6 +146,26 @@ test("reverse steps the runtime frame by frame and stops at the first frame", ()
   expect(seeks.at(-1)).toBe(1);
   elapse(1.5);
   expect(state()).toMatchObject({ state: { kind: "stopped" }, frame: 0 });
+});
+
+test("scrubs and shuttles may show stand-in pictures, but the frame they stop on is exact", () => {
+  const { elapse, shown } = open(thirty, 4);
+  shown.length = 0;
+  transport.scrub(30);
+  transport.scrub(45);
+  expect(shown.at(-1)).toEqual([1.5, true]);
+  expect(shown.every(([, moving]) => moving)).toBe(true);
+  transport.release();
+  expect(shown.at(-1)).toEqual([1.5, false]);
+  transport.dispatch({ type: "shuttle", dir: "reverse", fast: false });
+  transport.dispatch({ type: "shuttle", dir: "reverse", fast: false });
+  elapse(0.25);
+  expect(shown.at(-1)).toEqual([1, true]);
+  transport.dispatch({ type: "stop" });
+  expect(shown.at(-1)).toEqual([1, false]);
+  // 1x plays the runtime's own media, so its seeks are exact.
+  transport.dispatch({ type: "toggle" });
+  expect(shown.at(-1)).toEqual([1, false]);
 });
 
 test("a looped shuttle wraps inside the in and out range", () => {
