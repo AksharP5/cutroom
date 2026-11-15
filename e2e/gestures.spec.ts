@@ -538,10 +538,11 @@ test("edges resize with Select and ripple or roll with Trim, and the blade cuts 
 
   // Trim: the first shot's end comes in a second and every later clip closes up.
   await page.keyboard.press("t");
-  await expect(page.getByRole("button", { name: /^Trim/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page
+      .getByRole("toolbar", { name: "Tools", exact: true })
+      .getByRole("button", { name: /^Trim/ }),
+  ).toHaveAttribute("aria-pressed", "true");
   await drag(await at(87), await at(57));
   await expectClips([
     ["shot-1", 0, 0, 60],
@@ -663,10 +664,11 @@ test("Esc cancels a drag and keeps the tool and the selection", async ({
   await expect(timeline.locator(".tl-readout")).toBeHidden();
   await page.mouse.up();
 
-  await expect(page.getByRole("button", { name: /^Trim/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page
+      .getByRole("toolbar", { name: "Tools", exact: true })
+      .getByRole("button", { name: /^Trim/ }),
+  ).toHaveAttribute("aria-pressed", "true");
   await expect(timeline.locator("[data-clip].selected")).toHaveCount(1);
   await expect(timeline.locator('[data-clip="shot-1"]')).toHaveCSS(
     "transform",
