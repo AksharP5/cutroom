@@ -4,6 +4,7 @@ import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import type { ExportOptions } from "../../shared/export.ts";
 
 let rangeProgress: ((job: RenderJob) => void) | undefined;
 let reportedAt = 0;
@@ -41,7 +42,11 @@ function replaceOnce(
 /** Version-checked host changes, like studioPlugin. No dependency files are modified. */
 export function registerRenderIsolation(
   sources: Record<string, string> = {},
-  range?: { range: Fps | undefined; progress: (job: RenderJob) => void },
+  range?: {
+    range:
+      { fps: Fps; frames: NonNullable<ExportOptions["range"]> } | undefined;
+    progress: (job: RenderJob) => void;
+  },
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
@@ -107,12 +112,12 @@ export function registerRenderIsolation(
           url,
         );
         if (range?.range) {
-          const fps = JSON.stringify(range.range);
+          const fps = JSON.stringify(range.range.fps);
           const observer = JSON.stringify(import.meta.url);
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress } from ${observer};\nimport { alignRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\n${source}`;
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -161,6 +166,28 @@ export function registerRenderIsolation(
             "keyframeIntervalToGopSize3(cutroomRangeFps, config.keyframeIntervalSeconds)",
             url,
           );
+          // The planner mixes only the audio heard in the range, kept whole and
+          // moved earlier by whole seconds. The overrides follow upstream's fields.
+          source = replaceOnce(
+            source,
+            "function mixPlanAudio(c, compiledDir) {\n  return runAudioStage({",
+            "function mixPlanAudio(c, compiledDir) {\n  return cutroomMixRangeAudio(c, cutroomRange, (cutroomStage) => runAudioStage({",
+            url,
+          );
+          source = replaceOnce(
+            source,
+            "    log: c.log\n  });\n}\nasync function extractPlanVideos",
+            "    log: c.log,\n    ...cutroomStage\n  }));\n}\nasync function extractPlanVideos",
+            url,
+          );
+          // Cutroom writes the range's audio itself. Chunks muxing the plan mix
+          // would cut it at composition times it no longer starts at.
+          source = replaceOnce(
+            source,
+            "      { chunksCarryAudio: true }\n    );",
+            "      { chunksCarryAudio: false }\n    );",
+            url,
+          );
           source = replaceOnce(
             source,
             "  job.progress = Math.max(job.progress, boundedProgress);",
@@ -174,8 +201,7 @@ export function registerRenderIsolation(
     await writeStitchedMp4(parts, cutroomVideo);
     await alignRangeAudio({
       videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
-      startSeconds: startFrame * cutroomRangeFps.den / cutroomRangeFps.num,
-      durationSeconds: (endFrame - startFrame) * cutroomRangeFps.den / cutroomRangeFps.num,
+      fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },
       signal: config.abortSignal
     });`,
             url,
