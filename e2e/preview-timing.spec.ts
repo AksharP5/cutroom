@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
+import { interviewWorkload } from "../scripts/interview-performance";
 import { expect, test } from "./fixtures";
 import { waitForPreview } from "./preview-ready";
 
@@ -687,6 +688,66 @@ test("ripple delete, lift, razor, turning clips off and every undo keep the docu
     [30, 76],
     "clip on",
   );
+});
+
+test("the edit after a burst of W, undo, D and lift at 7 keys a second keeps the document and matches a fresh picture", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180000);
+  const project = await interviewWorkload(request);
+  // Give the title stylesheet its stacking rules first, so no edit below changes it.
+  for (const by of [1, -1]) {
+    const view = TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    );
+    const response = await request.post(
+      `/api/cutroom/projects/${project.id}/commands`,
+      {
+        data: {
+          composition: "index.html",
+          expectedRevision: view.revision,
+          label: "Establish stacking",
+          commands: [
+            { type: "move", clipIds: ["title-0"], by, mode: "overwrite" },
+          ],
+        },
+      },
+    );
+    expect(response.ok()).toBe(true);
+  }
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await seek(page, 90);
+  const original = await live(page);
+  let pressed = -Infinity;
+  const press = async (key: string) => {
+    const delay = pressed + 140 - performance.now();
+    if (delay > 0) await page.waitForTimeout(delay);
+    pressed = performance.now();
+    await page.keyboard.press(key);
+  };
+  // W cuts the music bed too, adding its tail as a clip, and undo takes it away.
+  await press("w");
+  await press("Control+z");
+  // A W pressed before the undo is saved would find nothing to trim, so the burst goes on
+  // with D, which shows at once. Each D that turns the music bed on adds it back, before
+  // the runtime's last layout pass is a third of a second old.
+  await page.locator('[data-clip="music"]').click({ force: true });
+  for (let index = 0; index < 12; index++) await press("d");
+  await page.locator('[data-clip="broll-0"]').click({ force: true });
+  await press("Backspace");
+  await waitForPreview(page);
+  // Let every write the burst started land before the next edit compares the document.
+  await page.waitForTimeout(1000);
+  const previous = await token(page);
+  await page.keyboard.press("Control+z");
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(original);
+  await matchesFresh(page, project.id, [89, 90, 240], "after the burst");
 });
 
 test("lifting a clip matches fresh pictures through a dissolve, a transform and track gain", async ({

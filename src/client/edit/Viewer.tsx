@@ -247,6 +247,11 @@ export function Viewer({
                   frameTime(frame, fps),
                   timingSignal,
                   isLatest,
+                  () => {
+                    // A newer edit waits for an update the page has started. Abandoning
+                    // it would let the page finish it while refusing the next one.
+                    if (checking.current === attempt) checking.current = null;
+                  },
                 )
               ) {
                 // The update drew the playhead's frame, so this document is current.
@@ -268,6 +273,9 @@ export function Viewer({
             } finally {
               clearTimeout(timingTimer);
               stop();
+              // Only the page's update runs to its end. A newer edit still aborts the
+              // reload or gain check this attempt falls back to.
+              checking.current ??= attempt;
             }
           }
           if (

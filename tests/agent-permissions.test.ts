@@ -21,6 +21,7 @@ const unscoped = [
 const reads = [
   "projects_list",
   "project_read",
+  "project_lint",
   "media_list",
   "source_marks",
   "source_read",

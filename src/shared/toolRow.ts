@@ -128,6 +128,11 @@ const cutroomTools: Record<
     kind: "queue",
     object: note,
   },
+  project_lint: {
+    verb: ["Checked", "Checking", "Check"],
+    kind: "project",
+    object: () => "the project for problems",
+  },
   transcripts_list: { verb: read, kind: "project", object: () => "the script" },
   transcript_import: {
     verb: ["Imported", "Importing", "Import"],

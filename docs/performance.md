@@ -390,6 +390,17 @@ The parity test retains its patched page and uses a second page for every fresh 
 
 The first timing edit can establish the managed stacking stylesheet and therefore reload. Nested compositions, source/script/CSS changes and stacking changes also reload. Added, removed and otherwise changed clips and a changed composition length update in place, with the exceptions in the architecture notes. An unavailable fingerprint disables live timing without preventing full preview loading. A live attempt has two seconds within the existing fifteen-second preparation deadline; fallback does not extend it. The pinned HyperFrames runtime is unchanged.
 
+### Edits right after a burst
+
+On November 15, 2026 the interview above (seeking to frame 90, the title stylesheet established) took one W and its undo, twelve D presses on the music bed and a lift, one key every 140 ms, then waited a second and undid the lift. The time is browser keydown of that undo to confirmed picture, six fresh projects per build, headless Chromium on a shared machine.
+
+| Build       | Median |          Range | Undo in place | Document kept through the burst |
+| ----------- | -----: | -------------: | ------------: | ------------------------------: |
+| main        | 575 ms | 215 to 1551 ms |        2 of 6 |                          0 of 6 |
+| this change | 135 ms |   92 to 157 ms |        6 of 6 |                          6 of 6 |
+
+Two things reloaded it on main. The runtime positions a clip it has not laid out on its next layout pass, at most three times a second, so in a burst that pass changed an added clip's style after the update had confirmed the document, and the next comparison refused it. And the viewer abandoned an update the page had started; the page finished it but refused the next one, and the reload it fell back to could come up ineligible for live updates. An update that adds clips now waits for that layout pass, which costs nothing when the last pass is older than a third of a second and up to a third of a second in a burst.
+
 ## Paused title edits
 
 The paused timing operation also carries existing Cutroom titles' validated attributes and plain text. It confirms the saved revision after seeking and painting, as timing does. Source and dependency revisions, parent-held eligibility and the live DOM comparison still gate it. [The architecture](architecture.md#cutrooms-own-editor) describes the title contract and reload rules.

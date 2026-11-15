@@ -2,7 +2,7 @@
 
 Cutroom's own editor is the default: a tool row, the viewer, the transport, and a timeline below a draggable split. Review notes and word-based edits share its project history.
 
-Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels, and frame capture. The switch goes away when those arrive.
+Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels. The switch goes away when those arrive.
 
 ## Editor
 
@@ -16,6 +16,8 @@ A text clip has a Text section above Transform. Double-click the clip on the pic
 
 The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu. The picture outline turns yellow while Draw or Comment is armed.
 
+Ctrl+Alt+G, or Save frame as PNG in the Export dialog, saves the frame at the playhead as a PNG at the composition's size. It goes beside the exports in `.cutroom/renders`, named after the project and the timecode, such as `Launch 00-00-03-12.png`, with a number added when that name is taken. A toast names the file, and the desktop app can reveal it.
+
 Notes are made on the picture. Comment drops a numbered pin where you click and opens a note beside it; Enter adds it, Shift+Enter starts a new line, and Esc discards it. Draw keeps every stroke on the picture until the note is added, and Ctrl+Z takes back the last stroke while the note is open, never the project's last edit. A drawing needs no words. Set end ends a note at the playhead, so it covers a range. Clicking the picture again before adding a note moves its pin and keeps what you typed and drew. The tool stays armed, so the next click starts the next note while the last one saves. A note that fails to save reopens with the reason. Saved notes keep their pins and strokes on the picture while the playhead is on their frame or range, and clicking a pin shows the note in Review. Pins on the picture, dots on the ruler, and rows in Review share one number per note.
 
 The transport follows DaVinci Resolve: L and J play, faster on each press up to 8x; K stops; arrows step frames, seconds, and edits. [Every key](keyboard.md). Timecode is `HH:MM:SS:FF` at the nominal rate, without drop frames. Click it to type a time: digits fill from the right, Enter seeks, and Esc cancels. Playback at 1x is audible, and Mute silences it. Faster speeds and reverse step through frames silently.
@@ -25,6 +27,8 @@ I and O set the timeline's in and out points through the same `setRange` command
 The viewer also shows one media file at a time as a source, opened from Media. A video shows its picture, an audio file its waveform, and an image a five-second still. The transport bar and its keys then drive the source, a scrub track under it shows its playhead and marked range, and the header above it shows how much would be placed. Insert and Overwrite, or dragging the source onto a track, put the marked part on the timeline through the same `insert` command as a Media drop, with `clip.mediaStart` at the in mark, so it is one undo step. The source is counted in frames at the timeline's rate, so a mark is a whole number of timeline frames. One viewer shows either the source or the timeline, not both side by side: at 1280 and 1720 the space between Media and the inspector fits one picture at a useful size, and the timeline below already shows where an edit lands. [Keys](keyboard.md).
 
 When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
+
+The status bar also counts HyperFrames lint errors and warnings, checked when the project opens and again after each source change. Click the count to list the findings, errors first, with any fix hint on hover. Choosing one whose element is a clip on the timeline selects that clip and moves the playhead to its start; any other finding copies its file and line. Agents read the same findings with `project_lint`.
 
 ### Timeline
 
