@@ -47,6 +47,8 @@ type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   stageProgress?: z.infer<typeof ExportStageSchema>;
   /** How the frames were drawn: from the sources, by capturing the browser, or both. */
   renderer?: "direct" | "mixed" | "capture";
+  /** The H.264 encoder: NVENC for an export drawn wholly from its sources on a working GPU. */
+  encoder?: "libx264" | "h264_nvenc";
   sizeBytes?: number;
   cancel: () => Promise<void>;
 };
@@ -61,6 +63,7 @@ const WorkerEvent = z.discriminatedUnion("type", [
     type: z.literal("complete"),
     audioLoweredDb: z.number().optional(),
     renderer: z.enum(["direct", "mixed", "capture"]).optional(),
+    encoder: z.enum(["libx264", "h264_nvenc"]).optional(),
   }),
   z.object({
     type: z.literal("error"),
@@ -126,7 +129,6 @@ async function directPlan(
     [
       [options.format !== "mp4", "it is not an MP4"],
       [entry !== "index.html", "it renders a sub-composition"],
-      [options.useGpu, "it encodes on the GPU"],
       [options.outputResolution, "it changes the output size"],
       [
         options.pageMotionBlur && options.pageMotionBlur !== "off",
@@ -175,6 +177,11 @@ export function createRenderWorkers(configuration: {
   workerPath?: string;
   /** Draw plain footage with FFmpeg instead of the browser where the planner allows. On by default. */
   directExport?: boolean;
+  /**
+   * Whether FFmpeg can encode on the GPU, asked once, before the first export drawn from the
+   * sources. Without it they encode on the CPU.
+   */
+  gpu?: () => Promise<boolean>;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
   workload?: (
@@ -185,6 +192,7 @@ export function createRenderWorkers(configuration: {
   removeScratch?: (path: string) => Promise<void>;
 }) {
   const jobs = new Map<string, RenderState>();
+  let gpu: Promise<boolean> | undefined;
   const remove = configuration.removeScratch ?? removeRenderScratch;
   /** Scratch whose browsers outlived the cleanup wait. The next export removes it. */
   const leftovers = new Set<string>();
@@ -345,6 +353,10 @@ export function createRenderWorkers(configuration: {
         const direct = useDirect
           ? await directPlan(options, sources, output?.range)
           : undefined;
+        const nvenc =
+          direct && configuration.gpu
+            ? (gpu ??= configuration.gpu())
+            : undefined;
         const workload = await configuration.workload?.(options.project.id);
         // One set of browsers captures every run the browser draws, sized to those frames.
         const captured = direct?.plan.segments.reduce(
@@ -462,6 +474,7 @@ export function createRenderWorkers(configuration: {
             sources,
             range: output?.range,
             scratchDir: scratch,
+            gpu: (await nvenc) ?? false,
             direct: direct && {
               ...direct,
               captureRefusal:
@@ -520,6 +533,7 @@ export function createRenderWorkers(configuration: {
               completed = true;
               state.audioLoweredDb = event.audioLoweredDb;
               state.renderer = event.renderer;
+              state.encoder = event.encoder;
             }
           }
         }
