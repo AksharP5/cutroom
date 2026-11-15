@@ -21,7 +21,13 @@ interface PreviewWindow extends DiagnosticWindow {
       toSum(): { values: Iterable<{ unit: string; value: number }> };
     };
   };
-  gsap?: { getProperty(element: Element, property: string): unknown };
+  gsap?: {
+    getProperty(element: Element, property: string): unknown;
+    getTweensOf?(target: Element): {
+      progress(): number;
+      vars: Record<string, unknown> & { startAt?: Record<string, unknown> };
+    }[];
+  };
   __hf?: Window["__hf"] & {
     audioMeter?: {
       start(): void;
@@ -186,6 +192,17 @@ function installPreviewBridge(
       .map((line) => line.replace(/[\t\f ]+/g, " ").replace(/^ | $/g, ""))
       .join("\n")
       .replace(/^\n+|\n+$/g, "");
+  /** Validates a transform style message from the editor: each longhand is a string or null. */
+  const transformCss = (value: unknown): TransformCss | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const css: TransformCss = { scale: null, rotate: null, "clip-path": null };
+    for (const property of ["scale", "rotate", "clip-path"] as const) {
+      const item: unknown = Reflect.get(value, property);
+      if (item !== null && typeof item !== "string") return undefined;
+      css[property] = item;
+    }
+    return css;
+  };
   const clipElement = (id: string) =>
     document.querySelector(`[data-hf-cutroom-clip-id="${CSS.escape(id)}"]`);
   /** Resolves every Cutroom track fader in this document, or null when the set differs. */
@@ -300,8 +317,163 @@ function installPreviewBridge(
     if (observedClip)
       observationTimer = window.setTimeout(scheduleObservation, 350);
   };
+  type TransformCss = Record<"scale" | "rotate" | "clip-path", string | null>;
+  const transformProperties = ["scale", "rotate", "clip-path"] as const;
+  const transforms = new Map<
+    HTMLElement | SVGElement,
+    Record<keyof TransformCss, { value: string; priority: string }>
+  >();
+  let transformFrame = 0;
+  let transformDraft: {
+    clipId: string;
+    style: TransformCss | null;
+    /** The same draft relative to the saved values, which GSAP folded into its transform. */
+    onGsap: TransformCss;
+  } | null = null;
+  const setTransform = (
+    element: HTMLElement | SVGElement,
+    property: keyof TransformCss,
+    value: string,
+    priority: string,
+  ) => {
+    // The parked video is represented by its held canvas. Both share the same style.
+    for (const target of [
+      element,
+      element instanceof HTMLVideoElement ? holds.get(element)?.canvas : null,
+    ])
+      if (value) target?.style.setProperty(property, value, priority);
+      else target?.style.removeProperty(property);
+  };
+  const restoreTransform = (element: HTMLElement | SVGElement) => {
+    const original = transforms.get(element);
+    if (!original) return;
+    for (const property of transformProperties)
+      setTransform(
+        element,
+        property,
+        original[property].value,
+        original[property].priority,
+      );
+    transforms.delete(element);
+  };
+  const writeTransform = () => {
+    transformFrame = 0;
+    const draft = transformDraft;
+    if (!draft) return;
+    const element = clipElement(draft.clipId);
+    if (!(element instanceof HTMLElement || element instanceof SVGElement))
+      return;
+    if (!draft.style) restoreTransform(element);
+    else {
+      let original = transforms.get(element);
+      if (!original) {
+        // Parse now, as Position drafts do, so GSAP folds only the saved values into its
+        // transform and never a draft. It leaves each longhand at "none".
+        win.gsap?.getProperty(element, "x");
+        original = {
+          scale: { value: "", priority: "" },
+          rotate: { value: "", priority: "" },
+          "clip-path": { value: "", priority: "" },
+        };
+        for (const property of transformProperties)
+          original[property] = {
+            value: element.style.getPropertyValue(property),
+            priority: element.style.getPropertyPriority(property),
+          };
+        transforms.set(element, original);
+      }
+      for (const property of transformProperties) {
+        const folded = "_gsap" in element && property !== "clip-path";
+        setTransform(
+          element,
+          property,
+          (folded ? draft.onGsap[property] : draft.style[property]) ??
+            (folded ? "none" : ""),
+          original[property].priority,
+        );
+      }
+    }
+    scheduleBox();
+    clearTimeout(observationTimer);
+    if (observedClip)
+      observationTimer = window.setTimeout(scheduleObservation, 350);
+  };
   let observedClip: string | null = null;
   let observedText: string | null = null;
+  /** The clip's saved transform longhands, which the warning compares while no draft shows. */
+  let observedTransform: TransformCss | null = null;
+  const cssProbe = document.createElement("div").style;
+  /** Numbers and words of two values agree once the browser serializes both the same way:
+   * `inset(0px 8px 0px 8px)` computes as `inset(0px 8px)`, and `scale: 2` reads as `2 2`. */
+  const sameCss = (
+    property: string,
+    computed: string,
+    saved: string,
+  ): boolean => {
+    const serialize = (value: string) => {
+      cssProbe.setProperty(property, value);
+      return cssProbe.getPropertyValue(property) || value;
+    };
+    const actual = serialize(computed);
+    const expected = serialize(saved);
+    const numbers = (value: string) => {
+      const found = (
+        value.match(/-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?/gi) ?? []
+      ).map(Number);
+      return found.length === 1 && !/[a-z(]/i.test(value)
+        ? [found[0]!, found[0]!]
+        : found;
+    };
+    const words = (value: string) =>
+      value
+        .replace(/-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?/gi, "#")
+        .replace(/\s+/g, " ");
+    const [a, b] = [numbers(actual), numbers(expected)];
+    return (
+      words(actual) === words(expected) &&
+      a.length === b.length &&
+      a.every((value, index) => Math.abs(value - b[index]!) < 0.0001)
+    );
+  };
+  /** Which saved or drafted transform longhands the composition's own styles or animation replace. */
+  const overriddenTransform = (
+    element: HTMLElement | SVGElement,
+    picture: Element,
+  ) => {
+    const expected =
+      transformDraft?.clipId === observedClip
+        ? transformDraft.style
+        : observedTransform;
+    if (!expected) return [];
+    const style = getComputedStyle(picture);
+    // GSAP folds the longhands into its own transform once it parses the element, so there
+    // only a tween that writes scale or rotation can replace them.
+    const tweens =
+      "_gsap" in element ? (win.gsap?.getTweensOf?.(element) ?? []) : null;
+    const keys = {
+      scale: ["scale", "scaleX", "scaleY", "transform"],
+      rotate: ["rotation", "rotate", "rotationZ", "rotateZ", "transform"],
+    };
+    const names = { scale: "Scale", rotate: "Rotation", "clip-path": "Crop" };
+    return transformProperties.flatMap((property) => {
+      const value = expected[property];
+      if (value === null) return [];
+      if (tweens && property !== "clip-path")
+        return tweens.some(
+          (tween) =>
+            keys[property].some(
+              (key) => key in tween.vars || key in (tween.vars.startAt ?? {}),
+            ) &&
+            (tween.progress() > 0 ||
+              Boolean(tween.vars.runBackwards || tween.vars.startAt)),
+        )
+          ? [names[property]]
+          : [];
+      return sameCss(property, style.getPropertyValue(property), value)
+        ? []
+        : [names[property]];
+    });
+  };
   const checkText = () => {
     if (!observedClip || observedText === null) return;
     // A saved edit can be observed before its replacement document is promoted. Only compare
@@ -406,7 +578,12 @@ function installPreviewBridge(
       const y =
         draft?.y ??
         (edited ? number("data-y") - number("data-hf-edit-base-y") : 0);
-      observingPosition = Boolean(x || y);
+      const transformed = Object.values(
+        (transformDraft?.clipId === observedClip
+          ? transformDraft.style
+          : observedTransform) ?? {},
+      ).some((value) => value !== null);
+      observingPosition = Boolean(x || y) || transformed;
       let overridden = false;
       const picture =
         element instanceof HTMLVideoElement
@@ -486,7 +663,13 @@ function installPreviewBridge(
           type: "position-warning",
           clipId: observedClip,
           time: win.__player?.getTime() ?? 0,
-          overridden,
+          overridden: [
+            ...(overridden ? ["Position"] : []),
+            ...(transformed &&
+            picture.checkVisibility({ checkVisibilityCSS: true })
+              ? overriddenTransform(element, picture)
+              : []),
+          ],
         },
         "*",
       );
@@ -518,7 +701,7 @@ function installPreviewBridge(
           observationFrame = 0;
           // Check again after a newer seek settles, or after a draft still waiting for its
           // frame reaches the picture: until then the draft and the picture disagree.
-          if (version !== pictureVersion || positionFrame) {
+          if (version !== pictureVersion || positionFrame || transformFrame) {
             scheduleObservation();
             return;
           }
@@ -622,7 +805,7 @@ function installPreviewBridge(
       () => {
         if (boxFrame !== frame) return;
         boxFrame = 0;
-        if (version !== pictureVersion || positionFrame) {
+        if (version !== pictureVersion || positionFrame || transformFrame) {
           scheduleBox();
           return;
         }
@@ -1442,8 +1625,30 @@ function installPreviewBridge(
           for (const { element, volume } of changes)
             if (element.getAttribute("data-volume") !== volume)
               element.setAttribute("data-volume", volume);
-          // Undo can return to this document before a committed Position draft is
-          // replaced. Restore its canonical styles, retaining any current gesture.
+          // Undo can return to this document before a committed draft is replaced.
+          // Restore its canonical styles, retaining any current gesture.
+          if (transforms.size) {
+            if (transformDraft?.clipId !== data.positionDraftClipId) {
+              cancelAnimationFrame(transformFrame);
+              transformFrame = 0;
+              transformDraft = null;
+            }
+            let restored = false;
+            for (const element of [...transforms.keys()]) {
+              if (
+                element.getAttribute("data-hf-cutroom-clip-id") ===
+                data.positionDraftClipId
+              )
+                continue;
+              restoreTransform(element);
+              restored = true;
+            }
+            if (restored && !positions.size) {
+              scheduleObservation();
+              scheduleBox();
+              await paint();
+            }
+          }
           if (positions.size) {
             if (positionDraft?.clipId !== data.positionDraftClipId) {
               cancelAnimationFrame(positionFrame);
@@ -1495,6 +1700,8 @@ function installPreviewBridge(
             return;
           observedClip = data.clipId;
           observedText = data.text;
+          observedTransform =
+            ("transform" in data ? transformCss(data.transform) : null) ?? null;
           postedBox = "";
           observeBox();
           scheduleObservation();
@@ -1527,6 +1734,22 @@ function installPreviewBridge(
           )
             scheduleObservation(data.hfId);
           return;
+        case "transform": {
+          if (!("clipId" in data) || typeof data.clipId !== "string") return;
+          const style =
+            "style" in data
+              ? data.style === null
+                ? null
+                : transformCss(data.style)
+              : undefined;
+          const onGsap =
+            "onGsap" in data ? transformCss(data.onGsap) : undefined;
+          if (style === undefined || !onGsap) return;
+          transformDraft = { clipId: data.clipId, style, onGsap };
+          if (!transformFrame)
+            transformFrame = requestAnimationFrame(writeTransform);
+          return;
+        }
         case "position":
           if (
             !("clipId" in data) ||

@@ -15,7 +15,7 @@ import {
   isAudioKind,
 } from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
-import { readOpacity, writeOpacity } from "./opacity";
+import { clipStyle, readClipStyle, writeClipStyle } from "./style";
 import { readPosition, positionAttributes } from "./position";
 import { posix } from "node:path";
 import {
@@ -641,6 +641,7 @@ export function parseComposition(
     const referenced = reference && clipIds.get(reference);
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
+    const style = readClipStyle(element.attrs.style);
     const group = element.attrs["data-audio-group"];
     const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
@@ -684,9 +685,13 @@ export function parseComposition(
           trackGainWarning: `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`,
         }),
       volume: volume !== null && volume >= 0 ? volume : null,
-      opacity: readOpacity(element.attrs.style),
+      opacity: style.opacity,
       x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
       y: isAudioKind(kind) ? null : readPosition(element.attrs, "y"),
+      scaleX: isAudioKind(kind) ? null : style.scaleX,
+      scaleY: isAudioKind(kind) ? null : style.scaleY,
+      rotation: isAudioKind(kind) ? null : style.rotation,
+      crop: isAudioKind(kind) ? null : style.crop,
       text:
         kind === "element"
           ? (elementText(element, textLayout.get(element)?.preserveLines)
@@ -1007,8 +1012,15 @@ function clipChanges(
     changes.push(["data-playback-rate", String(after.playbackRate)]);
   if (before.x !== after.x || before.y !== after.y)
     changes.push(...positionAttributes(element.attrs, after));
-  if (before.opacity !== after.opacity)
-    changes.push(["style", writeOpacity(element.attrs.style, after.opacity)]);
+  const [styleBefore, styleAfter] = [clipStyle(before), clipStyle(after)];
+  const style = Object.fromEntries(
+    Object.entries(styleAfter).filter(
+      ([property, value]) =>
+        styleBefore[property as keyof typeof styleBefore] !== value,
+    ),
+  );
+  if (Object.keys(style).length)
+    changes.push(["style", writeClipStyle(element.attrs.style, style)]);
   if (before.volume !== after.volume)
     changes.push([
       "data-volume",
@@ -1270,9 +1282,15 @@ function sourceRestrictions(
           parsed.fonts,
         )
       : null;
-  return read && "reason" in read
-    ? { ...restrictions, title: read.reason }
-    : restrictions;
+  const transform = isAudioKind(clip.kind)
+    ? undefined
+    : readClipStyle(parsed.elements.get(clip.id)!.attrs.style).restriction;
+  const all = {
+    ...restrictions,
+    ...(read && "reason" in read && { title: read.reason }),
+    ...(transform && { transform }),
+  };
+  return Object.keys(all).length ? all : undefined;
 }
 
 function cutAndTextRestrictions(
@@ -1393,8 +1411,8 @@ function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
     ...positionAttributes({}, clip).filter(
       (attribute) => attribute[1] !== null,
     ),
-    ...(clip.opacity !== null
-      ? [["style", writeOpacity(undefined, clip.opacity)] as const]
+    ...(writeClipStyle(undefined, clipStyle(clip)) !== null
+      ? [["style", writeClipStyle(undefined, clipStyle(clip))!] as const]
       : []),
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]

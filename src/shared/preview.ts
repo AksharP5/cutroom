@@ -140,8 +140,11 @@ export const PositionWarningSchema = z.object({
   type: z.literal("position-warning"),
   clipId: z.string(),
   time: z.number().nonnegative().finite(),
-  overridden: z.boolean(),
+  /** The Transform properties the composition's own styles or animation replace here. */
+  overridden: z.array(z.enum(["Position", "Scale", "Rotation", "Crop"])),
 });
+
+export type PositionWarning = z.infer<typeof PositionWarningSchema>;
 
 export const PositionFoldSchema = z.object({
   source: z.literal("hf-preview"),
@@ -153,4 +156,5 @@ export const PositionFoldSchema = z.object({
 export const TextWarningSchema = PositionWarningSchema.extend({
   type: z.literal("text-warning"),
   text: z.string(),
+  overridden: z.boolean(),
 });

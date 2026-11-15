@@ -15,7 +15,16 @@ import {
   RuntimeStateSchema,
   TrackGainPreviewSchema,
 } from "../../shared/preview";
+import {
+  relativeTransformStyle,
+  transformStyle,
+} from "../../shared/timeline/transform";
 import type {
+  ClipTransform,
+  TransformStyle,
+} from "../../shared/timeline/transform";
+import type {
+  PositionWarning,
   CompositionDiagnostic,
   PictureBox,
   PictureHit,
@@ -32,21 +41,28 @@ import type { EditPicture } from "./editFrame";
 import { seekQueue } from "./seekQueue";
 
 export const usePositionWarning = create<{
-  warning: { clipId: string; time: number } | null;
+  warning: {
+    clipId: string;
+    time: number;
+    properties: PositionWarning["overridden"];
+  } | null;
 }>(() => ({ warning: null }));
 export const useTextWarning = create<{
   warning: { clipId: string; time: number; text: string } | null;
 }>(() => ({ warning: null }));
 let observedClip: string | null = null;
 let observedText: string | null = null;
+let observedTransform: TransformStyle | null = null;
 let warningSource: HTMLIFrameElement | null = null;
 const observers = new Set<(clipId: string | null) => void>();
 export function observePosition(
   clipId: string | null,
   text: string | null = null,
+  transform: ClipTransform | null = null,
 ) {
   observedClip = clipId;
   observedText = text;
+  observedTransform = transform && transformStyle(transform);
   useTextWarning.setState({ warning: null });
   usePositionWarning.setState({ warning: null });
   if (pictureBox.current()?.clipId !== clipId) pictureBox.publish(null);
@@ -116,6 +132,44 @@ export async function commitPositionPreview(commit: () => Promise<boolean>) {
   positionDraft = null;
 }
 
+type TransformDraft = {
+  clipId: string;
+  style: TransformStyle | null;
+  onGsap: TransformStyle;
+};
+const transformTargets = new Set<(draft: TransformDraft) => void>();
+let transformDraft: TransformDraft | null = null;
+/** A Scale, Rotation or Crop draft; like Position, it goes only to preview documents. */
+export function previewTransform(
+  clipId: string,
+  draft: ClipTransform | null,
+  saved: ClipTransform,
+) {
+  transformDraft = {
+    clipId,
+    style: draft && transformStyle(draft),
+    onGsap: relativeTransformStyle(draft ?? saved, saved),
+  };
+  for (const target of transformTargets) target(transformDraft);
+}
+
+export function cancelTransformPreview(clipId: string, saved: ClipTransform) {
+  previewTransform(clipId, null, saved);
+  transformDraft = null;
+}
+
+export async function commitTransformPreview(
+  saved: ClipTransform,
+  commit: () => Promise<boolean>,
+) {
+  const draft = transformDraft;
+  const accepted = await commit();
+  // An earlier commit must never clear a subsequent gesture's draft.
+  if (transformDraft !== draft) return;
+  if (!accepted && draft) previewTransform(draft.clipId, null, saved);
+  transformDraft = null;
+}
+
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   let state: PreviewState = {
@@ -177,7 +231,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         const { clipId, time, overridden } = warning.data;
         if (frame === warningSource && clipId === observedClip)
           usePositionWarning.setState({
-            warning: overridden ? { clipId, time } : null,
+            warning: overridden.length
+              ? { clipId, time, properties: overridden }
+              : null,
           });
         return;
       }
@@ -327,8 +383,15 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const position = (draft: PositionDraft) => {
     send("position", draft);
   };
+  const transform = (draft: TransformDraft) => {
+    send("transform", draft);
+  };
   const observe = (clipId: string | null) =>
-    send("observe-position", { clipId, text: observedText });
+    send("observe-position", {
+      clipId,
+      text: observedText,
+      transform: observedTransform,
+    });
   const hit = async (x: number, y: number) =>
     (await request("hit", { x, y })).hits ?? [];
   const edit = seekQueue<EditPicture | null>(
@@ -352,6 +415,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     edit.dispose();
     if (positionTargets.delete(position) && !positionTargets.size)
       positionDraft = null;
+    if (transformTargets.delete(transform) && !transformTargets.size)
+      transformDraft = null;
     observers.delete(observe);
     if (warningSource === frame) {
       warningSource = null;
@@ -385,7 +450,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
           "track-gains",
           {
             ...snapshot,
-            positionDraftClipId: positionDraft?.clipId ?? null,
+            positionDraftClipId:
+              positionDraft?.clipId ?? transformDraft?.clipId ?? null,
           },
           signal,
         )
@@ -398,15 +464,19 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     signal: closing.signal,
     async activate() {
       positionTargets.add(position);
+      transformTargets.add(transform);
       // Keep both documents following the gesture until the new one has painted its latest
       // draft. Promotion runs immediately after this resolves, before another event can edit it.
       let shown: PositionDraft | null;
+      let shownTransform: TransformDraft | null;
       do {
         shown = positionDraft;
+        shownTransform = transformDraft;
         if (shown) position(shown);
+        if (shownTransform) transform(shownTransform);
         await request("paint");
         closing.signal.throwIfAborted();
-      } while (shown !== positionDraft);
+      } while (shown !== positionDraft || shownTransform !== transformDraft);
       // A candidate follows a drag already under way before it can replace the picture.
       let editing: EditPicture | null;
       let hadEdit = false;

@@ -133,7 +133,7 @@ export function ValueField({
           current.distance +=
             delta *
             ((unit === "gain" ? event.altKey : event.shiftKey)
-              ? unit === "pixels"
+              ? unit === "pixels" || unit === "degrees"
                 ? 10
                 : 0.1
               : 1);
