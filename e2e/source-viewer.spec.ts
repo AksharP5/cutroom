@@ -492,7 +492,9 @@ test("F9 and F10 from Source reveal Timeline after a successful placement", asyn
       release();
     }
     await expect.poll(read).not.toEqual(before);
-    await page.unroute("**/api/cutroom/projects/*/commands");
+    // The server has the edit before the handler fulfills; wait so the route is not
+    // auto-continued underneath it.
+    await page.unrouteAll({ behavior: "wait" });
     if (key === "F9")
       await page.screenshot({
         path: testInfo.outputPath("after-source-f9.png"),
