@@ -13,7 +13,7 @@ import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
-import { focusPanel, useKeymap } from "../../keymap";
+import { focusPanel, returnPointerFocus, useKeymap } from "../../keymap";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
@@ -309,6 +309,7 @@ export function Inspector({ projectId }: { projectId: string }) {
       aria-label="Inspector"
       data-open={open}
       inert={!open}
+      onClick={returnPointerFocus}
     >
       <header>
         <strong>Inspector</strong>
