@@ -184,12 +184,28 @@ test("exports accept chosen presets and folders, refuse invalid destinations/ran
     }
     const destination = join(directory, "taken.mp4");
     await writeFile(destination, "previous export");
-    const taken = result(
-      Started,
-      await f.client.callTool({
-        name: "export_start",
-        arguments: { projectId: p.id, directory, filename: "taken.mp4" },
-      }),
+    // An agent learns the name is taken before any job starts.
+    const refused = await f.client.callTool({
+      name: "export_start",
+      arguments: { projectId: p.id, directory, filename: "taken.mp4" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain(
+      `${destination} already exists`,
+    );
+    expect(JSON.stringify(refused.content)).toContain("taken 2.mp4");
+    expect(
+      await (await f.app.request("/api/export-jobs")).json(),
+    ).toMatchObject({ jobs: [] });
+    // A name taken after that check still never overwrites the file.
+    const taken = Started.parse(
+      await (
+        await f.app.request(`/api/projects/${p.id}/export`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ directory, filename: "taken.mp4" }),
+        })
+      ).json(),
     );
     let failed = result(
       ExportJobSchema,

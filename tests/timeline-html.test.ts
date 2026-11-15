@@ -243,6 +243,7 @@ test("visual placements maintain track stacking without rewriting authored style
   expect(inserted).toContain(`[data-track-index="0"]:not(audio)`);
   expect(inserted).toContain(`{z-index:0}`);
   const moved = edit(inserted, [
+    { type: "setTrack", index: 3, kind: "video" },
     { type: "move", clipIds: ["title"], trackBy: 2 },
   ]);
   expect(moved).toContain(`data-track-index="3"`);
@@ -264,9 +265,12 @@ test("audio placement leaves stacking and authored markup alone", () => {
   const html = composition(
     `<audio id="bed" src="bed.wav" style="z-index:90" data-start="0" data-duration="2" data-track-index="0"></audio>`,
   );
-  expect(edit(html, [{ type: "move", clipIds: ["bed"], trackBy: 1 }])).toBe(
-    html.replace(`data-track-index="0"`, `data-track-index="1"`),
-  );
+  expect(
+    edit(html, [
+      { type: "setTrack", index: 1, kind: "audio" },
+      { type: "move", clipIds: ["bed"], trackBy: 1 },
+    ]),
+  ).toBe(html.replace(`data-track-index="0"`, `data-track-index="1"`));
   const inserted = edit(html, [
     {
       type: "insert",
@@ -337,7 +341,10 @@ test("a managed stylesheet moved by hand is relocated rather than duplicated", (
   const moved = first
     .replace(block, "")
     .replace("</body>", `<aside>${block}</aside></body>`);
-  const output = edit(moved, [{ type: "move", clipIds: ["box"], trackBy: 1 }]);
+  const output = edit(moved, [
+    { type: "setTrack", index: 2, kind: "video" },
+    { type: "move", clipIds: ["box"], trackBy: 1 },
+  ]);
   expect(output.match(/<style data-cutroom-track-stacking/g)).toHaveLength(1);
   expect(output).toContain(`<head><style data-cutroom-track-stacking="main">`);
   expect(output).toContain(`<aside></aside>`);

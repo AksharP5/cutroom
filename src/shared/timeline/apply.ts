@@ -336,12 +336,17 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ? new Set(withPartners(clips, [...named]))
         : named;
       if (command.trackBy !== 0)
-        for (const clip of lifted)
-          assertTrackKind(
-            clip.kind,
-            trackAt(clip.track + command.trackBy),
-            clip.id,
-          );
+        for (const clip of lifted) {
+          const index = clip.track + command.trackBy;
+          const track = trackAt(index);
+          // A move never invents a track; the editor and agents create one first.
+          if (!track)
+            throw new TimelineError(
+              "not_found",
+              `Track ${index} does not exist, so ${clip.id} cannot move onto it. To create it, add {"type":"setTrack","index":${index},"kind":"${isAudioKind(clip.kind) ? "audio" : "video"}"} before the move in the same batch.`,
+            );
+          assertTrackKind(clip.kind, track, clip.id);
+        }
       let next = clips.map((clip) =>
         moving.has(clip)
           ? {

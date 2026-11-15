@@ -248,7 +248,7 @@ Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the 
 - Omit `range` to use In to Out when both marks exist, otherwise the whole timeline. `"marks"` requires both marks, `"timeline"` exports everything, and `{ "start": 30, "end": 90 }` exports those half-open project frames. Out is exclusive, as in `timeline_read`. Size and rational fps come from the project.
 - `quality` is `"draft"`, `"standard"`, or `"high"`, with Standard as the default, using the dialog's producer presets.
 - Omit `directory` to create the project's `.cutroom/renders` folder on demand. A chosen directory must be an absolute existing folder, under the same path validation as the dialog. App-state folders cannot be redirected through symlinks.
-- Omit `filename` to choose the next free project name, then a suffix from 2, in the chosen folder. An explicit filename must end in `.mp4` and cannot contain folders. Names are suggestions until publication. A taken destination fails without replacing it, even if another file appears during rendering.
+- Omit `filename` to choose the next free project name, then a suffix from 2, in the chosen folder. An explicit filename must end in `.mp4` and cannot contain folders. An explicit filename that already exists in the folder is refused before the export starts, with the taken path and the next free name. Names are suggestions until publication. A destination taken during rendering fails without replacing it.
 
 Only one export can run at a time across all projects, whether started in the editor or over MCP. A second start is refused with the running export's project, filename, and job ID. Wait for it to finish, or use `export_cancel` with that job ID and wait for cleanup before starting another export.
 

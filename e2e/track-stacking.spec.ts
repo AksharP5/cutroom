@@ -184,7 +184,11 @@ test("rendered video tracks stack upward after insert and track moves, while aut
     ),
   ).toBe(true);
 
-  await edit([{ type: "move", clipIds: ["footage"], trackBy: 3 }]);
+  // A move never creates a track; this one is above every existing row.
+  await edit([
+    { type: "setTrack", index: 3, kind: "video" },
+    { type: "move", clipIds: ["footage"], trackBy: 3 },
+  ]);
   expect(await whitePixels("footage-above-title")).toBe(0);
   await edit([{ type: "move", clipIds: ["footage"], trackBy: -3 }]);
   expect(await whitePixels("footage-back-on-v1")).toBeGreaterThan(100);

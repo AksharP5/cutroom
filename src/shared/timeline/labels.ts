@@ -84,7 +84,7 @@ export function editLabel(
             command.trackBy > 0 !==
             (clip !== undefined && isAudioKind(clip.kind));
           parts.push(
-            `${Math.abs(command.trackBy)} ${Math.abs(command.trackBy) === 1 ? "track" : "tracks"} ${up ? "up" : "down"}`,
+            `${Math.abs(command.trackBy)} ${Math.abs(command.trackBy) === 1 ? "track" : "tracks"} ${up ? "up" : "down"}${clip ? ` to ${trackName(clip.track + command.trackBy)}` : ""}`,
           );
         }
         if (pending) {

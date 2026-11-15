@@ -599,12 +599,15 @@ for (const [name, change] of [
   // An agent ripple trims a second off shot 1, so shot 2 starts a second earlier.
   [
     "ripple trims the shot before",
-    { type: "trim", clipId: "shot-1", edge: "end", to: 60, ripple: true },
+    [{ type: "trim", clipId: "shot-1", edge: "end", to: 60, ripple: true }],
   ],
-  // An agent moves shot 2 up to V2 and a second earlier.
+  // An agent adds V2 and moves shot 2 up to it and a second earlier.
   [
     "moves the shot",
-    { type: "move", clipIds: ["shot-2"], by: -30, trackBy: 1 },
+    [
+      { type: "setTrack", index: 1, kind: "video" },
+      { type: "move", clipIds: ["shot-2"], by: -30, trackBy: 1 },
+    ],
   ],
 ] as const)
   test(`Q and E at absolute frames are refused when an agent ${name} first`, async ({
@@ -618,7 +621,7 @@ for (const [name, change] of [
     await page.keyboard.press("q");
     await seek("0400");
     await page.keyboard.press("e");
-    const after = await agent([change]);
+    const after = await agent([...change]);
     release();
 
     // The same frames would now cut shot 2 somewhere else, so neither key is sent.
