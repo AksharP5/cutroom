@@ -24,6 +24,42 @@ type JsonRequest = (
 /** Fetches a path on the local server, such as `/api/projects/...`. */
 type LocalFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
+const MAX_VIEW_FRAMES = 8;
+
+/** Scales a JPEG down to `width` pixels wide with the FFmpeg that exports already need. */
+async function scaleJpeg(jpeg: Uint8Array, width: number, signal: AbortSignal) {
+  const ffmpeg = Bun.which("ffmpeg");
+  if (!ffmpeg) throw new Error("Install FFmpeg to scale timeline_view images.");
+  const child = Bun.spawn(
+    [
+      ffmpeg,
+      "-v",
+      "error",
+      "-f",
+      "jpeg_pipe",
+      "-i",
+      "pipe:0",
+      "-vf",
+      `scale='min(${width},iw)':-2:flags=lanczos`,
+      "-q:v",
+      "3",
+      "-f",
+      "image2pipe",
+      "-c:v",
+      "mjpeg",
+      "pipe:1",
+    ],
+    { stdin: jpeg, stdout: "pipe", stderr: "pipe", signal },
+  );
+  const [scaled, error, code] = await Promise.all([
+    new Response(child.stdout).bytes(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) throw new Error(`FFmpeg could not scale the frame: ${error}`);
+  return scaled;
+}
+
 const input = {
   projectId: z.string().describe("Project ID returned by projects_list"),
   composition: z
@@ -212,36 +248,64 @@ export function registerTimelineTools(
   server.registerTool(
     "timeline_view",
     {
-      description:
-        "Render one timeline frame as an image. Composition script and load failures return an error naming the file and message instead of a misleading static frame.",
-      inputSchema: { ...input, frame: z.number().int().nonnegative() },
+      description: `Render timeline frames as JPEG images, each followed by its frame number and time. Pass frame for one, or frames for up to ${MAX_VIEW_FRAMES} in one call. width scales each image down, keeping its aspect ratio; omit it for the composition's full size. A few hundred pixels is enough to check layout and timing, and costs far less context. Composition script and load failures return an error naming the file and message instead of a misleading static frame.`,
+      inputSchema: {
+        ...input,
+        frame: z.number().int().nonnegative().optional(),
+        frames: z
+          .array(z.number().int().nonnegative())
+          .min(1)
+          .max(MAX_VIEW_FRAMES)
+          .optional()
+          .describe("Several frames to render, in order"),
+        width: z
+          .number()
+          .int()
+          .min(64)
+          .max(3840)
+          .optional()
+          .describe("Image width in pixels; never larger than the composition"),
+      },
       // The thumbnail route captures in the capability-scoped, opaque renderer.
       annotations: readOnly,
     },
     async (
-      { projectId, composition, frame },
+      { projectId, composition, frame, frames, width },
       extra,
     ): Promise<CallToolResult> => {
+      const wanted =
+        frame === undefined ? frames : frames ? undefined : [frame];
+      if (!wanted)
+        return {
+          content: [{ type: "text", text: "Pass either frame or frames." }],
+          isError: true,
+        };
       const read = await readView(projectId, composition, extra.signal);
       if (!read.ok) return read.failure;
       const { timeline } = read.view;
-      // Full precision: the renderer floors seek times onto frames.
-      const seconds = frameTime(frame, timeline.fps);
-      const image = await fetchLocal(
-        `/api/projects/${id(projectId)}/thumbnail/${composition.split("/").map(id).join("/")}?t=${seconds}&format=jpeg&output=source`,
-        { signal: extra.signal },
-      );
-      if (!image.ok) return failedResponse(image);
-      return {
-        content: [
+      const content: CallToolResult["content"] = [];
+      // One at a time: captures share one renderer queue, and the first failure answers.
+      for (const at of wanted) {
+        // Full precision: the renderer floors seek times onto frames.
+        const seconds = frameTime(at, timeline.fps);
+        const image = await fetchLocal(
+          `/api/projects/${id(projectId)}/thumbnail/${composition.split("/").map(id).join("/")}?t=${seconds}&format=jpeg&output=source`,
+          { signal: extra.signal },
+        );
+        if (!image.ok) return failedResponse(image);
+        const jpeg = new Uint8Array(await image.arrayBuffer());
+        content.push(
           {
             type: "image",
-            data: Buffer.from(await image.arrayBuffer()).toString("base64"),
+            data: Buffer.from(
+              width ? await scaleJpeg(jpeg, width, extra.signal) : jpeg,
+            ).toString("base64"),
             mimeType: "image/jpeg",
           },
-          { type: "text", text: `Frame ${frame} (${seconds.toFixed(3)}s)` },
-        ],
-      };
+          { type: "text", text: `Frame ${at} (${seconds.toFixed(3)}s)` },
+        );
+      }
+      return { content };
     },
   );
 }
