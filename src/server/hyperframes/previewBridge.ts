@@ -60,36 +60,68 @@ type LiveClip = Pick<
 >;
 
 /**
- * How a loaded document becomes a saved one in place, or why it must reload. Both come
- * from the server: clips that stay keep their place, their other attributes and their
- * order; removed clips leave the structure with the whitespace they own.
+ * How a loaded document becomes a saved one in place, or why it must reload. Both lists
+ * come from the server. Clips that stay keep their place, their other attributes and their
+ * order. A clip that changed otherwise is removed and added again. Removed clips leave
+ * with the whitespace they own; each added clip goes next to a neighbour that stays, or
+ * that was added before it, in its gap. A gap with no clip that stays reloads.
  * Runs inside the preview too, so it uses nothing outside itself.
  */
 export function liveUpdatePlan(
   current: readonly LiveClip[],
   next: readonly LiveClip[],
-): { remove: string[] } | { refuse: string } {
+):
+  | {
+      remove: string[];
+      insert: { id: string; after: string | null; before: string | null }[];
+    }
+  | { refuse: string } {
   const before = new Map(current.map((clip) => [clip.id, clip]));
-  const after = new Map(next.map((clip) => [clip.id, clip]));
-  if (before.size !== current.length || after.size !== next.length)
+  if (
+    before.size !== current.length ||
+    new Set(next.map((clip) => clip.id)).size !== next.length
+  )
     return { refuse: "The preview clips are ambiguous." };
-  for (const clip of next) {
+  const stays = (clip: LiveClip) => {
     const old = before.get(clip.id);
-    if (!old) return { refuse: "Added clips need a fresh document." };
-    if (
-      old.slot !== clip.slot ||
-      old.body !== clip.body ||
-      old.space !== clip.space
-    )
-      return { refuse: "A clip changed more than its timing." };
-  }
-  const removed = current.filter((clip) => !after.has(clip.id));
-  if (removed.some((clip) => clip.slot === null))
+    return (
+      !!old &&
+      old.slot === clip.slot &&
+      old.body === clip.body &&
+      old.space === clip.space
+    );
+  };
+  const kept = new Set(next.filter(stays).map((clip) => clip.id));
+  const removed = current.filter((clip) => !kept.has(clip.id));
+  const added = next.filter((clip) => !kept.has(clip.id));
+  if ([...removed, ...added].some((clip) => clip.slot === null))
     return { refuse: "This clip is part of the document's structure." };
-  const kept = current.filter((clip) => after.has(clip.id));
-  if (kept.some((clip, index) => clip.id !== next[index]!.id))
+  if (
+    current
+      .filter((clip) => kept.has(clip.id))
+      .some(
+        (clip, index) =>
+          clip.id !== next.filter((clip) => kept.has(clip.id))[index]!.id,
+      )
+  )
     return { refuse: "The clips changed order." };
-  return { remove: removed.map((clip) => clip.id) };
+  const after: { id: string; after: string; before: null }[] = [];
+  const ahead: { id: string; after: null; before: string }[] = [];
+  for (const [index, clip] of next.entries()) {
+    if (kept.has(clip.id)) continue;
+    const gap = next.filter((other) => other.slot === clip.slot);
+    const first = gap.findIndex((other) => kept.has(other.id));
+    if (first < 0) return { refuse: "Added clips need a fresh document." };
+    // Clips in one gap are adjacent, so the neighbour in the list is the one in the page.
+    if (gap.indexOf(clip) > first)
+      after.push({ id: clip.id, after: next[index - 1]!.id, before: null });
+    else ahead.push({ id: clip.id, after: null, before: next[index + 1]!.id });
+  }
+  // After a neighbour in list order; before one in reverse, so each anchor exists.
+  return {
+    remove: removed.map((clip) => clip.id),
+    insert: [...after, ...ahead.reverse()],
+  };
 }
 
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
@@ -116,11 +148,17 @@ function installPreviewBridge(
   let titleStyle = initialTiming?.titleStyle;
   // The clips and length of the document as last confirmed; edits can add and remove clips.
   let liveClips = initialTiming?.clips ?? [];
+  /**
+   * Media this document removed, by clip id and the hash of its other attributes. Undo and
+   * turning a clip back on add the same clip again; reusing its element keeps the media it
+   * already loaded, where a new element would load it from scratch.
+   */
+  const removedMedia = new Map<string, HTMLMediaElement>();
   let updatingTiming = false;
   let confirmedStructure: string | null = null;
-  // Attribute writes made by the pinned runtime for a parent seek may change visibility.
-  // Remember their exact before/after values without cloning per frame. The runtime can
-  // apply a seek after its images decode, so the record runs until the seek settles.
+  // Attribute writes made by the pinned runtime for a parent seek or playback may change
+  // visibility. Remember their exact before/after values without cloning per frame. The
+  // runtime can apply a seek after its images decode, so the record runs until it settles.
   // An outside write before or after that must still fail the DOM comparison.
   const seekAttributes = new Map<
     Element,
@@ -177,32 +215,41 @@ function installPreviewBridge(
     recording = false;
     seekGeneration += 1;
   };
-  const seekRuntime = (time: number) => {
-    if (!initialTiming || confirmedStructure === null) {
-      win.__player?.seek(time);
-      return;
-    }
+  /** Starts recording the runtime's writes, for a seek or for playback. */
+  const recordRuntime = () => {
+    if (!initialTiming || confirmedStructure === null) return null;
     seekMutations.observe(document.documentElement, {
       subtree: true,
       attributes: true,
       attributeOldValue: true,
     });
     recording = true;
-    const generation = ++seekGeneration;
+    return ++seekGeneration;
+  };
+  /** Ends the record once the runtime has drawn the frame it is settling on. */
+  const settleRecording = (generation: number) => {
+    // The runtime keeps the old clips visible until the new ones have decoded a frame.
+    const settled = win.__hfWaitForSeekCompletion?.();
+    if (!settled) {
+      if (generation === seekGeneration) stopRecording();
+      return;
+    }
+    void settled
+      .catch(() => {})
+      .then(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+      .then(() => {
+        if (generation === seekGeneration) stopRecording();
+      });
+  };
+  const seekRuntime = (time: number) => {
+    const generation = recordRuntime();
     try {
       win.__player?.seek(time);
     } finally {
-      flushSeek();
-      // The runtime keeps the old clips visible until the new ones have decoded a frame.
-      const settled = win.__hfWaitForSeekCompletion?.();
-      if (!settled) seekMutations.disconnect();
-      else
-        void settled
-          .catch(() => {})
-          .then(() => new Promise((resolve) => requestAnimationFrame(resolve)))
-          .then(() => {
-            if (generation === seekGeneration) stopRecording();
-          });
+      if (generation !== null) {
+        flushSeek();
+        settleRecording(generation);
+      }
     }
   };
   const liveStructure = () => {
@@ -1302,6 +1349,8 @@ function installPreviewBridge(
       timer?: number;
     }
   >();
+  /** Videos a live update added, hidden until their first frame is held or they play. */
+  const pendingVideos = new Set<HTMLVideoElement>();
   const FRAME_TIMEOUT = 8_000;
   /** How long a moving playhead must rest before the sources decode its exact frame. */
   const SCRUB_REST_MS = 60;
@@ -1568,7 +1617,11 @@ function installPreviewBridge(
   };
   /** Videos the composition shows, read without this bridge's suppression. */
   const visibleVideos = () => {
-    const hidden = new Set([...holds.keys(), ...deferredSeeks.keys()]);
+    const hidden = new Set([
+      ...holds.keys(),
+      ...deferredSeeks.keys(),
+      ...pendingVideos,
+    ]);
     for (const video of hidden) video.removeAttribute("data-cutroom-held");
     const videos = Array.from(document.querySelectorAll("video")).filter(
       (video) =>
@@ -1699,6 +1752,12 @@ function installPreviewBridge(
               for (const [video, frame] of frames) {
                 showHold(video, frame, false);
                 frames.delete(video);
+              }
+              // The runtime decides whether an added video that has no frame here shows.
+              for (const video of pendingVideos) {
+                pendingVideos.delete(video);
+                if (!holds.has(video))
+                  video.removeAttribute("data-cutroom-held");
               }
               exactVersion = version;
             } finally {
@@ -1832,7 +1891,8 @@ function installPreviewBridge(
   const deferredSeeks = new Map<HTMLVideoElement, number>();
   let deferring = false;
   const unsuppress = (video: HTMLVideoElement) => {
-    if (!holds.has(video)) video.removeAttribute("data-cutroom-held");
+    if (!holds.has(video) && !pendingVideos.has(video))
+      video.removeAttribute("data-cutroom-held");
   };
   /** Sources with a loaded proxy defer their seeks; the rest seek as usual. */
   const deferSeeks = (video: HTMLVideoElement) => {
@@ -1942,8 +2002,11 @@ function installPreviewBridge(
   document.addEventListener(
     "play",
     (event) => {
-      if (!retired && event.target instanceof HTMLVideoElement)
+      if (!retired && event.target instanceof HTMLVideoElement) {
+        if (pendingVideos.delete(event.target) && !holds.has(event.target))
+          event.target.removeAttribute("data-cutroom-held");
         releasePlaying(event.target);
+      }
     },
     true,
   );
@@ -2251,6 +2314,7 @@ function installPreviewBridge(
             "data-playback-rate",
           ];
           const clips: unknown[] = timing.clips;
+          const markup = new Map<string, unknown>();
           const incoming = clips.map((clip): LiveClip => {
             if (
               !clip ||
@@ -2265,6 +2329,7 @@ function installPreviewBridge(
               typeof clip.space !== "string"
             )
               throw new Error("The preview clips changed.");
+            markup.set(clip.id, Reflect.get(clip, "html"));
             return {
               id: clip.id,
               slot: clip.slot,
@@ -2275,20 +2340,76 @@ function installPreviewBridge(
           const change = plan(liveClips, incoming);
           if ("refuse" in change) throw new Error(change.refuse);
           const previous = new Map(liveClips.map((clip) => [clip.id, clip]));
+          const spaces = new Map(incoming.map(({ id, space }) => [id, space]));
+          const bodies = new Map(incoming.map(({ id, body }) => [id, body]));
           // A removed clip goes with the whitespace before it. Check both before any write.
-          const removals = change.remove.map((id) => {
-            const element = elements.get(id);
-            const space = previous.get(id)!.space;
+          const ownSpace = (element: Element | undefined, space: string) => {
             const before = element?.previousSibling;
             if (
               !element ||
               (space && !(before instanceof Text && before.data === space))
             )
               throw new Error("The preview clip is missing.");
-            return { id, element, space: space ? before! : null };
+            return space ? before! : null;
+          };
+          const replaced = new Set(change.insert.map(({ id }) => id));
+          const removals = change.remove.map((id) => {
+            const element = elements.get(id);
+            const space = ownSpace(element, previous.get(id)!.space);
+            // Its new markup would be animated too, and only a fresh load finds that.
+            if (
+              replaced.has(id) &&
+              element!.getAnimations({ subtree: true }).length
+            )
+              throw new Error("This clip needs animation discovery.");
+            return { id, element: element!, space };
+          });
+          const removed = new Set(change.remove);
+          // Added clips come from the saved document's markup, parsed inertly. The runtime's
+          // CSS adapter finds animated clips only when it loads, so those reload instead.
+          const added = new Map<string, Element>();
+          const inserts = change.insert.map(({ id, after, before }) => {
+            const html = markup.get(id);
+            const template = document.createElement("template");
+            if (typeof html === "string") template.innerHTML = html;
+            const parsed = template.content.firstElementChild;
+            const reuse = removedMedia.get(`${id}\0${bodies.get(id)}`);
+            // Created in this document, so media choose and load their source here: one
+            // made in the inert template stays without a source until something resets it.
+            const element =
+              reuse?.localName === parsed?.localName &&
+              parsed?.childElementCount === 0
+                ? reuse
+                : parsed && document.importNode(parsed, true);
+            const anchor = after ?? before!;
+            if (
+              !element ||
+              template.content.childNodes.length !== 1 ||
+              element.getAttribute("data-hf-cutroom-clip-id") !== id ||
+              !(
+                added.has(anchor) ||
+                (elements.has(anchor) && !removed.has(anchor))
+              )
+            )
+              throw new Error("The added clip cannot be placed.");
+            if (
+              [...element.attributes].some(
+                ({ name, value }) =>
+                  name.startsWith("data-transition-") ||
+                  ((name === "data-title-in" || name === "data-title-out") &&
+                    value !== "none"),
+              )
+            )
+              throw new Error("This clip needs animation discovery.");
+            added.set(id, element);
+            return { id, element, parsed: parsed!, after, before };
           });
           const root = document.querySelector("[data-composition-id]");
           if (!root) throw new Error("The preview composition is missing.");
+          const records = new Map<
+            string,
+            { titleAttributes: string[] | null; animated: boolean }
+          >();
           for (const [index, clip] of clips.entries()) {
             if (
               !clip ||
@@ -2299,7 +2420,7 @@ function installPreviewBridge(
             )
               throw new Error("The preview clips changed.");
             const { id } = incoming[index]!;
-            const element = elements.get(id);
+            const element = added.get(id) ?? elements.get(id);
             if (!element) throw new Error("The preview clip is missing.");
             const values: [string, string | null][] = [];
             for (const name of attributes) {
@@ -2315,7 +2436,21 @@ function installPreviewBridge(
               values.push([name, value]);
             }
             const title: unknown = Reflect.get(clip, "title");
-            const expected = previous.get(id)!;
+            const expected = added.has(id)
+              ? {
+                  titleAttributes:
+                    title &&
+                    typeof title === "object" &&
+                    "attributes" in title &&
+                    Array.isArray(title.attributes)
+                      ? title.attributes.map((pair: unknown) =>
+                          Array.isArray(pair) ? String(pair[0]) : "",
+                        )
+                      : null,
+                  animated: false,
+                }
+              : previous.get(id)!;
+            records.set(id, expected);
             let text:
               | NonNullable<PreviewTiming["clips"][number]["title"]>["text"]
               | null = null;
@@ -2421,6 +2556,13 @@ function installPreviewBridge(
               // A removed video's held picture stays until the new frame replaces it.
               space?.remove();
               element.remove();
+              if (element instanceof HTMLMediaElement) {
+                const key = `${id}\0${previous.get(id)!.body}`;
+                removedMedia.delete(key);
+                removedMedia.set(key, element);
+                if (removedMedia.size > 8)
+                  removedMedia.delete(removedMedia.keys().next().value!);
+              }
               sourceTexts.delete(id);
               titleAnimations.delete(id);
               animatedTitles.delete(id);
@@ -2433,6 +2575,62 @@ function installPreviewBridge(
                 positions.delete(element);
                 transforms.delete(element);
               }
+            }
+            const live = (id: string) => added.get(id) ?? elements.get(id)!;
+            for (const { id, element, parsed, after, before } of inserts) {
+              // A reused element takes exactly the saved markup's attributes.
+              if (element !== parsed && element.ownerDocument === document) {
+                removedMedia.delete(`${id}\0${bodies.get(id)}`);
+                for (const { name } of [...element.attributes])
+                  if (!parsed.hasAttribute(name)) write(element, name, null);
+                for (const { name, value } of parsed.attributes)
+                  write(element, name, value);
+              }
+              const space = spaces.get(id)!;
+              const nodes = space
+                ? [document.createTextNode(space), element]
+                : [element];
+              // Load it now; the runtime would raise its preload only on its own schedule.
+              if (element instanceof HTMLMediaElement)
+                write(element, "preload", "auto");
+              // A new video stays hidden until its first decoded frame is held.
+              if (element instanceof HTMLVideoElement) {
+                write(element, "data-cutroom-held", "");
+                pendingVideos.add(element);
+                undo.push(() => pendingVideos.delete(element));
+              }
+              undo.push(() => {
+                for (const node of nodes) node.remove();
+              });
+              if (after) {
+                let anchor: Element = live(after);
+                while (
+                  anchor.nextElementSibling?.matches(
+                    "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
+                  ) &&
+                  anchor.nextSibling === anchor.nextElementSibling
+                )
+                  anchor = anchor.nextElementSibling;
+                anchor.after(...nodes);
+              } else {
+                const anchor = live(before!);
+                (ownSpace(anchor, spaces.get(before!)!) ?? anchor).before(
+                  ...nodes,
+                );
+              }
+              const text = [...element.childNodes]
+                .map((node) =>
+                  node.nodeType === Node.TEXT_NODE
+                    ? (node.nodeValue ?? "")
+                    : node instanceof HTMLBRElement
+                      ? "\n"
+                      : "",
+                )
+                .join("");
+              sourceTexts.set(id, [
+                canonicalWords(text),
+                canonicalWords(text.replace(/[\t\n\f\r ]+/g, " ")),
+              ]);
             }
             write(root, "data-duration", nextDuration);
             const changedTitles = new Set<Element>();
@@ -2609,7 +2807,7 @@ function installPreviewBridge(
               throw new Error("The preview clips are out of order.");
             confirmedStructure = expectedStructure;
             liveClips = incoming.map((clip) => ({
-              ...previous.get(clip.id)!,
+              ...records.get(clip.id)!,
               ...clip,
             }));
             timingRevision = timing.revision;
@@ -2641,6 +2839,8 @@ function installPreviewBridge(
           clearEditPicture();
           pictureVersion += 1;
           for (const video of holds.keys()) releasePlaying(video);
+          // Playback changes which clips show, as seeks do.
+          recordRuntime();
           win.__player?.play();
           observePlaying();
           refreshBoxAnimations();
@@ -2652,6 +2852,7 @@ function installPreviewBridge(
           animation = 0;
           if (metering) levels();
           await refreshPicture();
+          settleRecording(seekGeneration);
           clearTimeout(observationTimer);
           scheduleObservation();
           scheduleBox();

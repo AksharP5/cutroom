@@ -431,51 +431,119 @@ test("a video still off after one correction is accepted instead of waiting out 
   expect(await corrections(page)).toBeLessThanOrEqual(2);
 });
 
-test("ripple delete and lift keep the document and match fresh pictures, and undo still lands", async ({
+/** The timeline meters' lit share, per bar, after playing from `frame` for a moment. */
+async function meters(page: Page, frame: number) {
+  await seek(page, frame);
+  const play = page.getByRole("button", { name: "Play forward", exact: true });
+  await play.click();
+  await expect(play).toHaveAttribute("aria-pressed", "true");
+  await page.waitForTimeout(800);
+  const levels = await page
+    .locator(".tl-meter-level")
+    .evaluateAll((bars) =>
+      bars.map(
+        (bar) =>
+          100 -
+          Number.parseFloat(
+            /inset\(([\d.]+)%/.exec(getComputedStyle(bar).clipPath)?.[1] ??
+              "100",
+          ),
+      ),
+    );
+  await page.keyboard.press("Space");
+  await expect(play).toHaveAttribute("aria-pressed", "false");
+  return levels;
+}
+
+test("ripple delete, lift, razor, turning clips off and every undo keep the document and match fresh pictures", async ({
   page,
   request,
 }) => {
-  test.setTimeout(150000);
+  test.setTimeout(240000);
   const { project, edit } = await fixture(request, page);
   const picture = page.locator("iframe[data-live]").contentFrame();
-  const undo = async (label: string) => {
+  let previous = await token(page);
+  await edit([{ type: "setTrack", index: 1, volume: 0.5 }]);
+  await waitForPreview(page, { after: previous });
+  // A first gain away from unity gives the track's bus a render id, which needs a fresh document.
+  await page.reload();
+  await waitForPreview(page, { timing: true });
+  await seek(page, 100);
+  const original = await live(page);
+  const inPlace = async (
+    change: () => Promise<unknown>,
+    frames: number[],
+    label: string,
+  ) => {
     const previous = await token(page);
-    await page.getByRole("button", { name: /^Current time/ }).focus();
-    await page.keyboard.press("Control+z");
+    await change();
     await waitForPreview(page, { after: previous });
     await waitForPreview(page);
-    await expect(picture.locator("#v1, #a1")).toHaveCount(2);
-    await matchesFresh(page, project.id, [0, 76], label);
+    expect(await live(page), label).toBe(original);
+    await matchesFresh(page, project.id, frames, label);
+  };
+  const undo = () => {
+    return page
+      .getByRole("button", { name: /^Current time/ })
+      .focus()
+      .then(() => page.keyboard.press("Control+z"));
   };
   // Removing the first pair closes the gap: the second pair and the title move back,
   // and the composition shortens.
-  await seek(page, 100);
-  let original = await live(page);
   const length = await picture.locator("main").getAttribute("data-duration");
-  let previous = await token(page);
-  await edit([{ type: "remove", clipIds: ["v1"], ripple: true }]);
-  await waitForPreview(page, { after: previous });
+  await inPlace(
+    () => edit([{ type: "remove", clipIds: ["v1"], ripple: true }]),
+    [0, 43, 44, 100],
+    "ripple delete",
+  );
   await expect(picture.locator("#v1, #a1")).toHaveCount(0);
   await expect(picture.locator("main")).not.toHaveAttribute(
     "data-duration",
     length!,
   );
-  await waitForPreview(page);
-  expect(await live(page)).toBe(original);
-  await matchesFresh(page, project.id, [0, 43, 44, 100], "ripple delete");
-  // Undo adds the clips back, which still needs a fresh document.
-  await undo("undo ripple delete");
-
+  await inPlace(undo, [0, 75, 76], "undo ripple delete");
+  await expect(picture.locator("#v1, #a1")).toHaveCount(2);
   await seek(page, 40);
-  original = await live(page);
-  previous = await token(page);
-  await edit([{ type: "remove", clipIds: ["v1"], ripple: false }]);
-  await waitForPreview(page, { after: previous });
-  await expect(picture.locator("#v1, #a1")).toHaveCount(0);
-  await waitForPreview(page);
-  expect(await live(page)).toBe(original);
-  await matchesFresh(page, project.id, [0, 40, 75, 76], "lift");
-  await undo("undo lift");
+  await inPlace(
+    () => edit([{ type: "remove", clipIds: ["v1"], ripple: false }]),
+    [0, 40, 75, 76],
+    "lift",
+  );
+  await inPlace(undo, [0, 40, 76], "undo lift");
+  // The sound that came back plays through its track's gain, as in a fresh document.
+  const patched = await meters(page, 10);
+  const control = await page.context().newPage();
+  try {
+    await control.goto(`/#project/${project.id}`);
+    await waitForPreview(control);
+    const fresh = await meters(control, 10);
+    expect(patched.length).toBeGreaterThan(0);
+    expect(Math.max(...patched)).toBeGreaterThan(10);
+    for (const [index, level] of patched.entries())
+      expect(Math.abs(level - fresh[index]!), `meter ${index}`).toBeLessThan(5);
+  } finally {
+    await control.close();
+  }
+  // Playing in between does not cost the next edit its in-place update.
+  await seek(page, 150);
+  await inPlace(
+    () => edit([{ type: "split", at: 150, clipIds: ["v2"] }]),
+    [149, 150, 151],
+    "razor",
+  );
+  await expect(picture.locator("video")).toHaveCount(3);
+  await inPlace(undo, [149, 150], "undo razor");
+  await seek(page, 30);
+  await inPlace(
+    () => edit([{ type: "setClip", clipId: "v1", enabled: false }]),
+    [30],
+    "clip off",
+  );
+  await inPlace(
+    () => edit([{ type: "setClip", clipId: "v1", enabled: true }]),
+    [30, 76],
+    "clip on",
+  );
 });
 
 test("lifting a clip matches fresh pictures through a dissolve, a transform and track gain", async ({
@@ -497,7 +565,9 @@ test("lifting a clip matches fresh pictures through a dissolve, a transform and 
   ]);
   await waitForPreview(page, { after: previous });
   await waitForPreview(page, { timing: true });
-  // A second title keeps its track, and so the track stylesheet, after the lift.
+  // A second title keeps its track, and so the track stylesheet, after the lift. Its fade in
+  // is an animation the runtime finds only when it loads, so adding it takes a fresh document.
+  const before = await live(page);
   previous = await token(page);
   await edit([
     {
@@ -509,6 +579,7 @@ test("lifting a clip matches fresh pictures through a dissolve, a transform and 
   ]);
   await waitForPreview(page, { after: previous });
   await waitForPreview(page, { timing: true });
+  expect(await live(page)).not.toBe(before);
   const original = await live(page);
   previous = await token(page);
   await edit([{ type: "remove", clipIds: ["title"], ripple: false }]);
@@ -546,7 +617,7 @@ for (const [kind, css] of [
     await matchesFresh(page, project.id, [40, 60], kind);
   });
 
-test("MCP and disk timing refresh both tabs, while structural, script and CSS changes reload", async ({
+test("MCP and disk edits refresh both tabs in place, while script and CSS changes reload", async ({
   page,
   request,
   baseURL,
@@ -604,8 +675,16 @@ test("MCP and disk timing refresh both tabs, while structural, script and CSS ch
       tab.locator("iframe[data-live]").contentFrame().locator("#v1"),
     ).toHaveAttribute("data-media-start", "2");
   let previous = await token(page);
+  // New words on a clip replace it in place.
+  const wordsDoc = await live(page);
+  source = source.replace("Chapter one", "Chapter two");
+  await writeFile(join(project.path, "index.html"), source);
+  await waitForPreview(page, { after: previous });
+  await expect(
+    page.locator("iframe[data-live]").contentFrame().locator("#title"),
+  ).toHaveText("Chapter two");
+  expect(await live(page)).toBe(wordsDoc);
   for (const transform of [
-    (s: string) => s.replace("Chapter one", "Chapter two"),
     (s: string) => s.replace("color:white", "color:yellow"),
     (s: string) =>
       s.replace("</body>", "<script>window.testValue=42</script></body>"),
@@ -838,6 +917,7 @@ for (const [name, scripts] of [
     for (const commands of [
       [{ type: "move", clipIds: ["title"], by: 1, mode: "overwrite" }],
       [{ type: "remove", clipIds: ["v1"], ripple: true }],
+      [{ type: "split", at: 150, clipIds: ["v2"] }],
     ] satisfies CommandInput[][]) {
       const doc = await live(page),
         before = await token(page);

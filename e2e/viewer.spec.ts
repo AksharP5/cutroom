@@ -560,7 +560,13 @@ test("a seek made while an edited preview takes the screen is drawn by that prev
       true,
     );
   });
-  await writeFile(index, starter.replace("</main>", title("After")));
+  // A stylesheet change needs a fresh document; new words alone would update this one.
+  await writeFile(
+    index,
+    starter
+      .replace("</main>", title("After"))
+      .replace("</style>", "#late{color:#fff}</style>"),
+  );
   await expect(stage).toHaveAttribute("data-handoff", "promoting");
   await expect(live.locator("#late")).toHaveText("After");
   await expect(live.locator("#late")).toBeHidden();

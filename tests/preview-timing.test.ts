@@ -155,9 +155,6 @@ const liveChange = (before: string, after: string) => {
 for (const [name, change] of [
   ["script", source.replace("answer=42", "answer=43")],
   ["CSS", source.replace("position:absolute", "position:fixed")],
-  ["source", source.replace('src="a.mp4"', 'src="b.mp4"')],
-  ["stacking", source.replace('id="v"', 'id="v" data-track-index="2"')],
-  ["text", source.replace("Words", "Other")],
   [
     "sub-composition",
     source.replace(
@@ -175,24 +172,80 @@ test("removing clips and changing the composition's length keep the loaded docum
   const shorter = source
     .replace(/<audio.*?<\/audio>/, "")
     .replace('data-duration="10"', 'data-duration="7.5"');
-  expect(liveChange(source, shorter)).toEqual({ remove: ["a"] });
+  expect(liveChange(source, shorter)).toEqual({ remove: ["a"], insert: [] });
   expect(snapshot(shorter).duration).toBe("7.5");
-  // Undo adds the clip back, which needs a fresh document until additions are live.
-  expect(liveChange(shorter, source)).toBe("reload");
+  // Undo adds it back after the clip that was before it.
+  expect(liveChange(shorter, source)).toEqual({
+    remove: [],
+    insert: [{ id: "a", after: "v", before: null }],
+  });
+  expect(snapshot(source).clips.find(({ id }) => id === "a")?.html).toBe(
+    '<audio crossorigin="anonymous" data-hf-cutroom-clip-id="a" id="a" data-start="0" data-duration="2.5358666666666667" data-media-start="0" src="a.mp4" data-link="pair"></audio>',
+  );
+});
+
+test("added clips go next to a clip that stays in their gap, and changed clips are added again", () => {
+  const split = source.replace(
+    /(<video.*?<\/video>)/,
+    '$1<video id="v-2" data-start="1" data-duration="1.5" data-media-start="1" src="a.mp4"></video>',
+  );
+  expect(liveChange(source, split)).toEqual({
+    remove: [],
+    insert: [{ id: "v-2", after: "v", before: null }],
+  });
+  // Added first in the gap: before the clip that follows it, nearest first.
+  const ahead = source.replace(
+    "<video",
+    '<div id="t1" data-start="0" data-duration="1">One</div><div id="t2" data-start="0" data-duration="1">Two</div><video',
+  );
+  expect(liveChange(source, ahead)).toEqual({
+    remove: [],
+    insert: [
+      { id: "t2", after: null, before: "v" },
+      { id: "t1", after: null, before: "t2" },
+    ],
+  });
+  // Turning a clip off changes its other attributes, so it is replaced where it was.
+  const off = source.replace('id="a"', 'id="a" data-hidden=""');
+  expect(liveChange(source, off)).toEqual({
+    remove: ["a"],
+    insert: [{ id: "a", after: "v", before: null }],
+  });
+  for (const changed of [
+    source.replace('src="a.mp4"', 'src="b.mp4"'),
+    source.replace('id="v"', 'id="v" data-track-index="2"'),
+  ])
+    expect(liveChange(source, changed)).toEqual({
+      remove: ["v"],
+      insert: [{ id: "v", after: null, before: "a" }],
+    });
+  expect(liveChange(source, source.replace("Words", "Other"))).toEqual({
+    remove: ["title"],
+    insert: [{ id: "title", after: "a", before: null }],
+  });
+  // With nothing staying in a gap, the added clips have no neighbour to go next to.
+  const empty = source.replace(
+    /<video.*?<\/video>|<audio.*?<\/audio>|<div id="title".*?<\/div>/g,
+    "",
+  );
+  expect(liveChange(empty, source)).toBe("reload");
 });
 
 test("a removed clip takes the whitespace before it, so indented sources stay live", () => {
   const indented = source.replace(/(<video|<audio|<div)/g, "\n    $1");
   const lifted = indented.replace(/\n {4}<audio.*?<\/audio>/, "");
-  expect(liveChange(indented, lifted)).toEqual({ remove: ["a"] });
+  expect(liveChange(indented, lifted)).toEqual({ remove: ["a"], insert: [] });
   expect(snapshot(indented).clips.map(({ space }) => space)).toEqual([
     "\n    ",
     "\n    ",
     "\n    ",
   ]);
-  // Whitespace left behind is structure: it would draw differently in some layouts.
+  // Whitespace left behind joins the next clip's, so that clip comes back with it.
   const leftBehind = indented.replace(/<audio.*?<\/audio>/, "");
-  expect(liveChange(indented, leftBehind)).toBe("reload");
+  expect(liveChange(indented, leftBehind)).toEqual({
+    remove: ["a", "title"],
+    insert: [{ id: "title", after: "v", before: null }],
+  });
 });
 
 test("a clip holding a stylesheet is structure, so CSS inside it reloads", () => {
@@ -230,18 +283,25 @@ test("a clip holding another clip or a composition is structure, not a movable c
   );
 });
 
-test("generated HF ids do not force reloads, but ids used by scripts or CSS do", () => {
+test("generated HF ids change nothing, and a referenced one is added again with its clip", () => {
   const generated = source.replace('id="v"', 'data-hf-id="hf-old" id="v"');
   expect(snapshot(generated).structure).toBe(
     snapshot(generated.replace("hf-old", "hf-new")).structure,
   );
-  const referenced = generated.replace("answer=42", 'answer="hf-old"');
+  // A referenced id belongs to the clip's markup, so the clip is added again with the new one.
+  const referenced = generated.replace(
+    "</style>",
+    '[data-hf-id="hf-old"]{opacity:.5}</style>',
+  );
   expect(
     liveChange(
       referenced,
-      referenced.replace('data-hf-id="hf-old"', 'data-hf-id="hf-new"'),
+      referenced.replace(
+        'data-hf-id="hf-old" id="v"',
+        'data-hf-id="hf-new" id="v"',
+      ),
     ),
-  ).toBe("reload");
+  ).toEqual({ remove: ["v"], insert: [{ id: "v", after: null, before: "a" }] });
 });
 
 test("a Cutroom track fader travels with the timing update, but an authored group's fader reloads", () => {

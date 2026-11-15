@@ -24,6 +24,10 @@ declare global {
 // This test owns the compositor screencast; Playwright's trace must not replace it.
 test.use({ trace: "off" });
 
+/** A CSS animation that draws nothing: the picture is unchanged, but edits to it reload. */
+const animatedPicture =
+  "@keyframes still{to{outline-color:transparent}}#picture{animation:still 1s infinite}";
+
 async function openMedia(
   page: Page,
   request: APIRequestContext,
@@ -1227,7 +1231,10 @@ for (const withheld of [false, true]) {
   test(title, { tag: "@performance" }, async ({ page, request }, testInfo) => {
     test.setTimeout(240_000);
     const frames = await trackViewerResources(page);
-    const { project, read, seek } = await openMedia(page, request);
+    // Only a fresh document finds a clip's CSS animation, so every edit below reloads.
+    const { project, read, seek } = await openMedia(page, request, {
+      style: animatedPicture,
+    });
     await seek("0311");
     await expect(page.locator(".edit-frame")).toHaveCount(1);
     const resourceCounts = async () => ({
@@ -1500,7 +1507,10 @@ test("coalesced stalled replacements keep the picture and finish the latest save
   request,
 }, testInfo) => {
   test.setTimeout(120_000);
-  const { project, read, seek } = await openMedia(page, request);
+  // Only a fresh document finds a clip's CSS animation, so every edit below reloads.
+  const { project, read, seek } = await openMedia(page, request, {
+    style: animatedPicture,
+  });
   await waitForPreview(page, { timing: true });
   await seek("0311");
   const { gate } = await gatePaint(page, "promotion");
