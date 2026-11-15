@@ -23,6 +23,7 @@ import {
 import type { ExportJob } from "./export";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { useTimeline } from "./timeline";
+import { captureFrame } from "./capture";
 import "./export.css";
 
 const clock = (ms: number) => {
@@ -104,7 +105,11 @@ export function ExportControl({
     if (observedProject) return observeExports(observedProject);
   }, [observedProject]);
   const show = () => setOpen(true);
-  useKeymap({ workspacePrimaryWorkspaceDeliver: show });
+  const capture = () => void captureFrame(projectId);
+  useKeymap({
+    workspacePrimaryWorkspaceDeliver: show,
+    viewStillsStillGrab: capture,
+  });
   return (
     <>
       <button
@@ -131,6 +136,7 @@ export function ExportControl({
         <ExportDialog
           projectId={projectId}
           projectName={projectName}
+          onCapture={capture}
           onSetup={() => useExport.setState({ job: null, controlError: "" })}
           onClose={() => {
             setOpen(false);
@@ -147,11 +153,13 @@ function ExportDialog({
   projectId,
   projectName,
   onSetup,
+  onCapture,
   onClose,
 }: {
   projectId: string;
   projectName: string;
   onSetup(): void;
+  onCapture(): void;
   onClose(): void;
 }) {
   const timeline = useTimeline((state) => state.view?.timeline);
@@ -471,6 +479,16 @@ function ExportDialog({
           )
         ) : (
           <>
+            <button
+              className="secondary-button export-still"
+              title={hint("viewStillsStillGrab")}
+              onClick={() => {
+                onCapture();
+                onClose();
+              }}
+            >
+              Save frame as PNG
+            </button>
             <button className="secondary-button" onClick={onClose}>
               Cancel
             </button>

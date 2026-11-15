@@ -95,6 +95,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | Add title                                    | `Alt+Shift+T`                                                                                                  | `cutroomAddTitle`                                      |
 | Add a marker                                 | `M`                                                                                                            | `markMarkerAdd`                                        |
 | Snapping                                     | `C`                                                                                                            | `editSnapping`                                         |
+| Save frame as PNG                            | `Ctrl+Alt+G`                                                                                                   | `viewStillsStillGrab`                                  |
 | Keyboard shortcuts                           | `Ctrl+Alt+K`                                                                                                   | `resolveCustomizedActions`                             |
 
 These preset keys say Cutroom has no such editing yet: edit point selection (`V`), edit point types (`U`), slip or slide (`S`), freeze frames (`Shift+R`).

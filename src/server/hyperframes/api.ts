@@ -7,13 +7,14 @@ import {
   exportRange,
   ExportOptionsSchema,
   ExportStartSchema,
+  StillRequestSchema,
 } from "../../shared/export";
 import type { ExportOptions } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
 import { watch } from "node:fs";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
@@ -279,6 +280,37 @@ export function createHyperframesApi(
         }),
       },
     );
+  });
+  // A still is the review-note frame capture, kept beside the project's exports.
+  api.post("/projects/:id/still", async (c) => {
+    const input = StillRequestSchema.parse(await c.req.json());
+    const project = await store.get(c.req.param("id"));
+    const frame = await api.request(
+      new URL(
+        `/projects/${encodeURIComponent(project.id)}/thumbnail/${encodeURIComponent(input.composition)}?${new URLSearchParams({ t: input.time.toFixed(3), format: "png", output: "source" })}`,
+        c.req.url,
+      ),
+      { headers: c.req.raw.headers },
+    );
+    if (!frame.ok)
+      throw new HttpError(
+        frame.status === 404 ? 404 : 500,
+        `The frame could not be captured: ${await frame.text()}`,
+      );
+    const directory = await projectStatePath(project, ".cutroom/renders", true);
+    await mkdir(directory, { recursive: true });
+    const filename = await nextExportName(
+      directory,
+      exportFilename(project.name).replace(
+        /\.mp4$/,
+        ` ${input.timecode.replaceAll(":", "-")}.png`,
+      ),
+    );
+    const path = join(directory, filename);
+    await writeFile(path, new Uint8Array(await frame.arrayBuffer()), {
+      flag: "wx",
+    });
+    return c.json({ path, filename });
   });
   // Extend Studio's one job registry, progress stream and cancel route with Cutroom's output intent.
   api.use("/projects/:id/render", async (c, next) => {

@@ -46,6 +46,14 @@ export const exportFilename = (name: string) =>
       .slice(0, 196) || "Cut"
   }.mp4`;
 
+/** A frame to save as a PNG still, named by the timecode the person saw. */
+export const StillRequestSchema = z.object({
+  composition: z.string().min(1).default("index.html"),
+  time: z.number().nonnegative().finite(),
+  timecode: z.string().regex(/^\d{2}:\d{2}:\d{2}:\d{2}$/),
+});
+export const StillSchema = z.object({ path: z.string(), filename: z.string() });
+
 export const ExportStageSchema = z.object({
   code: z.enum([
     "compile",
