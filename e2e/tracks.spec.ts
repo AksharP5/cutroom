@@ -42,6 +42,9 @@ async function makeMedia(directory: string) {
     "lavfi",
     "-i",
     "sine=frequency=440:duration=2",
+    "-vf",
+    // Tagged BT.709, so every Chromium draws it as pure red: untagged SD is BT.601.
+    "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
     "-c:v",
     "libx264",
     "-preset",

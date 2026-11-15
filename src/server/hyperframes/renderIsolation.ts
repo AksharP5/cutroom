@@ -79,8 +79,12 @@ export function registerRenderIsolation(
   const httpErrors = JSON.stringify(
     new URL("../../shared/errors.ts", import.meta.url).href,
   );
+  const colour = JSON.stringify(
+    new URL("./videoColour.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
   let captureLoaded = false;
+  let extractorLoaded = false;
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
@@ -97,6 +101,28 @@ export function registerRenderIsolation(
             url,
           ),
         };
+      if (
+        url.endsWith(
+          "/@hyperframes/engine/dist/services/videoFrameExtractor.js",
+        )
+      ) {
+        let source = `import { chromeSdrColourFilters as cutroomColour } from ${colour};\n${String(loaded.source)}`;
+        source = replaceOnce(
+          source,
+          "return [...chromeGuessForUntaggedMatrix(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
+          "return [...cutroomColour(metadata), SDR_CANVAS_PASSTHROUGH_FILTER];",
+          url,
+        );
+        // Frames cached before the conversion keep their old colours otherwise.
+        source = replaceOnce(
+          source,
+          '            work.finalFrameOnly ? "final-frame" : undefined,\n',
+          '            work.finalFrameOnly ? "final-frame" : undefined,\n            ...cutroomColour(work.metadata).filter((filter) => filter.startsWith("colorspace=")),\n',
+          url,
+        );
+        extractorLoaded = true;
+        return { ...loaded, source };
+      }
       if (
         !url.endsWith("/@hyperframes/producer/dist/index.js") &&
         !url.endsWith("/@hyperframes/engine/dist/services/frameCapture.js")
@@ -280,7 +306,7 @@ export function registerRenderIsolation(
     },
   });
   return () => {
-    if (!producerLoaded || !captureLoaded)
+    if (!producerLoaded || !captureLoaded || !extractorLoaded)
       throw new Error(
         "The HyperFrames render isolation hooks did not load. Export was refused.",
       );
