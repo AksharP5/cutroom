@@ -20,24 +20,19 @@ const sum = (values: number[]) =>
   values.reduce((total, value) => total + value, 0);
 
 const scrubSteps = 90;
-// Runners differ several-fold in how many scrub frames arrive late (2% to 39% with nothing
-// selected), so scrubbing is judged on work that is measured, in alternating pairs.
-const conditions = [
-  ...[0, 1, 2].flatMap((run) =>
-    [false, true].map((selected) => ({
-      run,
-      mode: "playback" as const,
-      selected,
-    })),
-  ),
-  ...[0, 1, 2, 3, 4].flatMap((run) =>
+// Alternate which condition goes first, so a runner slowing down over a pair counts against
+// both. One playback run on CI ranges from 2 to 34 late frames with no change, so playback
+// pools six pairs. Runners differ several-fold in how many scrub frames arrive late (2% to
+// 39% with nothing selected), so scrubbing is judged on work that is measured.
+const pairs = (mode: "playback" | "scrub", count: number) =>
+  Array.from({ length: count }, (_, run) =>
     (run % 2 ? [true, false] : [false, true]).map((selected) => ({
       run,
-      mode: "scrub" as const,
+      mode,
       selected,
     })),
-  ),
-];
+  ).flat();
+const conditions = [...pairs("playback", 6), ...pairs("scrub", 5)];
 
 test(
   "Position observation and outline tracking stay in budget during 500-clip playback and scrubbing",
@@ -258,9 +253,10 @@ test(
             runs.map((result) => Math.max(0, ...result.boxes)),
           ),
           lateFrames: runs.map((result) => result.lateFrames),
-          medianLateRate: median(
-            runs.map((result) => result.lateFrames / result.frames.length),
-          ),
+          // Late frames over every frame played: what a viewer sees across all runs.
+          lateRate:
+            sum(runs.map((result) => result.lateFrames)) /
+            sum(runs.map((result) => result.frames.length)),
           positionMs: runs.map((result) => result.positionMs),
           editorCpuMs: runs.map((result) => result.editorCpuMs),
         };
@@ -332,7 +328,7 @@ test(
         (result) => result.mode === "playback" && result.selected === selected,
       )!;
     expect(
-      playback(true).medianLateRate - playback(false).medianLateRate,
+      playback(true).lateRate - playback(false).lateRate,
       "playback: added late-frame rate",
     ).toBeLessThan(0.05);
     // Many reads that each stay under the per-read budget still add up on every seek.
