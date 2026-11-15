@@ -174,6 +174,10 @@ export function createHyperframesApi(
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
     scratchDir: join(store.dataDir, "scratch"),
+    frameCache: {
+      dir: join(store.dataDir, "cache", "frames"),
+      maxBytes: 2 * 1024 ** 3,
+    },
     workload: async (id) => {
       const timeline = await readTimeline(id);
       return {

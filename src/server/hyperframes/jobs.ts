@@ -110,6 +110,8 @@ async function processGroupExited(pid: number, timeoutMs: number) {
 export function createRenderWorkers(configuration: {
   /** Holds each export's extracted frames and range work. Keep it off RAM-backed /tmp. */
   scratchDir: string;
+  /** Frames extracted for one export, kept for the next. Without it they go with the export's scratch. */
+  frameCache?: { dir: string; maxBytes: number };
   workerPath?: string;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
@@ -344,8 +346,15 @@ export function createRenderWorkers(configuration: {
                 ? { PRODUCER_HEADLESS_SHELL_PATH: browserExecutable() }
                 : {}),
               TMPDIR: temporary,
-              // Per export, so a cache keyed on per-export paths cannot grow without bound.
-              HYPERFRAMES_EXTRACT_CACHE_DIR: join(scratch, "frames"),
+              HYPERFRAMES_EXTRACT_CACHE_DIR:
+                configuration.frameCache?.dir ?? join(scratch, "frames"),
+              ...(configuration.frameCache
+                ? {
+                    HYPERFRAMES_EXTRACT_CACHE_MAX_MB: String(
+                      configuration.frameCache.maxBytes / 1024 ** 2,
+                    ),
+                  }
+                : {}),
               ...(plan
                 ? {
                     PRODUCER_MAX_WORKERS: String(plan.browsers),

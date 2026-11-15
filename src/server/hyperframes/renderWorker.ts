@@ -38,6 +38,7 @@ try {
       : undefined,
     progress,
     scratchDir: input.scratchDir,
+    projectDir: input.projectDir,
   });
   const {
     createConsoleLogger,
@@ -48,12 +49,20 @@ try {
     renderSpan,
     resolveConfig,
   } = await import("@hyperframes/producer");
+  const { gcExtractionCache } = await import("@hyperframes/engine");
   verifyIsolation();
+  const engineConfig = resolveConfig();
+  // Exports run one at a time, so no render is reading the shared frame cache while it shrinks.
+  if (engineConfig.extractCacheDir)
+    gcExtractionCache(engineConfig.extractCacheDir, {
+      maxBytes: engineConfig.extractCacheMaxBytes,
+      minAgeMs: 0,
+    });
   const request = parseRenderRequest({
     version: 1,
     projectDir: input.projectDir,
     outputPath: input.outputPath,
-    options: { ...input.options, engineConfig: resolveConfig() },
+    options: { ...input.options, engineConfig },
   });
   const logger = createConsoleLogger("warn");
   let audioLoweredDb: number | undefined;
