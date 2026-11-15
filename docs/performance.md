@@ -368,3 +368,16 @@ Both new cases require the live median below 80% of direct reload. The original 
 For live-supported edits, byte-identical live/fresh PNG comparisons cover all inspector control families and None, Fade, Slide and Wipe at entrance, hold and exit frames, plus cut boundaries, multiline HTML-like words, fonts, plates, undo/redo and MCP edits in two tabs. Edits involving Scale reload because scaled font/motion and plate changes did not pass the pixel comparison. A fresh/fresh diagnostic also differed despite equal computed state and geometry. This does not relax any live-path PNG assertion. Scale regressions require canonical replacement for font, size, plate and words. Enabling motion without proven initial animation discovery also reloads.
 
 The local full unit run passed 779 tests with five optional skips; the full functional run ran once with 445/448 passing. The scaled case became an explicit reload and the export/trim timeouts passed reruns. CI on `4599690` passed all 779 units, 449 functional tests and 11 performance cases before the final Scale restriction and main integration. On the integrated code, types, 56 focused units, 30 timing/title/gain workflows and both latency cases passed. The latest-main recheck passed 13 title/handoff workflows, including moved-playhead and playback continuity cases. The title/gain regression changes style, words, linked source timing and a fader in one operation, then retains the document for another title edit after a gain-only change. Final-head CI is linked in the PR.
+
+## Range exports
+
+A marked export mixes only the audio heard within a second of its range ([architecture](architecture.md#export-dialog)). Each case below exports two seconds (60 frames, Draft, 720p) through the editor's render route, one export at a time on a shared machine. The 500-clip project is `timelineWorkload(500)`: 240 linked picture and sound pairs over ten minutes. The interview project has ten linked interview cuts, b-roll, titles and a 60-second music bed. Planning is the time between the extraction and browser-start stages, where the mix runs beside plan hashing.
+
+| Range                   | Main `f3ea6c9` total |  Main planning | Range mix total | Range mix planning |
+| ----------------------- | -------------------: | -------------: | --------------: | -----------------: |
+| 500 clips, 0:00 to 0:02 |               31.3 s |         19.0 s |  17.4 s, 15.1 s |       6.1 s, 5.6 s |
+| 500 clips, 5:00 to 5:02 |       29.6 s, 28.4 s | 17.9 s, 17.2 s |  15.2 s, 15.4 s |       5.7 s, 5.7 s |
+| Interview, 0:00 to 0:02 |         8.9 s, 8.1 s |   3.3 s, 3.3 s |    6.4 s, 7.6 s |       1.8 s, 2.2 s |
+| Interview, 0:30 to 0:32 |         8.2 s, 8.2 s |   3.3 s, 3.3 s |    7.1 s, 7.6 s |       2.5 s, 2.6 s |
+
+The interview's music bed starts at 0:00, so its 0:30 range still mixes 33 seconds of audio. A second main run of the 500-clip 0:00 case stalled at browser start, an intermittent stall that predates this change, and was cancelled. Forcing the full mix through the same pipeline gives byte-identical AAC packets for both the 500-clip 5:00 range and the interview 0:30 range. Against main, the decoded audio has zero lag, the same sample count and a 37 to 40 dB signal-to-difference ratio, which is main's second AAC encode.

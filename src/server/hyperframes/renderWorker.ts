@@ -32,7 +32,9 @@ try {
     body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
   const input = Input.parse(JSON.parse(body));
   const verifyIsolation = registerRenderIsolation(input.sources, {
-    range: input.range ? input.options.fps : undefined,
+    range: input.range
+      ? { fps: input.options.fps, frames: input.range }
+      : undefined,
     progress,
   });
   const {
