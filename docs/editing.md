@@ -2,7 +2,7 @@
 
 Cutroom's own editor is the default: a tool row, the viewer, the transport, and a timeline below a draggable split. Review notes and word-based edits share its project history.
 
-Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels, frame capture, and export settings with a cancel button. The switch goes away when those arrive.
+Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels, and export settings with a cancel button. The switch goes away when those arrive.
 
 ## Editor
 
