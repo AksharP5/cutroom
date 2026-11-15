@@ -101,6 +101,10 @@ test("Scale, Rotation and Crop draw live while dragged, Esc restores, and releas
   await expect
     .poll(async () => readFile(join(project.path, "index.html"), "utf8"))
     .toContain('style="scale: 1.5"');
+  // The new Changes row waits while the pointer is over the inspector, so the label stays put.
+  const history = inspector.locator(".inspector-history");
+  await expect(history).toHaveCount(0);
+  expect(await label.boundingBox()).toEqual(at);
 
   // Esc during a drag puts the saved scale back.
   await page.mouse.move(at.x + 10, at.y + 5);
@@ -111,6 +115,12 @@ test("Scale, Rotation and Crop draw live while dragged, Esc restores, and releas
   await page.mouse.up();
   await expect.poll(rect).toEqual({ width: 300, height: 150 });
   expect(commands).toHaveLength(1);
+  expect(await label.boundingBox()).toEqual(at);
+  // Leaving the inspector shows the change.
+  await page.mouse.move(at.x - 600, at.y);
+  await expect(history.getByRole("listitem")).toHaveText([
+    /^Set scale to 150%/,
+  ]);
 
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(scaleX).toHaveValue("100%");
@@ -483,4 +493,39 @@ test("paired rows: a cell's letter scrubs its value in one undo step, a row's la
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(top).toHaveValue("12");
   await expect.poll(async () => (await saved()).crop?.top).toBe(12);
+});
+
+test("a field being typed in keeps its place while its own commits land, and Changes catches up when focus leaves", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(
+    request,
+    { name: "Held changes", width: 640, height: 360, duration: 2 },
+    box,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="box"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const history = inspector.locator(".inspector-history");
+  const rotation = positionField(page, "Rotation");
+  // Keyboard only: the pointer rests over the timeline, away from the inspector.
+  await page.mouse.move(600, 900);
+  await rotation.focus();
+  const before = await rotation.boundingBox();
+  // Up and Down commit on key release and keep the field focused.
+  await rotation.press("ArrowUp");
+  await expect(rotation).toHaveValue("1°");
+  // Undo turns on once the editor has read the edit back, Changes row and all.
+  await expect(
+    page.getByRole("button", { name: "Undo", exact: true }),
+  ).toBeEnabled();
+  await expect(rotation).toBeFocused();
+  await expect(history).toHaveCount(0);
+  expect(await rotation.boundingBox()).toEqual(before);
+  // Leaving the field brings the change in.
+  await rotation.press("Escape");
+  await expect(history.getByRole("listitem")).toHaveText([
+    /^Set rotation to 1°/,
+  ]);
 });

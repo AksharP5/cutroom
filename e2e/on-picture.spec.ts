@@ -161,7 +161,8 @@ test("a click on the picture selects the topmost clip drawn there and leaves the
   await expect(selected).toHaveText("Words");
   const stage = await page.locator(".edit-stage").boundingBox();
   await page.mouse.click(stage!.x + 6, stage!.y + 6);
-  await expect(inspector).toContainText("Select a clip to inspect it.");
+  // With nothing selected the inspector describes the timeline instead.
+  await expect(inspector.locator(".inspector-facts")).toContainText("Rate");
   await expect(outline).toBeHidden();
 });
 

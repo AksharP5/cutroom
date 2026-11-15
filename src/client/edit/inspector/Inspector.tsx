@@ -36,7 +36,9 @@ import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { TransformFields } from "./TransformFields";
-import { groupedChanges, pendingEdit, shownChanges } from "./changes";
+import { groupedChanges } from "./changes";
+import { ChangeList } from "./ChangeList";
+import { TimelineOverview } from "./TimelineOverview";
 import { transport } from "../transport";
 import {
   previewPosition,
@@ -48,6 +50,10 @@ import {
   usePictureMove,
   useTextEdit,
 } from "../preview";
+
+/** A text field or text area, where typing is under way. */
+const isField = (target: EventTarget | null) =>
+  target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 
 /** A Timing field a key asks for, such as Ctrl+D for Duration, focused once the inspector shows it. */
 export const useTimingEdit = create<{ field: "Duration" | "Speed" | null }>(
@@ -154,12 +160,24 @@ function CombinedGain({
   );
 }
 
-export function Inspector({ projectId }: { projectId: string }) {
+export function Inspector({
+  projectId,
+  projectName,
+}: {
+  projectId: string;
+  projectName: string;
+}) {
   const mode = useContext(EditorToolsContext)?.mode;
   const open = useWorkspace((state) => state.inspector);
   const view = useTimeline((state) => state.view);
   const selection = useTimeline((state) => state.selection);
   const root = useRef<HTMLElement>(null);
+  // Changes holds its rows while the inspector is in use, so the fields below never move under
+  // the pointer or a field being typed in. A scrub or drag anywhere holds it until release.
+  const [pointerInside, setPointerInside] = useState(false);
+  const [fieldFocused, setFieldFocused] = useState(false);
+  const gesture = useWorkspace((state) => state.gesture);
+  const holdChanges = pointerInside || fieldFocused || gesture;
   // Its panel key opens it first. Focus waits for that render, since a closed inspector is inert.
   const [focusRequests, setFocusRequests] = useState(0);
   useKeymap({
@@ -171,9 +189,6 @@ export function Inspector({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (focusRequests) focusPanel(root.current);
   }, [focusRequests]);
-  const [changesOpen, setChangesOpen] = useState(
-    () => sessionStorage.getItem("cutroom.inspector.changes") === "true",
-  );
   const [audioOpen, setAudioOpen] = useState(true);
   const [transformOpen, setTransformOpen] = useState(
     () =>
@@ -187,15 +202,6 @@ export function Inspector({ projectId }: { projectId: string }) {
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [textOpen, setTextOpen] = useState(true);
   const [titleOpen, setTitleOpen] = useState(true);
-  const [expanded, setExpanded] = useState(false);
-  const [accepting, setAccepting] = useState<string | null>(null);
-  // Closing the project cancels a pending reload, like the timeline's own read.
-  const closing = useRef(new AbortController());
-  useEffect(() => {
-    const controller = new AbortController();
-    closing.current = controller;
-    return () => controller.abort();
-  }, [projectId]);
   const [timingOpen, setTimingOpen] = useState(true);
   useEffect(() => {
     // Timeline presses prevent the browser's usual blur. Commit before they change selection.
@@ -212,7 +218,6 @@ export function Inspector({ projectId }: { projectId: string }) {
     document.addEventListener("pointerdown", blur, true);
     return () => document.removeEventListener("pointerdown", blur, true);
   }, []);
-  useEffect(() => setExpanded(false), [selection.anchor]);
   useEffect(() => {
     if (mode !== "draw" && mode !== "comment") return;
     const width = Number.parseFloat(
@@ -333,27 +338,7 @@ export function Inspector({ projectId }: { projectId: string }) {
     view?.clipEdits?.filter((edit) =>
       subject?.members.some((member) => member.id === edit.clipId),
     ) ?? [],
-    `${name} (${clip?.kind === "video" && subject?.audio.length ? "picture and sound" : "linked clips"})`,
   );
-  const shown = shownChanges(edits, expanded);
-  const accept = async (edit: (typeof edits)[number]) => {
-    setAccepting(edit.id);
-    const { signal } = closing.current;
-    try {
-      for (const member of edit.members.filter(pendingEdit))
-        await api(
-          `/projects/${projectId}/review/changes/accept`,
-          z.object({ ok: z.boolean() }),
-          json("POST", { editId: member.id }),
-        );
-      await loadTimeline(projectId, signal);
-    } catch (error) {
-      if (!signal.aborted)
-        showToast(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAccepting(null);
-    }
-  };
   const track =
     timeline &&
     clip &&
@@ -378,6 +363,10 @@ export function Inspector({ projectId }: { projectId: string }) {
       data-open={open}
       inert={!open}
       onClick={returnPointerFocus}
+      onPointerEnter={() => setPointerInside(true)}
+      onPointerLeave={() => setPointerInside(false)}
+      onFocus={(event) => setFieldFocused(isField(event.target))}
+      onBlur={(event) => setFieldFocused(isField(event.relatedTarget))}
     >
       <header>
         <strong>Inspector</strong>
@@ -443,8 +432,14 @@ export function Inspector({ projectId }: { projectId: string }) {
           timeline={timeline}
           incoming={selection.transition}
         />
-      ) : !clip || !timeline ? (
-        <p className="inspector-empty">Select a clip to inspect it.</p>
+      ) : !timeline ? null : !clip ? (
+        <TimelineOverview
+          projectId={projectId}
+          name={projectName}
+          timeline={timeline}
+          edits={view?.clipEdits ?? []}
+          hold={holdChanges}
+        />
       ) : (
         <div className="inspector-content">
           <div className="inspector-clip" data-kind={clip.kind}>
@@ -459,6 +454,15 @@ export function Inspector({ projectId }: { projectId: string }) {
               <time>{formatTimecode(clip.start, timeline.fps)}</time>
             </span>
           </div>
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={edits}
+            limit={3}
+            times={false}
+            hold={holdChanges}
+          />
           {clip.text !== null && (
             <details
               open={textOpen}
@@ -774,80 +778,6 @@ export function Inspector({ projectId }: { projectId: string }) {
                   onCommit={(value) => timing("speed", value)}
                 />
               </FieldRow>
-            )}
-          </details>
-          <details
-            open={changesOpen}
-            onToggle={(event) => {
-              const { open } = event.currentTarget;
-              sessionStorage.setItem("cutroom.inspector.changes", String(open));
-              setChangesOpen(open);
-            }}
-            className="inspector-section inspector-history"
-          >
-            <summary>
-              <CaretRight size={10} aria-hidden />
-              Changes <span className="inspector-count">{edits.length}</span>
-            </summary>
-            <ol className="inspector-changes">
-              {shown.map((edit) => (
-                <li key={edit.id} data-by={edit.by}>
-                  <span
-                    title={[
-                      edit.label,
-                      edit.at &&
-                        new Date(edit.at).toLocaleString(undefined, {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        }),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  >
-                    {edit.label
-                      .split(/(\d{2}:\d{2}:\d{2}:\d{2}|\d+(?:\.\d+)?%?)/g)
-                      .map((part, index) =>
-                        index % 2 ? (
-                          <span className="inspector-number" key={index}>
-                            {part}
-                          </span>
-                        ) : (
-                          part
-                        ),
-                      )}
-                  </span>
-                  {edit.by === "human" ? (
-                    <small>You</small>
-                  ) : !pendingEdit(edit) ? (
-                    <small>
-                      {edit.accepted
-                        ? "Accepted"
-                        : edit.resolution === "owner"
-                          ? "Edited by you"
-                          : "Source changed"}
-                    </small>
-                  ) : (
-                    <button
-                      disabled={accepting !== null}
-                      onClick={() => void accept(edit)}
-                    >
-                      Accept
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ol>
-            {(expanded || shown.length < edits.length) && (
-              <button
-                className="inspector-show-all"
-                aria-expanded={expanded}
-                onClick={() => setExpanded(!expanded)}
-              >
-                {expanded ? "Show less" : `Show all (${edits.length})`}
-              </button>
-            )}
-            {!edits.length && (
-              <p className="inspector-empty">No recent changes.</p>
             )}
           </details>
         </div>

@@ -217,6 +217,8 @@ test("delayed promotion preserves a second Position drag and returning step keys
   await page.mouse.up();
   await blocked.promise;
   await expect(field).toHaveValue("40 px");
+  // The commit's Changes row waits while the pointer is over the inspector.
+  expect(await label.boundingBox()).toEqual(box);
   await page.mouse.move(box.x + 10, box.y + 5);
   await page.mouse.down();
   await page.mouse.move(box.x + 70, box.y + 5);

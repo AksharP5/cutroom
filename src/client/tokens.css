@@ -193,6 +193,7 @@
   --size-panel-head: 34px;
   --size-row: 28px;
   --size-media-row: 30px;
+  --size-ledger-row: 24px; /* inspector change and marker rows */
   --size-status: 24px;
   --size-ruler: 28px; /* bands: pins 2-8, labels 10-19, flags and playhead head 19-28 */
   --ruler-pin-top: 2px;

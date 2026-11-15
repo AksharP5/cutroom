@@ -1,6 +1,6 @@
 import { ArrowCounterClockwise } from "@phosphor-icons/react";
 import { useEffect, useId, useRef, useState } from "react";
-import type { PointerEvent, ReactNode } from "react";
+import type { MouseEvent, PointerEvent, ReactNode } from "react";
 import type { Fps } from "../../../shared/timeline/schema";
 import { showToast, useWorkspace } from "../../workspace";
 import { formatField, parseField, stepField } from "./fields";
@@ -162,6 +162,11 @@ function useValue({
     },
     onPointerCancel: () => endDrag(),
     onLostPointerCapture: () => endDrag(),
+    // Pointer presses focus the field themselves, and only when they did not scrub. A click
+    // from assistive technology (detail 0) keeps the label's usual focus.
+    onClick(event: MouseEvent<HTMLLabelElement>) {
+      if (event.detail > 0) event.preventDefault();
+    },
   };
   const field = (
     <input
