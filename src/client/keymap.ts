@@ -587,6 +587,19 @@ export function restoreMenuFocus(target: HTMLElement | null) {
   else target.focus({ preventScroll: true });
 }
 
+/**
+ * A pointer click that sets a value, on a checkbox, radio or toggle, gives the transport keys back
+ * to the timeline, as a pointer menu does. Keyboard activation keeps focus and the control's keys.
+ */
+export function returnPointerFocus(event: MouseEvent<HTMLElement>) {
+  if (
+    event.detail &&
+    event.target instanceof Element &&
+    event.target.closest("input[type=checkbox], [role=radio], [aria-pressed]")
+  )
+    restoreMenuFocus(null);
+}
+
 /** A pointer returning to picture or timeline editing gives clipboard keys back to clips. */
 export function clearBrowserSelection(event: PointerEvent<HTMLElement>) {
   if (isTyping(event.target)) return;
