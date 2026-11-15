@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { browserExecutable } from "../src/server/hyperframes/render";
 import type { Fps } from "../src/shared/timeline/schema";
+import { defaultTitle } from "../src/shared/timeline/title";
+import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 
 const WIDTH = 640;
 const HEIGHT = 360;
@@ -88,8 +90,15 @@ const frameNumber = (frame: Uint8Array) => {
 
 type Clip = { src: string; start: number; frames: number; mediaStart: number };
 
-/** The document Cutroom writes for linked cuts over a music bed, at the given rate. */
-function project(fps: Fps, clips: Clip[]) {
+/**
+ * The document Cutroom writes for linked cuts over a music bed, at the given rate, with optional
+ * picture-only b-roll on the track above and a title on the track above that.
+ */
+function project(
+  fps: Fps,
+  clips: Clip[],
+  extras: { broll?: Clip; title?: { start: number; frames: number } } = {},
+) {
   const seconds = (frames: number) =>
     String(Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6);
   const end = Math.max(...clips.map((clip) => clip.start + clip.frames));
@@ -100,9 +109,23 @@ function project(fps: Fps, clips: Clip[]) {
       `<video id="v${index}" src="${clip.src}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" ${timing(clip)} data-track-index="0" muted></video>`,
   );
   const voice = clips[0]!;
+  if (extras.broll)
+    pictures.push(
+      `<video id="broll" src="${extras.broll.src}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" ${timing(extras.broll)} data-track-index="1" muted></video>`,
+    );
+  const title = extras.title && defaultTitle(fps);
+  if (extras.title && title)
+    pictures.push(
+      `<div id="title" class="clip" data-start="${seconds(extras.title.start)}" data-duration="${seconds(extras.title.frames)}" data-track-index="2"${titleAttributes(
+        title,
+        fps,
+      )
+        .map(([name, value]) => (value === null ? "" : ` ${name}="${value}"`))
+        .join("")}>Alex Rivera</div>`,
+    );
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8">
-<style>* { box-sizing: border-box; } html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style></head>
+<style>* { box-sizing: border-box; } html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style>${extras.title ? titleStyle([]) : ""}</head>
 <body><main id="main" data-composition-id="main" data-no-timeline data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="0" class="stage">
 ${pictures.join("\n")}
 <audio id="voice" src="${voice.src}" ${timing(voice)} data-track-index="1"></audio>
@@ -186,6 +209,19 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
             { src: "hd.mp4", start: 75, frames: 30, mediaStart: 2 },
           ],
           ranges: [null, { start: 20, end: 90 }],
+          renderer: "direct",
+        },
+        {
+          // B-roll over the first cut draws from its source; the title's frames are captured.
+          fps: { num: 30000, den: 1001 },
+          clips: [
+            { src: "ntsc.mp4", start: 0, frames: 40, mediaStart: 1.2 },
+            { src: "sd.mp4", start: 40, frames: 35, mediaStart: 0.52 },
+          ],
+          broll: { src: "hd.mp4", start: 10, frames: 15, mediaStart: 3 },
+          title: { start: 50, frames: 15 },
+          ranges: [null, { start: 5, end: 60 }],
+          renderer: "mixed",
         },
         {
           fps: { num: 24000, den: 1001 },
@@ -194,15 +230,23 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
             { src: "small.mp4", start: 36, frames: 36, mediaStart: 1 },
           ],
           ranges: [null],
+          renderer: "direct",
         },
-      ];
+      ] as const;
       let exported = 0;
-      for (const { fps, clips, ranges } of cases) {
-        await writeFile(join(root, "index.html"), project(fps, clips));
+      for (const testCase of cases) {
+        const { fps, clips, ranges } = testCase;
+        await writeFile(
+          join(root, "index.html"),
+          project(fps, [...clips], {
+            broll: "broll" in testCase ? testCase.broll : undefined,
+            title: "title" in testCase ? testCase.title : undefined,
+          }),
+        );
         for (const range of ranges) {
           const outputs = [];
           for (const [workers, renderer] of [
-            [direct, "direct"],
+            [direct, testCase.renderer],
             [capture, "capture"],
           ] as const) {
             const filename = `export-${exported++}.mp4`;

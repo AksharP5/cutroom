@@ -44,8 +44,8 @@ type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   finishedAt: number | null;
   estimate: ReturnType<typeof estimateExportStage>;
   stageProgress?: z.infer<typeof ExportStageSchema>;
-  /** How the frames were drawn: straight from the sources, or by capturing the browser. */
-  renderer?: "direct" | "capture";
+  /** How the frames were drawn: from the sources, by capturing the browser, or both. */
+  renderer?: "direct" | "mixed" | "capture";
   sizeBytes?: number;
   cancel: () => Promise<void>;
 };
@@ -59,7 +59,7 @@ const WorkerEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("complete"),
     audioLoweredDb: z.number().optional(),
-    renderer: z.enum(["direct", "capture"]).optional(),
+    renderer: z.enum(["direct", "mixed", "capture"]).optional(),
   }),
   z.object({
     type: z.literal("error"),
@@ -350,9 +350,13 @@ export function createRenderWorkers(configuration: {
               ? output.range.end - output.range.start
               : workload.durationFrames,
           });
-        // A direct export needs no browser. If a source turns out to need one, the worker fails
-        // with this refusal rather than starting browsers that would not fit.
-        if (plan && "refusal" in plan && !direct) throw new Error(plan.refusal);
+        // An export drawn wholly from its sources needs no browser. If a source turns out to need
+        // one, the worker fails with this refusal rather than starting browsers that would not fit.
+        const browserFree = direct?.plan.segments.every(
+          (segment) => segment.kind === "source",
+        );
+        if (plan && "refusal" in plan && !browserFree)
+          throw new Error(plan.refusal);
         for (const path of leftovers)
           await remove(path).then(
             () => leftovers.delete(path),

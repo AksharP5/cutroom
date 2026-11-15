@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   directAudioStage,
   registerRenderIsolation,
+  spliceSourceParts,
 } from "./renderIsolation.ts";
 import { DirectPlanSchema } from "./directPlan.ts";
 import { ExportRangeSchema } from "../../shared/export.ts";
@@ -46,10 +47,15 @@ try {
   for await (const chunk of process.stdin)
     body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
   const input = Input.parse(JSON.parse(body));
+  const capture = input.direct?.plan.segments.filter(
+    (segment) => segment.kind === "capture",
+  );
+  // A whole export that captures some frames runs as a marked export of every frame, so the
+  // browser draws only its runs and the span joins them with the frames drawn from the sources.
+  const range =
+    input.range ?? (capture?.length ? input.direct?.plan.frames : undefined);
   const verifyIsolation = registerRenderIsolation(input.sources, {
-    range: input.range
-      ? { fps: input.options.fps, frames: input.range }
-      : undefined,
+    range: range ? { fps: input.options.fps, frames: range } : undefined,
     progress,
     scratchDir: input.scratchDir,
     projectDir: input.projectDir,
@@ -65,7 +71,7 @@ try {
   } = await import("@hyperframes/producer");
   const { gcExtractionCache } = await import("@hyperframes/engine");
   // It imports the engine, so it loads only once the isolation hooks are registered.
-  const { exportDirect, prepareDirectExport } =
+  const { encodeSourceParts, exportDirect, prepareDirectExport } =
     await import("./directExport.ts");
   verifyIsolation();
   const engineConfig = resolveConfig();
@@ -91,29 +97,39 @@ try {
       throw new Error(input.direct.captureRefusal);
     console.warn(`Exporting with frame capture: ${direct.reason}.`);
   }
-  if (input.direct && direct && "pieces" in direct) {
-    const { collectRenderMedia } = await import("@hyperframes/producer");
-    const options = request.options;
-    ({ audioLoweredDb } = await exportDirect({
+  const pieces = direct && "pieces" in direct ? direct.pieces : undefined;
+  const encoding = input.direct &&
+    pieces && {
       plan: input.direct.plan,
-      pieces: direct.pieces,
+      pieces,
       html: input.direct.html,
+      workDir: join(input.scratchDir, "direct"),
+      fps: request.options.fps,
+      quality: request.options.quality,
+      crf: request.options.crf,
+      bitrate: request.options.videoBitrate,
+      maxBitrate: request.options.maxBitrate,
+      bufferSize: request.options.bufferSize,
+      engineConfig,
+      signal: abort.signal,
+    };
+  if (encoding && !capture?.length) {
+    const { collectRenderMedia } = await import("@hyperframes/producer");
+    ({ audioLoweredDb } = await exportDirect({
+      ...encoding,
       projectDir: request.projectDir,
       outputPath: request.outputPath,
-      workDir: join(input.scratchDir, "direct"),
-      fps: options.fps,
-      quality: options.quality,
-      crf: options.crf,
-      bitrate: options.videoBitrate,
-      maxBitrate: options.maxBitrate,
-      bufferSize: options.bufferSize,
-      engineConfig,
       audioStage: directAudioStage(),
       collectAudio: (html) => collectRenderMedia(html).audios,
-      signal: abort.signal,
       progress: (event) => send({ type: "progress", ...event }),
     }));
-  } else if (input.range) {
+  } else if (range) {
+    // Source frames encode while the span plans and captures; its progress stands for both.
+    if (encoding && capture)
+      spliceSourceParts(
+        capture,
+        encodeSourceParts({ ...encoding, onFrames: () => {} }),
+      );
     const options = request.options;
     const { num, den } = options.fps;
     send({ type: "progress", progress: 0, stage: "Preparing selected frames" });
@@ -144,8 +160,8 @@ try {
         maxParallelChunks: 1,
       },
       {
-        startSeconds: (input.range.start * den) / num,
-        endSeconds: (input.range.end * den) / num,
+        startSeconds: (range.start * den) / num,
+        endSeconds: (range.end * den) / num,
       },
       request.outputPath,
     );
@@ -163,7 +179,7 @@ try {
   send({
     type: "complete",
     audioLoweredDb,
-    renderer: direct && "pieces" in direct ? "direct" : "capture",
+    renderer: !encoding ? "capture" : capture?.length ? "mixed" : "direct",
   });
 } catch (error) {
   send({

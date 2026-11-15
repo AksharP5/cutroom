@@ -13,7 +13,7 @@ import {
 import type { AudioElement, EngineConfig } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
-import type { DirectPlan, DirectSegment } from "./directPlan.ts";
+import type { DirectPlan, SourceSegment } from "./directPlan.ts";
 import type { Fps } from "../../shared/timeline/schema.ts";
 import type { ExportStage } from "../../shared/export.ts";
 
@@ -50,16 +50,25 @@ const PART_INPUTS = 8;
 /** x264 already threads within a part; a few parts at once hide each process's start-up. */
 const PARALLEL_PARTS = Math.max(1, Math.min(4, Math.floor(cpus().length / 4)));
 
-type Piece = DirectSegment & { path: string };
+type Piece = SourceSegment & { path: string };
+/** An encoded run of frames, in the export's frame numbers. */
+export type EncodedPart = { start: number; end: number; path: string };
 
-/** Splits the plan into parts of at most PART_FRAMES frames and PART_INPUTS sources. */
+/**
+ * Splits the source runs into parts of at most PART_FRAMES frames and PART_INPUTS sources. A part
+ * never spans a gap, which frame capture fills.
+ */
 function partition(pieces: Piece[], fps: Fps) {
   const parts: Piece[][] = [];
   let part: Piece[] = [];
   let frames = 0;
   for (const piece of pieces)
     for (let start = piece.start; start < piece.end;) {
-      if (frames === PART_FRAMES || part.length === PART_INPUTS) {
+      if (
+        frames === PART_FRAMES ||
+        part.length === PART_INPUTS ||
+        (part.length && part.at(-1)!.end !== start)
+      ) {
         parts.push(part);
         part = [];
         frames = 0;
@@ -88,8 +97,11 @@ export async function prepareDirectExport(
   plan: DirectPlan,
   projectDir: string,
 ): Promise<{ pieces: Piece[] } | { reason: string }> {
+  const segments = plan.segments.filter(
+    (segment): segment is SourceSegment => segment.kind === "source",
+  );
   const sources = new Map<string, string | undefined>();
-  for (const src of new Set(plan.segments.map((segment) => segment.src))) {
+  for (const src of new Set(segments.map((segment) => segment.src))) {
     // The browser asks the capture server for the decoded path, which this same boundary checks.
     const path = await Promise.resolve()
       .then(() => projectPath({ path: projectDir }, decodeURIComponent(src)))
@@ -104,7 +116,7 @@ export async function prepareDirectExport(
     sources.set(src, path);
   }
   return {
-    pieces: plan.segments.map((segment) => ({
+    pieces: segments.map((segment) => ({
       ...segment,
       path: sources.get(segment.src)!,
     })),
@@ -189,13 +201,9 @@ async function encodePart(input: {
   input.onFrames(total - reported);
 }
 
-/** Exports a planned range straight from its sources, with the planner's own audio mix. */
-export async function exportDirect(input: {
+type Encoding = {
   plan: DirectPlan;
   pieces: Piece[];
-  html: string;
-  projectDir: string;
-  outputPath: string;
   workDir: string;
   fps: Fps;
   quality: "draft" | "standard" | "high";
@@ -204,13 +212,17 @@ export async function exportDirect(input: {
   maxBitrate?: string;
   bufferSize?: string;
   engineConfig: EngineConfig;
-  audioStage: AudioStage;
-  collectAudio: (html: string) => AudioElement[];
   signal: AbortSignal;
-  progress: Progress;
-}) {
-  const { plan, fps, signal, engineConfig } = input;
-  const frames = plan.frames.end - plan.frames.start;
+};
+
+/**
+ * Encodes the plan's source runs with the capture path's encoder settings, a few parts at once,
+ * each one closed GOP, so they join with captured parts without re-encoding.
+ */
+export async function encodeSourceParts(
+  input: Encoding & { onFrames: (frames: number) => void },
+): Promise<EncodedPart[]> {
+  const { plan, fps, signal } = input;
   const partsDir = join(input.workDir, "parts");
   await mkdir(partsDir, { recursive: true });
   const preset = getEncoderPreset(input.quality, "mp4");
@@ -226,6 +238,48 @@ export async function exportDirect(input: {
     bufferSize: input.bufferSize,
     pixelFormat: preset.pixelFormat,
   };
+  const parts = partition(input.pieces, fps).map((pieces, index) => ({
+    pieces,
+    start: pieces[0]!.start,
+    end: pieces.at(-1)!.end,
+    path: join(partsDir, `source-${String(index).padStart(4, "0")}.mp4`),
+  }));
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(PARALLEL_PARTS, parts.length) }, async () => {
+      while (next < parts.length && !signal.aborted) {
+        const part = parts[next++]!;
+        await encodePart({
+          pieces: part.pieces,
+          outputPath: part.path,
+          fps,
+          width: plan.width,
+          height: plan.height,
+          encoder,
+          signal,
+          timeout: input.engineConfig.ffmpegEncodeTimeout,
+          onFrames: input.onFrames,
+        });
+      }
+    }),
+  );
+  signal.throwIfAborted();
+  return parts.map(({ start, end, path }) => ({ start, end, path }));
+}
+
+/** Exports a range drawn entirely from its sources, with the planner's own audio mix. */
+export async function exportDirect(
+  input: Encoding & {
+    html: string;
+    projectDir: string;
+    outputPath: string;
+    audioStage: AudioStage;
+    collectAudio: (html: string) => AudioElement[];
+    progress: Progress;
+  },
+) {
+  const { plan, fps, signal, engineConfig } = input;
+  const frames = plan.frames.end - plan.frames.start;
   let encoded = 0;
   const report = (done: number) => {
     encoded += done;
@@ -236,30 +290,7 @@ export async function exportDirect(input: {
     });
   };
   report(0);
-
-  const parts = partition(input.pieces, fps);
-  const paths = parts.map((_, index) =>
-    join(partsDir, `part-${String(index).padStart(4, "0")}.mp4`),
-  );
-  let next = 0;
-  const video = Promise.all(
-    Array.from({ length: Math.min(PARALLEL_PARTS, parts.length) }, async () => {
-      while (next < parts.length && !signal.aborted) {
-        const index = next++;
-        await encodePart({
-          pieces: parts[index]!,
-          outputPath: paths[index]!,
-          fps,
-          width: plan.width,
-          height: plan.height,
-          encoder,
-          signal,
-          timeout: engineConfig.ffmpegEncodeTimeout,
-          onFrames: report,
-        });
-      }
-    }),
-  );
+  const video = encodeSourceParts({ ...input, onFrames: report });
   const audioWork = join(input.workDir, "audio", "plan", "work");
   await mkdir(audioWork, { recursive: true });
   const audio = mixRangeAudio(
@@ -295,7 +326,12 @@ export async function exportDirect(input: {
     stageProgress: { code: "assemble" },
   });
   const stitched = join(input.workDir, "video.mp4");
-  const concat = await concatVideoFiles(paths, stitched, signal, engineConfig);
+  const concat = await concatVideoFiles(
+    videoResult.value.map((part) => part.path),
+    stitched,
+    signal,
+    engineConfig,
+  );
   if (!concat.success)
     throw new Error(`Joining the encoded parts failed: ${concat.error}`);
   await alignRangeAudio({

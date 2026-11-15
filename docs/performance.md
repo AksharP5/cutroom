@@ -405,6 +405,19 @@ The interview's 30-second range and whole timeline, and the 300-clip project's 3
 
 A first export of the interview's 5-second range on main, before its frame cache held those frames, took 16.5 s. Against main's exports, the direct ones show the same source frame in every frame (read from the burned-in counter) of all five direct exports above, including the 11,250 frames of the whole plain timeline, with mean differences of 0.9 to 1.5/255 and no more than 0.32/255 bias per channel. Range exports carry sample-identical sound; the whole timeline has the same 18,000,000 samples at 67 dB SNR, the difference of the two paths' AAC encodes. Compared with the decoded source frames of the interview range, the direct frames measure 47 to 48.5 dB PSNR and main's 34 to 34.6 dB: frame capture reads each frame through a JPEG extraction and a JPEG screenshot.
 
+### Mixed exports
+
+When only some runs need the browser, the source runs encode while HyperFrames plans and captures the rest. Same projects and conditions as above; main's figures are from the table above and a run of the 300-clip whole timeline.
+
+| Export                         |           Main |            Mixed | Peak memory, main / mixed |      Captured runs |
+| ------------------------------ | -------------: | ---------------: | ------------------------: | -----------------: |
+| Interview, 30 s (0:05 to 0:35) | 34.1 s, 41.4 s |           15.4 s |             11.4 / 6.1 GB |                  1 |
+| Interview, whole 0:45          | 42.0 s, 40.6 s |           25.0 s |             10.3 / 6.0 GB |                  2 |
+| 300 clips, 30 s (0:05 to 0:35) | 50.0 s, 53.1 s |           21.4 s |              9.8 / 9.9 GB |                  1 |
+| 300 clips, whole 5:50          |        612.2 s | captured as main |                    8.9 GB | 20, over the limit |
+
+Each output shows the same source frame as main's in every frame, with sample-identical sound for ranges and 49.6 dB SNR for the whole interview (the two AAC encodes). About 8 s of each mixed export is HyperFrames planning and frame extraction, and each captured run then spends 6 to 7 s starting browsers. Before the three-run limit, the 300-clip whole timeline captured its first seven runs at about 13 s each, then one browser start stalled until Cutroom's 150-second start-up limit failed the export.
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.

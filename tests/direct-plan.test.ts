@@ -35,7 +35,7 @@ function edit(html: string, commands: CommandInput[]) {
   return patchComposition(parsed, timeline, origins);
 }
 
-test("Cutroom's own cuts export from the source, and frames under a title use the browser", async () => {
+test("Cutroom's own cuts and b-roll export from the source, and frames under a title use the browser", async () => {
   const fixture = await projectFixture();
   try {
     const project = ProjectSchema.parse(
@@ -53,7 +53,8 @@ test("Cutroom's own cuts export from the source, and frames under a title use th
       starter,
       emptyTimelineSettings(),
     ).timeline.clips.map((clip) => clip.id);
-    // The starter page, two linked cuts, a title over the second and a track gain.
+    // The starter page, two linked cuts, b-roll over the first, a title over the second and a
+    // track gain.
     const html = edit(starter, [
       { type: "remove", clipIds: starterClips },
       {
@@ -71,24 +72,41 @@ test("Cutroom's own cuts export from the source, and frames under a title use th
       {
         type: "insert",
         track: 1,
+        at: 20,
+        clip: {
+          kind: "video",
+          src: "broll.mp4",
+          duration: 20,
+          mediaStart: 4,
+          muted: true,
+        },
+      },
+      {
+        type: "insert",
+        track: 2,
         at: 90,
         clip: { kind: "title", text: "Name", duration: 30 },
       },
-      { type: "setTrack", index: 2, volume: 0.5 },
+      { type: "setTrack", index: 3, volume: 0.5 },
     ]);
-    const plan = planDirectExport(html, fps, { start: 30, end: 90 });
-    expect(plan).toEqual({
+    expect(planDirectExport(html, fps, null)).toEqual({
       width: 1920,
       height: 1080,
       durationFrames: 120,
-      frames: { start: 30, end: 90 },
+      frames: { start: 0, end: 120 },
       segments: [
-        { start: 30, end: 60, src: "a.mp4", mediaStart: 3 },
-        { start: 60, end: 90, src: "b.mp4", mediaStart: 0.5 },
+        { kind: "source", start: 0, end: 20, src: "a.mp4", mediaStart: 2 },
+        { kind: "source", start: 20, end: 40, src: "broll.mp4", mediaStart: 4 },
+        {
+          kind: "source",
+          start: 40,
+          end: 60,
+          src: "a.mp4",
+          mediaStart: 2 + 40 / 30,
+        },
+        { kind: "source", start: 60, end: 90, src: "b.mp4", mediaStart: 0.5 },
+        { kind: "capture", start: 90, end: 120 },
       ],
-    });
-    expect(planDirectExport(html, fps, null)).toEqual({
-      reason: "frame 90 shows 2 clips",
     });
   } finally {
     await fixture.close();
@@ -113,6 +131,61 @@ test("a plain clip at 30000/1001 plans its source time from its own start", () =
     durationFrames: 31,
     segments: [{ start: 1, end: 31, src: "v.mp4", mediaStart: 1.25 }],
   });
+});
+
+const second = (track: number) =>
+  `<video id="w" src="w.mp4" muted data-start="0" data-duration="2" data-track-index="${track}" style="position:absolute;inset:0;width:100%;height:100%"></video>`;
+const layer = `<style>@layer cutroom-tracks{${[0, 1]
+  .map(
+    (track) =>
+      `:where([data-composition-id="main"] [data-start][data-track-index="${track}"]:not(audio)){z-index:${track}}`,
+  )
+  .join("")}}</style>`;
+const sources = (html: string) => {
+  const plan = planDirectExport(html, fps, null);
+  return "segments" in plan
+    ? plan.segments.map((segment) =>
+        segment.kind === "source" ? segment.src : "capture",
+      )
+    : plan.reason;
+};
+
+test("of two full-frame videos, the one painted last exports from its source", () => {
+  // Same level: document order decides.
+  expect(sources(page({ body: video() + second(0) }))).toEqual(["w.mp4"]);
+  // Cutroom's track layer puts the higher track on top wherever it is in the document.
+  expect(sources(page({ head: layer, body: second(1) + video() }))).toEqual([
+    "w.mp4",
+  ]);
+  // Any other z-index could reorder them.
+  expect(
+    sources(
+      page({ head: "<style>.x{z-index:2}</style>", body: video() + second(0) }),
+    ),
+  ).toBe("frame 0 shows 2 clips in an authored order");
+});
+
+test("an export with more than three runs for the browser captures every frame, starting browsers once", () => {
+  const title = (start: number) =>
+    `<div id="t${start}" class="clip" data-start="${start}" data-duration="0.5" data-track-index="1">Hi</div>`;
+  const long = (titles: number[]) =>
+    page({
+      body:
+        video().replace('data-duration="2"', 'data-duration="5"') +
+        titles.map(title).join(""),
+    }).replace('data-duration="2" class', 'data-duration="5" class');
+  expect(sources(long([1, 2, 3]))).toEqual([
+    "v.mp4",
+    "capture",
+    "v.mp4",
+    "capture",
+    "v.mp4",
+    "capture",
+    "v.mp4",
+  ]);
+  expect(sources(long([1, 2, 3, 4]))).toBe(
+    "4 runs of frames need the browser, first t1 is not a video",
+  );
 });
 
 test("the page the cases below change exports from the source", () => {
