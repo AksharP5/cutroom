@@ -7,6 +7,8 @@ import { z } from "zod";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { frameTime } from "../../shared/timeline/apply";
 import { TimelineDestinationsSchema } from "../../shared/timeline/view";
+import type { RequestOptions } from "./server";
+import { editReply, filterTimeline } from "./timelineReply";
 import {
   CommandBatchSchema,
   CopyClipsSchema,
@@ -17,7 +19,7 @@ type JsonRequest = (
   path: string,
   method?: string,
   body?: unknown,
-  followup?: (data: AnimationFeedback) => Promise<void>,
+  options?: RequestOptions,
 ) => Promise<CallToolResult>;
 /** Fetches a path on the local server, such as `/api/projects/...`. */
 type LocalFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -28,6 +30,21 @@ const input = {
     .string()
     .default("index.html")
     .describe("Composition file within the project"),
+};
+const failed = (status: number, message: string): CallToolResult => ({
+  content: [{ type: "text", text: `Cutroom returned ${status}: ${message}` }],
+  isError: true,
+});
+const failedResponse = async (response: Response) => {
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return failed(response.status, text);
+  }
+  const error = z.object({ error: z.string() }).safeParse(body);
+  return failed(response.status, error.success ? error.data.error : text);
 };
 const readOnly = {
   readOnlyHint: true,
@@ -50,38 +67,114 @@ export function registerTimelineTools(
   const id = encodeURIComponent;
   const timelinePath = (projectId: string, composition: string) =>
     `/projects/${id(projectId)}/timeline?composition=${id(composition)}`;
+  /** The whole timeline as a read returns it, or the failure to show the agent. */
+  const readView = async (
+    projectId: string,
+    composition: string,
+    signal?: AbortSignal,
+  ) => {
+    const read = await fetchLocal(
+      `/api/cutroom${timelinePath(projectId, composition)}`,
+      { signal },
+    );
+    if (!read.ok)
+      return { ok: false as const, failure: await failedResponse(read) };
+    return {
+      ok: true as const,
+      view: TimelineViewSchema.parse(await read.json()),
+    };
+  };
   server.registerTool(
     "timeline_read",
     {
       description:
-        "Read the timeline: tracks including empty rows, clips, markers, and in/out range in integer frames at the composition's fps, plus the revision to pass to timeline_edit. setClip x/y are additive offsets in composition CSS pixels from authored CSS and animation, not absolute coordinates. A composition's own animation can override Position. Verify with timeline_view frames. Positive x is right and positive y is down. Null clears the offset. Position changes only the named visual clip, never linked audio. A text element's clip carries text, its words with line breaks at <br> and preserved source newlines; sourceRestrictions.text says why setClip text would be refused. Clip volume is linear gain (1 = 0 dB, null = unity). Track volume is the track's linear gain (1 = 0 dB), an independent audio group stage. Clips with trackGainWarning keep their authored group and are excluded from track gain. Each stage supports up to +12 dB; clip and track gains can combine above +12 dB. Automation is HyperFrames clip-local JSON and may contain baked volume ramps. fadeIn/fadeOut are authored frame lengths. Effective fades multiply both authored lengths by min(1, duration / (fadeIn + fadeOut)). Zero lengths stay zero.",
-      inputSchema: input,
+        "Read the timeline in integer frames at the composition's fps: tracks (including empty ones), clips, markers, the in/out range, and the revision to pass to timeline_edit. On long timelines pass from/to and tracks to get only the clips and markers there; tracks and the revision always cover the whole timeline. agentChanges lists clips still awaiting the owner's review; pass clipEdits: true for the owner and agent edit ledger behind it. Clip fields: x/y are additive offsets in composition CSS pixels on top of authored CSS and animation, not coordinates; positive x is right, positive y is down, null is none. The composition's own animation can override them, so check with timeline_view; they never move linked audio. text holds a text element's words, with <br> and preserved source line breaks as newlines; sourceRestrictions.text says why setClip text would be refused. title holds a Cutroom title's look and motion. volume is linear clip gain (1 = 0 dB, null = unity). A track's volume is a separate gain stage on top; clips with trackGainWarning keep their authored audio group and skip it. Each stage goes up to +12 dB. automation is HyperFrames clip-local JSON that may hold baked volume ramps. fadeIn/fadeOut are authored frame lengths; playback scales both by min(1, duration / (fadeIn + fadeOut)).",
+      inputSchema: {
+        ...input,
+        from: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "First frame of interest; clips ending after it are returned",
+          ),
+        to: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Exclusive end frame of interest"),
+        tracks: z
+          .array(z.number().int().nonnegative())
+          .min(1)
+          .optional()
+          .describe("Track indexes whose clips to return; omit for all"),
+        clipEdits: z
+          .boolean()
+          .default(false)
+          .describe("Include the clip edit ledger"),
+      },
       annotations: readOnly,
     },
-    ({ projectId, composition }) =>
-      request(timelinePath(projectId, composition)),
+    async ({ projectId, composition, from, to, tracks, clipEdits }) => {
+      const result = await readView(projectId, composition);
+      if (!result.ok) return result.failure;
+      const { clipEdits: ledger, timeline, ...view } = result.view;
+      const reply = {
+        ...view,
+        ...(clipEdits && { clipEdits: ledger }),
+        timeline: filterTimeline(timeline, { from, to, tracks }),
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(reply) }],
+        structuredContent: { result: reply },
+      };
+    },
   );
   server.registerTool(
     "timeline_edit",
     {
       description:
-        "Apply a batch of timeline commands as one undo step. Tracks persist after their last clip is removed. removeTrack removes an unlocked empty track by index; occupied tracks refuse removal. Cutroom never rewrites animation scripts. Root tween positions are absolute composition seconds; HyperFrames does not add data-start. Actual before/after timelines detect changed animation origins, including ripples that trim and displace clips, and new razor/pasted targets. The saved edit is acknowledged first. Animation inspection follows outside the response path: only the initiating editor tab receives a transient Ask agent toast through project SSE, filtered by its per-tab origin token. Observer tabs stay quiet; MCP edits do not show editor toasts. MCP callers receive nonempty feedback afterward as a notifications/message warning from cutroom.animation, with event animation-left-behind, projectId, requestId from the originating MCP call, the saved timeline revision, composition and clip IDs/labels. There is no animation warning in the tool result. Sub-composition hosts never warn. Complete literal selectors are matched as a whole; loose hints apply only to unresolved GSAP target expressions. Unrelated DOM lookups and non-GSAP receivers do not count. Literal computed members such as gsap[\"to\"] are recognized. Pure head/tail trims preserving origin stay quiet. No warning state is stored. Attribution is best-effort; ambiguous scripts can nudge and unresolvable helpers can be missed. Prefer animated titles in their own clip-local sub-composition files, which follow their host clips. A title is the exception that needs no file: insert with clip {kind: \"title\", text, duration, title} writes a plain text element whose attributes Cutroom's own stylesheet animates. title sets position (lower-left, lower-center, lower-right, center, top), font (a family the project declares with @font-face, or null), size in composition pixels, weight (400 to 700), color as #rrggbb, align, plate as #rrggbbaa or null, and in and out as {preset: none|fade|slide|scale|wipe, frames}; omitted fields take defaults, with size 64, so pass a size that suits the composition. The entrance starts on the clip's first frame and the exit ends on its last through trims, moves and ripples. A razor leaves the entrance on the first piece and the exit on the second. Change the look with setClip title, which keeps omitted fields, and the words with setClip text; timeline_read returns each clip's title. Removing time through the middle of a text element or still image shortens it without splitting or moving its start; video, audio and sub-compositions still split. Linked clips edit together, ripple edits follow unlocked auto-select tracks, and explicit edits that cannot apply exactly fail the whole batch. Auto-select razor splits leave source-restricted clips and their linked partners whole; skippedClips in the response names each clip, its label and reason. Ripple edits refuse atomically when a participating clip cannot be cut or removed exactly, naming its track and suggesting turning off auto-select there to ripple without it. Pass the revision from timeline_read; the response carries the next one. setClip x/y are additive offsets in composition CSS pixels from authored CSS and animation, not absolute coordinates. A composition's own animation can override Position. Verify with timeline_view frames. Positive x is right and positive y is down. Null clears the offset. Position changes only the named visual clip, never linked audio. setClip text replaces a text element's words, with newlines written as <br>; it is refused for media, nested markup, uncertain multiline whitespace, and certain script writes by id. Other scripts can replace the committed words. Verify text edits with timeline_view at relevant frames; the editor warns without blocking when rendered text differs. Clip volume is linear gain (1 = 0 dB, null = unity). setTrack volume is an independent track gain stage, including for embedded video sound, up to +12 dB per stage. Clips with trackGainWarning already belong to an authored group and are excluded; their own clip gain is still editable. Automation is HyperFrames clip-local JSON that may hold baked ramps. setClip automation:null clears it. Fade values are authored frame lengths. Effective fades multiply both lengths by min(1, duration / (fadeIn + fadeOut)), with zero lengths staying zero.",
-      inputSchema: CommandBatchSchema.extend({ projectId: input.projectId }),
+        "Apply a batch of timeline commands as one undo step, in order and atomically: a command that cannot apply exactly fails the whole batch, naming its index. Pass the revision from timeline_read; stale revisions are refused. Fields mean what timeline_read says. " +
+        "The reply has the next revision and only what changed: changes.clips, changes.tracks and changes.markers each list added (complete, so new ids from razor, insert and paste are here), changed (the id or index with the new values of changed fields; null means cleared) and removed (ids or indexes), plus range and duration when they change. skippedClips names clips an auto-select razor left whole, with the reason. warnings names clips on an edited track that track gain skips; tell the user, and keep their authored group. The last text line says what the edit did. Pass fullTimeline: true to also get the whole timeline. " +
+        "Linked clips edit together, and ripple edits follow unlocked auto-select tracks. A ripple refuses when a participating clip cannot be cut or removed exactly, naming its track; turning off auto-select there ripples without it. Removing time through the middle of a text element or still image shortens it; video, audio and sub-compositions split. Tracks stay when emptied; removeTrack removes an unlocked empty one. A cutting command's ids names its new pieces, keyed by source clip id in cut order (a ripple through several ranges cuts last range first); an id ever used in the project is refused with duplicate_id. " +
+        'For a lower third, name or heading, insert a title: clip {kind: "title", text, duration, title}, with a title.size that suits the composition (default 64 px). Its entrance stays on the clip\'s first frame and its exit on the last through every edit; a razor keeps the entrance on the first piece and the exit on the second. Verify setClip text with timeline_view, since other scripts can replace the words. ' +
+        "Cutroom never rewrites animation scripts, and root tweens sit at absolute composition seconds, so moving or cutting a clip can leave its animation behind. The reply never says so; afterwards the server may send a notifications/message warning from logger cutroom.animation with event animation-left-behind, projectId, the originating requestId, revision, composition and the clips' ids and labels. Detection is best-effort. Put bespoke animation in clip-local sub-composition files, which follow their host clips.",
+      inputSchema: CommandBatchSchema.extend({
+        projectId: input.projectId,
+        fullTimeline: z
+          .boolean()
+          .default(false)
+          .describe("Also return the whole timeline after the edit"),
+      }),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
       },
     },
-    ({ projectId, ...batch }, { requestId }) =>
-      request(`/projects/${id(projectId)}/commands`, "POST", batch, (data) =>
-        notifyAnimation({
-          event: "animation-left-behind",
-          requestId,
-          projectId,
-          ...data,
-        }),
-      ),
+    async ({ projectId, fullTimeline, ...batch }, { requestId }) => {
+      const before = await readView(projectId, batch.composition);
+      if (!before.ok) return before.failure;
+      // A read at another revision cannot show what this edit changed.
+      const exact = before.view.revision === batch.expectedRevision;
+      return request(`/projects/${id(projectId)}/commands`, "POST", batch, {
+        followup: (data) =>
+          notifyAnimation({
+            event: "animation-left-behind",
+            requestId,
+            projectId,
+            ...data,
+          }),
+        reply: (result) =>
+          editReply(
+            before.view,
+            TimelineViewSchema.parse(result),
+            fullTimeline || !exact,
+          ),
+      });
+    },
   );
   server.registerTool(
     "timeline_destinations",
@@ -129,29 +222,9 @@ export function registerTimelineTools(
       { projectId, composition, frame },
       extra,
     ): Promise<CallToolResult> => {
-      const failed = (status: number, message: string): CallToolResult => ({
-        content: [
-          { type: "text", text: `Cutroom returned ${status}: ${message}` },
-        ],
-        isError: true,
-      });
-      const failedResponse = async (response: Response) => {
-        const text = await response.text();
-        let body: unknown;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          return failed(response.status, text);
-        }
-        const error = z.object({ error: z.string() }).safeParse(body);
-        return failed(response.status, error.success ? error.data.error : text);
-      };
-      const read = await fetchLocal(
-        `/api/cutroom${timelinePath(projectId, composition)}`,
-        { signal: extra.signal },
-      );
-      if (!read.ok) return failedResponse(read);
-      const { timeline } = TimelineViewSchema.parse(await read.json());
+      const read = await readView(projectId, composition, extra.signal);
+      if (!read.ok) return read.failure;
+      const { timeline } = read.view;
       // Full precision: the renderer floors seek times onto frames.
       const seconds = frameTime(frame, timeline.fps);
       const image = await fetchLocal(

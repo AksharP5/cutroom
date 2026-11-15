@@ -231,6 +231,7 @@ test("linked inspector audio edits, fades, undo, MCP acceptance and preview/expo
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: view.revision,
           label: "Set gain to +6.0 dB",

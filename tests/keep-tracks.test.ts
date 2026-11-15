@@ -145,6 +145,7 @@ test("first lifts persist inferred tracks on disk, with history and MCP targetin
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: agentRead.revision,
           commands: [
@@ -163,6 +164,7 @@ test("first lifts persist inferred tracks on disk, with history and MCP targetin
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: placed.revision,
           commands: [{ type: "removeTrack", index: 1 }],

@@ -57,6 +57,7 @@ test("marker names and colours round-trip through MCP, disk, and undo history", 
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: before.revision,
           commands: [
@@ -116,6 +117,7 @@ test("marker names and colours round-trip through MCP, disk, and undo history", 
         await client.callTool({
           name: "timeline_edit",
           arguments: {
+            fullTimeline: true,
             projectId: project.id,
             expectedRevision: current.revision,
             commands: [{ type: "removeMarker", id: "downbeat" }],
@@ -463,6 +465,7 @@ test("title text edits through MCP write the source, undo in one step, and refus
       client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: (await read()).revision,
           commands: [{ type: "setClip", clipId: "headline", text: words }],
@@ -473,7 +476,13 @@ test("title text edits through MCP write the source, undo in one step, and refus
     const edited = resultSchema.parse(answer).structuredContent.result;
     expect(text(edited)).toBe("Spring\nlaunch");
     expect(await Bun.file(file).text()).toContain(">Spring<br>launch</div>");
-    expect(edited.clipEdits?.[0]?.label).toBe("Set text to “Spring launch”");
+    const { clipEdits } = resultSchema.parse(
+      await client.callTool({
+        name: "timeline_read",
+        arguments: { projectId: project.id, clipEdits: true },
+      }),
+    ).structuredContent.result;
+    expect(clipEdits?.[0]?.label).toBe("Set text to “Spring launch”");
     // The agent panel's row reads the sentence that ends the call's result.
     expect(
       editSummary("cutroom_studio: timeline_edit", JSON.stringify(answer)),
