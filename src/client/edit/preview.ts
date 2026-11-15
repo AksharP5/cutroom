@@ -566,6 +566,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       time: number,
       signal: AbortSignal,
       latest: () => boolean,
+      /** Called as the page starts the update; from then on it runs to its end. */
+      started: () => void,
     ) {
       if (!timingAllowed || !timingRevision)
         throw new Error("The preview has no timing revision.");
@@ -601,6 +603,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
           time,
         },
         signal,
+        started,
       );
       signal.throwIfAborted();
       if (reply.timingRevision !== snapshot.timing.revision)

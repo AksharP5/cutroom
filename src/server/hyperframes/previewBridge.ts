@@ -48,6 +48,8 @@ interface PreviewWindow extends DiagnosticWindow {
     getTime(): number;
     isPlaying(): boolean;
   };
+  /** Replaced each time the runtime lays out the composition's clips again. */
+  __clipManifest?: unknown;
   /** Without `videoFrames`, it settles everything except native video decodes. */
   __hfWaitForSeekCompletion?: (options?: {
     videoFrames?: boolean;
@@ -241,6 +243,19 @@ function installPreviewBridge(
         if (generation === seekGeneration) stopRecording();
       });
   };
+  /** Resolves once the runtime has laid out its clips again since it published `manifest`. */
+  const layoutPass = (manifest: unknown) =>
+    new Promise<void>((resolve, reject) => {
+      const deadline = performance.now() + 1000;
+      const check = () => {
+        if (retired) reject(new Error("The preview document was retired."));
+        else if (win.__clipManifest !== manifest) resolve();
+        else if (performance.now() > deadline)
+          reject(new Error("The runtime did not lay out the added clips."));
+        else requestAnimationFrame(check);
+      };
+      check();
+    });
   const seekRuntime = (time: number) => {
     const generation = recordRuntime();
     try {
@@ -2633,6 +2648,10 @@ function installPreviewBridge(
               ]);
             }
             write(root, "data-duration", nextDuration);
+            // The runtime positions clips it has not laid out yet on its next layout pass,
+            // at most three times a second. Wait for it so its writes join this document
+            // before it is drawn, rather than changing it after it is confirmed.
+            const manifest = inserts.length ? win.__clipManifest : undefined;
             const changedTitles = new Set<Element>();
             for (const { id, element, values, text } of writes) {
               for (const [name, value] of values)
@@ -2777,6 +2796,7 @@ function installPreviewBridge(
               throw new Error("The title animations did not retire.");
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
+            if (inserts.length) await layoutPass(manifest);
             seekRuntime(data.time);
             document
               .querySelector('meta[name="cutroom-mix-signature"]')
