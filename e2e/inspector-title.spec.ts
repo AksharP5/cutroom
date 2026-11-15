@@ -143,6 +143,34 @@ test("each Title control changes the picture and is one undo step", async ({
   await change(type("Plate opacity", "100"));
   await expect(shown).toHaveCSS("background-color", "rgb(255, 255, 255)");
 
+  await change(() =>
+    inspector.getByRole("checkbox", { name: "Shadow" }).check(),
+  );
+  await expect(shown).toHaveCSS(
+    "text-shadow",
+    "rgba(0, 0, 0, 0.7) 0px 5.76px 12px",
+  );
+  await change(type("Blur", "20"));
+  await expect(shown).toHaveCSS(
+    "text-shadow",
+    "rgba(0, 0, 0, 0.7) 0px 5.76px 20px",
+  );
+  await change(() =>
+    inspector.getByRole("checkbox", { name: "Stroke" }).check(),
+  );
+  await expect(shown).toHaveCSS("-webkit-text-stroke-width", "6px");
+  await change(type("Stroke colour hex", "#3366ff"));
+  await expect(shown).toHaveCSS(
+    "-webkit-text-stroke-color",
+    "rgb(51, 102, 255)",
+  );
+  await change(type("Width", "5"));
+  await expect(shown).toHaveCSS("-webkit-text-stroke-width", "10px");
+  expect((await title())?.title).toMatchObject({
+    shadow: { color: "#000000b3", blur: 20 },
+    stroke: { color: "#3366ff", width: 5 },
+  });
+
   await change(choose("Font", "Default"));
   await expect(shown).not.toHaveAttribute("data-title-font");
   await change(choose("Font", "Instrument Sans"));
@@ -208,7 +236,7 @@ test("a title Cutroom cannot read shows why in place of its controls", async ({
   const inspector = await openTitle(page, project.id);
   const section = inspector.locator(".inspector-title");
   const controls = section.locator("input, button:not([role=option])");
-  await expect(controls).toHaveCount(14);
+  await expect(controls).toHaveCount(16);
 
   const file = join(project.path, "index.html");
   const source = await readFile(file, "utf8");
@@ -302,4 +330,44 @@ test("Copy style and Paste style give several titles one title's look in one und
   await expect
     .poll(async () => Object.fromEntries(await titles()))
     .toEqual({ lower: style, second: plain, third: plain });
+});
+
+test("a title goes by its first line and its length fields show every digit", async ({
+  page,
+  request,
+}) => {
+  const { project, edit, title } = await titleProject(request, "Title name");
+  const inspector = await openTitle(page, project.id);
+  const header = inspector.locator(".inspector-clip strong");
+  const label = page.locator('[data-clip-label="lower"]');
+  await expect(header).toHaveText("Ada Lovelace");
+  await expect(label.locator(".tl-name").first()).toHaveText("Ada Lovelace");
+  // The name already is the first line, so the label does not repeat it underneath.
+  await expect(label.locator(".tl-text")).toHaveCount(0);
+
+  await edit([
+    { type: "setClip", clipId: "lower", text: "Grace Hopper\nRear Admiral" },
+  ]);
+  await expect(header).toHaveText("Grace Hopper");
+  await expect(label.locator(".tl-name").first()).toHaveText("Grace Hopper");
+  expect((await title())?.id).toBe("lower");
+
+  // The default 0.4 s entrance is 00:00:00:12 at 30 fps: the field must show its last digit,
+  // also when the inspector scrolls. Headless Chromium hides scrollbars, so the content gives up
+  // the width the app's own scrollbar takes.
+  await inspector
+    .locator(".inspector-content")
+    .evaluate((content: HTMLElement) => {
+      content.style.paddingRight = "var(--scrollbar-size)";
+    });
+  for (const name of ["In", "Out"]) {
+    const field = inspector.getByRole("textbox", { name, exact: true });
+    await expect(field).toHaveValue(/^00:00:00:\d\d$/);
+    // Text wider than the field scrolls inside it instead of showing.
+    expect(
+      await field.evaluate(
+        (input: HTMLInputElement) => input.scrollWidth - input.clientWidth,
+      ),
+    ).toBe(0);
+  }
 });

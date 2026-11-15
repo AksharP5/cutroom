@@ -4,9 +4,13 @@ import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
 
-/** A clip's name as the timeline shows it. */
-export const clipName = (clip: Pick<Clip, "id" | "label" | "src">) =>
-  clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
+/** A clip's name as the timeline shows it. A title without a label goes by its first line. */
+export const clipName = (
+  clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview">,
+) =>
+  clip.label ??
+  clip.src?.split("/").at(-1) ??
+  ((clip.title && clip.textPreview) || clip.id);
 
 /** Percentages keep every digit the engine stores (six decimals of the fraction). */
 export const formatPercent = (value: number) =>
@@ -44,7 +48,8 @@ export function editLabel(
       return clip
         ? (clip.label ??
             clip.src?.split("/").at(-1) ??
-            `a ${clip.kind === "element" ? "text" : clip.kind} clip`)
+            ((clip.title && clip.textPreview) ||
+              `a ${clip.kind === "element" ? "text" : clip.kind} clip`))
         : "a clip";
     });
     return names.length > 2
@@ -237,6 +242,19 @@ export function editLabel(
                 : `Set title ${name} to ${value}${field === "size" ? " px" : ""}`,
             );
           }
+          const { shadow, stroke } = look;
+          if (shadow !== undefined)
+            parts.push(
+              shadow === null
+                ? `${pending ? "Remove" : "Removed"} title shadow`
+                : `Set title shadow to ${shadow.color}, ${shadow.blur} px blur`,
+            );
+          if (stroke !== undefined)
+            parts.push(
+              stroke === null
+                ? `${pending ? "Remove" : "Removed"} title stroke`
+                : `Set title stroke to ${stroke.color}, ${stroke.width} px`,
+            );
           for (const [name, motion] of [
             ["entrance", entrance],
             ["exit", exit],
