@@ -255,28 +255,11 @@ test("a title goes by its first line and its length fields show every digit", as
   for (const name of ["In", "Out"]) {
     const field = inspector.getByRole("textbox", { name, exact: true });
     await expect(field).toHaveValue(/^00:00:00:\d\d$/);
-    // An input does not report overflow, so its text is set in a span with the same font.
-    const fit = await field.evaluate((input: HTMLInputElement) => {
-      const style = getComputedStyle(input);
-      const probe = document.createElement("span");
-      for (const property of [
-        "font-family",
-        "font-size",
-        "font-weight",
-        "font-stretch",
-        "letter-spacing",
-      ])
-        probe.style.setProperty(property, style.getPropertyValue(property));
-      probe.textContent = input.value;
-      document.body.append(probe);
-      const text = probe.getBoundingClientRect().width;
-      probe.remove();
-      const room =
-        input.clientWidth -
-        Number.parseFloat(style.paddingLeft) -
-        Number.parseFloat(style.paddingRight);
-      return { text: Math.ceil(text), room };
-    });
-    expect(fit.text).toBeLessThanOrEqual(fit.room);
+    // Text wider than the field scrolls inside it instead of showing.
+    expect(
+      await field.evaluate(
+        (input: HTMLInputElement) => input.scrollWidth - input.clientWidth,
+      ),
+    ).toBe(0);
   }
 });
