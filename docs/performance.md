@@ -416,7 +416,19 @@ When only some runs need the browser, the source runs encode while HyperFrames p
 | 300 clips, 30 s (0:05 to 0:35) | 50.0 s, 53.1 s |           21.4 s |              9.8 / 9.9 GB |                  1 |
 | 300 clips, whole 5:50          |        612.2 s | captured as main |                    8.9 GB | 20, over the limit |
 
-Each output shows the same source frame as main's in every frame, with sample-identical sound for ranges and 49.6 dB SNR for the whole interview (the two AAC encodes). About 8 s of each mixed export is HyperFrames planning and frame extraction, and each captured run then spends 6 to 7 s starting browsers. Before the three-run limit, the 300-clip whole timeline captured its first seven runs at about 13 s each, then one browser start stalled until Cutroom's 150-second start-up limit failed the export.
+Each output shows the same source frame as main's in every frame, with sample-identical sound for ranges and 49.6 dB SNR for the whole interview (the two AAC encodes). About 8 s of each mixed export is HyperFrames planning and frame extraction, and each captured run then spent 6 to 7 s starting browsers, so these exports allowed at most three captured runs. Before that limit, the 300-clip whole timeline captured its first seven runs at about 13 s each, then one browser start stalled until Cutroom's 150-second start-up limit failed the export.
+
+### One capture for every run
+
+Every captured run of an export now shares one start of its capture browsers, sized to the frames they capture, so the run limit is gone. These fixtures rebuild the layouts above (interview: ten linked 1080p BT.709 cuts with a burned-in frame counter, three b-roll clips including a 720p and a 23.976 fps one, a music bed and two titles; 300 clips: `timelineWorkload(300)` on a 720p copy with 20 titles), exported whole at Standard quality through the export route, one at a time on a shared machine. Peak memory is the summed PSS of the export's processes.
+
+| Export                | Main `ca73ce9`                 | One capture            | Peak memory, main / one capture | Free at start |
+| --------------------- | ------------------------------ | ---------------------- | ------------------------------- | ------------: |
+| Interview, whole 0:45 | 27.6 s, 24.3 s (2 starts)      | 18.2 s, 19.1 s, 18.8 s | 6.2 to 7.2 / 7.0 GB             |  19 to 22 GiB |
+| 300 clips, whole 5:50 | 456.7 s (every frame captured) | 161.7 s, 2 browsers    | 9.2 / 13.1 GB                   |      22.6 GiB |
+| 300 clips, whole 5:50 |                                | 222.8 s, 1 browser     | 8.0 GB                          |      19.5 GiB |
+
+On the 300-clip timeline the shared capture holds 9.2 GB of Chromium with two browsers and 4.2 GB with one; the source parts' four FFmpeg encoders beside it hold 3.0 to 3.6 GB, which the browser plan now reserves, so with 19.5 GiB free it starts one browser instead of two. Against main, every one of the 10,500 frames shows the same source frame, with a mean difference of 0.97/255 (1.33 at worst) and at most 0.29/255 bias per channel, and the sound has the same 16,800,000 samples at 48.1 dB SNR, the two paths' AAC encodes. The interview's output is identical to main's. No browser start stalled in any of these exports.
 
 ## Scrubbing
 
