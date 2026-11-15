@@ -195,6 +195,26 @@ test("a removed clip takes the whitespace before it, so indented sources stay li
   expect(liveChange(indented, leftBehind)).toBe("reload");
 });
 
+test("a clip holding a stylesheet is structure, so CSS inside it reloads", () => {
+  const styled = (css: string) =>
+    source.replace("Words</div>", `<style>${css}</style>Words</div>`);
+  const before = styled("main{background:#111}");
+  expect(snapshot(before).clips.find(({ id }) => id === "title")?.slot).toBe(
+    null,
+  );
+  expect(
+    liveChange(
+      before,
+      styled(
+        "video{animation:spin 2s infinite}@keyframes spin{to{rotate:1turn}}",
+      ),
+    ),
+  ).toBe("reload");
+  expect(liveChange(before, before.replace(/<div.*?<\/div>/, ""))).toBe(
+    "reload",
+  );
+});
+
 test("a clip holding another clip or a composition is structure, not a movable clip", () => {
   const holding = source
     .replace(/ id="(v|a|title)"/g, ' id="$1" data-hf-cutroom-clip-id="$1"')

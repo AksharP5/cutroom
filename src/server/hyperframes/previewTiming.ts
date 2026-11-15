@@ -178,11 +178,13 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     attribute(node, "data-hf-cutroom-clip-id") !== undefined &&
     attribute(node, "data-composition-id") === undefined &&
     attribute(node, "data-composition-src") === undefined;
+  // Styles and document metadata inside a clip affect other elements, so that clip is structure.
   const nested = (node: DefaultTreeAdapterTypes.Element): boolean =>
     node.childNodes.some(
       (child) =>
         "tagName" in child &&
-        (attribute(child, "data-hf-cutroom-clip-id") !== undefined ||
+        (["style", "link", "meta", "base"].includes(child.tagName) ||
+          attribute(child, "data-hf-cutroom-clip-id") !== undefined ||
           attribute(child, "data-composition-id") !== undefined ||
           attribute(child, "data-composition-src") !== undefined ||
           nested(child) ||
