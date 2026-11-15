@@ -190,6 +190,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
       await client.callTool({
         name: "timeline_edit",
         arguments: {
+          fullTimeline: true,
           projectId: project.id,
           expectedRevision: view.revision,
           label: "Agent opacity",

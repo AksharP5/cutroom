@@ -31,7 +31,7 @@ const position = z
     return offset === 0 ? null : offset;
   })
   .describe(
-    "Additive offset in composition CSS pixels, not an absolute coordinate. A composition's own animation can override Position. Verify with timeline_view frames. Positive x moves right; positive y moves down. Null or zero clears the offset; linked audio is unchanged.",
+    "Additive offset in composition CSS pixels, not a coordinate; null or zero clears it",
   );
 
 /**
@@ -321,7 +321,7 @@ const pieceIds = z
   .record(clipId, z.array(clipId).min(1).max(10_000))
   .optional()
   .describe(
-    "Ids for the pieces this command cuts off, keyed by the id of the clip they are cut from, in the order the command cuts them. A ripple through several ranges cuts a spanning clip once per range, last range first. Each id must never have been used in this project, even by a clip that was deleted or undone; any other id is refused with duplicate_id. Pieces without one get a new random id.",
+    "New ids for the pieces this command cuts off, keyed by source clip id in cut order; unnamed pieces get random ids",
   );
 
 export const ClipboardSchema = z.object({
