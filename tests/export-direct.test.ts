@@ -97,7 +97,7 @@ type Clip = { src: string; start: number; frames: number; mediaStart: number };
 function project(
   fps: Fps,
   clips: Clip[],
-  extras: { broll?: Clip; title?: { start: number; frames: number } } = {},
+  extras: { broll?: Clip; titles?: { start: number; frames: number }[] } = {},
 ) {
   const seconds = (frames: number) =>
     String(Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6);
@@ -113,11 +113,10 @@ function project(
     pictures.push(
       `<video id="broll" src="${extras.broll.src}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" ${timing(extras.broll)} data-track-index="1" muted></video>`,
     );
-  const title = extras.title && defaultTitle(fps);
-  if (extras.title && title)
+  for (const [index, title] of (extras.titles ?? []).entries())
     pictures.push(
-      `<div id="title" class="clip" data-start="${seconds(extras.title.start)}" data-duration="${seconds(extras.title.frames)}" data-track-index="2"${titleAttributes(
-        title,
+      `<div id="title-${index}" class="clip" data-start="${seconds(title.start)}" data-duration="${seconds(title.frames)}" data-track-index="2"${titleAttributes(
+        defaultTitle(fps),
         fps,
       )
         .map(([name, value]) => (value === null ? "" : ` ${name}="${value}"`))
@@ -125,7 +124,7 @@ function project(
     );
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8">
-<style>* { box-sizing: border-box; } html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style>${extras.title ? titleStyle([]) : ""}</head>
+<style>* { box-sizing: border-box; } html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style>${extras.titles ? titleStyle([]) : ""}</head>
 <body><main id="main" data-composition-id="main" data-no-timeline data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="0" class="stage">
 ${pictures.join("\n")}
 <audio id="voice" src="${voice.src}" ${timing(voice)} data-track-index="1"></audio>
@@ -212,14 +211,18 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           renderer: "direct",
         },
         {
-          // B-roll over the first cut draws from its source; the title's frames are captured.
+          // B-roll over the first cut draws from its source; both titles' frames are captured by
+          // one set of browsers, with source frames between them.
           fps: { num: 30000, den: 1001 },
           clips: [
             { src: "ntsc.mp4", start: 0, frames: 40, mediaStart: 1.2 },
             { src: "sd.mp4", start: 40, frames: 35, mediaStart: 0.52 },
           ],
           broll: { src: "hd.mp4", start: 10, frames: 15, mediaStart: 3 },
-          title: { start: 50, frames: 15 },
+          titles: [
+            { start: 28, frames: 6 },
+            { start: 50, frames: 15 },
+          ],
           ranges: [null, { start: 5, end: 60 }],
           renderer: "mixed",
         },
@@ -240,7 +243,7 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
           join(root, "index.html"),
           project(fps, [...clips], {
             broll: "broll" in testCase ? testCase.broll : undefined,
-            title: "title" in testCase ? testCase.title : undefined,
+            titles: "titles" in testCase ? [...testCase.titles] : undefined,
           }),
         );
         for (const range of ranges) {

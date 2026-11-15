@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
+import { mkdir, rename } from "node:fs/promises";
 import { registerHooks } from "node:module";
+import { cpus } from "node:os";
+import { join } from "node:path";
 import { MEDIA_TRASH } from "../../shared/media.ts";
 import { previewPolicy } from "./isolation.ts";
 import type { RenderJob } from "@hyperframes/producer";
@@ -30,6 +33,101 @@ export function spliceSourceParts(
   spliced = { capture, parts };
 }
 
+/**
+ * The frames one chunk capture walks when they are not contiguous. The chunk captures the
+ * contiguous range from `base`, and capture index `base + k` draws composition frame `frames[k]`,
+ * so one set of browsers loads the page once and seeks between runs.
+ */
+let listed:
+  { base: number; frames: number[]; parts: EncodedPart[] } | undefined;
+
+/** The composition frame a capture index draws. */
+export function capturedFrame(index: number) {
+  if (!listed) return index;
+  const frame = listed.frames[index - listed.base];
+  if (frame === undefined)
+    throw new Error(`Capture index ${index} is outside the listed frames.`);
+  return frame;
+}
+
+/** Whether the chunk being captured walks a frame list, so it encodes one part per run. */
+export const capturesList = () => listed !== undefined;
+
+/** Encodes per run at once; x264 threads within each. */
+const PARALLEL_RUNS = Math.max(1, Math.min(4, Math.floor(cpus().length / 4)));
+
+type ChunkEncode = {
+  job: RenderJob;
+  framesDir: string;
+  outputPath: string;
+  videoOnlyPath: string;
+  gopSize: number;
+  chunkedEncodeSize: number;
+  captureImageFormat?: string;
+};
+
+/**
+ * `renderChunk`'s encode stage. A listed capture holds every run's frames in one folder; each run
+ * becomes its own closed-GOP part, encoded exactly as a chunk of that run alone would be.
+ */
+export async function encodeCaptured<Input extends ChunkEncode>(
+  input: Input,
+  encode: (input: Input) => Promise<unknown>,
+  gopFor: (frames: number) => number,
+) {
+  const capture = listed;
+  if (!capture) return encode(input);
+  const runs: { first: number; frames: number }[] = [];
+  for (const [index, frame] of capture.frames.entries()) {
+    const run = runs.at(-1);
+    if (run && capture.frames[index - 1] === frame - 1) run.frames++;
+    else runs.push({ first: index, frames: 1 });
+  }
+  const extension = input.captureImageFormat === "png" ? "png" : "jpg";
+  const name = (index: number) =>
+    `frame_${String(index).padStart(6, "0")}.${extension}`;
+  const { job } = input;
+  const total = capture.frames.length;
+  let encoded = 0;
+  const report = () => {
+    job.currentStage = `Encoding frame ${encoded}/${total}`;
+    job.stageProgress = { code: "encode", done: encoded, total };
+    publishRangeProgress(job);
+  };
+  report();
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(PARALLEL_RUNS, runs.length) }, async () => {
+      while (next < runs.length) {
+        const index = next++;
+        const run = runs[index]!;
+        const framesDir = `${input.framesDir}-run-${index}`;
+        await mkdir(framesDir);
+        for (let frame = 0; frame < run.frames; frame++)
+          await rename(
+            join(input.framesDir, name(run.first + frame)),
+            join(framesDir, name(frame)),
+          );
+        const path = `${input.videoOnlyPath}.run-${String(index).padStart(4, "0")}.mp4`;
+        // The run's own job copy keeps the chunk's counts; progress is reported across runs here.
+        await encode({
+          ...input,
+          job: { ...job, totalFrames: 0 },
+          framesDir,
+          outputPath: path,
+          videoOnlyPath: path,
+          gopSize: gopFor(run.frames),
+          chunkedEncodeSize: run.frames,
+        });
+        const start = capture.frames[run.first]!;
+        capture.parts.push({ start, end: start + run.frames, path });
+        encoded += run.frames;
+        report();
+      }
+    }),
+  );
+}
+
 /** `renderSpan`'s chunk loop: captures what the browser must draw and returns every part in frame order. */
 export async function spanParts(
   slices: SpanSlice[],
@@ -41,20 +139,47 @@ export async function spanParts(
     index: number,
   ) => Promise<string>,
 ) {
-  const runs = spliced?.capture ?? [{ start: startFrame, end: endFrame }];
   const parts: { start: number; path: string }[] = [];
-  for (const run of runs)
-    for (const slice of slices) {
-      const range = {
-        startFrame: Math.max(slice.startFrame, startFrame, run.start),
-        endFrame: Math.min(slice.endFrame, endFrame, run.end),
-      };
-      if (range.endFrame <= range.startFrame) continue;
+  for (const slice of slices) {
+    const from = Math.max(slice.startFrame, startFrame);
+    const to = Math.min(slice.endFrame, endFrame);
+    if (to <= from) continue;
+    if (!spliced) {
       parts.push({
-        start: range.startFrame,
-        path: await capture(slice, range, parts.length),
+        start: from,
+        path: await capture(
+          slice,
+          { startFrame: from, endFrame: to },
+          parts.length,
+        ),
       });
+      continue;
     }
+    // Every run the browser draws in this slice, captured by one set of browsers.
+    const frames: number[] = [];
+    for (const run of spliced.capture)
+      for (
+        let frame = Math.max(from, run.start);
+        frame < Math.min(to, run.end);
+        frame++
+      )
+        frames.push(frame);
+    if (!frames.length) continue;
+    listed = { base: slice.startFrame, frames, parts: [] };
+    try {
+      await capture(
+        slice,
+        {
+          startFrame: slice.startFrame,
+          endFrame: slice.startFrame + frames.length,
+        },
+        parts.length,
+      );
+      parts.push(...listed.parts);
+    } finally {
+      listed = undefined;
+    }
+  }
   if (spliced) parts.push(...(await spliced.parts));
   return parts.sort((a, b) => a.start - b.start).map((part) => part.path);
 }
@@ -149,6 +274,7 @@ export function registerRenderIsolation(
   let producerLoaded = false;
   let captureLoaded = false;
   let extractorLoaded = false;
+  let coordinatorLoaded = !range?.range;
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
@@ -197,6 +323,24 @@ export function registerRenderIsolation(
         return { ...loaded, source };
       }
       if (
+        range?.range &&
+        url.endsWith(
+          "/@hyperframes/engine/dist/services/parallelCoordinator.js",
+        )
+      ) {
+        let source = `import { capturedFrame as cutroomCapturedFrame } from ${JSON.stringify(import.meta.url)};\n${String(loaded.source)}`;
+        // Parallel capture workers draw the listed frames too (see capturedFrame).
+        for (const indent of ["            ", "        "])
+          source = replaceOnce(
+            source,
+            `\n${indent}const time = (i * captureOptions.fps.den) / captureOptions.fps.num;`,
+            `\n${indent}const time = (cutroomCapturedFrame(i) * captureOptions.fps.den) / captureOptions.fps.num;`,
+            url,
+          );
+        coordinatorLoaded = true;
+        return { ...loaded, source };
+      }
+      if (
         !url.endsWith("/@hyperframes/producer/dist/index.js") &&
         !url.endsWith("/@hyperframes/engine/dist/services/frameCapture.js")
       )
@@ -222,7 +366,7 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress, spanParts as cutroomSpanParts } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -329,6 +473,43 @@ export function registerRenderIsolation(
     });`,
             url,
           );
+          // One chunk can capture every run: capture index k draws the k-th listed frame. Its
+          // video frames are extracted and placed for those frames, and each run encodes alone.
+          for (const capture of [
+            "const { encodeResult } = await captureFrameToBufferPipelined2(session, i, time);",
+            "await captureFrame(session, i, time);",
+          ])
+            source = replaceOnce(
+              source,
+              `      const time = absoluteIdx * job.config.fps.den / job.config.fps.num;\n      ${capture}`,
+              `      const time = cutroomCapturedFrame(absoluteIdx) * job.config.fps.den / job.config.fps.num;\n      ${capture}`,
+              url,
+            );
+          source = replaceOnce(
+            source,
+            "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => range.startFrame + i);",
+            "const chunkFrameNumbers = Array.from({ length: framesInChunk }, (_, i) => cutroomCapturedFrame(range.startFrame + i));",
+            url,
+          );
+          source = replaceOnce(
+            source,
+            "overlap.current = canEncodeWhileCapturing(encodeInput,",
+            "overlap.current = !cutroomCapturesList() && canEncodeWhileCapturing(encodeInput,",
+            url,
+          );
+          source = replaceOnce(
+            source,
+            "await (overlapped ? overlapped.finish() : runEncodeStage(encodeInput));",
+            "await (overlapped ? overlapped.finish() : cutroomEncodeCaptured(encodeInput, runEncodeStage, (frames) => chunkGopFrames(frames, encoder.keyframeIntervalFrames)));",
+            url,
+          );
+          // A listed capture writes its runs' parts instead of the chunk's one file.
+          source = replaceOnce(
+            source,
+            "const sha256 = hashChunkOutput(outputChunkPath, outputKind);",
+            'const sha256 = cutroomCapturesList() ? "" : hashChunkOutput(outputChunkPath, outputKind);',
+            url,
+          );
           source = replaceOnce(
             source,
             "    await writeStitchedMp4(parts, outputPath);",
@@ -415,7 +596,12 @@ export function registerRenderIsolation(
     },
   });
   return () => {
-    if (!producerLoaded || !captureLoaded || !extractorLoaded)
+    if (
+      !producerLoaded ||
+      !captureLoaded ||
+      !extractorLoaded ||
+      !coordinatorLoaded
+    )
       throw new Error(
         "The HyperFrames render isolation hooks did not load. Export was refused.",
       );

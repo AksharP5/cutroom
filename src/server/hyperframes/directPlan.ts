@@ -45,12 +45,6 @@ export type DirectPlan = z.infer<typeof DirectPlanSchema>;
 /** Why the export needs the browser, for the logs; never shown as an error. */
 type Refusal = { reason: string };
 
-/**
- * Each captured run starts its own capture browsers, and a start can stall (HyperFrames gives a
- * stuck page minutes). Beyond this many runs, capturing the whole export starts browsers once.
- */
-const MAX_CAPTURE_RUNS = 3;
-
 /** Cutroom's starter page loads GSAP, which does nothing until a script uses it. */
 const LIBRARY_SCRIPTS = new Set(["assets/vendor/gsap.min.js"]);
 
@@ -467,11 +461,6 @@ export function planDirectExport(
   }
   if (!segments.some((segment) => segment.kind === "source"))
     return { reason: reason ?? "no frame shows a plain video" };
-  const runs = segments.filter((segment) => segment.kind === "capture").length;
-  if (runs > MAX_CAPTURE_RUNS)
-    return {
-      reason: `${runs} runs of frames need the browser, first ${reason}`,
-    };
   return { width, height, durationFrames, frames, segments };
 }
 
