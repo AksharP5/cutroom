@@ -424,6 +424,44 @@ const Ruler = memo(function Ruler({
   );
 });
 
+const TRACK_SWITCHES = [
+  "locked",
+  "autoSelect",
+  "enabled",
+  "muted",
+  "solo",
+] as const satisfies readonly (keyof Track)[];
+/** How long a switch that changed stays lit, so a toggle made from the keyboard or a menu shows. */
+const FLASH_MS = 600;
+
+/**
+ * The switches whose setting just changed, as `index:setting`. A header shows its default-state
+ * buttons only while pointed at or focused, so a toggle from the menu would otherwise go unseen.
+ */
+function useSwitchFlash(rows: readonly Row[]) {
+  const previous = useRef(new Map<number, Track>());
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [flash, setFlash] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const changed = rows.flatMap(({ track }) => {
+      const before = previous.current.get(track.index);
+      return before
+        ? TRACK_SWITCHES.filter(
+            (setting) => before[setting] !== track[setting],
+          ).map((setting) => `${track.index}:${setting}`)
+        : [];
+    });
+    previous.current = new Map(rows.map(({ track }) => [track.index, track]));
+    if (!changed.length) return;
+    setFlash(new Set(changed));
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setFlash(new Set()), FLASH_MS);
+  }, [rows]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (track: Track, setting: (typeof TRACK_SWITCHES)[number]) =>
+    flash.has(`${track.index}:${setting}`) || undefined;
+}
+
 const TrackHeads = memo(function TrackHeads({
   rows,
   destinations,
@@ -447,6 +485,7 @@ const TrackHeads = memo(function TrackHeads({
   resize: ReturnType<typeof useTrackResize>;
   onHeight(row: Row, height: number): void;
 }) {
+  const flashing = useSwitchFlash(rows);
   return rows.map((row) => {
     const { track, id, top, height } = row;
     const name =
@@ -507,6 +546,7 @@ const TrackHeads = memo(function TrackHeads({
         <div className="tl-head-buttons">
           <button
             className={`tl-track-button${track.locked ? " exception" : ""}`}
+            data-flash={flashing(track, "locked")}
             aria-label={`Lock ${id}`}
             aria-pressed={track.locked}
             title={track.locked ? "Unlock track" : "Lock track"}
@@ -520,6 +560,7 @@ const TrackHeads = memo(function TrackHeads({
           </button>
           <button
             className={`tl-track-button${track.autoSelect ? "" : " exception"}`}
+            data-flash={flashing(track, "autoSelect")}
             aria-label={`Auto-select ${id}`}
             aria-pressed={track.autoSelect}
             title={
@@ -534,7 +575,8 @@ const TrackHeads = memo(function TrackHeads({
           </button>
           {track.kind === "video" ? (
             <button
-              className={`tl-track-button${track.enabled ? "" : " exception"}`}
+              className={`tl-track-button optional${track.enabled ? "" : " exception"}`}
+              data-flash={flashing(track, "enabled")}
               aria-label={`Enable ${id}`}
               aria-pressed={track.enabled}
               title={
@@ -551,7 +593,8 @@ const TrackHeads = memo(function TrackHeads({
           ) : (
             <>
               <button
-                className={`tl-track-button${track.muted ? " exception" : ""}`}
+                className={`tl-track-button optional${track.muted ? " exception" : ""}`}
+                data-flash={flashing(track, "muted")}
                 aria-label={`Mute ${id}`}
                 aria-pressed={track.muted}
                 title="Mute track"
@@ -560,7 +603,8 @@ const TrackHeads = memo(function TrackHeads({
                 M
               </button>
               <button
-                className={`tl-track-button${track.solo ? " exception" : ""}`}
+                className={`tl-track-button optional${track.solo ? " exception" : ""}`}
+                data-flash={flashing(track, "solo")}
                 aria-label={`Solo ${id}`}
                 aria-pressed={track.solo}
                 title="Solo track (also in export)"

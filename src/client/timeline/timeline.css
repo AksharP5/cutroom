@@ -460,6 +460,32 @@ input.tl-track-gain {
   background: var(--surface-active);
   color: var(--text-primary);
 }
+/*
+  At rest a header shows its id, name, gain, lock and auto-select, and any switch that is not as a
+  new track has it: disabled, muted, solo, armed. The rest, and the microphone, fade in while the
+  header is pointed at or holds focus. Opacity only, so nothing moves.
+*/
+@media (hover: hover) and (pointer: fine) {
+  .tl-head :is(.tl-track-button.optional, .vo-arm, .vo-input) {
+    transition: opacity var(--duration-hover) var(--ease-fade);
+  }
+  .tl-head:not(:hover, :focus-within)
+    :is(.tl-track-button.optional:not(.exception), .vo-arm:not(.armed)):not(
+      [data-flash]
+    ),
+  .tl-head:not(:hover, :focus-within, :has(.vo-arm.armed)) .vo-input {
+    opacity: 0;
+  }
+}
+/* A switch whose setting just changed lights for a moment, so a toggle from the keyboard shows. */
+.tl-track-button[data-flash]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--overlay-press);
+  pointer-events: none;
+}
 .tl-track-button:active {
   transform: scale(var(--press-scale));
 }

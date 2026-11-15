@@ -358,3 +358,64 @@ test("Normal and Tall keep the 132 px name row, meter and separate controls", as
     ).toBe(20);
   }
 });
+
+test("headers show state at rest, every switch on approach, and light a switch a menu toggled", async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request, {
+    density: "normal",
+    heights: {},
+  });
+  await page.goto(`/#project/${project.id}`);
+  const button = (name: string) =>
+    page.getByRole("button", { name, exact: true });
+  const opacity = (name: string) =>
+    button(name).evaluate((element) => getComputedStyle(element).opacity);
+  const away = async () => {
+    const viewer = (await page
+      .getByRole("region", { name: "Viewer" })
+      .boundingBox())!;
+    await page.mouse.move(viewer.x + 20, viewer.y + 20);
+  };
+  await expect(page.locator(".tl-head")).toHaveCount(8);
+  await away();
+
+  // At rest: lock and auto-select, never the switches still as a new track has them.
+  for (const name of ["Lock V1", "Auto-select V1", "Lock A1", "Auto-select A1"])
+    await expect.poll(() => opacity(name)).toBe("1");
+  for (const name of ["Enable V1", "Mute A1", "Solo A1", "Arm A1"])
+    await expect.poll(() => opacity(name)).toBe("0");
+
+  // Pointing at a header shows its whole row in place; focus inside it does too.
+  const a1 = page.getByRole("group", {
+    name: "A1: Dialogue and voiceover",
+    exact: true,
+  });
+  const lock = (await button("Lock A1").boundingBox())!;
+  await a1.hover({ position: { x: 60, y: 8 } });
+  await expect.poll(() => opacity("Mute A1")).toBe("1");
+  await expect.poll(() => opacity("Arm A1")).toBe("1");
+  expect(await button("Lock A1").boundingBox()).toEqual(lock);
+  await away();
+  await expect.poll(() => opacity("Mute A1")).toBe("0");
+  await a1.getByRole("textbox", { name: "Name A1", exact: true }).focus();
+  await expect.poll(() => opacity("Solo A1")).toBe("1");
+  await page.keyboard.press("Escape");
+
+  // A switch out of its default state stays in view.
+  await a1.hover({ position: { x: 60, y: 8 } });
+  await button("Mute A1").click();
+  await expect(button("Mute A1")).toHaveAttribute("aria-pressed", "true");
+  await away();
+  await expect.poll(() => opacity("Mute A1")).toBe("1");
+
+  // Turned back from the header's menu, it lights for a moment before it goes.
+  await a1.click({ button: "right", position: { x: 60, y: 8 } });
+  await page.getByRole("menuitemcheckbox", { name: "Mute" }).click();
+  await away();
+  await expect(button("Mute A1")).toHaveAttribute("aria-pressed", "false");
+  await expect(button("Mute A1")).toHaveAttribute("data-flash");
+  await expect(button("Mute A1")).not.toHaveAttribute("data-flash");
+  await expect.poll(() => opacity("Mute A1")).toBe("0");
+});
