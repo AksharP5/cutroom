@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import * as studio from "@hyperframes/studio-server";
 import { createStudioApi } from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { browserExecutable } from "../src/server/hyperframes/render";
+import { createThumbnailRenderer } from "../src/server/hyperframes/thumbnails";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
 import { createReviewService } from "../src/server/projects/review";
 import { createProjectStore } from "../src/server/projects/store";
@@ -58,11 +60,16 @@ async function captureFixture({ neverReady = false } = {}) {
   let rejectSetup = false;
   const sceneRequested = Promise.withResolvers<void>();
   const mcpSignals: (AbortSignal | null | undefined)[] = [];
+  let documentLoads = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 4961,
     idleTimeout: 120,
     async fetch(request) {
+      if (
+        /^\/api\/isolated\/[\w-]+\/preview$/.test(new URL(request.url).pathname)
+      )
+        documentLoads += 1;
       // A local asset can finish after load. Exercise the real runtime's buildReady
       // contract without replacing its player or seek implementation.
       if (new URL(request.url).pathname.endsWith("/scene.json")) {
@@ -88,6 +95,7 @@ async function captureFixture({ neverReady = false } = {}) {
     sceneRequested: sceneRequested.promise,
     mcpSignals,
     baseUrl: server.url.origin,
+    documentLoads: () => documentLoads,
     rejectSetup() {
       rejectSetup = true;
     },
@@ -401,4 +409,144 @@ test.skipIf(!browserExecutable())(
     }
   },
   30_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "a reused capture page matches fresh pages and never returns a previous frame or revision",
+  async () => {
+    const fixture = await captureFixture();
+    const renderer = createThumbnailRenderer();
+    try {
+      const isolated = await fetch(
+        `${fixture.baseUrl}/api/projects/${fixture.project.id}/isolated-preview?hf-capture=1`,
+        { redirect: "manual" },
+      );
+      const previewUrl = new URL(
+        z.string().parse(isolated.headers.get("location")),
+        fixture.baseUrl,
+      ).href;
+      const capture = (seekTime: number, url = previewUrl) =>
+        renderer.capture({
+          project: { id: fixture.project.id, dir: fixture.project.path },
+          compPath: "index.html",
+          seekTime,
+          width: 320,
+          height: 240,
+          outputWidth: 320,
+          outputHeight: 240,
+          previewUrl: url,
+          format: "jpeg",
+          signal: new AbortController().signal,
+        });
+      const times = [1.5, 0.5, 2.5, 1.5, 0.5];
+      const reused: Buffer[] = [];
+      for (const time of times)
+        reused.push(z.instanceof(Buffer).parse(await capture(time)));
+      expect(fixture.documentLoads()).toBe(1);
+      expect(
+        await Promise.all(reused.map((image) => frameColor(image))),
+      ).toEqual(["green", "red", "blue", "green", "red"]);
+      // A distinct URL forces a fresh page for every reference frame.
+      for (const [index, time] of times.entries())
+        expect(await capture(time, `${previewUrl}&fresh=${index}`)).toEqual(
+          reused[index],
+        );
+      expect(fixture.documentLoads()).toBe(1 + times.length);
+
+      // Concurrent captures each own a page and their own seek time.
+      const concurrent = await Promise.all(
+        [2.5, 0.5, 1.5, 2.5].map((time) => capture(time)),
+      );
+      expect(
+        await Promise.all(
+          concurrent.map((image) =>
+            frameColor(z.instanceof(Buffer).parse(image)),
+          ),
+        ),
+      ).toEqual(["blue", "red", "green", "blue"]);
+
+      const source = join(fixture.project.path, "index.html");
+      await writeFile(
+        source,
+        (await Bun.file(source).text()).replace(
+          'backgroundColor:"lime"',
+          'backgroundColor:"blue"',
+        ),
+      );
+      const loadsBeforeEdit = fixture.documentLoads();
+      expect(
+        await frameColor(z.instanceof(Buffer).parse(await capture(1.5))),
+      ).toBe("blue");
+      expect(fixture.documentLoads()).toBe(loadsBeforeEdit + 1);
+    } finally {
+      await renderer.close();
+      await fixture.close();
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "a page compiled while its source changed is not kept for the version it was stamped with",
+  async () => {
+    const fixture = await captureFixture();
+    const renderer = createThumbnailRenderer();
+    const signature = studio.createProjectSignatureAsync;
+    let afterSignature: (() => Promise<void>) | null = null;
+    const spy = spyOn(studio, "createProjectSignatureAsync").mockImplementation(
+      async (...args) => {
+        const result = await signature(...args);
+        const hook = afterSignature;
+        afterSignature = null;
+        await hook?.();
+        return result;
+      },
+    );
+    try {
+      const isolated = await fetch(
+        `${fixture.baseUrl}/api/projects/${fixture.project.id}/isolated-preview?hf-capture=1`,
+        { redirect: "manual" },
+      );
+      const previewUrl = new URL(
+        z.string().parse(isolated.headers.get("location")),
+        fixture.baseUrl,
+      ).href;
+      const capture = async () =>
+        frameColor(
+          z.instanceof(Buffer).parse(
+            await renderer.capture({
+              project: { id: fixture.project.id, dir: fixture.project.path },
+              compPath: "index.html",
+              seekTime: 1.5,
+              width: 320,
+              height: 240,
+              outputWidth: 320,
+              outputHeight: 240,
+              previewUrl,
+              format: "jpeg",
+              signal: new AbortController().signal,
+            }),
+          ),
+        );
+      const source = join(fixture.project.path, "index.html");
+      const original = await Bun.file(source).text();
+      // The route signs the original, then an edit lands before the compiler reads it.
+      afterSignature = () =>
+        writeFile(
+          source,
+          original.replace('backgroundColor:"lime"', 'backgroundColor:"blue"'),
+        );
+      expect(await capture()).toBe("blue");
+      // Undo restores the signed version. A kept page would match it by stamp and show the edit,
+      // so the next frame must load a new document.
+      await writeFile(source, original);
+      await capture();
+      expect(fixture.documentLoads()).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await renderer.close();
+      await fixture.close();
+    }
+  },
+  60_000,
 );
