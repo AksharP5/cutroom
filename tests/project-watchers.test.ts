@@ -111,3 +111,48 @@ test.skipIf(process.platform !== "linux")(
     }
   },
 );
+
+test.skipIf(process.platform !== "linux")(
+  "an outside write right after an editor write is the last change the preview hears",
+  async () => {
+    const f = await projectFixture();
+    // Hold the first announcement in review bookkeeping, so it is still pending when the
+    // outside write lands.
+    let hold = false;
+    const observeAssets = f.review.observeAssets.bind(f.review);
+    const review = Object.assign(Object.create(f.review), {
+      observeAssets: async (...args: Parameters<typeof observeAssets>) => {
+        if (hold) {
+          hold = false;
+          await Bun.sleep(250);
+        }
+        return observeAssets(...args);
+      },
+    });
+    const api = createHyperframesApi(f.store, review);
+    try {
+      const project = await f.store.create({ name: "Ordered writes" });
+      const path = join(project.path, "index.html");
+      const versions: (string | null)[] = [];
+      const stop = await api.subscribe(project.id, (change) => {
+        if (change.path === "index.html") versions.push(change.version);
+      });
+      const before = await readFile(path, "utf8");
+      const own = before.replace("</body>", "<p>own</p></body>");
+      hold = true;
+      await f.store.mutate(project, "Own write", async () =>
+        f.store.writeFiles(project, [
+          { sourceFile: "index.html", absPath: path, before, after: own },
+        ]),
+      );
+      const outside = before.replace("</body>", "<p>outside</p></body>");
+      await writeFile(path, outside);
+      await Bun.sleep(600);
+      expect(versions.at(-1)).toBe(fileContentVersion(outside));
+      stop();
+    } finally {
+      await api.dispose();
+      await f.close();
+    }
+  },
+);

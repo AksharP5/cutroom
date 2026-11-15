@@ -176,6 +176,11 @@ export function createHyperframesApi(
   let disposed = false;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const announced = new Map<string, string>();
+  /** Per file: reads started, the newest read announced, and the announcements in order. */
+  const reads = new Map<
+    string,
+    { started: number; announced: number; queue: Promise<void> }
+  >();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
@@ -360,23 +365,47 @@ export function createHyperframesApi(
         const key = `${project.id}\0${path}`;
         const absolute = join(project.dir, path);
         const read = async () => {
+          const order = reads.get(key) ?? {
+            started: 0,
+            announced: 0,
+            queue: Promise.resolve(),
+          };
+          reads.set(key, order);
+          const sequence = ++order.started;
           try {
             const info = await stat(absolute);
             if (!info.isFile() || info.size > 2_000_000)
-              return { version: null, content: undefined };
+              return { sequence, version: null, content: undefined };
             const bytes = await readFile(absolute);
             return {
+              sequence,
               version: fileContentVersion(bytes),
               content: /\.(html?|css|m?[jt]sx?|json|srt|vtt)$/i.test(path)
                 ? bytes.toString("utf8")
                 : undefined,
             };
           } catch (error) {
-            if (isMissing(error)) return { version: null, content: undefined };
+            if (isMissing(error))
+              return { sequence, version: null, content: undefined };
             throw error;
           }
         };
-        const announce = async ({
+        // Two reads of one file can overlap, and announcing waits on review bookkeeping, so
+        // announcements run one at a time and a read older than one already announced is dropped.
+        const announce = (file: Awaited<ReturnType<typeof read>>) => {
+          const order = reads.get(key);
+          // The last tab closed while this file was being read.
+          if (!order) return Promise.resolve();
+          const run = order.queue.then(() => {
+            if (file.sequence < order.announced) return;
+            order.announced = file.sequence;
+            return deliver(file);
+          });
+          // A failed announcement is reported by its caller and must not stop later ones.
+          order.queue = run.catch(() => {});
+          return run;
+        };
+        const deliver = async ({
           version,
           content,
         }: Awaited<ReturnType<typeof read>>) => {
@@ -1011,6 +1040,8 @@ export function createHyperframesApi(
         }
         for (const key of announced.keys())
           if (key.startsWith(`${projectId}\0`)) announced.delete(key);
+        for (const key of reads.keys())
+          if (key.startsWith(`${projectId}\0`)) reads.delete(key);
       };
       let watcher: ReturnType<typeof watch>;
       try {
