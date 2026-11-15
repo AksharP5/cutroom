@@ -478,7 +478,9 @@ export async function editTimeline(
             ? (command.clipIds ?? [])
             : "clipId" in command
               ? [command.clipId]
-              : [],
+              : command.type === "setTransition"
+                ? [command.from, command.to]
+                : [],
         ),
       ),
       creates,

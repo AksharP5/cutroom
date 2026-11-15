@@ -6,6 +6,8 @@ export interface Selection {
   ids: ReadonlySet<string>;
   /** The clip a Shift-click range starts from: the last clip clicked without Shift. */
   anchor: string | null;
+  /** A selected transition, named by the clip it leads into. It is selected alone. */
+  transition?: string;
 }
 export const emptySelection: Selection = { ids: new Set(), anchor: null };
 
@@ -165,6 +167,12 @@ export function pruneSelection(
   timeline: Timeline,
   current: Selection,
 ): Selection {
+  if (current.transition !== undefined)
+    return selectable(timeline).some(
+      (clip) => clip.id === current.transition && clip.transitionIn,
+    )
+      ? current
+      : emptySelection;
   const ids = new Set(
     selectable(timeline)
       .filter((clip) => current.ids.has(clip.id))

@@ -803,7 +803,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             `Transitions join video, image and audio clips, and ${clipName(clip)} is not one.`,
           );
       const { transition } = command;
-      const cuts = linkedCuts(clips, from, to);
+      const cuts: [Clip, Clip][] = command.linked
+        ? linkedCuts(clips, from, to)
+        : [[from, to]];
       if (transition)
         for (const [outgoing, incoming] of cuts) {
           const room = transitionRoom(
@@ -1696,14 +1698,15 @@ export function transitionRoom(
   return { frames: side.frames, reason: side.limit.reason() };
 }
 
-/** The longest transition that fits a cut and every linked cut beside it. */
+/** The longest transition that fits a cut and, when linked, every linked cut beside it. */
 export function cutRoom(
   timeline: Timeline,
   from: Clip,
   to: Clip,
   alignment: Transition["alignment"],
+  linked = true,
 ) {
-  return linkedCuts(timeline.clips, from, to)
+  return (linked ? linkedCuts(timeline.clips, from, to) : [[from, to]])
     .map(([outgoing, incoming]) =>
       transitionRoom(timeline.fps, outgoing, incoming, alignment),
     )

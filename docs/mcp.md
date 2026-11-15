@@ -157,7 +157,7 @@ A transition sits on a cut between two video, image or audio clips on one track.
 }
 ```
 
-`kind` is `dissolve` (the default) or `dip`, to black and back. `duration` is in frames. `alignment` is `center` (the default), `start`, which begins on the cut, or `end`, which finishes on it. `transition: null` removes it. Linked partners that meet at the same frame get the same transition, so a shot's sound crossfades with its picture. Sound always crossfades on equal-power curves, whatever the kind.
+`kind` is `dissolve` (the default) or `dip`, to black and back. `duration` is in frames. `alignment` is `center` (the default), `start`, which begins on the cut, or `end`, which finishes on it. `transition: null` removes it. Linked partners that meet at the same frame get the same transition, so a shot's sound crossfades with its picture; `linked: false` sets only the named cut. Sound always crossfades on equal-power curves, whatever the kind.
 
 Both clips keep their start and length at the cut in `timeline_read`; each carries the transition, as `transitionOut` on the first clip and `transitionIn` on the second. A transition plays the media past each clip's edit point: the outgoing clip needs frames after its out point and the incoming clip frames before its in point, half each for `center`. A length that does not fit is refused with `out_of_bounds`, naming the longest that does and what limits it, such as "Only 13 frames fit at this cut: talk.mp4 has 6 frames of media before its in point." Stills have no limit.
 

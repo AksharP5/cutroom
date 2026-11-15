@@ -383,6 +383,21 @@ export const keymap = {
     label: "Match frame in the source viewer",
     keys: ["F"],
   },
+  editAddTransition: {
+    area: "Edit",
+    label: "Add transition at the nearest cut",
+    keys: ["Ctrl+T"],
+  },
+  editAddVideoTransition: {
+    area: "Edit",
+    label: "Add video transition",
+    keys: ["Alt+T"],
+  },
+  editAddAudioTransition: {
+    area: "Edit",
+    label: "Add audio transition",
+    keys: ["Shift+T"],
+  },
   // Shift+T is "add audio-only transition" in the owner's Resolve preset, so a title takes Alt too.
   cutroomAddTitle: { area: "Edit", label: "Add title", keys: ["Alt+Shift+T"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
@@ -402,9 +417,6 @@ export const missing = {
   editSelectEditPoint: { label: "edit point selection", keys: ["V"] },
   editToggleEditPointType: { label: "edit point types", keys: ["U"] },
   trimToggleSlideMode: { label: "slip or slide", keys: ["S"] },
-  editAddTransition: { label: "transitions", keys: ["Ctrl+T"] },
-  editAddVideoTransition: { label: "video transitions", keys: ["Alt+T"] },
-  editAddAudioTransition: { label: "audio transitions", keys: ["Shift+T"] },
   clipFreezeFrame: { label: "freeze frames", keys: ["Shift+R"] },
 } satisfies Record<string, { label: string; keys: readonly string[] }>;
 
