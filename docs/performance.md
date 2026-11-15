@@ -187,6 +187,44 @@ Paired 500-clip screenshots freeze both animation clocks at 110 ms, then capture
 
 [Every session's median maximum and p95, raw frame samples, traces, capture method, and matching images](https://github.com/AksharP5/cutroom/tree/pr-assets/ripple-first-edit) are retained separately from the source branch. Reproduce with `CUTROOM_PERF_DIR=... bun run test:perf`; set `CUTROOM_PERF_TRACE=1 CUTROOM_PERF_RUNS=1` for the separate profiling pass.
 
+## Work counts
+
+Frame-time budgets measure what users feel, but on shared CI runners they need repeated runs and still fail when a runner is slow (see Zoom and ripple edits). `e2e/timeline-work-performance.spec.ts` gates the same hot gestures on how much work they cause instead, which depends on the code and not on the runner. The idea comes from Powermove's structural timeline tests; no code was taken.
+
+Each gesture runs once on the 500-clip `timelineWorkload` under a `devtools.timeline` trace. The counts are:
+
+- **Forced style and layout**: recalculations and layouts that run inside script, because script read style or geometry after changing the page. The browser would otherwise do that work once, when it draws. This is what a misplaced `getBoundingClientRect` or `offsetWidth` adds.
+- **Layouts** and **restyled elements** in the editor, from the trace's `Layout` and `UpdateLayoutTree` events for the editor's frame.
+- **React commits**, through a devtools hook installed before the editor loads.
+- **Clip-body redraws**: full clears or resizes of the `.tl-bodies` canvas.
+- **Forced style and layout in the preview**, the sandboxed frame that runs in its own renderer. Playback is counted per frame the preview drew, since its runtime plays on its own clock.
+
+Gestures are driven a fixed number of steps, each followed by animation frames, so counts follow inputs rather than time. Edits are measured until the viewer shows the new revision and the editor has had no commit or redraw for 30 frames. Restyled elements are not budgeted where an easing or slide decides how many frames run (key zoom and the edits).
+
+Measured on main `f736424`, November 15, 2026, Chromium 155 at 1720x1050: six unthrottled runs and runs with the editor's CPU throttled 4x and 6x. Every budget is the highest count seen plus a margin.
+
+| Gesture                     | Count                 |    Main | Budget | Deliberate regression                                              | With it |
+| --------------------------- | --------------------- | ------: | -----: | ------------------------------------------------------------------ | ------: |
+| Ctrl+wheel zoom, 16 steps   | Restyled elements     |   2,387 |  3,600 | `--ppf` inherited again                                            |  27,945 |
+| Ctrl+wheel zoom, 16 steps   | Forced style, layout  |      32 |     40 |                                                                    |         |
+| Scroll, 60 steps of 8 px    | Layouts               |       5 |     10 |                                                                    |         |
+| Key zoom, 6 eased steps     | Layouts               |      18 |     24 |                                                                    |         |
+| Drag a clip, 40 moves       | Forced style, layout  |       7 |     12 | Read the readout's `offsetWidth` after the per-move writes         |      64 |
+| Trim a clip's end, 40 moves | Forced style, layout  |     4-6 |     10 | Same                                                               |      52 |
+| Scrub the ruler, 40 moves   | Forced style, layout  |       0 |      4 | Read the playhead's bounds after writing its position, every frame |      82 |
+| Scrub the ruler, 40 moves   | React commits         |       2 |      4 | Render the timeline on every playhead frame                        |      42 |
+| Play 1x for 120 frames      | Forced style, layout  |    9-14 |     20 | Read the playhead's bounds after writing its position, every frame |     141 |
+| Play 1x for 120 frames      | React commits         |     2-8 |     15 | Render the timeline on every playhead frame                        |      81 |
+| Play 1x for 120 frames      | Preview forced, frame |   13-15 |     24 |                                                                    |         |
+| Ripple delete, undo, W      | React commits         |   24-34 |     45 |                                                                    |         |
+| Ripple delete, undo, W      | Preview forced        | 744-775 |    900 |                                                                    |         |
+
+The spec budgets every count for every gesture; the table shows the ones each regression tripped and a few others. All counts except clip-body redraws while scrolling (1 to 9, as filmstrip frames arrive) and the preview's work while scrubbing (1,028 to 1,493, as its seeks coalesce) were identical or within a few across runs and throttling, while frame counts for the same gestures varied up to threefold. The check takes about 40 seconds locally, most of it building the workload. Set `CUTROOM_WORK_THROTTLE=4` to see the counts hold under CPU throttling.
+
+Every edit forces about 750 style recalculations in the preview, one or two per clip, on every run. That is the current in-place edit path's cost on 480 media elements, and the budget holds it there.
+
+The frame-time budgets above and in Trim preview, Position preview and Track heights stay. They measure what a user sees, and some regressions (a slow style pass over the same elements) change time without changing any count. The counts catch the common regressions on any runner; the ceilings catch the rest when it is large. The noisiest timing assertion, Position's added late-frame rate during playback, already pairs with exact counts of observations and box reads per run, so it was left as it is.
+
 ## Trim preview
 
 The 400-clip roll check sends 540 pointer updates over 180 displayed frames per run, with all clips mounted at Fit. Each run must send more than ten seeks, send no more seeks than displayed frames, and keep at most one seek in flight. These assertions gate seek coalescing independently of runner speed.
