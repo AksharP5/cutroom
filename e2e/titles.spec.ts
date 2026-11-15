@@ -379,11 +379,17 @@ test("a title added over MCP keeps its entrance and exit on the clip through tri
 
 /** Around a 96 px lower-left title, relative so a scaled viewer screenshot measures the same area. */
 const TITLE_AREA = "crop=iw*760/1920:ih*200/1080:iw*60/1920:ih*820/1080";
+/** A band just under a lower-left title's box, which ends 10% above the bottom. */
+const BELOW_TITLE = "crop=iw*500/1920:ih*12/1080:iw*120/1920:ih*972/1080";
 /**
  * How far red and green stand above blue in the area around a 96 px lower-left title, 0 to 255.
  * White words and the grey background are neutral, so only a coloured stroke or shadow scores.
  */
-const tint = async (path: string, frames: number[] = [0]) => {
+const tint = async (
+  path: string,
+  frames: number[] = [0],
+  area = TITLE_AREA,
+) => {
   const { stdout } = await promisify(execFile)(
     "ffmpeg",
     [
@@ -392,7 +398,7 @@ const tint = async (path: string, frames: number[] = [0]) => {
       "-i",
       path,
       "-vf",
-      `select=${frames.map((frame) => `eq(n\\,${frame})`).join("+")},${TITLE_AREA},scale=1:1:flags=area,format=rgb24`,
+      `select=${frames.map((frame) => `eq(n\\,${frame})`).join("+")},${area},scale=1:1:flags=area,format=rgb24`,
       "-fps_mode",
       "passthrough",
       "-f",
@@ -424,7 +430,12 @@ test("a title's shadow and stroke draw in the viewer, the frame capture and the 
     const { edit } = editor(client, project.id);
     await edit([
       { type: "setTrack", index: 3, kind: "video" },
-      lowerThird({ size: 96, color: "#ffffff", plate: null }),
+      lowerThird({
+        size: 96,
+        color: "#ffffff",
+        plate: null,
+        in: { preset: "wipe", frames: 15 },
+      }),
     ]);
     await captured(request, project.id, 240, testInfo.outputPath("plain.png"));
     const [bare] = await tint(testInfo.outputPath("plain.png"));
@@ -473,6 +484,17 @@ test("a title's shadow and stroke draw in the viewer, the frame capture and the 
     const [capture] = await tint(testInfo.outputPath("styled.png"));
     expect(capture!.red).toBeGreaterThan(4);
     expect(capture!.green).toBeGreaterThan(4);
+    // While a Wipe runs, the shadow below the title's box (bottom 10%) still shows: it is not
+    // cut off at the box and then popped in when the Wipe ends.
+    await captured(request, project.id, 192, testInfo.outputPath("wipe.png"));
+    const [wiping, holding] = await Promise.all(
+      ["wipe.png", "styled.png"].map(
+        async (file) =>
+          (await tint(testInfo.outputPath(file), [0], BELOW_TITLE))[0]!,
+      ),
+    );
+    expect(holding!.green).toBeGreaterThan(4);
+    expect(wiping!.green).toBeGreaterThanOrEqual(holding!.green - 1);
     const started = result(
       z.object({ jobId: z.string() }),
       await client.callTool({
@@ -497,7 +519,14 @@ test("a title's shadow and stroke draw in the viewer, the frame capture and the 
       .toBe("complete");
     const [exported] = await tint((await status()).outputPath);
     await testInfo.attach("Tint", {
-      body: JSON.stringify({ bare, viewer, capture, exported }),
+      body: JSON.stringify({
+        bare,
+        viewer,
+        capture,
+        wiping,
+        holding,
+        exported,
+      }),
       contentType: "application/json",
     });
     expect(Math.abs(exported!.red - capture!.red)).toBeLessThanOrEqual(2);

@@ -159,13 +159,6 @@ test("shadow and stroke are attributes on the title that read back, change and c
     shadow: { color: "#000000b3", blur: 12 },
     stroke: { color: "#112233", width: 3 },
   });
-  // The stylesheet draws them, so preview and export render the same attributes.
-  expect(TITLE_STYLE).toContain(
-    "[data-title-shadow]{text-shadow:0 .06em attr(data-title-shadow-blur type(<length>),0px) attr(data-title-shadow type(<color>),#000)}",
-  );
-  expect(TITLE_STYLE).toContain(
-    "[data-title-stroke]{-webkit-text-stroke:calc(2*attr(data-title-stroke-width type(<length>),0px)) attr(data-title-stroke type(<color>),#000);paint-order:stroke fill}",
-  );
 
   const changed = edit(inserted, [
     {

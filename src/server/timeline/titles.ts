@@ -23,14 +23,17 @@ const TITLE_RULES = [
   "@keyframes cutroom-title-slide-out{from{transform:none}to{opacity:0;transform:translateY(var(--cutroom-title-travel))}}",
   "@keyframes cutroom-title-scale-in{from{opacity:0;transform:scale(.9)}to{transform:none}}",
   "@keyframes cutroom-title-scale-out{from{transform:none}to{opacity:0;transform:scale(.9)}}",
-  "@keyframes cutroom-title-wipe-in{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0)}}",
-  "@keyframes cutroom-title-wipe-out{from{clip-path:inset(0)}to{clip-path:inset(0 0 0 100%)}}",
+  // A wipe's edges reach past the box by the shadow and stroke, so neither is cut while it runs.
+  "@keyframes cutroom-title-wipe-in{from{clip-path:inset(var(--cutroom-title-reach) calc(100% - var(--cutroom-title-reach)) var(--cutroom-title-reach) var(--cutroom-title-reach))}to{clip-path:inset(var(--cutroom-title-reach))}}",
+  "@keyframes cutroom-title-wipe-out{from{clip-path:inset(var(--cutroom-title-reach))}to{clip-path:inset(var(--cutroom-title-reach) var(--cutroom-title-reach) var(--cutroom-title-reach) calc(100% - var(--cutroom-title-reach)))}}",
   `[${TITLE_ATTRIBUTE}]{` +
     "position:absolute;margin:0;width:fit-content;max-width:88%;line-height:1.15;" +
     "font-size:attr(data-title-size type(<length>),64px);" +
     "font-weight:attr(data-title-weight type(<number>),600);" +
     "color:attr(data-title-color type(<color>),#fff);" +
     "--cutroom-title-travel:.6em;" +
+    // Zero without a shadow or stroke, so a plain title's wipe clips to its box as it always has.
+    "--cutroom-title-reach:calc(-1*(var(--cutroom-title-shadow-reach,0px) + var(--cutroom-title-stroke-reach,0px)));" +
     "--cutroom-title-length:attr(data-duration type(<number>),0);" +
     "--cutroom-title-in:0;--cutroom-title-out:0;" +
     "--cutroom-title-in-name:none;--cutroom-title-out-name:none;" +
@@ -42,9 +45,9 @@ const TITLE_RULES = [
     "animation-fill-mode:backwards,forwards;" +
     "animation-timing-function:cubic-bezier(.16,1,.3,1),cubic-bezier(.7,0,.84,0)}",
   "[data-title-plate]{background:attr(data-title-plate type(<color>));padding:.35em .6em;border-radius:.1em}",
-  "[data-title-shadow]{text-shadow:0 .06em attr(data-title-shadow-blur type(<length>),0px) attr(data-title-shadow type(<color>),#000)}",
+  "[data-title-shadow]{text-shadow:0 .06em attr(data-title-shadow-blur type(<length>),0px) attr(data-title-shadow type(<color>),#000);--cutroom-title-shadow-reach:calc(attr(data-title-shadow-blur type(<length>),0px) + .06em)}",
   // The stroke is painted under the letters, so its outer half is the outline the user set.
-  "[data-title-stroke]{-webkit-text-stroke:calc(2*attr(data-title-stroke-width type(<length>),0px)) attr(data-title-stroke type(<color>),#000);paint-order:stroke fill}",
+  "[data-title-stroke]{-webkit-text-stroke:calc(2*attr(data-title-stroke-width type(<length>),0px)) attr(data-title-stroke type(<color>),#000);paint-order:stroke fill;--cutroom-title-stroke-reach:attr(data-title-stroke-width type(<length>),0px)}",
   '[data-title-align="center"]{text-align:center}',
   '[data-title-align="right"]{text-align:right}',
   '[data-title-position="lower-left"]{left:6%;bottom:10%}',
