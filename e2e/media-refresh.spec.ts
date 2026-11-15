@@ -94,13 +94,14 @@ async function waveHeight(page: Page) {
       .getBoundingClientRect();
     const box = canvas.getBoundingClientRect();
     const ratio = canvas.width / box.width;
+    // The waveform fills the lane under the clip's 2px rail.
     const pixels = canvas
       .getContext("2d")!
       .getImageData(
         (clip.left + 20 - box.left) * ratio,
-        (clip.bottom - 27 - box.top) * ratio,
+        (clip.top + 3 - box.top) * ratio,
         1,
-        26 * ratio,
+        (clip.height - 4) * ratio,
       ).data;
     let rows = 0;
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i]! > 128) rows++;
