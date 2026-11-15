@@ -65,6 +65,7 @@ import type { FrameRange, Row, RowSizes, TickStep } from "./math";
 import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import type { Tool } from "./gesture";
+import { TransitionMark } from "./TransitionMark";
 import { useLaneGestures } from "./lanes";
 import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
@@ -1238,6 +1239,32 @@ export function Timeline({
                         ({ clip, row }) =>
                           selection.ids.has(clip.id) && (
                             <ClipOutline key={clip.id} clip={clip} row={row} />
+                          ),
+                      )}
+                      {rowClips.map(
+                        ({ clip }) =>
+                          clip.transitionIn && (
+                            <TransitionMark
+                              key={`transition:${clip.id}`}
+                              timeline={timeline}
+                              clip={clip}
+                              transition={clip.transitionIn}
+                              selected={selection.transition === clip.id}
+                              frameAt={(x) =>
+                                viewport.current?.frameAtClient(x) ?? 0
+                              }
+                              onSelect={() =>
+                                onSelect({
+                                  ids: new Set(),
+                                  anchor: null,
+                                  transition: clip.id,
+                                })
+                              }
+                              onGesture={onGesture}
+                              onEdit={(command) =>
+                                onEdit("Transition length", [command])
+                              }
+                            />
                           ),
                       )}
                     </div>

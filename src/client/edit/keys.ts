@@ -1,5 +1,11 @@
 import { isAudioKind } from "../../shared/timeline/schema";
-import { clipEnd, frameTime, toFrames } from "../../shared/timeline/apply";
+import {
+  clipEnd,
+  cutRoom,
+  frameTime,
+  toFrames,
+} from "../../shared/timeline/apply";
+import { takesTransition } from "../../shared/timeline/transition";
 import { TimelineError } from "../../shared/timeline/errors";
 import type {
   Clip,
@@ -15,6 +21,8 @@ export interface EditTarget {
   selection: ReadonlySet<string>;
   /** The frame under the playhead. */
   frame: number;
+  /** A selected transition, named by the clip it leads into. */
+  transition?: string;
 }
 
 interface EditKey {
@@ -118,9 +126,34 @@ const razor = (timeline: Timeline, target: EditTarget): CommandInput[] => {
   ];
 };
 
+/** The clip that ends where `to` starts on its track: the other side of its cut. */
+const outgoing = (timeline: Timeline, to: Clip) =>
+  timeline.clips.find(
+    (clip) =>
+      clip.track === to.track &&
+      clipEnd(clip) === to.start &&
+      clip.id !== to.id &&
+      takesTransition(clip),
+  );
+
 const removeSelection =
   (ripple: boolean) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    // A selected transition is what Delete and Backspace remove.
+    if (target.transition !== undefined) {
+      const to = timeline.clips.find((clip) => clip.id === target.transition);
+      const from = to?.transitionIn && outgoing(timeline, to);
+      return to && from
+        ? [
+            {
+              type: "setTransition",
+              from: from.id,
+              to: to.id,
+              transition: null,
+            },
+          ]
+        : [];
+    }
     const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
     return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
   };
@@ -172,6 +205,77 @@ const moveTrack =
         mode: "place",
       }));
   };
+
+/**
+ * Ctrl+T, Alt+T and Shift+T: a one-second cross dissolve, centred on the cut nearest the playhead
+ * between two clips on unlocked auto-select tracks, or touching the selected clips when there are
+ * some. Ctrl+T takes a picture cut first and its linked sound with it; Alt+T only picture, Shift+T
+ * only sound. Where the media runs short it takes the longest that fits and says so.
+ */
+export function addTransition(
+  timeline: Timeline,
+  target: EditTarget,
+  scope: "both" | "video" | "audio",
+): { commands: CommandInput[]; note: string | null } {
+  const tracks = new Map(
+    timeline.tracks
+      .filter((track) => track.autoSelect && !track.locked)
+      .map((track) => [track.index, track]),
+  );
+  const cuts = timeline.clips.flatMap((to) => {
+    const track = tracks.get(to.track);
+    const from = track && takesTransition(to) && outgoing(timeline, to);
+    if (!track || !from) return [];
+    if (scope !== "both" && track.kind !== scope) return [];
+    if (
+      target.selection.size &&
+      !target.selection.has(from.id) &&
+      !target.selection.has(to.id)
+    )
+      return [];
+    return [{ from, to, video: track.kind === "video" }];
+  });
+  const [cut] = cuts.toSorted(
+    (a, b) =>
+      Math.abs(a.to.start - target.frame) -
+        Math.abs(b.to.start - target.frame) ||
+      Number(b.video) - Number(a.video) ||
+      a.to.track - b.to.track,
+  );
+  if (!cut)
+    throw new TimelineError(
+      "not_found",
+      `No cut between two ${scope === "audio" ? "sound clips" : scope === "video" ? "picture clips" : "clips"} to put a transition on${target.selection.size ? " at the selected clips" : ""}.`,
+    );
+  const linked = scope === "both";
+  const room = cutRoom(timeline, cut.from, cut.to, "center", linked);
+  if (room.frames < 1)
+    throw new TimelineError(
+      "out_of_bounds",
+      `No transition fits at this cut: ${room.reason}.`,
+    );
+  const second = toFrames(1, timeline.fps);
+  const duration = Math.min(second, room.frames);
+  return {
+    commands: [
+      {
+        type: "setTransition",
+        from: cut.from.id,
+        to: cut.to.id,
+        linked,
+        transition: {
+          kind: cut.to.transitionIn?.kind ?? "dissolve",
+          duration,
+          alignment: "center",
+        },
+      },
+    ],
+    note:
+      duration < second
+        ? `Shortened to ${duration} ${duration === 1 ? "frame" : "frames"}: ${room.reason}.`
+        : null,
+  };
+}
 
 /**
  * The source file and frame under the playhead, for match frame: from the selected clip under it,

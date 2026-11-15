@@ -14,7 +14,7 @@ import {
   shownTracks,
 } from "../../shared/timeline/tracks";
 import { addTitleCommands } from "../edit/addTitle";
-import { editKeys, trimmedPlayhead } from "../edit/keys";
+import { addTransition, editKeys, trimmedPlayhead } from "../edit/keys";
 import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
 import {
@@ -144,10 +144,8 @@ export function ProjectTimeline({
       () => {
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
-        const target = {
-          selection: useTimeline.getState().selection.ids,
-          frame: clock.frame(),
-        };
+        const { ids, transition } = useTimeline.getState().selection;
+        const target = { selection: ids, transition, frame: clock.frame() };
         let parked: number | null = null;
         let saved = () => {};
         void editTimeline(
@@ -201,6 +199,23 @@ export function ProjectTimeline({
         useTextEdit.setState({ clipId: id });
       },
     );
+  };
+  /** Adds the default transition at the nearest cut, saying so when the media made it shorter. */
+  const transitionKey = (scope: Parameters<typeof addTransition>[2]) => () => {
+    revealTimeline();
+    const target = {
+      selection: useTimeline.getState().selection.ids,
+      frame: clock.frame(),
+    };
+    let note: string | null = null;
+    void editTimeline(projectId, "Add transition", (current) => {
+      const added = addTransition(current, target, scope);
+      note = added.note;
+      return added.commands;
+    }).then((accepted) => {
+      if (accepted && note)
+        showToast(note, null, { tone: "info", transient: true });
+    });
   };
   const clipboard = (action: Parameters<typeof clipboardEdit>[1]) => {
     if (action !== "copy") revealTimeline();
@@ -277,6 +292,9 @@ export function ProjectTimeline({
     editAudioMoveTrackDestinationDown: () =>
       destinationKey("audio", (current) => current + 1),
     cutroomAddTitle: addTitle,
+    editAddTransition: transitionKey("both"),
+    editAddVideoTransition: transitionKey("video"),
+    editAddAudioTransition: transitionKey("audio"),
     editCopy: () => clipboard("copy"),
     editCut: () => clipboard("cut"),
     editPaste: () => clipboard("overwrite"),

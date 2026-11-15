@@ -630,9 +630,15 @@ export const CommandSchema = z.discriminatedUnion("type", [
         })
         .nullable()
         .describe("null removes the transition"),
+      linked: z
+        .boolean()
+        .default(true)
+        .describe(
+          "False sets only this cut, leaving linked partners' cuts as they are",
+        ),
     })
     .describe(
-      "Set or remove the transition on a cut between two video, image or audio clips. Linked partners meeting at the same cut get it too. The outgoing clip needs media past its out point and the incoming clip before its in point; a length that does not fit is refused with the longest that does. A transition owns its audio edge fades. Trims keep it on the cut and shorten it to fit; moving a clip away or deleting one removes it.",
+      "Set or remove the transition on a cut between two video, image or audio clips. Linked partners meeting at the same cut get it too, unless linked is false. The outgoing clip needs media past its out point and the incoming clip before its in point; a length that does not fit is refused with the longest that does. A transition owns its audio edge fades. Trims keep it on the cut and shorten it to fit; moving a clip away or deleting one removes it.",
     ),
   z
     .object({

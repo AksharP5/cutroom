@@ -25,6 +25,7 @@ import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
 import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
+import { TransitionSection } from "./TransitionSection";
 import { ValueField } from "./ValueField";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
@@ -415,6 +416,12 @@ export function Inspector({ projectId }: { projectId: string }) {
             </details>
           )}
         </div>
+      ) : selection.transition !== undefined && timeline ? (
+        <TransitionSection
+          projectId={projectId}
+          timeline={timeline}
+          incoming={selection.transition}
+        />
       ) : !clip || !timeline ? (
         <p className="inspector-empty">Select a clip to inspect it.</p>
       ) : (

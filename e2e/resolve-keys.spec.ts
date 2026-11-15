@@ -182,8 +182,8 @@ test("preset keys Cutroom lacks say so instead of nothing", async ({
   await expect(notice).toContainText(
     "Cutroom has no edit point selection yet (V).",
   );
-  await page.keyboard.press("Control+t");
+  await page.keyboard.press("Shift+r");
   await expect(notice).toContainText(
-    "Cutroom has no transitions yet (Ctrl+T).",
+    "Cutroom has no freeze frames yet (Shift+R).",
   );
 });

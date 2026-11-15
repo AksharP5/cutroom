@@ -868,6 +868,49 @@ input.tl-track-gain {
   pointer-events: none;
 }
 
+/* A transition over its cut, below the name strip: a dimmed box with the diagonal of a mix. Its
+   ends take a length drag. */
+.tl-transition {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100%);
+  min-width: 4px;
+  top: calc(var(--size-clip-name) + 1px);
+  bottom: 1px;
+  z-index: var(--z-clip-selected);
+  border: var(--stroke-hair) solid var(--line-strong);
+  border-radius: var(--radius-clip);
+  background:
+    linear-gradient(
+      to top right,
+      transparent calc(50% - 1px),
+      var(--line-strong) 50%,
+      transparent calc(50% + 1px)
+    ),
+    color-mix(in srgb, var(--surface-panel) 60%, transparent);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.tl-transition.selected {
+  border-color: var(--selection);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--selection);
+}
+.tl-transition::before,
+.tl-transition::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.tl-transition::before {
+  left: 0;
+}
+.tl-transition::after {
+  right: 0;
+}
+
 /* Clip gain and edge fades sit above the shared media canvas. */
 .tl {
   display: flex;

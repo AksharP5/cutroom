@@ -13,6 +13,7 @@ import {
   settingsOf,
   timelineContent,
 } from "../src/server/timeline/composition";
+import { addTransition, editKeys } from "../src/client/edit/keys";
 import { countingIds } from "./clip-ids";
 
 const mediaLengths = new Map([["talk.mp4", 20]]);
@@ -238,4 +239,48 @@ test("a transition's edge owns its fade, and transitions join only cuts between 
       },
     ]),
   ).toThrow("talk.mp4 does not end where talk.mp4 starts on the same track.");
+});
+
+test("Ctrl+T, Alt+T and Shift+T pick the nearest cut and shorten to fit with a reason; Delete removes a selected transition", () => {
+  const timeline = parse(shots).timeline;
+  const at = (frame: number, selection: string[] = []) => ({
+    selection: new Set(selection),
+    frame,
+  });
+  expect(addTransition(timeline, at(70), "both")).toEqual({
+    commands: [
+      {
+        type: "setTransition",
+        from: "a",
+        to: "b",
+        linked: true,
+        transition: { kind: "dissolve", duration: 30, alignment: "center" },
+      },
+    ],
+    note: null,
+  });
+  expect(addTransition(timeline, at(70), "audio").commands[0]).toMatchObject({
+    from: "sa",
+    to: "sb",
+    linked: false,
+  });
+  expect(() => addTransition(timeline, at(70, ["sa"]), "video")).toThrow(
+    "No cut between two picture clips to put a transition on at the selected clips.",
+  );
+  const short = parse(
+    shots.replace(
+      'id="b" src="talk.mp4" muted data-start="3" data-duration="3" data-media-start="4"',
+      'id="b" src="talk.mp4" muted data-start="3" data-duration="3" data-media-start="0.2"',
+    ),
+  ).timeline;
+  const shortened = addTransition(short, at(0), "both");
+  expect(shortened.note).toBe(
+    "Shortened to 13 frames: talk.mp4 has 6 frames of media before its in point.",
+  );
+  expect(
+    editKeys.editDelete.commands(parse(edit(shots, [dissolve(30)])).timeline, {
+      ...at(0),
+      transition: "b",
+    }),
+  ).toEqual([{ type: "setTransition", from: "a", to: "b", transition: null }]);
 });
