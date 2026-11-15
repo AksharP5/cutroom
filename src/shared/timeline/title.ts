@@ -15,6 +15,8 @@ export const defaultTitle = (fps: Fps): Title => ({
   color: "#ffffff",
   align: "left",
   plate: null,
+  shadow: null,
+  stroke: null,
   in: { preset: "fade", frames: framesOf(DEFAULT_IN_SECONDS, fps) },
   out: { preset: "fade", frames: framesOf(DEFAULT_OUT_SECONDS, fps) },
 });
@@ -41,8 +43,15 @@ export const sameTitle = (a: Title | null, b: Title | null) =>
   a === b ||
   (a !== null &&
     b !== null &&
-    (Object.keys(a) as (keyof Title)[]).every((key) =>
-      key === "in" || key === "out"
-        ? a[key].preset === b[key].preset && a[key].frames === b[key].frames
-        : a[key] === b[key],
-    ));
+    (Object.keys(a) as (keyof Title)[]).every((key) => {
+      const [x, y] = [a[key], b[key]];
+      // Settings with parts (motions, shadow, stroke) are flat objects of plain values.
+      return typeof x === "object" &&
+        x !== null &&
+        typeof y === "object" &&
+        y !== null
+        ? Object.entries(x).every(
+            ([part, value]) => Reflect.get(y, part) === value,
+          )
+        : x === y;
+    }));

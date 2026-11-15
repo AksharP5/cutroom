@@ -143,6 +143,34 @@ export const TitleSchema = z.object({
   plate: titleColor(8)
     .nullable()
     .describe("Background plate colour with alpha; null for no plate"),
+  shadow: z
+    .object({
+      color: titleColor(8),
+      blur: z
+        .number()
+        .int()
+        .min(0)
+        .max(200)
+        .describe("Blur radius in composition pixels"),
+    })
+    .nullable()
+    .describe(
+      "Drop shadow under the words, colour with alpha; null for none. Set as a whole object.",
+    ),
+  stroke: z
+    .object({
+      color: titleColor(6),
+      width: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .describe("Thickness outside the letters in composition pixels"),
+    })
+    .nullable()
+    .describe(
+      "Outline around the letters; null for none. Set as a whole object.",
+    ),
   in: titleMotion.describe("Entrance, anchored to the clip's first frame"),
   out: titleMotion.describe("Exit, ending on the clip's last frame"),
 });

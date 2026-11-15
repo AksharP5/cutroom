@@ -108,17 +108,19 @@ A title is words on screen with a preset entrance and exit: a lower third, a nam
 
 `mode`, `ids` and `clip.id` work as they do for media. A title goes on a video track. `clip.title` takes any of these, and fields left out take the default:
 
-| Field      | Values                                                                        | Default      |
-| ---------- | ----------------------------------------------------------------------------- | ------------ |
-| `position` | `lower-left`, `lower-center`, `lower-right`, `center`, `top`                  | `lower-left` |
-| `font`     | a family the project declares with `@font-face`, or `null`                    | `null`       |
-| `size`     | whole composition pixels, 8 to 2000                                           | `64`         |
-| `weight`   | `400`, `500`, `600`, `700`                                                    | `600`        |
-| `color`    | `#rrggbb`                                                                     | `#ffffff`    |
-| `align`    | `left`, `center`, `right`                                                     | `left`       |
-| `plate`    | `#rrggbbaa` background behind the words, or `null`                            | `null`       |
-| `in`       | `{ "preset": "none" \| "fade" \| "slide" \| "scale" \| "wipe", "frames": n }` | fade, 0.4 s  |
-| `out`      | the same                                                                      | fade, 0.3 s  |
+| Field      | Values                                                                                | Default      |
+| ---------- | ------------------------------------------------------------------------------------- | ------------ |
+| `position` | `lower-left`, `lower-center`, `lower-right`, `center`, `top`                          | `lower-left` |
+| `font`     | a family the project declares with `@font-face`, or `null`                            | `null`       |
+| `size`     | whole composition pixels, 8 to 2000                                                   | `64`         |
+| `weight`   | `400`, `500`, `600`, `700`                                                            | `600`        |
+| `color`    | `#rrggbb`                                                                             | `#ffffff`    |
+| `align`    | `left`, `center`, `right`                                                             | `left`       |
+| `plate`    | `#rrggbbaa` background behind the words, or `null`                                    | `null`       |
+| `shadow`   | `{ "color": "#rrggbbaa", "blur": 0 to 200 px }` under the words, or `null`            | `null`       |
+| `stroke`   | `{ "color": "#rrggbb", "width": 1 to 100 px }` outline outside the letters, or `null` | `null`       |
+| `in`       | `{ "preset": "none" \| "fade" \| "slide" \| "scale" \| "wipe", "frames": n }`         | fade, 0.4 s  |
+| `out`      | the same                                                                              | fade, 0.3 s  |
 
 The default size suits 1920x1080; pass a size for other compositions. `font: null` uses the composition's own font. A font no `@font-face` rule in the composition or `index.html` declares is refused with the declared families, because preview and export can resolve a system font to different faces. New projects declare Instrument Sans.
 
@@ -131,6 +133,8 @@ The default size suits 1920x1080; pass a size for other compositions. `font: nul
   "title": { "size": 72, "in": { "preset": "slide" } }
 }
 ```
+
+`shadow` and `stroke` are set whole: send both parts, or `null` to remove one. They let white words read over busy footage without a plate, for example `"title": { "stroke": { "color": "#000000", "width": 3 }, "shadow": { "color": "#000000b3", "blur": 12 } }`.
 
 `setClip.title` on a clip that is not a title is refused with `unsupported`. `x`, `y`, `opacity`, scale, rotation and crop work as on any visual clip; `x` and `y` offset the title from its `position`, and a Wipe replaces the crop while it runs.
 

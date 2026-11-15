@@ -237,6 +237,19 @@ export function editLabel(
                 : `Set title ${name} to ${value}${field === "size" ? " px" : ""}`,
             );
           }
+          const { shadow, stroke } = look;
+          if (shadow !== undefined)
+            parts.push(
+              shadow === null
+                ? `${pending ? "Remove" : "Removed"} title shadow`
+                : `Set title shadow to ${shadow.color}, ${shadow.blur} px blur`,
+            );
+          if (stroke !== undefined)
+            parts.push(
+              stroke === null
+                ? `${pending ? "Remove" : "Removed"} title stroke`
+                : `Set title stroke to ${stroke.color}, ${stroke.width} px`,
+            );
           for (const [name, motion] of [
             ["entrance", entrance],
             ["exit", exit],

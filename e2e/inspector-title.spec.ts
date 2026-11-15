@@ -143,6 +143,34 @@ test("each Title control changes the picture and is one undo step", async ({
   await change(type("Plate opacity", "100"));
   await expect(shown).toHaveCSS("background-color", "rgb(255, 255, 255)");
 
+  await change(() =>
+    inspector.getByRole("checkbox", { name: "Shadow" }).check(),
+  );
+  await expect(shown).toHaveCSS(
+    "text-shadow",
+    "rgba(0, 0, 0, 0.7) 0px 5.76px 12px",
+  );
+  await change(type("Blur", "20"));
+  await expect(shown).toHaveCSS(
+    "text-shadow",
+    "rgba(0, 0, 0, 0.7) 0px 5.76px 20px",
+  );
+  await change(() =>
+    inspector.getByRole("checkbox", { name: "Stroke" }).check(),
+  );
+  await expect(shown).toHaveCSS("-webkit-text-stroke-width", "6px");
+  await change(type("Stroke colour hex", "#3366ff"));
+  await expect(shown).toHaveCSS(
+    "-webkit-text-stroke-color",
+    "rgb(51, 102, 255)",
+  );
+  await change(type("Width", "5"));
+  await expect(shown).toHaveCSS("-webkit-text-stroke-width", "10px");
+  expect((await title())?.title).toMatchObject({
+    shadow: { color: "#000000b3", blur: 20 },
+    stroke: { color: "#3366ff", width: 5 },
+  });
+
   await change(choose("Font", "Default"));
   await expect(shown).not.toHaveAttribute("data-title-font");
   await change(choose("Font", "Instrument Sans"));
@@ -208,7 +236,7 @@ test("a title Cutroom cannot read shows why in place of its controls", async ({
   const inspector = await openTitle(page, project.id);
   const section = inspector.locator(".inspector-title");
   const controls = section.locator("input, button:not([role=option])");
-  await expect(controls).toHaveCount(14);
+  await expect(controls).toHaveCount(16);
 
   const file = join(project.path, "index.html");
   const source = await readFile(file, "utf8");

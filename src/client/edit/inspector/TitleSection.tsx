@@ -59,9 +59,20 @@ const ALIGN_LABELS: Record<Title["align"], string> = {
 };
 /** A plate switched on starts as the lower-third black the MCP examples use. */
 const DEFAULT_PLATE = "#000000b3";
+/** Shadow and stroke switched on start dark and soft enough to lift white words off footage. */
+const DEFAULT_SHADOW: NonNullable<Title["shadow"]> = {
+  color: "#000000b3",
+  blur: 12,
+};
+const DEFAULT_STROKE: NonNullable<Title["stroke"]> = {
+  color: "#000000",
+  width: 3,
+};
 const MAX_SIZE = 2000;
 const MIN_SIZE = 8;
 const MAX_MOTION_FRAMES = 100_000;
+const MAX_SHADOW_BLUR = 200;
+const MAX_STROKE_WIDTH = 100;
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -77,12 +88,14 @@ function DraftField({
   label,
   value,
   disabled,
+  className,
   parse,
   onCommit,
 }: {
   label: string;
   value: string;
   disabled: boolean;
+  className?: string;
   /** The canonical value, or throws with what to type instead. */
   parse(text: string): string;
   onCommit(value: string): void;
@@ -93,6 +106,7 @@ function DraftField({
     <input
       type="text"
       aria-label={label}
+      className={className}
       spellCheck={false}
       disabled={disabled}
       value={draft ?? value}
@@ -364,14 +378,99 @@ export function TitleSection({
               onKeyDown={(event) => event.stopPropagation()}
             />
             {title.plate !== null && (
-              <PlateFields
+              <AlphaColourFields
                 key={clip.id}
-                plate={title.plate}
+                label="Plate"
+                value={title.plate}
                 disabled={disabled}
                 onCommit={(plate) => edit({ plate })}
               />
             )}
           </Row>
+          <Row label="Shadow">
+            <input
+              type="checkbox"
+              aria-label="Shadow"
+              checked={title.shadow !== null}
+              disabled={disabled}
+              onChange={(event) =>
+                edit({ shadow: event.target.checked ? DEFAULT_SHADOW : null })
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+            {title.shadow !== null && (
+              <AlphaColourFields
+                key={clip.id}
+                label="Shadow"
+                value={title.shadow.color}
+                disabled={disabled}
+                onCommit={(color) =>
+                  title.shadow && edit({ shadow: { ...title.shadow, color } })
+                }
+              />
+            )}
+          </Row>
+          {title.shadow !== null && (
+            <ValueField
+              key={`${clip.id}:shadow-blur`}
+              label="Blur"
+              value={title.shadow.blur}
+              unit="pixels"
+              min={0}
+              max={MAX_SHADOW_BLUR}
+              fps={fps}
+              disabled={disabled}
+              tip="Shadow blur in composition pixels. Drag the label or use Up/Down. Shift for 10 pixels."
+              onCommit={(blur) => {
+                if (blur === null || !title.shadow) return;
+                const whole = Math.round(blur);
+                if (whole !== title.shadow.blur)
+                  edit({ shadow: { ...title.shadow, blur: whole } });
+              }}
+            />
+          )}
+          <Row label="Stroke">
+            <input
+              type="checkbox"
+              aria-label="Stroke"
+              checked={title.stroke !== null}
+              disabled={disabled}
+              onChange={(event) =>
+                edit({ stroke: event.target.checked ? DEFAULT_STROKE : null })
+              }
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+            {title.stroke !== null && (
+              <ColourFields
+                key={clip.id}
+                label="Stroke colour"
+                value={title.stroke.color}
+                disabled={disabled}
+                onCommit={(color) =>
+                  title.stroke && edit({ stroke: { ...title.stroke, color } })
+                }
+              />
+            )}
+          </Row>
+          {title.stroke !== null && (
+            <ValueField
+              key={`${clip.id}:stroke-width`}
+              label="Width"
+              value={title.stroke.width}
+              unit="pixels"
+              min={1}
+              max={MAX_STROKE_WIDTH}
+              fps={fps}
+              disabled={disabled}
+              tip="Stroke thickness outside the letters in composition pixels. Drag the label or use Up/Down. Shift for 10 pixels."
+              onCommit={(width) => {
+                if (width === null || !title.stroke) return;
+                const whole = Math.round(width);
+                if (whole !== title.stroke.width)
+                  edit({ stroke: { ...title.stroke, width: whole } });
+              }}
+            />
+          )}
           {(["in", "out"] as const).map((edge) => (
             <ValueField
               key={`${clip.id}:${edge}`}
@@ -404,35 +503,38 @@ export function TitleSection({
   );
 }
 
-/** A plate is one `#rrggbbaa` value: the colour and its opacity are edited apart. */
-function PlateFields({
-  plate,
+/** One `#rrggbbaa` value, such as a plate: the colour and its opacity are edited apart. */
+function AlphaColourFields({
+  label,
+  value,
   disabled,
   onCommit,
 }: {
-  plate: string;
+  label: string;
+  value: string;
   disabled: boolean;
-  onCommit(plate: string): void;
+  onCommit(value: string): void;
 }) {
-  const colour = plate.slice(0, 7);
-  const alpha = plate.slice(7);
+  const colour = value.slice(0, 7);
+  const alpha = value.slice(7);
   return (
     <>
       <ColourFields
-        label="Plate colour"
+        label={`${label} colour`}
         value={colour}
         disabled={disabled}
         onCommit={(next) => onCommit(`${next}${alpha}`)}
       />
       <DraftField
-        label="Plate opacity"
+        label={`${label} opacity`}
+        className="inspector-alpha"
         value={formatPercent(
           Math.round((Number.parseInt(alpha, 16) / 255) * 100) / 100,
         )}
         disabled={disabled}
         parse={(text) => {
           const opacity = parseField(text, "percent", { num: 1, den: 1 });
-          if (opacity > 1) throw new Error("Plate opacity stops at 100%.");
+          if (opacity > 1) throw new Error(`${label} opacity stops at 100%.`);
           return formatPercent(Math.round(opacity * 100) / 100);
         }}
         onCommit={(percent) =>

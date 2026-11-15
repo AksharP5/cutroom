@@ -377,6 +377,136 @@ test("a title added over MCP keeps its entrance and exit on the clip through tri
   }
 });
 
+/** Around a 96 px lower-left title, relative so a scaled viewer screenshot measures the same area. */
+const TITLE_AREA = "crop=iw*760/1920:ih*200/1080:iw*60/1920:ih*820/1080";
+/**
+ * How far red and green stand above blue in the area around a 96 px lower-left title, 0 to 255.
+ * White words and the grey background are neutral, so only a coloured stroke or shadow scores.
+ */
+const tint = async (path: string, frames: number[] = [0]) => {
+  const { stdout } = await promisify(execFile)(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      path,
+      "-vf",
+      `select=${frames.map((frame) => `eq(n\\,${frame})`).join("+")},${TITLE_AREA},scale=1:1:flags=area,format=rgb24`,
+      "-fps_mode",
+      "passthrough",
+      "-f",
+      "rawvideo",
+      "-",
+    ],
+    { encoding: "buffer" },
+  );
+  return frames.map((_, index) => {
+    const [r, g, b] = stdout.subarray(index * 3, index * 3 + 3);
+    return { red: r! - b!, green: g! - b! };
+  });
+};
+test("a title's shadow and stroke draw in the viewer, the frame capture and the export alike", async ({
+  page,
+  baseURL,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const client = await connect(baseURL!);
+  try {
+    const project = result(
+      ProjectSchema,
+      await client.callTool({
+        name: "project_create",
+        arguments: { name: "Title outline", duration: 12 },
+      }),
+    );
+    const { edit } = editor(client, project.id);
+    await edit([
+      { type: "setTrack", index: 3, kind: "video" },
+      lowerThird({ size: 96, color: "#ffffff", plate: null }),
+    ]);
+    await captured(request, project.id, 240, testInfo.outputPath("plain.png"));
+    const [bare] = await tint(testInfo.outputPath("plain.png"));
+    expect(bare).toEqual({ red: 0, green: 0 });
+
+    const styled = await edit([
+      {
+        type: "setClip",
+        clipId: "lower",
+        title: {
+          stroke: { color: "#ff0000", width: 4 },
+          shadow: { color: "#00ff00ff", blur: 30 },
+        },
+      },
+    ]);
+    expect(
+      styled.timeline.clips.find((clip) => clip.id === "lower")?.title,
+    ).toMatchObject({
+      stroke: { color: "#ff0000", width: 4 },
+      shadow: { color: "#00ff00ff", blur: 30 },
+    });
+
+    // The viewer draws them on the live title.
+    await page.goto(`/#project/${project.id}`);
+    const preview = page.frameLocator("iframe[data-live]");
+    await opacityAt(page, preview, "lower", 240, full);
+    const shown = preview.locator("#lower");
+    await expect(shown).toHaveCSS("-webkit-text-stroke-width", "8px");
+    await expect(shown).toHaveCSS(
+      "-webkit-text-stroke-color",
+      "rgb(255, 0, 0)",
+    );
+    await expect(shown).toHaveCSS(
+      "text-shadow",
+      "rgb(0, 255, 0) 0px 5.76px 30px",
+    );
+    await page
+      .locator("iframe[data-live]")
+      .screenshot({ path: testInfo.outputPath("viewer.png") });
+    const [viewer] = await tint(testInfo.outputPath("viewer.png"));
+    expect(viewer!.red).toBeGreaterThan(4);
+    expect(viewer!.green).toBeGreaterThan(4);
+
+    // The frame capture and a short export of the hold agree.
+    await captured(request, project.id, 240, testInfo.outputPath("styled.png"));
+    const [capture] = await tint(testInfo.outputPath("styled.png"));
+    expect(capture!.red).toBeGreaterThan(4);
+    expect(capture!.green).toBeGreaterThan(4);
+    const started = result(
+      z.object({ jobId: z.string() }),
+      await client.callTool({
+        name: "export_start",
+        arguments: {
+          projectId: project.id,
+          range: { start: 240, end: 243 },
+          quality: "high",
+        },
+      }),
+    );
+    const status = async () =>
+      result(
+        ExportJobSchema,
+        await client.callTool({ name: "export_status", arguments: started }),
+      );
+    await expect
+      .poll(async () => (await status()).status, {
+        timeout: 90_000,
+        intervals: [250, 500],
+      })
+      .toBe("complete");
+    const [exported] = await tint((await status()).outputPath);
+    await testInfo.attach("Tint", {
+      body: JSON.stringify({ bare, viewer, capture, exported }),
+      contentType: "application/json",
+    });
+    expect(Math.abs(exported!.red - capture!.red)).toBeLessThanOrEqual(2);
+    expect(Math.abs(exported!.green - capture!.green)).toBeLessThanOrEqual(2);
+  } finally {
+    await client.close();
+  }
+});
+
 test("a title's entrance plays in step with the playhead at 1x", async ({
   page,
   baseURL,
