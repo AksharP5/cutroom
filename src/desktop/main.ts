@@ -13,8 +13,14 @@ import {
 } from "./runtime";
 
 app.setName("Cutroom");
-if (process.platform === "linux")
+if (process.platform === "linux") {
   app.setDesktopName("io.github.AksharP5.Cutroom.desktop");
+  // By default Chromium copies software-decoded video into native GPU buffers. On NVIDIA
+  // (driver 615, Wayland) those frames draw with the BT.601 matrix whatever the video is
+  // tagged, so BT.709 footage was up to 22/255 off. Plain texture uploads keep the tagged
+  // matrix and measured no playback cost; see scripts/desktop-colour.ts.
+  app.commandLine.appendSwitch("disable-gpu-memory-buffer-video-frames");
+}
 const dataDir = resolve(
   process.env.CUTROOM_DATA_DIR || join(homedir(), ".local", "share", "cutroom"),
 );

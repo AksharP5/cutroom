@@ -4,6 +4,8 @@ Cutroom has one local server and a React workspace. The Electron application is 
 
 The desktop's owned backend also stops when its parent IPC channel closes, including after a forced desktop quit. An existing server that the desktop connects to keeps its independent lifetime.
 
+On Linux the desktop starts Chromium with `--disable-gpu-memory-buffer-video-frames`. Without it, Chromium copies software-decoded video into native GPU buffers, and on an NVIDIA GPU under Wayland those draw every BT.709 video with the BT.601 matrix, up to 22/255 off. Ordinary texture uploads keep the video's tagged colours, and 1080p playback measured the same frame pacing with slightly less CPU. CI has no GPU, so `bun scripts/desktop-colour.ts` checks the desktop viewer locally: it opens a private Cutroom window, plays tagged BT.709 and BT.601 bars, and fails when a paused or playing picture moves more than 6/255 from Chromium's colour-managed reference. Run it after an Electron upgrade or a change to the desktop's Chromium switches.
+
 ## Project ownership
 
 Projects remain ordinary HyperFrames folders. The application registry records their paths, while `cutroom.json` stores annotations and original word-timed transcripts. Review status lives in `.cutroom/review.json`, outside project history. `src/shared/review.ts` defines the one transition table that the UI routes, MCP tools, and agent turn lifecycle all pass through, and `src/server/projects/review.ts` runs every review change, plus the note deletes, edits, undo, redo, and restore that could race one, in a single queue per project. One reconcile step there derives status from the live notes and review.json and saves it, before every read and around every history change. Source media is never rewritten by script cuts.
