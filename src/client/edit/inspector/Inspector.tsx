@@ -28,6 +28,7 @@ import type { TimingField } from "./fields";
 import { ValueField } from "./ValueField";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
+import { TransformFields } from "./TransformFields";
 import { groupedChanges, pendingEdit, shownChanges } from "./changes";
 import { transport } from "../transport";
 import {
@@ -226,8 +227,18 @@ export function Inspector({ projectId }: { projectId: string }) {
     observePosition(
       clip && !isAudioKind(clip.kind) ? clip.id : null,
       clip?.sourceRestrictions?.text ? null : (clip?.text ?? null),
+      clip ?? null,
     );
-  }, [projectId, clip?.id, clip?.text, clip?.sourceRestrictions?.text]);
+  }, [
+    projectId,
+    clip?.id,
+    clip?.text,
+    clip?.sourceRestrictions?.text,
+    clip?.scaleX,
+    clip?.scaleY,
+    clip?.rotation,
+    JSON.stringify(clip?.crop),
+  ]);
   useEffect(() => () => observePosition(null), [projectId]);
   const textEdit = useTextEdit((state) => state.clipId);
   useEffect(() => {
@@ -478,11 +489,28 @@ export function Inspector({ projectId }: { projectId: string }) {
                 fps={timeline.fps}
                 disabled={track?.track.locked}
               />
+              {clip.sourceRestrictions?.transform ? (
+                <p className="inspector-reason">
+                  {clip.sourceRestrictions.transform}
+                </p>
+              ) : (
+                <TransformFields
+                  key={clip.id}
+                  projectId={projectId}
+                  clip={clip}
+                  fps={timeline.fps}
+                  disabled={track?.track.locked}
+                />
+              )}
               {warningFrame !== null && (
                 <p className="inspector-warning" role="status">
                   <Warning size={14} aria-hidden />
                   <span>
-                    This clip's animation overrides Position at{" "}
+                    This clip's animation overrides{" "}
+                    {new Intl.ListFormat("en").format(
+                      positionWarning!.properties,
+                    )}{" "}
+                    at{" "}
                     <button
                       type="button"
                       title="Seek to this frame"
@@ -496,13 +524,25 @@ export function Inspector({ projectId }: { projectId: string }) {
               )}
               <button
                 type="button"
-                aria-label="Reset position"
+                aria-label="Reset transform"
                 disabled={
-                  (clip.x === null && clip.y === null) || track?.track.locked
+                  [clip.x, clip.y, clip.scaleX, clip.rotation, clip.crop].every(
+                    (value) => value === null,
+                  ) || track?.track.locked
                 }
                 onClick={() => {
-                  void editTimeline(projectId, "Reset position", () => [
-                    { type: "setClip", clipId: clip.id, x: null, y: null },
+                  void editTimeline(projectId, "Reset transform", () => [
+                    {
+                      type: "setClip",
+                      clipId: clip.id,
+                      x: null,
+                      y: null,
+                      ...(!clip.sourceRestrictions?.transform && {
+                        scale: null,
+                        rotation: null,
+                        crop: null,
+                      }),
+                    },
                   ]);
                 }}
               >

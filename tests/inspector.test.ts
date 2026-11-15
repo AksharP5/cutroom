@@ -494,6 +494,18 @@ test("edit labels describe the commands with past tense and the actual values", 
   expect(label([{ type: "setClip", clipId: "title", opacity: null }])).toBe(
     "Set opacity to Auto",
   );
+  expect(label([{ type: "setClip", clipId: "title", scale: 1.1 }])).toBe(
+    "Set scale to 110%",
+  );
+  expect(label([{ type: "setClip", clipId: "title", scaleY: 0.9 }])).toBe(
+    "Set scale Y to 90%",
+  );
+  expect(
+    label([{ type: "setClip", clipId: "title", scale: null, rotation: 0 }]),
+  ).toBe("Reset scale; Reset rotation");
+  expect(
+    label([{ type: "setClip", clipId: "title", crop: { left: 120, top: 8 } }]),
+  ).toBe("Set crop left to 120 px, top to 8 px");
   expect(
     label([
       {

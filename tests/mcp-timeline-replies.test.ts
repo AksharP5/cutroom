@@ -166,3 +166,47 @@ test("timeline_read narrows to a frame range and tracks, and holds the edit ledg
     await mcp.close();
   }
 });
+
+test("setClip scale, rotation and crop answer as changed fields and read back as the clip's transform", async () => {
+  const mcp = await connect();
+  try {
+    const before = await mcp.read();
+    const edit = z
+      .object({
+        changes: z.object({
+          clips: z.object({
+            changed: z.array(z.record(z.string(), z.unknown())),
+          }),
+        }),
+      })
+      .parse(
+        await mcp.result("timeline_edit", {
+          expectedRevision: before.revision,
+          commands: [
+            {
+              type: "setClip",
+              clipId: "caption",
+              scale: 1.1,
+              rotation: 90,
+              crop: { left: 40 },
+            },
+          ],
+        }),
+      );
+    const transform = {
+      scaleX: 1.1,
+      scaleY: 1.1,
+      rotation: 90,
+      crop: { top: 0, right: 0, bottom: 0, left: 40 },
+    };
+    expect(edit.changes.clips.changed).toEqual([
+      { id: "caption", ...transform },
+    ]);
+    const caption = (await mcp.read()).timeline.clips.find(
+      (clip) => clip.id === "caption",
+    );
+    expect(caption).toMatchObject(transform);
+  } finally {
+    await mcp.close();
+  }
+});

@@ -95,7 +95,10 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
     const overrides: number[] = [];
     Object.assign(window, { positionOverrides: overrides });
     addEventListener("message", (event) => {
-      if (event.data?.type === "position-warning" && event.data.overridden)
+      if (
+        event.data?.type === "position-warning" &&
+        event.data.overridden.length
+      )
         overrides.push(event.data.time);
     });
   });
@@ -155,7 +158,7 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
   await undo();
   await expect(field("Position X")).toHaveValue("-12.5 px");
   await painted(() =>
-    inspector.getByRole("button", { name: "Reset position" }).click(),
+    inspector.getByRole("button", { name: "Reset transform" }).click(),
   );
   await expect(field("Position X")).toHaveValue("0 px");
   await expect
@@ -280,10 +283,6 @@ test("Position fields and MCP retain media offsets and GSAP motion in export wit
     );
     await page.locator('[data-clip="title"]').click();
     await expect(field("Position X")).toHaveValue("40 px");
-    await expect(inspector.getByText("Scale", { exact: true })).toHaveCount(0);
-    await expect(inspector.getByText("Rotation", { exact: true })).toHaveCount(
-      0,
-    );
     // Play from within the x/y animation while retaining the offset.
     await seek(3, 40);
     await page

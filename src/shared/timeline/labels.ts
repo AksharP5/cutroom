@@ -138,7 +138,14 @@ export function editLabel(
       }
       case "setClip": {
         const parts: string[] = [];
-        if (command.x === null && command.y === null)
+        const reset =
+          command.x === null &&
+          command.y === null &&
+          command.scale === null &&
+          command.rotation === null &&
+          command.crop === null;
+        if (reset) parts.push("Reset transform");
+        else if (command.x === null && command.y === null)
           parts.push("Reset position");
         else
           for (const axis of ["x", "y"] as const) {
@@ -156,6 +163,49 @@ export function editLabel(
                 `${pending ? "Move" : "Moved"} ${Math.abs(delta)} px ${axis === "x" ? (delta > 0 ? "right" : "left") : delta > 0 ? "down" : "up"}`,
               );
           }
+        const scale = [
+          command.scaleX ?? command.scale,
+          command.scaleY ?? command.scale,
+        ];
+        if (
+          !reset &&
+          (command.scale !== undefined ||
+            command.scaleX !== undefined ||
+            command.scaleY !== undefined)
+        )
+          parts.push(
+            scale.every((value) => value === null || value === 1)
+              ? "Reset scale"
+              : command.scale !== undefined && scale[0] === scale[1]
+                ? `Set scale to ${formatPercent(command.scale ?? 1)}`
+                : (["X", "Y"] as const)
+                    .flatMap((axis, index) =>
+                      scale[index] === undefined
+                        ? []
+                        : [
+                            `Set scale ${axis} to ${formatPercent(scale[index] ?? 1)}`,
+                          ],
+                    )
+                    .join("; "),
+          );
+        if (!reset && command.rotation !== undefined)
+          parts.push(
+            command.rotation
+              ? `Set rotation to ${command.rotation}°`
+              : "Reset rotation",
+          );
+        if (!reset && command.crop !== undefined)
+          parts.push(
+            command.crop === null
+              ? "Reset crop"
+              : `Set crop ${(["left", "right", "top", "bottom"] as const)
+                  .flatMap((edge) =>
+                    command.crop?.[edge] === undefined
+                      ? []
+                      : [`${edge} to ${command.crop[edge]} px`],
+                  )
+                  .join(", ")}`,
+          );
         if (command.text !== undefined) {
           const words = command.text.replaceAll("\n", " ");
           parts.push(

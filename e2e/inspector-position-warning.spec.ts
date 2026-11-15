@@ -152,7 +152,7 @@ test("ancestor scale, rotation and clip zoom warn without blocking edits; the cl
       "overrides Position",
     );
     await expect(positionField(page)).toBeEnabled();
-    await inspector.getByRole("button", { name: "Reset position" }).click();
+    await inspector.getByRole("button", { name: "Reset transform" }).click();
     await expect(positionField(page)).toHaveValue("0 px");
     await expect(inspector.getByRole("status")).toHaveCount(0);
   }
@@ -169,7 +169,8 @@ test("ancestor scale, rotation and clip zoom warn without blocking edits; the cl
         "clipId" in data &&
         "overridden" in data
       )
-        verdicts[String(data.clipId)] = Boolean(data.overridden);
+        verdicts[String(data.clipId)] =
+          Array.isArray(data.overridden) && data.overridden.length > 0;
     });
   });
   for (const { id } of holding) {

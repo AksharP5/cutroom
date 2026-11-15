@@ -841,6 +841,61 @@ test("position captures both native baselines and clearing one axis keeps the ot
   ).toMatchObject({ x: 12.25, y: -10 });
 });
 
+test("scale, rotation and crop are inline longhands beside authored styles, and the identity removes them", () => {
+  const html = composition(
+    '<video id="shot" src="shot.mp4" style="object-fit: cover; transform: translateX(4px)" data-start="0" data-duration="2" data-x="10" data-hf-edit-base-x="0" data-y="0" data-hf-edit-base-y="0"></video>',
+  );
+  const punched = edit(html, [
+    { type: "setClip", clipId: "shot", scale: 1.1, rotation: -2.5 },
+    { type: "setClip", clipId: "shot", crop: { left: 120, top: 8 } },
+  ]);
+  // Position stays in its native attributes and the authored transform composes after the longhands.
+  expect(punched).toContain(
+    'style="object-fit: cover; transform: translateX(4px); scale: 1.1; rotate: -2.5deg; clip-path: inset(8px 0px 0px 120px)" data-start="0" data-duration="2" data-x="10"',
+  );
+  const shot = () =>
+    parseComposition(punched, emptyTimelineSettings()).timeline.clips[0];
+  expect(shot()).toMatchObject({
+    x: 10,
+    scaleX: 1.1,
+    scaleY: 1.1,
+    rotation: -2.5,
+    crop: { top: 8, right: 0, bottom: 0, left: 120 },
+  });
+  // One axis keeps the other; a partial crop keeps the other edges.
+  const stretched = edit(punched, [
+    { type: "setClip", clipId: "shot", scaleY: 0.9, crop: { left: 0 } },
+  ]);
+  expect(stretched).toContain("scale: 1.1 0.9;");
+  expect(stretched).toContain("clip-path: inset(8px 0px 0px 0px)");
+  expect(
+    edit(stretched, [
+      {
+        type: "setClip",
+        clipId: "shot",
+        scale: null,
+        rotation: 0,
+        crop: { top: 0 },
+      },
+    ]),
+  ).toBe(html);
+});
+
+test("an inline transform Cutroom cannot read is kept through other edits and refuses its own", () => {
+  const html = composition(
+    '<div id="spun" style="rotate: var(--spin); opacity: 0.5" data-start="0" data-duration="2">Hi</div>',
+  );
+  const { clips } = parseComposition(html, emptyTimelineSettings()).timeline;
+  expect(clips[0]).toMatchObject({ rotation: null, opacity: 0.5 });
+  expect(clips[0]!.sourceRestrictions?.transform).toContain("rotation");
+  expect(
+    edit(html, [{ type: "setClip", clipId: "spun", opacity: 1 }]),
+  ).toContain('style="rotate: var(--spin); opacity: 1"');
+  expect(() =>
+    edit(html, [{ type: "setClip", clipId: "spun", scale: 2 }]),
+  ).toThrow("Cutroom can't edit this clip's inline rotation");
+});
+
 test("a text edit replaces only the words, escaping them and writing line breaks as <br>", () => {
   const html = composition(
     `<h1 id="title" class="clip" data-start="0" data-duration="2">\n    Ada &amp; Park,\n    Editor\n  </h1>\n<video id="shot" src="shot.mp4" data-start="0" data-duration="2"></video>`,

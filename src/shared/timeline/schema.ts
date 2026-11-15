@@ -34,6 +34,22 @@ const position = z
     "Additive offset in composition CSS pixels, not a coordinate; null or zero clears it",
   );
 
+/** Canonical at the given decimals, which survive the CSS parser's 32-bit floats exactly. */
+const canonical = (decimals: number) => (value: number) =>
+  Number(value.toFixed(decimals)) + 0;
+/** A static inline `scale` axis: 1 is the clip's own size. */
+const scale = z.number().min(0.01).max(100).overwrite(canonical(4));
+/** A static inline `rotate` in degrees, clockwise. */
+const rotation = z.number().min(-3600).max(3600).overwrite(canonical(2));
+/** Pixels trimmed from one edge of the clip's own box, before scale and rotation. */
+const cropEdge = z.number().min(0).max(20000).overwrite(canonical(2));
+export const CropSchema = z.object({
+  top: cropEdge,
+  right: cropEdge,
+  bottom: cropEdge,
+  left: cropEdge,
+});
+
 /**
  * Plain clip text: explicit breaks and preserved source line breaks use `\n`,
  * whitespace runs collapse to one space, and each line is trimmed. No-break spaces are content.
@@ -169,6 +185,22 @@ export const ClipSchema = z.object({
   opacity: opacity.nullable(),
   x: position.default(null),
   y: position.default(null),
+  scaleX: scale
+    .nullable()
+    .default(null)
+    .describe(
+      "Static scale, 1 = the clip's own size; null with scaleY when unset",
+    ),
+  scaleY: scale.nullable().default(null),
+  rotation: rotation
+    .nullable()
+    .default(null)
+    .describe("Static clockwise rotation in degrees about the clip's centre"),
+  crop: CropSchema.nullable()
+    .default(null)
+    .describe(
+      "Pixels cut from each edge of the clip's own box. It does not change layout",
+    ),
   text: z
     .string()
     .nullable()
@@ -211,6 +243,7 @@ export const ClipSchema = z.object({
       remove: z.string().optional(),
       text: z.string().optional(),
       title: z.string().optional(),
+      transform: z.string().optional(),
     })
     .optional(),
 });
@@ -494,6 +527,22 @@ export const CommandSchema = z.discriminatedUnion("type", [
       opacity: opacity.nullable().optional(),
       x: position.optional(),
       y: position.optional(),
+      scale: scale
+        .nullable()
+        .optional()
+        .describe("Both scale axes; 1 or null resets"),
+      scaleX: scale.nullable().optional(),
+      scaleY: scale.nullable().optional(),
+      rotation: rotation
+        .nullable()
+        .optional()
+        .describe("Degrees clockwise; 0 or null resets"),
+      crop: CropSchema.partial()
+        .nullable()
+        .optional()
+        .describe(
+          "Pixels per edge; omitted edges keep their values, null clears",
+        ),
       text: titleText
         .optional()
         .describe(

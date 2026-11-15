@@ -12,6 +12,7 @@ import { cutTitle, defaultTitle, editTitle } from "./title";
 import { TimelineError } from "./errors";
 import { windowMix } from "./mix";
 import { newTrack, nextTrackIndex } from "./tracks";
+import { editTransform, hasTransformEdit } from "./transform";
 
 export { TimelineError } from "./errors";
 export type { TimelineErrorCode } from "./errors";
@@ -567,6 +568,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               opacity: null,
               x: null,
               y: null,
+              scaleX: null,
+              scaleY: null,
+              rotation: null,
+              crop: null,
               text: input.text,
               title: editTitle(defaultTitle(fps), input.title),
               fadeIn: 0,
@@ -604,6 +609,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         opacity: null,
         x: null,
         y: null,
+        scaleX: null,
+        scaleY: null,
+        rotation: null,
+        crop: null,
         text: null,
         title: null,
         fadeIn: 0,
@@ -799,11 +808,20 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "setClip": {
       const target = find(command.clipId);
+      const transform = hasTransformEdit(command);
       if (
         isAudioKind(target.kind) &&
-        (command.x !== undefined || command.y !== undefined)
+        (command.x !== undefined || command.y !== undefined || transform)
       )
-        throw new TimelineError("unsupported", "Audio clips have no position.");
+        throw new TimelineError(
+          "unsupported",
+          `Audio clips have no ${transform ? "transform" : "position"}.`,
+        );
+      if (transform && target.sourceRestrictions?.transform)
+        throw new TimelineError(
+          "unsupported",
+          target.sourceRestrictions.transform,
+        );
       if (command.text !== undefined) {
         if (target.text === null)
           throw new TimelineError(
@@ -839,6 +857,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 }),
                 ...(command.x !== undefined && { x: command.x }),
                 ...(command.y !== undefined && { y: command.y }),
+                ...(transform && editTransform(clip, command)),
                 ...(command.text !== undefined && {
                   text: command.text,
                   textPreview: firstTextLine(command.text),

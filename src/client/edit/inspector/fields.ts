@@ -17,7 +17,7 @@ import {
   parseTimecode,
 } from "../../../shared/timeline/timecode";
 
-export type FieldUnit = "timecode" | "percent" | "gain" | "pixels";
+export type FieldUnit = "timecode" | "percent" | "gain" | "pixels" | "degrees";
 
 /** The gain floor shared with the timeline line: at or below it a clip is silent. */
 const SILENCE_DB = -60;
@@ -48,6 +48,14 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
       throw new Error("Enter a position in pixels, such as -40 px.");
     return Number.parseFloat(input);
   }
+  if (unit === "degrees") {
+    if (
+      !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:°|deg)?$/.test(input) ||
+      !Number.isFinite(Number.parseFloat(input))
+    )
+      throw new Error("Enter an angle in degrees, such as -15°.");
+    return Number.parseFloat(input);
+  }
   if (unit === "gain") return parseGain(input);
   if (unit === "timecode") {
     if (/^\d+(?:\.\d+)?\s*s$/.test(input))
@@ -69,11 +77,13 @@ export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
     ? "Auto"
     : unit === "pixels"
       ? `${value} px`
-      : unit === "gain"
-        ? audioGainToText(value)
-        : unit === "timecode"
-          ? formatTimecode(value, fps)
-          : formatPercent(value);
+      : unit === "degrees"
+        ? `${value}°`
+        : unit === "gain"
+          ? audioGainToText(value)
+          : unit === "timecode"
+            ? formatTimecode(value, fps)
+            : formatPercent(value);
 
 /** Clip × track gain as shown, uncapped by HyperFrames' +12 dB clip formatter. Products
  * that read the same are the same; null when there is nothing to combine.
@@ -136,7 +146,8 @@ export function stepField(value: number, delta: number, unit: FieldUnit) {
     );
     return db <= SILENCE_DB ? 0 : audioDbToGain(Math.round(db * 10) / 10);
   }
-  if (unit === "pixels") return Number((value + delta).toFixed(6));
+  if (unit === "pixels" || unit === "degrees")
+    return Number((value + delta).toFixed(6));
   return unit === "timecode" ? Math.round(value + delta) : value + delta * 0.01;
 }
 
