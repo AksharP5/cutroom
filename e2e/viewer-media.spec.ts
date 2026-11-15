@@ -1146,7 +1146,6 @@ for (const withheld of [false, true]) {
     const initial = await page.locator(".edit-picture").screenshot();
     try {
       for (let batch = 1; batch <= 3; batch++) {
-        let stalled: string | null = null;
         for (let edit = 0; edit < 50; edit++) {
           const previous = await page
             .locator(".edit-frame")
@@ -1182,10 +1181,6 @@ for (const withheld of [false, true]) {
                 .last()
                 .locator("[data-cutroom-video-hold]"),
             ).toHaveCount(1);
-            stalled = await page
-              .locator(".edit-frame")
-              .last()
-              .getAttribute("src");
           }
           if (withheld) {
             await expect(page.locator("iframe[data-live]")).not.toHaveAttribute(
@@ -1197,11 +1192,14 @@ for (const withheld of [false, true]) {
           expect((await resourceCounts()).maxDocuments).toBeLessThanOrEqual(2);
         }
         if (withheld) {
-          await expect(page.locator(".edit-frame").last()).not.toHaveAttribute(
-            "src",
-            stalled!,
-            { timeout: 20000 },
-          );
+          // When the stalled candidate expires, the confirmed frame is briefly the only
+          // one before the coalesced destination navigates. Only the latest saved label
+          // shows that the destination for the whole burst was tried.
+          await expect(
+            page.frameLocator(".edit-frame").last().locator("#picture"),
+          ).toHaveAttribute("data-timeline-label", `Picture ${batch}-49`, {
+            timeout: 20000,
+          });
         }
         await expect(page.locator(".edit-frame")).toHaveCount(1, {
           timeout: 20000,
