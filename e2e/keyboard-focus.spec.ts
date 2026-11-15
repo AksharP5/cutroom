@@ -13,6 +13,8 @@ test.beforeEach(async ({ page, request }) => {
   await expect(
     page.getByRole("button", { name: "Snapping", exact: true }),
   ).toBeVisible();
+  // The toolbar draws before the timeline loads; until then edit keys such as M have nothing to edit.
+  await expect(page.locator(".tl-ruler")).toBeVisible();
 });
 
 test("Space activates a toolbar button reached by keyboard without playing", async ({
