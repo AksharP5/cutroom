@@ -132,6 +132,8 @@ The default size suits 1920x1080; pass a size for other compositions. `font: nul
 }
 ```
 
+To give several titles one look, the way Copy style and Paste style do in the editor, read the source title's `title` from `timeline_read` and send it whole as `setClip.title` for each of the others in one `timeline_edit` batch, which is one undo step.
+
 `setClip.title` on a clip that is not a title is refused with `unsupported`. `x`, `y`, `opacity`, scale, rotation and crop work as on any visual clip; `x` and `y` offset the title from its `position`, and a Wipe replaces the crop while it runs.
 
 The entrance starts on the clip's first frame and the exit ends on its last. Tail trims, head trims, moves, ripples and pastes keep both there with no further command. When they are longer than the clip together, both shorten in proportion. A ripple through the middle of a title shortens it in place. A razor leaves the entrance on the first piece and the exit on the second, with `preset: "none"` at the cut, so the words run straight through it; set either again with `setClip.title`.

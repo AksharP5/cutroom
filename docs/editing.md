@@ -143,6 +143,8 @@ Select one title and the inspector shows a Title section between Text and Transf
 - Plate puts a filled box behind the words. Ticking it starts from black at 70%; the swatch, hex and percentage beside it set its colour and opacity.
 - In and Out each take a preset and a length, typed as timecode, frames (`12f`) or seconds (`0.4s`). The length is disabled while the preset is None.
 
+To give other titles the same look, right-click a title and choose Copy style, then select the others and choose Paste style. It copies every Title setting, motions and Position included, but not the words, timing or Position X/Y offset, and pasting onto several titles is one undo step. The copied style lasts until the editor reloads and belongs to its project, because fonts do.
+
 The section edits one title at a time. Several selected clips show the clip count, as for every other inspector section. A title Cutroom cannot read shows the reason in the section in place of the controls.
 
 The entrance belongs to the clip's first frame and the exit to its last:

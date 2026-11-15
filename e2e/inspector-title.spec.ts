@@ -223,3 +223,83 @@ test("a title Cutroom cannot read shows why in place of its controls", async ({
   await expect(controls).toHaveCount(0);
   await expect(inspector).toContainText("Title on V4");
 });
+
+test("Copy style and Paste style give several titles one title's look in one undo step", async ({
+  page,
+  request,
+}) => {
+  const { project, edit, steps } = await titleProject(request, "Title style");
+  await edit([
+    { type: "setTrack", index: 4, kind: "video" },
+    ...(["second", "third"] as const).map((id, index): CommandInput => ({
+      type: "insert",
+      track: 3 + index,
+      at: 240,
+      clip: { kind: "title", id, text: id, duration: 60 },
+    })),
+    {
+      type: "setClip",
+      clipId: "lower",
+      title: {
+        size: 96,
+        color: "#ffcc00",
+        plate: "#112233cc",
+        position: "top",
+        in: { preset: "wipe", frames: 20 },
+      },
+    },
+  ]);
+  const titles = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline.clips.flatMap((clip) =>
+      clip.title ? [[clip.id, clip.title] as const] : [],
+    );
+  const style = Object.fromEntries(await titles()).lower!;
+  const plain = Object.fromEntries(await titles()).second!;
+  const menu = async (id: string) => {
+    await page
+      .locator(`.tl-lanes [data-clip="${id}"]`)
+      .click({ button: "right" });
+    return page.getByRole("menu");
+  };
+
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('.tl-lanes [data-clip="lower"]').click();
+  // Nothing copied yet, so only Copy style is offered.
+  await expect(
+    (await menu("lower")).getByRole("menuitem", { name: "Paste style" }),
+  ).toBeDisabled();
+  await page
+    .getByRole("menu")
+    .getByRole("menuitem", { name: "Copy style" })
+    .click();
+
+  await page.locator('.tl-lanes [data-clip="second"]').click();
+  await page
+    .locator('.tl-lanes [data-clip="third"]')
+    .click({ modifiers: ["Shift"] });
+  const before = await steps();
+  await (
+    await menu("third")
+  )
+    .getByRole("menuitem", { name: "Paste style" })
+    .click();
+  await expect.poll(steps).toBe(before + 1);
+  expect(Object.fromEntries(await titles())).toEqual({
+    lower: style,
+    second: style,
+    third: style,
+  });
+  // The words stay each title's own.
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#third"),
+  ).toHaveText("third");
+
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect
+    .poll(async () => Object.fromEntries(await titles()))
+    .toEqual({ lower: style, second: plain, third: plain });
+});
