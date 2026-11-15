@@ -16,6 +16,7 @@ import {
   SourceSchema,
 } from "../src/shared/project";
 import { projectPath } from "../src/server/projects/path";
+import { declaredFonts } from "../src/server/timeline/titles";
 import { projectFixture } from "./project-fixture";
 
 test("a removed project folder refuses paths that allow missing files", async () => {
@@ -31,13 +32,20 @@ test("a removed project folder refuses paths that allow missing files", async ()
   }
 });
 
-test("new projects ship a valid, self-contained Instrument Sans composition", async () => {
+test("new projects ship a valid, self-contained composition declaring four title fonts", async () => {
   const fixture = await projectFixture();
   try {
     const project = await fixture.store.create({ name: "A & B <cut>" });
     const source = await readFile(join(project.path, "index.html"), "utf8");
     expect(source).toContain("A &amp; B &lt;cut&gt;");
     expect(source).toContain("Drop media in, or ask your agent to start.");
+    // The families titles may use are the ones the project declares, so Font offers these four.
+    expect(declaredFonts(source).toSorted()).toEqual([
+      "Fraunces",
+      "Instrument Sans",
+      "Martian Mono",
+      "Oswald",
+    ]);
     expect(
       await readFile(
         join(project.path, "assets/fonts/InstrumentSans-var.woff2"),
@@ -50,9 +58,25 @@ test("new projects ship a valid, self-contained Instrument Sans composition", as
         ),
       ),
     );
-    expect(
-      await readFile(join(project.path, "assets/fonts/LICENSE.txt"), "utf8"),
-    ).toContain("SIL OPEN FONT LICENSE");
+    // Every declared file is in the project, next to the licence that names its family.
+    for (const [file, family] of [
+      ["InstrumentSans", "Instrument Sans"],
+      ["Oswald", "Oswald"],
+      ["Fraunces", "Fraunces"],
+      ["MartianMono", "Martian Mono"],
+    ]) {
+      expect(source).toContain(`src: url("assets/fonts/${file}-var.woff2")`);
+      expect(
+        (await readFile(join(project.path, `assets/fonts/${file}-var.woff2`)))
+          .length,
+      ).toBeGreaterThan(10_000);
+      const license = await readFile(
+        join(project.path, `assets/fonts/${file}-LICENSE.txt`),
+        "utf8",
+      );
+      expect(license).toContain(`The ${family} Project Authors`);
+      expect(license).toContain("SIL OPEN FONT LICENSE");
+    }
     const lint = await lintProject(project.path);
     expect(lint.results.flatMap(({ result }) => result.findings)).toEqual([]);
     await fixture.store.importProject({ path: project.path });

@@ -223,3 +223,61 @@ test("a title Cutroom cannot read shows why in place of its controls", async ({
   await expect(controls).toHaveCount(0);
   await expect(inspector).toContainText("Title on V4");
 });
+
+test("a new project's Font menu offers four fonts, and each draws its own face", async ({
+  page,
+  request,
+}) => {
+  const { project, steps } = await titleProject(request, "Title fonts");
+  const inspector = await openTitle(page, project.id);
+  const font = inspector.getByRole("combobox", { name: "Font", exact: true });
+  await font.click();
+  const options = page.getByRole("listbox", {
+    name: "Font options",
+    exact: true,
+  });
+  await expect(options.getByRole("option")).toHaveText([
+    "Default",
+    "Instrument Sans",
+    "Oswald",
+    "Fraunces",
+    "Martian Mono",
+  ]);
+  await page.keyboard.press("Escape");
+
+  const preview = page.frameLocator("iframe[data-live]");
+  const widths = new Set<number>();
+  for (const family of [
+    "Instrument Sans",
+    "Oswald",
+    "Fraunces",
+    "Martian Mono",
+  ]) {
+    if (family !== "Instrument Sans") {
+      const before = await steps();
+      await font.click();
+      await options.getByRole("option", { name: family, exact: true }).click();
+      await expect.poll(steps).toBe(before + 1);
+    }
+    const shown = preview.locator("#lower");
+    await expect(shown).toHaveAttribute("data-title-font", family);
+    // The face itself loaded, so the words are not set in a fallback.
+    await expect
+      .poll(() =>
+        shown.evaluate(
+          (element, name) =>
+            element.ownerDocument.fonts.check(`600 64px "${name}"`) &&
+            [...element.ownerDocument.fonts].some(
+              (face) =>
+                face.family.replaceAll('"', "") === name &&
+                face.status === "loaded",
+            ),
+          family,
+        ),
+      )
+      .toBe(true);
+    widths.add(Math.round((await shown.boundingBox())!.width));
+  }
+  // Four faces, four different widths for the same words.
+  expect(widths.size).toBe(4);
+});

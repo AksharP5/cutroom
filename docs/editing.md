@@ -136,7 +136,7 @@ A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe
 
 Select one title and the inspector shows a Title section between Text and Transform: Font, Weight, Size, Colour, Align, Position, Plate, In and Out. Every change is one undo step and shows on the picture as soon as it saves.
 
-- Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font.
+- Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font. New projects declare Instrument Sans, Oswald, Fraunces and Martian Mono. To add another, put its file in the project and declare it with `@font-face`.
 - Size is in composition pixels; drag its label or use Up and Down, as with Position.
 - Colour is a swatch that opens the system colour picker, with the same colour as six hex digits beside it. Moving through colours in the picker saves once, when the picker closes.
 - Position picks one of five places on the picture and clears any Position X/Y offset in the same undo step, so the title lands on the place you chose.
