@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileContentVersion } from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { projectFixture } from "./project-fixture";
 
@@ -49,6 +51,60 @@ test.skipIf(process.platform !== "linux")(
       expect(seen).toEqual([]);
       stopOther();
       expect(await watches()).toBe(before);
+    } finally {
+      await api.dispose();
+      await f.close();
+    }
+  },
+);
+
+test.skipIf(process.platform !== "linux")(
+  "the editor's own writes and undos reach the preview at once and only once; outside writes still settle first",
+  async () => {
+    const f = await projectFixture();
+    const api = createHyperframesApi(f.store, f.review);
+    try {
+      const project = await f.store.create({ name: "Own writes" });
+      const path = join(project.path, "index.html");
+      const changes: { version: string | null; at: number }[] = [];
+      const stop = await api.subscribe(project.id, (change) => {
+        if (change.path === "index.html")
+          changes.push({ version: change.version, at: performance.now() });
+      });
+      const seen = async (count: number, since: number) => {
+        // Long enough for the watcher's 60 ms settle to announce anything it still holds.
+        await Bun.sleep(300);
+        expect(changes.map(({ version }) => version)).toHaveLength(count);
+        return changes.at(-1)!.at - since;
+      };
+      const before = await readFile(path, "utf8");
+      const after = before.replace("</body>", "<p>own</p></body>");
+      let start = performance.now();
+      await f.store.mutate(project, "Own write", async () =>
+        f.store.writeFiles(project, [
+          { sourceFile: "index.html", absPath: path, before, after },
+        ]),
+      );
+      const own = await seen(1, start);
+      expect(changes[0]!.version).toBe(fileContentVersion(after));
+
+      start = performance.now();
+      const undo = await f.request(
+        `/projects/${project.id}/history/undo`,
+        "POST",
+      );
+      expect(undo.status).toBe(200);
+      const undone = await seen(2, start);
+      expect(changes[1]!.version).toBe(fileContentVersion(before));
+
+      start = performance.now();
+      await writeFile(path, before.replace("</body>", "<p>outside</p></body>"));
+      const outside = await seen(3, start);
+      // Own writes skip the 60 ms wait that outside editors get.
+      expect(own).toBeLessThan(60);
+      expect(undone).toBeLessThan(60);
+      expect(outside).toBeGreaterThanOrEqual(60);
+      stop();
     } finally {
       await api.dispose();
       await f.close();

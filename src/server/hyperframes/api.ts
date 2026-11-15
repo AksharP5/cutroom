@@ -175,6 +175,7 @@ export function createHyperframesApi(
   >();
   let disposed = false;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const announced = new Map<string, string>();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
@@ -357,56 +358,70 @@ export function createHyperframesApi(
         if (affectsProjectSignature(project.dir, join(project.dir, path)))
           signatures.delete(project.dir);
         const key = `${project.id}\0${path}`;
+        const absolute = join(project.dir, path);
+        const read = async () => {
+          try {
+            const info = await stat(absolute);
+            if (!info.isFile() || info.size > 2_000_000)
+              return { version: null, content: undefined };
+            const bytes = await readFile(absolute);
+            return {
+              version: fileContentVersion(bytes),
+              content: /\.(html?|css|m?[jt]sx?|json|srt|vtt)$/i.test(path)
+                ? bytes.toString("utf8")
+                : undefined,
+            };
+          } catch (error) {
+            if (isMissing(error)) return { version: null, content: undefined };
+            throw error;
+          }
+        };
+        const announce = async ({
+          version,
+          content,
+        }: Awaited<ReturnType<typeof read>>) => {
+          // Both paths below can see one write. Each version is announced once.
+          if (version !== null && announced.get(key) === version) return;
+          if (version === null) announced.delete(key);
+          else announced.set(key, version);
+          const receipt = identifyFileWrite(
+            absolute,
+            version ?? DELETED_VERSION,
+          );
+          const affects = affectsPreview(project.dir, path);
+          const change: FileChange = {
+            projectId: project.id,
+            path,
+            version,
+            content,
+            affectsPreview: affects,
+            affectedCompositions: affects
+              ? compositionsAffectedBy(project.dir, path)
+              : [],
+            ...(receipt ? { writeToken: receipt.writeToken } : {}),
+          };
+          if (affects) await reviews.observeAssets(await store.get(project.id));
+          for (const subscriber of subscribers) subscriber(change);
+        };
+        const failed = (error: unknown) =>
+          console.error("Project watch failed:", error);
+        // Outside editors can write a file in several steps, so wait for them to settle.
         clearTimeout(timers.get(key));
         timers.set(
           key,
           setTimeout(() => {
             timers.delete(key);
-            void (async () => {
-              const absolute = join(project.dir, path);
-              let version: string | null = null;
-              let content: string | undefined;
-              try {
-                const info = await stat(absolute);
-                if (info.isFile() && info.size <= 2_000_000) {
-                  const bytes = await readFile(absolute);
-                  version = fileContentVersion(bytes);
-                  if (/\.(html?|css|m?[jt]sx?|json|srt|vtt)$/i.test(path))
-                    content = bytes.toString("utf8");
-                }
-              } catch (error) {
-                if (!(
-                  error &&
-                  typeof error === "object" &&
-                  "code" in error &&
-                  error.code === "ENOENT"
-                ))
-                  throw error;
-              }
-              const receipt = identifyFileWrite(
-                absolute,
-                version ?? DELETED_VERSION,
-              );
-              const affects = affectsPreview(project.dir, path);
-              const change: FileChange = {
-                projectId: project.id,
-                path,
-                version,
-                content,
-                affectsPreview: affects,
-                affectedCompositions: affects
-                  ? compositionsAffectedBy(project.dir, path)
-                  : [],
-                ...(receipt ? { writeToken: receipt.writeToken } : {}),
-              };
-              if (affects)
-                await reviews.observeAssets(await store.get(project.id));
-              for (const subscriber of subscribers) subscriber(change);
-            })().catch((error: unknown) =>
-              console.error("Project watch failed:", error),
-            );
+            void read().then(announce).catch(failed);
           }, 60),
         );
+        // Cutroom's own writes are whole once their receipt exists, so they skip that wait.
+        void read()
+          .then((file) =>
+            file.version !== null && identifyFileWrite(absolute, file.version)
+              ? announce(file)
+              : undefined,
+          )
+          .catch(failed);
       },
     );
     watcher.unref();
@@ -994,6 +1009,8 @@ export function createHyperframesApi(
           clearTimeout(timer);
           timers.delete(key);
         }
+        for (const key of announced.keys())
+          if (key.startsWith(`${projectId}\0`)) announced.delete(key);
       };
       let watcher: ReturnType<typeof watch>;
       try {

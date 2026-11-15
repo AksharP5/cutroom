@@ -422,10 +422,12 @@ export function createProjectRoutes(
         await store.history(project),
         actor,
       );
-      const result = await history.step(direction, {
-        kind: "person",
-        name: "You",
-      });
+      // A write token leaves a receipt, so the preview watcher can announce these writes at once.
+      const result = await history.step(
+        direction,
+        { kind: "person", name: "You" },
+        { writeToken: crypto.randomUUID() },
+      );
       if (!result.ok)
         throw new HttpError(
           409,
