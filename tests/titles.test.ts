@@ -677,7 +677,7 @@ test("an MCP agent adds a title in one call, an undeclared font is refused, and 
     const refused = await call([insert("Comic Sans")]);
     expect(refused.isError).toBe(true);
     expect(JSON.stringify(refused.content)).toContain(
-      "Declared fonts: Instrument Sans.",
+      "Declared fonts: Instrument Sans, Oswald, Fraunces, Martian Mono.",
     );
     expect(await files()).toEqual(original);
 

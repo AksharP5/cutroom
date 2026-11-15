@@ -79,20 +79,59 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+/**
+ * Open-licence fonts every new project carries and declares, so a title's Font menu has real
+ * choices and export finds the same faces. Each file sits beside its licence in `assets/fonts`.
+ */
+const PROJECT_FONTS = [
+  {
+    family: "Instrument Sans",
+    file: "InstrumentSans-var.woff2",
+    source: new URL(
+      "../../client/fonts/InstrumentSans-var.woff2",
+      import.meta.url,
+    ),
+    license: "INSTRUMENT-SANS.txt",
+    axes: "font-weight: 400 700;\n  font-stretch: 75% 100%;",
+  },
+  {
+    family: "Oswald",
+    file: "Oswald-var.woff2",
+    source: new URL("fonts/Oswald-var.woff2", import.meta.url),
+    license: "OSWALD.txt",
+    axes: "font-weight: 200 700;",
+  },
+  {
+    family: "Fraunces",
+    file: "Fraunces-var.woff2",
+    source: new URL("fonts/Fraunces-var.woff2", import.meta.url),
+    license: "FRAUNCES.txt",
+    axes: "font-weight: 100 900;",
+  },
+  {
+    family: "Martian Mono",
+    file: "MartianMono-var.woff2",
+    source: new URL("fonts/MartianMono-var.woff2", import.meta.url),
+    license: "MARTIAN-MONO.txt",
+    axes: "font-weight: 100 800;\n  font-stretch: 75% 112.5%;",
+  },
+] as const;
+
 function starter(input: z.infer<typeof CreateProjectSchema>): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>${escapeHtml(input.name)}</title>
 <script src="assets/vendor/gsap.min.js"></script>
 <style>
-@font-face {
-  font-family: "Instrument Sans";
-  src: url("assets/fonts/InstrumentSans-var.woff2") format("woff2");
-  font-weight: 400 700;
-  font-stretch: 75% 100%;
+${PROJECT_FONTS.map(
+  (font) => `@font-face {
+  font-family: "${font.family}";
+  src: url("assets/fonts/${font.file}") format("woff2");
+  ${font.axes}
   font-style: normal;
   font-display: block;
 }
-* { box-sizing: border-box; }
+`,
+).join("")}* { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 body { color: #ededed; background: #111111; font-family: "Instrument Sans", system-ui, sans-serif; }
 .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }
@@ -326,19 +365,15 @@ export async function createProjectStore(options: {
         await mkdir(path);
         const fonts = join(path, "assets", "fonts");
         await mkdir(fonts, { recursive: true });
-        await Promise.all([
-          copyFile(
-            new URL(
-              "../../client/fonts/InstrumentSans-var.woff2",
-              import.meta.url,
+        await Promise.all(
+          PROJECT_FONTS.flatMap((font) => [
+            copyFile(font.source, join(fonts, font.file)),
+            copyFile(
+              new URL(`../../../licenses/${font.license}`, import.meta.url),
+              join(fonts, font.file.replace("-var.woff2", "-LICENSE.txt")),
             ),
-            join(fonts, "InstrumentSans-var.woff2"),
-          ),
-          copyFile(
-            new URL("../../../licenses/INSTRUMENT-SANS.txt", import.meta.url),
-            join(fonts, "LICENSE.txt"),
-          ),
-        ]);
+          ]),
+        );
         const vendor = join(path, "assets", "vendor");
         await mkdir(vendor);
         // Keep the distribution's license notice with the project, including offline exports.
