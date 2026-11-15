@@ -607,6 +607,72 @@ test("arrow keys nudge the selected clip while the picture has focus", async ({
   expect(commands).toHaveLength(2);
 });
 
+test("corner handles scale the grabbed clip about its centre, live, with Shift for one axis", async ({
+  page,
+  request,
+}) => {
+  const { at, commands, selected, drawn } = await open(page, request);
+  const scaleX = positionField(page, "Scale X");
+  const scaleY = positionField(page, "Scale Y");
+  // Title is 200 x 50 at (60, 100): its centre is (160, 125), its bottom right (260, 150).
+  await page.mouse.click(...at(100, 125));
+  await expect(selected).toHaveText("Title");
+  await page.mouse.click(...at(100, 125));
+  const corner = page.locator('.edit-select-outline b[data-corner="se"]');
+  await expect(corner).toBeVisible();
+  const pull = async (to: readonly [number, number]) => {
+    await page.mouse.move(...at(260, 150));
+    await page.mouse.down();
+    await page.mouse.move(...to, { steps: 4 });
+  };
+
+  // Half again along the diagonal is 150%, drawn live and shown in the fields.
+  await pull(at(310, 162.5));
+  await expect
+    .poll(() => drawn("title"))
+    .toEqual({ left: 10, top: 87.5, width: 300, height: 75 });
+  await expect(scaleX).toHaveValue("150%");
+  expect(commands).toHaveLength(0);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect
+    .poll(() => drawn("title"))
+    .toEqual({ left: 60, top: 100, width: 200, height: 50 });
+  await expect(scaleX).toHaveValue("100%");
+  expect(commands).toHaveLength(0);
+
+  await pull(at(310, 162.5));
+  await page.mouse.up();
+  await expect.poll(() => commands.length).toBe(1);
+  expect(JSON.parse(commands[0]!).commands).toEqual([
+    { type: "setClip", clipId: "title", scale: 1.5 },
+  ]);
+  await expect(scaleX).toHaveValue("150%");
+  await expect
+    .poll(() => drawn("title"))
+    .toEqual({ left: 10, top: 87.5, width: 300, height: 75 });
+  await page.keyboard.press("Control+z");
+  await expect(scaleX).toHaveValue("100%");
+  await expect
+    .poll(() => drawn("title"))
+    .toEqual({ left: 60, top: 100, width: 200, height: 50 });
+
+  // Shift scales each axis alone: straight right widens the clip and keeps its height.
+  await expect(corner).toBeVisible();
+  await page.keyboard.down("Shift");
+  await pull(at(310, 150));
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect.poll(() => commands.length).toBe(2);
+  expect(JSON.parse(commands[1]!).commands).toEqual([
+    { type: "setClip", clipId: "title", scaleX: 1.5, scaleY: 1 },
+  ]);
+  await expect(scaleY).toHaveValue("100%");
+  await expect
+    .poll(() => drawn("title"))
+    .toEqual({ left: 10, top: 100, width: 300, height: 50 });
+});
+
 for (const release of ["before", "after"] as const)
   test(`a superseded handoff keeps a cancelled drag grabbed when pointerup is ${release} the restore`, async ({
     page,
