@@ -98,8 +98,27 @@
   font-stretch: var(--stretch-mono);
 }
 .inspector-section {
+  position: relative;
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
   padding: 0 var(--space-3) var(--space-2);
+}
+/* A section's reset sits on its head and shows on approach; one row resets from its label. */
+.clip-inspector .inspector-section-reset {
+  position: absolute;
+  top: calc((var(--size-section-head) - var(--size-field)) / 2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: var(--size-field);
+  min-height: var(--size-field);
+  padding: 0;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.inspector-section:is(:hover, :focus-within)
+  > .inspector-section-reset:not(:disabled) {
+  opacity: 1;
 }
 .inspector-section summary {
   min-height: var(--size-section-head);
@@ -201,7 +220,7 @@
   grid-template-columns: var(--size-inspector-label) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--size-row);
+  min-height: var(--size-inspector-row);
 }
 .inspector-field :is(label, .inspector-label) {
   color: var(--text-tertiary);
@@ -231,16 +250,99 @@
   color: var(--text-tertiary);
   background: var(--surface-panel);
 }
-.inspector-combined-gain span {
-  color: var(--text-tertiary);
-  font-size: var(--type-xs);
+/* A value nobody set recedes, so a changed clip reads differently from an untouched one. */
+.inspector-field input[data-default]:not(:focus, :disabled) {
+  color: var(--text-secondary);
 }
-.inspector-combined-gain output {
-  padding-inline: var(--space-2);
+.inspector-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.clip-inspector .inspector-label button {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: 0;
+  color: var(--text-tertiary);
+}
+
+/* Paired values share a row, one column each, with a short scrub label inside each field. */
+.inspector-value[data-paired] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  gap: var(--space-1);
+}
+.inspector-value[data-paired]:has(> :nth-child(4 of .inspector-cell)) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.inspector-value[data-paired] > button {
+  justify-self: start;
+}
+.inspector-value[data-paired] > .inspector-field-hint {
+  grid-column: 1 / -1;
+  padding-bottom: 0;
+}
+.inspector-value[data-paired] input[type="text"] {
+  padding: 0 var(--space-1);
+  font-size: var(--type-2xs);
+}
+.inspector-value[data-paired] input[data-timecode] {
+  font-size: var(--type-field-tight);
+}
+.inspector-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  height: var(--size-field);
+  padding-left: var(--space-1);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.inspector-cell[aria-disabled="true"] {
+  background: var(--surface-panel);
+}
+.inspector-field .inspector-cell :is(label, span) {
+  flex: none;
+  font-size: var(--type-2xs);
+}
+/* The letter is the scrub handle; a full-height 16px strip makes it easy to grab. */
+.inspector-cell label {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  min-width: var(--space-4);
+}
+.inspector-field .inspector-cell input[type="text"] {
+  flex: 1;
+  height: 100%;
+  padding-left: 0;
+  background: transparent;
+}
+.inspector-cell:has(input:focus-visible) {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.edit-page .inspector-cell input:focus-visible {
+  outline: none;
+}
+.inspector-net {
+  padding-right: var(--space-1);
+  background: transparent;
+  cursor: default;
+}
+.inspector-net span {
+  color: var(--text-tertiary);
+}
+.inspector-net output {
+  flex: 1;
   text-align: right;
-  font: var(--weight-medium) var(--type-xs) / var(--leading-tight)
+  font: var(--weight-medium) var(--type-2xs) / var(--leading-tight)
     var(--font-mono);
   font-stretch: var(--stretch-mono);
+  color: var(--text-secondary);
 }
 /*
  * A narrow editor keeps the tool row whole, so the inspector opens under it. The viewer narrows

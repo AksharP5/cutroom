@@ -4,6 +4,7 @@ import { expect, test } from "./fixtures";
 import {
   createPositionProject,
   positionField,
+  scrubHandle,
   waitFrames,
 } from "./position-helpers";
 
@@ -62,7 +63,7 @@ test("500 clips: position scrubs paint live, cancel cleanly and commit one undo 
       characterData: true,
     });
   });
-  const label = inspector.locator("label").filter({ hasText: /^Position X$/ });
+  const label = await scrubHandle(page, "Position X");
   const box = await label.boundingBox();
   if (!box) throw new Error("Position label missing");
   await page.mouse.move(box.x + 10, box.y + 5);
@@ -187,7 +188,7 @@ test("delayed promotion preserves a second Position drag and returning step keys
   await page.locator('[data-clip="title"]').click();
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   const field = positionField(page);
-  const label = inspector.locator("label").filter({ hasText: /^Position X$/ });
+  const label = await scrubHandle(page, "Position X");
   const stage = page.locator(".edit-stage[data-preview-ready]");
   await expect(stage).toBeVisible();
   const box = await label.boundingBox();
