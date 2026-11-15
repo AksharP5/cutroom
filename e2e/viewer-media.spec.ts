@@ -247,8 +247,12 @@ async function capturePicture(page: Page, minimumRed = 230) {
       blank = null;
     },
     async read() {
-      const count = samples.length;
-      await expect.poll(() => samples.length).toBeGreaterThan(count + 1);
+      // Wait for frames captured after this call, not just any two more: decoding lags
+      // capture, so a count alone can end on a frame from before the latest change.
+      const called = Date.now() / 1000;
+      await expect
+        .poll(() => samples.filter(({ time }) => time > called).length)
+        .toBeGreaterThan(1);
       await decoding;
       return { samples: [...samples], blank };
     },
