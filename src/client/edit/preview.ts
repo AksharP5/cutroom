@@ -332,11 +332,13 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     action: string,
     payload: object = {},
     signal = closing.signal,
+    sent?: (id: string) => void,
   ) =>
     new Promise<Reply>((resolve, reject) => {
       closing.signal.throwIfAborted();
       signal.throwIfAborted();
       const id = send(action, payload);
+      sent?.(id);
       const finish = () => {
         clearTimeout(timer);
         pending.delete(id);
@@ -363,19 +365,41 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         timer,
       });
     });
+  // A moving playhead waits for each picture before asking for the next, so a decode is
+  // never abandoned for a newer one before it shows anything. The preview paints on its
+  // own, so the next seek starts as soon as the last one shows rather than at our paint.
+  const moving = seekQueue<number>(
+    async (time) => {
+      await request("seek", { time, scrub: true }, closing.signal, (id) => {
+        playbackRequest = id;
+      });
+    },
+    (error) => {
+      if (!closing.signal.aborted) reportEditorError("viewer", error);
+    },
+    (start) => {
+      queueMicrotask(() => start(performance.now()));
+      return 1;
+    },
+    () => {},
+  );
   const player: RuntimePlayer = {
     play: () => {
+      moving.clear();
       clock = null;
       state.playing = true;
       playbackRequest = send("play");
     },
     pause: () => {
+      moving.clear();
       state.playing = false;
       playbackRequest = send("pause");
     },
-    seek: (time) => {
+    seek: (time, scrub) => {
       clock = null;
       state.time = time;
+      if (scrub) return moving.push(time);
+      moving.clear();
       playbackRequest = send("seek", { time });
     },
     time: () => state.time,
@@ -418,6 +442,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     dismissDiagnostics();
     unfollowEdit();
     edit.dispose();
+    moving.dispose();
     if (positionTargets.delete(position) && !positionTargets.size)
       positionDraft = null;
     if (transformTargets.delete(transform) && !transformTargets.size)

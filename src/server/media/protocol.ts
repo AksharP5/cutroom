@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { mediaSettings } from "../../shared/media";
 
-export const MediaKindSchema = z.enum(["probe", "peaks", "filmstrip", "frame"]);
+export const MediaKindSchema = z.enum([
+  "probe",
+  "peaks",
+  "filmstrip",
+  "frame",
+  "scrub",
+]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 export const MediaInfoSchema = z.object({
   channels: z.number().int().positive().optional(),

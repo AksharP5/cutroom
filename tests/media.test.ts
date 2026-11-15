@@ -474,3 +474,133 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
   15000,
 );
+
+/** Eight-bit frame numbers, from `first`, as black and white blocks along the top. */
+async function numberedVideo(path: string, first: number) {
+  await ffmpeg([
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=size=1280x720:rate=30:duration=2",
+    "-f",
+    "lavfi",
+    "-i",
+    "nullsrc=size=8x1:rate=30:duration=2",
+    "-filter_complex",
+    `[1:v]format=gray,geq=lum='255*mod(floor((N+${first})/pow(2\\,X))\\,2)',scale=1280:36:flags=neighbor[bar];[0:v][bar]overlay=0:0,format=yuv420p`,
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-g",
+    "30",
+    "-threads",
+    "1",
+    "-y",
+    path,
+  ]);
+}
+
+/** Reads every frame's number back from its blocks. */
+async function frameNumbers(path: string) {
+  const child = Bun.spawn(
+    [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-i",
+      path,
+      "-vf",
+      "crop=iw:ih/80:0:ih/80,scale=8:1:flags=area,format=gray",
+      "-f",
+      "rawvideo",
+      "-",
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const bytes = new Uint8Array(await new Response(child.stdout).arrayBuffer());
+  await child.exited;
+  return Array.from({ length: bytes.length / 8 }, (_, frame) =>
+    Array.from(bytes.subarray(frame * 8, frame * 8 + 8)).reduce(
+      (value, level, bit) => value | (level > 128 ? 1 << bit : 0),
+      0,
+    ),
+  );
+}
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "scrub proxies are small all-intra copies whose frame N is source frame N, remade when the source changes",
+  async () => {
+    const fixture = await projectFixture();
+    const routes = createMediaRoutes(fixture.store);
+    fixture.app.route("/api/cutroom", routes);
+    try {
+      const project = await fixture.store.create({ name: "Scrub proxies" });
+      const source = join(project.path, "talk.mp4");
+      await numberedVideo(source, 0);
+      const url = `/projects/${project.id}/media/scrub?path=talk.mp4`;
+      const first = PendingSchema.parse(
+        await (await fixture.request(url)).json(),
+      );
+      const proxy = join(fixture.directory, "proxy.mp4");
+      const response = await ready(() => fixture.request(url));
+      expect(response.headers.get("content-type")).toBe("video/mp4");
+      await writeFile(proxy, Buffer.from(await response.arrayBuffer()));
+      const probe = Bun.spawnSync([
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,r_frame_rate:frame=pict_type",
+        "-of",
+        "json",
+        proxy,
+      ]);
+      const facts = z
+        .object({
+          streams: z.tuple([
+            z.object({
+              width: z.number(),
+              height: z.number(),
+              r_frame_rate: z.string(),
+            }),
+          ]),
+          frames: z.array(z.object({ pict_type: z.string() })),
+        })
+        .parse(JSON.parse(probe.stdout.toString()));
+      expect(facts.streams[0]).toEqual({
+        width: 960,
+        height: 540,
+        r_frame_rate: "30/1",
+      });
+      expect(facts.frames).toHaveLength(60);
+      expect(facts.frames.every(({ pict_type }) => pict_type === "I")).toBe(
+        true,
+      );
+      const numbers = Array.from({ length: 60 }, (_, frame) => frame);
+      expect(await frameNumbers(source)).toEqual(numbers);
+      expect(await frameNumbers(proxy)).toEqual(numbers);
+
+      await numberedVideo(source, 100);
+      const changed = PendingSchema.parse(
+        await (await fixture.request(url)).json(),
+      );
+      expect(changed.key).not.toBe(first.key);
+      await writeFile(
+        proxy,
+        Buffer.from(
+          await (await ready(() => fixture.request(url))).arrayBuffer(),
+        ),
+      );
+      expect(await frameNumbers(proxy)).toEqual(
+        numbers.map((frame) => frame + 100),
+      );
+    } finally {
+      await routes.dispose();
+      await fixture.close();
+    }
+  },
+  30000,
+);

@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ProjectStore } from "../projects/store";
+import type { Project } from "../../shared/project";
+import { HttpError } from "../../shared/errors";
 import { createMediaService } from "./service";
+import type { MediaService } from "./service";
 import { peakRange } from "./range";
 
 const PathSchema = z.string().min(1).max(4096);
@@ -24,10 +27,12 @@ function headers(etag: string, type: string) {
     etag,
   };
 }
-export function createMediaRoutes(store: ProjectStore) {
+export function createMediaRoutes(
+  store: ProjectStore,
+  media: MediaService = createMediaService(),
+) {
   const api = new Hono();
-  const media = createMediaService();
-  for (const kind of ["probe", "peaks", "filmstrip", "frame"] as const)
+  for (const kind of ["probe", "peaks", "filmstrip", "frame", "scrub"] as const)
     api.get(`/projects/:id/media/${kind}`, async (c) => {
       c.header("cache-control", "no-store");
       const project = await store.get(c.req.param("id"));
@@ -69,9 +74,11 @@ export function createMediaRoutes(store: ProjectStore) {
         etag,
         kind === "frame"
           ? "image/jpeg"
-          : kind === "peaks"
-            ? "application/octet-stream"
-            : "application/json",
+          : kind === "scrub"
+            ? "video/mp4"
+            : kind === "peaks"
+              ? "application/octet-stream"
+              : "application/json",
       );
       if (c.req.header("if-none-match") === etag)
         return new Response(null, { status: 304, headers: h });
@@ -112,5 +119,47 @@ export function createMediaRoutes(store: ProjectStore) {
       },
     );
   });
-  return Object.assign(api, { dispose: () => media.dispose() });
+  return Object.assign(api, { media, dispose: () => media.dispose() });
+}
+
+/**
+ * Scrub proxies for the sandboxed preview, below its capability: `scrub?path=` answers the
+ * proxy's key once it exists, and `scrub/<key>` serves that MP4 with byte ranges.
+ */
+export async function scrubPreview(
+  media: MediaService,
+  project: Project,
+  route: string,
+  path: string | null,
+): Promise<Response> {
+  try {
+    const key = /^scrub\/([a-f0-9]{64})$/.exec(route)?.[1];
+    if (key)
+      return new Response(Bun.file(await media.scrub(project, key)), {
+        headers: {
+          "content-type": "video/mp4",
+          "cache-control": "private, max-age=31536000, immutable",
+        },
+      });
+    if (route !== "scrub") throw new HttpError(404, "Not found.");
+    const result = await media.request(
+      project,
+      PathSchema.parse(path),
+      "scrub",
+    );
+    const headers = { "cache-control": "no-store" };
+    if (result.artifact) return Response.json({ key: result.key }, { headers });
+    return Response.json(
+      { key: result.key, job: result.state },
+      result.state.status === "failed"
+        ? { status: 422, headers }
+        : { status: 202, headers: { ...headers, "retry-after": "1" } },
+    );
+  } catch (error) {
+    if (error instanceof HttpError)
+      return Response.json({ error: error.message }, { status: error.status });
+    if (error instanceof z.ZodError)
+      return Response.json({ error: "Choose a media path." }, { status: 400 });
+    throw error;
+  }
 }

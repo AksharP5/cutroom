@@ -67,7 +67,11 @@ export function velocity(state: TransportState): number {
 export interface RuntimePlayer {
   play(): void;
   pause(): void;
-  seek(seconds: number): void;
+  /**
+   * Shows the frame at `seconds`. While the playhead is `moving` (a scrub or shuttle), a player
+   * may show a quicker stand-in picture first, as long as the exact frame replaces it at rest.
+   */
+  seek(seconds: number, moving?: boolean): void;
   /** Seconds on the runtime's own clock, which leads at 1x so audio stays in sync. */
   time(): number;
   /** Continuous playback time paired with the instant it was observed in the preview. */
@@ -113,7 +117,13 @@ export function createTransport() {
 
   const clamp = (frame: number) =>
     Math.max(0, Math.min(get().duration - 1, frame));
-  const show = (frame: number) => player?.seek(frameTime(frame, get().fps));
+  const show = (frame: number) => {
+    const { state, fps } = get();
+    player?.seek(
+      frameTime(frame, fps),
+      state.kind === "scrubbing" || state.kind === "shuttle",
+    );
+  };
   /** The frame on screen at a runtime time. */
   const frameAt = (seconds: number) => {
     const { fps } = get();

@@ -4,7 +4,8 @@ import { z } from "zod";
 import { encodePeaks, peakSampleRate } from "./peaks";
 import { FilmstripSchema, MediaInfoSchema, MediaTaskSchema } from "./protocol";
 import { mediaSettings } from "../../shared/media";
-import { scaleFilter, tileWidth } from "./settings";
+import { scaleFilter, scrubFilter, tileWidth } from "./settings";
+import { chromeColourGuess } from "../hyperframes/videoColour";
 import { localMediaInputOptions } from "./input";
 
 const task = MediaTaskSchema.parse(await Bun.stdin.json());
@@ -161,7 +162,87 @@ try {
   } else {
     const video = task.info?.video;
     if (!video) throw new Error("The media has no video stream.");
-    if (task.kind === "frame") {
+    if (task.kind === "scrub") {
+      const raw = await run([
+        task.ffprobe,
+        "-v",
+        "error",
+        ...localMediaInputOptions,
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,pix_fmt,color_space,color_primaries,color_transfer,color_range:stream_tags=alpha_mode",
+        "-of",
+        "json",
+        task.source,
+      ]);
+      const stream = z
+        .object({
+          streams: z.tuple([
+            z.object({
+              codec_name: z.string(),
+              pix_fmt: z.string().optional(),
+              color_space: z.string().optional(),
+              color_primaries: z.string().optional(),
+              color_transfer: z.string().optional(),
+              color_range: z.string().optional(),
+              tags: z.object({ alpha_mode: z.string().optional() }).optional(),
+            }),
+          ]),
+        })
+        .parse(JSON.parse(z.string().parse(raw))).streams[0];
+      // An opaque proxy would draw black where the clip is transparent.
+      if (
+        /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(stream.pix_fmt ?? "") ||
+        stream.tags?.alpha_mode === "1"
+      )
+        throw new Error("Transparent video scrubs from the source.");
+      // Tag what Chrome draws for the source, since its guess for an untagged
+      // 540-line proxy can differ from its guess for the source.
+      const guess = chromeColourGuess(video.height, stream.codec_name);
+      const tag = (value: string | undefined, fallback: string) =>
+        value && value !== "unknown" ? value : fallback;
+      // Every frame is a keyframe at the source's timestamps, so a seek decodes one small
+      // picture and proxy frame N is source frame N.
+      await run([
+        ...ffmpeg,
+        ...localMediaInputOptions,
+        "-i",
+        task.source,
+        "-map",
+        "0:v:0",
+        "-an",
+        "-sn",
+        "-dn",
+        "-vf",
+        scrubFilter(video),
+        "-fps_mode",
+        "passthrough",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "superfast",
+        "-crf",
+        "28",
+        "-g",
+        "1",
+        "-pix_fmt",
+        "yuv420p",
+        "-colorspace",
+        tag(stream.color_space, guess),
+        "-color_primaries",
+        tag(stream.color_primaries, guess),
+        "-color_trc",
+        tag(stream.color_transfer, "bt709"),
+        "-color_range",
+        stream.color_range === "pc" ? "pc" : "tv",
+        "-threads",
+        "1",
+        "-movflags",
+        "+faststart",
+        "scrub.mp4",
+      ]);
+    } else if (task.kind === "frame") {
       await run([
         ...ffmpeg,
         ...localMediaInputOptions,

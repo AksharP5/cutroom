@@ -383,3 +383,17 @@ A marked export mixes only the audio heard within a second of its range ([archit
 | Interview, 0:30 to 0:32 |         8.2 s, 8.2 s |   3.3 s, 3.3 s |    7.1 s, 7.6 s |       2.5 s, 2.6 s |
 
 The interview's music bed starts at 0:00, so its 0:30 range still mixes 33 seconds of audio. A second main run of the 500-clip 0:00 case stalled at browser start, an intermittent stall that predates this change, and was cancelled. Forcing the full mix through the same pipeline gives byte-identical AAC packets for both the 500-clip 5:00 range and the interview 0:30 range. Against main, the decoded audio has zero lag, the same sample count and a 37 to 40 dB signal-to-difference ratio, which is main's second AAC encode.
+
+## Scrubbing
+
+A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.
+
+| Three runs each                          | Interview, `main` |      Interview, proxies | 300 clips, `main` | 300 clips, proxies |
+| ---------------------------------------- | ----------------: | ----------------------: | ----------------: | -----------------: |
+| New pictures per second while dragging   |                 0 |              41, 51, 52 |       0, 0.3, 0.3 |      8.7, 9.3, 9.3 |
+| Pointer to picture, median / worst       |      only at rest |           26-29 / 47 ms |      only at rest |   128-145 / 197 ms |
+| Pictures of a frame the playhead skipped |                 0 |                       0 |                 0 |                  0 |
+| Browser CPU while dragging, cores        |              4.85 |                    3.83 |               3.9 |                4.4 |
+| Exact frame after a single move          |             65 ms | 150 ms (proxy at 23 ms) |                 – |                  – |
+
+CPU was measured with the screencast off. The 300-clip timeline uses more CPU because it now loads and draws each clip it passes; it is bounded by those loads, not by decoding. A single move shows the exact frame later than before, since the source decodes only after 60 ms of rest; the proxy frame at Fit is close to the viewer's own resolution.
