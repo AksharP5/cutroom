@@ -451,6 +451,8 @@ export async function editTimeline(
 ) {
   const { view, projectId: open } = useTimeline.getState();
   if (!view || open !== projectId) return false;
+  // A success clears the refusal this edit followed, never one shown while it was saving.
+  const followed = lastToast;
   let edit: Edit | null = null;
   let accepted = false;
   try {
@@ -579,7 +581,11 @@ export async function editTimeline(
           },
           { tone: "info", transient: true },
         );
-      } else if (lastToast && useWorkspace.getState().toast === lastToast) {
+      } else if (
+        followed &&
+        lastToast === followed &&
+        useWorkspace.getState().toast === followed
+      ) {
         showToast("");
       }
     }

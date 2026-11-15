@@ -97,6 +97,42 @@ test("Alt+Up and Alt+Down move the selected clip between video tracks and say wh
   await expect.poll(() => clip("shot-1")).toEqual([0, 0, 90]);
 });
 
+test("a refusal shown while an earlier edit is saving stays after that edit lands", async ({
+  page,
+  request,
+}) => {
+  const { clip, select } = await open(page, request);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/cutroom/projects/*/commands", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await select("shot-1");
+  await page.keyboard.press("Alt+ArrowUp");
+  // While the move is saving, the card cannot go up: it is on the top video track.
+  await select("card");
+  await page.keyboard.press("Alt+ArrowUp");
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("No track above the selected clips.");
+  // The move's reply is followed by a history read; the refusal must outlive both.
+  const settled = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/history") &&
+      response.request().method() === "GET",
+  );
+  release();
+  await settled;
+  await expect.poll(() => clip("shot-1")).toEqual([1, 0, 90]);
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  );
+  await expect(alert).toContainText("No track above the selected clips.");
+});
+
 test("Shift+Up and Shift+Down go to the previous and next marker", async ({
   page,
   request,
