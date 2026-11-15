@@ -1,6 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "bun:test";
-import { comboOf, keymap, keymapTable } from "../src/client/keymap";
+import {
+  comboOf,
+  keymap,
+  keymapTable,
+  missing,
+  missingSentence,
+} from "../src/client/keymap";
 
 const press = (
   code: string,
@@ -29,6 +35,8 @@ test("key presses name their combo by key position, as the keymap writes it", ()
   expect(press("F9")).toBe("F9");
   expect(press("F10", { shiftKey: true })).toBe("Shift+F10");
   expect(press("F13")).toBeNull();
+  expect(press("Comma", { shiftKey: true })).toBe("Shift+,");
+  expect(press("Period")).toBe(".");
 });
 
 test("every combo in the keymap is bound to exactly one action", () => {
@@ -54,4 +62,15 @@ test("the keyboard docs show the keymap as it is", async () => {
     "utf8",
   );
   expect(rows(docs)).toEqual(rows(keymapTable()));
+});
+
+test("missing preset keys never shadow a working key, and the docs list them", async () => {
+  const bound = new Set(Object.values(keymap).flatMap(({ keys }) => keys));
+  for (const { keys } of Object.values(missing))
+    for (const key of keys) expect(bound.has(key)).toBe(false);
+  const docs = await readFile(
+    new URL("../docs/keyboard.md", import.meta.url),
+    "utf8",
+  );
+  expect(docs).toContain(missingSentence());
 });

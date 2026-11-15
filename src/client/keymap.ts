@@ -112,6 +112,18 @@ export const keymap = {
     keys: ["Down"],
     repeat: true,
   },
+  controlMarkersPrev: {
+    area: "Playhead",
+    label: "Previous marker",
+    keys: ["Shift+Up"],
+    repeat: true,
+  },
+  controlMarkersNext: {
+    area: "Playhead",
+    label: "Next marker",
+    keys: ["Shift+Down"],
+    repeat: true,
+  },
   controlTimelineStart: {
     area: "Playhead",
     label: "Timeline start",
@@ -200,6 +212,16 @@ export const keymap = {
     area: "Tracks",
     label: "Audio destination down",
     keys: ["Ctrl+Alt+Down"],
+  },
+  editMoveClipsUp: {
+    area: "Tracks",
+    label: "Move clips up a track",
+    keys: ["Alt+Up"],
+  },
+  editMoveClipsDown: {
+    area: "Tracks",
+    label: "Move clips down a track",
+    keys: ["Alt+Down"],
   },
   editUndo: { area: "Edit", label: "Undo", keys: ["Ctrl+Z", "`"] },
   editRedo: { area: "Edit", label: "Redo", keys: ["Ctrl+Shift+Z"] },
@@ -322,6 +344,45 @@ export const keymap = {
     keys: ["Shift+X", "Delete"],
   },
   editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
+  editNudgeTrimStepNudgeReverse: {
+    area: "Edit",
+    label: "Nudge clips one frame earlier",
+    keys: [","],
+    repeat: true,
+  },
+  editNudgeTrimStepNudgeForward: {
+    area: "Edit",
+    label: "Nudge clips one frame later",
+    keys: ["."],
+    repeat: true,
+  },
+  editNudgeTrimStepTrimMultiFrameLeft: {
+    area: "Edit",
+    label: "Nudge clips five frames earlier",
+    keys: ["Shift+,"],
+    repeat: true,
+  },
+  editNudgeTrimStepTrimMultiFrameRight: {
+    area: "Edit",
+    label: "Nudge clips five frames later",
+    keys: ["Shift+."],
+    repeat: true,
+  },
+  clipChangeClipDuration: {
+    area: "Edit",
+    label: "Change clip duration",
+    keys: ["Ctrl+D"],
+  },
+  clipChangeClipSpeed: {
+    area: "Edit",
+    label: "Change clip speed",
+    keys: ["R"],
+  },
+  editMatchFrame: {
+    area: "View",
+    label: "Match frame in the source viewer",
+    keys: ["F"],
+  },
   // Shift+T is "add audio-only transition" in the owner's Resolve preset, so a title takes Alt too.
   cutroomAddTitle: { area: "Edit", label: "Add title", keys: ["Alt+Shift+T"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
@@ -332,6 +393,42 @@ export const keymap = {
     keys: ["Ctrl+Alt+K"],
   },
 } satisfies Record<string, Binding>;
+
+/**
+ * Keys the owner's Resolve preset binds to editing Cutroom does not have yet. Each answers with a
+ * notice instead of nothing.
+ */
+export const missing = {
+  editSelectEditPoint: { label: "edit point selection", keys: ["V"] },
+  editToggleEditPointType: { label: "edit point types", keys: ["U"] },
+  trimToggleSlideMode: { label: "slip or slide", keys: ["S"] },
+  editAddTransition: { label: "transitions", keys: ["Ctrl+T"] },
+  editAddVideoTransition: { label: "video transitions", keys: ["Alt+T"] },
+  editAddAudioTransition: { label: "audio transitions", keys: ["Shift+T"] },
+  clipFreezeFrame: { label: "freeze frames", keys: ["Shift+R"] },
+} satisfies Record<string, { label: string; keys: readonly string[] }>;
+
+const missingKeys = new Map(
+  Object.values(missing).flatMap(({ label, keys }) =>
+    keys.map((key) => [key, `Cutroom has no ${label} yet (${key}).`]),
+  ),
+);
+
+/** The notice for a press of a missing key, under the same rules as the keys that work. */
+export function missingNotice(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.repeat || isTyping(event.target))
+    return null;
+  const combo = comboOf(event);
+  return (combo && missingKeys.get(combo)) ?? null;
+}
+
+/** The sentence in `docs/keyboard.md` that lists the missing keys. */
+export const missingSentence = () =>
+  `These preset keys say Cutroom has no such editing yet: ${Object.values(
+    missing,
+  )
+    .map(({ label, keys }) => `${label} (${keys.map(code).join(", ")})`)
+    .join(", ")}.`;
 
 export type Action = keyof typeof keymap;
 
@@ -357,6 +454,8 @@ const named: Record<string, string> = {
   Backspace: "Backspace",
   Delete: "Delete",
   Backslash: "\\",
+  Comma: ",",
+  Period: ".",
 };
 
 /** The combo a key press makes, by key position so Shift never changes the key's name. */

@@ -1,6 +1,7 @@
 import { isAudioKind } from "../../../shared/timeline/schema";
 import type { Clip, Fps, Timeline } from "../../../shared/timeline/schema";
 import { useContext, useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { CaretRight, SidebarSimple, Warning, X } from "@phosphor-icons/react";
 import {
   MAX_PLAYBACK_RATE,
@@ -13,7 +14,7 @@ import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
 import { EditorToolsContext } from "../../editor/EditorTools";
 import { trackRows } from "../../timeline/math";
-import { focusPanel, useKeymap } from "../../keymap";
+import { focusByKeyboard, focusPanel, useKeymap } from "../../keymap";
 import { showToast, useWorkspace } from "../../workspace";
 import { editTimeline, loadTimeline, useTimeline } from "../timeline";
 import { formatTimecode } from "../../../shared/timeline/timecode";
@@ -34,6 +35,11 @@ import {
   usePictureMove,
   useTextEdit,
 } from "../preview";
+
+/** A Timing field a key asks for, such as Ctrl+D for Duration, focused once the inspector shows it. */
+export const useTimingEdit = create<{ field: "Duration" | "Speed" | null }>(
+  () => ({ field: null }),
+);
 
 export function InspectorToggle() {
   const open = useWorkspace((state) => state.inspector);
@@ -237,6 +243,30 @@ export function Inspector({ projectId }: { projectId: string }) {
     // Typing replaces the words, so retitling is double-click, type, Enter.
     field.select();
   }, [textEdit, open, clip?.id, textOpen]);
+  const timingEdit = useTimingEdit((state) => state.field);
+  useEffect(() => {
+    if (!timingEdit || !open) return;
+    if (clip && !timingOpen) {
+      setTimingOpen(true);
+      return;
+    }
+    useTimingEdit.setState({ field: null });
+    const input = [
+      ...(root.current?.querySelectorAll<HTMLLabelElement>(
+        ".inspector-timing label",
+      ) ?? []),
+    ].find((label) => label.textContent === timingEdit)?.control;
+    if (input instanceof HTMLInputElement && !input.disabled)
+      return focusByKeyboard(input);
+    const what = timingEdit.toLowerCase();
+    showToast(
+      clip
+        ? `This clip has no ${what} to change.`
+        : `Select one clip to change its ${what}.`,
+      null,
+      { tone: "info", transient: true },
+    );
+  }, [timingEdit, open, clip?.id, timingOpen]);
   const textWarning = useTextWarning((state) => state.warning);
   const textWarningFrame =
     textWarning &&
