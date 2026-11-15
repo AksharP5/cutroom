@@ -10,6 +10,7 @@ const Input = z.object({
   options: z.looseObject({ fps: FpsSchema }),
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
+  scratchDir: z.string(),
 });
 const abort = new AbortController();
 process.once("SIGTERM", () => abort.abort());
@@ -36,6 +37,7 @@ try {
       ? { fps: input.options.fps, frames: input.range }
       : undefined,
     progress,
+    scratchDir: input.scratchDir,
   });
   const {
     createConsoleLogger,

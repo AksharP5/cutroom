@@ -63,7 +63,7 @@ async function captureFixture({ neverReady = false } = {}) {
   let documentLoads = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
-    port: 4961,
+    port: 0,
     idleTimeout: 120,
     async fetch(request) {
       if (
@@ -100,10 +100,13 @@ async function captureFixture({ neverReady = false } = {}) {
       rejectSetup = true;
     },
     async close() {
-      await api.dispose();
-      await store.close();
-      await server.stop(true);
-      await rm(root, { recursive: true, force: true });
+      try {
+        await api.dispose();
+        await store.close();
+        await server.stop(true);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     },
   };
 }

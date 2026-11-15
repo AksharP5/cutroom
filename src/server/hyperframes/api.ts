@@ -170,6 +170,7 @@ export function createHyperframesApi(
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
   const renders = createRenderWorkers({
+    scratchDir: join(store.dataDir, "scratch"),
     sourceOverrides: async (id) =>
       Object.fromEntries(
         (await readTrackMix(store, await store.get(id))).map(

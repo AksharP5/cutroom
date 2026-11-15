@@ -47,7 +47,11 @@ console.log('CUTROOM_RENDER:' + JSON.stringify({type:"progress",progress:1,stage
 setInterval(() => {}, 1000);
 `,
     );
-    const workers = createRenderWorkers({ workerPath, stopTimeoutMs: 40 });
+    const workers = createRenderWorkers({
+      scratchDir: join(directory, "scratch"),
+      workerPath,
+      stopTimeoutMs: 40,
+    });
     const outputPath = join(directory, "render.mp4");
     try {
       const state = workers.start({
@@ -126,7 +130,11 @@ test("a malformed worker event fails the job and still reaps the worker", async 
     workerPath,
     `process.on("SIGTERM", () => {}); console.log('CUTROOM_RENDER:{"type":"unknown"}'); setInterval(() => {}, 1000);`,
   );
-  const workers = createRenderWorkers({ workerPath, stopTimeoutMs: 40 });
+  const workers = createRenderWorkers({
+    scratchDir: join(directory, "scratch"),
+    workerPath,
+    stopTimeoutMs: 40,
+  });
   try {
     const state = workers.start({
       project: { id: "test", dir: directory },
@@ -156,6 +164,7 @@ test("the HTTP render-cancel route stops its worker without shutdown and propaga
   try {
     for (const failCleanup of [false, true]) {
       const workers = createRenderWorkers({
+        scratchDir: join(directory, "scratch"),
         workerPath,
         removeScratch: async (path) => {
           await rm(path, { recursive: true, force: true });
@@ -220,7 +229,10 @@ test("a worker startup failure retains its cause instead of only the Node versio
   const directory = await mkdtemp(join(tmpdir(), "cutroom-render-startup-"));
   const workerPath = join(directory, "worker.mjs");
   await writeFile(workerPath, 'import "./missing-worker-dependency.mjs";');
-  const workers = createRenderWorkers({ workerPath });
+  const workers = createRenderWorkers({
+    scratchDir: join(directory, "scratch"),
+    workerPath,
+  });
   try {
     const state = workers.start({
       project: { id: "test", dir: directory },
@@ -303,6 +315,7 @@ test.skipIf(process.platform !== "linux")(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "cutroom-render-stall-"));
     const workers = createRenderWorkers({
+      scratchDir: join(directory, "scratch"),
       workerPath: await stalledStartup(directory),
       stopTimeoutMs: 100,
     });
@@ -336,6 +349,7 @@ test.skipIf(process.platform !== "linux")(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "cutroom-render-stall-"));
     const workers = createRenderWorkers({
+      scratchDir: join(directory, "scratch"),
       workerPath: await stalledStartup(directory),
       stopTimeoutMs: 100,
       startupTimeoutMs: 300,
@@ -378,7 +392,11 @@ await writeFile(outputPath, "video");
 send({ type: "complete" });
 `,
   );
-  const workers = createRenderWorkers({ workerPath, startupTimeoutMs: 450 });
+  const workers = createRenderWorkers({
+    scratchDir: join(directory, "scratch"),
+    workerPath,
+    startupTimeoutMs: 450,
+  });
   try {
     const state = workers.start({
       project: { id: "slow", dir: directory },
