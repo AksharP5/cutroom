@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import * as studio from "@hyperframes/studio-server";
 import { createStudioApi } from "@hyperframes/studio-server";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { browserExecutable } from "../src/server/hyperframes/render";
@@ -478,6 +479,71 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
       ).toBe("blue");
       expect(fixture.documentLoads()).toBe(loadsBeforeEdit + 1);
     } finally {
+      await renderer.close();
+      await fixture.close();
+    }
+  },
+  60_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "a page compiled while its source changed is not kept for the version it was stamped with",
+  async () => {
+    const fixture = await captureFixture();
+    const renderer = createThumbnailRenderer();
+    const signature = studio.createProjectSignatureAsync;
+    let afterSignature: (() => Promise<void>) | null = null;
+    const spy = spyOn(studio, "createProjectSignatureAsync").mockImplementation(
+      async (...args) => {
+        const result = await signature(...args);
+        const hook = afterSignature;
+        afterSignature = null;
+        await hook?.();
+        return result;
+      },
+    );
+    try {
+      const isolated = await fetch(
+        `${fixture.baseUrl}/api/projects/${fixture.project.id}/isolated-preview?hf-capture=1`,
+        { redirect: "manual" },
+      );
+      const previewUrl = new URL(
+        z.string().parse(isolated.headers.get("location")),
+        fixture.baseUrl,
+      ).href;
+      const capture = async () =>
+        frameColor(
+          z.instanceof(Buffer).parse(
+            await renderer.capture({
+              project: { id: fixture.project.id, dir: fixture.project.path },
+              compPath: "index.html",
+              seekTime: 1.5,
+              width: 320,
+              height: 240,
+              outputWidth: 320,
+              outputHeight: 240,
+              previewUrl,
+              format: "jpeg",
+              signal: new AbortController().signal,
+            }),
+          ),
+        );
+      const source = join(fixture.project.path, "index.html");
+      const original = await Bun.file(source).text();
+      // The route signs the original, then an edit lands before the compiler reads it.
+      afterSignature = () =>
+        writeFile(
+          source,
+          original.replace('backgroundColor:"lime"', 'backgroundColor:"blue"'),
+        );
+      expect(await capture()).toBe("blue");
+      // Undo restores the signed version. A kept page would match it by stamp and show the edit,
+      // so the next frame must load a new document.
+      await writeFile(source, original);
+      await capture();
+      expect(fixture.documentLoads()).toBe(2);
+    } finally {
+      spy.mockRestore();
       await renderer.close();
       await fixture.close();
     }

@@ -238,9 +238,13 @@ export function createThumbnailRenderer() {
             ? { type: "png", ...(clip ? { clip } : {}) }
             : { type: "jpeg", quality: 80, ...(clip ? { clip } : {}) },
         );
-        loaded ??= signature
-          ? { page, previewUrl: options.previewUrl, viewport, signature }
-          : undefined;
+        // The route stamps the signature before the compiler reads the files, so an edit
+        // landing mid-build leaves a stale stamp. Keep the page only if the files still match it.
+        loaded ??=
+          signature &&
+          signature === (await createProjectSignatureAsync(options.project.dir))
+            ? { page, previewUrl: options.previewUrl, viewport, signature }
+            : undefined;
         return Buffer.from(image);
       } catch (error) {
         loaded = undefined;
