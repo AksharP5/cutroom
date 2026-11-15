@@ -615,10 +615,16 @@ test("Q during an earlier edit's preview swap keeps the picture it already shows
   });
   await seek("0400");
   // Later documents arrive slowly, so the razor's is still loading when Q comes.
-  await page.route("**/api/isolated/*/preview?*document=*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await route.continue().catch(() => {});
-  });
+  // A navigation's redirect is not reliably routed, so hold the first request too.
+  await page.route(
+    (url) =>
+      url.pathname.endsWith("/isolated-preview") ||
+      (url.pathname.endsWith("/preview") && url.searchParams.has("document")),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue().catch(() => {});
+    },
+  );
   const capture = await capturePicture(page, blue);
   try {
     capture.reset();
