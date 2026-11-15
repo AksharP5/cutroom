@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtemp, rm, writeFile, copyFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, copyFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -42,15 +42,23 @@ for (const [name, extra, allowed] of [
       ] as const,
   ),
   ["pinned GSAP", '<script src="gsap.min.js"></script>', true],
+  // App state is outside the preview signature, so a later change there would go unseen.
+  [
+    "pinned GSAP in app state",
+    '<script src=".cutroom/gsap.min.js"></script>',
+    false,
+  ],
   ["changed library", '<script src="changed.js"></script>', false],
 ] as const)
   test(`only script-free sources qualify: ${name}`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "timing-policy-"));
     try {
-      await copyFile(
-        fileURLToPath(import.meta.resolve("gsap/dist/gsap.min.js")),
-        join(dir, "gsap.min.js"),
-      );
+      await mkdir(join(dir, ".cutroom"));
+      for (const copy of ["gsap.min.js", ".cutroom/gsap.min.js"])
+        await copyFile(
+          fileURLToPath(import.meta.resolve("gsap/dist/gsap.min.js")),
+          join(dir, copy),
+        );
       await writeFile(join(dir, "changed.js"), "parent.postMessage({})");
       await writeFile(
         join(dir, "index.html"),
@@ -90,3 +98,36 @@ test("a mounted sub-composition script prevents live timing on its root", async 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+for (const [scene, allowed] of [
+  ["scene.html", true],
+  [".cutroom/scene.html", false],
+] as const)
+  test(`a script-free sub-composition qualifies only outside app state: ${scene}`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), "timing-scene-"));
+    try {
+      await mkdir(join(dir, ".cutroom"));
+      await writeFile(
+        join(dir, "index.html"),
+        `<html><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="4"><div data-composition-src="${scene}" data-start="0" data-duration="4"></div></main></body></html>`,
+      );
+      await writeFile(
+        join(dir, scene),
+        '<template><main data-composition-id="scene" data-width="640" data-height="360" data-duration="4"><div class="clip" data-start="0" data-duration="4">Title</div></main></template>',
+      );
+      const reads: string[] = [];
+      const policy = previewTimingPolicy(dir);
+      await bundleToSingleHtml(dir, {
+        runtime: "placeholder",
+        inlineAssets: false,
+        onRead: (path) => {
+          reads.push(path);
+          policy.read(path);
+        },
+      });
+      expect(reads).toContain(join(dir, scene));
+      expect(policy.contract()).toBe(allowed ? "attributes" : null);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });

@@ -511,3 +511,113 @@ test("a compile whose source changes after signing cannot approve the signed ver
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("media cache writes during a compile keep live timing for the opening tab and a tab sharing the compile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cutroom-app-state-"));
+  const store = await createProjectStore({
+    dataDir: root,
+    projectsDir: join(root, "projects"),
+  });
+  const editor = createHyperframesApi(store, createReviewService(store));
+  const app = new Hono().route("/api", editor);
+  // Each hook runs once, on the next signature computation, before or after it.
+  let beforeSignature: (() => Promise<void>) | null = null;
+  let afterSignature: (() => Promise<void>) | null = null;
+  const signature = hyperframes.createProjectSignatureAsync;
+  const spy = spyOn(
+    hyperframes,
+    "createProjectSignatureAsync",
+  ).mockImplementation(async (...args) => {
+    const before = beforeSignature;
+    beforeSignature = null;
+    await before?.();
+    const result = await signature(...args);
+    const after = afterSignature;
+    afterSignature = null;
+    await after?.();
+    return result;
+  });
+  try {
+    const project = await store.create({
+      name: "App state",
+      width: 320,
+      height: 240,
+      duration: 4,
+    });
+    const path = join(project.path, "index.html");
+    const html =
+      '<html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="4"><div id="title" class="clip" data-start="0" data-duration="2">Words</div></main></body></html>';
+    await writeFile(path, html);
+    let frames = 0;
+    const cacheFrame = async () => {
+      await mkdir(join(project.path, ".cutroom", "cache", "frames"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(project.path, ".cutroom", "cache", "frames", `${++frames}.png`),
+        "frame",
+      );
+    };
+    const load = async (document: string) => {
+      const redirect = await app.request(
+        `/api/projects/${project.id}/isolated-preview?document=${document}`,
+      );
+      const url = redirect.headers.get("location")!;
+      const response = await app.request(url, {
+        headers: {
+          "sec-fetch-dest": "iframe",
+          "sec-fetch-site": "same-origin",
+        },
+      });
+      expect(response.status).toBe(200);
+      return url;
+    };
+    const approved = async (url: string) =>
+      (await (await app.request(`${url}&cutroom-status=1`)).json()) as {
+        allowed: boolean;
+      };
+
+    // Opening a project extracts filmstrip frames while its first document compiles.
+    afterSignature = cacheFrame;
+    const opened = await load("opened");
+    expect(frames).toBe(1);
+    expect(await approved(opened)).toEqual({ allowed: true });
+
+    const first = await load("first");
+    const second = await load("second");
+    for (const url of [first, second])
+      expect(await approved(url)).toEqual({ allowed: true });
+
+    // Both tabs read one timing edit. The first compiles it; the second signs the same
+    // source and shares that compile. A cache write lands before the compile is checked.
+    await writeFile(path, html.replace('data-start="0"', 'data-start="1"'));
+    const checking = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const shared = Promise.withResolvers<void>();
+    afterSignature = async () => {
+      beforeSignature = async () => {
+        checking.resolve();
+        await release.promise;
+      };
+    };
+    const firstTiming = app.request(`${first}&cutroom-timing=1`);
+    await checking.promise;
+    afterSignature = async () => shared.resolve();
+    const secondTiming = app.request(`${second}&cutroom-timing=1`);
+    await shared.promise;
+    await cacheFrame();
+    release.resolve();
+    for (const response of await Promise.all([firstTiming, secondTiming])) {
+      expect(response.status).toBe(200);
+      const result = z
+        .object({ live: z.literal(true), timing: PreviewTimingSchema })
+        .parse(await response.json());
+      expect(result.timing.clips[0]?.values["data-start"]).toBe("1");
+    }
+  } finally {
+    spy.mockRestore();
+    await editor.dispose();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
