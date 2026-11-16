@@ -337,7 +337,7 @@ export function SourceViewer({ projectId }: { projectId: string }) {
   const file = useSource((state) => state.file);
   const shown = useSource((state) => state.shown);
   const version = useWorkspace((state) =>
-    file ? (state.fileChanges[file.path] ?? null) : null,
+    file ? state.fileChanges[file.path] : undefined,
   );
   if (!file) return null;
   return (
@@ -374,12 +374,16 @@ export function SourceViewer({ projectId }: { projectId: string }) {
         </button>
       </header>
       <div className="edit-source-stage">
-        <SourceMedia
-          key={`${file.path}:${version}`}
-          projectId={projectId}
-          file={file}
-          version={version}
-        />
+        {/* Gone from this name: a rename gives the file its new path, and a listing without it closes
+        the source. Asking for it until then would only fail and close the source. */}
+        {version !== null && (
+          <SourceMedia
+            key={`${file.path}:${version}`}
+            projectId={projectId}
+            file={file}
+            version={version ?? null}
+          />
+        )}
       </div>
       <ScrubTrack player={sourcePlayer} />
     </div>

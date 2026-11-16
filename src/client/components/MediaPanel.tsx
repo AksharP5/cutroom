@@ -144,9 +144,12 @@ function MediaRow({
     return () => observer.disconnect();
   }, [seen]);
   const changed = useWorkspace((state) => state.fileChanges[path]);
+  // The file left this name, by a rename or a move, before the list read it again: asking for
+  // it now would only show a broken picture until the row goes.
+  const gone = changed === null;
   useEffect(() => setDuration(null), [changed]);
   useEffect(() => {
-    if (!seen || kind !== "video") return;
+    if (!seen || gone || kind !== "video") return;
     const closing = new AbortController();
     setHasAudio(null);
     const probe = async () => {
@@ -173,7 +176,7 @@ function MediaRow({
       if (!closing.signal.aborted) console.warn("Media probe failed", error);
     });
     return () => closing.abort();
-  }, [seen, kind, projectId, path, changed]);
+  }, [seen, gone, kind, projectId, path, changed]);
   const src = mediaUrl(projectId, path, changed);
   const measure = (element: HTMLMediaElement) => {
     if (Number.isFinite(element.duration)) setDuration(element.duration);
@@ -253,7 +256,7 @@ function MediaRow({
       }}
     >
       <span className="media-thumb" aria-hidden="true">
-        {seen && kind === "video" && (
+        {seen && !gone && kind === "video" && (
           <video
             src={`${src}#t=0.1`}
             preload="metadata"
@@ -265,7 +268,7 @@ function MediaRow({
         {kind === "audio" && (
           <>
             <Waveform size={14} />
-            {seen && (
+            {seen && !gone && (
               <audio
                 src={src}
                 preload="metadata"
@@ -274,7 +277,7 @@ function MediaRow({
             )}
           </>
         )}
-        {kind === "image" && <img src={src} alt="" loading="lazy" />}
+        {kind === "image" && !gone && <img src={src} alt="" loading="lazy" />}
       </span>
       {renaming ? (
         <RenameField

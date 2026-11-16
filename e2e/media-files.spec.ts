@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
@@ -220,13 +220,43 @@ test("renaming a still on the timeline, then asking to remove it, makes no reque
     ),
   );
   await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+  // A picture that loaded, not a broken one.
+  const pictured = (img: Locator) =>
+    expect
+      .poll(() =>
+        img.evaluate((element: HTMLImageElement) => element.naturalWidth),
+      )
+      .toBeGreaterThan(0);
   // Let the still's picture load before the rename, as it has for anyone who can see it.
-  await page.waitForLoadState("networkidle");
+  await pictured(row("still.png").locator("img"));
   const refused: string[] = [];
   page.on("response", (response) => {
     if (response.status() >= 400)
       refused.push(`${response.status()} ${new URL(response.url()).pathname}`);
   });
+  await row("still.png").dblclick();
+  const source = page.getByRole("group", { name: "Source", exact: true });
+  await pictured(source.locator("img"));
+  // The watcher says the old name is gone before the rename answers and the list is read again,
+  // while the row and the source still show it.
+  let answered = () => {};
+  const renamed = new Promise<void>((resolve) => (answered = resolve));
+  await page.route(
+    (url) => url.pathname.endsWith("/media/rename"),
+    async (route) => {
+      const response = await route.fetch();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await route.fulfill({ response });
+      answered();
+    },
+  );
+  await page.route(
+    (url) => url.pathname === `/api/projects/${project.id}`,
+    async (route) => {
+      await renamed;
+      await route.continue();
+    },
+  );
 
   await row("still.png").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
@@ -234,7 +264,9 @@ test("renaming a still on the timeline, then asking to remove it, makes no reque
   await page.keyboard.press("Enter");
   await expect(row("logo-card.png")).toBeVisible();
   await expect.poll(sources).toContain("assets/logo-card.png");
-  await page.waitForLoadState("networkidle");
+  await pictured(row("logo-card.png").locator("img"));
+  await expect(source.locator(".edit-source-name")).toHaveText("logo-card.png");
+  await pictured(source.locator("img"));
 
   await row("logo-card.png").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
