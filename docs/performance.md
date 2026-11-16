@@ -586,4 +586,22 @@ The first measurement, below, read resident memory through Playwright, so its nu
 
 After an 8 s drag across the whole 400-clip timeline at Fit, the browser's renderer processes held 3,286 MB with the pipeline off (the preview's process 3,081 MB, with 103 video and 103 audio elements loaded) and 958 MB with it on (the preview's process 169 MB with no video and one audio element loaded; the editor's process 733 MB, of which decoded frames are at most 192 MB; the rest was later traced to the canvas image cache, above, not the decoders).
 
-Where it is still short: W on the 400-clip timeline is 144-230 ms because the frame after a ripple is a cold exact decode from the GOP's keyframe; on the interview, playback stalls up to 86-201 ms where b-roll stops covering the interview, because lookahead only decodes the openings of clips that start, not of clips that come back into view.
+The shortfalls above (W on the 400-clip timeline, and stalls where b-roll stops covering the interview) are measured again below.
+
+### Playback and edits
+
+On November 16, 2026, against #189 and later, with the same workloads, the bare DevTools driver from Memory above, and headed windows (X11, so a window the desktop does not show still paints). Installed Chromium 155 and the Electron 45 desktop app, each against the same private server, on a shared machine (load average 2 to 26 during the runs). Main's pipeline is the build before the lookahead and decoder changes. Playback starts at 5 s and runs 46 s on the interview and 20 s on the 400-clip timeline; a picture is a canvas draw with a new frame. W and undo are timed from the key to the first canvas draw whose burned-in number is the expected frame, at four playheads per timeline.
+
+| Ranges                                     |       Chromium, main |       Chromium, now |                   Electron, main | Electron, now |
+| ------------------------------------------ | -------------------: | ------------------: | -------------------------------: | ------------: |
+| Interview 1x: pictures per second          |            16.1-29.5 |           29.4-29.9 |                        24.0-29.4 |     29.4-29.7 |
+| Interview 1x: gap p95 / max                | 49-274 / 200-1342 ms |   35-38 / 67-160 ms |                49-66 / 94-983 ms |    35 / 83 ms |
+| 400 clips 1x: pictures per second, max gap | 29.2-29.4, 68-118 ms | 29.3-29.5, 67-68 ms |             29.0-29.9, 69-103 ms |   29.3, 68 ms |
+| W, interview                               |             39-75 ms |             9-19 ms |                         35-77 ms |      10-18 ms |
+| W, 400 clips                               |           103-227 ms |            27-32 ms |                        55-158 ms |      21-27 ms |
+| Undo of W, interview                       |             41-61 ms |            26-33 ms | 41-61 ms, one 1059 ms, one never |      25-34 ms |
+| Undo of W, 400 clips                       |            90-144 ms |            75-88 ms |                        83-105 ms |      65-93 ms |
+
+HyperFrames' own playback of the interview, headed in Chromium through Playwright on the same machine, gave 36.9-37.1 pictures per second (both pictures where b-roll overlaps the interview count), gap p95 40-53 ms and max 130-167 ms. Two frames at 30 fps is 67 ms.
+
+What changed: lookahead prepares every clip that comes into view, including one a clip above stops covering, and at rest the next clip to come into view, so W finds its frame decoded. Main's stalls came mostly from its decoders: the frames a decoder kept centred on the furthest frame playback had asked for and never moved back, so after playback restarted earlier in a file each new frame was evicted as it arrived, and a frame the decoder wrongly took to be in flight was waited for by feeding the rest of the file (8.3 s once). After undo, most of the remaining time is the editor's: its timeline view arrives 20-26 ms after the key on the interview and 63-137 ms on the 400-clip timeline, and the pipeline draws 17-43 ms after that.

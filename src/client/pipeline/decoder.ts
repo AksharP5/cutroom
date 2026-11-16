@@ -8,7 +8,8 @@ const BLOCKS = 12;
 /** Reads samples through 1 MiB blocks, so a GOP costs a request or two instead of one per frame. */
 function blockReader(read: ReadRange, size: number) {
   const blocks = new Map<number, Promise<Uint8Array>>();
-  const block = (index: number) => {
+  let last = -1;
+  const fetchBlock = (index: number) => {
     let found = blocks.get(index);
     if (found) blocks.delete(index);
     else {
@@ -17,6 +18,18 @@ function blockReader(read: ReadRange, size: number) {
     }
     blocks.set(index, found);
     while (blocks.size > BLOCKS) blocks.delete(blocks.keys().next().value!);
+    return found;
+  };
+  const block = (index: number) => {
+    const found = fetchBlock(index);
+    // Reading on through a file, as playback does, starts the next block before it is needed.
+    if (
+      index === last + 1 &&
+      (index + 1) * BLOCK < size &&
+      !blocks.has(index + 1)
+    )
+      void fetchBlock(index + 1).catch(() => {});
+    last = index;
     return found;
   };
   return async (offset: number, length: number) => {
@@ -52,6 +65,8 @@ export const frameBudget = {
   limit: 192 << 20,
   used: 0,
 };
+/** Samples a run may feed past a frame that has not come out before it gives up on it. */
+const PAST = 32;
 /** Frames each decoder keeps: enough for a GOP's worth of reverse steps or a cut's opening. */
 const KEPT = 24;
 
@@ -69,8 +84,14 @@ export class SourceDecoder {
   #next = -1;
   /** The keyframe the current run of samples started from. */
   #runStart = -1;
-  /** The last frame asked for, which eviction keeps close to. */
+  /** Where the decoder is wanted: the last frame drawn, or the start of its latest prefetch. */
   #asked = 0;
+  /** The last frame drawn, which eviction keeps: an undo or a step back shows it again. */
+  #drawn = -1;
+  /** The frame the running request decodes towards, in a sequential run, or -1. */
+  #heading = -1;
+  /** The range a queued prefetch will decode, which later prefetches widen instead of queueing. */
+  #ahead: { from: number; to: number } | null = null;
   /** Frames the current run has put out, so a sent frame is known to be in flight or gone. */
   readonly #produced = new Set<number>();
   readonly #frames = new Map<number, VideoFrame>();
@@ -159,13 +180,46 @@ export class SourceDecoder {
     return low;
   }
 
-  /** A clone of the decoded frame, which the caller closes. */
+  /** A clone of the frame to draw, which the caller closes. */
   frame(index: number, sequential = false): Promise<VideoFrame> {
+    this.#drawn = index;
+    this.#asked = index;
     const cached = this.#touch(index);
     if (cached) return Promise.resolve(cached.clone());
+    // A run on its way to a later frame puts this one out first: wait for it there rather than
+    // behind the work queued after it.
+    if (this.#heading >= index && this.reaches(index)) {
+      const arrived = this.#arrival(index);
+      if (arrived) return arrived;
+    }
+    return this.#enqueue(index, sequential);
+  }
+
+  #enqueue(index: number, sequential: boolean) {
     const run = this.#queue.then(() => this.#decode(index, sequential));
     this.#queue = run.catch(() => {});
     return run;
+  }
+
+  /** The frame as the current run puts it out, or null when the run ends without it. */
+  #arrival(index: number): Promise<VideoFrame> | null {
+    const running = this.#queue;
+    return new Promise<VideoFrame>((resolve, reject) => {
+      const waiters = this.#waiting.get(index) ?? new Set();
+      const wake = (frame: VideoFrame) => {
+        waiters.delete(wake);
+        resolve(frame);
+      };
+      waiters.add(wake);
+      this.#waiting.set(index, waiters);
+      // Should the run stop short of it, decode it in turn.
+      void running.then(() => {
+        if (!waiters.delete(wake)) return;
+        const cached = this.#touch(index);
+        if (cached) resolve(cached.clone());
+        else this.#enqueue(index, true).then(resolve, reject);
+      });
+    });
   }
 
   has(index: number) {
@@ -188,6 +242,7 @@ export class SourceDecoder {
   #restart(key: number) {
     this.#next = key;
     this.#runStart = key;
+    this.#heading = -1;
     this.#produced.clear();
   }
 
@@ -207,7 +262,6 @@ export class SourceDecoder {
     retried = false,
   ): Promise<VideoFrame> {
     if (this.#closed) throw new Error("The decoder was closed.");
-    if (!sequential || index > this.#asked) this.#asked = index;
     const cached = this.#touch(index);
     if (cached) return cached.clone();
     if (this.#error || this.#decoder.state === "closed") {
@@ -221,6 +275,7 @@ export class SourceDecoder {
     while (key > 0 && !samples[key]!.key) key--;
     let gopEnd = target + 1;
     while (gopEnd < samples.length && !samples[gopEnd]!.key) gopEnd++;
+    if (sequential) this.#heading = Math.max(this.#heading, index);
     // A sample in flight comes out on its own; one ahead in the same run is fed forward.
     // Anything else starts at its keyframe, which the decoder takes at any point.
     if (!this.reaches(index)) this.#restart(key);
@@ -258,13 +313,15 @@ export class SourceDecoder {
       if (this.#next !== gopEnd || gopEnd >= samples.length) this.#restart(-1);
     };
     if (sequential) {
-      // Playback: frame threading holds a few frames, so keep feeding the GOP until it lands.
+      // Playback: frame threading holds a few frames, so keep feeding until it lands, on into
+      // the next GOP, which starts with its own keyframe. Only the file's end needs a flush.
       while (!landed() && !this.#frames.has(index) && !this.#error) {
-        if (this.#next >= gopEnd) {
+        // Long past the frame without it: it was dropped, so decode it again from its keyframe.
+        if (this.#next >= samples.length || this.#next > target + PAST) {
           await flush();
           break;
         }
-        await send(Math.min(gopEnd, Math.max(this.#next, target) + 4));
+        await send(Math.min(samples.length, Math.max(this.#next, target) + 4));
         await Promise.race([arrived, this.#drained()]);
       }
     } else {
@@ -294,13 +351,27 @@ export class SourceDecoder {
     await new Promise((resolve) => setTimeout(resolve, 4));
   }
 
-  /** Decodes ahead of playback, so the frame is ready when the clock reaches it. */
-  prefetch(index: number) {
-    if (index < 0 || index >= this.frameCount || this.#frames.has(index))
+  /**
+   * Decodes `from` through `to` ahead of the clock, so the frames are ready when it reaches them.
+   * A prefetch still waiting to start takes the new range instead, so they never pile up.
+   */
+  prefetch(from: number, to = from) {
+    from = Math.max(0, from);
+    to = Math.min(to, this.frameCount - 1);
+    if (from > to) return;
+    if (this.#ahead) {
+      this.#ahead = { from, to };
       return;
-    void this.frame(index, true)
-      .then((frame) => frame.close())
-      .catch(() => {});
+    }
+    this.#ahead = { from, to };
+    const run = this.#queue.then(async () => {
+      const { from, to } = this.#ahead!;
+      this.#ahead = null;
+      this.#asked = from;
+      for (let index = from; index <= to && !this.#closed; index++)
+        if (!this.#frames.has(index)) (await this.#decode(index, true)).close();
+    });
+    this.#queue = run.catch(() => {});
   }
 
   /**
@@ -311,7 +382,7 @@ export class SourceDecoder {
     let victim: number | undefined;
     let distance = -1;
     for (const [index, frame] of this.#frames) {
-      if (frame === keep) continue;
+      if (frame === keep || index === this.#drawn) continue;
       const away =
         index < this.#asked ? (this.#asked - index) * 2 : index - this.#asked;
       if (away > distance) {
