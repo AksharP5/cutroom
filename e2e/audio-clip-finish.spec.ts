@@ -76,7 +76,8 @@ test("five tracks fit, fade handles spare labels and follow a held roll, and edg
     }),
   );
   expect(lanes).toHaveLength(5);
-  expect(lanes[0]!.top).toBeCloseTo(timeline.y + 29, 0);
+  // Under the 32px ruler and its seam.
+  expect(lanes[0]!.top).toBeCloseTo(timeline.y + 33, 0);
   expect(lanes.at(-1)!.bottom).toBeLessThan(timeline.y + timeline.height);
   await page.screenshot({ path: info.outputPath("five-tracks.png") });
 

@@ -22,6 +22,7 @@ import {
 } from "./export";
 import type { ExportJob } from "./export";
 import { formatTimecode } from "../../shared/timeline/timecode";
+import { TimecodeText } from "../components/TimecodeText";
 import { useTimeline } from "./timeline";
 import { captureFrame } from "./capture";
 import "./export.css";
@@ -300,12 +301,14 @@ function ExportDialog({
           <dl className="export-summary">
             <dt>{job ? "Range" : "Frames"}</dt>
             <dd className="mono">
-              {formatTimecode(frames.start, fps)} →{" "}
-              {formatTimecode(frames.end - 1, fps)}
+              <TimecodeText timecode={formatTimecode(frames.start, fps)} /> →{" "}
+              <TimecodeText timecode={formatTimecode(frames.end - 1, fps)} />
             </dd>
             <dt>Duration</dt>
             <dd className="mono">
-              {formatTimecode(frames.end - frames.start, fps)}
+              <TimecodeText
+                timecode={formatTimecode(frames.end - frames.start, fps)}
+              />
             </dd>
             <dt>Project</dt>
             <dd className="mono">

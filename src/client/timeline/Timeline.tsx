@@ -65,7 +65,7 @@ import type { FrameRange, Row, RowSizes, TickStep } from "./math";
 import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import type { Tool } from "./gesture";
-import { TransitionMark } from "./TransitionMark";
+import { TransitionLength, TransitionMark } from "./TransitionMark";
 import { useLaneGestures } from "./lanes";
 import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
@@ -73,7 +73,8 @@ import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
 import type { TimelineViewport } from "./view";
-import { formatTimecode } from "../../shared/timeline/timecode";
+import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
+import { TimecodeText } from "../components/TimecodeText";
 import { useKeymap } from "../keymap";
 import "./timeline.css";
 
@@ -244,18 +245,20 @@ const ClipLabel = memo(function ClipLabel({
   row,
   fps,
   timed,
+  selected,
 }: {
   clip: Clip;
   row: Row;
   fps: Fps;
   /** Whether the clip can get wide enough to show its duration before labels are mounted again. */
   timed: boolean;
+  selected: boolean;
 }) {
   const end = clip.start + clip.duration;
   const name = clipName(clip);
   return (
     <div
-      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}`}
+      className={`tl-label${timed ? " timed" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip-label={clip.id}
       data-kind={clip.kind}
       style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
@@ -281,7 +284,7 @@ const ClipLabel = memo(function ClipLabel({
       )}
       {timed && (
         <span className="tl-length" data-unscaled style={{ "--f": end }}>
-          {formatTimecode(clip.duration, fps)}
+          <TimecodeText timecode={formatTimecode(clip.duration, fps)} />
         </span>
       )}
     </div>
@@ -348,16 +351,24 @@ const Ruler = memo(function Ruler({
           ))}
         </div>
         <div className="tl-tick-labels" ref={labels}>
-          {ticks.map((frame) => (
-            <span
-              key={frame}
-              className="tl-tick-label"
-              data-unscaled
-              style={{ "--f": frame }}
-            >
-              {formatTimecode(frame, fps)}
-            </span>
-          ))}
+          {ticks.map((frame) => {
+            const timecode = formatTimecode(frame, fps);
+            const { lead, value } = quietTimecode(timecode, { trailing: true });
+            return (
+              <span
+                key={frame}
+                className="tl-tick-label"
+                data-unscaled
+                style={{
+                  "--f": frame,
+                  "--lead": lead.length,
+                  "--tail": lead.length + value.length,
+                }}
+              >
+                {timecode}
+              </span>
+            );
+          })}
         </div>
       </div>
       {range.in !== null && (
@@ -1175,6 +1186,7 @@ export function Timeline({
                   </div>
                 ))}
                 <canvas className="tl-bodies" ref={canvas} />
+                <i className="tl-hover" ref={gestures.marks.hoverBox} hidden />
                 {recording &&
                   layout.rows
                     .filter((row) => row.track.index === takeTrack?.index)
@@ -1236,12 +1248,6 @@ export function Timeline({
                           />
                         ))}
                       {rowClips.map(
-                        ({ clip, row }) =>
-                          selection.ids.has(clip.id) && (
-                            <ClipOutline key={clip.id} clip={clip} row={row} />
-                          ),
-                      )}
-                      {rowClips.map(
                         ({ clip }) =>
                           clip.transitionIn && (
                             <TransitionMark
@@ -1265,6 +1271,13 @@ export function Timeline({
                                 onEdit("Transition length", [command])
                               }
                             />
+                          ),
+                      )}
+                      {/* Brackets sit above the transitions they may cross. */}
+                      {rowClips.map(
+                        ({ clip, row }) =>
+                          selection.ids.has(clip.id) && (
+                            <ClipOutline key={clip.id} clip={clip} row={row} />
                           ),
                       )}
                     </div>
@@ -1296,8 +1309,23 @@ export function Timeline({
                               clip.duration * mounted.labelPpf >=
                               LENGTH_MIN_WIDTH
                             }
+                            selected={selection.ids.has(clip.id)}
                           />
                         ))}
+                    {clips
+                      .filter((item) => item.row === row)
+                      .map(
+                        ({ clip }) =>
+                          clip.transitionIn && (
+                            <TransitionLength
+                              key={`transition:${clip.id}`}
+                              clip={clip}
+                              transition={clip.transitionIn}
+                              fps={fps}
+                              selected={selection.transition === clip.id}
+                            />
+                          ),
+                      )}
                   </div>
                 ))}
               </div>

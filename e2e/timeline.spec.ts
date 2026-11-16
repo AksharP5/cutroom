@@ -130,6 +130,47 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
   await page.keyboard.press("Escape");
   await expect(selected).toHaveCount(0);
 
+  // Ruler labels keep their whole timecode and draw the zeros around the seconds quietly: the
+  // brightest pixel under `00:00:` is dimmer than the brightest under `05`.
+  const label = timeline.locator(".tl-tick-label", { hasText: "00:00:05:00" });
+  const png = await label.screenshot();
+  const [zeros, seconds] = await page.evaluate(async (data) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = new OffscreenCanvas(image.width, image.height);
+    const context = canvas.getContext("2d")!;
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, image.width, image.height).data;
+    const brightest = (from: number, to: number) => {
+      let most = 0;
+      for (let y = 0; y < image.height; y++)
+        for (let x = Math.floor(from); x < Math.ceil(to); x++)
+          most = Math.max(most, pixels[(y * image.width + x) * 4 + 1]!);
+      return most;
+    };
+    const char = image.width / 11;
+    return [brightest(0, char * 6), brightest(char * 6, char * 8)];
+  }, png.toString("base64"));
+  expect(zeros).toBeLessThan(seconds - 30);
+
+  // The clip under the pointer lights up over its body, and a press takes the light away.
+  const hover = timeline.locator(".tl-hover");
+  await expect(hover).toBeHidden();
+  const rule = (await clip("rule").boundingBox())!;
+  await page.mouse.move(rule.x + rule.width / 2, rule.y + rule.height / 2);
+  await expect(hover).toBeVisible();
+  const lit = (await hover.boundingBox())!;
+  expect(Math.abs(lit.x - rule.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(lit.width - rule.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(lit.y - rule.y)).toBeLessThanOrEqual(1);
+  await page.mouse.down();
+  await expect(hover).toBeHidden();
+  await page.mouse.up();
+  await page.keyboard.press("Escape");
+  await page.mouse.move(rule.x + rule.width / 2, rule.y - 200);
+  await expect(hover).toBeHidden();
+
   // Auto-select is a timeline edit; Shift+V then skips that track.
   await timeline.getByRole("button", { name: "Auto-select V1" }).click();
   await expect

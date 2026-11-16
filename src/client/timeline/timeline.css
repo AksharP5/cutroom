@@ -185,12 +185,24 @@
   height: var(--size-tick-minor);
   background: var(--line);
 }
+/*
+  Quiet zeros without elements: every scroll restyles the labels, so each stays one text node.
+  The mono face gives every character one width, so a gradient clipped to the text in ch units
+  colours the zero groups (--lead characters, and from --tail on) quietly.
+*/
 .tl-tick-label {
   position: absolute;
   top: var(--ruler-label-top);
   left: calc(var(--f) / var(--span) * 100% + 4px);
-  color: var(--text-tertiary);
-  font: var(--type-micro) / 9px var(--font-mono);
+  background: linear-gradient(
+    to right,
+    var(--text-quiet) calc(var(--lead) * 1ch),
+    var(--text-secondary) 0 calc(var(--tail) * 1ch),
+    var(--text-quiet) 0
+  );
+  background-clip: text;
+  color: transparent;
+  font: var(--type-2xs) / 10px var(--font-mono);
   font-stretch: var(--stretch-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -248,9 +260,18 @@
   align-items: center;
   gap: 3px;
   height: var(--size-marker-h);
-  color: var(--text-secondary);
-  font: var(--weight-medium) var(--type-micro) / 9px var(--font-sans);
+  color: var(--marker);
+  font: var(--weight-medium) var(--type-2xs) / 10px var(--font-sans);
   white-space: nowrap;
+}
+/* A name cut short by the next marker shows whole while its marker is hovered or focused. */
+.tl-marker:is(:hover, :focus-visible) {
+  z-index: 1;
+}
+.tl-marker:is(:hover, :focus-visible) span {
+  max-width: none;
+  background: var(--surface-panel);
+  box-shadow: 4px 0 0 var(--surface-panel);
 }
 /* The name gives way to the next marker or in/out bracket, and hides when under 16px is left. */
 .tl-marker span {
@@ -467,8 +488,7 @@ input.tl-track-gain {
 @media (hover: hover) and (pointer: fine) {
   .tl-track-button:hover::before,
   .tl-head-id:hover::before,
-  .tl-zoom-step:hover::before,
-  .tl-clip:hover::before {
+  .tl-zoom-step:hover::before {
     content: "";
     position: absolute;
     inset: 0;
@@ -556,6 +576,21 @@ input.tl-track-gain {
 .tl-selected {
   height: calc(100% - 2px);
 }
+/* A selected clip's name strip and rail turn to paper, with dark text. Instant. */
+.tl-clip.selected,
+.tl-label.selected {
+  --rail: var(--selection);
+  --head: var(--selection);
+}
+.tl-label.selected {
+  --clip-head-text: var(--on-selection);
+  --clip-head-meta: var(--on-selection-meta);
+  --text-quiet: var(--on-selection-quiet);
+}
+/* A text clip's words sit on its body, below the strip. */
+.tl-label.selected .tl-text-line {
+  color: var(--text-primary);
+}
 .tl-clip.locked,
 .tl-label.locked {
   opacity: var(--track-locked-opacity);
@@ -575,7 +610,7 @@ input.tl-track-gain {
   left: 0;
   z-index: var(--z-clip-selected);
 }
-/* Selection: a 1px paper outline inside the clip, with brackets at its ends, above the bodies. Instant. */
+/* Selection: a 1px paper outline inside the clip, with 2px brackets at its ends, above the bodies and transitions. Instant. */
 .tl-selected {
   z-index: var(--z-clip-selected);
   box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
@@ -588,16 +623,42 @@ input.tl-track-gain {
   position: absolute;
   top: -1px;
   bottom: -1px;
-  width: 6px;
+  width: calc(var(--stroke-bracket) + 5px);
   border: var(--stroke-bracket) solid var(--selection);
 }
 .tl-selected::before {
-  left: -3px;
+  left: calc(var(--stroke-bracket) * -1);
   border-right: 0;
 }
 .tl-selected::after {
-  right: -3px;
+  right: calc(var(--stroke-bracket) * -1);
   border-left: 0;
+}
+
+/*
+  The clip under the pointer takes the 7% white overlay, over its filmstrip and under its outline.
+  One box for the whole timeline, which lanes.ts moves only when the pointer reaches another clip
+  and hides while a press is down.
+*/
+.tl-hover {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  z-index: var(--z-clip-selected);
+  width: calc(var(--d) / var(--span) * 100% - 1px);
+  margin-top: 1px;
+  border-radius: var(--radius-clip);
+  background: var(--overlay-hover);
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+@media not ((hover: hover) and (pointer: fine)) {
+  .tl-hover {
+    display: none;
+  }
 }
 
 /* Names sit above the stretching layer, so text keeps its shape during a zoom. */
@@ -614,6 +675,8 @@ input.tl-track-gain {
   height: var(--size-clip-name);
   margin-top: 1px;
   padding: var(--stroke-rail) 5px 0 6px;
+  /* Quiet zeros on a kind strip: between its durations and the strip, 2.9:1 or more. */
+  --text-quiet: color-mix(in srgb, var(--clip-head-meta) 62%, var(--head));
   color: var(--clip-head-text);
   font: var(--weight-medium) var(--type-2xs) / 1 var(--font-sans);
   font-stretch: var(--stretch-condensed);
@@ -868,8 +931,8 @@ input.tl-track-gain {
   pointer-events: none;
 }
 
-/* A transition over its cut, below the name strip: a dimmed box with the diagonal of a mix. Its
-   ends take a length drag. */
+/* A transition over its cut, below the name strip: a paper wash with the diagonal of a mix and
+   paper ends, so a cut with a mix reads apart from a hard cut. Its ends take a length drag. */
 .tl-transition {
   position: absolute;
   left: calc(var(--s) / var(--span) * 100%);
@@ -878,22 +941,55 @@ input.tl-track-gain {
   top: calc(var(--size-clip-name) + 1px);
   bottom: 1px;
   z-index: var(--z-clip-selected);
-  border: var(--stroke-hair) solid var(--line-strong);
-  border-radius: var(--radius-clip);
+  border-inline: var(--stroke-hair) solid var(--transition-line);
   background:
     linear-gradient(
       to top right,
       transparent calc(50% - 1px),
-      var(--line-strong) 50%,
+      var(--transition-line) 50%,
       transparent calc(50% + 1px)
     ),
-    color-mix(in srgb, var(--surface-panel) 60%, transparent);
+    var(--transition-fill);
   pointer-events: auto;
   cursor: pointer;
 }
 .tl-transition.selected {
-  border-color: var(--selection);
+  --transition-fill: var(--transition-fill-selected);
+  --transition-line: var(--selection);
   box-shadow: inset 0 0 0 var(--stroke-hair) var(--selection);
+}
+/* The length, centred on the transition, once it is 28px wide. */
+.tl-transition-length {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100%);
+  top: calc(var(--size-clip-name) + 1px);
+  bottom: 1px;
+  container-type: inline-size;
+  pointer-events: none;
+}
+.tl-transition-length span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  padding: 1px 2px;
+  border-radius: var(--radius-clip);
+  background: var(--transition-length-backing);
+  color: var(--text-primary);
+  font: var(--type-micro) / 1 var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+.tl-transition-length.selected span {
+  background: var(--selection);
+  color: var(--on-selection);
+}
+@container (width < 28px) {
+  .tl-transition-length span {
+    display: none;
+  }
 }
 .tl-transition::before,
 .tl-transition::after {

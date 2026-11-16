@@ -17,10 +17,12 @@ import type { VoiceoverSession } from "../voiceover/session";
 import { blurPointerButton, hint } from "../keymap";
 import {
   formatTimecode,
+  quietTimecode,
   parseTimecode,
   timecodeDigits,
 } from "../../shared/timeline/timecode";
 import { transport, velocity } from "./transport";
+import { TimecodeText } from "../components/TimecodeText";
 import type { Transport } from "./transport";
 
 /** Writes the frame-driven parts of the bar straight to the DOM on every frame, without React. */
@@ -50,16 +52,21 @@ function Timecode({
   player: Transport;
   voiceover?: VoiceoverSession;
 }) {
+  const quiet = useRef<HTMLSpanElement>(null);
   const head = useRef<HTMLSpanElement>(null);
   const frames = useRef<HTMLSpanElement>(null);
   const [digits, setDigits] = useState<string | null>(null);
   const fps = player.use((state) => state.fps);
   const duration = player.use((state) => state.duration);
   useFrameText(player, ({ frame, fps }) => {
-    if (!head.current || !frames.current) return;
-    const text = formatTimecode(frame, fps);
-    head.current.textContent = text.slice(0, 9);
-    frames.current.textContent = text.slice(9);
+    const { lead, value } = quietTimecode(formatTimecode(frame, fps));
+    // Only a part that changed is written, so playback mostly touches the frames.
+    const write = (span: HTMLSpanElement | null, text: string) => {
+      if (span && span.textContent !== text) span.textContent = text;
+    };
+    write(quiet.current, lead);
+    write(head.current, value.slice(0, -2));
+    write(frames.current, value.slice(-2));
   });
 
   const finish = (seek: boolean) => {
@@ -78,6 +85,7 @@ function Timecode({
         hidden={digits !== null}
         onClick={() => setDigits("")}
       >
+        <span ref={quiet} className="timecode-quiet" />
         <span ref={head} />
         <span ref={frames} className="edit-now-frames" />
       </button>
@@ -100,7 +108,9 @@ function Timecode({
           }}
         />
       )}
-      <span className="edit-duration">{formatTimecode(duration, fps)}</span>
+      <span className="edit-duration">
+        <TimecodeText timecode={formatTimecode(duration, fps)} />
+      </span>
       {/* After the clock, so starting a take never moves the timecode. */}
       {voiceover && <VoiceoverRecordMark session={voiceover} />}
     </div>
@@ -268,12 +278,14 @@ export function TransportBar({
             <span className="edit-range">
               {range.in !== null && (
                 <>
-                  <span>In</span> {formatTimecode(range.in, fps)}
+                  <span>In</span>{" "}
+                  <TimecodeText timecode={formatTimecode(range.in, fps)} />
                 </>
               )}
               {range.out !== null && (
                 <>
-                  <span>Out</span> {formatTimecode(range.out - 1, fps)}
+                  <span>Out</span>{" "}
+                  <TimecodeText timecode={formatTimecode(range.out - 1, fps)} />
                 </>
               )}
             </span>

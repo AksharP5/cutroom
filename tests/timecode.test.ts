@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { formatTimecode, parseTimecode } from "../src/shared/timeline/timecode";
+import {
+  formatTimecode,
+  parseTimecode,
+  quietTimecode,
+} from "../src/shared/timeline/timecode";
 
 const ntsc24 = { num: 24000, den: 1001 };
 const ntsc30 = { num: 30000, den: 1001 };
@@ -37,4 +41,18 @@ test("frames past the rate carry, and nothing else parses", () => {
   expect(parseTimecode("", thirty)).toBeNull();
   expect(parseTimecode("12:04", thirty)).toBeNull();
   expect(parseTimecode("123456789", thirty)).toBeNull();
+});
+
+test("quiet zeros split off the zero groups and keep the timecode whole", () => {
+  const parts = (text: string, trailing?: boolean) =>
+    Object.values(quietTimecode(text, { trailing }));
+  expect(parts("00:00:05:12")).toEqual(["00:00:", "05:12", ""]);
+  expect(parts("00:00:05:00", true)).toEqual(["00:00:", "05", ":00"]);
+  expect(parts("00:01:00:00", true)).toEqual(["00:", "01:00", ":00"]);
+  expect(parts("01:00:00:00")).toEqual(["", "01:00:00:00", ""]);
+  // Zero itself keeps its frames group, so a label is never blank.
+  expect(parts("00:00:00:00", true)).toEqual(["00:00:00:", "00", ""]);
+  expect(parts("00:00:00:07")).toEqual(["00:00:00:", "07", ""]);
+  for (const text of ["00:00:05:00", "12:34:56:29", "00:00:00:00"])
+    expect(parts(text, true).join("")).toBe(text);
 });
