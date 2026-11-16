@@ -362,11 +362,20 @@ test.skipIf(!tools)(
         lengths.slice(0, piece).reduce((sum, length) => sum + length, 0),
       );
 
-      // Export reads the recording from its first timestamp; so do the pieces and the proxy.
+      // Export reads the recording from its first timestamp, as FFmpeg reports it; so do the
+      // pieces and the proxy. That is 1.5 s, or 23 ms earlier where FFmpeg 7 counts the AAC
+      // encoder's lead-in.
+      const start = Number(
+        Bun.spawnSync([
+          ...["ffprobe", "-v", "error", "-show_entries", "format=start_time"],
+          ...["-of", "csv=p=0", source],
+        ]).stdout.toString(),
+      );
+      expect(start).toBeWithin(1.45, 1.51);
       const original = await frames(source);
       const expected = {
         numbers: original.numbers,
-        times: original.times.map((time) => Number((time - 1.5).toFixed(6))),
+        times: original.times.map((time) => Number((time - start).toFixed(6))),
       };
       const get = async (name: number | "init") => {
         const response = await fetch(
