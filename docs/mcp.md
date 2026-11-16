@@ -2,30 +2,30 @@
 
 The stdio bridge connects to a running local Cutroom server. It accepts only loopback HTTP origins. The local HTTP MCP endpoint is `/mcp`.
 
-| Tool                                                       | Behavior                                                           |
-| ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| `projects_list`                                            | List registered project folders.                                   |
-| `project_create`, `project_import`                         | Create a composition or register an existing folder.               |
-| `project_read`                                             | Read annotations and transcript metadata.                          |
-| `project_lint`                                             | Run HyperFrames lint: counts and findings, errors first.           |
-| `media_list`                                               | Inspect local media elements and their timing.                     |
-| `media_rename`, `media_remove`                             | Rename a media file with its references, or move it to the trash.  |
-| `source_read`, `source_write`                              | Read source and save with its exact expected version.              |
-| `annotation_add`, `annotation_update`, `annotation_remove` | Add a new timed note, edit its content, or remove an unsent note.  |
-| `review_list`, `review_add`                                | Read the review queue or add a queued request.                     |
-| `review_claim`, `review_complete`, `review_block`          | Start, finish, or ask a question about a queued note.              |
-| `review_reorder`                                           | Move a note before another, or to the end, for the owner.          |
-| `review_withdraw`                                          | Withdraw a note the owner's newer message cancels.                 |
-| `review_accept`, `review_send_back`, `review_reply`        | Act for the owner on done or blocked notes (outside clients only). |
-| `review_restore`, `review_release`                         | Re-queue a withdrawn note or a stuck claim.                        |
-| `transcripts_list`, `transcript_import`, `transcript_edit` | Read word timing, import a script, and cut or restore words.       |
-| `transcription_start`, `transcription_status`              | Run and inspect local transcription.                               |
-| `history_list`, `history_undo`, `history_redo`             | Use the editor's shared history.                                   |
-| `timeline_read`, `timeline_edit`                           | Read the timeline in frames and apply a batch of commands.         |
-| `timeline_destinations`                                    | Read or set the destination tracks for Insert and Overwrite.       |
-| `timeline_copy`                                            | Copy clips and linked partners into the in-app clipboard.          |
-| `timeline_view`                                            | Render up to eight frames, or report composition setup errors.     |
-| `export_start`, `export_status`, `export_cancel`           | Start, inspect, and cancel the editor's render jobs.               |
+| Tool                                                            | Behavior                                                                    |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `projects_list`                                                 | List registered project folders.                                            |
+| `project_create`, `project_import`                              | Create a composition or register an existing folder.                        |
+| `project_read`                                                  | Read annotations and transcript metadata.                                   |
+| `project_lint`                                                  | Run HyperFrames lint: counts and findings, errors first.                    |
+| `media_list`                                                    | Inspect local media elements and their timing.                              |
+| `media_rename`, `media_remove`                                  | Rename a media file with its references, or move it to the trash.           |
+| `source_read`, `source_write`                                   | Read source and save with its exact expected version.                       |
+| `annotation_add`, `annotation_update`, `annotation_remove`      | Add a new timed note, edit its content, or remove an unsent note.           |
+| `review_list`, `review_add`                                     | Read the review queue or add a queued request.                              |
+| `review_claim`, `review_complete`, `review_block`               | Start, finish, or ask a question about a queued note.                       |
+| `review_reorder`                                                | Move a note before another, or to the end, for the owner.                   |
+| `review_withdraw`                                               | Withdraw a note the owner's newer message cancels.                          |
+| `review_accept`, `review_send_back`, `review_reply`             | Act for the owner on done or blocked notes (outside clients only).          |
+| `review_restore`, `review_release`                              | Re-queue a withdrawn note or a stuck claim.                                 |
+| `transcripts_list`, `transcript_import`, `transcript_edit`      | Read word timing, import a script, and cut or restore words.                |
+| `transcription_start`, `transcription_status`                   | Run and inspect local transcription.                                        |
+| `history_list`, `history_undo`, `history_redo`                  | Use the editor's shared history.                                            |
+| `timeline_read`, `timeline_edit`                                | Read the timeline in frames and apply a batch of commands.                  |
+| `timeline_destinations`                                         | Read or set the destination tracks for Insert and Overwrite.                |
+| `timeline_copy`                                                 | Copy clips and linked partners into the in-app clipboard.                   |
+| `timeline_view`                                                 | Render up to eight frames, or report composition setup errors.              |
+| `export_start`, `export_status`, `export_cancel`, `export_list` | Start, inspect, and cancel the editor's render jobs, and list past renders. |
 
 Start with `projects_list` and retain the returned project ID. Before saving an existing file, use `source_read` and pass its exact version to `source_write`. To create a file and its parent folders, pass `expectedVersion: null`; an existing path is rejected with 409. A stale version is rejected. Cutroom's native connection can mutate only the project with its active run; every project mutation checks that token before writing, including source repair. Project creation and import have no existing target and always require separate approval, even with Always allow enabled.
 
@@ -43,7 +43,7 @@ Cutroom tells its native agents which of its tools may run without asking. The r
 
 | Asks                                                  | Tools                                                                                                                                                                                                                                                                                                                                                               | Why                                                                                                                                               |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Never asks                                            | Reads: `projects_list`, `project_read`, `project_lint`, `media_list`, `source_marks`, `source_read`, `transcripts_list`, `transcription_status`, `history_list`, `review_list`, `timeline_read`, `timeline_copy`, `timeline_view`, `export_status`                                                                                                                  | Nothing changes.                                                                                                                                  |
+| Never asks                                            | Reads: `projects_list`, `project_read`, `project_lint`, `media_list`, `source_marks`, `source_read`, `transcripts_list`, `transcription_status`, `history_list`, `review_list`, `timeline_read`, `timeline_copy`, `timeline_view`, `export_status`, `export_list`                                                                                                   | Nothing changes.                                                                                                                                  |
 | Never asks                                            | Queue bookkeeping: `review_claim`, `review_complete`, `review_block`, `review_release`                                                                                                                                                                                                                                                                              | They only move a note between queue states in `.cutroom/review.json`, outside project content and undo history. No file, clip, or render differs. |
 | Never asks                                            | View preferences: `timeline_destinations`                                                                                                                                                                                                                                                                                                                           | It only chooses the destination tracks in `.cutroom/view.json`, outside project content and undo history. No file, clip, or render differs.       |
 | Asks, until you choose **Always allow Cutroom edits** | Project edits: `source_write`, `media_rename`, `media_remove`, `timeline_edit`, `transcript_edit`, `transcript_import`, `transcription_start`, `history_undo`, `history_redo`, `annotation_add`, `annotation_update`, `annotation_remove`, `review_add`, `review_withdraw`, `review_reorder`, `review_accept`, `review_send_back`, `review_reply`, `review_restore` | They change project files, note content, or cancel a request you made.                                                                            |
@@ -353,6 +353,8 @@ Only one export can run at a time across all projects, whether started in the ed
 The response includes `jobId` and `outputPath`. `export_status` takes `jobId` and returns `status`, `stage`, `stageProgress`, `progress` from 0 to 100, `estimate`, `outputPath`, `sizeBytes`, `error`, `format`, `size` (the rendered frame), `fps`, `range` (in the export's frames at `fps`), `encoder` once an export drawn from its sources finishes, and timing/preset details. `estimate` is either null or `{ milliseconds, stage }` for the current stage, using the dialog's measured frame-rate estimator. Preparation, assembly, retries, and stalled progress do not claim an estimate. `sizeBytes` is available once published; `error` preserves the failure cause, including cleanup errors. An export whose browsers make no startup progress for 150 seconds fails with that cause. Completed, failed, and cancelled jobs remain queryable for five minutes after cleanup, while the server remains running.
 
 `export_cancel` takes `jobId` and waits for the worker and its browsers to exit and for partial-output cleanup before returning `cancelled`. An unresponsive worker is stopped after two seconds. Cleanup failure returns an error and leaves the job `failed`. Cancellation after publication keeps the completed file. A native Cutroom agent can start and cancel jobs only for its active run's project. `export_status` is read-only. Start and cancel require separate native approval, including when **Always allow Cutroom edits** is enabled, because exports create output files beyond editable project source.
+
+`export_list` takes `projectId` and returns the project's finished renders, newest first: each `path`, `format`, `sizeBytes` and `modifiedAt` (milliseconds). It lists every export in `.cutroom/renders` and the ones saved to other folders, which Cutroom records in `.cutroom/renders.json` when it publishes them, while the file is still the one it wrote. Agents can't delete renders; the owner deletes them from the Export dialog.
 
 Agent jobs appear in the open editor's Export indicator. The dialog follows the running job through completion or cancellation even if you switch projects or reload in another one, and `export_status` also reads owner-started jobs. Existing progress and inline-video routes remain `/api/render/:jobId/progress` and `/view`.
 

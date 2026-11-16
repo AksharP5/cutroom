@@ -258,6 +258,11 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "the export",
   },
+  export_list: {
+    verb: ["Listed", "Listing", "List"],
+    kind: "project",
+    object: () => "the renders",
+  },
   export_cancel: {
     verb: ["Cancelled", "Cancelling", "Cancel"],
     kind: "edit",

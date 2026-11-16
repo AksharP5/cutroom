@@ -4,6 +4,7 @@ import type { Fps } from "../../shared/timeline/schema";
 import {
   ExportJobSchema,
   exportRange,
+  RendersSchema,
   retimeFrames,
 } from "../../shared/export";
 import type {
@@ -170,6 +171,21 @@ export function observeExports(projectId: string) {
     stopReady();
   };
 }
+
+/** The project's past renders, newest first. */
+export const listRenders = (projectId: string) =>
+  renderApi(
+    `/projects/${encodeURIComponent(projectId)}/exports`,
+    RendersSchema,
+  ).then(({ renders }) => renders);
+
+/** Deletes one of the project's renders from disk. */
+export const deleteRender = (projectId: string, path: string) =>
+  renderApi(
+    `/projects/${encodeURIComponent(projectId)}/exports`,
+    z.object({ deleted: z.string() }),
+    { method: "DELETE", body: JSON.stringify({ path }) },
+  );
 
 /** Whether exports drawn from their sources can encode on the GPU. */
 export const exportGpuAvailable = () =>

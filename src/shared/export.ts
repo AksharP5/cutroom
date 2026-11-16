@@ -158,6 +158,16 @@ export const exportFilename = (name: string, format: ExportFormat = "mp4") =>
       .slice(0, 199 - format.length) || "Cut"
   }.${format}`;
 
+/** A finished render Cutroom made for a project, wherever it was saved. */
+export const RenderFileSchema = z.object({
+  path: z.string(),
+  format: ExportFormatSchema,
+  sizeBytes: z.number().nonnegative(),
+  modifiedAt: z.number(),
+});
+export type RenderFile = z.infer<typeof RenderFileSchema>;
+export const RendersSchema = z.object({ renders: z.array(RenderFileSchema) });
+
 /** A frame to save as a PNG still, named by the timecode the person saw. */
 export const StillRequestSchema = z.object({
   composition: z.string().min(1).default("index.html"),

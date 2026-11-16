@@ -72,6 +72,17 @@ export function registerExportTools(
     ({ jobId }) => request(`/render/${encodeURIComponent(jobId)}`),
   );
   server.registerTool(
+    "export_list",
+    {
+      description:
+        "List the project's finished renders, newest first: every export in its .cutroom/renders and the ones the editor or an agent saved to other folders, while each file is still the one Cutroom wrote. Each has its absolute path, format, byte size and modified time in milliseconds.",
+      inputSchema: { projectId: z.string() },
+      annotations: { ...edit, readOnlyHint: true },
+    },
+    ({ projectId }) =>
+      request(`/projects/${encodeURIComponent(projectId)}/exports`),
+  );
+  server.registerTool(
     "export_cancel",
     {
       description:
