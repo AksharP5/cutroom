@@ -198,7 +198,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
           };
         }),
       );
-      const box = canvas.getBoundingClientRect();
+      // The canvas stays hidden until its first frame is drawn, so measure the picture it fills.
+      const box = (canvas.parentElement ?? canvas).getBoundingClientRect();
       const width = Math.max(1, Math.round(box.width * devicePixelRatio));
       const height = Math.max(1, Math.round(box.height * devicePixelRatio));
       if (canvas.width !== width || canvas.height !== height) {

@@ -225,6 +225,21 @@ Every edit forces about 750 style recalculations in the preview, one or two per 
 
 The frame-time budgets above and in Trim preview, Position preview and Track heights stay. They measure what a user sees, and some regressions (a slow style pass over the same elements) change time without changing any count. The counts catch the common regressions on any runner; the ceilings catch the rest when it is large. The noisiest timing assertion, Position's added late-frame rate during playback, already pairs with exact counts of observations and box reads per run, so it was left as it is.
 
+## Timeline reads
+
+Each change should read the timeline once. One edit writes several project files (the composition, `cutroom.json`, `.cutroom/review.json`, and their temporary copies), and the server announces each as a project file event. The editor used to read the timeline and history for every event, once more when the review notes it reloaded on those events changed, and once more after its own edit. It now gathers the events of one burst for 100 ms and answers them with one queued read. An edit's answer is already the view a read returns, so the edit itself reads only the history. Undo and redo answer without a view, so they still read once themselves and once for their file events.
+
+Measured on November 15, 2026 with Chromium 1720x1050 on a shared machine: five rounds of razor, undo, redo and an agent marker over HTTP, on the interview workload (29 clips) and on 300 one-second element clips. Reads are counted per action as `GET /timeline` / `GET /history`. Read time is the sum of those requests' time to first byte, median of five. Server CPU is the server process's user and system time over the same window, in 10 ms steps, and includes the edit itself and preview work.
+
+| Action, 300 clips | Reads before | Reads after | Read time before | Read time after | Server CPU before | Server CPU after |
+| ----------------- | -----------: | ----------: | ---------------: | --------------: | ----------------: | ---------------: |
+| Edit (E)          |    5-7 / 5-7 |       1 / 2 |           240 ms |           72 ms |            570 ms |           500 ms |
+| Undo              |    4-6 / 4-6 |       2 / 2 |           222 ms |           84 ms |            550 ms |           500 ms |
+| Redo              |    4-6 / 4-6 |       2 / 2 |            48 ms |           26 ms |            240 ms |           230 ms |
+| Agent edit        |        3 / 3 |       1 / 1 |            27 ms |            8 ms |            100 ms |            80 ms |
+
+The interview workload shows the same counts, with read time falling from 28 to 5 ms per edit and 16 to 5 ms per agent edit. An outside edit now shows about 70 ms later (median 153 to 225 ms from the request to the last read on the interview workload), the cost of waiting for the rest of its burst. The editor's own edits are unaffected: they show before the server answers. `e2e/timeline-reads.spec.ts` fails when an edit, an undo or an agent edit reads more than this.
+
 ## Trim preview
 
 The 400-clip roll check sends 540 pointer updates over 180 displayed frames per run, with all clips mounted at Fit. Each run must send more than ten seeks, send no more seeks than displayed frames, and keep at most one seek in flight. These assertions gate seek coalescing independently of runner speed.

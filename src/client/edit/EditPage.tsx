@@ -40,6 +40,7 @@ import {
   editTimeline,
   loadTimeline,
   openTimeline,
+  refreshTimeline,
   stepHistory,
   useTimeline,
 } from "./timeline";
@@ -146,7 +147,7 @@ export function EditPage({
     const stopProject = subscribeProjectEvents(
       projectId,
       "message",
-      () => void loadTimeline(projectId, closing.signal).catch(fail),
+      () => void refreshTimeline(projectId, closing.signal).catch(fail),
     );
     // The preview server's own invalidation decides what reloads the picture: HTML, CSS, scripts, media.
     const stopAnimationFeedback = subscribeProjectEvents(
