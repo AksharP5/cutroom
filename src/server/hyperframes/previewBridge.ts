@@ -1642,7 +1642,12 @@ function installPreviewBridge(
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
     "video[data-cutroom-held] { visibility: hidden !important; }" +
-    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }";
+    "video[data-cutroom-held][data-cutroom-flow] { position: absolute !important; }" +
+    // While a video seeks, the runtime shows a still copy and sets the video to display:none,
+    // which cancels its transition animations. Its CSS adapter keeps their handles and its next
+    // pause revives them beside the new ones, so each hold composes the fade once more. Hidden
+    // in place, the video keeps its one animation per edge.
+    "video[data-hf-seek-video]:is([data-transition-in], [data-transition-out]) { display: block !important; visibility: hidden !important; }";
   document.head.append(holdStyle);
   const cancelRelease = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
