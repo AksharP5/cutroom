@@ -43,7 +43,12 @@ import type { Row, RowLayout, TrackClips } from "./math";
 import { MEDIA_DRAG_TYPE, mediaDrag } from "./mediaDrag";
 import { slideClips } from "./motion";
 import type { Offset } from "./motion";
-import { clickSelection, emptySelection, marqueeSelection } from "./selection";
+import {
+  clickSelection,
+  emptySelection,
+  gapSelection,
+  marqueeSelection,
+} from "./selection";
 import type { Selection } from "./selection";
 import type { TimelineViewport } from "./view";
 
@@ -69,6 +74,15 @@ export interface LaneGestureOptions {
   onGesture(active: boolean): void;
   onTrackDrag(active: boolean): void;
 }
+
+/** The height of a clip's name strip, read once from the design tokens. */
+let strip: number | undefined;
+const nameStrip = () =>
+  (strip ??= parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      "--size-clip-name",
+    ),
+  ));
 
 const sameIds = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
   a.size === b.size && [...a].every((id) => b.has(id));
@@ -96,6 +110,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
+  /** The gap a press on an empty lane would select if it stays a click. */
+  const pressedGap = useRef<Selection | null>(null);
   /** A pressed clip that was already selected with others: a click without a drag selects it alone. */
   const kept = useRef<string | null>(null);
   /** Transforms as last written, so an unchanged clip is not restyled. */
@@ -479,6 +495,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       clip,
       x: event.clientX - box.left,
       width: box.width,
+      strip: event.clientY - box.top < nameStrip(),
       ...(mix === "gain" || mix === "fadeIn" || mix === "fadeOut"
         ? { mix }
         : mix === "point"
@@ -680,14 +697,13 @@ export function useLaneGestures(options: LaneGestureOptions) {
     latest.current.onTrackDrag(false);
 
     if (!active) {
-      // A marquee: a click on an empty lane without a modifier deselects.
+      // A marquee: a click on an empty lane without a modifier selects the gap there, as in
+      // Resolve, or deselects.
       clear();
-      if (
-        outcome === "click" &&
-        marqueeBase.current === emptySelection &&
-        selection.ids.size
-      )
-        onSelect(emptySelection);
+      if (outcome === "click" && marqueeBase.current === emptySelection) {
+        if (pressedGap.current) onSelect(pressedGap.current);
+        else if (selection.ids.size || selection.gap) onSelect(emptySelection);
+      }
       return;
     }
     if (outcome === "click" && edit) {
@@ -892,8 +908,18 @@ export function useLaneGestures(options: LaneGestureOptions) {
     }).gesture;
     onGesture(true);
     if (intent.kind === "marquee") {
-      marqueeBase.current =
-        toggle || event.shiftKey ? selection : emptySelection;
+      const modified = toggle || event.shiftKey;
+      marqueeBase.current = modified ? selection : emptySelection;
+      const row = rowAt(event.clientY);
+      const ppf = view()?.ppf;
+      pressedGap.current =
+        !modified && row && ppf
+          ? gapSelection(
+              timeline,
+              row.track.index,
+              Math.floor(local(event.clientX, 0).x / ppf),
+            )
+          : null;
       return;
     }
     kept.current = keep && hit && selection.ids.size > 1 ? hit.clip.id : null;

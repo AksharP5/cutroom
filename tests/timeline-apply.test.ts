@@ -9,6 +9,7 @@ import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
+import { syncOffsets } from "../src/shared/timeline/sync";
 import type {
   Clip,
   CommandInput,
@@ -2045,4 +2046,230 @@ test("paste insert refuses a linked partner on an excluded track and a locked de
       options,
     ),
   ).toThrow("locked");
+});
+
+// A talk recorded as one file, cut into picture and linked sound with five seconds of source.
+const talk = (
+  id: string,
+  start: number,
+  duration: number,
+  mediaStart: number,
+) => [
+  clip(id, 0, start, duration, {
+    link: `lk-${id}`,
+    mediaStart,
+    sourceDuration: 5,
+  }),
+  clip(`${id}-sound`, 1, start, duration, {
+    kind: "audio",
+    link: `lk-${id}`,
+    mediaStart,
+    sourceDuration: 5,
+    hasAudio: true,
+  }),
+];
+const avTracks: Partial<Track>[] = [
+  { index: 0, kind: "video" },
+  { index: 1, kind: "audio" },
+];
+
+test("closeGap closes a gap on every auto-select track and keeps sound in sync", () => {
+  const state = timeline(
+    [...talk("a", 0, 30, 0), ...talk("b", 60, 30, 2)],
+    avTracks,
+  );
+  const closed = run(state, { type: "closeGap", track: 0, at: 45 });
+  expect(positions(closed)).toEqual({
+    a: [0, 0, 30],
+    "a-sound": [1, 0, 30],
+    b: [0, 30, 30],
+    "b-sound": [1, 30, 30],
+  });
+  expect(
+    editLabel(
+      [CommandSchema.parse({ type: "closeGap", track: 0, at: 45 })],
+      state,
+      "",
+      "pending",
+    ),
+  ).toBe("Close the 1 s gap on V1 at 00:00:01:00");
+});
+
+test("closeGap refuses what Resolve refuses: a clip in the gap, a locked track, and no gap", () => {
+  const music = clip("music", 2, 20, 50, {
+    kind: "audio",
+    hasAudio: true,
+    src: "music.wav",
+  });
+  const tracks: Partial<Track>[] = [...avTracks, { index: 2, kind: "audio" }];
+  const state = timeline(
+    [...talk("a", 0, 30, 0), ...talk("b", 60, 30, 2), music],
+    tracks,
+  );
+  expect(() => run(state, { type: "closeGap", track: 0, at: 45 })).toThrow(
+    "music.wav on A2 is in the gap. Turn off auto-select on A2 to close the gap without it.",
+  );
+  // Without auto-select, the music bed stays where it is.
+  const off = timeline(state.clips, [
+    ...avTracks,
+    { index: 2, kind: "audio", autoSelect: false },
+  ]);
+  expect(
+    positions(run(off, { type: "closeGap", track: 0, at: 45 })).music,
+  ).toEqual([2, 20, 50]);
+  // Sound on a track that does not ripple would fall out of sync with its picture.
+  const stranded = timeline(
+    state.clips.filter((item) => item !== music),
+    [
+      { index: 0, kind: "video" },
+      { index: 1, kind: "audio", autoSelect: false },
+    ],
+  );
+  expect(() => run(stranded, { type: "closeGap", track: 0, at: 45 })).toThrow(
+    "Linked clips of talk.mp4 on A1 do not ripple, so closing the gap would put them out of sync. Turn on auto-select on A1, or unlink them.",
+  );
+  const locked = timeline(state.clips, [
+    { index: 0, kind: "video", locked: true },
+    ...tracks.slice(1),
+  ]);
+  expect(() => run(locked, { type: "closeGap", track: 0, at: 45 })).toThrow(
+    "Track V1 is locked.",
+  );
+  expect(() => run(state, { type: "closeGap", track: 0, at: 95 })).toThrow(
+    "Nothing follows frame 95 on V1, so there is no gap to close.",
+  );
+  expect(() => run(state, { type: "closeGap", track: 0, at: 10 })).toThrow(
+    "Frame 10 on V1 is inside talk.mp4, not a gap.",
+  );
+});
+
+test("slip changes the source of a clip and its sound, never its place, and stops at the source's ends", () => {
+  const state = timeline(talk("a", 30, 60, 1), avTracks);
+  const slipped = run(state, { type: "slip", clipId: "a", by: 15 });
+  expect(positions(slipped)).toEqual(positions(state));
+  expect(slipped.clips.map((item) => item.mediaStart)).toEqual([1.5, 1.5]);
+  // One second before the in point and two after the out point.
+  expect(() => run(state, { type: "slip", clipId: "a", by: -31 })).toThrow(
+    "talk.mp4 can slip at most 30 frames earlier in its source.",
+  );
+  expect(() => run(state, { type: "slip", clipId: "a", by: 61 })).toThrow(
+    "talk.mp4 can slip at most 60 frames later in its source.",
+  );
+  expect(
+    run(state, { type: "slip", clipId: "a", by: 60 }).clips[0]!.mediaStart,
+  ).toBe(3);
+  const still = timeline(
+    [
+      clip("logo", 0, 0, 30, {
+        kind: "image",
+        mediaStart: null,
+        src: "logo.png",
+      }),
+    ],
+    avTracks,
+  );
+  expect(() => run(still, { type: "slip", clipId: "logo", by: 1 })).toThrow(
+    "logo.png has no source to slip.",
+  );
+});
+
+test("slipping the sound alone puts it out of sync by that many frames", () => {
+  const state = timeline(talk("a", 30, 60, 1), avTracks);
+  const slipped = run(state, {
+    type: "slip",
+    clipId: "a-sound",
+    by: -3,
+    linked: false,
+  });
+  expect(slipped.clips.map((item) => item.mediaStart)).toEqual([1, 0.9]);
+  expect(Object.fromEntries(syncOffsets(slipped))).toEqual({
+    a: -3,
+    "a-sound": 3,
+  });
+  const moved = run(state, {
+    type: "move",
+    clipIds: ["a-sound"],
+    by: 5,
+    linked: false,
+  });
+  expect(Object.fromEntries(syncOffsets(moved))).toEqual({
+    a: -5,
+    "a-sound": 5,
+  });
+  expect(syncOffsets(state).size).toBe(0);
+});
+
+test("slide moves a clip between its neighbours, which trim to follow with their sound", () => {
+  const state = timeline(
+    [...talk("a", 0, 30, 0), ...talk("b", 30, 30, 1), ...talk("c", 60, 30, 3)],
+    avTracks,
+  );
+  const slid = run(state, { type: "slide", clipId: "b", by: 10 });
+  expect(positions(slid)).toEqual({
+    a: [0, 0, 40],
+    "a-sound": [1, 0, 40],
+    b: [0, 40, 30],
+    "b-sound": [1, 40, 30],
+    c: [0, 70, 20],
+    "c-sound": [1, 70, 20],
+  });
+  const source = Object.fromEntries(
+    slid.clips.map((item) => [item.id, item.mediaStart]),
+  );
+  expect([source.a, source.b, source.c]).toEqual([0, 1, 3 + 10 / 30]);
+  expect(() => run(state, { type: "slide", clipId: "b", by: 30 })).toThrow(
+    "talk.mp4 can slide at most 29 frames later: then talk.mp4 would be shorter than one frame.",
+  );
+  // c starts three seconds in, but a has only five seconds of source in all.
+  const tight = timeline(
+    [...talk("a", 0, 30, 4), ...talk("b", 30, 30, 1), ...talk("c", 60, 30, 3)],
+    avTracks,
+  );
+  expect(() => run(tight, { type: "slide", clipId: "b", by: 1 })).toThrow(
+    "talk.mp4 cannot slide later: talk.mp4 has no more source after its out point.",
+  );
+});
+
+test("slide into a gap shrinks it and stops at the next clip", () => {
+  const state = timeline(
+    [clip("a", 0, 0, 30), clip("b", 0, 30, 30), clip("c", 0, 70, 30)],
+    avTracks,
+  );
+  expect(positions(run(state, { type: "slide", clipId: "b", by: 10 }))).toEqual(
+    {
+      a: [0, 0, 40],
+      b: [0, 40, 30],
+      c: [0, 70, 30],
+    },
+  );
+  expect(() => run(state, { type: "slide", clipId: "b", by: 11 })).toThrow(
+    "talk.mp4 can slide at most 10 frames later: then talk.mp4 would cover talk.mp4.",
+  );
+});
+
+test("unlink separates picture and sound, link joins them again with any partners", () => {
+  const state = timeline(talk("a", 0, 30, 0), avTracks);
+  const apart = run(state, { type: "unlink", clipIds: ["a"] });
+  expect(apart.clips.map((item) => item.link)).toEqual([null, null]);
+  expect(
+    positions(run(apart, { type: "move", clipIds: ["a"], by: 5 }))["a-sound"],
+  ).toEqual([1, 0, 30]);
+  const together = run(apart, { type: "link", clipIds: ["a", "a-sound"] });
+  const [link] = new Set(together.clips.map((item) => item.link));
+  expect(link).toBeString();
+  expect(
+    positions(run(together, { type: "move", clipIds: ["a"], by: 5 }))[
+      "a-sound"
+    ],
+  ).toEqual([1, 5, 30]);
+  const music = clip("music", 2, 0, 30, { kind: "audio", hasAudio: true });
+  const three = run(
+    timeline(
+      [...state.clips, music],
+      [...avTracks, { index: 2, kind: "audio" }],
+    ),
+    { type: "link", clipIds: ["a", "music"] },
+  );
+  expect(new Set(three.clips.map((item) => item.link)).size).toBe(1);
+  expect(run(state, { type: "link", clipIds: ["a", "a-sound"] })).toBe(state);
 });

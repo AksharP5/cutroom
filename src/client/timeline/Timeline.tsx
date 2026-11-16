@@ -1,3 +1,4 @@
+import { syncOffsets } from "../../shared/timeline/sync";
 import { useTrackResize } from "./heights";
 import {
   MIN_TRACK_HEIGHT,
@@ -261,6 +262,7 @@ const ClipLabel = memo(function ClipLabel({
   selected,
   offline,
   synced,
+  offset,
 }: {
   clip: Clip;
   row: Row;
@@ -271,6 +273,8 @@ const ClipLabel = memo(function ClipLabel({
   offline: boolean;
   /** Sound right under its own picture, which already names it: shown on hover or selection. */
   synced: boolean;
+  /** Frames this clip has drifted from its linked picture or sound, as Resolve's badge shows. */
+  offset: number | undefined;
 }) {
   const end = clip.start + clip.duration;
   const name = clipName(clip);
@@ -316,6 +320,15 @@ const ClipLabel = memo(function ClipLabel({
       >
         {name}
       </span>
+      {offset !== undefined && (
+        <span
+          className="tl-sync"
+          data-sync={offset}
+          title={`Out of sync by ${Math.abs(offset)} ${Math.abs(offset) === 1 ? "frame" : "frames"}`}
+        >
+          {offset > 0 ? `+${offset}` : offset}
+        </span>
+      )}
       {clip.textPreview && clip.textPreview !== name && (
         <span className="tl-text-line">
           <span
@@ -865,6 +878,10 @@ export function Timeline({
       .join("\n"),
   );
   const offline = useMemo(() => new Set(offlineIds.split("\n")), [offlineIds]);
+  const offsets = useMemo(
+    () => syncOffsets({ clips: timeline.clips, fps: timeline.fps }),
+    [timeline.clips, timeline.fps],
+  );
   const synced = useMemo(() => {
     const pictures = new Map(
       timeline.clips
@@ -1463,6 +1480,16 @@ export function Timeline({
                             />
                           ),
                       )}
+                      {selection.gap?.track === row.track.index && (
+                        <i
+                          className="tl-gap"
+                          data-gap={`${selection.gap.from}-${selection.gap.to}`}
+                          style={{
+                            "--s": selection.gap.from,
+                            "--d": selection.gap.to - selection.gap.from,
+                          }}
+                        />
+                      )}
                       {/* Brackets sit above the transitions they may cross. */}
                       {rowClips.map(
                         ({ clip, row }) =>
@@ -1502,6 +1529,7 @@ export function Timeline({
                             selected={selection.ids.has(clip.id)}
                             offline={offline.has(clip.id)}
                             synced={synced.has(clip.id)}
+                            offset={offsets.get(clip.id)}
                           />
                         ))}
                     {mounted &&

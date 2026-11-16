@@ -137,8 +137,17 @@ export function ProjectTimeline({
       () => {
         revealTimeline();
         // The store's selection, not this render's: a click just before the key has not rendered.
-        const { ids, transition } = useTimeline.getState().selection;
-        const target = { selection: ids, transition, frame: clock.frame() };
+        const {
+          selection: { ids, transition, gap },
+          trimKeys,
+        } = useTimeline.getState();
+        const target = {
+          selection: ids,
+          transition,
+          gap,
+          ...(tool === "trim" && { trim: trimKeys }),
+          frame: clock.frame(),
+        };
         let parked: number | null = null;
         let saved = () => {};
         void editTimeline(
@@ -323,11 +332,12 @@ export function ProjectTimeline({
     },
     editDeselectAll: (key) => {
       // Esc with nothing selected steps out of a sub-composition, as in Studio.
-      const { ids, transition } = useTimeline.getState().selection;
+      const { ids, transition, gap } = useTimeline.getState().selection;
       if (
         keymap.editDeselectAll.keys[key] === "Esc" &&
         !ids.size &&
         !transition &&
+        !gap &&
         leaveComposition(projectId)
       )
         return;
@@ -342,6 +352,15 @@ export function ProjectTimeline({
           tone: "info",
           transient: true,
         });
+    },
+    trimToggleSlideMode: () => {
+      const trimKeys =
+        useTimeline.getState().trimKeys === "slip" ? "slide" : "slip";
+      useTimeline.setState({ trimKeys });
+      showToast(`Comma and period now ${trimKeys} clips with Trim.`, null, {
+        tone: "info",
+        transient: true,
+      });
     },
     // Pressed during a drag, it turns snapping off or on for the rest of it, as in Resolve.
     editSnapping: () =>

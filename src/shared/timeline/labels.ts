@@ -1,5 +1,5 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
-import { toFrames } from "./apply";
+import { gapAt, toFrames } from "./apply";
 import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
@@ -146,6 +146,18 @@ export function editLabel(
         return pending
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
+      case "closeGap": {
+        const gap = timeline && gapAt(timeline, command.track, command.at);
+        return `${pending ? "Close" : "Closed"} ${gap ? `the ${span(gap.to - gap.from)} gap` : "the gap"} on ${trackName(command.track)}${gap ? ` at ${time(gap.from)}` : ""}`;
+      }
+      case "slip":
+        return `${pending ? "Slip" : "Slipped"}${named ? ` ${target([command.clipId])}` : ""} ${span(Math.abs(command.by))} ${command.by > 0 ? "later" : "earlier"} in its source${command.linked ? "" : ", without its linked clips"}`;
+      case "slide":
+        return `${pending ? "Slide" : "Slid"}${named ? ` ${target([command.clipId])}` : ""} ${span(Math.abs(command.by))} ${command.by > 0 ? "right" : "left"} between its neighbours`;
+      case "link":
+        return `${pending ? "Link" : "Linked"} ${target(command.clipIds)}`;
+      case "unlink":
+        return `${pending ? "Unlink" : "Unlinked"} ${target(command.clipIds)}`;
       case "paste":
         return `${pending ? "Paste" : "Pasted"} clips${pending || command.mode === "insert" ? ` with ${command.mode}` : ""} at ${time(command.at)}`;
       case "insert": {

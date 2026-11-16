@@ -669,7 +669,7 @@ input.tl-track-gain {
   --clip-head-text: var(--danger);
 }
 /* Sound right under its own picture repeats the name above it, until it is pointed at or selected. */
-.tl-label.synced:not(.selected, .offline, [data-hover]) > * {
+.tl-label.synced:not(.selected, .offline, [data-hover]) > :not(.tl-sync) {
   visibility: hidden;
 }
 .tl-label.titled {
@@ -798,6 +798,16 @@ input.tl-track-gain {
   padding: 1px 0;
   text-overflow: ellipsis;
 }
+/* Linked picture and sound that drifted apart, by how many frames, as Resolve marks them. */
+.tl-sync {
+  flex: none;
+  padding: 1px 3px;
+  border-radius: var(--radius-clip);
+  background: var(--danger);
+  color: var(--on-selection);
+  font: var(--type-micro) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 /* Text comes from the composition projection, using the same type and colour as the name. */
 .tl-text-line {
   position: absolute;
@@ -872,6 +882,22 @@ input.tl-track-gain {
 .tl-lanes[data-cursor="trim"] .tl-clip,
 .tl-lanes[data-cursor="trim"] .tl-gain {
   cursor: ew-resize;
+}
+/* Slip and slide, drawn as Resolve draws them: the source moving between fixed edges, and a
+   clip moving between its neighbours. */
+.tl-lanes[data-cursor="slip"],
+.tl-lanes[data-cursor="slip"] .tl-clip {
+  cursor:
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6v12M19 6v12M8 12h8M10 9.5 8 12l2 2.5M14 9.5l2 2.5-2 2.5" stroke="black" stroke-width="4"/><path d="M5 6v12M19 6v12M8 12h8M10 9.5 8 12l2 2.5M14 9.5l2 2.5-2 2.5" stroke="white" stroke-width="1.6"/></svg>')
+      12 12,
+    ew-resize;
+}
+.tl-lanes[data-cursor="slide"],
+.tl-lanes[data-cursor="slide"] .tl-clip {
+  cursor:
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 7v10M14.5 7v10M2.5 12h4M17.5 12h4M4.5 9.5 2.5 12l2 2.5M19.5 9.5l2 2.5-2 2.5" stroke="black" stroke-width="4"/><path d="M9.5 7v10M14.5 7v10M2.5 12h4M17.5 12h4M4.5 9.5 2.5 12l2 2.5M19.5 9.5l2 2.5-2 2.5" stroke="white" stroke-width="1.6"/></svg>')
+      12 12,
+    ew-resize;
 }
 .tl-lanes[data-cursor="roll"],
 .tl-lanes[data-cursor="roll"] .tl-clip {
@@ -1036,6 +1062,19 @@ input.tl-track-gain {
   font-stretch: var(--stretch-mono);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* A selected gap: the empty time Delete closes, washed and outlined like a selection. */
+.tl-gap {
+  position: absolute;
+  left: calc(var(--s) / var(--span) * 100%);
+  width: calc(var(--d) / var(--span) * 100% - 1px);
+  height: calc(100% - 2px);
+  margin-top: 1px;
+  border-radius: var(--radius-clip);
+  background: var(--text-selection-bg);
+  box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
+  pointer-events: none;
 }
 
 .tl-agent-change {

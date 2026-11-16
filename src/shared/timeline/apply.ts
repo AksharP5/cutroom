@@ -583,6 +583,188 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
+    case "closeGap": {
+      const track = trackAt(command.track);
+      if (!track)
+        throw new TimelineError(
+          "not_found",
+          `Track ${command.track} does not exist.`,
+        );
+      const name = trackLabel(timeline, track.index);
+      if (track.locked)
+        throw new TimelineError("locked", `Track ${name} is locked.`);
+      const gap = gapAt(timeline, track.index, command.at);
+      if (!gap) {
+        const inside = clips.find(
+          (clip) =>
+            clip.track === track.index &&
+            clip.start <= command.at &&
+            command.at < clipEnd(clip),
+        );
+        throw new TimelineError(
+          "out_of_bounds",
+          inside
+            ? `Frame ${command.at} on ${name} is inside ${clipName(inside)}, not a gap.`
+            : `Nothing follows frame ${command.at} on ${name}, so there is no gap to close.`,
+        );
+      }
+      const tracks = rippleTracks(timeline, [track.index]);
+      // Resolve closes a gap only when the time is empty on every track it ripples.
+      const blocking = clips.find(
+        (clip) =>
+          tracks.has(clip.track) &&
+          clip.start < gap.to &&
+          clipEnd(clip) > gap.from,
+      );
+      if (blocking) {
+        const other = trackLabel(timeline, blocking.track);
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(blocking)} on ${other} is in the gap. Turn off auto-select on ${other} to close the gap without it.`,
+        );
+      }
+      const next = removeTime(
+        clips,
+        tracks,
+        () => gap.from,
+        gap.to - gap.from,
+        timeline,
+        mint,
+      );
+      // Nothing is cut, so every clip keeps its id; linked clips must move by the same amount.
+      const shift = (clip: Clip) => clip.start - byId.get(clip.id)!.start;
+      for (const clip of next) {
+        const stranded =
+          clip.link !== null &&
+          next.find(
+            (other) => other.link === clip.link && shift(other) !== shift(clip),
+          );
+        if (!stranded) continue;
+        const other = trackLabel(
+          timeline,
+          shift(clip) ? stranded.track : clip.track,
+        );
+        throw new TimelineError(
+          "unsupported",
+          `Linked clips of ${clipName(clip)} on ${other} do not ripple, so closing the gap would put them out of sync. Turn on auto-select on ${other}, or unlink them.`,
+        );
+      }
+      return { ...timeline, clips: next };
+    }
+    case "slip": {
+      const target = find(command.clipId);
+      const range = slipRange(timeline, target, command.linked);
+      if (!range)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} has no source to slip.`,
+        );
+      if (command.by === 0) return timeline;
+      if (command.by < range.min || command.by > range.max) {
+        const later = command.by > 0;
+        const room = later ? range.max : -range.min;
+        throw new TimelineError(
+          "out_of_bounds",
+          room
+            ? `${clipName(target)} can slip at most ${frameCount(room)} ${later ? "later" : "earlier"} in its source.`
+            : `${clipName(target)} ${later ? "ends at the last" : "starts at the first"} frame of its source, so it cannot slip ${later ? "later" : "earlier"}.`,
+        );
+      }
+      const slipped = new Set(range.clips);
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          slipped.has(clip)
+            ? { ...clip, mediaStart: advance(clip, command.by, fps) }
+            : clip,
+        ),
+      };
+    }
+    case "slide": {
+      const target = find(command.clipId);
+      const { by } = command;
+      if (by === 0) return timeline;
+      const range = slideRange(timeline, target);
+      if (by < range.min || by > range.max) {
+        const limit = by > 0 ? range.later : range.earlier;
+        const room = Math.abs(by > 0 ? range.max : range.min);
+        throw new TimelineError(
+          "out_of_bounds",
+          room
+            ? `${clipName(target)} can slide at most ${frameCount(room)} ${by > 0 ? "later" : "earlier"}: then ${limit}.`
+            : `${clipName(target)} cannot slide ${by > 0 ? "later" : "earlier"}: ${limit}.`,
+        );
+      }
+      // Each neighbour's edges, which a clip between two linked members could have on both sides.
+      const edges = new Map<
+        string,
+        { clip: Clip; start: number; end: number }
+      >();
+      const edge = (clip: Clip) => {
+        const known = edges.get(clip.id);
+        if (known) return known;
+        const fresh = { clip, start: clip.start, end: clipEnd(clip) };
+        edges.set(clip.id, fresh);
+        return fresh;
+      };
+      for (const { member, left, right } of range.sides) {
+        edge(member).start += by;
+        edge(member).end += by;
+        if (left) edge(left).end += by;
+        if (right) edge(right).start += by;
+      }
+      const members = new Set(range.sides.map(({ member }) => member.id));
+      return {
+        ...timeline,
+        clips: clips.map((clip) => {
+          const moved = edges.get(clip.id);
+          if (!moved) return clip;
+          // The sliding clips keep their source; only their neighbours trim.
+          return members.has(clip.id)
+            ? { ...clip, start: moved.start }
+            : windowClip(clip, moved.start, moved.end, fps, "trim");
+        }),
+      };
+    }
+    case "link": {
+      const members = withPartners(clips, command.clipIds.map(find));
+      const [first] = members;
+      if (
+        first?.link &&
+        members.every((clip) => clip.link === first.link) &&
+        members.length ===
+          clips.filter((clip) => clip.link === first.link).length
+      )
+        return timeline;
+      const link = uniqueName(taken, "lk", 1);
+      const ids = new Set(members.map((clip) => clip.id));
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          ids.has(clip.id) ? { ...clip, link } : clip,
+        ),
+      };
+    }
+    case "unlink": {
+      const named = new Set(command.clipIds.map(find));
+      const links = new Set([...named].flatMap((clip) => clip.link ?? []));
+      if (!links.size) return timeline;
+      // A partner left on its own is unlinked too.
+      const left = new Map<string, number>();
+      for (const clip of clips)
+        if (clip.link && links.has(clip.link) && !named.has(clip))
+          left.set(clip.link, (left.get(clip.link) ?? 0) + 1);
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          clip.link &&
+          links.has(clip.link) &&
+          (named.has(clip) || (left.get(clip.link) ?? 0) < 2)
+            ? { ...clip, link: null }
+            : clip,
+        ),
+      };
+    }
     case "insert": {
       const { clip: input, track, at, mode } = command;
       if (command.linkedAudio && input.kind !== "video")
@@ -1583,14 +1765,145 @@ function shiftAfter(
   return next;
 }
 
-function refuseRippleCut(clip: Clip, timeline: Timeline): never {
-  const kind = timeline.tracks.find(
-    (track) => track.index === clip.track,
-  )!.kind;
+/** A track as its header names it: V1 for the first video track, A2 for the second audio one. */
+function trackLabel(timeline: Timeline, index: number) {
+  const kind = timeline.tracks.find((track) => track.index === index)!.kind;
   const number = timeline.tracks.filter(
-    (track) => track.kind === kind && track.index <= clip.track,
+    (track) => track.kind === kind && track.index <= index,
   ).length;
-  const track = `${kind === "audio" ? "A" : "V"}${number}`;
+  return `${kind === "audio" ? "A" : "V"}${number}`;
+}
+
+const frameCount = (frames: number) =>
+  `${frames} ${frames === 1 ? "frame" : "frames"}`;
+
+/**
+ * The empty time around `frame` on a track: from the end of the clip before it, or the timeline's
+ * start, to the start of the clip after it. Null inside a clip and after a track's last clip,
+ * which Resolve does not count as a gap.
+ */
+export function gapAt(
+  timeline: Pick<Timeline, "clips">,
+  track: number,
+  frame: number,
+): { from: number; to: number } | null {
+  let from = 0;
+  let to = Infinity;
+  for (const clip of timeline.clips) {
+    if (clip.track !== track) continue;
+    const end = clipEnd(clip);
+    if (clip.start <= frame && frame < end) return null;
+    if (end <= frame) from = Math.max(from, end);
+    else to = Math.min(to, clip.start);
+  }
+  return to === Infinity ? null : { from, to };
+}
+
+/**
+ * How far a clip can slip, in frames: negative shows earlier source. With `linked`, partners that
+ * play a source slip too and limit it. Null when the clip has no source to slip.
+ */
+export function slipRange(timeline: Timeline, clip: Clip, linked = true) {
+  if (clip.mediaStart === null) return null;
+  const clips = (linked ? withPartners(timeline.clips, [clip]) : [clip]).filter(
+    (member) => member.mediaStart !== null,
+  );
+  return {
+    clips,
+    min:
+      0 -
+      Math.min(...clips.map((member) => framesBeforeIn(member, timeline.fps))),
+    max: Math.min(
+      ...clips.map((member) => framesAfterOut(member, timeline.fps)),
+    ),
+  };
+}
+
+/**
+ * How far a clip can slide, in frames, with what stops it each way, and each linked member's
+ * neighbours: the clip ending where it starts and the clip starting where it ends on its track.
+ * Without a neighbour, the gap on that side gives way, back to the timeline's start.
+ */
+export function slideRange(timeline: Timeline, clip: Clip) {
+  const { fps } = timeline;
+  const members = withPartners(timeline.clips, [clip]);
+  const ids = new Set(members.map((member) => member.id));
+  const later: [number, string][] = [[Infinity, ""]];
+  const earlier: [number, string][] = [[Infinity, ""]];
+  const sides = members.map((member) => {
+    const others = timeline.clips.filter(
+      (other) => other.track === member.track && !ids.has(other.id),
+    );
+    const left = others.find((other) => clipEnd(other) === member.start);
+    const right = others.find((other) => other.start === clipEnd(member));
+    if (right)
+      later.push([
+        right.duration - 1,
+        `${clipName(right)} would be shorter than one frame`,
+      ]);
+    else {
+      const next = others
+        .filter((other) => other.start >= clipEnd(member))
+        .reduce<Clip | undefined>(
+          (first, other) =>
+            !first || other.start < first.start ? other : first,
+          undefined,
+        );
+      if (next)
+        later.push([
+          next.start - clipEnd(member),
+          `${clipName(member)} would cover ${clipName(next)}`,
+        ]);
+    }
+    if (left)
+      later.push([
+        framesAfterOut(left, fps),
+        `${clipName(left)} has no more source after its out point`,
+      ]);
+    if (left)
+      earlier.push([
+        left.duration - 1,
+        `${clipName(left)} would be shorter than one frame`,
+      ]);
+    else {
+      const previous = others
+        .filter((other) => clipEnd(other) <= member.start)
+        .reduce<Clip | undefined>(
+          (last, other) =>
+            !last || clipEnd(other) > clipEnd(last) ? other : last,
+          undefined,
+        );
+      earlier.push(
+        previous
+          ? [
+              member.start - clipEnd(previous),
+              `${clipName(member)} would cover ${clipName(previous)}`,
+            ]
+          : [member.start, "the timeline starts there"],
+      );
+    }
+    if (right)
+      earlier.push([
+        framesBeforeIn(right, fps),
+        `${clipName(right)} has no more source before its in point`,
+      ]);
+    return { member, left, right };
+  });
+  const least = (limits: [number, string][]) =>
+    limits.reduce((first, next) => (next[0] < first[0] ? next : first));
+  const [max, laterLimit] = least(later);
+  const [min, earlierLimit] = least(earlier);
+  return {
+    min: 0 - Math.max(0, min),
+    max: Math.max(0, max),
+    earlier: earlierLimit,
+    later: laterLimit,
+    sides,
+  };
+}
+
+function refuseRippleCut(clip: Clip, timeline: Timeline): never {
+  const track = trackLabel(timeline, clip.track);
   const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
   throw new TimelineError(
     "unsupported",

@@ -4,14 +4,17 @@ import {
 } from "@hyperframes/core/audio-automation";
 import { volumePoints } from "../../shared/timeline/mix";
 import { compactFxNode } from "../../shared/timeline/fx";
+import { syncOffsets } from "../../shared/timeline/sync";
 import type { Timeline, TimelineView } from "../../shared/timeline/schema";
 
 /**
  * The timeline as agents read it: a clip's native automation becomes its volume points in
  * frames, as `setClip.automation` writes them, and the names of any other lanes, which can hold
- * hundreds of points. Effects leave out parameters at their defaults.
+ * hundreds of points. Effects leave out parameters at their defaults. Linked picture and sound
+ * that have drifted apart carry their offset, as the timeline's out-of-sync badge shows it.
  */
 export function agentTimeline(timeline: Timeline) {
+  const offsets = syncOffsets(timeline);
   return {
     ...timeline,
     ...(timeline.masterFx && {
@@ -22,7 +25,12 @@ export function agentTimeline(timeline: Timeline) {
       fx: track.fx.map(compactFxNode),
     })),
     clips: timeline.clips.map(({ automation, ...rest }) => {
-      const clip = { ...rest, fx: rest.fx.map(compactFxNode) };
+      const offset = offsets.get(rest.id);
+      const clip = {
+        ...rest,
+        fx: rest.fx.map(compactFxNode),
+        ...(offset && { syncOffset: offset }),
+      };
       if (!automation) return { ...clip, automation: null };
       const volume = volumePoints(automation, timeline.fps);
       const lanes = parseAutomation(automation)

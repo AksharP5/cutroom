@@ -90,6 +90,20 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
 
 `timeline_read` takes optional `from` and `to` frames (half-open) and `tracks`, a list of track indexes, and then returns only the clips and markers that overlap that range on those tracks. `timeline.tracks`, the range, the duration and the revision always describe the whole timeline, so the revision is valid for an edit anywhere. A batch applies in order and atomically: if one command cannot apply exactly, the response names its index and error code, and nothing is written. The command list is the `CommandSchema` union in `src/shared/timeline/schema.ts`. [Editing behavior](editing.md#timeline-commands) describes the ripple, link, and lock rules.
 
+Resolve's gap, slip, slide and link edits are commands too, each one undo step with the same reply:
+
+```json
+[
+  { "type": "closeGap", "track": 0, "at": 95 },
+  { "type": "slip", "clipId": "talk", "by": 12 },
+  { "type": "slide", "clipId": "broll", "by": -8 },
+  { "type": "unlink", "clipIds": ["talk"] },
+  { "type": "link", "clipIds": ["talk", "talk-sound"] }
+]
+```
+
+`closeGap` closes the gap around a frame on a track, rippling unlocked auto-select tracks, and refuses when a clip on one of them is in the gap. `slip` shows later source with a positive `by` (earlier with a negative one), with linked partners unless `linked: false`. `slide` moves a clip between its neighbours, which trim to follow. Both refuse with how far the clip can go. A linked picture and sound that play different moments of their file carry `syncOffset` in reads and replies, the frames the clip plays its source later than its partner; moving it by `-syncOffset` or slipping it by `syncOffset` resyncs it. [The rules](editing.md).
+
 `timeline_read.timeline.tracks` includes empty tracks. Lifting, cutting, moving or overwriting their last clips keeps those tracks and their settings. Edits save the track list in `cutroom.json`, so reload and undo/redo preserve it. Each track carries `volume`, its linear gain (1 = 0 dB), which plays on top of every clip on the track in preview and export; set it with `setTrack` (`{ "type": "setTrack", "index": 2, "volume": 0.125 }` turns a music track down 18 dB, however many pieces its bed is cut into). A clip's `volume` stays canonical in `data-volume`. Track gain uses an independent `<hf-audio-group>` stage, including for embedded video sound and GSAP volume tweens. Each stage accepts up to +12 dB; clip and track gains can combine above +12 dB. A clip that already belongs to an authored audio group is excluded from track gain and carries a plain `trackGainWarning` in reads; an edit that changes its track lists it under `warnings`. Keep that membership intact and report the exclusion to the user, especially when setting track gain to zero. Track mute and solo still apply to those clips. Use each track's `index` to target an empty row with `insert` or `setTrack`; V1/A1 labels are display numbers within each kind. To remove an unlocked empty track, send `{ "type": "removeTrack", "index": 0 }` through `timeline_edit`. Occupied tracks refuse removal with `unsupported`; locked tracks refuse with `locked`. Remove clips first if you intend to remove their track. Track removal is undoable and leaves other tracks' indices unchanged. The editor offers the same command as Remove empty track in a track header's context menu.
 
 ### Volume automation

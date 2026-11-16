@@ -1,4 +1,4 @@
-import { frameTime } from "../../shared/timeline/apply";
+import { clipEnd, frameTime } from "../../shared/timeline/apply";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import type { Timeline } from "../../shared/timeline/schema";
 import type { Intent } from "../timeline/gesture";
@@ -23,16 +23,49 @@ export function followEditPicture(
   };
 }
 
+/**
+ * The source frames an edit changes, as Resolve's trim view shows them: a trimmed edge, both
+ * sides of a rolled cut, a slipped clip's new in and out, or the out and in of the neighbours a
+ * slide trims. A side of a slide without a neighbour shows the clip's own edge there.
+ */
+function editEdges(timeline: Timeline, intent: Intent) {
+  switch (intent.kind) {
+    case "trim":
+      return [{ id: intent.clipId, end: intent.edge === "end" }];
+    case "roll":
+      return [
+        { id: intent.left, end: true },
+        { id: intent.right, end: false },
+      ];
+    case "slip":
+      return [
+        { id: intent.clipId, end: false },
+        { id: intent.clipId, end: true },
+      ];
+    case "slide": {
+      const clip = timeline.clips.find((item) => item.id === intent.clipId);
+      if (!clip) return [];
+      const end = clipEnd(clip);
+      const left = timeline.clips.find(
+        (other) => other.track === clip.track && clipEnd(other) === clip.start,
+      );
+      const right = timeline.clips.find(
+        (other) => other.track === clip.track && other.start === end,
+      );
+      return [
+        { id: (left ?? clip).id, end: left !== undefined },
+        { id: (right ?? clip).id, end: right === undefined },
+      ];
+    }
+    default:
+      return [];
+  }
+}
+
 /** The engine's accepted preview owns source offsets, including ripple head trims. */
 export function previewEditFrame(timeline: Timeline, intent: Intent) {
-  if (intent.kind !== "trim" && intent.kind !== "roll") return;
-  const edges =
-    intent.kind === "roll"
-      ? [
-          { id: intent.left, end: true },
-          { id: intent.right, end: false },
-        ]
-      : [{ id: intent.clipId, end: intent.edge === "end" }];
+  const edges = editEdges(timeline, intent);
+  if (!edges.length) return;
   const clips = edges.flatMap((edge) => {
     const edited = timeline.clips.find((clip) => clip.id === edge.id);
     const clip =
@@ -54,19 +87,15 @@ export function previewEditFrame(timeline: Timeline, intent: Intent) {
   if (!clips.length) return;
   if (!picture && useTransport.getState().state.kind !== "stopped")
     transport.dispatch({ type: "stop" });
-  const frames = clips.flatMap(({ clip, end }) =>
-    clip.kind === "video" || clip.kind === "image"
-      ? [
-          {
-            clipId: clip.id,
-            time:
-              (clip.mediaStart ?? 0) +
-              frameTime(end ? clip.duration - 1 : 0, timeline.fps) *
-                clip.playbackRate,
-          },
-        ]
-      : [],
+  const shown = clips.filter(
+    ({ clip }) => clip.kind === "video" || clip.kind === "image",
   );
+  const frames = shown.map(({ clip, end }) => ({
+    clipId: clip.id,
+    time:
+      (clip.mediaStart ?? 0) +
+      frameTime(end ? clip.duration - 1 : 0, timeline.fps) * clip.playbackRate,
+  }));
   const edge = clips.at(-1)!;
   picture = {
     time: frameTime(
@@ -78,7 +107,7 @@ export function previewEditFrame(timeline: Timeline, intent: Intent) {
       frames.length === 2
         ? frames.map(
             (frame, index) =>
-              `${index ? "In" : "Out"} ${formatTimecode(Math.floor((frame.time * timeline.fps.num) / timeline.fps.den + 1e-6), timeline.fps)}`,
+              `${shown[index]!.end ? "Out" : "In"} ${formatTimecode(Math.floor((frame.time * timeline.fps.num) / timeline.fps.den + 1e-6), timeline.fps)}`,
           )
         : [],
   };

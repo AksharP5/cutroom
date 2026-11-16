@@ -72,6 +72,11 @@ export function clipMenuItems({
     { action: "editBackspace", disabled: none },
     { action: "editDelete", disabled: none },
     { action: "editClipEnabled", disabled: none },
+    {
+      action: "editLink",
+      disabled: clips.length < 2 && !clips.some((clip) => clip.link),
+      checked: clips.some((clip) => clip.link !== null),
+    },
     "separator",
     { action: "editSelectClipsSelectTrackAfter" },
     "separator",
