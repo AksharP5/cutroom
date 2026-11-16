@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  compositionExportName,
   defaultExportRange,
   exportQualities,
   ExportOptionsSchema,
@@ -164,6 +165,11 @@ function ExportDialog({
   onClose(): void;
 }) {
   const timeline = useTimeline((state) => state.view?.timeline);
+  // The dialog renders the composition the editor shows, as Resolve delivers the open timeline.
+  const name = compositionExportName(
+    projectName,
+    useTimeline((state) => state.composition),
+  );
   const composition = useWorkspace((state) => state.composition);
   const job = useExport((state) => state.job);
   const controlError = useExport((state) => state.controlError);
@@ -171,7 +177,7 @@ function ExportDialog({
     timeline ? defaultExportRange(timeline) : "timeline",
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
-  const baseFilename = exportFilename(projectName);
+  const baseFilename = exportFilename(name);
   const [filename, setFilename] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
   const [destination, setDestination] = useState<ExportDestination | null>(
@@ -243,14 +249,9 @@ function ExportDialog({
       return;
     }
     setError("");
-    void exportProject(
-      projectId,
-      projectName,
-      parsed.data,
-      quality,
-      choice,
-    ).catch((error: unknown) =>
-      setError(error instanceof Error ? error.message : String(error)),
+    void exportProject(projectId, name, parsed.data, quality, choice).catch(
+      (error: unknown) =>
+        setError(error instanceof Error ? error.message : String(error)),
     );
   };
   const openFile = (action: "open" | "reveal") => {
@@ -266,7 +267,7 @@ function ExportDialog({
     <Modal title="Export" onClose={onClose} initialFocus={exportButton}>
       <div className="export-body">
         <div className="export-title">
-          {job ? job.name : projectName}
+          {job ? job.name : name}
           <span>MP4 · H.264 / AAC</span>
         </div>
         {!job && (

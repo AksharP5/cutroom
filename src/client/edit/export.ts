@@ -5,7 +5,7 @@ import { ExportJobSchema, exportRange } from "../../shared/export";
 import type { ExportOptions, ExportQuality } from "../../shared/export";
 import { useWorkspace } from "../workspace";
 import { trackRows } from "../timeline/math";
-import { afterTimelineEdits, useTimeline } from "./timeline";
+import { ROOT_COMPOSITION, afterTimelineEdits, useTimeline } from "./timeline";
 import { subscribeProjectEvents } from "../api";
 
 export interface ExportJob {
@@ -160,8 +160,9 @@ export async function exportProject(
   choice: "timeline" | "marks",
 ) {
   if (exportActive(useExport.getState().job)) return;
-  const timeline = useTimeline.getState().view?.timeline;
-  if (!timeline) return;
+  const shown = useTimeline.getState().view;
+  if (!shown) return;
+  const { timeline, composition } = shown;
   const frames = exportRange(timeline, choice);
   useExport.setState({
     controlError: "",
@@ -193,8 +194,10 @@ export async function exportProject(
   useWorkspace.setState({ exporting: true });
   try {
     const jobId = await afterTimelineEdits(projectId, async () => {
-      const current = useTimeline.getState().view?.timeline;
-      if (!current) throw new Error("The timeline is unavailable.");
+      const view = useTimeline.getState().view;
+      if (view?.composition !== composition)
+        throw new Error("The open composition changed. Export it again.");
+      const current = view.timeline;
       const range = exportRange(current, choice);
       const { rows } = trackRows(current.tracks, {
         video: 0,
@@ -238,6 +241,7 @@ export async function exportProject(
             format: "mp4",
             quality,
             fps: `${current.fps.num}/${current.fps.den}`,
+            ...(composition !== ROOT_COMPOSITION && { composition }),
             cutroom: { ...options, range: choice === "marks" ? range : null },
           }),
         },

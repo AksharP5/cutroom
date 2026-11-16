@@ -3,6 +3,7 @@ import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   defaultExportRange,
+  compositionExportName,
   exportFilename,
   exportRange,
   ExportOptionsSchema,
@@ -203,8 +204,8 @@ export function createHyperframesApi(
       dir: join(store.dataDir, "cache", "frames"),
       maxBytes: 2 * 1024 ** 3,
     },
-    workload: async (id) => {
-      const timeline = await readTimeline(id);
+    workload: async (id, composition) => {
+      const timeline = await readTimeline(id, composition);
       return {
         mediaClips: timeline.clips.filter(
           (clip) => clip.kind === "video" || isAudioKind(clip.kind),
@@ -220,27 +221,39 @@ export function createHyperframesApi(
       ),
   });
   const exportRequest = new AsyncLocalStorage<ExportOptions>();
-  const readTimeline = async (projectId: string) => {
+  /** A composition's timeline, as the editor reads it, for an export's range, rate and size. */
+  const readTimeline = async (projectId: string, composition: string) => {
     const project = await store.get(projectId);
     const [source, document] = await Promise.all([
-      readSource(project, "index.html"),
+      readSource(project, composition),
       store.document(project),
     ]);
+    const scope = compositionScope(composition);
     const { lengths } = await mediaFacts(
       project,
-      "index.html",
-      mediaSources(source.content, "document"),
+      composition,
+      mediaSources(source.content, scope),
     );
     return parseComposition(
       source.content,
-      document.timelines["index.html"] ?? emptyTimelineSettings(),
-      { mediaLengths: lengths },
+      document.timelines[composition] ?? emptyTimelineSettings(),
+      { scope, mediaLengths: lengths },
     ).timeline;
+  };
+  /** A composition named by a caller, as the project path the timeline routes use. */
+  const exportedComposition = (requested: string | undefined) => {
+    const composition = posix
+      .normalize(requested ?? "index.html")
+      .replace(/^\/+/, "");
+    if (composition === ".." || composition.startsWith("../"))
+      throw new HttpError(400, "The composition must be inside the project.");
+    return composition;
   };
   api.post("/projects/:id/export", async (c) => {
     const input = ExportStartSchema.parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
-    const timeline = await readTimeline(project.id);
+    const composition = exportedComposition(input.composition);
+    const timeline = await readTimeline(project.id, composition);
     const choice = input.range ?? defaultExportRange(timeline);
     let frames;
     try {
@@ -261,7 +274,10 @@ export function createHyperframesApi(
       throw new HttpError(400, "Enter an absolute output folder.");
     const filename =
       input.filename ??
-      (await nextExportName(directory, exportFilename(project.name)));
+      (await nextExportName(
+        directory,
+        exportFilename(compositionExportName(project.name, composition)),
+      ));
     // Enter the dialog's route with the caller's identity. It owns destination validation and registration.
     return api.request(
       new URL(`/projects/${encodeURIComponent(project.id)}/render`, c.req.url),
@@ -272,6 +288,7 @@ export function createHyperframesApi(
           format: "mp4",
           quality: input.quality,
           fps: `${timeline.fps.num}/${timeline.fps.den}`,
+          ...(composition !== "index.html" && { composition }),
           cutroom: {
             directory,
             filename,
@@ -328,10 +345,16 @@ export function createHyperframesApi(
       throw new HttpError(400, "Enter an absolute output folder.");
     const project = await store.get(c.req.param("id"));
     if (cutroom.range) {
-      const timeline = await readTimeline(project.id);
-      const { fps } = z
-        .object({ fps: z.union([z.string(), z.number()]) })
+      const { fps, composition } = z
+        .object({
+          fps: z.union([z.string(), z.number()]),
+          composition: z.string().optional(),
+        })
         .parse(body);
+      const timeline = await readTimeline(
+        project.id,
+        exportedComposition(composition),
+      );
       const rate = parseFps(fps);
       if (
         !rate.ok ||

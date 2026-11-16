@@ -301,8 +301,9 @@ Pass `noteId` to `source_write`, `timeline_edit`, or `transcript_edit` when the 
 
 ## Export
 
-`export_start` takes `projectId` and optional `range`, `quality`, `filename`, and `directory`. It uses the editor's render route and job registry over both the stdio bridge and HTTP `/mcp`. The bridge sends the local Origin header; clients do not need to call the render route themselves.
+`export_start` takes `projectId` and optional `composition`, `range`, `quality`, `filename`, and `directory`. It uses the editor's render route and job registry over both the stdio bridge and HTTP `/mcp`. The bridge sends the local Origin header; clients do not need to call the render route themselves.
 
+- Omit `composition` to render the root, `index.html`. Name a sub-composition, such as `compositions/intro.html`, to render it alone: its own length, marks, size and rate, with the default name followed by the scene's file name (`Launch intro.mp4`). A sub-composition renders with frame capture.
 - Omit `range` to use In to Out when both marks exist, otherwise the whole timeline. `"marks"` requires both marks, `"timeline"` exports everything, and `{ "start": 30, "end": 90 }` exports those half-open project frames. Out is exclusive, as in `timeline_read`. Size and rational fps come from the project.
 - `quality` is `"draft"`, `"standard"`, or `"high"`, with Standard as the default, using the dialog's producer presets.
 - Omit `directory` to create the project's `.cutroom/renders` folder on demand. A chosen directory must be an absolute existing folder, under the same path validation as the dialog. App-state folders cannot be redirected through symlinks.

@@ -408,3 +408,128 @@ test("one active export refuses overlapping MCP and editor starts across project
     await f.close();
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "export_start renders one sub-composition at its own length, marks and name",
+  async () => {
+    const f = await fixture();
+    try {
+      const p = await f.store.create({
+        name: "Scenes",
+        duration: 2,
+        width: 320,
+        height: 240,
+      });
+      await mkdir(join(p.path, "compositions"));
+      await writeFile(
+        join(p.path, "compositions", "red.html"),
+        `<template>
+  <div id="red-root" data-composition-id="red" data-width="320" data-height="240" data-duration="1" style="position:absolute;inset:0;background:#ff0000">
+    <div id="red-card" class="clip" data-start="0" data-duration="1" data-track-index="0"></div>
+  </div>
+</template>
+`,
+      );
+      const index = join(p.path, "index.html");
+      await writeFile(
+        index,
+        (await readFile(index, "utf8")).replace(
+          /(<main[^>]*>)[\s\S]*<\/main>/,
+          `$1<div id="red" class="clip" data-composition-id="red" data-composition-src="compositions/red.html" data-start="1" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div></main>`,
+        ),
+      );
+      const document = await f.store.document(p);
+      await f.store.writeDocument(
+        p,
+        Object.assign(document, {
+          timelines: {
+            "compositions/red.html": {
+              tracks: [],
+              markers: [],
+              range: { in: 3 / 30, out: 12 / 30 },
+            },
+          },
+        }),
+      );
+      const start = (args: Record<string, unknown>) =>
+        f.client.callTool({
+          name: "export_start",
+          arguments: {
+            projectId: p.id,
+            composition: "compositions/red.html",
+            ...args,
+          },
+        });
+      const status = async (jobId: string) =>
+        result(
+          ExportJobSchema,
+          await f.client.callTool({
+            name: "export_status",
+            arguments: { jobId },
+          }),
+        );
+
+      // The scene's own marks set the range, not the root's.
+      const marked = result(Started, await start({}));
+      expect((await status(marked.jobId)).range).toEqual({
+        start: 3,
+        end: 12,
+      });
+      await f.client.callTool({
+        name: "export_cancel",
+        arguments: { jobId: marked.jobId },
+      });
+
+      const whole = result(Started, await start({ range: "timeline" }));
+      expect(whole.outputPath).toBe(
+        join(p.path, ".cutroom/renders", "Scenes red.mp4"),
+      );
+      let job = await status(whole.jobId);
+      expect(job.name).toBe("Scenes red");
+      for (const deadline = Date.now() + 120_000; job.status === "rendering";) {
+        if (Date.now() > deadline) throw new Error("The export timed out.");
+        await Bun.sleep(250);
+        job = await status(whole.jobId);
+      }
+      expect(job.status, job.error ?? "").toBe("complete");
+      const probe = Bun.spawnSync([
+        "ffprobe",
+        "-v",
+        "error",
+        "-count_frames",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-of",
+        "csv=p=0",
+        whole.outputPath,
+      ]);
+      // One second of the scene, not the root's two.
+      expect(probe.stdout.toString().trim()).toBe("30");
+      const pixel = Bun.spawnSync([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        whole.outputPath,
+        "-vf",
+        "crop=2:2:160:120",
+        "-frames:v",
+        "1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-",
+      ]).stdout;
+      // The scene's red fills its first frame, where the root shows nothing yet.
+      expect(pixel[0]).toBeGreaterThan(200);
+      expect(pixel[1]).toBeLessThan(60);
+      expect(pixel[2]).toBeLessThan(60);
+    } finally {
+      await f.close();
+    }
+  },
+  180_000,
+);

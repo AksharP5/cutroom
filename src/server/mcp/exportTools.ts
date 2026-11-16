@@ -28,7 +28,7 @@ export function registerExportTools(
     "export_start",
     {
       description:
-        "Export MP4 through the editor's render jobs. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
+        "Export MP4 through the editor's render jobs, of the root composition or one named by composition. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
       inputSchema: ExportStartSchema.extend({ projectId: z.string() }),
       annotations: edit,
     },
