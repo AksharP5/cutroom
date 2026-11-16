@@ -491,8 +491,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   return {
     player,
     mix,
-    /** Whether the footage pipeline draws this document's root videos beneath it. */
-    pipeline: (active: boolean) => send("pipeline", { active }),
+    /** Whether the footage pipeline draws root videos beneath this document, and which. */
+    pipeline: (active: boolean, drawn: readonly string[]) =>
+      send("pipeline", { active, drawn }),
     signal: closing.signal,
     async activate() {
       positionTargets.add(position);

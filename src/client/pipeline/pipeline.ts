@@ -106,6 +106,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     { signal: closing.signal },
   );
   let plan: Plan | null = null;
+  const explained = new Set<string>();
   let stopped: string | null = null;
   const stop = (reason: string) => {
     // Why the composition stays with HyperFrames, for whoever tries the setting, said once.
@@ -354,6 +355,15 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(next.reason);
     }
     plan = next;
+    // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
+    for (const reason of Object.values(next.hyperframes))
+      if (!explained.has(reason)) {
+        explained.add(reason);
+        console.info(`[pipeline] HyperFrames draws a clip: ${reason}`);
+      }
+    const drawn = Object.keys(next.drawable);
+    if (drawn.join("\n") !== usePipeline.getState().drawn.join("\n"))
+      usePipeline.setState({ drawn });
     sources.forgetFailures();
     // Open every file now: opening one mid-playback costs the clock a few frames.
     for (const clip of view.timeline.clips)

@@ -10,6 +10,8 @@ export const PipelinePlanSchema = z.union([
     height: z.number().int().positive(),
     /** Video clips the pipeline draws, by timeline clip id, with each one's object-fit. */
     drawable: z.record(z.string(), z.enum(["fill", "contain", "cover"])),
+    /** Video clips HyperFrames draws above the pipeline's, with the reason the pipeline cannot. */
+    hyperframes: z.record(z.string(), z.string()),
     /** Every visual clip in document order, which breaks ties between clips on one level. */
     order: z.array(z.string()),
     /** Stacking level of each track that Cutroom's track layer orders. */
