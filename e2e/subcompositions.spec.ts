@@ -189,3 +189,73 @@ test("media placed inside a scene is written from the scene's folder and plays t
   await expect(shot).toBeVisible();
   await expect(shot).not.toHaveClass(/offline/);
 });
+
+test("the composition list shows each scene's lint, opens it, and places it at the playhead", async ({
+  page,
+  request,
+}) => {
+  const { project, read } = await scenes(request);
+  await writeFile(
+    join(project.path, "compositions", "outro.html"),
+    // A CSS transition runs on the browser clock, which lint warns about.
+    scene
+      .replaceAll("intro", "outro")
+      .replace("font-size:44px;", "font-size:44px;transition:opacity 1s;"),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const media = page.getByRole("region", { name: "Media" });
+  await media.getByRole("button", { name: /^Compositions/ }).click();
+  const list = media.getByRole("list", { name: "Compositions" });
+  const row = (path: string) => list.locator(`[data-path="${path}"]`);
+  await expect(list.getByRole("listitem")).toHaveCount(3);
+  await expect(row("index.html")).toHaveAttribute("aria-current", "true");
+  await expect(row("compositions/intro.html")).toContainText("00:00:06:00");
+  await expect(
+    row("compositions/outro.html").getByLabel("1 lint findings"),
+  ).toBeVisible();
+  await expect(
+    row("compositions/intro.html").getByLabel(/lint findings/),
+  ).toHaveCount(0);
+
+  // Overwrite at playhead puts the outro on the video destination as one undo step.
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("1000");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^Current time/ })).toHaveText(
+    "00:00:10:00",
+  );
+  await row("compositions/outro.html").click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "compositions/outro.html" })
+    .getByRole("menuitem", { name: "Overwrite at playhead" })
+    .click();
+  await expect
+    .poll(async () =>
+      (await read("index.html")).map((clip) => [
+        clip.kind,
+        clip.src,
+        clip.start,
+        clip.duration,
+      ]),
+    )
+    .toEqual([
+      ["composition", "compositions/intro.html", 60, 180],
+      ["element", null, 240, 60],
+      ["composition", "compositions/outro.html", 300, 180],
+    ]);
+  await expect(timeline.locator(".tl-clip.composition")).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await read("index.html")).length).toBe(2);
+
+  // Double-click opens a scene, and the list follows the editor.
+  await row("compositions/intro.html").dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toContainText("intro");
+  await expect(row("compositions/intro.html")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await expect(timeline.locator('[data-clip="intro-sub"]')).toBeVisible();
+});

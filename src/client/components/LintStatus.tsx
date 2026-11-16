@@ -1,17 +1,9 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { z } from "zod";
-import { compactLint } from "../../shared/lint";
+import { useId, useRef } from "react";
 import type { LintFinding } from "../../shared/lint";
-import { subscribeProjectEvents } from "../api";
+import { useLint } from "../lint";
 import { showToast } from "../workspace";
 import { menuStep } from "./menu";
 import "./select-menu.css";
-
-type Lint = ReturnType<typeof compactLint>;
-
-const fileChangeSchema = z.object({ affectsPreview: z.boolean() });
-/** Saves arrive in bursts; one lint after the last is enough. */
-const SETTLE_MS = 400;
 
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -48,56 +40,10 @@ async function reveal(finding: LintFinding) {
 
 /** HyperFrames lint findings for the project, rechecked whenever a source file changes. */
 export function LintStatus({ projectId }: { projectId: string }) {
-  const [lint, setLint] = useState<Lint | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { lint, failure } = useLint(projectId);
   const menu = useRef<HTMLDivElement>(null);
   const search = useRef({ text: "", at: 0 });
   const anchor = `--lint-${useId().replace(/[^a-zA-Z0-9-]/g, "")}`;
-
-  useEffect(() => {
-    setLint(null);
-    setFailure(null);
-    let request = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const check = async () => {
-      request.abort();
-      request = new AbortController();
-      const { signal } = request;
-      try {
-        const response = await fetch(
-          `/api/projects/${encodeURIComponent(projectId)}/lint`,
-          { signal },
-        );
-        const body: unknown = await response.json();
-        if (!response.ok)
-          throw new Error(
-            z.object({ error: z.string() }).safeParse(body).data?.error ??
-              `Lint returned ${response.status}`,
-          );
-        setLint(compactLint(body));
-        setFailure(null);
-      } catch (error) {
-        if (signal.aborted) return;
-        setFailure(error instanceof Error ? error.message : String(error));
-      }
-    };
-    void check();
-    const unsubscribe = subscribeProjectEvents(
-      projectId,
-      "file-change",
-      (event) => {
-        const change = fileChangeSchema.safeParse(JSON.parse(event.data));
-        if (!change.success || !change.data.affectsPreview) return;
-        clearTimeout(timer);
-        timer = setTimeout(() => void check(), SETTLE_MS);
-      },
-    );
-    return () => {
-      unsubscribe();
-      clearTimeout(timer);
-      request.abort();
-    };
-  }, [projectId]);
 
   if (failure)
     return (

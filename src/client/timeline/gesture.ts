@@ -16,7 +16,6 @@ import { sourcePath } from "../../shared/media";
 import type {
   Clip,
   CommandInput,
-  InsertClip,
   Timeline,
   Track,
 } from "../../shared/timeline/schema";
@@ -638,7 +637,7 @@ export function bladePreview(
 
 /** Media dragged onto the timeline: a project file and the part of it that plays there. */
 export interface DraggedMedia {
-  kind: InsertClip["kind"];
+  kind: MediaDrag["kind"];
   /** The file as the composition it lands in writes it, from that composition's folder. */
   src: string;
   frames: number;
@@ -698,13 +697,16 @@ export function dropPreview(
       mode,
       track: track.index,
       at,
-      clip: {
-        kind: media.kind,
-        src: media.src,
-        duration: media.frames,
-        mediaStart: media.mediaStart,
-        muted: media.kind === "video" && !media.hasAudio,
-      },
+      clip:
+        media.kind === "composition"
+          ? { kind: "composition", src: media.src, duration: media.frames }
+          : {
+              kind: media.kind,
+              src: media.src,
+              duration: media.frames,
+              mediaStart: media.mediaStart,
+              muted: media.kind === "video" && !media.hasAudio,
+            },
     },
   ];
   const fits = (track.kind === "audio") === isAudioKind(media.kind);

@@ -2,7 +2,7 @@
 
 Cutroom's own editor is the default: a tool row, the viewer, the transport, and a timeline below a draggable split. Review notes and word-based edits share its project history.
 
-Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the composition and source panels. The switch goes away when those arrive.
+Settings keeps a New editor switch as a way back to the embedded HyperFrames editor, which still has what Cutroom's does not yet: the source panel. The switch goes away when it arrives.
 
 ## Editor
 
@@ -35,6 +35,8 @@ The status bar also counts HyperFrames lint errors and warnings, checked when th
 Double-click a sub-composition's clip on the timeline, or select it and press Enter, to edit that composition in the same editor. The viewer shows it on its own, and a line above the ruler says where you are: the project, any composition you came through, and the open one. Click a name to go back to it, or press Esc with nothing selected to go up one level. Each composition keeps its own playhead, selection and timeline zoom, so going back finds the root as you left it. The first time a composition opens with the playhead over its clip, its playhead starts at the frame the root was showing.
 
 Editing keys, the inspector, undo and redo, review notes and the agent's context all follow the open composition. A note made inside belongs to it, and opening that note from Review opens the composition first. The footage pipeline setting only draws the root; inside a sub-composition HyperFrames plays everything.
+
+Once a project has a sub-composition, the Media panel's header also offers Compositions: every composition file, the root first, with a picture from a third of the way in, its length, and a count of its HyperFrames lint warnings and errors (red when any is an error; the count's tooltip lists them). The open one has a paper tick on its left edge. Double-click a row, press Enter on it, or choose Open in its menu to edit it. Drag a row onto a track, or choose Insert at playhead or Overwrite at playhead, to place it as a scene clip on the video destination, through the same `insert` command an agent sends, so it is one undo step. The root, and the composition already open, cannot be placed. A placed scene plays its composition from the start, written as the documented host element; the server refuses a scene that would end up playing itself.
 
 ### Timeline
 
@@ -138,6 +140,7 @@ The timeline is a projection of composition HTML in integer frames: a clip start
 - `setClip.scale`, `scaleX`, `scaleY`, `rotation` and `crop` set a visual clip's inline `scale`, `rotate` and `clip-path: inset()`, leaving every other declaration in its `style` as written. 100%, 0° and an empty crop remove the declaration. [Transform semantics](mcp.md#timeline).
 - `setClip.text` replaces a text element's words. Newlines become `<br>`, the words are HTML-escaped, and the whitespace around them in the source stays. Media, elements without text, text with markup inside it, preformatted text, and text a script writes by id are refused. [Text semantics](mcp.md#timeline).
 - `insert` with `clip.kind: "title"` adds a title, and `setClip.title` changes its look and motion. [Titles](#titles) describes how they follow edits.
+- `insert` with `clip.kind: "composition"` places another composition file of the project as a scene: a host element with that file's `data-composition-id`, `data-composition-src` as written from the edited composition's folder, and the file's declared size. It plays from the composition's start. A file that is missing, has no `data-composition-id`, or plays the edited composition through its own scenes is refused, with `not_found` or `unsupported`.
 - `setTiming` changes media `playbackRate` or `mediaStart` in seconds, together with linked partners. Duration stays fixed. Source-in shifts partners by the same source offset; speed preserves source sync at the selected clip's start, including split edits. Locked tracks, non-media clips, and insufficient source media are refused.
 
 ### Titles

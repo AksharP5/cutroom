@@ -5,6 +5,7 @@ import type {
   Fps,
   InsertClip,
   InsertTitle,
+  InsertComposition,
   Timeline,
   Track,
   Transition,
@@ -30,7 +31,7 @@ export type { TimelineErrorCode } from "./errors";
  */
 export type ClipOrigin =
   | { copyOf: string }
-  | { insert: InsertClip | InsertTitle }
+  | { insert: InsertClip | InsertTitle | InsertComposition }
   | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
 /**
@@ -554,70 +555,20 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         next = splitClips(next, targets, at, fps, mint);
         next = shiftAfter(next, tracks, () => at, input.duration);
       }
-      if (input.kind === "title") {
-        onCreate(id, { insert: input });
-        return {
-          ...timeline,
-          clips: [
-            ...next,
-            {
-              id,
-              track,
-              kind: "element",
-              start: at,
-              duration: input.duration,
-              mediaStart: null,
-              playbackRate: 1,
-              src: null,
-              sourceDuration: null,
-              hasAudio: false,
-              link: null,
-              label: input.label ?? null,
-              textPreview: firstTextLine(input.text),
-              volume: null,
-              opacity: null,
-              x: null,
-              y: null,
-              scaleX: null,
-              scaleY: null,
-              rotation: null,
-              crop: null,
-              text: input.text,
-              title: editTitle(defaultTitle(fps), input.title),
-              fadeIn: 0,
-              fadeOut: 0,
-              transitionIn: null,
-              transitionOut: null,
-              automation: null,
-              enabled: true,
-              startRef: null,
-            },
-          ],
-        };
-      }
-      const video = separate ? { ...input, muted: true } : input;
-      onCreate(id, { insert: video });
-      const added: Clip = {
+      /** The new clip with nothing set beyond what the input says. */
+      const placed = (fields: Pick<Clip, "kind"> & Partial<Clip>): Clip => ({
         id,
         track,
-        kind: input.kind,
         start: at,
         duration: input.duration,
-        mediaStart: input.kind === "image" ? null : input.mediaStart,
+        mediaStart: null,
         playbackRate: 1,
-        src: input.src,
-        sourceDuration:
-          input.kind === "image"
-            ? null
-            : (batch.mediaLengths.get(input.src) ?? null),
-        hasAudio:
-          isAudioKind(input.kind) ||
-          (input.kind === "video" &&
-            !video.muted &&
-            !batch.silentMedia.has(input.src)),
-        link: separate ? id : null,
+        src: null,
+        sourceDuration: null,
+        hasAudio: false,
+        link: null,
         label: input.label ?? null,
-        volume: input.volume ?? null,
+        volume: null,
         opacity: null,
         x: null,
         y: null,
@@ -634,7 +585,52 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         automation: null,
         enabled: true,
         startRef: null,
-      };
+        ...fields,
+      });
+      if (input.kind === "title") {
+        onCreate(id, { insert: input });
+        return {
+          ...timeline,
+          clips: [
+            ...next,
+            placed({
+              kind: "element",
+              textPreview: firstTextLine(input.text),
+              text: input.text,
+              title: editTitle(defaultTitle(fps), input.title),
+            }),
+          ],
+        };
+      }
+      // A scene plays its composition from the start, as a fresh host does.
+      if (input.kind === "composition") {
+        onCreate(id, { insert: input });
+        return {
+          ...timeline,
+          clips: [
+            ...next,
+            placed({ kind: "composition", mediaStart: 0, src: input.src }),
+          ],
+        };
+      }
+      const video = separate ? { ...input, muted: true } : input;
+      onCreate(id, { insert: video });
+      const added = placed({
+        kind: input.kind,
+        mediaStart: input.kind === "image" ? null : input.mediaStart,
+        src: input.src,
+        sourceDuration:
+          input.kind === "image"
+            ? null
+            : (batch.mediaLengths.get(input.src) ?? null),
+        hasAudio:
+          isAudioKind(input.kind) ||
+          (input.kind === "video" &&
+            !video.muted &&
+            !batch.silentMedia.has(input.src)),
+        link: separate ? id : null,
+        volume: input.volume ?? null,
+      });
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
       if (separate) {
