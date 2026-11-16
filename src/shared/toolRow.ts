@@ -171,6 +171,26 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `subtitles for ${target}` : "subtitles"),
   },
+  variables_list: {
+    verb: read,
+    kind: "project",
+    object: () => "the variables",
+  },
+  variables_preview: {
+    verb: ["Previewed", "Previewing", "Preview"],
+    kind: "edit",
+    object: () => "variable values",
+  },
+  variables_set_default: {
+    verb: ["Set", "Setting", "Set"],
+    kind: "edit",
+    object: (target) => (target ? `the default of ${target}` : "a default"),
+  },
+  variables_declare: {
+    verb: ["Declared", "Declaring", "Declare"],
+    kind: "edit",
+    object: (target) => (target ? `the variable ${target}` : "a variable"),
+  },
   history_list: { verb: read, kind: "project", object: () => "the history" },
   history_undo: {
     verb: ["Undid", "Undoing", "Undo"],

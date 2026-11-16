@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FpsSchema } from "./timeline/schema.ts";
 import type { Fps, Timeline } from "./timeline/schema";
+import { VariableValuesSchema } from "./variables.ts";
 
 export const exportFormats = ["mp4", "mov", "webm", "gif"] as const;
 export const ExportFormatSchema = z.enum(exportFormats);
@@ -139,6 +140,9 @@ export const ExportStartSchema = ExportDestinationSchema.partial().extend({
     .describe(
       "Encode on an NVIDIA GPU when every frame is drawn from the sources and NVENC works",
     ),
+  variables: VariableValuesSchema.optional().describe(
+    "Composition variable overrides by id, as variables_list declares them, like hyperframes render --variables. Each value must fit its declaration; omitted variables render their defaults. The preview's overrides are not applied unless passed here",
+  ),
 });
 
 /** What an export of one composition is called: the project, then the scene's file name. */

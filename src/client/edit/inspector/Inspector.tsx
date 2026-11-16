@@ -39,6 +39,7 @@ import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
+import { BindVariable } from "./VariablesSection";
 import { TransformFields } from "./TransformFields";
 import { valueAt } from "../../../shared/timeline/keyframes";
 import {
@@ -604,6 +605,13 @@ export function Inspector({
                     {formatTimecode(textWarningFrame, timeline.fps)}.
                   </span>
                 </p>
+              )}
+              {!track?.track.locked && (
+                <BindVariable
+                  projectId={projectId}
+                  clip={clip}
+                  name={name || clip.id}
+                />
               )}
             </details>
           )}

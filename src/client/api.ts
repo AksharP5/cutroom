@@ -17,6 +17,7 @@ export function subscribeProjectEvents(
     | "export"
     | "ready"
     | "view"
+    | "variables"
     | "animation-left-behind",
   listener: (event: MessageEvent<string>) => void,
 ) {

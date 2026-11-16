@@ -6,6 +6,7 @@ import { showSource } from "../source";
 import { transport } from "../transport";
 import { ChangeList } from "./ChangeList";
 import { ledgerChanges } from "./changes";
+import { VariablesSection } from "./VariablesSection";
 
 /** With nothing selected, the inspector describes the timeline: its format, markers and history. */
 export function TimelineOverview({
@@ -62,6 +63,7 @@ export function TimelineOverview({
           )}
         </dl>
       </section>
+      <VariablesSection projectId={projectId} />
       {markers.length > 0 && (
         <section className="inspector-section">
           <h3>

@@ -39,6 +39,11 @@ import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { useTimeline } from "./timeline";
 import { captureFrame } from "./capture";
+import {
+  ExportVariables,
+  exportVariables,
+  previewDrafts,
+} from "./ExportVariables";
 import { RendersList, formatBytes } from "./RendersList";
 import "./export.css";
 
@@ -210,6 +215,7 @@ function ExportDialog({
   const [sizeChoice, setSizeChoice] = useState<ExportSize>("project");
   const [rate, setRate] = useState<RateChoice>("project");
   const [gpu, setGpu] = useState(true);
+  const [variableDrafts, setVariableDrafts] = useState(previewDrafts);
   const [gpuAvailable, setGpuAvailable] = useState(false);
   useEffect(() => {
     let current = true;
@@ -340,9 +346,17 @@ function ExportDialog({
       setError(parsed.error.issues[0].message);
       return;
     }
+    let variables;
+    try {
+      variables = exportVariables(variableDrafts);
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : String(problem));
+      return;
+    }
     setError("");
     if (!outputFps) return;
     void exportProject(projectId, name, parsed.data, choice, {
+      variables,
       quality,
       format,
       fps: outputFps,
@@ -507,6 +521,12 @@ function ExportDialog({
                 Encode on the GPU
               </label>
             )}
+            <ExportVariables
+              drafts={variableDrafts}
+              onChange={(id, value) =>
+                setVariableDrafts((drafts) => ({ ...drafts, [id]: value }))
+              }
+            />
             <label className="export-field">
               File name
               <input

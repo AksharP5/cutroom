@@ -26,6 +26,7 @@ import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
 import { connectPreview, usePreparing } from "./preview";
 import { previewRefresh } from "./previewRefresh";
+import { previewVariablesQuery, useVariables } from "./variables";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 import { usePipeline } from "../pipeline/setting";
@@ -61,6 +62,8 @@ export function Viewer({
 }) {
   const documentId = useRef(crypto.randomUUID());
   const { revision } = change;
+  const shownRevision = useRef(revision);
+  shownRevision.current = revision;
   const stage = useRef<HTMLDivElement>(null);
   const editLabels = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -207,11 +210,15 @@ export function Viewer({
   const shownComposition = useRef(composition);
   shownComposition.current = composition;
   const documentCompositions = useRef(new Map<number, string>());
+  /** The variable overrides each document was requested with, as HyperFrames' query. */
+  const documentVariables = useRef(new Map<number, string>());
   const previewQuery = (gen: number) => {
     const shown = documentCompositions.current.get(gen) ?? ROOT_COMPOSITION;
-    return shown === ROOT_COMPOSITION
-      ? ""
-      : `&composition=${encodeURIComponent(shown)}`;
+    return `${
+      shown === ROOT_COMPOSITION
+        ? ""
+        : `&composition=${encodeURIComponent(shown)}`
+    }${documentVariables.current.get(gen) ?? ""}`;
   };
   const reload = (
     revision: number,
@@ -219,6 +226,10 @@ export function Viewer({
   ) => {
     latest.current += 1;
     documentCompositions.current.set(latest.current, shownComposition.current);
+    documentVariables.current.set(
+      latest.current,
+      previewVariablesQuery(shownComposition.current),
+    );
     loadingRevision.current = { gen: latest.current, revision };
     transition({ type: "navigate", gen: latest.current, deadline });
   };
@@ -391,6 +402,22 @@ export function Viewer({
     checking.current?.abort();
     refresh.current?.push(change);
   }, [change]);
+  // HyperFrames reads variables once as a document starts, so new overrides need a new document.
+  // It loads over the last picture, as an edit's reload does.
+  useEffect(
+    () =>
+      useVariables.subscribe(() => {
+        const requested = documentVariables.current.get(latest.current);
+        if (
+          requested === undefined ||
+          requested === previewVariablesQuery(shownComposition.current)
+        )
+          return;
+        checking.current?.abort();
+        reload(shownRevision.current);
+      }),
+    [],
+  );
   // Opening a composition loads its document over the last picture, as an edit's reload does.
   const opened = useRef(composition);
   useLayoutEffect(() => {

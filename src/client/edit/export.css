@@ -197,3 +197,19 @@
 .export-render-delete {
   color: var(--danger);
 }
+.export-variables {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+.export-variables legend {
+  margin-bottom: var(--space-2);
+  color: var(--text-secondary);
+}
+.export-field input.export-swatch {
+  width: var(--size-row);
+  padding: var(--space-1);
+}
