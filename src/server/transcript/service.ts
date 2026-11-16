@@ -26,6 +26,7 @@ import {
   parseSourceDocument,
   patchElementInHtml,
 } from "@hyperframes/studio-server";
+import type { HistoryWho } from "@hyperframes/studio-server";
 import { randomClipId } from "../../shared/timeline/apply";
 import { recordClipIds, usedClipIds } from "../projects/ids";
 import { projectPath, readSource } from "../projects/store";
@@ -275,6 +276,7 @@ export function createTranscriptService(
     project: Project,
     transcriptId: string,
     input: CutWords,
+    who?: HistoryWho,
   ) =>
     store.mutate(
       project,
@@ -359,6 +361,7 @@ export function createTranscriptService(
         ]);
         return transcriptView(transcript);
       },
+      who,
     );
 
   const start = async (

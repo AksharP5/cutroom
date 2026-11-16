@@ -1171,6 +1171,14 @@ test("an agent's script cut marks every rewritten element, including editor iden
       await readFile(join(project.path, "index.html"), "utf8"),
     )?.[0];
     expect(element).toContain("data-hf-id=");
+    // The undo history credits the cut to the agent, not to the person.
+    const history = (await (
+      await fixture.request(`/projects/${project.id}/history`)
+    ).json()) as { entries: { label: string; who: { kind: string } }[] };
+    expect(
+      history.entries.find((entry) => entry.label === "Cut script words")?.who
+        .kind,
+    ).toBe("agent");
   } finally {
     await fixture.close();
   }
