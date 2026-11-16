@@ -10,6 +10,8 @@ import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema } from "./protocol";
 import type { MediaKind } from "./protocol";
 import { startMediaWorker } from "./process";
+import { makesProxy } from "./settings";
+import { probeNvenc } from "../hyperframes/nvenc";
 import type { z } from "zod";
 
 async function fingerprint(source: string) {
@@ -37,8 +39,26 @@ const artifacts = {
   filmstrip: "filmstrip.json",
   frame: "frame.jpg",
   scrub: "scrub.mp4",
-};
-const priority = { frame: 0, probe: 1, peaks: 1, filmstrip: 2, scrub: 3 };
+  proxy: "proxy.mp4",
+} satisfies Record<MediaKind, string>;
+/** A clip with no editing proxy shows no picture at all, so its proxy comes before strips. */
+const priority = {
+  frame: 0,
+  probe: 1,
+  peaks: 1,
+  proxy: 2,
+  filmstrip: 3,
+  scrub: 4,
+} satisfies Record<MediaKind, number>;
+/** Each kind's recipe; a new one keys new cache entries. */
+const recipe = {
+  probe: "media-v7",
+  peaks: "media-v6",
+  filmstrip: "media-v6",
+  frame: "media-v6",
+  scrub: "media-v7",
+  proxy: "media-v6",
+} satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 const background = (kind: MediaKind) =>
   kind === "filmstrip" || kind === "scrub";
@@ -52,8 +72,11 @@ export function createMediaService(
     failureTtlMs?: number;
     maxCacheEntries?: number;
     removeDirectory?: (directory: string) => Promise<void>;
+    /** Whether NVENC works here; asked once, before the first editing proxy. */
+    nvenc?: () => Promise<boolean>;
   } = {},
 ) {
+  let nvenc: Promise<boolean> | undefined;
   const jobs = new Map<string, MediaJob>();
   const queue: MediaJob[] = [];
   const running = new Map<MediaJob, Promise<void>>();
@@ -99,11 +122,14 @@ export function createMediaService(
           : a.sequence - b.sequence),
     );
     while (!closing && running.size < 2 && queue.length) {
-      const backgroundRunning = [...running.keys()].some((job) =>
-        background(job.kind),
-      );
-      const index = queue.findIndex(
-        (job) => !background(job.kind) || !backgroundRunning,
+      const busy = (kind: (kind: MediaKind) => boolean) =>
+        [...running.keys()].some((job) => kind(job.kind));
+      // A clip shows no picture until its editing proxy exists, so one proxy at a time may
+      // also take the worker the other whole-file passes leave free.
+      const index = queue.findIndex((job) =>
+        job.kind === "proxy"
+          ? !busy((kind) => kind === "proxy")
+          : !background(job.kind) || !busy(background),
       );
       if (index === -1) break;
       const job = queue.splice(index, 1)[0]!;
@@ -134,8 +160,13 @@ export function createMediaService(
       info = MediaInfoSchema.parse(await Bun.file(probe.artifact).json());
       if (kind === "peaks" && !info.channels)
         throw new HttpError(422, "The media has no audio stream.");
-      if ((kind === "filmstrip" || kind === "scrub") && !info.video)
+      if (
+        (kind === "filmstrip" || kind === "scrub" || kind === "proxy") &&
+        !info.video
+      )
         throw new HttpError(422, "The media has no video stream.");
+      if (kind === "proxy" && !makesProxy(info.video!))
+        throw new HttpError(422, "This video needs no editing proxy.");
       if (kind === "frame") {
         if (!info.video)
           throw new HttpError(422, "The media has no video stream.");
@@ -146,7 +177,7 @@ export function createMediaService(
       }
     }
     const key = createHash("sha256")
-      .update(`media-v6\0${kind}\0${identity}\0${frame ?? ""}`)
+      .update(`${recipe[kind]}\0${kind}\0${identity}\0${frame ?? ""}`)
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
@@ -199,12 +230,31 @@ export function createMediaService(
         let failure: string | undefined;
         let cleanupFailure: string | undefined;
         try {
+          const encoder =
+            kind === "proxy"
+              ? (await (nvenc ??= (options.nvenc ?? probeNvenc)()))
+                ? ("nvenc" as const)
+                : ("x264" as const)
+              : undefined;
           scratch = await mkdtemp(join(cache, ".media-"));
           if (machine.state.status === "cancelling") return;
           const worker = startMediaWorker(
-            { kind, source, directory: scratch, ffmpeg, ffprobe, info, time },
+            {
+              kind,
+              source,
+              directory: scratch,
+              ffmpeg,
+              ffprobe,
+              info,
+              time,
+              encoder,
+            },
             options.workerUrl ?? new URL("./worker.ts", import.meta.url),
             options.stopTimeoutMs ?? 1000,
+            (progress) => {
+              if (machine.state.status === "running")
+                machine.transition({ status: "running", progress });
+            },
           );
           job.cancel = worker.cancel;
           try {
@@ -266,6 +316,23 @@ export function createMediaService(
     },
     scrub(project: Project, key: string) {
       return projectPath(project, `.cutroom/cache/${key}/${artifacts.scrub}`);
+    },
+    /** A video's editing proxy job, started if it has none; null for a video that needs none. */
+    async proxyState(project: Project, path: string) {
+      const result = await request(project, path, "proxy").catch(
+        (error: unknown) => {
+          if (
+            error instanceof HttpError &&
+            (error.status === 422 || error.status === 404)
+          )
+            return null;
+          throw error;
+        },
+      );
+      return result?.state ?? null;
+    },
+    proxy(project: Project, key: string) {
+      return projectPath(project, `.cutroom/cache/${key}/${artifacts.proxy}`);
     },
     async dispose() {
       closing = true;

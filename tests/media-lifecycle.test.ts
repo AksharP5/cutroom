@@ -31,7 +31,7 @@ import {appendFile} from "node:fs/promises";
 import {join} from "node:path";
 const task = await Bun.stdin.json();
 if(task.kind === "probe") {
- await Bun.write(join(task.directory,"probe.json"), JSON.stringify(${JSON.stringify(mode)} === "no-stream" ? {} : {channels:1,video:{width:160,height:90,pixelAspect:1,fps:30,duration:12}}));
+ await Bun.write(join(task.directory,"probe.json"), JSON.stringify(${JSON.stringify(mode)} === "no-stream" ? {} : {channels:1,video:{width:160,height:90,pixelAspect:1,fps:30,duration:12,codec:"h264",alpha:false,hdr:false}}));
 } else {
  await appendFile(${JSON.stringify(log)}, JSON.stringify({kind:task.kind,source:task.source,time:task.time})+"\\n");
  if(${JSON.stringify(mode)} === "crash" && !await Bun.file(${JSON.stringify(marker)}).exists()) {

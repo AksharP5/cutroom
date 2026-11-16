@@ -628,25 +628,53 @@ What changed: lookahead prepares every clip that comes into view, including one 
 
 On November 16, 2026, the pipeline was checked against HyperFrames on camera, phone and screen footage: the owner's own recordings (a DaVinci Resolve 1080p60 MOV render with a timecode track, a vertical Resolve MOV, a full-range MP4 with an ICC profile, a 60 fps screen recording at 1916x1074, an OBS HEVC recording), and ffmpeg stand-ins with numbered frames for what was missing. Parity is the e2e test's comparison, the viewer with and without the pipeline at nine frames across two cuts, headless; the export tolerance is a mean difference under 4/255 and a bias under 1.5/255. Playback, scrub, steps and edits were measured headed in Chromium 155 through Playwright (X11), on a four-cut 1080p composition of one file, with renderer memory as the proportional set size after a drag (Playwright's Network domain inflates the pipeline's side, as above).
 
-| Footage                                          | Drawn by                                | Parity, mean / worst bias | 1x playback on: pictures/s, gap p95/max | Off          | Step, median / p95 | W / undo   |
-| ------------------------------------------------ | --------------------------------------- | ------------------------: | --------------------------------------: | ------------ | -----------------: | ---------- |
-| H.264 4K60, 40 Mbit/s, 2 s GOP                   | pipeline                                |                 2.7 / 0.3 |                         43.1, 66/260 ms | 49.8, 34/84  |        18 / 227 ms | 13 / 27 ms |
-| H.264 1080p30, 4 s GOP with B-frames             | pipeline                                |                 2.0 / 0.3 |                          30.0, 34/94 ms | 30.0, 50/84  |          7 / 82 ms | 10 / 19 ms |
-| Phone portrait, 90° matrix (also 180°, 270°)     | pipeline                                |                 0.6 / 0.2 |                          29.3, 50/66 ms | 29.9, 50/83  |          9 / 33 ms | 31 / 18 ms |
-| Variable frame rate, 1/60 and 1/20 s frames      | pipeline                                |                 2.0 / 0.3 |                          30.0, 35/50 ms | 21.4, 83/100 |          8 / 31 ms | 13 / 25 ms |
-| Resolve 1080p60 MOV (real)                       | pipeline                                |                 2.4 / 0.3 |                          60.2, 18/18 ms | 51.2, 34/84  |          7 / 10 ms | 12 / 18 ms |
-| Resolve vertical MOV (real), open GOP            | pipeline                                |                 0.6 / 0.4 |                          30.2, 34/35 ms | 29.8, 50/84  |         7 / 102 ms | 11 / 18 ms |
-| Screen recording, 60 fps, 1916x1074 (real)       | pipeline                                |                 1.4 / 0.2 |                          58.3, 18/34 ms | 49.3, 34/84  |          7 / 79 ms | 10 / 18 ms |
-| Full range: ICC (real), bitstream tags, EBU colr | pipeline (EBU through the browser)      |                 0.9 / 0.4 |                                       - | -            |                  - | -          |
-| H.264 High 10, SDR                               | pipeline, through the browser           |                 0.2 / 0.1 |                                       - | -            |                  - | -          |
-| Trimmed MP4 (edit list into a GOP), audio first  | pipeline                                |                 0.4 / 0.1 |                                       - | -            |                  - | -          |
-| HDR: HLG or PQ in MP4 `nclx`, MOV `nclc`, VUI    | HyperFrames, "Wide-gamut and HDR video" |                         - |                                       - | -            |                  - | -          |
-| Delayed start (empty edit)                       | HyperFrames, "edit list delays"         |                         - |                                       - | -            |                  - | -          |
-| HEVC 8 and 10-bit (stand-ins, OBS recording)     | HyperFrames, "cannot decode hvc1"       |                         - |                                       - | -            |                  - | -          |
-| Fragmented MP4, audio-only file, MKV             | HyperFrames                             |                         - |                                       - | -            |                  - | -          |
+| Footage                                          | Drawn by                                             | Parity, mean / worst bias | 1x playback on: pictures/s, gap p95/max | Off          | Step, median / p95 | W / undo   |
+| ------------------------------------------------ | ---------------------------------------------------- | ------------------------: | --------------------------------------: | ------------ | -----------------: | ---------- |
+| H.264 4K60, 40 Mbit/s, 2 s GOP                   | pipeline                                             |                 2.7 / 0.3 |                         43.1, 66/260 ms | 49.8, 34/84  |        18 / 227 ms | 13 / 27 ms |
+| H.264 1080p30, 4 s GOP with B-frames             | pipeline                                             |                 2.0 / 0.3 |                          30.0, 34/94 ms | 30.0, 50/84  |          7 / 82 ms | 10 / 19 ms |
+| Phone portrait, 90° matrix (also 180°, 270°)     | pipeline                                             |                 0.6 / 0.2 |                          29.3, 50/66 ms | 29.9, 50/83  |          9 / 33 ms | 31 / 18 ms |
+| Variable frame rate, 1/60 and 1/20 s frames      | pipeline                                             |                 2.0 / 0.3 |                          30.0, 35/50 ms | 21.4, 83/100 |          8 / 31 ms | 13 / 25 ms |
+| Resolve 1080p60 MOV (real)                       | pipeline                                             |                 2.4 / 0.3 |                          60.2, 18/18 ms | 51.2, 34/84  |          7 / 10 ms | 12 / 18 ms |
+| Resolve vertical MOV (real), open GOP            | pipeline                                             |                 0.6 / 0.4 |                          30.2, 34/35 ms | 29.8, 50/84  |         7 / 102 ms | 11 / 18 ms |
+| Screen recording, 60 fps, 1916x1074 (real)       | pipeline                                             |                 1.4 / 0.2 |                          58.3, 18/34 ms | 49.3, 34/84  |          7 / 79 ms | 10 / 18 ms |
+| Full range: ICC (real), bitstream tags, EBU colr | pipeline (EBU through the browser)                   |                 0.9 / 0.4 |                                       - | -            |                  - | -          |
+| H.264 High 10, SDR                               | pipeline, through the browser                        |                 0.2 / 0.1 |                                       - | -            |                  - | -          |
+| Trimmed MP4 (edit list into a GOP), audio first  | pipeline                                             |                 0.4 / 0.1 |                                       - | -            |                  - | -          |
+| HDR: HLG or PQ in MP4 `nclx`, MOV `nclc`, VUI    | HyperFrames, "Wide-gamut and HDR video"              |                         - |                                       - | -            |                  - | -          |
+| Delayed start (empty edit)                       | HyperFrames, "edit list delays"                      |                         - |                                       - | -            |                  - | -          |
+| HEVC 8 and 10-bit (stand-ins, OBS recording)     | pipeline, from its [editing proxy](#editing-proxies) |                         - |                                       - | -            |                  - | -          |
+| Fragmented MP4, audio-only file, MKV             | HyperFrames                                          |                         - |                                       - | -            |                  - | -          |
 
-Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs, so HEVC shows no picture with or without the pipeline. Moving the ruler, the pipeline drew 57 to 60 new pictures a second of the 60 positions the pointer gave it, for every kind. Memory after the drag was 1,460 MB with the pipeline and 2,000 MB without on 4K60; on the 1080p files of one source it was 20 to 80 MB higher with the pipeline, which only saves memory once many clips would each load a `<video>`.
+Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs, so HEVC showed no picture with or without the pipeline until [editing proxies](#editing-proxies). Moving the ruler, the pipeline drew 57 to 60 new pictures a second of the 60 positions the pointer gave it, for every kind. Memory after the drag was 1,460 MB with the pipeline and 2,000 MB without on 4K60; on the 1080p files of one source it was 20 to 80 MB higher with the pipeline, which only saves memory once many clips would each load a `<video>`.
 
 Before the fixes measured here, rotated phone video drew sideways (mean difference 121 to 218), HDR in a MOV and HDR named only in the bitstream drew untone-mapped (bias 26 and 18), Android's full-range EBU footage drew 8/255 too little blue, a delayed edit list drew the wrong frames, and Resolve's MOVs, which write negative composition offsets in a version 0 `ctts`, showed the previous frame for one in two or three frames, then stalled on the open GOP's B-frames once their times were read right. 4K60 played at 2.3 pictures a second: low-latency decoding ran at 94 fps there against 166 with frame threading, and the two lanes fell behind each other. On the 400-clip timeline, frame threading measured the same as low latency (29.6 pictures a second, steps 31 / 54-104 ms against 29-31 / 105-107 ms, W 39 ms, undo 96-102 against 100-165 ms).
 
 4K60 is still short of HyperFrames: the decoders put out about four frames for each one drawn, so their scheduling, not decoding, is the next fix. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+
+## Editing proxies
+
+Measured on November 16, 2026, on the owner's machine (16 threads, RTX 5060, FFmpeg 9.0), through the media service's own job, from ffmpeg stand-ins with grain at OBS-like settings (x265, a keyframe every 2 s, two B-frames, BT.709, AAC). CPU is the job's processes' user time.
+
+| Source, one minute                             | NVENC: time, CPU | libx264: time, CPU | Proxy, NVENC / libx264 |
+| ---------------------------------------------- | ---------------: | -----------------: | ---------------------: |
+| HEVC 1080p30, 8-bit, 12 Mbit/s                 |      4.0 s, 15 s |       10.5 s, 58 s |         90 MB / 113 MB |
+| HEVC 2160p30, 10-bit, 40 Mbit/s, made at 1080p |     12.0 s, 73 s |      14.1 s, 116 s |          71 MB / 57 MB |
+
+Decoding 4K HEVC is most of the work: NVDEC saved 3 s of the 16 a minute took before the decoder's threads went from four to six, so decoding stays on the CPU, where every frame takes the same path as the export's. Eight threads made it 10.8 s at 5.5 cores. CQ 21 made 115 MB a minute at 4K for no picture the viewer can show; CQ 25 is about libx264's CRF 20.
+
+Every frame's burned-in number and presentation time matched the source's in the proxy: HEVC 1080p and 4K, 8 and 10-bit, variable frame rate, NTSC HEVC in Matroska (on the source's millisecond clock; FFmpeg's default had snapped it to 1001/30000 steps, up to 0.4 ms off), ProRes 422 at 23.976 and DNxHR at 29.97. Exports of the same timelines carried every frame's number too, since they read the source.
+
+Colour, Chrome drawing the proxy against FFmpeg's decode of the export at three frames: 8-bit 1080p HEVC differs by 3.6/255 on average with at most 0.4/255 bias, within the export suite's 4 and 1.5. 10-bit 4K differs by 4.3/255 with up to 2.5/255 bias: an 8-bit copy of a 10-bit picture alone measures 0.7/255 more red, even encoded losslessly with any dither, and Chrome's drawing of a downscaled picture adds about one more.
+
+Before and after, on a fresh project of one 10 s HEVC 1080p30 clip, headed in Chromium 155 (X11):
+
+|                      | Before                                  |             After, HyperFrames |                 After, pipeline |
+| -------------------- | --------------------------------------- | -----------------------------: | ------------------------------: |
+| Picture              | never; "did not draw the frame in time" |            4.9 s after opening |                           2.9 s |
+| 1x playback, 3 s     | no picture                              | 88 of 90 frames, all different | 83 pictures sampled every 10 ms |
+| Step, median / max   | -                                       |                     31 / 33 ms |                       4 / 16 ms |
+| Ruler drag, 61 moves | no picture                              |           63 stand-in pictures |                     61 pictures |
+
+A minute of 4K 10-bit HEVC shows "Preparing footage" 1.7 s after opening and its picture after 17 s. Before one editing proxy could run beside a filmstrip, the same clip waited 28 s for its filmstrip first.
+
+On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matroska, checked locally and deleted), NVENC made the proxy in 93 s (5.4 s a minute, 25 MB a minute) and libx264 in 140 s (19 MB a minute). All 62,509 frame times matched the recording's, and sampled frames differed from it by 0.2/255 on average. In the editor the clip played 86 pictures in 3 s through the pipeline, with 30 ms steps. The whole file is made before the clip shows a picture, so that recording showed "Preparing footage" for 95 s; making the proxy in pieces that play as they finish would show the start sooner.

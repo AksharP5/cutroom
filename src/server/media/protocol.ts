@@ -7,6 +7,7 @@ export const MediaKindSchema = z.enum([
   "filmstrip",
   "frame",
   "scrub",
+  "proxy",
 ]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 export const MediaInfoSchema = z.object({
@@ -18,6 +19,9 @@ export const MediaInfoSchema = z.object({
       pixelAspect: z.number().positive(),
       fps: z.number().positive(),
       duration: z.number().nonnegative(),
+      codec: z.string(),
+      alpha: z.boolean(),
+      hdr: z.boolean(),
     })
     .optional(),
 });
@@ -29,9 +33,11 @@ export const MediaTaskSchema = z.object({
   ffprobe: z.string(),
   info: MediaInfoSchema.optional(),
   time: z.number().nonnegative().optional(),
+  encoder: z.enum(["nvenc", "x264"]).optional(),
 });
 export type MediaTask = z.infer<typeof MediaTaskSchema>;
 export const MediaEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("progress"), progress: z.number().min(0).max(1) }),
   z.object({ type: z.literal("done") }),
   z.object({ type: z.literal("error"), error: z.string() }),
 ]);

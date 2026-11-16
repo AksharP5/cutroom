@@ -47,7 +47,14 @@ export function createMediaRoutes(
   media: MediaService = createMediaService(),
 ) {
   const api = new Hono();
-  for (const kind of ["probe", "peaks", "filmstrip", "frame", "scrub"] as const)
+  for (const kind of [
+    "probe",
+    "peaks",
+    "filmstrip",
+    "frame",
+    "scrub",
+    "proxy",
+  ] as const)
     api.get(`/projects/:id/media/${kind}`, async (c) => {
       c.header("cache-control", "no-store");
       const project = await store.get(c.req.param("id"));
@@ -89,7 +96,7 @@ export function createMediaRoutes(
         etag,
         kind === "frame"
           ? "image/jpeg"
-          : kind === "scrub"
+          : kind === "scrub" || kind === "proxy"
             ? "video/mp4"
             : kind === "peaks"
               ? "application/octet-stream"
@@ -194,4 +201,43 @@ export async function scrubPreview(
       return Response.json({ error: "Choose a media path." }, { status: 400 });
     throw error;
   }
+}
+
+/** Response headers the sandboxed preview's runtime reads from an editing proxy request. */
+export const proxyExposedHeaders = "retry-after, x-hf-proxy-progress";
+
+/**
+ * The editing proxy for HyperFrames' runtime, which asks `<asset>?hf-proxy=h264` for a video its
+ * browser cannot decode: 202 with its progress while the proxy is made, then the MP4, with byte
+ * ranges. Null for a video Cutroom makes no proxy of, which HyperFrames' own transcoder keeps.
+ */
+export async function proxyPreview(
+  media: MediaService,
+  project: Project,
+  path: string,
+): Promise<Response | null> {
+  const result = await media
+    .request(project, path, "proxy")
+    .catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 422) return null;
+      throw error;
+    });
+  if (!result) return null;
+  if (result.artifact)
+    return new Response(Bun.file(result.artifact), {
+      headers: { "content-type": "video/mp4", "cache-control": "no-store" },
+    });
+  if (result.state.status === "failed")
+    return new Response(result.state.error, {
+      status: 502,
+      headers: { "cache-control": "no-store" },
+    });
+  return new Response(null, {
+    status: 202,
+    headers: {
+      "cache-control": "no-store",
+      "retry-after": "1",
+      "x-hf-proxy-progress": result.state.progress.toFixed(3),
+    },
+  });
 }

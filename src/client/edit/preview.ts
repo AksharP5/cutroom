@@ -50,6 +50,27 @@ export const usePositionWarning = create<{
 export const useTextWarning = create<{
   warning: { clipId: string; time: number; text: string } | null;
 }>(() => ({ warning: null }));
+const PreviewCopiesSchema = z.object({
+  source: z.literal("hf-preview"),
+  type: z.literal("preview-copies"),
+  copies: z
+    .object({
+      total: z.number(),
+      ready: z.number(),
+      failed: z.number(),
+      progress: z.number(),
+    })
+    .nullable(),
+});
+type PreviewCopies = z.infer<typeof PreviewCopiesSchema>["copies"];
+/**
+ * The editing proxies the shown preview waits for, as HyperFrames' runtime counts them: videos
+ * this browser cannot decode play from a proxy the server makes in the background.
+ */
+export const usePreparing = create<{ copies: PreviewCopies }>(() => ({
+  copies: null,
+}));
+let preparingSource: HTMLIFrameElement | null = null;
 let observedClip: string | null = null;
 let observedText: string | null = null;
 let observedTransform: TransformStyle | null = null;
@@ -238,8 +259,17 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     string,
     { resolve(reply: Reply): void; reject(error: Error): void; timer: number }
   >();
+  let copies: PreviewCopies = null;
   const receive = (event: MessageEvent<unknown>) => {
     if (event.source !== frame.contentWindow) return;
+    const preparing = PreviewCopiesSchema.safeParse(event.data);
+    if (preparing.success) {
+      copies = preparing.data.copies;
+      // The first document says so before it can show anything; later ones once they show.
+      if (preparingSource === frame || preparingSource === null)
+        usePreparing.setState({ copies });
+      return;
+    }
     if (active) {
       const playback = PlaybackClockSchema.safeParse(event.data);
       if (playback.success) {
@@ -480,6 +510,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       pictureBox.publish(null);
     }
     if (hitTarget === hit) hitTarget = null;
+    if (preparingSource === frame) {
+      preparingSource = null;
+      usePreparing.setState({ copies: null });
+    }
     send("meter", { enabled: false });
     closing.abort();
     if (active) audioLevels.publish({ l: 0, r: 0, playing: false });
@@ -566,6 +600,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         edit.push(picture);
       });
       active = true;
+      preparingSource = frame;
+      usePreparing.setState({ copies });
       showDiagnostics();
     },
     /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */

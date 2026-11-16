@@ -21,8 +21,6 @@ export function allowsLocalRequest(
   if (!read) return origin !== null && allowed.includes(origin);
   if (!origin || allowed.includes(origin)) return true;
   return (
-    origin === "null" &&
-    ["GET", "HEAD"].includes(request.method) &&
-    /^\/api\/isolated\/[\w-]+\//.test(url.pathname)
+    origin === "null" && read && /^\/api\/isolated\/[\w-]+\//.test(url.pathname)
   );
 }

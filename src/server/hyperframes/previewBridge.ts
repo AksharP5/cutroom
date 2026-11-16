@@ -20,6 +20,8 @@ import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 
 interface PreviewWindow extends DiagnosticWindow {
+  /** HyperFrames' codec facts for the project's media, by root-relative path. */
+  __HF_MEDIA_CODEC_MAP__?: Record<string, { browserHostile?: boolean }>;
   CSSNumericValue: {
     parse(value: string): {
       toSum(): { values: Iterable<{ unit: string; value: number }> };
@@ -1842,6 +1844,20 @@ function installPreviewBridge(
     }
   };
   /** Videos the composition shows, read without this bridge's suppression. */
+  /**
+   * A video in a codec this browser cannot decode, such as HEVC or ProRes, until HyperFrames'
+   * runtime swaps in the editing proxy the server is making. Until then it plays only its sound,
+   * or fails to load, and has no picture to wait for.
+   */
+  const awaitingProxy = (video: HTMLVideoElement) => {
+    if (!video.error && (!video.readyState || video.videoWidth)) return false;
+    const path = decodeURIComponent(
+      new URL(video.currentSrc || video.src, location.href).pathname,
+    );
+    return Object.entries(win.__HF_MEDIA_CODEC_MAP__ ?? {}).some(
+      ([media, facts]) => facts.browserHostile && path.endsWith(media),
+    );
+  };
   const visibleVideos = () => {
     const hidden = new Set([
       ...holds.keys(),
@@ -1851,7 +1867,10 @@ function installPreviewBridge(
     for (const video of hidden) video.removeAttribute("data-cutroom-held");
     const videos = Array.from(document.querySelectorAll("video")).filter(
       (video) =>
-        video.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+        video.checkVisibility({
+          checkOpacity: true,
+          checkVisibilityCSS: true,
+        }) && !awaitingProxy(video),
     );
     for (const video of hidden) video.setAttribute("data-cutroom-held", "");
     return videos;

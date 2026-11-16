@@ -33,6 +33,7 @@ import type { ReviewActor } from "../../shared/review";
 import { HttpError } from "../../shared/errors";
 import { ExportDestinationSchema } from "../../shared/export";
 import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
+import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { nextExportName } from "../hyperframes/exportName";
 import { createTranscriptService } from "../transcript/service";
@@ -65,6 +66,11 @@ export function createProjectRoutes(
   store: ProjectStore,
   reviews: ReviewService,
   transcripts: TranscriptService = createTranscriptService(store),
+  /** A video's editing proxy, which asking for starts; null when it needs none. */
+  proxyState: (
+    project: Project,
+    path: string,
+  ) => Promise<Readonly<JobState> | null> = async () => null,
 ) {
   const api = new Hono();
   /** Whose history entry an edit is: the calling agent's, or the owner's when undefined. */
@@ -151,9 +157,30 @@ export function createProjectRoutes(
       ),
     });
   });
-  api.get("/projects/:id/media", async (c) =>
-    c.json({ media: await listMedia(await store.get(c.req.param("id"))) }),
-  );
+  api.get("/projects/:id/media", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const media = await listMedia(project);
+    const videos = [
+      ...new Set(
+        media.flatMap((clip) =>
+          clip.kind === "video" ? [clip.mediaPath] : [],
+        ),
+      ),
+    ];
+    const proxies = new Map(
+      await Promise.all(
+        videos.map(
+          async (path) => [path, await proxyState(project, path)] as const,
+        ),
+      ),
+    );
+    return c.json({
+      media: media.map((clip) => {
+        const proxy = proxies.get(clip.mediaPath);
+        return proxy ? { ...clip, proxy } : clip;
+      }),
+    });
+  });
   api.post("/projects/:id/media/rename", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(MediaRenameSchema, await c.req.json());

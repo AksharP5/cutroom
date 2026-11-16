@@ -88,7 +88,11 @@ import {
 } from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
-import { scrubPreview } from "../media/routes";
+import {
+  proxyExposedHeaders,
+  proxyPreview,
+  scrubPreview,
+} from "../media/routes";
 import type { MediaService } from "../media/service";
 
 export interface FileChange {
@@ -771,6 +775,20 @@ export function createHyperframesApi(
     }`;
     return c.redirect(isolatedPreview(id, url.href));
   });
+  // The runtime marks its editing proxy requests with a priority header, which needs a preflight.
+  api.options("/isolated/:key/*", (c) => {
+    if (![...previewKeys.values()].includes(c.req.param("key")))
+      return c.notFound();
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "null",
+        "Access-Control-Allow-Methods": "GET, HEAD",
+        "Access-Control-Allow-Headers": "range, x-hf-proxy-priority",
+        "Access-Control-Max-Age": "600",
+      },
+    });
+  });
   api.get("/isolated/:key/*", async (c) => {
     const key = c.req.param("key");
     const projectId = [...previewKeys].find(([, value]) => value === key)?.[0];
@@ -789,6 +807,7 @@ export function createHyperframesApi(
       );
       headers.set("X-DNS-Prefetch-Control", "off");
       headers.set("Access-Control-Allow-Origin", "null");
+      headers.set("Access-Control-Expose-Headers", proxyExposedHeaders);
       headers.set("X-Content-Type-Options", "nosniff");
       headers.set("Referrer-Policy", "no-referrer");
     };
@@ -854,6 +873,25 @@ export function createHyperframesApi(
         target = `/projects/${encodeURIComponent(projectId)}/preview/${composition ? "comp/" : ""}${asset}`;
         if (!composition && !url.searchParams.has("hf-proxy"))
           assetContentType = getMimeType(file);
+        // The runtime's request for a video its browser cannot decode. Cutroom's media service
+        // makes it; posters, sized copies and the videos it declines stay with HyperFrames.
+        const proxy =
+          media &&
+          !composition &&
+          url.searchParams.get("hf-proxy") === "h264" &&
+          [...url.searchParams.keys()].every((name) =>
+            ["hf-proxy", "hf-proxy-retry"].includes(name),
+          )
+            ? await proxyPreview(
+                media,
+                project,
+                relative(project.path, canonical),
+              )
+            : null;
+        if (proxy) {
+          isolate(proxy.headers);
+          return proxy;
+        }
       }
       const forward = () =>
         api.request(`${url.origin}${target}${url.search}`, {

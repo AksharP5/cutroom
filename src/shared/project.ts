@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TimelineSettingsSchema } from "./timeline/schema";
+import { JobStateSchema } from "./jobs";
 
 export const PointSchema = z.object({
   x: z.number().min(0).max(1),
@@ -176,6 +177,11 @@ export const MediaClipSchema = z.object({
   kind: z.enum(["video", "audio"]),
   start: z.number(),
   duration: z.number(),
+  /**
+   * The editing proxy the preview plays for a video the browser cannot decode, such as HEVC or
+   * ProRes. Absent for a video that plays as it is.
+   */
+  proxy: JobStateSchema.optional(),
 });
 export const MediaListSchema = z.object({ media: z.array(MediaClipSchema) });
 

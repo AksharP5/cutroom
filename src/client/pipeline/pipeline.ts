@@ -120,12 +120,50 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     usePipeline.setState({ active: false });
   };
 
+  /** Files whose editing proxy is being made, each asked after again until it exists. */
+  const preparing = new Set<string>();
+  const proxyReady = async (url: string, path: string) => {
+    preparing.add(path);
+    try {
+      for (;;) {
+        const response = await fetch(url, {
+          headers: { range: "bytes=0-0" },
+          signal: closing.signal,
+        });
+        await response.body?.cancel();
+        if (response.status !== 202) break;
+        await new Promise((done) => setTimeout(done, 2000));
+      }
+      sources.forgetFailures();
+      void draw();
+    } finally {
+      preparing.delete(path);
+    }
+  };
   const sources = sourceCache(async (path): Promise<Source> => {
-    const url = mediaUrl(projectId, path);
-    const [{ decoder, intrinsic }, second] = await Promise.all([
-      openSource(url, closing.signal),
-      openSource(url, closing.signal),
-    ]);
+    const lanes = (url: string) =>
+      Promise.all([
+        openSource(url, closing.signal),
+        openSource(url, closing.signal),
+      ]);
+    // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
+    // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
+    const [{ decoder, intrinsic }, second] = await lanes(
+      mediaUrl(projectId, path),
+    ).catch(async (error: unknown) => {
+      const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
+      const response = await fetch(url, {
+        headers: { range: "bytes=0-0" },
+        signal: closing.signal,
+      });
+      await response.body?.cancel();
+      if (response.status === 202) {
+        if (!preparing.has(path)) void proxyReady(url, path).catch(() => {});
+        throw new Error(`${path} is being prepared for editing`);
+      }
+      if (!response.ok) throw error;
+      return lanes(url);
+    });
     const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
