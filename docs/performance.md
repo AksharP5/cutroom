@@ -4,7 +4,7 @@ Run the production UI benchmark with `bun run build && bun run bench:ui`. To com
 
 The benchmark creates synthetic local media and a project with 100 clips, 10,000 transcript words, and 200 chat messages. It uses three fresh browser contexts, consumes the rendered results, and checks that all 10,000 words can be selected. Native agent discovery is stubbed; inference speed is outside this measurement.
 
-The November 9, 2026 local comparison used Bun 1.4.4, system Chromium, the portable 0.1.0 build, and the 0.1.2 production build. Each build ran separately. Version 0.1.2 uses the shared Agent/Review/Script panel; the benchmark opens the relevant tab before each operation. These are local measurements, not a comparison with proprietary HyperFrames Studio.
+The November 9, 2026 local comparison used Bun 1.4.4, system Chromium, the portable 0.1.0 build, and the 0.1.2 production build. Each build ran separately. Version 0.1.2 uses the shared Agent/Review/Script panel; the benchmark opens the relevant tab before each operation. These are local measurements; see [Cutroom vs HyperFrames Studio](#cutroom-vs-hyperframes-studio) for a comparison with Studio.
 
 | Operation                                   |         0.1.0 |     0.1.2 |
 | ------------------------------------------- | ------------: | --------: |
@@ -24,6 +24,64 @@ The editor bundle contains one CodeMirror View instance instead of eight. The ed
 The new editor's code panel loads CodeMirror only when it first opens: its editor chunk (4.7 KB) and the CodeMirror chunk it shares with the embedded editor (511 KB, 177 KB with gzip) are not preloaded with the editor. On November 16, 2026 the panel added 0.2 KB to the app's entry script and 9 KB (3 KB with gzip) to the editor's own chunk, and the embedded editor's chunk shrank by the CodeMirror it now shares. Opening a project to a ready preview took a median 838 ms with the panel against 840 ms without (20 headed runs each, alternating builds). The first open of the panel showed the source in about 390 ms, and selecting a clip showed its element in about 110 ms.
 
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
+
+## Cutroom vs HyperFrames Studio
+
+On November 16, 2026 the same project was opened and edited in Cutroom (main `c3db508`, default settings, so the footage pipeline was off) and in HyperFrames Studio 0.9.26, run from this repository's `node_modules` with `hyperframes preview --no-open`. `node scripts/bench-vs-studio.ts` does both: it makes the project, starts the editor's own server on a private port, and drives one headed Chromium 155 window (X11, 1720x1050, muted) through every operation below. Three runs per editor, each with a fresh server, project copy and browser, unthrottled and with CPU throttled 4x (the editor page and, in Cutroom, its out-of-process preview). The machine was shared: load average about 10 to 13 from other work during the runs.
+
+The project is a five-minute 1080p30 edit with 123 clips: 100 three-second cuts from one two-minute 8 Mbit/s H.264 source with a one-second GOP, a music bed, 20 text titles, and a GSAP sub-composition placed twice. Every source frame carries its number in sixteen blocks along the top. A CDP screencast records every composited frame of the tab and each picture is read back by that number, so "to picture" means the viewer showed the expected source frame. Edits run on shots 22, 23, 24, 27 and 28, which nothing else overlaps; a ripple delete must show the next shot's frame at the same playhead, and undo the original frame again.
+
+### Where Cutroom loses
+
+1. **Opening to the first picture.** 687 ms against Studio's 520 ms when reopening (median of six), 1,058 ms against 712 ms on the first open after the server starts (median of three). The editor asks for its preview about 470 ms after navigation, together with its first timeline read, so the preview cannot start loading until the editor has loaded and mounted (`src/client/edit/Viewer.tsx:391`), and the first compile of the preview document took 352 ms on the server (28 ms warm, against 2 to 5 ms for Studio's). The viewer then checks the runtime's readiness every 50 ms (`src/client/edit/Viewer.tsx:609-614`). Cutroom shows the whole timeline 440 ms sooner than Studio (902 ms against 1,345 ms), so it is the picture that comes late, not the editor.
+2. **Even 1x playback.** Both editors present about 30 pictures a second, but in Cutroom 55 of them per ten seconds arrived more than 42 ms after the previous one (three runs: 47, 62, 55), against 4 in Studio, with gap p95 50 ms against 33 ms. A 30 fps picture held for an extra 60 Hz frame reads as judder. Played on its own as a top-level page, each editor's compiled preview judders the same way (60 late gaps for Cutroom's, 40 for Studio's), and Studio's editor plays the same preview evenly inside its page, so the difference is in how the preview is hosted, not in the composition. Not proven: Cutroom's preview is a sandboxed, out-of-process frame (`src/client/edit/Viewer.tsx:736`) whose bridge posts a clock and meter levels to the editor every frame while playing (`src/server/hyperframes/previewBridge.ts:1326-1352`); Studio's is in the editor's process. At 4x both judder (gap p95 50 ms each) and Cutroom has fewer late gaps (22 against 52).
+3. **Ripple delete to picture is no faster than Studio's.** 603 ms against 632 ms unthrottled, although Cutroom's timeline shows the edit in 18 ms. Any authored `<script>` makes a composition ineligible for in-place preview updates (`src/server/hyperframes/previewTimingPolicy.ts:61-65`), and HyperFrames projects register their timelines in one (Studio's linter reports a composition without `window.__timelines` as an error), so every edit here loads a new preview document. The viewer's `data-preview-timing-ready` stayed unset and the live frame's document changed on the edit. Throttled 4x, Cutroom is four times faster than Studio here (691 ms against 2,761 ms).
+
+### Results
+
+Median / p95 pooled over three runs; a single value is the median of the three runs. Edit rows have 15 samples each, drags 9, opens 6 (or 3 for the first open). Opening ran before throttling, so it has no 4x column.
+
+| Operation                                    |     Cutroom 1x |        Studio 1x |   Cutroom 4x |        Studio 4x |
+| -------------------------------------------- | -------------: | ---------------: | -----------: | ---------------: |
+| First open to frame 0 shown, per run         | 1,049-1,079 ms |       691-713 ms |            - |                - |
+| Reopen to frame 0 shown                      |   687 / 701 ms |     520 / 533 ms |            - |                - |
+| Reopen to all 100 shots on the timeline      |   902 / 904 ms | 1,345 / 1,358 ms |            - |                - |
+| Ruler drag, 3 s: new pictures per second     |        14 / 19 |        4.6 / 6.0 |    3.6 / 4.0 |      0.33 / 0.33 |
+| Ruler drag: gap between new pictures, p95    |          98 ms |           501 ms |       511 ms |         3,057 ms |
+| 1x play, 10 s: pictures per second           |             30 |               29 |           30 |               29 |
+| 1x play: dropped of 300                      |              3 |                6 |            5 |               12 |
+| 1x play: gaps over 42 ms                     |             55 |                4 |           22 |               52 |
+| 1x play: picture gap p95                     |          50 ms |            33 ms |        50 ms |            50 ms |
+| Ctrl+wheel zoom, 16 steps: frame p95         |     20 / 20 ms |     122 / 240 ms |   45 / 48 ms |     200 / 201 ms |
+| Ctrl+wheel zoom: frames over 25 ms           |              1 |                7 |           20 |               15 |
+| Razor at the playhead, key to timeline       |      6 / 15 ms |     590 / 793 ms |   47 / 77 ms | 2,181 / 2,627 ms |
+| Undo of the razor, key to timeline           |     54 / 74 ms |     575 / 840 ms | 111 / 221 ms | 2,511 / 3,131 ms |
+| Ripple delete, key to timeline               |     18 / 21 ms |      91 / 120 ms |  83 / 120 ms |     424 / 493 ms |
+| Ripple delete, key to picture                |   603 / 617 ms |     632 / 667 ms | 691 / 795 ms | 2,761 / 2,930 ms |
+| Undo, key to timeline                        |     48 / 55 ms |     556 / 584 ms | 114 / 183 ms | 2,568 / 3,322 ms |
+| Undo, key to picture                         |   361 / 450 ms |     578 / 612 ms | 538 / 711 ms | 2,627 / 3,390 ms |
+| Trim drag, 40 moves: editor frame p95        |     19 / 20 ms |       21 / 24 ms |   28 / 33 ms |      53 / 109 ms |
+| Trim drag: edge pictures shown in the viewer |             21 |               11 |           25 |                6 |
+| Move drag, 40 moves: editor frame p95        |     19 / 19 ms |       18 / 19 ms |   24 / 30 ms |      38 / 100 ms |
+| Agent writes the file, to picture            |   493 / 504 ms |     566 / 663 ms | 563 / 802 ms | 2,219 / 2,710 ms |
+| Undo of that write, to picture               |   381 / 412 ms |     499 / 628 ms | 502 / 738 ms | 1,906 / 2,461 ms |
+| Agent edits over MCP, call to picture        |   590 / 614 ms |     no such tool | 730 / 973 ms |     no such tool |
+| Browser memory after the session (PSS)       |       1,402 MB |         2,629 MB |     1,250 MB |         3,013 MB |
+| Server memory after the session (PSS)        |         408 MB |           533 MB |       346 MB |           517 MB |
+
+What each row does, in both editors:
+
+- **Open**: navigation to the first screencast frame showing source frame 0, and to the timeline listing all 100 shots. Three navigations per run in one browser; the first of the first run follows a fresh server.
+- **Ruler drag**: from shot 10 to shot 40 at Fit, a pointer move about every 16 ms for three seconds. The gap row includes the wait from the drag's start to its first picture.
+- **Play**: Space at shot 22, then `requestVideoFrameCallback` on every visible video in the preview for ten seconds. Pictures from a hidden video the runtime keeps ready are not counted.
+- **Zoom**: Ctrl+wheel over the timeline, one step a displayed frame, timed by the editor page's animation frames.
+- **Razor**: click the shot, then Cutroom's E (razor at the playhead) or Studio's S (split the selected clip). Timed from the key to the frame after the timeline shows one more clip. The picture does not change.
+- **Ripple delete**: click the shot, then Delete. Studio's ripple is on by default and closes the gap on its main track; Cutroom also ripples the music, as Resolve does with auto-select tracks on.
+- **Trim and move drags**: zoomed until the clip is 160 px wide, 40 pointer moves at about 60 Hz: shot 30's end 60 px left, title 6 by 80 px. Each was checked to have applied and to undo. Both editors show the trim's edge frame in the viewer while dragging; Cutroom shows about twice as many.
+- **Agent edit**: Studio's agent tools (WebMCP: select, inspect, seek, set style or text, transform, animate) have no timing edit, so its agent edits the file. Both editors were timed from writing a ripple-deleted `index.html` to the picture; Cutroom also from a `timeline_edit` remove-with-ripple call, after a `timeline_read` that is not timed.
+- **Memory**: proportional set size of the browser's process tree and of the server's, after the session. Playwright keeps response bodies for its Network domain, which overstates the browser's figure for both editors (see Footage pipeline, Memory). Studio's server includes the headless Chrome it starts for thumbnails.
+
+Run it with `bun run build`, then `node scripts/bench-vs-studio.ts --editor cutroom|studio --throttle 1|4 --runs 3 --out <file>`, and `--summary <files>` for the medians. It runs under Node because Playwright's library loses its browser under Bun, takes about four minutes a run, and is not run in CI. The project, about 125 MB, goes in `~/.cache/cutroom-vs-studio-bench` unless `--dir` says otherwise.
 
 ## Timeline engine
 
