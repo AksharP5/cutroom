@@ -34,7 +34,7 @@ Instrument Sans and Martian Mono are vendored in `src/client/fonts/` as variable
 
 The Cutroom logo, mark, favicons, and application icon are original Cutroom assets.
 
-Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, and other dependencies retain the license files in their installed packages.
+Phosphor icons retain the MIT license of `@phosphor-icons/react`. React, Hono, Zustand, Vite, CodeMirror and Lezer (the code panel's editor, the same versions the embedded editor uses), and other dependencies retain the license files in their installed packages.
 
 Lightning CSS 1.33.0 parses and rewrites the inspector's inline opacity styles. Its MPL-2.0 license is retained in `node_modules/lightningcss/LICENSE`, including in the production package. The dependency source is unchanged.
 

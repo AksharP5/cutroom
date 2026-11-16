@@ -1,0 +1,166 @@
+/* The code panel: the project's files and the open one's source, left of the viewer. */
+
+.code-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--width-code-tree) minmax(0, 1fr);
+  overflow: hidden;
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+  background: var(--surface-panel);
+}
+.code-panel[data-open="false"] {
+  visibility: hidden;
+}
+
+.code-files {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-1) 0;
+  border-right: var(--stroke-hair) solid var(--line-subtle);
+}
+.code-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.code-files ul ul {
+  padding-left: var(--space-3);
+}
+.code-files :is(button, summary, .code-asset) {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  height: var(--size-ledger-row);
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font: var(--weight-regular) var(--type-xs) / var(--leading-tight)
+    var(--font-sans);
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+/* Files that are not source (media, fonts, notes) are listed for orientation, never opened. */
+.code-files .code-asset {
+  display: block;
+  line-height: var(--size-ledger-row);
+  color: var(--text-tertiary);
+}
+.code-files summary {
+  list-style: none;
+}
+.code-files summary::-webkit-details-marker {
+  display: none;
+}
+.code-files summary svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.code-files details[open] > summary svg {
+  rotate: 90deg;
+}
+@media (hover: hover) and (pointer: fine) {
+  .code-files :is(button, summary):hover {
+    background: var(--overlay-hover);
+    color: var(--text-primary);
+  }
+}
+.code-files button[aria-current="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+/* The person's unsaved edit, in their colour. */
+.code-files button[data-edited]::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--human);
+}
+
+.code-file {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.code-file header {
+  flex: none;
+  height: var(--size-row);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 6px 0 var(--space-3);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+}
+.code-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-medium);
+}
+.code-edited {
+  flex: 1;
+  color: var(--human);
+  font-size: var(--type-xs);
+}
+.code-path:has(+ .code-save) {
+  flex: 1;
+}
+:is(.code-save, .code-outside button) {
+  flex: none;
+  height: var(--size-tool-button);
+  padding: 0 9px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: default;
+  transition: transform var(--duration-press) var(--ease-out);
+}
+:is(.code-save, .code-outside button):not(:disabled):active {
+  transform: scale(var(--press-scale));
+}
+.code-save:disabled {
+  opacity: 1;
+  box-shadow: none;
+  background: none;
+  color: var(--text-tertiary);
+}
+.code-outside {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 6px var(--space-1) var(--space-3);
+  border-bottom: var(--stroke-hair) solid var(--line);
+  background: var(--surface-raised);
+  font-size: var(--type-xs);
+}
+.code-outside span {
+  flex: 1;
+  min-width: 0;
+}
+.code-editor {
+  flex: 1;
+  min-height: 0;
+}
+.code-split {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--space-1);
+  cursor: col-resize;
+  touch-action: none;
+}

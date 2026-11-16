@@ -3,7 +3,7 @@ import type { PointerEvent } from "react";
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
-  Folder,
+  Code,
   Magnet,
 } from "@phosphor-icons/react";
 import { z } from "zod";
@@ -59,6 +59,8 @@ import {
 import { SourceViewer } from "./SourceViewer";
 import { CompositionPath } from "./CompositionPath";
 import { ToolButtons } from "./ToolButtons";
+import { CodePanel } from "./code/CodePanel";
+import { codeCanLeave, useCode } from "./code/code";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
@@ -99,7 +101,7 @@ export function EditPage({
   onContext,
   onSaveNote,
   onOpenNote,
-  onFiles,
+  projectPath,
 }: {
   projectId: string;
   projectName: string;
@@ -108,10 +110,27 @@ export function EditPage({
   onContext?: (context: EditorContext) => void;
   onSaveNote: SaveNote;
   onOpenNote(id: string): void;
-  /** Opens the project's folder in the file dialog. */
-  onFiles(): void;
+  /** The project folder, for copying a file's full path. */
+  projectPath: string;
 }) {
   const voiceover = useVoiceover(projectId);
+  const codeOpen = useWorkspace((state) => state.code);
+  // Leaving the project keeps neither a voiceover take nor code edits unsaved.
+  useEffect(() => {
+    useWorkspace.setState({
+      beforeProjectChange: () => voiceover.canLeave() && codeCanLeave(),
+    });
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!useCode.getState().edited) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      useWorkspace.setState({ beforeProjectChange: null });
+    };
+  }, [voiceover]);
   const editorTools = useContext(EditorToolsContext);
   const mode = editorTools?.mode ?? "select";
   const setMode = (next: typeof mode) => {
@@ -491,6 +510,7 @@ export function EditPage({
     editUndo: () => step("undo"),
     editRedo: () => step("redo"),
     workspaceViewerModeCinemaViewer: toggleFullscreen,
+    cutroomToggleCode: () => useWorkspace.setState({ code: !codeOpen }),
   };
   useKeymap(handlers);
 
@@ -555,12 +575,13 @@ export function EditPage({
         />
         <button
           className="edit-icon"
-          aria-label="Project files"
-          aria-haspopup="dialog"
-          title="Project files"
-          onClick={onFiles}
+          aria-label="Code"
+          aria-controls="code-panel"
+          aria-pressed={codeOpen}
+          title={hint("cutroomToggleCode")}
+          onClick={() => useWorkspace.setState({ code: !codeOpen })}
         >
-          <Folder size={16} />
+          <Code size={16} />
         </button>
         <span className="edit-separator" />
         <button
@@ -585,6 +606,7 @@ export function EditPage({
         <InspectorToggle />
         <ExportControl projectId={projectId} projectName={projectName} />
       </div>
+      <CodePanel projectId={projectId} projectPath={projectPath} />
       <section
         ref={viewer}
         className="edit-viewer"

@@ -28,12 +28,10 @@ type DirectoryState =
 const titles = {
   file: "Attach a file",
   directory: "Open a project folder",
-  project: "Project files",
 } as const;
 const actions = {
   file: "Attach file",
   directory: "Open this folder",
-  project: "Copy path",
 } as const;
 
 export function FileDialog({
@@ -43,8 +41,7 @@ export function FileDialog({
   onClose,
 }: {
   initialPath: string;
-  /** `project` browses a project's folder and copies the chosen file's path. */
-  kind: "file" | "directory" | "project";
+  kind: "file" | "directory";
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {

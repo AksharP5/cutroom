@@ -2,7 +2,6 @@ import { realpath } from "node:fs/promises";
 import {
   basename,
   dirname,
-  extname,
   isAbsolute,
   join,
   relative,
@@ -11,6 +10,7 @@ import {
 } from "node:path";
 import type { Project } from "../../shared/project.ts";
 import { HttpError } from "../../shared/errors.ts";
+import { protectedPath } from "../../shared/sourcePaths.ts";
 
 export async function projectPath(
   project: Pick<Project, "path">,
@@ -45,33 +45,6 @@ export async function projectPath(
   return canonical;
 }
 
-// HyperFrames' authored text types, plus the editor's .htm alias.
-export const projectSourceTypes = new Set([
-  ".html",
-  ".htm",
-  ".css",
-  ".js",
-  ".mjs",
-  ".cjs",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".json",
-  ".svg",
-]);
-const configNames = new Set([
-  "package.json",
-  "package-lock.json",
-  "deno.json",
-  "deno.jsonc",
-  "mcp.json",
-  "claude.json",
-  "codex.json",
-  "opencode.json",
-  "opencode.jsonc",
-  "agents.json",
-]);
-
 /** User-controlled writes can change composition content, never native tooling or permissions. */
 export async function projectWritePath(
   project: Pick<Project, "path">,
@@ -79,18 +52,7 @@ export async function projectWritePath(
   options: { allowMissing?: boolean; sourceOnly?: boolean } = {},
 ) {
   const check = (path: string) => {
-    const parts = path.replaceAll("\\", "/").split("/");
-    const name = parts.at(-1)?.toLowerCase() ?? "";
-    if (
-      parts.some((part) => part !== "." && part.startsWith(".")) ||
-      configNames.has(name) ||
-      /^(?:claude|agents?|gemini|skill|instructions)(?:\.[^.]+)*\.(?:md|markdown)$/.test(
-        name,
-      ) ||
-      /^(?:tsconfig|jsconfig)(?:\..+)?\.json$/.test(name) ||
-      /(?:^|\.)config\.(?:[cm]?[jt]s|jsx|tsx|json)$/.test(name) ||
-      (options.sourceOnly !== false && !projectSourceTypes.has(extname(name)))
-    )
+    if (protectedPath(path, options.sourceOnly !== false))
       throw new HttpError(
         403,
         "Edit HTML, CSS, JavaScript, TypeScript, SVG, or JSON source. Hidden files, instructions, and tool configuration are protected.",

@@ -146,6 +146,13 @@
   --meter-peak: var(--text-primary);
   --meter-clip: var(--playhead);
 
+  /* Code syntax on --surface-panel: low chroma, so source reads as text first */
+  --code-keyword: #b9a3e3; /* 8.4 */
+  --code-name: #93b4e0; /* 8.8; tags, types, selectors */
+  --code-attribute: #dca0b4; /* 8.7; attributes, CSS properties */
+  --code-string: #a3cc9f; /* 10.4 */
+  --code-number: #d6b98a; /* 10.0; numbers, units, colours, booleans */
+
   /* Type */
   --font-sans: "Instrument Sans", system-ui, sans-serif;
   --font-mono: "Martian Mono", ui-monospace, monospace;
@@ -239,6 +246,9 @@
   --width-inspector: 300px;
   --width-inspector-min: 264px;
   --width-centre-min: 736px;
+  --width-code: 480px; /* code panel: file tree and editor, left of the viewer */
+  --width-code-min: 320px;
+  --width-code-tree: 152px;
   --timeline-height: 337px; /* the viewer is sized from it, so a taller ruler takes from the tracks */
 
   /* Radii */

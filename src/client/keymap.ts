@@ -267,6 +267,13 @@ export const keymap = {
     keys: ["Ctrl+9"],
     fields: true,
   },
+  // Unbound in every page of the owner's Resolve preset.
+  cutroomToggleCode: {
+    area: "Panels",
+    label: "Show or hide code",
+    keys: ["Ctrl+Alt+C"],
+    fields: true,
+  },
   cutroomOpenComposition: {
     area: "View",
     label: "Open the selected composition clip",
@@ -680,6 +687,8 @@ export function blurPointerButton(event: MouseEvent<HTMLElement>) {
 export function actionFor(event: KeyboardEvent): Action | null {
   const typing = isTyping(event.target);
   if (typing && !inPageField(event.target)) return null;
+  // AltGr types characters, and Windows reports it as Ctrl+Alt.
+  if (typing && event.getModifierState("AltGraph")) return null;
   if (
     (event.code === "Space" || event.key === "Enter") &&
     event.target instanceof Element &&

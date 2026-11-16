@@ -5,6 +5,7 @@ import {
   TimelineViewSettingsSchema,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
+import type { ClipSourcesSchema } from "../../shared/code";
 import { destinationTracks, shownTracks } from "../../shared/timeline/tracks";
 import { projectViews } from "../projects/view";
 import { projectMutationGuard } from "../projects/authorization";
@@ -546,6 +547,23 @@ export function createTimelineRoutes(
           } satisfies TimelineView;
         }),
       );
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+  // The code panel follows the selection to each clip's element in the composition's source.
+  api.get("/projects/:id/timeline/sources", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    try {
+      const { source, parsed } = await read(project, composition);
+      return c.json({
+        composition,
+        version: source.version,
+        clips: Object.fromEntries(
+          [...parsed.elements].map(([id, element]) => [id, element.start]),
+        ),
+      } satisfies z.infer<typeof ClipSourcesSchema>);
     } catch (error) {
       return refused(c, error);
     }
