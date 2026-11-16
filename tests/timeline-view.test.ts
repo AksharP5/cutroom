@@ -73,6 +73,7 @@ const clip = (
   transitionIn: null,
   transitionOut: null,
   automation: null,
+  fx: [],
   enabled: true,
   startRef: null,
   ...extra,
@@ -87,6 +88,7 @@ const track = (index: number, extra: Partial<Track> = {}): Track => ({
   muted: false,
   solo: false,
   volume: 1,
+  fx: [],
   ...extra,
 });
 const timeline = (clips: Clip[], tracks: Track[]): Timeline =>

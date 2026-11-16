@@ -1504,3 +1504,15 @@ input.tl-track-gain {
 .tl-lanes[data-cursor="point"] {
   cursor: move;
 }
+/* A track with effects says so in its header; a click opens them. */
+.tl-track-fx {
+  flex: none;
+  min-height: 0;
+  padding: 0 var(--stroke-rail);
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--type-2xs) var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  cursor: pointer;
+}

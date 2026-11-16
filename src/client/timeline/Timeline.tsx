@@ -12,6 +12,7 @@ import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
 import { ClipMix, mixBody } from "./mix";
 import { TrackGain } from "./TrackGain";
+import { getAudioFxDef } from "@hyperframes/core/audio-fx";
 import { AudioMeters } from "./meters";
 import {
   memo,
@@ -142,6 +143,8 @@ export interface TimelineProps {
   onRenameTrack(track: Track, name: string): void;
   /** A track's gain was set from its header, as linear gain. */
   onTrackGain(track: Track, volume: number): void;
+  /** Open a track's effects. */
+  onTrackFx(track: Track): void;
   /**
    * A right-click or the menu key on a track header, or on the empty space under the headers.
    * `anchor` is the header, which a menu opened from the keyboard hangs from.
@@ -526,6 +529,7 @@ const TrackHeads = memo(function TrackHeads({
   onToggleTrack,
   onRenameTrack,
   onTrackGain,
+  onTrackFx,
   onGesture,
   audioControls,
   resize,
@@ -537,6 +541,7 @@ const TrackHeads = memo(function TrackHeads({
   onToggleTrack: TimelineProps["onToggleTrack"];
   onRenameTrack: TimelineProps["onRenameTrack"];
   onTrackGain: TimelineProps["onTrackGain"];
+  onTrackFx: TimelineProps["onTrackFx"];
   onGesture: TimelineProps["onGesture"];
   audioControls: TimelineProps["audioControls"];
   resize: ReturnType<typeof useTrackResize>;
@@ -597,6 +602,21 @@ const TrackHeads = memo(function TrackHeads({
               onCommit={(volume) => onTrackGain(track, volume)}
               onGesture={onGesture}
             />
+          )}
+          {track.fx.length > 0 && (
+            <button
+              className="tl-track-fx"
+              aria-label={`Effects on ${id}`}
+              title={track.fx
+                .map(
+                  (node) =>
+                    `${node.label ?? getAudioFxDef(node.type)?.label ?? node.type}${node.enabled ? "" : " (bypassed)"}`,
+                )
+                .join(", ")}
+              onClick={() => onTrackFx(track)}
+            >
+              FX
+            </button>
           )}
           {track.kind === "audio" && audioControls?.(track, id, "title")}
         </div>
@@ -744,6 +764,7 @@ export function Timeline({
   recording,
   onRenameTrack,
   onTrackGain,
+  onTrackFx,
   onTrackMenu,
   onClipMenu,
   onOpenPin,
@@ -1260,6 +1281,7 @@ export function Timeline({
               onToggleTrack={onToggleTrack}
               onRenameTrack={onRenameTrack}
               onTrackGain={onTrackGain}
+              onTrackFx={onTrackFx}
               onGesture={onGesture}
               audioControls={audioControls}
               resize={resize}

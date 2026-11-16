@@ -58,6 +58,7 @@ const clip = (
   transitionIn: null,
   transitionOut: null,
   automation: null,
+  fx: [],
   enabled: true,
   hasAudio: false,
   startRef: null,
@@ -82,6 +83,7 @@ const sequence = (tracks: Partial<Track>[] = []): Timeline =>
       muted: false,
       solo: false,
       volume: 1,
+      fx: [],
       ...tracks.find((track) => track.index === index),
     })),
     clips: [
@@ -328,6 +330,13 @@ test("frozen edit anchors include linked partners and ripple followers but ignor
     "c",
   ]);
   expect(anchorsChanged(anchors, { ...before, markers: [] })).toBe(false);
+  // Every server answer parses new effect arrays; equal effects are the same clip.
+  expect(
+    anchorsChanged(anchors, {
+      ...before,
+      clips: before.clips.map((clip) => ({ ...clip, fx: [...clip.fx] })),
+    }),
+  ).toBe(false);
   for (const id of ["a-sound", "c"]) {
     expect(
       anchorsChanged(anchors, {

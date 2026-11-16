@@ -21,6 +21,7 @@ const timeline = normalizeTimeline({
       muted: false,
       solo: false,
       volume: 1,
+      fx: [],
     },
   ],
   clips: [
@@ -52,6 +53,7 @@ const timeline = normalizeTimeline({
       transitionIn: null,
       transitionOut: null,
       automation: null,
+      fx: [],
       enabled: true,
       hasAudio: false,
       startRef: null,
