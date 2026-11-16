@@ -69,6 +69,8 @@ export const frameBudget = {
 const PAST = 32;
 /** Frames each decoder keeps: enough for a GOP's worth of reverse steps or a cut's opening. */
 const KEPT = 24;
+/** Gamuts and transfers that need Chrome's tone mapping, which a bitstream may name with no `colr`. */
+const WIDE = new Set<string | null>(["bt2020", "smpte432", "pq", "hlg"]);
 
 /**
  * One WebCodecs decoder for one file, however many clips play it. Frames are found by their
@@ -100,6 +102,16 @@ export class SourceDecoder {
   readonly #waiting = new Map<number, Set<(frame: VideoFrame) => void>>();
   #queue: Promise<unknown> = Promise.resolve();
   #error: Error | null = null;
+  /** Set for good once a frame shows the file is one the pipeline must not draw. */
+  #refused: Error | null = null;
+  /**
+   * Frames the decoder never puts out from any keyframe, such as a B-frame of DaVinci Resolve's
+   * that refers to a picture before the file's first. A paused <video> keeps showing the frame
+   * before, and so does the pipeline.
+   */
+  readonly #missing = new Set<number>();
+  /** A decoded picture's size, which 10-bit footage doubles. */
+  #frameBytes = 0;
   #closed = false;
 
   constructor(
@@ -120,7 +132,9 @@ export class SourceDecoder {
       colorSpace: colour,
       // The editor's <video> decodes in software on Linux; matching it keeps colours identical.
       hardwareAcceleration: "prefer-software",
-      optimizeForLatency: true,
+      // Frame threading, as the editor's <video> decodes: low-latency decoding kept up with 4K60
+      // only 1.5 times over, and playback fell behind it to 2 pictures a second.
+      optimizeForLatency: false,
     };
     this.#decoder = this.#create();
   }
@@ -148,6 +162,14 @@ export class SourceDecoder {
   }
 
   #output(frame: VideoFrame) {
+    const { primaries, transfer } = frame.colorSpace;
+    if (WIDE.has(primaries) || WIDE.has(transfer)) {
+      frame.close();
+      this.#refused = this.#error = new Error(
+        "Wide-gamut and HDR video stays with HyperFrames.",
+      );
+      return;
+    }
     const index = this.#indexOf.get(frame.timestamp);
     if (index === undefined || this.#closed || this.#frames.has(index)) {
       frame.close();
@@ -155,11 +177,32 @@ export class SourceDecoder {
     }
     this.#produced.add(index);
     this.#frames.set(index, frame);
-    frameBudget.used += frame.allocationSize();
+    this.#frameBytes = frame.allocationSize();
+    frameBudget.used += this.#frameBytes;
     while (this.#frames.size > KEPT && this.evictOldest(frame));
     evict(this, frame);
     for (const wake of this.#waiting.get(index) ?? []) wake(frame.clone());
     this.#waiting.delete(index);
+  }
+
+  /**
+   * How many of `count` frames a prefetch may decode: what a third of the shared budget holds at
+   * this file's frame size, so the playhead's frames, the next clip's opening and another file's
+   * fit together instead of evicting each other. A 4K frame is 12 MB: 5 of them, where 1080p
+   * keeps the whole count.
+   */
+  room(count: number) {
+    const { width, height } = this.#track;
+    const bytes = this.#frameBytes || width * height * 1.5;
+    return Math.max(
+      2,
+      Math.min(count, Math.floor(frameBudget.limit / 3 / bytes)),
+    );
+  }
+
+  /** Clockwise degrees the file shows its stored pictures turned by. */
+  get rotation() {
+    return this.#track.rotation;
   }
 
   get frameCount() {
@@ -182,6 +225,8 @@ export class SourceDecoder {
 
   /** A clone of the frame to draw, which the caller closes. */
   frame(index: number, sequential = false): Promise<VideoFrame> {
+    if (this.#refused) return Promise.reject(this.#refused);
+    while (this.#missing.has(index)) index--;
     this.#drawn = index;
     this.#asked = index;
     const cached = this.#touch(index);
@@ -262,6 +307,8 @@ export class SourceDecoder {
     retried = false,
   ): Promise<VideoFrame> {
     if (this.#closed) throw new Error("The decoder was closed.");
+    if (this.#refused) throw this.#refused;
+    while (this.#missing.has(index)) index--;
     const cached = this.#touch(index);
     if (cached) return cached.clone();
     if (this.#error || this.#decoder.state === "closed") {
@@ -273,6 +320,12 @@ export class SourceDecoder {
     const target = shown[index]!;
     let key = target;
     while (key > 0 && !samples[key]!.key) key--;
+    // In an open GOP, the B-frames shown just after a keyframe may refer to the GOP before it, as
+    // DaVinci Resolve's renders do, so one a decode from its own keyframe never put out is decoded
+    // again from the keyframe before.
+    if (retried && key > 0)
+      do key--;
+      while (key > 0 && !samples[key]!.key);
     let gopEnd = target + 1;
     while (gopEnd < samples.length && !samples[gopEnd]!.key) gopEnd++;
     if (sequential) this.#heading = Math.max(this.#heading, index);
@@ -335,7 +388,12 @@ export class SourceDecoder {
     if (this.#error) throw this.#error;
     const frame = this.#touch(index);
     if (frame) return frame.clone();
-    if (retried) throw new Error("The decoder did not produce the frame.");
+    if (retried) {
+      if (index === 0)
+        throw new Error("The decoder did not produce the frame.");
+      this.#missing.add(index);
+      return this.#decode(index - 1, false);
+    }
     // Decoded and dropped again before it was drawn: decode it once more on its own.
     this.#restart(-1);
     return this.#decode(index, false, true);

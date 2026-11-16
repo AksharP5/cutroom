@@ -1,8 +1,10 @@
 /** One picture as Cutroom places it: the clip's box fills the composition, then CSS moves it. */
 export interface Layer {
   frame: VideoFrame;
-  /** The source's own picture size, which object-fit uses even when a proxy frame is drawn. */
+  /** The source's picture size as shown, which object-fit uses even when a proxy frame is drawn. */
   intrinsic: { width: number; height: number };
+  /** Clockwise quarter turns from the frame's stored picture to the one shown, as a phone's matrix asks. */
+  turn: 0 | 90 | 180 | 270;
   fit: "fill" | "contain" | "cover";
   x: number;
   y: number;
@@ -40,6 +42,7 @@ uniform bool planes;
 uniform mat3 toRgb;
 uniform vec3 offset;
 uniform vec4 content;
+uniform mat3 orient;
 uniform vec4 shown;
 uniform float opacity;
 uniform float brightness;
@@ -57,6 +60,7 @@ void main() {
   if (at.x < shown.x || at.y < shown.y || at.x > shown.z || at.y > shown.w) discard;
   vec2 uv = (at - content.xy) / content.zw;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
+  uv = (orient * vec3(uv, 1.0)).xy;
   vec3 rgb;
   if (!planes) rgb = texture(luma, uv).rgb;
   else {
@@ -72,6 +76,24 @@ void main() {
   colour = vec4(rgb * brightness * opacity, opacity);
 }`;
 
+/**
+ * Where a point of the shown picture lies in the stored one, column-major: shown (u, v) is stored
+ * (v, 1 - u) after a clockwise quarter turn.
+ */
+const ORIENT: Record<Layer["turn"], number[]> = {
+  0: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+  90: [0, -1, 0, 1, 0, 0, 0, 1, 1],
+  180: [-1, 0, 0, 0, -1, 0, 1, 1, 1],
+  270: [0, 1, 0, -1, 0, 0, 1, 0, 1],
+};
+
+/**
+ * Primaries and transfers whose YCbCr Chrome draws as plain matrix arithmetic. It converts any
+ * other gamut, such as EBU's (bt470bg, common in Android phones' full-range footage), so the
+ * browser's own conversion draws those.
+ */
+const PLAIN = new Set<string | null>(["bt709", "smpte170m"]);
+
 /** Luma weights of the YCbCr matrices Cutroom's footage uses. */
 const WEIGHTS: Partial<Record<VideoMatrixCoefficients, [number, number]>> = {
   bt709: [0.2126, 0.0722],
@@ -81,9 +103,11 @@ const WEIGHTS: Partial<Record<VideoMatrixCoefficients, [number, number]>> = {
 
 /**
  * The column-major matrix and offset that turn 8-bit YCbCr samples, read as 0 to 1, into RGB.
- * Null for a matrix this does not know, which then draws through the browser's own conversion.
+ * Null for a matrix or gamut this does not draw as Chrome does, which then draws through the
+ * browser's own conversion.
  */
 function conversion(space: VideoColorSpace) {
+  if (!PLAIN.has(space.primaries) || !PLAIN.has(space.transfer)) return null;
   const weights = WEIGHTS[space.matrix ?? "bt709"];
   if (!weights) return null;
   const [kr, kb] = weights;
@@ -142,6 +166,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const place = uniform("place");
   const view = uniform("view");
   const content = uniform("content");
+  const orient = uniform("orient");
   const shown = uniform("shown");
   const opacity = uniform("opacity");
   const brightness = uniform("brightness");
@@ -288,6 +313,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
         const cw = scale === null ? width : iw * scale;
         const ch = scale === null ? height : ih * scale;
         gl.uniform4f(content, (width - cw) / 2, (height - ch) / 2, cw, ch);
+        gl.uniformMatrix3fv(orient, false, ORIENT[layer.turn]);
         // clip-path: inset() on the box, which also bounds a covering picture.
         const { top, right, bottom, left } = layer.crop;
         gl.uniform4f(shown, left, top, width - right, height - bottom);

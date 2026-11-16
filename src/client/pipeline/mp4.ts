@@ -15,8 +15,11 @@ export interface Sample {
 export interface VideoTrack {
   codec: string;
   description: Uint8Array;
+  /** Stored picture size, before rotation. */
   width: number;
   height: number;
+  /** Clockwise quarter turns the track's matrix shows the picture with, in degrees. */
+  rotation: 0 | 90 | 180 | 270;
   /** Tags from the container's `colr` box, or null when it has none. */
   colour: VideoColorSpaceInit | null;
   /** Decode order. */
@@ -159,6 +162,31 @@ function codecString(type: string, config: DataView) {
     .join(".")}`;
 }
 
+/**
+ * The clockwise rotation of a track header's matrix, as Chrome shows a phone's portrait video.
+ * Mirrors, scales and shears are refused: the browser would draw them in ways the pipeline does not.
+ */
+function rotationOf(tkhd: Box | undefined): VideoTrack["rotation"] {
+  if (!tkhd) return 0;
+  const at = tkhd.data.getUint8(0) === 1 ? 52 : 40;
+  if (at + 36 > tkhd.data.byteLength)
+    throw new Error("The track header is cut short.");
+  // 16.16 fixed point: x' = a x + c y, y' = b x + d y, with y pointing down.
+  const [a, b, , c, d] = [0, 4, 8, 12, 16].map(
+    (offset) => tkhd.data.getInt32(at + offset) / 65536,
+  ) as [number, number, number, number, number];
+  const turns = {
+    "1,0,0,1": 0,
+    "0,1,-1,0": 90,
+    "-1,0,0,-1": 180,
+    "0,-1,1,0": 270,
+  } as const;
+  const rotation = turns[`${a},${b},${c},${d}` as keyof typeof turns];
+  if (rotation === undefined)
+    throw new Error("The video's matrix mirrors or distorts its picture.");
+  return rotation;
+}
+
 export async function readVideoTrack(
   read: ReadRange,
   size: number,
@@ -192,8 +220,10 @@ export async function readVideoTrack(
     (box) => box.type === (entry.type.startsWith("avc") ? "avcC" : "hvcC"),
   );
   if (!config) throw new Error("The video track has no decoder configuration.");
+  // MP4 writes `nclx`; QuickTime's `nclc` has the same tags without the range flag.
   const colr = extensions.find(
-    (box) => box.type === "colr" && fourcc(box.data, 0) === "nclx",
+    (box) =>
+      box.type === "colr" && ["nclx", "nclc"].includes(fourcc(box.data, 0)),
   );
   // Wide-gamut and HDR footage needs Chrome's tone mapping, so HyperFrames keeps it.
   if (
@@ -207,9 +237,12 @@ export async function readVideoTrack(
         primaries: PRIMARIES[colr.data.getUint16(4)] ?? null,
         transfer: TRANSFERS[colr.data.getUint16(6)] ?? null,
         matrix: MATRICES[colr.data.getUint16(8)] ?? null,
-        fullRange: (colr.data.getUint8(10) & 0x80) !== 0,
+        fullRange:
+          fourcc(colr.data, 0) === "nclx" &&
+          (colr.data.getUint8(10) & 0x80) !== 0,
       }
     : null;
+  const rotation = rotationOf(track.child("tkhd"));
 
   if (!(timescale > 0)) throw new Error("The video track has no timescale.");
   const cut = () => new Error("The sample table is cut short.");
@@ -225,11 +258,10 @@ export async function readVideoTrack(
     };
   };
   const durations = rows(table.child("stts"), 2);
-  const ctts = table.child("ctts");
-  const offsets = rows(ctts, 2);
-  // Version 1 offsets are signed.
-  const offsetAt = (row: number) =>
-    ctts?.data.getUint8(0) === 1 ? offsets.at(row, 1) | 0 : offsets.at(row, 1);
+  const offsets = rows(table.child("ctts"), 2);
+  // Signed in either version, as FFmpeg and so Chrome read them: DaVinci Resolve writes negative
+  // offsets in a version 0 box.
+  const offsetAt = (row: number) => offsets.at(row, 1) | 0;
   const stco = table.child("stco");
   const co64 = table.child("co64");
   const chunks = stco
@@ -263,25 +295,31 @@ export async function readVideoTrack(
     : null;
   const toChunk = rows(table.child("stsc"), 3);
 
-  // The edit list's first media time is where presentation starts.
+  // One edit whose media time is where presentation starts, as encoders and phone trims write.
+  // An empty edit delays the picture and more edits rearrange it; the browser plays those its own
+  // way, so they stay with HyperFrames.
   let shift = 0;
   const elst = track.path("edts", "elst");
   if (elst) {
-    const version = elst.data.getUint8(0);
+    const wide = elst.data.getUint8(0) === 1;
     const edits = elst.data.getUint32(4);
-    if (8 + edits * (version === 1 ? 20 : 12) > elst.data.byteLength)
-      throw cut();
-    for (let index = 0, at = 8; index < edits; index++) {
-      const mediaTime =
-        version === 1
-          ? Number(elst.data.getBigInt64(at + 8))
-          : elst.data.getInt32(at + 4);
-      at += version === 1 ? 20 : 12;
-      if (mediaTime >= 0) {
-        shift = mediaTime;
-        break;
-      }
+    if (8 + edits * (wide ? 20 : 12) > elst.data.byteLength) throw cut();
+    const played: number[] = [];
+    for (let index = 0, at = 8; index < edits; index++, at += wide ? 20 : 12) {
+      const duration = wide
+        ? Number(elst.data.getBigUint64(at))
+        : elst.data.getUint32(at);
+      const mediaTime = wide
+        ? Number(elst.data.getBigInt64(at + 8))
+        : elst.data.getInt32(at + 4);
+      const rate = elst.data.getUint32(at + (wide ? 16 : 8));
+      if (mediaTime < 0 ? duration > 0 : rate !== 0x10000 || played.length)
+        throw new Error(
+          "The video's edit list delays or rearranges its frames.",
+        );
+      if (mediaTime >= 0) played.push(mediaTime);
     }
+    shift = played[0] ?? 0;
   }
 
   const samples: Sample[] = [];
@@ -347,6 +385,7 @@ export async function readVideoTrack(
     ),
     width,
     height,
+    rotation,
     colour,
     samples,
     shown,
