@@ -219,6 +219,16 @@ async function expectSamePictures(
     },
     { expected, actual, band: BAND, height: HEIGHT },
   );
+  console.log(
+    "PARITY",
+    JSON.stringify(
+      results.map((r, i) => [
+        frames[i],
+        Math.round(r.difference * 1000) / 1000,
+        Math.round(Math.max(...r.bias) * 1000) / 1000,
+      ]),
+    ),
+  );
   for (const [index, result] of results.entries()) {
     const frame = frames[index];
     expect(result.numbers[1], `frame ${frame} number`).toBe(result.numbers[0]);
@@ -319,7 +329,8 @@ test("the footage pipeline places, crops, fades and dissolves clips as HyperFram
       ].join("\n"),
     titleStyle([]),
   );
-  await numbered(join(created.path, "a.mp4"), "30");
+  // 720 lines, so Chrome reads the untagged file as BT.709 where the cuts above read BT.601.
+  await numbered(join(created.path, "a.mp4"), "30", "1280x720");
   await edit(request, created, [
     {
       type: "setClip",

@@ -570,6 +570,20 @@ The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by de
 
 Every picture shown while dragging was a frame the playhead visited, and the resting frame was exact in every run. The worst pointer-to-picture time in each run is the first picture of the drag. With the pipeline on, every playhead position the drag produced got a picture; the drag itself delivered about 29 positions a second in this harness, so that is the ceiling here, not the pipeline (a draw took 12 ms at the median).
 
-After an 8 s drag across the whole 400-clip timeline at Fit, the browser's renderer processes held 3,286 MB with the pipeline off (the preview's process 3,081 MB, with 103 video and 103 audio elements loaded) and 958 MB with it on (the preview's process 169 MB with no video and one audio element loaded; the editor's process 733 MB, of which decoded frames are at most 192 MB and the rest is the WebCodecs decoders' own memory).
+### Memory
+
+Measured again after #189 on the same 8 s drag across the whole 400-clip timeline at Fit, as the proportional set size (PSS) of every renderer process, with the browser launched and driven over a bare DevTools connection (Runtime and Input only). Playwright's Network domain makes the renderer keep fetched response bodies, which added up to about 200 MB to the pipeline's process, so Playwright runs overstate it. Installed Chromium 155 launched directly (the `/usr/bin/chromium` wrapper loads the user's extensions), and the Electron 45 desktop app (`dist-desktop/main.cjs`) with its own data directory, on a shared machine.
+
+| Renderers after the drag (PSS) |                    Chromium |                 Electron 45 |
+| ------------------------------ | --------------------------: | --------------------------: |
+| Pipeline off                   |                      878 MB |                      931 MB |
+| Pipeline on, browser converts  | 915-928 MB (editor 687-689) | 900-914 MB (editor 706-714) |
+| Pipeline on, YUV planes        | 431-443 MB (editor 186-187) | 414-453 MB (editor 202-235) |
+
+A Chromium memory dump of the editor's process before the change put 508 MB in `cc/image_memory`, the canvas image cache that `texImage2D(VideoFrame)` fills, against 99 MB in the decoders' frame pools. Skipping the upload alone took the process from 874 MB to 381 MB. Copying a frame's planes out took 0.2 ms at the median and 0.9 ms at worst during 1x playback of the 400-clip timeline.
+
+The first measurement, below, read resident memory through Playwright, so its numbers are not comparable with these.
+
+After an 8 s drag across the whole 400-clip timeline at Fit, the browser's renderer processes held 3,286 MB with the pipeline off (the preview's process 3,081 MB, with 103 video and 103 audio elements loaded) and 958 MB with it on (the preview's process 169 MB with no video and one audio element loaded; the editor's process 733 MB, of which decoded frames are at most 192 MB; the rest was later traced to the canvas image cache, above, not the decoders).
 
 Where it is still short: W on the 400-clip timeline is 144-230 ms because the frame after a ripple is a cold exact decode from the GOP's keyframe; on the interview, playback stalls up to 86-201 ms where b-roll stops covering the interview, because lookahead only decodes the openings of clips that start, not of clips that come back into view.
