@@ -114,6 +114,10 @@
 
   /* Pencil marks on the picture. Casing keeps them legible on any footage. */
   --pencil-casing: rgb(0 0 0 / 0.7);
+  /* Safe zones and the grid: quieter than the selection, cased the same way. */
+  --guide: rgb(255 255 255 / 0.5);
+  --guide-quiet: rgb(255 255 255 / 0.28);
+  --guide-casing: rgb(0 0 0 / 0.35);
 
   /* Clip kinds: rail (2px top edge), head (name strip fill), body (flat fill). */
   --clip-video: #6884d6;

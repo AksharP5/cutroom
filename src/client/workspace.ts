@@ -38,6 +38,9 @@ export const useWorkspace = create(() => ({
       : localStorage.getItem("cutroom.inspector") !== "false",
   /** The new editor's code panel: the project's files and the open one's source. */
   code: localStorage.getItem("cutroom.code") === "true",
+  /** The viewer's safe-zone boxes and thirds grid, drawn over the picture only. */
+  safeZones: localStorage.getItem("cutroom.safeZones") === "true",
+  grid: localStorage.getItem("cutroom.grid") === "true",
   /** Export progress and finished renders. */
   exports: false,
   exporting: false,
@@ -184,13 +187,12 @@ export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
     },
   }));
 
-useWorkspace.subscribe(({ newEditor, inspector, code }, previous) => {
-  if (inspector !== previous.inspector)
-    localStorage.setItem("cutroom.inspector", String(inspector));
-  if (code !== previous.code)
-    localStorage.setItem("cutroom.code", String(code));
-  if (newEditor !== previous.newEditor)
-    localStorage.setItem(NEW_EDITOR_KEY, String(newEditor));
+useWorkspace.subscribe((state, previous) => {
+  for (const key of ["inspector", "code", "safeZones", "grid"] as const)
+    if (state[key] !== previous[key])
+      localStorage.setItem(`cutroom.${key}`, String(state[key]));
+  if (state.newEditor !== previous.newEditor)
+    localStorage.setItem(NEW_EDITOR_KEY, String(state.newEditor));
 });
 
 /** Frame rate for timecode: the open composition's, or the default before it loads. */

@@ -459,6 +459,12 @@ export const keymap = {
     keys: ["Alt+]"],
   },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
+  viewSafeAreaToggle: {
+    area: "View",
+    label: "Safe zones",
+    keys: ["Alt+Shift+S"],
+  },
+  cutroomToggleGrid: { area: "View", label: "Grid", keys: ["Shift+G"] },
   viewStillsStillGrab: {
     area: "View",
     label: "Save frame as PNG",

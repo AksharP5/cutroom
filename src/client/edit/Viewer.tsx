@@ -19,6 +19,7 @@ import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import { PictureSelect } from "./PictureSelect";
+import { ViewerGuides } from "./ViewerGuides";
 import { ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
@@ -743,6 +744,7 @@ export function Viewer({
           </div>
         </div>
       </div>
+      {live && width > 0 && <ViewerGuides box={box} frame={live} />}
       {live && width > 0 && (
         <PictureSelect
           projectId={projectId}

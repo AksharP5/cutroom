@@ -4,6 +4,8 @@ import {
   ArrowClockwise,
   ArrowCounterClockwise,
   Code,
+  FrameCorners,
+  GridNine,
   Magnet,
 } from "@phosphor-icons/react";
 import { z } from "zod";
@@ -115,6 +117,8 @@ export function EditPage({
 }) {
   const voiceover = useVoiceover(projectId);
   const codeOpen = useWorkspace((state) => state.code);
+  const safeZones = useWorkspace((state) => state.safeZones);
+  const grid = useWorkspace((state) => state.grid);
   // Leaving the project keeps neither a voiceover take nor code edits unsaved.
   useEffect(() => {
     useWorkspace.setState({
@@ -511,6 +515,8 @@ export function EditPage({
     editRedo: () => step("redo"),
     workspaceViewerModeCinemaViewer: toggleFullscreen,
     cutroomToggleCode: () => useWorkspace.setState({ code: !codeOpen }),
+    viewSafeAreaToggle: () => useWorkspace.setState({ safeZones: !safeZones }),
+    cutroomToggleGrid: () => useWorkspace.setState({ grid: !grid }),
   };
   useKeymap(handlers);
 
@@ -562,6 +568,24 @@ export function EditPage({
           onClick={() => useTimeline.setState({ snapping: !snapping })}
         >
           <Magnet size={16} weight={snapping ? "fill" : "regular"} />
+        </button>
+        <button
+          className="edit-icon"
+          aria-label="Safe zones"
+          aria-pressed={safeZones}
+          title={hint("viewSafeAreaToggle")}
+          onClick={() => useWorkspace.setState({ safeZones: !safeZones })}
+        >
+          <FrameCorners size={16} weight={safeZones ? "fill" : "regular"} />
+        </button>
+        <button
+          className="edit-icon"
+          aria-label="Grid"
+          aria-pressed={grid}
+          title={hint("cutroomToggleGrid")}
+          onClick={() => useWorkspace.setState({ grid: !grid })}
+        >
+          <GridNine size={16} weight={grid ? "fill" : "regular"} />
         </button>
         <SelectMenu<Zoom>
           className="edit-zoom"

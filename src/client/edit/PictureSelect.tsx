@@ -6,7 +6,13 @@ import { SNAP_PX } from "../timeline/gesture";
 import { clickSelection, emptySelection } from "../timeline/selection";
 import { useWorkspace } from "../workspace";
 import { inspectorSubject } from "./inspector/fields";
-import { contains, cornerScale, dragOffset, pickHit } from "./pictureDrag";
+import {
+  contains,
+  cornerScale,
+  dragOffset,
+  pickHit,
+  snapLines,
+} from "./pictureDrag";
 import { editTransform } from "../../shared/timeline/transform";
 import { valueAt } from "../../shared/timeline/keyframes";
 import {
@@ -22,6 +28,7 @@ import {
   commitTransformPreview,
   hitPicture,
   pictureBox,
+  shownClips,
   previewPosition,
   previewTransform,
   usePictureMove,
@@ -140,7 +147,13 @@ interface Press {
   hits: PictureHit[] | null;
   latest: { client: Offset; axis: boolean; bypass: boolean };
   released: boolean;
-  drag: (Move & { box: PictureBox | null }) | null;
+  drag:
+    | (Move & {
+        box: PictureBox | null;
+        /** The other clips drawn on the picture, once the preview says where. */
+        others: PictureBox[];
+      })
+    | null;
   /** A drag that began over nothing, or on a locked track, moves nothing. */
   idle: boolean;
 }
@@ -478,13 +491,27 @@ export function PictureSelect({
       }
       if (target.id !== clip?.id) select(hit, false);
       const from = valueAt(target, "position", playheadIn(target));
-      current.drag = {
+      const drag: NonNullable<Press["drag"]> = {
         timeline: current.timeline,
         clip: target,
         from,
         to: from,
         box: hit.box,
+        others: [],
       };
+      current.drag = drag;
+      // Other clips join the snap lines when the preview answers; the drag never waits for them.
+      void shownClips().then(
+        (shown) => {
+          if (press.current?.drag !== drag) return;
+          drag.others = shown.flatMap(({ clipId, box }) =>
+            clipId === target.id ? [] : [box],
+          );
+          act(current);
+        },
+        // A preview replaced mid-drag keeps the frame's own lines.
+        () => {},
+      );
       grab();
       // Like a timeline drag, this one owns Esc while it lasts.
       useWorkspace.setState({ gesture: true });
@@ -503,7 +530,7 @@ export function PictureSelect({
       {
         axis: pointer.axis,
         box: drag.box,
-        frame,
+        lines: snapLines(frame, useWorkspace.getState(), drag.others),
         reach: snapping ? SNAP_PX / scale.x : 0,
       },
     );
