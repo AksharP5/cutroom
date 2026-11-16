@@ -70,7 +70,7 @@ import {
   timelineContent,
   settingsOf,
 } from "./composition";
-import type { ParsedComposition } from "./composition";
+import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
 import { declaredFonts, undeclaredFontReason } from "./titles";
@@ -147,6 +147,82 @@ export function createTimelineRoutes(
     };
   };
 
+  /** A composition file of the project, or null when `path` names none. */
+  const readComposition = async (project: Project, path: string) => {
+    const source = await readSource(project, path).catch((error: unknown) => {
+      if (
+        isMissing(error) ||
+        (error instanceof HttpError && error.status < 500)
+      )
+        return null;
+      throw error;
+    });
+    if (!source) return null;
+    try {
+      return parseComposition(source.content, emptyTimelineSettings(), {
+        scope: compositionScope(path),
+      });
+    } catch (error) {
+      if (error instanceof TimelineError) return null;
+      throw error;
+    }
+  };
+  /** Whether `path`, through the scenes it hosts, plays `target`. */
+  const plays = async (
+    project: Project,
+    path: string,
+    target: string,
+    seen = new Set<string>(),
+  ): Promise<boolean> => {
+    if (path === target) return true;
+    if (seen.has(path)) return false;
+    seen.add(path);
+    const parsed = await readComposition(project, path);
+    for (const clip of parsed?.timeline.clips ?? []) {
+      const hosted =
+        clip.kind === "composition" && clip.src
+          ? localMediaPath(path, clip.src)
+          : null;
+      if (hosted && (await plays(project, hosted, target, seen))) return true;
+    }
+    return false;
+  };
+  /**
+   * The compositions a batch places as scenes, each another composition file of the project
+   * that does not, through its own scenes, play the one being edited.
+   */
+  const hostedCompositions = async (
+    project: Project,
+    composition: string,
+    sources: readonly string[],
+  ) => {
+    const hosted = new Map<string, HostedComposition>();
+    for (const src of new Set(sources)) {
+      const path = localMediaPath(composition, src);
+      const parsed =
+        path === null || path.startsWith("../")
+          ? null
+          : await readComposition(project, path);
+      if (!path || !parsed)
+        throw new TimelineError(
+          "not_found",
+          `"${src}" is not a composition file in this project.`,
+        );
+      if (await plays(project, path, composition))
+        throw new TimelineError(
+          "unsupported",
+          `"${src}" plays ${composition}, so placing it there would play itself.`,
+        );
+      const { attrs } = parsed.root;
+      hosted.set(src, {
+        id: attrs["data-composition-id"]!,
+        width: attrs["data-width"] ?? null,
+        height: attrs["data-height"] ?? null,
+      });
+    }
+    return hosted;
+  };
+
   const prepareEdit = async (
     project: Project,
     batch: CommandBatch,
@@ -163,7 +239,18 @@ export function createTimelineRoutes(
       project,
       composition,
       batch.commands.flatMap((command) =>
-        command.type === "insert" && command.clip.kind !== "title"
+        command.type === "insert" &&
+        command.clip.kind !== "title" &&
+        command.clip.kind !== "composition"
+          ? [command.clip.src]
+          : [],
+      ),
+    );
+    const hosted = await hostedCompositions(
+      project,
+      composition,
+      batch.commands.flatMap((command) =>
+        command.type === "insert" && command.clip.kind === "composition"
           ? [command.clip.src]
           : [],
       ),
@@ -279,7 +366,13 @@ export function createTimelineRoutes(
         retired: await usedClipIds(project),
       }),
     );
-    const html = patchComposition(current.parsed, timeline, origins, snapshots);
+    const html = patchComposition(
+      current.parsed,
+      timeline,
+      origins,
+      snapshots,
+      hosted,
+    );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
     const writtenSource = parseComposition(html, settings, {

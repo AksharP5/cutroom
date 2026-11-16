@@ -1462,6 +1462,43 @@ function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
   ])}>${textMarkup(clip.text!)}</div>`;
 }
 
+/** What a host needs from the composition it plays: the root's id and declared size. */
+export interface HostedComposition {
+  id: string;
+  width: string | null;
+  height: string | null;
+}
+
+/** A new sub-composition host, written as the documented recipe writes one. */
+function hostMarkup(
+  clip: Clip,
+  hosted: HostedComposition,
+  fps: Fps,
+  mix: TrackMix,
+): string {
+  const hidden = mix.hidden.has(clip.track);
+  return `<div${attributeMarkup([
+    ["id", clip.id],
+    ["class", "clip"],
+    ["data-composition-id", hosted.id],
+    ["data-composition-src", clip.src!],
+    ["data-start", String(toSeconds(clip.start, fps))],
+    ["data-duration", String(toSeconds(clip.duration, fps))],
+    ["data-track-index", String(clip.track)],
+    ...(hosted.width !== null ? [["data-width", hosted.width] as const] : []),
+    ...(hosted.height !== null
+      ? [["data-height", hosted.height] as const]
+      : []),
+    ...(!clip.enabled || hidden ? [["data-hidden", ""] as const] : []),
+    ...(clip.enabled && hidden
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...(clip.label !== null
+      ? [["data-timeline-label", clip.label] as const]
+      : []),
+  ])}></div>`;
+}
+
 function insertMarkup(
   clip: Clip,
   input: InsertClip,
@@ -1754,6 +1791,8 @@ export function patchComposition(
   after: Timeline,
   origins: ReadonlyMap<string, ClipOrigin>,
   clipboards: ReadonlyMap<string, ParsedComposition> = new Map(),
+  /** The compositions new hosts play, by `src`. */
+  hosted: ReadonlyMap<string, HostedComposition> = new Map(),
 ): string {
   const { html, timeline: before } = parsed;
   const { fps } = before;
@@ -1840,6 +1879,11 @@ export function patchComposition(
     });
   }
 
+  const hostedComposition = (src: string) => {
+    const found = hosted.get(src);
+    if (!found) throw new Error(`No composition was read for ${src}.`);
+    return found;
+  };
   const inserts = new Map<number, string[]>();
   // New media goes after the last clip in the source, or first in the root.
   const lastClip = [...parsed.elements].reduce<
@@ -1869,13 +1913,15 @@ export function patchComposition(
         `\n${indent}${
           origin.insert.kind === "title"
             ? titleMarkup(clip, fps, mix)
-            : insertMarkup(
-                elementClip(clip, fps),
-                origin.insert,
-                fps,
-                mix,
-                transitionChanges({}, clip, under(clip.id), fps),
-              )
+            : origin.insert.kind === "composition"
+              ? hostMarkup(clip, hostedComposition(origin.insert.src), fps, mix)
+              : insertMarkup(
+                  elementClip(clip, fps),
+                  origin.insert,
+                  fps,
+                  mix,
+                  transitionChanges({}, clip, under(clip.id), fps),
+                )
         }`,
       ]);
       continue;

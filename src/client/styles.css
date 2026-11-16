@@ -633,6 +633,28 @@ option {
 .panel-header .icon-button {
   margin-left: auto;
 }
+/* Media and Compositions share the panel; the open view is the bright name. */
+.panel-views {
+  display: flex;
+  gap: var(--space-3);
+}
+.panel-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--size-panel-head);
+  color: var(--text-tertiary);
+  font: inherit;
+  cursor: default;
+}
+.panel-view[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+@media (hover: hover) and (pointer: fine) {
+  .panel-view[aria-pressed="false"]:hover {
+    color: var(--text-secondary);
+  }
+}
 .panel-count {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
@@ -724,6 +746,23 @@ option {
   color: var(--text-secondary);
 }
 .media-confirm-remove {
+  color: var(--danger);
+}
+/* The composition the editor has open carries a paper tick. */
+.media-row[aria-current="true"] {
+  box-shadow: inset 2px 0 var(--selection);
+}
+.composition-lint {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-size: var(--type-2xs);
+}
+.composition-lint[data-errors] {
   color: var(--danger);
 }
 .media-duration {

@@ -1,11 +1,14 @@
-import type { InsertClip } from "../../shared/timeline/schema";
+import type {
+  InsertClip,
+  InsertComposition,
+} from "../../shared/timeline/schema";
 
 /** Marks a drag as project media, so the timeline takes it and the Media panel's importer does not. */
 export const MEDIA_DRAG_TYPE = "application/x-cutroom-media";
 export { STILL_SECONDS } from "../../shared/media";
 
 export interface MediaDrag {
-  kind: InsertClip["kind"];
+  kind: InsertClip["kind"] | InsertComposition["kind"];
   /** The file's project-relative path. */
   path: string;
   /** How long it runs on the timeline: the whole file, or the part marked in the source viewer. */

@@ -24,6 +24,7 @@ import { showToast, useFps, useWorkspace } from "../workspace";
 import { TimecodeText } from "./TimecodeText";
 import { openContextMenu, revealRows } from "./ContextMenu";
 import { Modal } from "./Modal";
+import { CompositionList, useCompositions } from "./CompositionList";
 
 const acceptedFiles = mediaKinds
   .flatMap(({ extensions }) => extensions.map((extension) => `.${extension}`))
@@ -320,6 +321,11 @@ export function MediaPanel({
     : media?.[0]?.path;
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
+  const compositions = useCompositions(projectId);
+  // The list appears once the project has a scene; the root alone needs no list.
+  const [view, setView] = useState<"media" | "compositions">("media");
+  const showing =
+    compositions && compositions.length > 1 ? view : ("media" as const);
   const [message, setMessage] = useState("");
   const [renaming, setRenaming] = useState<string>();
   /** A file the timeline still uses, waiting for the owner's answer. */
@@ -609,15 +615,39 @@ export function MediaPanel({
       }}
     >
       <header className="panel-header">
-        <h2>Media</h2>
-        {media && media.length > 0 && (
-          <span className="panel-count">{media.length}</span>
+        {compositions && compositions.length > 1 ? (
+          <h2 className="panel-views">
+            {(
+              [
+                ["media", "Media", media?.length ?? 0],
+                ["compositions", "Compositions", compositions.length],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                className="panel-view"
+                aria-pressed={showing === value}
+                onClick={() => setView(value)}
+              >
+                {label}
+                {count > 0 && <span className="panel-count">{count}</span>}
+              </button>
+            ))}
+          </h2>
+        ) : (
+          <>
+            <h2>Media</h2>
+            {media && media.length > 0 && (
+              <span className="panel-count">{media.length}</span>
+            )}
+          </>
         )}
         <button
           className="icon-button"
           aria-label="Import media"
           title="Import media"
           disabled={importing}
+          hidden={showing !== "media"}
           onClick={() => picker.current?.click()}
         >
           <Plus />
@@ -640,7 +670,9 @@ export function MediaPanel({
         </p>
       )}
       <div className="media-body">
-        {media?.length === 0 ? (
+        {showing === "compositions" && compositions ? (
+          <CompositionList projectId={projectId} paths={compositions} />
+        ) : media?.length === 0 ? (
           <div className="media-empty">
             <strong>{importing ? "Importing" : "No media yet"}</strong>
             <span>Drop files here or import from your computer.</span>

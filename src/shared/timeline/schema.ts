@@ -412,6 +412,26 @@ export const InsertTitleSchema = z.object({
   label: label.optional(),
 });
 
+export const InsertCompositionSchema = z.object({
+  id: clipId
+    .optional()
+    .describe(
+      "Host element id, never used before in this project; when omitted, the file name and a random suffix",
+    ),
+  kind: z.literal("composition"),
+  src: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .describe(
+      "The sub-composition's HTML file as this composition writes it, from its folder: compositions/intro.html in index.html",
+    ),
+  duration: frames.describe(
+    "Length on the timeline in frames, usually the composition's own length from timeline_read",
+  ),
+  label: label.optional(),
+});
+
 const clipIds = z.array(clipId).min(1).max(10_000);
 /** Ids for the pieces a command cuts off, so a caller knows a new clip's id before it exists. */
 const pieceIds = z
@@ -526,7 +546,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
         ),
       track: frame,
       at: frame,
-      clip: z.discriminatedUnion("kind", [InsertClipSchema, InsertTitleSchema]),
+      clip: z.discriminatedUnion("kind", [
+        InsertClipSchema,
+        InsertTitleSchema,
+        InsertCompositionSchema,
+      ]),
       linkedAudio: z
         .object({
           id: clipId.optional(),
@@ -543,7 +567,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      'Add a media clip, or a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit.',
+      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; or a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start.',
     ),
   z
     .object({
@@ -811,6 +835,7 @@ export type Marker = z.infer<typeof MarkerSchema>;
 export type Timeline = z.infer<typeof TimelineSchema>;
 export type InsertClip = z.infer<typeof InsertClipSchema>;
 export type InsertTitle = z.infer<typeof InsertTitleSchema>;
+export type InsertComposition = z.infer<typeof InsertCompositionSchema>;
 export type Title = z.infer<typeof TitleSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
 export type TitleEdit = z.infer<typeof TitleEditSchema>;
