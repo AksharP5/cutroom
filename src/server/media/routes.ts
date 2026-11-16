@@ -1,5 +1,8 @@
+import { realpath, stat } from "node:fs/promises";
+import { extname, relative } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
+import { projectPath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
@@ -20,6 +23,18 @@ const RangeSchema = z
     (range) => range.end >= range.start,
     "Range end must follow its start.",
   );
+/** The containers the viewer's footage pipeline demuxes, by extension. */
+const SOURCE_TYPES = new Map([
+  [".mp4", "video/mp4"],
+  [".m4v", "video/mp4"],
+  [".mov", "video/quicktime"],
+]);
+/** The type of a video the pipeline may read, or null for hidden files and anything else. */
+const sourceType = (path: string) => {
+  const parts = path.split(/[\\/]/);
+  if (parts.some((part) => part.startsWith(".") && part !== ".")) return null;
+  return SOURCE_TYPES.get(extname(path).toLowerCase()) ?? null;
+};
 function headers(etag: string, type: string) {
   return {
     "content-type": type,
@@ -96,6 +111,23 @@ export function createMediaRoutes(
         { headers: h },
       );
     });
+  // The footage pipeline's reads: a project video's own bytes, in ranges. Only video containers
+  // outside hidden folders, checked on the path asked for and on the file a link resolves to.
+  api.get("/projects/:id/media/source", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const path = PathSchema.parse(c.req.query("path"));
+    const type = sourceType(path);
+    const file = type && (await projectPath(project, path));
+    if (
+      !file ||
+      sourceType(relative(await realpath(project.path), file)) !== type ||
+      !(await stat(file)).isFile()
+    )
+      throw new HttpError(404, "Choose a video in the project.");
+    return new Response(Bun.file(file), {
+      headers: { "content-type": type, "cache-control": "no-store" },
+    });
+  });
   api.get("/projects/:id/media/filmstrip/:key/sprite", async (c) => {
     const project = await store.get(c.req.param("id"));
     const key = KeySchema.parse(c.req.param("key"));
