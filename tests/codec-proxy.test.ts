@@ -429,3 +429,48 @@ test.skipIf(!tools)(
   },
   120_000,
 );
+
+test.skipIf(!tools)(
+  "a clip the preview asks for gets its proxy while a long recording nobody watches is still being made",
+  async () => {
+    const fixture = await projectFixture();
+    const media = createMediaService({ nvenc: async () => false });
+    try {
+      const project = await fixture.store.create({ name: "Two recordings" });
+      // MPEG-4 Part 2 is a codec no browser decodes, and quick to make.
+      const make = (name: string, size: string, seconds: number) => {
+        const made = Bun.spawnSync([
+          ...["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i"],
+          `testsrc2=size=${size}:rate=30:duration=${seconds}`,
+          ...["-c:v", "mpeg4", "-q:v", "5", join(project.path, name)],
+        ]);
+        if (made.exitCode !== 0) throw new Error(made.stderr.toString());
+      };
+      make("long.mkv", "1920x1080", 60);
+      make("short.mkv", "640x360", 2);
+      // The long recording's proxy starts first, as listing the media does, and nobody waits.
+      const long = () => media.request(project, "long.mkv", "proxy");
+      const deadline = performance.now() + 30_000;
+      for (;;) {
+        // Planned, and its pieces being made.
+        const started = await long();
+        if (started.pieces && started.state.status === "running") break;
+        if (performance.now() > deadline) throw new Error("It never started.");
+        await Bun.sleep(20);
+      }
+      for (;;) {
+        const short = await media.proxyPoll(project, "short.mkv");
+        if (short.artifact) break;
+        expect(short.state.status).not.toBe("failed");
+        if (performance.now() > deadline)
+          throw new Error("The clip the preview asked for was not made.");
+        await Bun.sleep(100);
+      }
+      expect((await long()).state.status).toBe("running");
+    } finally {
+      await media.dispose();
+      await fixture.close();
+    }
+  },
+  60_000,
+);

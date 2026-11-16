@@ -241,6 +241,8 @@ export async function proxyPreview(
       .catch((error: unknown) => {
         if (error instanceof HttpError)
           return new Response(error.message, { status: error.status, headers });
+        // The preview stopped asking, for instance after moving on to another piece.
+        if (signal.aborted) return new Response(null, { status: 204, headers });
         throw error;
       });
     if (!body || body instanceof Response) return body;
@@ -249,7 +251,7 @@ export async function proxyPreview(
     });
   }
   const result = await media
-    .request(project, path, "proxy")
+    .proxyPoll(project, path)
     .catch((error: unknown) => {
       if (error instanceof HttpError && error.status === 422) return null;
       throw error;

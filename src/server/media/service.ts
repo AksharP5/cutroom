@@ -43,6 +43,8 @@ type ProxyWork = {
   >;
   /** Requests waiting now, which keep this proxy ahead of the others. */
   waiting: number;
+  /** When the preview last asked whether it is ready, by `performance.now()`. */
+  polledAt: number;
   /** The piece asked for last, and when, by request order. */
   asked?: number;
   askedAt: number;
@@ -89,6 +91,13 @@ const recipe = {
   pieces: "media-v8",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
+/**
+ * The preview waits on this proxy: a request waits for one of its pieces, or the preview asked
+ * whether it is ready within its polling interval.
+ */
+const wanted = (job: MediaJob) =>
+  !!job.work &&
+  (job.work.waiting > 0 || performance.now() - job.work.polledAt < 3000);
 const background = (kind: MediaKind) =>
   kind === "filmstrip" || kind === "scrub";
 
@@ -144,12 +153,12 @@ export function createMediaService(
     ((directory: string) => rm(directory, { recursive: true, force: true }));
   const pump = () => {
     // A proxy the preview waits on goes before the others, the latest asked first.
-    const demand = (job: MediaJob) =>
-      job.work?.waiting ? job.work.askedAt : -1;
+    const askedAt = (job: MediaJob) =>
+      job.work && wanted(job) ? job.work.askedAt : -1;
     queue.sort(
       (a, b) =>
         priority[a.kind] - priority[b.kind] ||
-        demand(b) - demand(a) ||
+        askedAt(b) - askedAt(a) ||
         (a.kind === "frame"
           ? b.sequence - a.sequence
           : a.sequence - b.sequence),
@@ -223,8 +232,7 @@ export function createMediaService(
     }
     if (!running.has(job))
       for (const other of running.keys())
-        if (other.kind === "proxy" && !other.work?.waiting)
-          other.work?.run?.stop();
+        if (other.kind === "proxy" && !wanted(other)) other.work?.run?.stop();
     pump();
   };
   /** A piece cut from a finished proxy, for a preview that started on its pieces. */
@@ -264,10 +272,15 @@ export function createMediaService(
       throw new Error(errors.trim() || `FFmpeg exited with code ${code}.`);
     return bytes;
   };
-  /** Another proxy is waited on while this one is not: this one gives way after its piece. */
+  /**
+   * A proxy nobody waits on is background work: after its piece it gives way to a proxy the
+   * preview waits on, and to the short jobs (frames, probes, peaks, plans) the queue holds back.
+   */
   const givesWay = (job: MediaJob) =>
-    !job.work?.waiting &&
-    queue.some((other) => other.kind === "proxy" && other.work?.waiting);
+    !wanted(job) &&
+    queue.some((other) =>
+      other.kind === "proxy" ? wanted(other) : !background(other.kind),
+    );
   const runProxy = async (
     job: MediaJob,
     work: ProxyWork,
@@ -605,6 +618,7 @@ export function createMediaService(
         done: new Set(),
         waiters: new Map(),
         waiting: 0,
+        polledAt: -Infinity,
         askedAt: 0,
         cursor: 0,
       };
@@ -646,6 +660,15 @@ export function createMediaService(
         },
       );
       return result?.state ?? null;
+    },
+    /** A video's editing proxy as the preview asks for it, which marks it as waited on. */
+    async proxyPoll(project: Project, path: string) {
+      const result = await request(project, path, "proxy");
+      if (result.job?.work && !result.artifact) {
+        result.job.work.polledAt = performance.now();
+        demand(result.job);
+      }
+      return result;
     },
     /**
      * One piece of a video's editing proxy, or the header every piece shares, for the preview's
