@@ -517,6 +517,22 @@ test("timeline edit keys immediately edit and reveal Timeline while Source is sh
       .evaluateAll((clips) =>
         clips.map((clip) => clip.getAttribute("data-clip")).sort(),
       );
+  /** Each clip's id, place and whether it is on, as the timeline draws them. */
+  const shown = () =>
+    timeline.locator("[data-clip]").evaluateAll((clips) =>
+      clips
+        .map((clip) => {
+          const style = getComputedStyle(clip);
+          return `${clip.getAttribute("data-clip")} ${style.getPropertyValue("--s")}+${style.getPropertyValue("--d")} ${!clip.classList.contains("disabled")}`;
+        })
+        .sort(),
+    );
+  const held = before.clips
+    .map(
+      ({ id, start, duration, enabled }) =>
+        `${id} ${start}+${duration} ${enabled}`,
+    )
+    .sort();
   await seek(page, "200");
   await expect
     .poll(() => colour(page, page.locator(".edit-picture")))
@@ -569,11 +585,9 @@ test("timeline edit keys immediately edit and reveal Timeline while Source is sh
       }
       await page.keyboard.press("Control+z");
       await expect.poll(read).toEqual(before);
-      // Removing clips prunes selection; restore it for the next selected edit, once the
-      // timeline shows them again.
-      await expect(
-        timeline.locator('[data-clip="picture"], [data-clip="sound"]'),
-      ).toHaveCount(2);
+      // The server undoes before the editor reads it back, and a split, trim or disable still
+      // shows both clips. Restore the selection once the timeline shows exactly what it held.
+      await expect.poll(shown).toEqual(held);
       await seek(page, "200");
       await page.keyboard.press("Shift+v");
       await expect.poll(selected).toEqual(["picture", "sound"]);
