@@ -38,6 +38,7 @@ import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { useTimeline } from "./timeline";
 import { captureFrame } from "./capture";
+import { RendersList, formatBytes } from "./RendersList";
 import "./export.css";
 
 const formatNames: Record<ExportFormat, string> = {
@@ -531,6 +532,7 @@ function ExportDialog({
                 {destinationError}
               </p>
             )}
+            <RendersList projectId={projectId} />
           </>
         ) : (
           <>
@@ -544,17 +546,7 @@ function ExportDialog({
               {job.status === "complete" && job.sizeBytes !== null && (
                 <>
                   <dt>File size</dt>
-                  <dd className="mono">
-                    {new Intl.NumberFormat(undefined, {
-                      style: "unit",
-                      unit:
-                        job.sizeBytes >= 1_000_000 ? "megabyte" : "kilobyte",
-                      maximumFractionDigits: 1,
-                    }).format(
-                      job.sizeBytes /
-                        (job.sizeBytes >= 1_000_000 ? 1_000_000 : 1_000),
-                    )}
-                  </dd>
+                  <dd className="mono">{formatBytes(job.sizeBytes)}</dd>
                 </>
               )}
             </dl>

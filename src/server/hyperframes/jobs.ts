@@ -198,6 +198,8 @@ export function createRenderWorkers(configuration: {
    */
   gpu?: () => Promise<boolean>;
   sourceOverrides?: (projectId: string) => Promise<Record<string, string>>;
+  /** Told about each export once its file is in place. */
+  published?: (projectId: string, path: string) => Promise<void>;
   /** Sizes the export's capture browsers to the memory free when it starts. */
   workload?: (
     projectId: string,
@@ -591,6 +593,15 @@ export function createRenderWorkers(configuration: {
           );
         });
         state.sizeBytes = (await stat(outputPath)).size;
+        // The file is already the person's; a failed record only drops it from the renders list.
+        await configuration
+          .published?.(options.project.id, outputPath)
+          .catch((error: unknown) =>
+            console.warn(
+              `Could not add ${basename(outputPath)} to the project's renders:`,
+              error instanceof Error ? error.message : error,
+            ),
+          );
         state.stage = "Finished";
         await writeFile(
           options.outputPath.replace(/\.(mp4|webm|mov|gif)$/, ".meta.json"),

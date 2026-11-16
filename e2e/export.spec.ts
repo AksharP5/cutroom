@@ -480,6 +480,46 @@ test("the dialog exports marked frames as a ProRes 4444 MOV at another frame rat
   });
 });
 
+test("the dialog lists past renders and deletes one only after confirming", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  const renders = dialog.getByRole("region", { name: "Renders" });
+  // A project that has never exported shows no list.
+  await expect(renders).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Export MP4", exact: true }).click();
+  await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+  await dialog.getByRole("button", { name: "New export", exact: true }).click();
+  await expect(renders.getByRole("listitem")).toHaveCount(1);
+  await expect(renders).toContainText("Export proof.mp4");
+  await expect(renders).toContainText("MP4");
+
+  await renders
+    .getByRole("button", { name: "Delete Export proof.mp4", exact: true })
+    .click();
+  await renders.getByRole("button", { name: "Keep", exact: true }).click();
+  await expect(renders.getByRole("listitem")).toHaveCount(1);
+  await renders
+    .getByRole("button", { name: "Delete Export proof.mp4", exact: true })
+    .click();
+  await renders
+    .getByRole("button", { name: "Delete file", exact: true })
+    .click();
+  await expect(renders).toHaveCount(0);
+  const listed: unknown = await (
+    await request.get(`/api/projects/${project.id}/exports`)
+  ).json();
+  expect(listed).toEqual({ renders: [] });
+  expect(
+    existsSync(join(project.path, ".cutroom/renders/Export proof.mp4")),
+  ).toBe(false);
+});
+
 test("Cancel stops the real render and removes a named partial file", async ({
   page,
   request,

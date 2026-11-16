@@ -66,6 +66,7 @@ import {
   thumbnailRendererVersion,
 } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
+import { createRenderIndex } from "./renders";
 import type { ExportRequest } from "./jobs";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
@@ -198,6 +199,7 @@ export function createHyperframesApi(
   >();
   const signatures = new Map<string, Promise<string>>();
   const thumbnails = createThumbnailRenderer();
+  const renderIndex = createRenderIndex();
   const renders = createRenderWorkers({
     scratchDir: join(store.dataDir, "scratch"),
     gpu:
@@ -225,6 +227,8 @@ export function createHyperframesApi(
         durationFrames: timeline.duration,
       };
     },
+    published: async (id, path) =>
+      renderIndex.record(await store.get(id), path),
     sourceOverrides: async (id) =>
       Object.fromEntries(
         (await readTrackMix(store, await store.get(id))).map(
@@ -1080,6 +1084,37 @@ export function createHyperframesApi(
     size: job.size,
     range: job.range,
     encoder: job.encoder,
+  });
+  // Past renders: listed for the dialog and agents, opened by the browser, deleted only by the owner.
+  api.get("/projects/:id/exports", async (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({
+      renders: await renderIndex.list(await store.get(c.req.param("id"))),
+    });
+  });
+  api.get("/projects/:id/exports/file", async (c) => {
+    const path = z.string().min(1).parse(c.req.query("path"));
+    const project = await store.get(c.req.param("id"));
+    const render = (await renderIndex.list(project)).find(
+      (render) => render.path === path,
+    );
+    if (!render) throw new HttpError(404, "Render not found.");
+    const file = Bun.file(path);
+    c.header("Content-Type", file.type);
+    c.header(
+      "Content-Disposition",
+      `inline; filename*=UTF-8''${encodeURIComponent(path.split(sep).at(-1) ?? "render").replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    );
+    return c.body(file.stream());
+  });
+  api.delete("/projects/:id/exports", async (c) => {
+    if (c.req.header(AGENT_HEADER) !== undefined)
+      throw new HttpError(409, "Only the owner can delete renders.");
+    const { path } = z
+      .object({ path: z.string().min(1) })
+      .parse(await c.req.json());
+    await renderIndex.remove(await store.get(c.req.param("id")), path);
+    return c.json({ deleted: path });
   });
   api.get("/export-gpu", async (c) => {
     c.header("Cache-Control", "no-store");
