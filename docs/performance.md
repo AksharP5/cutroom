@@ -533,3 +533,28 @@ A ruler drag asks for a new frame on every pointer move. [Scrub proxies](archite
 | Exact frame after a single move          |             65 ms | 150 ms (proxy at 23 ms) |                 – |                  – |
 
 CPU was measured with the screencast off. The 300-clip timeline uses more CPU because it now loads and draws each clip it passes; it is bounded by those loads, not by decoding. A single move shows the exact frame later than before, since the source decodes only after 60 ms of rest; the proxy frame at Fit is close to the viewer's own resolution.
+
+## Footage pipeline
+
+The [footage pipeline](architecture.md#footage-pipeline) is a setting, off by default. On November 15, 2026 both settings ran on the same production build of this change, alternating, on a private server: installed Chromium 155 at 1720x1050 on the RTX 5060 (ANGLE Vulkan), muted, with the machine shared with other work and DaVinci Resolve holding 4.5 of the GPU's 8 GB. Every source frame carries its number in 16 blocks along the top, and a picture counts only when a screencast frame shows a new number. The interview is `interviewWorkload` with a 60 s 1080p30 file at 8 Mbit/s and a 1 s GOP: ten cuts that each jump back a second in one file, four b-roll clips from a 720p file over them, music and four titles. The 400-clip timeline is `timelineWorkload(400)` over a 720p30 copy with a 1 s GOP: 190 linked 2.5 s cuts and 20 titles. Playback was measured headed (headless halves the clock with this much media), with `requestVideoFrameCallback` in the preview for HyperFrames and the pipeline canvas's draws for the pipeline; HyperFrames' count includes both pictures where b-roll overlaps the interview.
+
+| Ranges over 2 runs                                   |     Interview, off |      Interview, on |       400 clips, off |      400 clips, on |
+| ---------------------------------------------------- | -----------------: | -----------------: | -------------------: | -----------------: |
+| New pictures per second while dragging the ruler     |          28.1-28.4 |          28.5-29.0 |              8.6-8.7 |          29.0-29.5 |
+| Playhead positions per second in the same drag       |          29.3-29.4 |          29.2-29.7 |            22.8-25.0 |          29.0-29.8 |
+| Pointer to picture, median / worst                   | 50-52 / 327-329 ms | 32-33 / 348-351 ms | 149-150 / 312-335 ms | 31-32 / 370-371 ms |
+| W, key to final picture                              |         476-529 ms |          63-104 ms |          955-1347 ms |         144-230 ms |
+| Undo of W                                            |         403-431 ms |           69-78 ms |           858-926 ms |         129-138 ms |
+| X (lift)                                             |           60-86 ms |           32-35 ms |           231-381 ms |           32-35 ms |
+| Undo of lift                                         |           78-85 ms |           53-54 ms |           206-211 ms |           84-87 ms |
+| Frame step, median / p95 (30 steps, 0 wrong frames)  |         63 / 79 ms |         40 / 95 ms |           64 / 75 ms |         26 / 70 ms |
+| J (reverse 1x): new pictures per second, gap p95/max |     29.9, 51/59 ms |     29.5, 38/70 ms |       29.2, 59/85 ms |     29.6, 37/39 ms |
+| L L (2x): new pictures per second, gap p95/max       |     30.9, 66/69 ms |     46.1, 34/40 ms |       26.0, 68/87 ms |     56.3, 30/38 ms |
+| 1x playback, headed: pictures per second             |          28.4-41.5 |          28.7-30.0 |            29.8-29.9 |               30.0 |
+| 1x playback, headed: gap p95 / max                   |   38-55 / 54-77 ms |  39-41 / 86-201 ms |     40-42 / 56-67 ms |      39 / 44-46 ms |
+
+Every picture shown while dragging was a frame the playhead visited, and the resting frame was exact in every run. The worst pointer-to-picture time in each run is the first picture of the drag. With the pipeline on, every playhead position the drag produced got a picture; the drag itself delivered about 29 positions a second in this harness, so that is the ceiling here, not the pipeline (a draw took 12 ms at the median).
+
+After an 8 s drag across the whole 400-clip timeline at Fit, the browser's renderer processes held 3,286 MB with the pipeline off (the preview's process 3,081 MB, with 103 video and 103 audio elements loaded) and 958 MB with it on (the preview's process 169 MB with no video and one audio element loaded; the editor's process 733 MB, of which decoded frames are at most 192 MB and the rest is the WebCodecs decoders' own memory).
+
+Where it is still short: W on the 400-clip timeline is 144-230 ms because the frame after a ripple is a cold exact decode from the GOP's keyframe; on the interview, playback stalls up to 86-201 ms where b-roll stops covering the interview, because lookahead only decodes the openings of clips that start, not of clips that come back into view.
