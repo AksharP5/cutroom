@@ -23,7 +23,6 @@ import {
   chromium,
   type BrowserContext,
   type CDPSession,
-  type Frame,
   type Locator,
   type Page,
 } from "@playwright/test";
@@ -158,8 +157,6 @@ function adapter(editor: Editor) {
         return ruler.y + ruler.height / 2;
       },
       wheelTarget: ".tl-scroll",
-      preview: (page: Page) =>
-        page.frames().find((frame) => frame.url().includes("/api/isolated/")),
       fit: async (page: Page) => {
         await page
           .getByRole("slider", { name: "Zoom", exact: true })
@@ -191,7 +188,6 @@ function adapter(editor: Editor) {
     rulerY: async (page: Page) =>
       (await page.locator('[data-clip="true"]').first().boundingBox())!.y - 26,
     wheelTarget: "[data-timeline-scroll-viewport]",
-    preview: studioPreview,
     fit: async (page: Page) => {
       await page.getByRole("button", { name: "Fit timeline to width" }).click();
     },
@@ -421,7 +417,7 @@ async function session(
       opens,
       throttledTargets: throttled,
       scrub: await step("scrub", () => scrub(page, ui, cdp, decoder)),
-      playback: await step("playback", () => playback(page, ui)),
+      playback: await step("playback", () => playback(page, ui, cdp, decoder)),
       zoom: await step("zoom", () => zoom(page, ui)),
       razor: await step("razor", () => edits(page, ui, cdp, decoder, "razor")),
       rippleDelete: await step("rippleDelete", () =>
@@ -595,11 +591,19 @@ async function scrub(page: Page, ui: Adapter, cdp: CDPSession, decoder: Page) {
   };
 }
 
-/** Ten seconds of 1x play from shot 22, counted as pictures the preview's videos presented. */
-async function playback(page: Page, ui: Adapter) {
-  const preview = ui.preview(page);
-  if (!preview) throw new Error("The preview frame is missing.");
-  await install(preview);
+/**
+ * Ten seconds of 1x play from shot 22, counted as new source frames in the tab's composited
+ * frames, as the viewer showed them. A preview's `requestVideoFrameCallback` times are not
+ * used: they are when its main thread ran the callback, a display frame before or after the
+ * picture whenever that thread starts its frame just as the compositor presents one.
+ */
+async function playback(
+  page: Page,
+  ui: Adapter,
+  cdp: CDPSession,
+  decoder: Page,
+) {
+  await seekToShot(page, ui, cdp, decoder, 22, 0.1);
   const editorFrames = page.evaluate(async () => {
     const times: number[] = [];
     const end = performance.now() + 10_500;
@@ -611,65 +615,43 @@ async function playback(page: Page, ui: Adapter) {
       );
     return times;
   });
+  const cast = await screencast(cdp);
   await page.keyboard.press(ui.play);
   await sleep(500);
-  await preview.evaluate(() => {
-    const state = (window as unknown as { benchFrames: number[][] })
-      .benchFrames;
-    state.length = 0;
-  });
+  const start = Date.now();
   await sleep(10_000);
-  const presented = await preview.evaluate(
-    () => (window as unknown as { benchFrames: number[][] }).benchFrames,
-  );
+  const end = Date.now();
+  const frames = await cast.stop();
   await page.keyboard.press(ui.play);
   const editor = gaps(await editorFrames);
-  // Only the shot on screen counts; a runtime may also run the next clip's video hidden.
-  const shown = presented.filter(([, , , visible]) => visible === 1);
-  const frames = gaps(shown.map(([time]) => time!));
+  const composited = (
+    await decode(decoder, frames, await ui.pictureBox(page))
+  ).filter((p) => p.time >= start && p.time <= end);
+  const shown = composited.filter((p) => p.number !== null);
+  const changes = shown.filter(
+    (p, i) => i === 0 || p.number !== shown[i - 1]!.number,
+  );
+  // A picture stays up for whole display frames; the capture times jitter by a few ms.
+  const display = median(gaps(composited.map((p) => p.time)))!;
+  const held = gaps(changes.map((p) => p.time)).map(
+    (gap) => Math.max(1, Math.round(gap / display)) * display,
+  );
   return {
-    pictures: shown.length,
-    hiddenPictures: presented.length - shown.length,
-    picturesPerSecond: shown.length / 10,
-    dropped: Math.max(0, 10 * fps - shown.length),
-    gapP95: quantile(frames, 0.95),
-    gapMax: frames.length ? Math.max(...frames) : null,
-    // A 30 fps picture held for a 60 Hz display frame longer than it should be.
-    lateGaps: frames.filter((gap) => gap > 42).length,
+    composited: composited.length,
+    displayFrame: display,
+    pictures: changes.length,
+    picturesPerSecond: changes.length / ((end - start) / 1000),
+    dropped: Math.max(
+      0,
+      Math.round(((end - start) / 1000) * fps) - changes.length,
+    ),
+    gapP95: quantile(held, 0.95),
+    gapMax: held.length ? Math.max(...held) : null,
+    // A 30 fps picture held for a display frame longer than it should be.
+    lateGaps: held.filter((gap) => gap > 2 * display).length,
     editorFrameP95: quantile(editor, 0.95),
     editorLateFrames: editor.filter((gap) => gap > 25).length,
   };
-}
-
-/** requestVideoFrameCallback on every video the preview has or adds. */
-async function install(preview: Frame) {
-  await preview.evaluate(() => {
-    const w = window as unknown as {
-      benchFrames: number[][];
-      benchWatched?: WeakSet<HTMLVideoElement>;
-    };
-    w.benchFrames = [];
-    if (w.benchWatched) return;
-    const watched = (w.benchWatched = new WeakSet());
-    const watch = () => {
-      for (const video of document.querySelectorAll("video")) {
-        if (watched.has(video)) continue;
-        watched.add(video);
-        const id = Number(video.id.replace(/\D/g, "") || -1);
-        const onFrame: VideoFrameRequestCallback = (now, meta) => {
-          const visible = video.checkVisibility({
-            opacityProperty: true,
-            visibilityProperty: true,
-          });
-          w.benchFrames.push([now, meta.mediaTime, id, visible ? 1 : 0]);
-          video.requestVideoFrameCallback(onFrame);
-        };
-        video.requestVideoFrameCallback(onFrame);
-      }
-    };
-    watch();
-    setInterval(watch, 100);
-  });
 }
 
 /** Sixteen Ctrl+wheel steps in, one per displayed frame, then back to Fit. */
