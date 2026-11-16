@@ -332,13 +332,22 @@ A press costs one `elementsFromPoint` in the preview and style reads for element
 
 `bun run test:perf` collects `cutroom:clip-box` and `cutroom:position-observation` separately on the 500-clip real-media workload. Each budget remains below 5 ms, applied to the median of three fresh runs' maximum durations. This follows #63's smallest odd sample that tolerates one isolated pause while failing a repeated stall. Raw durations, overall maxima and per-run maxima remain in `position-observation.json`; `CUTROOM_POSITION_TIMING_OUT` saves it locally. Static selected playback may make at most six geometry reads per 2.5-second run. Unselected runs must make none, and selection may not add five percentage points to the median late-frame rate.
 
-The picture-paint gate measures native pointer-down `timeStamp` to a task after the outline update's next animation frame, including that rendering opportunity. It makes ten alternating video/title clicks in each of three fresh loads, after drawn clip bodies and a 4.5-second media warm-up. Cold clicks stay in each run's maximum. The median maximum must be at most 50 ms, three frames at 60 Hz and well below the roughly 100 ms instant-response threshold. CI Chromium 158 with SwiftShader measured 35.2 ms against the previous 33 ms ceiling. That two-frame ceiling was too close to normal runner variation. The measurement method is unchanged. `picture-selection-paint.json` and `CUTROOM_PICTURE_TIMING_OUT` retain every pointer, outline and after-paint timestamp, cold click and bridge hit cost. This includes a rendering opportunity, not physical display scan-out.
+The picture-paint gate measures native pointer-down `timeStamp` to a task after the outline update's next animation frame, including that rendering opportunity. It makes ten alternating video/title clicks in each of three fresh loads, after drawn clip bodies and a 4.5-second media warm-up. Cold clicks stay in each run's maximum. The median maximum must be at most 50 ms, three frames at 60 Hz and well below the roughly 100 ms instant-response threshold. CI Chromium 158 with SwiftShader measured 35.2 ms against the previous 33 ms ceiling. That two-frame ceiling was too close to normal runner variation. The gate runs without Playwright's trace and checks the inspector only after each paint is stamped. A trace snapshots the whole 500-clip page after every click and check, and a role locator walks it too, both on the editor's main thread. Under 4x CPU throttling those snapshots took about 25 ms per click, often between the outline's frame and the task that stamps its paint, so the gate timed the test harness along with the selection. CI failed at 50.8, 52.2 and 54.6 ms while the same commit's twin run passed. `picture-selection-paint.json` and `CUTROOM_PICTURE_TIMING_OUT` retain every pointer, outline and after-paint timestamp, cold click and bridge hit cost. This includes a rendering opportunity, not physical display scan-out.
 
 Negative controls run inside actual preview reads without changing production code:
 
 - `CUTROOM_POSITION_READ_STALL_MS=10` stalls the selected title's geometry read.
 - `CUTROOM_POSITION_OBSERVATION_STALL_MS=10` stalls the selected title's computed-style read.
 - `CUTROOM_PICTURE_HIT_STALL_MS=60` stalls `elementsFromPoint`. This replaces the old 40 ms control so it clearly exceeds the 50 ms paint budget.
+
+On November 16, 2026, main `3e3c0d3` and this measurement ran on the same production build, installed Chromium 155 headless at 1720x1050, five sessions of three loads each:
+
+| Measurement                | Session medians, unthrottled |   Load maxima, unthrottled | Session medians, 4x CPU throttle |
+| -------------------------- | ---------------------------: | -------------------------: | -------------------------------: |
+| With trace and early check |              35.9 to 41.7 ms | 31.5 to 59.8 ms, 3 over 50 |                    125 to 139 ms |
+| Without                    |              28.1 to 30.6 ms |            28.0 to 32.6 ms |                     94 to 120 ms |
+
+The 60 ms hit stall still fails it, at 121 ms.
 
 Run either gate with `bun run test:perf --grep 'Position observation'` or `bun run test:perf --grep 'picture selection paints'`.
 
