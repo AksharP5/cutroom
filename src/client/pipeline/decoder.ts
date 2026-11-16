@@ -1,3 +1,4 @@
+import { LIMITS } from "./mp4";
 import type { ReadRange, VideoTrack } from "./mp4";
 
 const BLOCK = 1 << 20;
@@ -19,6 +20,9 @@ function blockReader(read: ReadRange, size: number) {
     return found;
   };
   return async (offset: number, length: number) => {
+    // The demuxer bounds samples by the file; this keeps a bad one from allocating anyway.
+    if (length > LIMITS.sample || offset + length > size)
+      throw new Error("A sample lies outside the file.");
     const first = Math.floor(offset / BLOCK);
     const last = Math.floor((offset + length - 1) / BLOCK);
     if (first === last) {

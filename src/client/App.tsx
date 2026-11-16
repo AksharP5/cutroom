@@ -50,7 +50,7 @@ import { StatusBar } from "./components/StatusBar";
 import { clearToasts, showToast, useWorkspace } from "./workspace";
 import { actionFor, focusPanel, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
-import { usePipeline } from "./pipeline/pipeline";
+import { usePipeline } from "./pipeline/setting";
 
 const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({

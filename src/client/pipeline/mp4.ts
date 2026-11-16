@@ -27,6 +27,17 @@ export interface VideoTrack {
 
 export type ReadRange = (start: number, end: number) => Promise<Uint8Array>;
 
+/**
+ * Bounds that real files sit far inside, so a crafted header fails fast instead of allocating:
+ * a movie header of 64 MB holds hours of 4K footage, and 2 million samples is nine hours at
+ * 60 fps. One compressed frame is never near 64 MB.
+ */
+export const LIMITS = {
+  movie: 64 << 20,
+  samples: 2_000_000,
+  sample: 64 << 20,
+};
+
 class Box {
   constructor(
     readonly type: string,
@@ -78,18 +89,26 @@ function readBoxes(view: DataView, from: number) {
 /** Finds the top-level `moov` from box headers alone, then reads only it. */
 async function readMovie(read: ReadRange, size: number) {
   for (let at = 0; at + 8 <= size;) {
-    const head = new DataView((await read(at, Math.min(size, at + 16))).buffer);
+    const bytes = await read(at, Math.min(size, at + 16));
+    if (bytes.byteLength < 8) break;
+    const head = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     let length = head.getUint32(0);
     const type = fourcc(head, 4);
     let header = 8;
     if (length === 1) {
+      if (bytes.byteLength < 16) break;
       length = Number(head.getBigUint64(8));
       header = 16;
     } else if (length === 0) length = size - at;
-    if (length < header) break;
+    if (length < header || at + length > size) break;
     if (type === "moov") {
-      const bytes = await read(at + header, at + length);
-      return new Box("moov", new DataView(bytes.buffer, bytes.byteOffset));
+      if (length > LIMITS.movie)
+        throw new Error("The movie header is larger than any real file's.");
+      const movie = await read(at + header, at + length);
+      return new Box(
+        "moov",
+        new DataView(movie.buffer, movie.byteOffset, movie.byteLength),
+      );
     }
     if (type === "moof") break;
     at += length;
@@ -153,7 +172,8 @@ export async function readVideoTrack(
       return handler && fourcc(handler.data, 8) === "vide";
     });
   if (!track) throw new Error("The file has no video track.");
-  const mdhd = track.path("mdia", "mdhd")!.data;
+  const mdhd = track.path("mdia", "mdhd")?.data;
+  if (!mdhd) throw new Error("The video track has no media header.");
   const timescale =
     mdhd.getUint8(0) === 1 ? mdhd.getUint32(20) : mdhd.getUint32(12);
   const table = track.path("mdia", "minf", "stbl");
@@ -191,47 +211,57 @@ export async function readVideoTrack(
       }
     : null;
 
-  // Decode times, presentation offsets, chunk offsets and sizes, as the sample table stores them.
-  const entries = (box: Box | undefined, fields: number, from = 8) => {
-    if (!box) return [];
+  if (!(timescale > 0)) throw new Error("The video track has no timescale.");
+  const cut = () => new Error("The sample table is cut short.");
+  /** A table of `count` rows of `fields` 32-bit numbers, read in place. */
+  const rows = (box: Box | undefined, fields: number, from = 8) => {
+    if (!box) return { count: 0, at: () => 0 };
     const count = box.data.getUint32(4);
-    return Array.from({ length: count }, (_, index) =>
-      Array.from({ length: fields }, (_, field) =>
-        box.data.getUint32(from + (index * fields + field) * 4),
-      ),
-    );
+    if (from + count * fields * 4 > box.data.byteLength) throw cut();
+    return {
+      count,
+      at: (row: number, field: number) =>
+        box.data.getUint32(from + (row * fields + field) * 4),
+    };
   };
-  const durations = entries(table.child("stts"), 2);
+  const durations = rows(table.child("stts"), 2);
   const ctts = table.child("ctts");
-  const offsets = ctts
-    ? entries(ctts, 2).map(([count, offset]) => [
-        count!,
-        ctts.data.getUint8(0) === 1 ? offset! | 0 : offset!,
-      ])
-    : [];
-  const chunks = table.child("stco")
-    ? entries(table.child("stco"), 1).map(([offset]) => offset!)
-    : (() => {
-        const co64 = table.child("co64");
-        if (!co64) return [];
-        const count = co64.data.getUint32(4);
-        return Array.from({ length: count }, (_, index) =>
-          Number(co64.data.getBigUint64(8 + index * 8)),
-        );
-      })();
+  const offsets = rows(ctts, 2);
+  // Version 1 offsets are signed.
+  const offsetAt = (row: number) =>
+    ctts?.data.getUint8(0) === 1 ? offsets.at(row, 1) | 0 : offsets.at(row, 1);
+  const stco = table.child("stco");
+  const co64 = table.child("co64");
+  const chunks = stco
+    ? rows(stco, 1)
+    : co64
+      ? (() => {
+          const count = co64.data.getUint32(4);
+          if (8 + count * 8 > co64.data.byteLength) throw cut();
+          return {
+            count,
+            at: (row: number) => Number(co64.data.getBigUint64(8 + row * 8)),
+          };
+        })()
+      : { count: 0, at: () => 0 };
   const stsz = table.child("stsz");
-  if (!stsz) throw new Error("The video track has no sample sizes.");
+  if (!stsz || stsz.data.byteLength < 12)
+    throw new Error("The video track has no sample sizes.");
   const fixed = stsz.data.getUint32(4);
   const count = stsz.data.getUint32(8);
-  const sizes = Array.from(
-    { length: count },
-    (_, index) => fixed || stsz.data.getUint32(12 + index * 4),
-  );
-  const stss = table.child("stss");
-  const keys = stss
-    ? new Set(entries(stss, 1).map(([sample]) => sample! - 1))
+  if (fixed ? fixed * count > size : 12 + count * 4 > stsz.data.byteLength)
+    throw cut();
+  if (count > LIMITS.samples)
+    throw new Error("The video track has more samples than any real file's.");
+  const sizeOf = (sample: number) =>
+    fixed || stsz.data.getUint32(12 + sample * 4);
+  const stss = rows(table.child("stss"), 1);
+  const keys = stss.count
+    ? new Set(
+        Array.from({ length: stss.count }, (_, row) => stss.at(row, 0) - 1),
+      )
     : null;
-  const toChunk = entries(table.child("stsc"), 3);
+  const toChunk = rows(table.child("stsc"), 3);
 
   // The edit list's first media time is where presentation starts.
   let shift = 0;
@@ -239,6 +269,8 @@ export async function readVideoTrack(
   if (elst) {
     const version = elst.data.getUint8(0);
     const edits = elst.data.getUint32(4);
+    if (8 + edits * (version === 1 ? 20 : 12) > elst.data.byteLength)
+      throw cut();
     for (let index = 0, at = 8; index < edits; index++) {
       const mediaTime =
         version === 1
@@ -258,24 +290,45 @@ export async function readVideoTrack(
   let durationIndex = 0;
   let offsetRun = 0;
   let offsetIndex = 0;
-  for (let chunk = 0, sample = 0; chunk < chunks.length; chunk++) {
-    const run = toChunk.findLast(([first]) => first! - 1 <= chunk);
-    let at = chunks[chunk]!;
-    for (let n = 0; n < (run?.[1] ?? 0) && sample < count; n++, sample++) {
-      const offset = offsets[offsetIndex]?.[1] ?? 0;
+  // Sample-to-chunk runs are sorted by first chunk, so one pointer walks them.
+  let run = -1;
+  for (
+    let chunk = 0, sample = 0;
+    chunk < chunks.count && sample < count;
+    chunk++
+  ) {
+    while (run + 1 < toChunk.count && toChunk.at(run + 1, 0) - 1 <= chunk)
+      run++;
+    const perChunk = run < 0 ? 0 : toChunk.at(run, 1);
+    let at = chunks.at(chunk, 0);
+    for (let n = 0; n < perChunk && sample < count; n++, sample++) {
+      const length = sizeOf(sample);
+      if (length > LIMITS.sample || at + length > size)
+        throw new Error("A sample lies outside the file.");
       samples.push({
         offset: at,
-        size: sizes[sample]!,
-        time: (decodeTime + offset - shift) / timescale,
+        size: length,
+        time:
+          (decodeTime +
+            (offsetIndex < offsets.count ? offsetAt(offsetIndex) : 0) -
+            shift) /
+          timescale,
         key: keys ? keys.has(sample) : true,
       });
-      at += sizes[sample]!;
-      decodeTime += durations[durationIndex]?.[1] ?? 0;
-      if (++durationRun >= (durations[durationIndex]?.[0] ?? Infinity)) {
+      at += length;
+      decodeTime +=
+        durationIndex < durations.count ? durations.at(durationIndex, 1) : 0;
+      if (
+        durationIndex < durations.count &&
+        ++durationRun >= durations.at(durationIndex, 0)
+      ) {
         durationIndex++;
         durationRun = 0;
       }
-      if (offsets.length && ++offsetRun >= offsets[offsetIndex]![0]!) {
+      if (
+        offsetIndex < offsets.count &&
+        ++offsetRun >= offsets.at(offsetIndex, 0)
+      ) {
         offsetIndex++;
         offsetRun = 0;
       }

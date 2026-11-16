@@ -27,7 +27,7 @@ import { connectPreview } from "./preview";
 import { previewRefresh } from "./previewRefresh";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
-import { attachPipeline, usePipeline } from "../pipeline/pipeline";
+import { usePipeline } from "../pipeline/setting";
 
 export type Zoom = "fit" | "actual";
 
@@ -82,7 +82,16 @@ export function Viewer({
   useEffect(() => {
     const canvas = pipelineCanvas.current;
     if (!pipelineEnabled || !canvas) return;
-    return attachPipeline(projectId, canvas);
+    // Loaded only once the setting is on.
+    let detach: (() => void) | null = null;
+    let gone = false;
+    void import("../pipeline/pipeline").then(({ attachPipeline }) => {
+      if (!gone) detach = attachPipeline(projectId, canvas);
+    });
+    return () => {
+      gone = true;
+      detach?.();
+    };
   }, [projectId, pipelineEnabled]);
   useEffect(() => {
     for (const connection of connections.current.values())

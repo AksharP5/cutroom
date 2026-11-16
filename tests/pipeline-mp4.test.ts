@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readVideoTrack } from "../src/client/pipeline/mp4";
+import { LIMITS, readVideoTrack } from "../src/client/pipeline/mp4";
 
 async function run(args: string[]) {
   const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
@@ -21,6 +21,8 @@ async function compare(
   rate: string,
   container: "mp4" | "mov",
   codec: RegExp,
+  /** The `ctts` version the file must carry, when the case is about it. */
+  offsets?: 0 | 1,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "cutroom-mp4-"));
   try {
@@ -37,6 +39,8 @@ async function compare(
     ]);
     const file = Bun.file(path);
     const bytes = new Uint8Array(await file.arrayBuffer());
+    if (offsets !== undefined)
+      expect(bytes[Buffer.from(bytes).indexOf("ctts") + 4]).toBe(offsets);
     const track = await readVideoTrack(
       async (start, end) => bytes.slice(start, end),
       bytes.length,
@@ -88,6 +92,98 @@ test.skipIf(!ffmpeg)(
       "mov",
       /^avc1\./,
     );
+  },
+);
+
+test.skipIf(!ffmpeg)(
+  "reads signed composition offsets (ctts version 1)",
+  async () => {
+    await compare(
+      [
+        ...["-c:v", "libx264", "-preset", "veryfast", "-g", "12", "-bf", "3"],
+        ...["-movflags", "+negative_cts_offsets"],
+      ],
+      "30",
+      "mp4",
+      /^avc1\./,
+      1,
+    );
+  },
+);
+
+/** A small real MP4, then one field of one box rewritten, as a crafted file would be. */
+async function crafted(edits: [box: string, at: number, value: number][]) {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-mp4-"));
+  try {
+    const path = join(directory, "clip.mp4");
+    await run([
+      "ffmpeg",
+      ...[
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x90:rate=30:duration=1",
+      ],
+      ...[
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        path,
+      ],
+    ]);
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    for (const [box, at, value] of edits)
+      // Offsets count from the end of the box's 8-byte header.
+      view.setUint32(Buffer.from(bytes).indexOf(box) + 4 + at, value);
+    return bytes;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Fails, quickly and without holding much memory, instead of building the samples. */
+async function refuses(bytes: Uint8Array, reason: RegExp) {
+  Bun.gc(true);
+  const before = process.memoryUsage().rss;
+  const started = performance.now();
+  await expect(
+    readVideoTrack(async (start, end) => bytes.slice(start, end), bytes.length),
+  ).rejects.toThrow(reason);
+  expect(performance.now() - started).toBeLessThan(250);
+  expect(process.memoryUsage().rss - before).toBeLessThan(64 << 20);
+}
+
+test.skipIf(!ffmpeg)(
+  "a crafted sample table fails fast instead of allocating",
+  async () => {
+    // A fixed sample size with four billion samples, in a file of a few kilobytes.
+    await refuses(
+      await crafted([
+        ["stsz", 4, 1],
+        ["stsz", 8, 0xffffffff],
+      ]),
+      /cut short/,
+    );
+    // Three million one-byte samples poured into one chunk by a huge samples-per-chunk.
+    await refuses(
+      await crafted([
+        ["stsz", 4, 1],
+        ["stsz", 8, 3_000_000],
+        ["stsc", 12, 0xffffffff],
+      ]),
+      /cut short/,
+    );
+    // Sizes that fit the table but point past the end of the file.
+    await refuses(await crafted([["stco", 8, 0x7fffffff]]), /outside the file/);
+    // No timescale makes every presentation time infinite.
+    await refuses(await crafted([["mdhd", 12, 0]]), /no timescale/);
+    expect(LIMITS.samples).toBeLessThan(1 << 22);
   },
 );
 

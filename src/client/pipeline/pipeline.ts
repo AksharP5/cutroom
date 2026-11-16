@@ -1,4 +1,3 @@
-import { create } from "zustand";
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { PipelinePlan } from "../../shared/pipeline";
 import { useTimeline } from "../edit/timeline";
@@ -8,23 +7,10 @@ import type { Layer } from "./compositor";
 import { SourceDecoder } from "./decoder";
 import { openRanges, readVideoTrack } from "./mp4";
 import { shownAt } from "./layers";
+import { sourceCache } from "./sources";
+import { usePipeline } from "./setting";
 import { framesBefore } from "../../shared/timeline/transition";
 import { chromeColourGuess } from "../../shared/videoColour";
-
-const SETTING = "cutroom.footagePipeline";
-
-/**
- * The viewer's footage pipeline. Off by default: Settings turns it on. While `active`, the
- * pipeline draws every video clip beneath the preview, and the preview draws everything else.
- */
-export const usePipeline = create(() => ({
-  enabled: localStorage.getItem(SETTING) === "true",
-  active: false,
-}));
-usePipeline.subscribe(({ enabled }, previous) => {
-  if (enabled !== previous.enabled)
-    localStorage.setItem(SETTING, String(enabled));
-});
 
 type Plan = Exclude<PipelinePlan, { reason: string }>;
 
@@ -109,39 +95,35 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     },
     { signal: closing.signal },
   );
-  const sources = new Map<string, Promise<Source>>();
   let plan: Plan | null = null;
+  let stopped: string | null = null;
   const stop = (reason: string) => {
-    // Why the composition stays with HyperFrames, for whoever tries the setting.
-    if (!closing.signal.aborted) console.info(`[pipeline] off: ${reason}`);
+    // Why the composition stays with HyperFrames, for whoever tries the setting, said once.
+    if (!closing.signal.aborted && stopped !== reason)
+      console.info(`[pipeline] off: ${reason}`);
+    stopped = reason;
     usePipeline.setState({ active: false });
   };
 
-  const source = (path: string) => {
-    let found = sources.get(path);
-    if (found) return found;
-    found = (async () => {
-      const url = mediaUrl(projectId, path);
-      const [{ decoder, intrinsic }, second] = await Promise.all([
-        openSource(url, closing.signal),
-        openSource(url, closing.signal),
-      ]);
-      const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
-      // A proxy that is still being made answers 202; moving seeks use the source meanwhile.
-      const proxy = await openSource(proxyUrl, closing.signal)
-        .then(({ decoder }) => decoder)
-        .catch(() => null);
-      return {
-        lanes: [decoder, second.decoder] as [SourceDecoder, SourceDecoder],
-        playing: decoder,
-        proxy,
-        intrinsic,
-      };
-    })();
-    sources.set(path, found);
-    found.catch(() => sources.delete(path));
-    return found;
-  };
+  const sources = sourceCache(async (path): Promise<Source> => {
+    const url = mediaUrl(projectId, path);
+    const [{ decoder, intrinsic }, second] = await Promise.all([
+      openSource(url, closing.signal),
+      openSource(url, closing.signal),
+    ]);
+    const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
+    // A proxy that is still being made answers 202; moving seeks use the source meanwhile.
+    const proxy = await openSource(proxyUrl, closing.signal)
+      .then(({ decoder }) => decoder)
+      .catch(() => null);
+    return {
+      lanes: [decoder, second.decoder] as [SourceDecoder, SourceDecoder],
+      playing: decoder,
+      proxy,
+      intrinsic,
+    };
+  });
+  const source = sources.get;
 
   let drawing = false;
   let wanted = false;
@@ -233,6 +215,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       );
       if (state.kind === "playing") void lookahead(frame);
       canvas.dataset.frame = String(frame);
+      stopped = null;
       if (!usePipeline.getState().active)
         usePipeline.setState({ active: true });
     } finally {
@@ -282,6 +265,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(next.reason);
     }
     plan = next;
+    sources.forgetFailures();
     // Open every file now: opening one mid-playback costs the clock a few frames.
     for (const clip of view.timeline.clips)
       if (clip.src && next.drawable[clip.id])
