@@ -18,7 +18,9 @@ export interface Shown {
 
 /**
  * Which drawable video clips show at a frame, bottom first, and how their transitions draw them.
- * Null when a video the plan never classified shows there, so the frame needs HyperFrames.
+ * HyperFrames draws the plan's other videos above them. Null when a video the plan never
+ * classified shows there, or an edit has put one of HyperFrames' videos beneath one of the
+ * pipeline's, so the frame needs HyperFrames.
  *
  * A clip's element runs across its transitions: it starts `framesBefore` its first frame and ends
  * `framesAfter` its last. Cutroom's transitions sheet animates it in element-local seconds. A cross
@@ -35,14 +37,17 @@ export function shownAt(
   const off = new Set(
     timeline.tracks.filter((track) => !track.enabled).map(({ index }) => index),
   );
-  const fitOf = (clip: Clip): Fit | null => {
-    const named = plan.drawable[clip.id];
-    if (named) return named;
+  type Owner = Fit | "hyperframes";
+  const named = (id: string): Owner | undefined =>
+    plan.drawable[id] ?? (plan.hyperframes[id] ? "hyperframes" : undefined);
+  const ownerOf = (clip: Clip): Owner | null => {
+    const owner = named(clip.id);
+    if (owner) return owner;
     if (order.has(clip.id)) return null;
     // A piece an edit just made, such as the razor's, draws as the clip it came from until the
     // next plan names it: its neighbour on the track, or else any clip of the file, if they agree.
     const known = timeline.clips.filter(
-      (other) => other.src === clip.src && plan.drawable[other.id],
+      (other) => other.src === clip.src && named(other.id),
     );
     const neighbour = known.find(
       (other) =>
@@ -50,11 +55,12 @@ export function shownAt(
         (other.start + other.duration === clip.start ||
           clip.start + clip.duration === other.start),
     );
-    if (neighbour) return plan.drawable[neighbour.id]!;
-    const fits = new Set(known.map((other) => plan.drawable[other.id]!));
-    return fits.size === 1 ? [...fits][0]! : null;
+    if (neighbour) return named(neighbour.id)!;
+    const owners = new Set(known.map((other) => named(other.id)!));
+    return owners.size === 1 ? [...owners][0]! : null;
   };
   const shown: (Shown & { level: number; index: number })[] = [];
+  const hyperframes: { level: number; index: number }[] = [];
   for (const clip of timeline.clips) {
     if (clip.kind !== "video" || !clip.enabled || off.has(clip.track)) continue;
     const before = clip.transitionIn ? framesBefore(clip.transitionIn) : 0;
@@ -62,8 +68,15 @@ export function shownAt(
     const first = clip.start - before;
     const end = clip.start + clip.duration + after;
     if (frame < first || frame >= end) continue;
-    const fit = fitOf(clip);
-    if (!fit || clip.mediaStart === null) return null;
+    const fit = ownerOf(clip);
+    if (!fit) return null;
+    const level = plan.trackZ[String(clip.track)] ?? 0;
+    const index = order.get(clip.id) ?? Infinity;
+    if (fit === "hyperframes") {
+      hyperframes.push({ level, index });
+      continue;
+    }
+    if (clip.mediaStart === null) return null;
     const partner = (edge: "in" | "out") =>
       timeline.clips.find(
         (other) =>
@@ -118,10 +131,16 @@ export function shownAt(
         1e-5,
       opacity,
       brightness,
-      level: plan.trackZ[String(clip.track)] ?? 0,
-      index: order.get(clip.id) ?? Infinity,
+      level,
+      index,
     });
   }
+  const below = (
+    a: { level: number; index: number },
+    b: { level: number; index: number },
+  ) => a.level < b.level || (a.level === b.level && a.index < b.index);
+  if (shown.some((layer) => hyperframes.some((other) => !below(layer, other))))
+    return null;
   return shown
     .sort((a, b) => a.level - b.level || a.index - b.index)
     .map(({ level: _level, index: _index, ...rest }) => rest);

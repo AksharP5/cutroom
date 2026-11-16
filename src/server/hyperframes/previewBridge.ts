@@ -1507,21 +1507,37 @@ function installPreviewBridge(
         if (frame instanceof VideoFrame) frame.close();
     }
   };
-  // Footage pipeline: the parent draws every root video beneath this document. Those videos stay
-  // in the DOM the runtime and the live-update checks compare, but never load: their media
-  // properties answer as a ready, seeked element. A constructed sheet, outside the DOM, hides
-  // them and clears the page's background so the parent's picture shows through.
+  // Footage pipeline: the parent draws the root videos it names beneath this document. Those
+  // videos stay in the DOM the runtime and the live-update checks compare, but never load: their
+  // media properties answer as a ready, seeked element. A constructed sheet, outside the DOM, hides
+  // them and clears the page's background so the parent's picture shows through. Every other
+  // video plays and draws here as usual, on top.
   const ROOT_COMPOSITION =
     "[data-composition-id]:not([data-composition-id] [data-composition-id])";
   const pipelineSheet = new CSSStyleSheet();
-  // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
-  // backdrop. The scheme only picks system colours, so the default text colour stays black.
-  pipelineSheet.replaceSync(
-    ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
-      `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
-      `${ROOT_COMPOSITION} > video { opacity: 0 !important; }`,
-  );
   let pipelineActive = false;
+  let pipelineDrawn = new Set<string>();
+  /** A video's timeline id: its id, or HyperFrames' own when it has none. */
+  const clipId = (media: HTMLMediaElement) =>
+    media.getAttribute("id") ?? media.getAttribute("data-hf-id");
+  const drawnByPipeline = (media: HTMLMediaElement) =>
+    pipelineDrawn.has(clipId(media) ?? "");
+  const writePipelineSheet = () => {
+    // Ids reach the selector escaped, as CSS strings.
+    const drawn = [...pipelineDrawn].flatMap((id) => [
+      `[id="${CSS.escape(id)}"]`,
+      `:not([id])[data-hf-id="${CSS.escape(id)}"]`,
+    ]);
+    // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
+    // backdrop. The scheme only picks system colours, so the default text colour stays black.
+    pipelineSheet.replaceSync(
+      ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
+        `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
+        (drawn.length
+          ? `${ROOT_COMPOSITION} > video:is(${drawn.join(", ")}) { opacity: 0 !important; }`
+          : ""),
+    );
+  };
   /** Parked media, and whether parking released media the element had loaded. */
   const parked = new Map<HTMLMediaElement, { released: boolean }>();
   const PARKED = [
@@ -1623,21 +1639,36 @@ function installPreviewBridge(
     }
   };
   let residency = 0;
+  /** Parks the videos the pipeline draws and gives back the rest; true when one comes back. */
   const parkRootVideos = () => {
-    if (!pipelineActive) return;
-    for (const video of rootMedia("video")) park(video);
+    if (!pipelineActive) return false;
+    let released = false;
+    for (const video of rootMedia("video"))
+      if (drawnByPipeline(video)) park(video);
+      else if (parked.has(video)) {
+        unpark(video, false);
+        released = true;
+      }
+    return released;
   };
-  const setPipeline = (active: boolean) => {
+  /** True when media comes back, so the runtime must seek again for it to load and draw. */
+  const setPipeline = (active: boolean, drawn: Set<string>) => {
     pipelineActive = active;
+    pipelineDrawn = drawn;
+    writePipelineSheet();
     const sheets = document.adoptedStyleSheets.filter(
       (sheet) => sheet !== pipelineSheet,
     );
     document.adoptedStyleSheets = active ? [...sheets, pipelineSheet] : sheets;
     clearInterval(residency);
     if (active) {
-      parkRootVideos();
+      const released = parkRootVideos();
       residentAudio(false);
-    } else for (const media of [...parked.keys()]) unpark(media, false);
+      return released;
+    }
+    const released = parked.size > 0;
+    for (const media of [...parked.keys()]) unpark(media, false);
+    return released;
   };
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
@@ -2980,16 +3011,29 @@ function installPreviewBridge(
         case "inspect":
           rememberTitleAnimations();
           break;
-        case "pipeline":
-          if (!("active" in data) || typeof data.active !== "boolean") return;
-          if (data.active === pipelineActive) break;
-          setPipeline(data.active);
+        case "pipeline": {
+          if (
+            !("active" in data) ||
+            typeof data.active !== "boolean" ||
+            !("drawn" in data) ||
+            !Array.isArray(data.drawn) ||
+            !data.drawn.every((id) => typeof id === "string")
+          )
+            return;
+          const drawn = new Set<string>(data.drawn);
+          if (
+            data.active === pipelineActive &&
+            drawn.size === pipelineDrawn.size &&
+            [...drawn].every((id) => pipelineDrawn.has(id))
+          )
+            break;
           // The runtime took the parked videos as seeked; seek again so they load and draw.
-          if (!data.active && !win.__player?.isPlaying()) {
+          if (setPipeline(data.active, drawn) && !win.__player?.isPlaying()) {
             seekRuntime(win.__player?.getTime() ?? 0);
             await refreshPicture();
           }
           break;
+        }
         case "cancel-edit":
           // Let the one pending seek finish without painting a stale edge. The queued
           // playhead seek then restores the picture, even when the source is still loading.

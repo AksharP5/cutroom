@@ -82,6 +82,7 @@ export function Viewer({
   const pipelineCanvas = useRef<HTMLCanvasElement>(null);
   const pipelineEnabled = usePipeline((state) => state.enabled);
   const pipelineActive = usePipeline((state) => state.active);
+  const pipelineDrawn = usePipeline((state) => state.drawn);
   useEffect(() => {
     const canvas = pipelineCanvas.current;
     if (!pipelineEnabled || !canvas) return;
@@ -98,8 +99,8 @@ export function Viewer({
   }, [projectId, pipelineEnabled]);
   useEffect(() => {
     for (const connection of connections.current.values())
-      connection.pipeline(pipelineActive);
-  }, [pipelineActive]);
+      connection.pipeline(pipelineActive, pipelineDrawn);
+  }, [pipelineActive, pipelineDrawn]);
   const draftId = useProjectNotes(
     (state) => state.projects[projectId]?.draft?.id,
   );
@@ -548,7 +549,8 @@ export function Viewer({
     connections.current.set(gen, preview);
     try {
       await preview.inspect();
-      if (usePipeline.getState().active) preview.pipeline(true);
+      const { active, drawn } = usePipeline.getState();
+      if (active) preview.pipeline(true, drawn);
       const resume = () => {
         settled.current?.();
         settled.current = null;

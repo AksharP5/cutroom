@@ -474,3 +474,20 @@ test("an edit or a jump at rest shows the right frame at once and settles on Hyp
     await context.close();
   }
 });
+
+test("a clip the pipeline cannot draw plays in HyperFrames on top while the pipeline draws the rest", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(240_000);
+  const fps = { num: 30, den: 1 };
+  // `over` has a class of its own, so HyperFrames draws it, a.mp4 from its frame 90, over v0.
+  const created = await project(request, fps, (seconds) =>
+    [
+      `<video id="v0" src="a.mp4" muted data-start="0" data-duration="${seconds(110)}" data-media-start="0" data-track-index="0" style="${fill}"></video>`,
+      `<video id="over" class="tinted" src="a.mp4" muted data-start="${seconds(30)}" data-duration="${seconds(30)}" data-media-start="3" data-track-index="1" style="${fill}"></video>`,
+    ].join("\n"),
+  );
+  await numbered(join(created.path, "a.mp4"), "30");
+  await parity(browser, created, 30, [10, 30, 40, 59, 60, 70]);
+});

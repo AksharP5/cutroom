@@ -170,6 +170,8 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   const videos: Layer[] = [];
   const others: Layer[] = [];
   const order: string[] = [];
+  /** Videos HyperFrames draws, on top of the pipeline's, and why. */
+  const hyperframes: Record<string, string> = {};
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
       continue;
@@ -194,7 +196,7 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       video &&
       (frameAt(start) === null || frameAt(start + duration) === null)
     )
-      return { reason: `${id} starts or ends between frames` };
+      hyperframes[id] = `${id} starts or ends between frames`;
     const layer = {
       id,
       element,
@@ -207,13 +209,17 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     (video ? videos : others).push(layer);
   }
 
+  // A video the pipeline cannot draw exactly is HyperFrames', as a title is.
   const fits: Record<string, "fill" | "contain" | "cover"> = {};
   for (const { id, element } of videos) {
+    if (hyperframes[id]) continue;
     if (
       attribute(element, "muted") === undefined &&
       attribute(element, "data-has-audio") !== "false"
-    )
-      return { reason: `${id} plays its own sound` };
+    ) {
+      hyperframes[id] = `${id} plays its own sound`;
+      continue;
+    }
     // The pipeline draws Cutroom's transitions; the rest of the clip must pass the export's rules.
     const edges = readTransitions(
       Object.fromEntries(
@@ -229,8 +235,10 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       (!transitionSheet ||
         (!edges.in && !edges.out) ||
         (readClipStyle(attribute(element, "style")).opacity ?? 1) !== 1)
-    )
-      return { reason: `${id} has a transition the pipeline cannot draw` };
+    ) {
+      hyperframes[id] = `${id} has a transition the pipeline cannot draw`;
+      continue;
+    }
     const placed = placedClip(
       {
         ...element,
@@ -241,7 +249,10 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       // The pipeline draws whatever lies beneath, so coverage never matters here.
       { width, height, beneath: "#000000" },
     );
-    if ("reason" in placed) return placed;
+    if ("reason" in placed) {
+      hyperframes[id] = placed.reason;
+      continue;
+    }
     fits[id] =
       declarationsOf(attribute(element, "style") ?? "")
         .map((declaration) => VIDEO_FITS.get(key(declaration)))
@@ -290,19 +301,38 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   const level = (layer: Layer) => stacking.trackZ.get(layer.track) ?? 0;
   const below = (a: Layer, b: Layer) =>
     level(a) < level(b) || (level(a) === level(b) && a.index < b.index);
-  for (const video of videos)
-    for (const other of others)
-      if (
-        other.start < video.end &&
-        video.start < other.end &&
-        !below(video, other)
-      )
-        return { reason: `${other.id} lies beneath ${video.id}` };
+  // The pipeline paints beneath the preview, so a video above anything HyperFrames draws at the
+  // same time is HyperFrames' too, which may put more videos above one of its own.
+  for (let settled = false; !settled;) {
+    settled = true;
+    const drawnByHyperframes = [
+      ...others,
+      ...videos.filter(({ id }) => hyperframes[id]),
+    ];
+    for (const video of videos) {
+      if (hyperframes[video.id]) continue;
+      const beneath = drawnByHyperframes.find(
+        (other) =>
+          other.start < video.end &&
+          video.start < other.end &&
+          !below(video, other),
+      );
+      if (!beneath) continue;
+      hyperframes[video.id] = `${beneath.id} lies beneath ${video.id}`;
+      delete fits[video.id];
+      settled = false;
+    }
+  }
+  if (!Object.keys(fits).length)
+    return {
+      reason: Object.values(hyperframes)[0] ?? "it has no video to draw",
+    };
 
   return {
     width,
     height,
     drawable: fits,
+    hyperframes,
     order,
     trackZ: Object.fromEntries(stacking.trackZ),
     background,

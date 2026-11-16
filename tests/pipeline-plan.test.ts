@@ -66,7 +66,7 @@ test("plain footage under titles is drawable, with each video's fit and the page
 const card = (inner: string) =>
   `<div id="card" class="clip" data-start="0" data-duration="1" data-track-index="4">${inner}</div>`;
 
-test("whatever HyperFrames must draw beneath a video keeps the composition on HyperFrames", () => {
+test("whatever could change every clip keeps the composition on HyperFrames", () => {
   const cases: [string, string, string][] = [
     [
       `<div id="under" class="clip" data-start="0" data-duration="1" data-track-index="0" style="z-index:0"></div>`,
@@ -75,16 +75,6 @@ test("whatever HyperFrames must draw beneath a video keeps the composition on Hy
     ],
     [`<script>window.x = 1</script>`, "", "the composition has a <script>"],
     ["", `<script src="app.js"></script>`, "the head has a <script>"],
-    [
-      `<video id="loud" src="talk.mp4" data-start="0" data-duration="1" data-track-index="5" style="${fill}"></video>`,
-      "",
-      "loud plays its own sound",
-    ],
-    [
-      `<video id="framed" src="talk.mp4" muted data-start="0" data-duration="1" data-track-index="5" style="position:absolute;left:10px;width:50%"></video>`,
-      "",
-      "framed is not placed in a box filling the frame",
-    ],
     [
       "",
       "<style>video{filter:blur(4px)}</style>",
@@ -125,28 +115,68 @@ test("whatever HyperFrames must draw beneath a video keeps the composition on Hy
       "<style>.clip{backdrop-filter:blur(8px)}</style>",
       "a stylesheet sets backdrop-filter",
     ],
-    // A video between frames is one the pipeline would draw a frame early or late.
-    [
-      `<video id="early" src="talk.mp4" muted data-start="0.01" data-duration="1" data-track-index="5" style="${fill}"></video>`,
-      "",
-      "early starts or ends between frames",
-    ],
   ];
   for (const [extra, head, reason] of cases)
     expect(planPreviewPipeline(page(extra, head), fps)).toEqual({
       reason: expect.stringContaining(reason),
     });
+});
+
+test("a video the pipeline cannot draw is HyperFrames', and so is any video above one of HyperFrames' clips", () => {
+  const video = (id: string, track: number, rest = "muted", style = fill) =>
+    `<video id="${id}" src="talk.mp4" ${rest} data-start="0" data-duration="1" data-track-index="${track}" style="${style}"></video>`;
+  const cases: [string, string][] = [
+    [video("loud", 5, ""), "loud plays its own sound"],
+    [
+      video("framed", 5, "muted", "position:absolute;left:10px;width:50%"),
+      "framed is not placed in a box filling the frame",
+    ],
+    // A video between frames is one the pipeline would draw a frame early or late.
+    [
+      video("early", 5).replace('data-start="0"', 'data-start="0.01"'),
+      "early starts or ends between frames",
+    ],
+  ];
+  for (const [extra, reason] of cases) {
+    const plan = drawable(page(extra));
+    expect(plan.drawable).toEqual({ a: "fill", b: "cover", broll: "fill" });
+    expect(Object.values(plan.hyperframes)).toEqual([reason]);
+  }
+  // HyperFrames draws on top, so a video above its clip goes with it, and one above that too:
+  // top overlaps only over, after the title.
+  const at = (html: string, start: number, duration: number) =>
+    html.replace(
+      'data-start="0" data-duration="1"',
+      `data-start="${start}" data-duration="${duration}"`,
+    );
+  const stacked = drawable(
+    page(
+      at(video("loud", 5, ""), 3, 1) +
+        at(video("over", 6), 3.5, 1) +
+        at(video("top", 7), 4.2, 0.8),
+    ),
+  );
+  expect(stacked.drawable).toEqual({ a: "fill", b: "cover", broll: "fill" });
+  expect(stacked.hyperframes).toEqual({
+    loud: "loud plays its own sound",
+    over: "loud lies beneath over",
+    top: "over lies beneath top",
+  });
   // B-roll moved above the title puts the title beneath footage it overlaps.
   const under = edit(page(), [
     { type: "setTrack", index: 4, kind: "video" },
     { type: "move", clipIds: ["broll"], by: 0, trackBy: 3, mode: "overwrite" },
   ]);
-  expect(planPreviewPipeline(under, fps)).toEqual({
-    reason: "title lies beneath broll",
+  expect(drawable(under).hyperframes).toEqual({
+    broll: "title lies beneath broll",
+  });
+  // With nothing left to draw the composition stays on HyperFrames.
+  expect(planPreviewPipeline(page().replaceAll(" muted ", " "), fps)).toEqual({
+    reason: "a plays its own sound",
   });
 });
 
-test("a transition the pipeline would draw differently keeps the composition on HyperFrames", () => {
+test("a transition the pipeline would draw differently is HyperFrames' to draw", () => {
   const dissolve: CommandInput = {
     type: "setTransition",
     from: "a",
@@ -155,17 +185,18 @@ test("a transition the pipeline would draw differently keeps the composition on 
   };
   expect(drawable(edit(page(), [dissolve])).drawable.b).toBe("cover");
   // A dissolve animates opacity from the clip's own, which the pipeline draws only at 1.
+  // b fades over a, which holds beneath it, so a stays with the pipeline.
   expect(
-    planPreviewPipeline(
+    drawable(
       edit(page(), [dissolve, { type: "setClip", clipId: "b", opacity: 0.5 }]),
-      fps,
-    ),
-  ).toEqual({ reason: "b has a transition the pipeline cannot draw" });
+    ).hyperframes,
+  ).toEqual({ b: "b has a transition the pipeline cannot draw" });
   // Without Cutroom's transitions sheet the attributes animate nothing.
   const bare = edit(page(), [dissolve]).replace(
     /<style data-cutroom-transitions[^>]*>[\s\S]*?<\/style>/,
     "",
   );
+  // Then a and b are HyperFrames', so is the b-roll above a, and nothing is left to draw.
   expect(planPreviewPipeline(bare, fps)).toEqual({
     reason: "a has a transition the pipeline cannot draw",
   });
@@ -260,4 +291,26 @@ test("playback prepares clips that come back into view, not only clips that star
     { frame: 60, id: "a", time: 2 },
     { frame: 90, id: "b", time: 10 },
   ]);
+});
+
+test("a frame showing one of HyperFrames' videos still draws the pipeline's beneath it", () => {
+  const html = page(
+    `<video id="loud" src="talk.mp4" data-start="0" data-duration="1" data-track-index="5" style="${fill}"></video>`,
+  );
+  const plan = drawable(html);
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  expect(shownAt(timeline, plan, 10)!.map(({ clip }) => clip.id)).toEqual([
+    "a",
+  ]);
+  // A razor piece of it, before the next plan names it, is HyperFrames' too.
+  const loud = timeline.clips.find((clip) => clip.id === "loud")!;
+  const cut = {
+    ...timeline,
+    clips: [
+      ...timeline.clips.filter((clip) => clip.id !== "loud"),
+      { ...loud, duration: 15 },
+      { ...loud, id: "loud-2", start: loud.start + 15, duration: 15 },
+    ],
+  };
+  expect(shownAt(cut, plan, 20)!.map(({ clip }) => clip.id)).toEqual(["a"]);
 });
