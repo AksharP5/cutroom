@@ -213,6 +213,19 @@
 .edit-frame[data-retiring] {
   visibility: hidden;
 }
+/* Over footage, so it keeps a dark backing to stay legible on any picture. */
+.edit-preparing {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  translate: -50% 0;
+  padding: var(--space-1) var(--space-2);
+  background: rgb(0 0 0 / 0.72);
+  color: var(--text-secondary);
+  font: var(--type-xs) / var(--leading-body) var(--font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
 .edit-edge-labels {
   position: absolute;
   inset: 0;

@@ -23,7 +23,7 @@ import { ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
-import { connectPreview } from "./preview";
+import { connectPreview, usePreparing } from "./preview";
 import { previewRefresh } from "./previewRefresh";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
@@ -81,6 +81,7 @@ export function Viewer({
   // The footage pipeline draws the videos beneath the preview while it is active.
   const pipelineCanvas = useRef<HTMLCanvasElement>(null);
   const pipelineEnabled = usePipeline((state) => state.enabled);
+  const copies = usePreparing((state) => state.copies);
   const pipelineActive = usePipeline((state) => state.active);
   const pipelineDrawn = usePipeline((state) => state.drawn);
   useEffect(() => {
@@ -726,6 +727,13 @@ export function Viewer({
             />
           );
         })}
+        {copies && copies.ready < copies.total && (
+          <div className="edit-preparing" role="status">
+            {copies.failed
+              ? "Footage could not be prepared"
+              : `Preparing footage ${Math.floor(copies.progress * 100)}%`}
+          </div>
+        )}
         <div ref={editLabels} className="edit-edge-labels" hidden>
           <div>
             <span />
