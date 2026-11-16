@@ -2,7 +2,12 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { APIRequestContext, Page, TestInfo } from "@playwright/test";
+import type {
+  APIRequestContext,
+  Locator,
+  Page,
+  TestInfo,
+} from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { volumePoints } from "../src/shared/timeline/mix";
@@ -874,33 +879,47 @@ async function openTone(
 
 /** Where the gain line is on screen at a fraction of the clip's width. */
 /**
- * Exports the open timeline, plays it from the start, and reads the master meter and the
- * exported file's peaks at the same instants, in dBFS, failing beyond 1 dB apart.
+ * Exports the open timeline to the test's output folder and returns the file. `whileOpen` runs
+ * in the finished dialog before it closes, which resets it.
  */
-async function meterAgainstExport(
+async function exportTimeline(
   page: Page,
   request: APIRequestContext,
   info: TestInfo,
-  times: number[],
+  whileOpen?: (dialog: Locator) => Promise<void>,
 ) {
   await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/render"),
   );
-  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
   await dialog.getByRole("button", { name: "Export MP4" }).click();
   const { jobId } = z
     .object({ jobId: z.string() })
     .parse(await (await started).json());
   await expect(dialog).toContainText("Export complete.", { timeout: 90_000 });
-  const output = info.outputPath("export.mp4");
+  const output = info.outputPath(`export-${jobId}.mp4`);
   await writeFile(
     output,
     await (await request.get(`/api/render/${jobId}/download`)).body(),
   );
+  await whileOpen?.(dialog);
   await dialog.getByRole("button", { name: "Close dialog" }).click();
+  return output;
+}
+
+/**
+ * Plays the open timeline from the start and reads the master meter and the exported file's
+ * peaks at the same instants, in dBFS, failing beyond 1 dB apart.
+ */
+async function meterAgainst(
+  page: Page,
+  info: TestInfo,
+  output: string,
+  times: number[],
+) {
   await page.getByRole("region", { name: "Viewer", exact: true }).click();
   await page.keyboard.press("Home");
   await page.keyboard.press("Space");
@@ -943,8 +962,11 @@ async function meterAgainstExport(
       time: sample.time,
       previewDb: [sample.l, sample.r].map((level) => 20 * Math.log10(level)),
       exportDb: exported.map((level) => 20 * Math.log10(level)),
-      differenceDb: [sample.l, sample.r].map(
-        (level, index) => 20 * Math.log10(level / exported[index]!),
+      // A channel silent in both reads as no difference.
+      differenceDb: [sample.l, sample.r].map((level, index) =>
+        level < 1e-4 && exported[index]! < 1e-4
+          ? 0
+          : 20 * Math.log10(level / exported[index]!),
       ),
     });
   }
@@ -956,6 +978,14 @@ async function meterAgainstExport(
     for (const db of differenceDb) expect(Math.abs(db)).toBeLessThan(1);
   return evidence;
 }
+
+/** Exports, then compares the meter with the file at `times`. */
+const meterAgainstExport = async (
+  page: Page,
+  request: APIRequestContext,
+  info: TestInfo,
+  times: number[],
+) => meterAgainst(page, info, await exportTimeline(page, request, info), times);
 
 const lineAt = (page: Page, fraction: number) =>
   page
@@ -1566,4 +1596,142 @@ test("an effect chain built in the inspector and a track's effects play alike in
   const evidence = await meterAgainstExport(page, request, info, [2, 5, 8]);
   // A 0.75 tone is -2.5 dBFS and -6 dB of gain leaves -8.5; the limiter brings it to about -17.
   for (const { exportDb } of evidence) expect(exportDb[0]!).toBeLessThan(-15);
+});
+
+test("Duck under voice lowers a music bed only while the voice speaks, Normalize loudness sets clip gain, and a measured export normalizes the mix to -16 LUFS", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(240_000);
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Voice over music", duration: 10 },
+      })
+    ).json(),
+  );
+  // The voice speaks 1-3 s and 6-8 s on the left; the music plays throughout on the right.
+  for (const [name, expression] of [
+    ["Narration.wav", "0.2*sin(2*PI*440*t)*(between(t,1,3)+between(t,6,8))|0"],
+    ["Music.wav", "0|0.5*sin(2*PI*110*t)"],
+  ] as const)
+    await exec("ffmpeg", [
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      `aevalsrc='${expression}':d=10:s=48000`,
+      join(project.path, name),
+    ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    '<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="240" data-duration="10" data-fps="30"><audio id="narration" src="Narration.wav" data-start="0" data-duration="10" data-track-index="1"></audio><audio id="music" src="Music.wav" data-start="0" data-duration="10" data-track-index="2"></audio></main></body></html>',
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const clip = async (id: string) =>
+    (await read()).timeline.clips.find((each) => each.id === id)!;
+  await defaultAudioRows(request, api);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await settledPpf(page);
+  const fps = (await read()).timeline.fps;
+  const initial = (await read()).timeline;
+
+  await page
+    .locator('[data-clip="music"]')
+    .click({ button: "right", position: { x: 40, y: 7 } });
+  await page.getByRole("menuitem", { name: "Duck under voice" }).click();
+  await expect
+    .poll(async () => volumePoints((await clip("music")).automation, fps))
+    .not.toBeNull();
+  const duck = volumePoints((await clip("music")).automation, fps)!;
+  const at = (frame: number) => {
+    const after = duck.findIndex((point) => point.frame >= frame);
+    const [a, b] = [duck[after - 1]!, duck[after]!];
+    return b.frame === frame
+      ? b.gain
+      : a.gain + ((b.gain - a.gain) * (frame - a.frame)) / (b.frame - a.frame);
+  };
+  const down = 10 ** (-12 / 20);
+  // Down by 12 dB under each phrase, up again in the 3 s between them and at the ends.
+  for (const [frame, gain] of [
+    [0, 1],
+    [60, down],
+    [135, 1],
+    [210, down],
+    [290, 1],
+  ] as const)
+    expect(at(frame)).toBeCloseTo(gain, 2);
+  await expect(
+    page.locator('[data-clip-mix="music"] [data-point]'),
+  ).toHaveCount(duck.length);
+  await page.screenshot({ path: info.outputPath("ducked.png") });
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await read()).timeline).toEqual(initial);
+  await page.keyboard.press("Control+Shift+z");
+  await expect
+    .poll(async () => volumePoints((await clip("music")).automation, fps))
+    .toEqual(duck);
+
+  await page
+    .locator('[data-clip="narration"]')
+    .click({ button: "right", position: { x: 40, y: 7 } });
+  await page
+    .getByRole("menuitem", { name: "Normalize loudness to -16 LUFS" })
+    .click();
+  await expect
+    .poll(async () => (await clip("narration")).volume)
+    .not.toBeNull();
+  const voiceGain = (await clip("narration")).volume!;
+
+  // A measured export normalizes the mix; the next export reaches -16 LUFS.
+  const lufs = async (dialog: Locator) => {
+    const row = dialog.getByText(/^-?\d+\.\d LUFS/);
+    await expect(row).toBeVisible();
+    return Number.parseFloat((await row.textContent())!);
+  };
+  let before = 0;
+  await exportTimeline(page, request, info, async (dialog) => {
+    before = await lufs(dialog);
+    await dialog
+      .getByRole("button", { name: "Normalize mix to -16 LUFS" })
+      .click();
+    await expect(dialog).toContainText("Export again to hear it.");
+  });
+  expect((await read()).timeline.masterFx?.[0]?.params.gain).toBeCloseTo(
+    -16 - before,
+    1,
+  );
+  let after = 0;
+  const normalized = await exportTimeline(
+    page,
+    request,
+    info,
+    async (dialog) => {
+      after = await lufs(dialog);
+      await page.screenshot({ path: info.outputPath("normalized.png") });
+    },
+  );
+  expect(Math.abs(after + 16)).toBeLessThan(0.5);
+  // The voice is left and the bed right, so the meter and the file show each on its own.
+  const evidence = await meterAgainst(page, info, normalized, [2, 4.5, 7]);
+
+  await writeFile(
+    info.outputPath("duck-loudness.json"),
+    JSON.stringify(
+      {
+        duck,
+        voiceGainDb: 20 * Math.log10(voiceGain),
+        meterAgainstExport: evidence,
+        mixLufs: { before, after },
+      },
+      null,
+      2,
+    ),
+  );
 });

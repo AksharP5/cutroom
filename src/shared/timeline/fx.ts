@@ -213,3 +213,32 @@ export function compactFxNode(node: FxNode) {
     ...(Object.keys(params).length && { params }),
   };
 }
+
+/** The master bus effect that carries the mix's loudness normalization. */
+export const LOUDNESS_FX_ID = "loudness";
+
+/**
+ * The master chain with its loudness gain set so a mix measured at `lufs` reaches `target`. The
+ * measured mix already includes the current loudness gain, so the change adds to it; gain stays
+ * within the gain effect's range.
+ */
+export function mixLoudnessFx(
+  masterFx: readonly FxNode[],
+  lufs: number,
+  target: number,
+): FxInput[] {
+  const current = masterFx.find((node) => node.id === LOUDNESS_FX_ID);
+  const before = current?.enabled ? Number(current.params.gain ?? 0) : 0;
+  const gain =
+    Math.round(Math.min(12, Math.max(-60, before + target - lufs)) * 10) / 10;
+  return [
+    ...masterFx.filter((node) => node.id !== LOUDNESS_FX_ID).map(fxInput),
+    {
+      id: LOUDNESS_FX_ID,
+      type: "gain",
+      label: "Loudness",
+      enabled: true,
+      params: { gain },
+    },
+  ];
+}

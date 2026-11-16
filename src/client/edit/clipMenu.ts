@@ -17,6 +17,9 @@ export function clipMenuItems({
   onInspector,
   onCopyStyle,
   onPasteStyle,
+  onDuck,
+  onNormalize,
+  clicked,
 }: {
   timeline: Timeline;
   selection: ReadonlySet<string>;
@@ -32,10 +35,19 @@ export function clipMenuItems({
   onInspector(): void;
   onCopyStyle(title: Clip): void;
   onPasteStyle(titles: Clip[]): void;
+  /** Ducks the clip under the voice: the other selected clips, or every voice over it. */
+  onDuck(bed: Clip, voices: Clip[]): void;
+  /** Sets each clip's gain so it measures -16 LUFS. */
+  onNormalize(clips: Clip[]): void;
+  /** The clip a right-click landed on, which Duck under voice lowers. */
+  clicked?: Clip;
 }): MenuItem[] {
   const clips = timeline.clips.filter((clip) => selection.has(clip.id));
   const none = clips.length === 0;
   const titles = clips.filter((clip) => clip.title);
+  const sound = clips.filter((clip) => clip.hasAudio);
+  const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
+  const voices = sound.filter((clip) => clip !== bed);
   return [
     { action: "editCut", disabled: none },
     { action: "editCopy", disabled: none },
@@ -68,6 +80,21 @@ export function clipMenuItems({
             label: "Paste style",
             run: () => onPasteStyle(titles),
             disabled: !titleStyle,
+          },
+        ]
+      : []),
+    ...(bed
+      ? [
+          "separator" as const,
+          {
+            label: voices.length
+              ? "Duck under the selected voice"
+              : "Duck under voice",
+            run: () => onDuck(bed, voices),
+          },
+          {
+            label: "Normalize loudness to -16 LUFS",
+            run: () => onNormalize(sound),
           },
         ]
       : []),

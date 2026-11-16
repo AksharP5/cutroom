@@ -14,6 +14,9 @@ import type { Timeline, TimelineView } from "../../shared/timeline/schema";
 export function agentTimeline(timeline: Timeline) {
   return {
     ...timeline,
+    ...(timeline.masterFx && {
+      masterFx: timeline.masterFx.map(compactFxNode),
+    }),
     tracks: timeline.tracks.map((track) => ({
       ...track,
       fx: track.fx.map(compactFxNode),

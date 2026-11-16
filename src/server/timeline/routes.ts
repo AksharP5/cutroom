@@ -73,6 +73,12 @@ import {
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
+import {
+  DuckRequestSchema,
+  LoudnessRequestSchema,
+  duckPlan,
+  loudnessPlan,
+} from "./audio";
 import { declaredFonts, undeclaredFontReason } from "./titles";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
@@ -518,6 +524,24 @@ export function createTimelineRoutes(
     } catch (error) {
       return refused(c, error);
     }
+  });
+  // Mix plans are measured here, where the media is, and applied as ordinary commands by the editor or
+  // an agent, so each is one undo step through the same path as any edit.
+  api.post("/projects/:id/audio/duck", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const input = parseInput(DuckRequestSchema, await c.req.json());
+    const { parsed } = await read(project, composition);
+    return c.json(await duckPlan(project, composition, parsed.timeline, input));
+  });
+  api.post("/projects/:id/audio/loudness", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const input = parseInput(LoudnessRequestSchema, await c.req.json());
+    const { parsed } = await read(project, composition);
+    return c.json(
+      await loudnessPlan(project, composition, parsed.timeline, input),
+    );
   });
   // Which clips the viewer's footage pipeline may draw; only the entry composition has one.
   api.get("/projects/:id/pipeline", async (c) => {

@@ -1170,6 +1170,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ],
       };
     }
+    case "setMaster": {
+      const masterFx = buildFxChain(timeline.masterFx ?? [], command.fx);
+      const { masterFx: _, ...rest } = timeline;
+      return masterFx.length ? { ...rest, masterFx } : rest;
+    }
     case "removeTrack": {
       const track = timeline.tracks.find(
         (track) => track.index === command.index,

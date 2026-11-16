@@ -77,6 +77,8 @@ const rows = (
     onInspector() {},
     onCopyStyle() {},
     onPasteStyle() {},
+    onDuck() {},
+    onNormalize() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 

@@ -409,6 +409,8 @@ export function editLabel(
             : "")
         );
       }
+      case "setMaster":
+        return "Set mix effects";
       case "removeTrack":
         return pending
           ? `Remove empty ${trackName(command.index)}`

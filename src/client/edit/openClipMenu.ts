@@ -1,10 +1,41 @@
 import type { Clip } from "../../shared/timeline/schema";
 import { openContextMenu } from "../components/ContextMenu";
-import { useWorkspace } from "../workspace";
+import { showToast, useWorkspace } from "../workspace";
+import { z } from "zod";
+import { CommandSchema } from "../../shared/timeline/schema";
+import { ApiError, api, json } from "../api";
 import { clipMenuItems } from "./clipMenu";
-import { hasClipboard, useTimeline } from "./timeline";
+import { editTimeline, hasClipboard, useTimeline } from "./timeline";
 import { copyTitleStyle, hasTitleStyle, pasteTitleStyle } from "./titleStyle";
 import { useTransport } from "./transport";
+
+const PlanSchema = z.object({
+  label: z.string(),
+  commands: z.array(CommandSchema),
+});
+
+/**
+ * Measures the audio a mix edit needs on the server, where the media is, then applies its
+ * commands as one undo step, like any edit. A refusal says why in a toast.
+ */
+async function applyPlan(
+  projectId: string,
+  composition: string,
+  kind: "duck" | "loudness",
+  request: object,
+) {
+  try {
+    const plan = await api(
+      `/projects/${encodeURIComponent(projectId)}/audio/${kind}?composition=${encodeURIComponent(composition)}`,
+      PlanSchema,
+      json("POST", request),
+    );
+    await editTimeline(projectId, plan.label, () => plan.commands);
+  } catch (error) {
+    if (!(error instanceof ApiError)) throw error;
+    showToast(error.message);
+  }
+}
 
 /** The Media row listing a clip's file, when the panel shows it. */
 function mediaRow(clip: Clip | undefined) {
@@ -51,6 +82,16 @@ export function openClipMenu(
           projectId,
           titles.map((title) => title.id),
         ),
+      clicked,
+      onDuck: (bed, voices) =>
+        void applyPlan(projectId, view.composition, "duck", {
+          bed: bed.id,
+          ...(voices.length && { voices: voices.map((voice) => voice.id) }),
+        }),
+      onNormalize: (clips) =>
+        void applyPlan(projectId, view.composition, "loudness", {
+          clipIds: clips.map((clip) => clip.id),
+        }),
     }),
     anchor,
   );

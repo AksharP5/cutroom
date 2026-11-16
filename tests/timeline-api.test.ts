@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import { parseAutomation } from "@hyperframes/core/audio-automation";
+import { volumePoints } from "../src/shared/timeline/mix";
 import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
@@ -2036,3 +2037,105 @@ test("missing or malformed view preferences use defaults and do not block timeli
     await fixture.close();
   }
 });
+
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
+  "agents duck a bed under a voice and normalize a clip's loudness with the server's measurements, each in one undo step",
+  async () => {
+    const fixture = await timelineFixture();
+    const { project } = fixture;
+    // Speech 1-2 s and 5-6 s over a 7 s bed; the voice alone measures well under -16 LUFS.
+    for (const [name, expression] of [
+      ["voice.wav", "0.1*sin(2*PI*440*t)*(between(t,1,2)+between(t,5,6))"],
+      ["music.wav", "0.3*sin(2*PI*110*t)"],
+    ])
+      expect(
+        Bun.spawnSync([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          `aevalsrc='${expression}':d=7:s=48000`,
+          join(project.path, name!),
+        ]).exitCode,
+      ).toBe(0);
+    await writeFile(
+      join(project.path, "index.html"),
+      `<main data-composition-id="main" data-duration="7" data-fps="30"><audio id="voice" src="voice.wav" data-start="0" data-duration="7" data-track-index="0"></audio><audio id="music" src="music.wav" data-start="0" data-duration="7" data-track-index="1"></audio></main>`,
+    );
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: createMcpHttpHandler({
+        fetch: (url, init) => fixture.app.request(url, init),
+      }),
+    });
+    const client = new Client({ name: "audio-test", version: "1" });
+    const reply = z.object({
+      structuredContent: z.object({
+        result: z.looseObject({
+          measured: z.looseObject({}),
+          changes: z.looseObject({}),
+        }),
+      }),
+    });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://127.0.0.1:${server.port}/mcp`),
+        ),
+      );
+      const timeline = async () =>
+        TimelineViewSchema.parse(
+          await (
+            await fixture.request(`/projects/${project.id}/timeline`)
+          ).json(),
+        ).timeline;
+      const initial = await timeline();
+      const ducked = reply.parse(
+        await client.callTool({
+          name: "audio_duck",
+          arguments: { projectId: project.id, bed: "music" },
+        }),
+      ).structuredContent.result;
+      expect(ducked.measured).toMatchObject({ voices: ["voice"], speech: 2 });
+      const music = (await timeline()).clips.find(({ id }) => id === "music")!;
+      const points = volumePoints(music.automation, initial.fps)!;
+      const level = (frame: number) =>
+        points.find((point) => point.frame >= frame)!.gain;
+      // Down 12 dB through each phrase, back at full level between them.
+      expect(level(45)).toBeCloseTo(10 ** (-12 / 20), 3);
+      expect(level(105)).toBe(1);
+      expect(level(165)).toBeCloseTo(10 ** (-12 / 20), 3);
+      const normalized = reply.parse(
+        await client.callTool({
+          name: "audio_loudness",
+          arguments: { projectId: project.id, clipIds: ["voice"] },
+        }),
+      ).structuredContent.result;
+      const [measured] = z
+        .object({
+          clips: z.array(
+            z.object({
+              measured: z.number(),
+              volume: z.number(),
+              reaches: z.number(),
+            }),
+          ),
+        })
+        .parse(normalized.measured).clips;
+      expect(measured!.reaches).toBe(-16);
+      expect(
+        (await timeline()).clips.find(({ id }) => id === "voice")!.volume,
+      ).toBeCloseTo(10 ** ((-16 - measured!.measured) / 20), 4);
+      await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+      await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+      expect(await timeline()).toEqual(initial);
+    } finally {
+      await client.close();
+      server.stop(true);
+      await fixture.close();
+    }
+  },
+);
