@@ -175,6 +175,11 @@ export interface RowSizes {
   divider: number;
   dropZones?: boolean;
   heights?: Readonly<Record<string, number>>;
+  /**
+   * Room for the tracks. When they leave some of it empty, audio tracks at the default height
+   * share it, each up to `audio` tall, in whole pixels.
+   */
+  fill?: { height: number; audio: number };
 }
 export interface RowLayout {
   rows: Row[];
@@ -198,6 +203,25 @@ export function trackRows(
   const nextIndex = nextTrackIndex(all);
   const videoHeight = sizes.heights?.[nextIndex] ?? sizes.video;
   const audioHeight = sizes.heights?.[nextIndex] ?? sizes.audio;
+  const height = (track: Track) =>
+    sizes.heights?.[track.index] ??
+    (track.kind === "video" ? sizes.video : sizes.audio);
+  const growing = audio.filter((track) => !sizes.heights?.[track.index]);
+  const spare = sizes.fill
+    ? sizes.fill.height -
+      all.reduce((total, track) => total + height(track) + sizes.seam, 0) -
+      sizes.divider
+    : 0;
+  const grow =
+    sizes.fill && spare > 0 && growing.length
+      ? Math.max(
+          0,
+          Math.min(
+            sizes.fill.audio - sizes.audio,
+            Math.floor(spare / growing.length),
+          ),
+        )
+      : 0;
   const rows: Row[] = [];
   // The upper drop target overlays the ruler. Its preview occupies the future top row.
   let top = 0;
@@ -217,7 +241,7 @@ export function trackRows(
       track,
       id: `A${index + 1}`,
       top,
-      height: sizes.heights?.[track.index] ?? sizes.audio,
+      height: sizes.heights?.[track.index] ?? sizes.audio + grow,
     });
     top += rows.at(-1)!.height + sizes.seam;
   }

@@ -95,6 +95,12 @@ for (const dpr of [1, 2])
           },
           [id, up] as const,
         );
+      /** Pixels from a clip's bottom to the middle of its lane, where a waveform is centred. */
+      const middle = async (id: string) =>
+        Math.round(
+          (await timeline.locator(`[data-clip="${id}"]`).boundingBox())!
+            .height / 2,
+        );
       const isRed = ({ red, green, blue }: Awaited<ReturnType<typeof drawn>>) =>
         red > 200 && green < 60 && blue < 60;
 
@@ -108,8 +114,10 @@ for (const dpr of [1, 2])
       expect(isRed(await drawn("silent", 3))).toBe(true);
       // The audio clip's waveform runs through the middle of its body, and nowhere near its edge.
       for (const id of ["bed", "location"]) {
-        await expect.poll(async () => (await drawn(id, 14)).alpha).toBe(255);
-        const wave = await drawn(id, 14);
+        await expect
+          .poll(async () => (await drawn(id, await middle(id))).alpha)
+          .toBe(255);
+        const wave = await drawn(id, await middle(id));
         expect(wave.green).toBeGreaterThan(wave.red);
         expect((await drawn(id, 3)).alpha).toBe(0);
       }
@@ -117,7 +125,9 @@ for (const dpr of [1, 2])
       await page.getByRole("option", { name: "Compact", exact: true }).click();
       await expect.poll(async () => isRed(await drawn("sound", 3))).toBe(true);
       await expect
-        .poll(async () => (await drawn("location", 8)).alpha)
+        .poll(
+          async () => (await drawn("location", await middle("location"))).alpha,
+        )
         .toBe(255);
       const resizer = page.getByRole("separator", { name: "Height V4" });
       const border = (await resizer.boundingBox())!;

@@ -64,6 +64,7 @@ export function createBodies(
   const token = (name: string) => style.getPropertyValue(name).trim();
   const tokens = {
     name: parseFloat(token("--size-clip-name")),
+    rail: parseFloat(token("--stroke-rail")),
     locked: Number(token("--track-locked-opacity")),
     seam: token("--clip-filmstrip-seam"),
     scrim: token("--clip-video-body"),
@@ -405,7 +406,9 @@ export function createBodies(
     for (const row of rowsBetween(scene.rows, top, bottom)) {
       const track = scene.tracks.get(row.track.index);
       if (!track) continue;
-      const y0 = Math.round((row.top + 1 + tokens.name) * dpr) - originY;
+      // Sound has no name strip: its waveform takes the lane under the kind rail.
+      const strip = row.track.kind === "audio" ? tokens.rail : tokens.name;
+      const y0 = Math.round((row.top + 1 + strip) * dpr) - originY;
       const y1 = Math.round((row.top + row.height - 1) * dpr) - originY;
       const inView =
         row.top < visible.y.to && row.top + row.height > visible.y.from;

@@ -631,6 +631,7 @@ test("gain follows the pointer, Shift adjusts finely, horizontal presses move cl
     ).timeline;
   const music = async () =>
     (await read()).clips.find((clip) => clip.id === "music")!;
+  await defaultAudioRows(request, api);
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator("iframe[data-live]")).toBeVisible();
   const initial = await read();
@@ -806,6 +807,24 @@ test("cold audio starting at five seconds drives meters, clipping latches until 
 });
 
 /** A project with one 10 s tone on a default audio row, opened and settled. */
+/**
+ * The gain scale is pinned at the default audio row. With so few tracks the timeline has spare
+ * room, which would otherwise grow the row and give each pixel a different step.
+ */
+async function defaultAudioRows(request: APIRequestContext, api: string) {
+  const { timeline } = TimelineViewSchema.parse(
+    await (await request.get(`${api}/timeline`)).json(),
+  );
+  const heights = Object.fromEntries(
+    timeline.tracks
+      .filter((track) => track.kind === "audio")
+      .map((track) => [String(track.index), 44]),
+  );
+  expect(
+    (await request.put(`${api}/timeline-view`, { data: { heights } })).ok(),
+  ).toBe(true);
+}
+
 async function openTone(
   page: Page,
   request: APIRequestContext,
@@ -837,6 +856,7 @@ async function openTone(
     TimelineViewSchema.parse(
       await (await request.get(`${api}/timeline`)).json(),
     );
+  await defaultAudioRows(request, api);
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator("iframe[data-live]")).toBeVisible();
   await settledPpf(page);

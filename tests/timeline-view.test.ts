@@ -269,6 +269,30 @@ test("video tracks stack upward from the divider and audio downward", () => {
   ]);
 });
 
+test("empty room below the tracks goes to audio tracks at the default height, up to tall", () => {
+  const sizes = { video: 56, audio: 44, seam: 1, divider: 2 };
+  const tracks = [
+    track(0),
+    track(1, { kind: "audio" }),
+    track(2, { kind: "audio" }),
+  ];
+  const heights = (room: number, custom = {}) =>
+    trackRows(tracks, {
+      ...sizes,
+      heights: custom,
+      fill: { height: room, audio: 80 },
+    }).rows.map((row) => row.height);
+  // 57 + 2 + 45 + 45 fills 149px exactly.
+  expect(heights(149)).toEqual([56, 44, 44]);
+  // 31 spare pixels are shared in whole pixels; the last one stays empty.
+  expect(heights(180)).toEqual([56, 59, 59]);
+  expect(heights(1000)).toEqual([56, 80, 80]);
+  // Too little room never shrinks a track.
+  expect(heights(100)).toEqual([56, 44, 44]);
+  // A track the user sized keeps its height; the others share the room.
+  expect(heights(180, { 1: 50 })).toEqual([56, 50, 69]);
+});
+
 test("new-track bands use the same row geometry as the created tracks", () => {
   const tracks = [track(0), track(1, { kind: "audio" })];
   for (const height of [28, 200]) {
