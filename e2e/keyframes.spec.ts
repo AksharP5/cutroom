@@ -205,10 +205,10 @@ test("Resolve's keyframe keys add, hold, step between and delete keyframes, and 
     "data-ease",
     "hold",
   );
-  expect((await keyframes())!.position!.map(({ ease }) => ease)).toEqual([
-    "linear",
-    "hold",
-  ]);
+  // The diamond draws before the edit saves; wait for the saved keyframes.
+  await expect
+    .poll(async () => (await keyframes())?.position?.map(({ ease }) => ease))
+    .toEqual(["linear", "hold"]);
 
   // [ and ] step between them.
   await seekFrame(page, 0);
@@ -229,7 +229,7 @@ test("Resolve's keyframe keys add, hold, step between and delete keyframes, and 
   // Alt+] deletes the keyframes under the playhead.
   await page.keyboard.press("Alt+BracketRight");
   await expect(page.locator('[data-keyframe="box:10"]')).toHaveCount(0);
-  expect((await keyframes())!.position!.map(({ frame }) => frame)).toEqual([
-    40,
-  ]);
+  await expect
+    .poll(async () => (await keyframes())?.position?.map(({ frame }) => frame))
+    .toEqual([40]);
 });
