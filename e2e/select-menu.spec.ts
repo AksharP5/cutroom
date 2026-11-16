@@ -74,7 +74,10 @@ test("the quality listbox opens from the keyboard, navigates, selects and return
   await trigger.press("Space");
   await page.keyboard.press("Tab");
   await expect(list).toBeHidden();
-  await expect(dialog.getByLabel("File name", { exact: true })).toBeFocused();
+  // Tab leaves the menu for the next field, the Size menu.
+  await expect(
+    dialog.getByRole("combobox", { name: "Size", exact: true }),
+  ).toBeFocused();
   await page.emulateMedia({ reducedMotion: "reduce" });
   await trigger.click();
   const motion = await list.evaluate((element) => {
