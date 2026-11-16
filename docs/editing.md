@@ -120,6 +120,14 @@ A direct cut removes the selected words' source intervals, splits the media elem
 
 Direct script edits currently require a local, independently timed media element. Nested timed scenes, linked media, independently changed split pieces, and media-specific scripted animation are refused rather than rewritten ambiguously. Use the agent handoff for those edits.
 
+### Captions
+
+**Add captions** writes the transcript's words to `compositions/captions.html`, a HyperFrames sub-composition, and places it as one clip on a new Captions track above the others. The style menu switches between Karaoke, Word highlight and Plain without changing timing. **Edit caption** on a selected word changes only how captions show it. **SRT** and **VTT** download the lines in composition time. Each of these is one undo step, and agents do the same with `captions_edit` and `captions_export` ([details](mcp.md#captions)).
+
+Captions follow where the words play now, not the raw recording. A script cut or restore rewrites them in the same undo step. A razor, ripple delete, move or trim of the footage on the timeline leaves them as they were and shows **Update captions**, which rewrites them and keeps word corrections and the style. Updating replaces hand edits to the captions file.
+
+The preview and export run the same captions file through the same runtime, with no script, so a frame looks the same in both.
+
 ## Timeline commands
 
 Cutroom never rewrites animation scripts when editing the timeline. Root GSAP tween positions are absolute composition seconds. HyperFrames does not add a clip's `data-start`: a root tween at 4 seconds still plays at 4 seconds after its clip moves to 6.

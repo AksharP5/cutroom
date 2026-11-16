@@ -232,13 +232,23 @@ export function transcriptView(transcript: Transcript, document?: Document) {
   const words = transcript.words.map((word) => {
     while (rangeIndex < ranges.length && word.start >= ranges[rangeIndex]!.end)
       rangeIndex++;
-    let timelineStart: number | null = null;
     const range = ranges[rangeIndex];
-    if (range && word.start >= range.start - 0.001 && word.start < range.end)
-      timelineStart = round(
-        range.timelineStart + (word.start - range.start) / range.rate,
-      );
-    return { ...word, cut: cutIds.has(word.id), timelineStart };
+    if (!range || word.start < range.start - 0.001 || word.start >= range.end)
+      return {
+        ...word,
+        cut: cutIds.has(word.id),
+        timelineStart: null,
+        timelineEnd: null,
+      };
+    const at = (time: number) =>
+      round(range.timelineStart + (time - range.start) / range.rate);
+    return {
+      ...word,
+      cut: cutIds.has(word.id),
+      timelineStart: at(word.start),
+      // A word cut short by the end of its piece ends there.
+      timelineEnd: at(Math.min(word.end, range.end)),
+    };
   });
   return {
     ...transcript,

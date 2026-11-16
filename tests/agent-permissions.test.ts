@@ -27,6 +27,8 @@ const reads = [
   "source_read",
   "transcripts_list",
   "transcription_status",
+  "captions_list",
+  "captions_export",
   "history_list",
   "review_list",
   "export_status",

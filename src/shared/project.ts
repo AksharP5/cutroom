@@ -71,6 +71,8 @@ export const TranscriptViewSchema = TranscriptSchema.extend({
     WordSchema.extend({
       cut: z.boolean(),
       timelineStart: z.number().nullable(),
+      /** Where the word stops on the timeline; null with `timelineStart`. */
+      timelineEnd: z.number().nullable(),
     }),
   ),
   duration: z.number().nonnegative(),

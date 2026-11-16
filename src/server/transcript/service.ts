@@ -32,6 +32,7 @@ import { projectPath, readSource } from "../projects/store";
 import { projectWritePath } from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import { localMediaPath } from "../../shared/media";
+import { followTranscript } from "../captions/project";
 import {
   applyTranscriptCuts,
   originalClip,
@@ -335,12 +336,24 @@ export function createTranscriptService(
         // The original piece and every old piece leave the file, so their ids are spent too.
         await recordClipIds(project, used);
         transcript.cutWordIds = nextIds;
+        // Captions of these words follow the cut in the same undo step.
+        const captions = await followTranscript(
+          project,
+          transcript,
+          transcript.sourceFile,
+          after,
+        ).catch((error: unknown) => {
+          // Captions that cannot be read back stay as they are; the cut still applies.
+          if (error instanceof HttpError) return null;
+          throw error;
+        });
         await store.writeDocument(project, document, [
+          ...(captions?.files ?? []),
           {
             sourceFile: transcript.sourceFile,
             absPath: await projectWritePath(project, transcript.sourceFile),
             before: source.content,
-            after,
+            after: captions?.html ?? after,
             expectedVersion: source.version,
           },
         ]);

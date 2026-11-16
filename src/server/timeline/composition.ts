@@ -1177,6 +1177,28 @@ function textEdit(
   };
 }
 
+/**
+ * Sets or removes attributes on the element with `id`, rewriting only those attributes' bytes so
+ * every other byte of the file stays as written. Null when no element has that id.
+ */
+export function setElementAttributes(
+  html: string,
+  id: string,
+  changes: readonly AttributeChange[],
+): string | null {
+  const element = [...descendants(parseElements(html).roots)].find(
+    (item) => item.attrs.id === id,
+  );
+  if (!element) return null;
+  const spans = new Map(
+    scanHtmlOpeningTags(html).map((span) => [span.start, span]),
+  );
+  return applyEdits(
+    html,
+    attributeEdits(openingTag(spans, element, id), html, [...changes]),
+  );
+}
+
 /** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */
 export function applyTrackMix(parsed: ParsedComposition): string {
   const { html, timeline } = parsed;

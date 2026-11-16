@@ -155,6 +155,22 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "the transcription",
   },
+  captions_list: { verb: read, kind: "project", object: () => "the captions" },
+  captions_edit: {
+    verb: edited,
+    kind: "edit",
+    object: (target) => (target ? `the captions of ${target}` : "the captions"),
+  },
+  captions_export: {
+    verb: ["Exported", "Exporting", "Export"],
+    kind: "project",
+    object: (target) => (target ? `the captions of ${target}` : "the captions"),
+  },
+  subtitles_import: {
+    verb: ["Imported", "Importing", "Import"],
+    kind: "edit",
+    object: (target) => (target ? `subtitles for ${target}` : "subtitles"),
+  },
   history_list: { verb: read, kind: "project", object: () => "the history" },
   history_undo: {
     verb: ["Undid", "Undoing", "Undo"],
