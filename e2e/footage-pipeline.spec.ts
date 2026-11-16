@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Browser, Page } from "@playwright/test";
@@ -17,11 +17,16 @@ const HEIGHT = 360;
 /** Each frame carries its own number as 16 bits along the top, white for 1. */
 const BAND = 32;
 
-/** Five seconds of footage at `rate` whose frames are numbered in the top band. */
+/**
+ * Five seconds of footage at `rate` whose frames are numbered in the top band, stored as `tail`
+ * leaves them (pixel format and colour tags).
+ */
 async function numbered(
   path: string,
   rate: string,
   size = `${WIDTH}x${HEIGHT}`,
+  tail = "format=yuv420p",
+  encoder = ["-g", "15"],
 ) {
   const width = Number(size.split("x")[0]);
   const band = (BAND * width) / WIDTH;
@@ -34,8 +39,8 @@ async function numbered(
     ...["-v", "error", "-y", "-f", "lavfi", "-i"],
     `testsrc2=size=${size}:rate=${rate}:duration=5`,
     "-vf",
-    `drawbox=x=0:y=0:w=${width}:h=${band}:color=black:t=fill,${bits.join(",")},format=yuv420p`,
-    ...["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-g", "15"],
+    `drawbox=x=0:y=0:w=${width}:h=${band}:color=black:t=fill,${bits.join(",")},${tail}`,
+    ...["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", ...encoder],
     path,
   ]);
 }
@@ -181,13 +186,9 @@ async function pictures(
  * difference under 4/255 and each channel's bias under 1.5/255. A wrong frame, matrix, range,
  * placement or opacity moves the picture far more.
  */
-async function expectSamePictures(
-  page: Page,
-  expected: string[],
-  actual: string[],
-  frames: number[],
-) {
-  const results = await page.evaluate(
+/** Each pair's frame numbers, mean difference and per-channel bias, out of 255. */
+function compare(page: Page, expected: string[], actual: string[]) {
+  return page.evaluate(
     async ({ expected, actual, band, height }) => {
       const read = async (base64: string) => {
         const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -231,6 +232,15 @@ async function expectSamePictures(
     },
     { expected, actual, band: BAND, height: HEIGHT },
   );
+}
+
+async function expectSamePictures(
+  page: Page,
+  expected: string[],
+  actual: string[],
+  frames: number[],
+) {
+  const results = await compare(page, expected, actual);
   console.log(
     "PARITY",
     JSON.stringify(
@@ -490,4 +500,108 @@ test("a clip the pipeline cannot draw plays in HyperFrames on top while the pipe
   );
   await numbered(join(created.path, "a.mp4"), "30");
   await parity(browser, created, 30, [10, 30, 40, 59, 60, 70]);
+});
+
+test("the footage pipeline draws phone and camera footage as HyperFrames does: turned portrait, Android's full-range colour and open GOPs", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(240_000);
+  const fps = { num: 30, den: 1 };
+  const fit = `${fill};object-fit:contain`;
+  const created = await project(request, fps, (seconds) =>
+    [
+      `<video id="v0" src="phone.mp4" muted data-start="0" data-duration="${seconds(30)}" data-media-start="0" data-track-index="0" style="${fit}"></video>`,
+      `<video id="v1" src="android.mp4" muted data-start="${seconds(30)}" data-duration="${seconds(30)}" data-media-start="${seconds(47)}" data-track-index="0" style="${fit}"></video>`,
+      `<video id="v2" src="camera.mov" muted data-start="${seconds(60)}" data-duration="${seconds(50)}" data-media-start="${seconds(28)}" data-track-index="0" style="${fit}"></video>`,
+    ].join("\n"),
+  );
+  // A phone stores its picture landscape and turns it with the track's matrix.
+  const stored = join(created.path, "stored.mp4");
+  await numbered(stored, "30");
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-y", "-display_rotation:v:0", "90", "-i", stored],
+    ...["-c", "copy", join(created.path, "phone.mp4")],
+  ]);
+  // Full-range BT.601 with EBU primaries in a colr box, which Chrome converts to the screen's gamut.
+  await numbered(
+    join(created.path, "android.mp4"),
+    "30",
+    undefined,
+    "scale=out_range=full,format=yuvj420p,setparams=range=pc:color_primaries=bt470bg:color_trc=smpte170m:colorspace=bt470bg",
+  );
+  // An open GOP: the frames shown just before each keyframe refer to the GOP before it, so
+  // decoding from their own keyframe never puts them out.
+  await numbered(join(created.path, "camera.mov"), "30", undefined, undefined, [
+    ...["-g", "30", "-bf", "3", "-x264-params", "open-gop=1:b-pyramid=none"],
+  ]);
+  await parity(browser, created, 30, [0, 29, 30, 59, 100]);
+  // A seeking <video> shows the keyframe after those frames, so HyperFrames is no reference
+  // there; the pipeline shows the frames the file's timestamps name, as the export does.
+  const context = await browser.newContext({
+    viewport: { width: 1720, height: 1050 },
+  });
+  try {
+    const page = await context.newPage();
+    const shots = await pictures(page, created, 30, [60, 61, 90, 91], true);
+    const results = await compare(page, shots, shots);
+    expect(results.map(({ numbers }) => numbers[1])).toEqual([28, 29, 58, 59]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("HDR named only in the bitstream stays with HyperFrames", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const fps = { num: 30, den: 1 };
+  const created = await project(
+    request,
+    fps,
+    (seconds) =>
+      `<video id="v0" src="hdr.mp4" muted data-start="0" data-duration="${seconds(110)}" data-media-start="0" data-track-index="0" style="${fill}"></video>`,
+  );
+  // x264 writes these tags into the stream's VUI only, so the file has no colr box.
+  await numbered(
+    join(created.path, "hdr.mp4"),
+    "30",
+    undefined,
+    "format=yuv420p10le",
+  );
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-y", "-i", join(created.path, "hdr.mp4")],
+    ...["-c:v", "libx264", "-preset", "veryfast", "-x264-params"],
+    "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+    join(created.path, "pq.mp4"),
+  ]);
+  await rename(join(created.path, "pq.mp4"), join(created.path, "hdr.mp4"));
+  const context = await browser.newContext({
+    viewport: { width: 1720, height: 1050 },
+  });
+  try {
+    const page = await context.newPage();
+    const reasons: string[] = [];
+    page.on("console", (message) => {
+      if (message.text().startsWith("[pipeline]")) reasons.push(message.text());
+    });
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "true");
+    });
+    await page.goto(`/#project/${created.id}`);
+    const stage = page.locator(".edit-stage");
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    await typeFrame(page, 20, 30);
+    await expect
+      .poll(() => reasons)
+      .toContain(
+        "[pipeline] off: Wide-gamut and HDR video stays with HyperFrames.",
+      );
+    await expect(stage).toHaveAttribute("data-pipeline", "off");
+    await expect(page.locator(".edit-pipeline")).toBeHidden();
+  } finally {
+    await context.close();
+  }
 });

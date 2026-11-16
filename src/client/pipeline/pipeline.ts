@@ -78,9 +78,13 @@ async function openSource(
   const track = await readVideoTrack(read, size);
   if (!(await SourceDecoder.supported(track)))
     throw new Error(`This browser cannot decode ${track.codec}.`);
+  const turned = track.rotation % 180 !== 0;
   return {
     decoder: new SourceDecoder(track, read, size, colourOf(track)),
-    intrinsic: { width: track.width, height: track.height },
+    intrinsic: {
+      width: turned ? track.height : track.width,
+      height: turned ? track.width : track.height,
+    },
   };
 }
 
@@ -174,11 +178,13 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   const placed = (
     layer: Shown,
     frame: VideoFrame,
+    turn: Layer["turn"],
     intrinsic: Source["intrinsic"],
   ): Layer => {
     const { clip } = layer;
     return {
       frame,
+      turn,
       intrinsic,
       fit: layer.fit,
       x: clip.x ?? 0,
@@ -206,7 +212,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (!found.proxy) void found.askProxy();
         const index = found.playing.indexAt(layer.time);
         const lane = laneFor(found, index);
-        const stand = moving ? found.proxy : null;
+        // Moving seeks draw the proxy, whose frame N is the source's frame N.
+        const decoder = (moving ? found.proxy : null) ?? lane;
         return {
           layer,
           found,
@@ -219,17 +226,22 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
             !!found.proxy &&
             !lane.has(index) &&
             !lane.reaches(index),
-          // Moving seeks draw the proxy, whose frame N is the source's frame N.
-          request: (stand ?? lane).frame(index, playing),
+          decoder,
+          request: decoder.frame(index, playing),
         };
       }),
     );
-    const paint = async (frames: VideoFrame[], standIn: boolean) => {
+    const paint = async (
+      frames: VideoFrame[],
+      from: SourceDecoder[],
+      standIn: boolean,
+    ) => {
       // A page that paints nothing shows the browser's white canvas, as frame capture does.
       if (compositor.lost()) return;
       await compositor.draw(
         pictures.map(({ layer, found }, at) =>
-          placed(layer, frames[at]!, found.intrinsic),
+          // The proxy is stored upright; a phone's file may be stored turned.
+          placed(layer, frames[at]!, from[at]!.rotation, found.intrinsic),
         ),
         plan!.background ?? "#ffffff",
         plan!.width,
@@ -264,7 +276,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         ),
       ).catch(() => []);
       try {
-        if (standIns.length && !wanted) await paint(standIns, true);
+        if (standIns.length && !wanted)
+          await paint(
+            standIns,
+            pictures.map(({ cold, found, decoder }) =>
+              cold ? found.proxy! : decoder,
+            ),
+            true,
+          );
       } finally {
         for (const picture of standIns) picture.close();
       }
@@ -272,14 +291,18 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const frames = await settle(pictures.map(({ request }) => request));
     try {
       if (pictures.some(({ cold }) => cold) && wanted) return;
-      await paint(frames, false);
+      await paint(
+        frames,
+        pictures.map(({ decoder }) => decoder),
+        false,
+      );
     } finally {
       for (const picture of frames) picture.close();
     }
     for (const { found, lane, index } of pictures) {
       if (moving) continue;
       found.playing = lane;
-      if (playing) lane.prefetch(index + 1, index + 8);
+      if (playing) lane.prefetch(index + 1, index + lane.room(8));
     }
     if (playing) prepare(view, frame, LOOKAHEAD, OPENING);
     else if (!moving) prepare(view, frame, NEXT, PREPARED);
@@ -331,7 +354,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
           // The playing lane may hold it now, but drops it as the playhead moves on.
           const spare = found.lanes.find((lane) => lane !== found.playing)!;
           if (!spare.has(index) && !spare.reaches(index))
-            spare.prefetch(index, index + count - 1);
+            spare.prefetch(index, index + spare.room(count) - 1);
         })
         .catch(() => {});
     }

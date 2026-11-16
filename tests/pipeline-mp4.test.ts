@@ -23,6 +23,8 @@ async function compare(
   codec: RegExp,
   /** The `ctts` version the file must carry, when the case is about it. */
   offsets?: 0 | 1,
+  /** Rewrites the file before it is read, as another muxer would have written it. */
+  rewrite?: (bytes: Uint8Array) => void,
 ) {
   const directory = await mkdtemp(join(tmpdir(), "cutroom-mp4-"));
   try {
@@ -39,6 +41,10 @@ async function compare(
     ]);
     const file = Bun.file(path);
     const bytes = new Uint8Array(await file.arrayBuffer());
+    if (rewrite) {
+      rewrite(bytes);
+      await Bun.write(path, bytes);
+    }
     if (offsets !== undefined)
       expect(bytes[Buffer.from(bytes).indexOf("ctts") + 4]).toBe(offsets);
     const track = await readVideoTrack(
@@ -96,7 +102,7 @@ test.skipIf(!ffmpeg)(
 );
 
 test.skipIf(!ffmpeg)(
-  "reads signed composition offsets (ctts version 1)",
+  "reads signed composition offsets in either ctts version",
   async () => {
     await compare(
       [
@@ -107,6 +113,20 @@ test.skipIf(!ffmpeg)(
       "mp4",
       /^avc1\./,
       1,
+    );
+    // DaVinci Resolve writes the same negative offsets in a version 0 box.
+    await compare(
+      [
+        ...["-c:v", "libx264", "-preset", "veryfast", "-g", "12", "-bf", "3"],
+        ...["-movflags", "+negative_cts_offsets"],
+      ],
+      "30",
+      "mov",
+      /^avc1\./,
+      0,
+      (bytes) => {
+        bytes[Buffer.from(bytes).indexOf("ctts") + 4] = 0;
+      },
     );
   },
 );
@@ -200,3 +220,146 @@ test.skipIf(!ffmpeg)("reads HEVC tagged as hvc1", async () => {
     /^hvc1\.1\.6\.L\d+\.[0-9A-F]+/i,
   );
 });
+
+/** A one-second clip made by ffmpeg with `args` around its output, read by the demuxer. */
+async function made(name: string, args: (path: string) => string[][]) {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-mp4-"));
+  try {
+    const source = join(directory, "source.mp4");
+    await run([
+      "ffmpeg",
+      ...[
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x90:rate=30:duration=1",
+      ],
+      ...[
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        source,
+      ],
+    ]);
+    const path = join(directory, name);
+    for (const step of args(path))
+      await run(["ffmpeg", "-v", "error", "-y", ...step]);
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    return () =>
+      readVideoTrack(
+        async (start, end) => bytes.slice(start, end),
+        bytes.length,
+      );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test.skipIf(!ffmpeg)(
+  "reads a phone's rotation and refuses a mirrored picture",
+  async () => {
+    // ffmpeg names rotations counter-clockwise; the browser turns the picture back clockwise.
+    for (const [counter, clockwise] of [
+      [0, 0],
+      [90, 270],
+      [180, 180],
+      [270, 90],
+    ])
+      expect(
+        (
+          await (
+            await made("turned.mp4", (path) => [
+              [
+                ...["-display_rotation:v:0", String(counter)],
+                ...["-i", path.replace("turned", "source"), "-c", "copy", path],
+              ],
+            ])
+          )()
+        ).rotation,
+      ).toBe(clockwise as 0);
+    await expect(
+      (
+        await made("mirrored.mp4", (path) => [
+          [
+            ...["-display_hflip:v:0", "-i", path.replace("mirrored", "source")],
+            ...["-c", "copy", path],
+          ],
+        ])
+      )(),
+    ).rejects.toThrow(/mirrors/);
+  },
+);
+
+test.skipIf(!ffmpeg)(
+  "reads QuickTime colour tags and refuses HDR in a MOV",
+  async () => {
+    const tagged = (tags: string) =>
+      made("clip.mov", (path) => [
+        [
+          ...["-i", path.replace("clip.mov", "source.mp4")],
+          ...["-vf", `setparams=${tags}`, "-c:v", "libx264", path],
+        ],
+      ]);
+    const track = await (
+      await tagged("color_primaries=bt709:color_trc=bt709:colorspace=bt709")
+    )();
+    expect(track.colour).toEqual({
+      primaries: "bt709",
+      transfer: "bt709",
+      matrix: "bt709",
+      fullRange: false,
+    });
+    await expect(
+      (
+        await tagged(
+          "color_primaries=bt2020:color_trc=arib-std-b67:colorspace=bt2020nc",
+        )
+      )(),
+    ).rejects.toThrow(/HDR/);
+  },
+);
+
+test.skipIf(!ffmpeg)(
+  "reads a trim's edit list and refuses one that delays the picture",
+  async () => {
+    // A stream copy from 0.4 s starts presentation inside a GOP, as a phone's trim does.
+    const trimmed = await (
+      await made("trimmed.mp4", (path) => [
+        [
+          "-ss",
+          "0.4",
+          "-i",
+          path.replace("trimmed", "source"),
+          "-c",
+          "copy",
+          path,
+        ],
+      ])
+    )();
+    const first = trimmed.shown.find(
+      (index) => trimmed.samples[index]!.time >= 0,
+    );
+    expect(trimmed.samples[first!]!.time).toBeCloseTo(0, 6);
+    expect(trimmed.samples[trimmed.shown[0]!]!.time).toBeLessThan(0);
+    await expect(
+      (
+        await made("delayed.mp4", (path) => [
+          [
+            "-itsoffset",
+            "0.5",
+            "-i",
+            path.replace("delayed", "source"),
+            "-c",
+            "copy",
+            path,
+          ],
+        ])
+      )(),
+    ).rejects.toThrow(/delays or rearranges/);
+  },
+);
