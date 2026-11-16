@@ -13,7 +13,7 @@ import type {
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle } from "./title";
 import { TimelineError } from "./errors";
-import { clipFades, windowMix } from "./mix";
+import { clipFades, windowMix, withVolumePoints } from "./mix";
 import {
   framesAfter,
   framesBefore,
@@ -943,6 +943,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           target.sourceRestrictions?.title ??
             `${target.label ?? target.id} is not a Cutroom title.`,
         );
+      if (command.automation?.volume.length && !target.hasAudio)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} has no sound to automate.`,
+        );
       for (const [fade, transition] of [
         [command.fadeIn, target.transitionIn],
         [command.fadeOut, target.transitionOut],
@@ -965,7 +970,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
                 ...(command.automation !== undefined && {
-                  automation: command.automation,
+                  automation:
+                    command.automation &&
+                    withVolumePoints(
+                      clip.automation,
+                      command.automation.volume,
+                      timeline.fps,
+                    ),
                 }),
                 ...(command.x !== undefined && { x: command.x }),
                 ...(command.y !== undefined && { y: command.y }),

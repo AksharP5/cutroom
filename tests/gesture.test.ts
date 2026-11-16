@@ -21,6 +21,7 @@ import {
   step,
 } from "../src/client/timeline/gesture";
 import type { Drag, Gesture, Preview } from "../src/client/timeline/gesture";
+import { gainLevel } from "../src/client/timeline/mix";
 import { anchorsChanged, editAnchors } from "../src/client/edit/anchors";
 
 const clip = (
@@ -920,4 +921,50 @@ test("a queued edit to a title still applies after the server answers with a new
   expect(anchors.clips.map(({ id }) => id)).toEqual(["c"]);
   expect(anchorsChanged(anchors, titled())).toBe(false);
   expect(anchorsChanged(anchors, titled({ color: "#ff0000" }))).toBe(true);
+});
+
+test("a dragged volume point stays a frame from its neighbours and its gain follows the line under the pointer", () => {
+  const timeline = sequence();
+  const automation = JSON.stringify({
+    version: 1,
+    lanes: [
+      {
+        target: "volume",
+        points: [
+          { t: 0, v: 1 },
+          { t: 2, v: 1 },
+          { t: 4, v: 1 },
+        ],
+      },
+    ],
+  });
+  timeline.clips = [
+    clip("music", 2, 0, 240, { automation, hasAudio: true, volume: 0.5 }),
+  ];
+  const body = 60;
+  const point = (frame: number, at: number) =>
+    dragPreview(
+      drag({ kind: "point", clipId: "music", index: 1 }, [], 60, timeline),
+      { frame, track: 2, reach: 0, level: { at, body } },
+    );
+  const unity = gainLevel(0.5, body);
+  // Dragged past the next point, it stops a frame short; held on the clip's own gain, it reads 1.
+  expect(point(400, unity).commands).toEqual([
+    {
+      type: "setClip",
+      clipId: "music",
+      automation: {
+        volume: [
+          { frame: 0, gain: 1 },
+          { frame: 119, gain: 1 },
+          { frame: 120, gain: 1 },
+        ],
+      },
+    },
+  ]);
+  // Pulled down to the -6 dB mark under a -6 dB clip gain, the point is -6 dB on top of it.
+  const moved = point(60, gainLevel(0.25, body)).commands[0];
+  expect(
+    moved?.type === "setClip" && moved.automation?.volume[1]?.gain,
+  ).toBeCloseTo(0.5, 2);
 });

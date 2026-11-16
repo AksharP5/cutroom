@@ -8,6 +8,7 @@ import {
 import { frameTime, toFrames, toSeconds } from "../../shared/timeline/apply";
 import { TransitionSchema } from "../../shared/timeline/schema";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
+import { offsetAutomation } from "../../shared/timeline/mix";
 import { KEYFRAME_ANIMATION } from "./keyframes";
 import type { Clip, Fps, Transition } from "../../shared/timeline/schema";
 import {
@@ -186,7 +187,10 @@ export function elementClip(clip: Clip, fps: Fps): Clip {
         : clip.mediaStart - frameTime(before, fps) * clip.playbackRate,
     fadeIn: transitionIn && straight ? transitionIn.duration : clip.fadeIn,
     fadeOut: transitionOut && straight ? transitionOut.duration : clip.fadeOut,
-    automation: clip.automation ?? crossfadeAutomation(clip, fps),
+    // Clip-local automation is timed from the element, which starts `before` frames early.
+    automation: clip.automation
+      ? offsetAutomation(clip.automation, frameTime(before, fps))
+      : crossfadeAutomation(clip, fps),
     keyframes: shiftKeyframes(clip.keyframes, -before),
   };
 }

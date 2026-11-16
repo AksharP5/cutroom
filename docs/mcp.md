@@ -87,6 +87,26 @@ Timeline edits use frames at the composition's fps. Pass the `revision` from `ti
 
 `timeline_read.timeline.tracks` includes empty tracks. Lifting, cutting, moving or overwriting their last clips keeps those tracks and their settings. Edits save the track list in `cutroom.json`, so reload and undo/redo preserve it. Each track carries `volume`, its linear gain (1 = 0 dB), which plays on top of every clip on the track in preview and export; set it with `setTrack` (`{ "type": "setTrack", "index": 2, "volume": 0.125 }` turns a music track down 18 dB, however many pieces its bed is cut into). A clip's `volume` stays canonical in `data-volume`. Track gain uses an independent `<hf-audio-group>` stage, including for embedded video sound and GSAP volume tweens. Each stage accepts up to +12 dB; clip and track gains can combine above +12 dB. A clip that already belongs to an authored audio group is excluded from track gain and carries a plain `trackGainWarning` in reads; an edit that changes its track lists it under `warnings`. Keep that membership intact and report the exclusion to the user, especially when setting track gain to zero. Track mute and solo still apply to those clips. Use each track's `index` to target an empty row with `insert` or `setTrack`; V1/A1 labels are display numbers within each kind. To remove an unlocked empty track, send `{ "type": "removeTrack", "index": 0 }` through `timeline_edit`. Occupied tracks refuse removal with `unsupported`; locked tracks refuse with `locked`. Remove clips first if you intend to remove their track. Track removal is undoable and leaves other tracks' indices unchanged. The editor offers the same command as Remove empty track in a track header's context menu.
 
+### Volume automation
+
+A clip with sound can carry a volume envelope, which the editor draws as points on its gain line. Reads give it as `automation: { "volume": [{ "frame": 90, "gain": 1 }, { "frame": 150, "gain": 0.25 }] }`: clip-local frames (0 is the clip's first frame), and gain as a linear level on top of the clip's own gain, so 1 changes nothing and 0.25 is -12 dB. The level runs straight between points, and the first and last points hold before and after them. `lanes` names any effect-parameter lanes the clip also has, without their points. `automation` is `null` when the clip has none.
+
+```json
+{
+  "type": "setClip",
+  "clipId": "music",
+  "automation": {
+    "volume": [
+      { "frame": 0, "gain": 1 },
+      { "frame": 90, "gain": 1 },
+      { "frame": 105, "gain": 0.25 }
+    ]
+  }
+}
+```
+
+`setClip.automation.volume` replaces the whole envelope with the points given, in any order; two points on one frame are refused, and so is an envelope on a clip without sound. Frames may be fractional, as baked ramps read back. `[]` removes the envelope and keeps effect lanes; `automation: null` removes every lane. The envelope multiplies with the clip's gain, its fades and its track's gain. It is clip-local, so it moves with the clip; a tail trim keeps it, and a razor or a head trim keeps the level at the cut but drops points before the clip's new first frame. A transition on a clip with an envelope crossfades with straight fades. A baked ramp may bend between its points; writing points back makes straight runs. Preview and export play the same envelope.
+
 In the editor, drops, moves and overwrite pastes that remove a whole clip show one short notice naming the replaced clip, with Undo. Media or a paste placed over part of a clip names it as partly replaced in the same notice. A clip moved over part of another, and a trim, stay silent.
 
 ### Titles

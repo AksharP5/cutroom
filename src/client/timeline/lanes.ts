@@ -1,13 +1,16 @@
 import {
+  drawnPoints,
   envelopeAt,
+  volumeLane,
   envelopeHeight,
   fadePath,
   gainFromDrag,
   mixBody,
 } from "./mix";
 import type { GainDrag } from "./mix";
-import { audioGainToText } from "@hyperframes/core/audio-gain";
-import { clipFades } from "../../shared/timeline/mix";
+import { audioGainToText, gainTimesLane } from "@hyperframes/core/audio-gain";
+import { sampleAutomationLane } from "@hyperframes/core/audio-automation";
+import { clipFades, volumePoints } from "../../shared/timeline/mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { DragEvent, PointerEvent, RefObject } from "react";
@@ -86,6 +89,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
   const pointer = useRef({ x: 0, y: 0, bypass: false });
   /** A held gain line: how far down the lanes its body starts, and the drag that moves it. */
   const gain = useRef<(GainDrag & { top: number }) | null>(null);
+  /** A held volume point's clip body: how far down the lanes it starts, and its height. */
+  const pointBody = useRef<{ top: number; body: number } | null>(null);
+  /** An Alt press on a gain line or point, which a click turns into a point edit. */
+  const pointClick = useRef<{ hit: Hit; x: number } | null>(null);
   /** What the last drawn preview was made from; the same input draws nothing again. */
   const drawn = useRef("");
   const marqueeBase = useRef<Selection>(emptySelection);
@@ -176,6 +183,16 @@ export function useLaneGestures(options: LaneGestureOptions) {
       create: target?.create,
       reach: reach(bypass),
       gain: (intent.kind === "gain" && gain.current) || undefined,
+      level:
+        intent.kind === "point" && pointBody.current
+          ? {
+              at:
+                ((local(x, y).y - pointBody.current.top) /
+                  pointBody.current.body) *
+                100,
+              body: pointBody.current.body,
+            }
+          : undefined,
     };
   }
   /** Frames within which edges snap: none with snapping off or the bypass key held. */
@@ -322,6 +339,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
       const path = fadePath(clip, shown.fps, body);
       for (const curve of mix?.querySelectorAll("path") ?? [])
         curve.setAttribute("d", path);
+      const points = mix?.querySelectorAll<HTMLElement>("[data-point]");
+      drawnPoints(clip, shown.fps, body).forEach(({ at, level }, index) => {
+        points?.[index]?.style.setProperty("--at", `${at}%`);
+        points?.[index]?.style.setProperty("--level", String(level));
+      });
       const fades = clipFades(clip);
       for (const edge of ["fadeIn", "fadeOut"] as const) {
         const handle = mix?.querySelector<HTMLElement>(`[data-mix="${edge}"]`);
@@ -429,6 +451,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     preview.current = null;
     destinationRow.current = null;
     gain.current = null;
+    pointBody.current = null;
     drawn.current = "";
     return offsets;
   }
@@ -450,14 +473,17 @@ export function useLaneGestures(options: LaneGestureOptions) {
     );
     if (!element || !clip) return null;
     const box = element.getBoundingClientRect();
-    const mix = event.target.closest("[data-mix]")?.getAttribute("data-mix");
+    const handle = event.target.closest<HTMLElement>("[data-mix]");
+    const mix = handle?.dataset.mix;
     return {
       clip,
       x: event.clientX - box.left,
       width: box.width,
       ...(mix === "gain" || mix === "fadeIn" || mix === "fadeOut"
         ? { mix }
-        : {}),
+        : mix === "point"
+          ? { mix: { point: Number(handle?.dataset.point) } }
+          : {}),
     };
   }
 
@@ -517,7 +543,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const readoutWidth = readout.current?.offsetWidth || 120;
     const readoutHeight = readout.current?.offsetHeight || 24;
     const input = dragInput(active);
-    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}`;
+    const key = `${input.frame}:${input.track}:${input.reach}:${ppf}:${input.gain?.from}:${input.gain?.dy}:${input.level?.at}`;
     if (key !== drawn.current) {
       drawn.current = key;
       const next = dragPreview(active, input);
@@ -535,11 +561,19 @@ export function useLaneGestures(options: LaneGestureOptions) {
           rowOf(clip?.track),
         );
       } else if (readout.current) {
+        const clip =
+          "clipId" in intent
+            ? next.shown.clips.find((each) => each.id === intent.clipId)
+            : undefined;
         if (intent.kind === "gain") {
-          readout.current.textContent = audioGainToText(
-            next.shown.clips.find((clip) => clip.id === intent.clipId)!
-              .volume ?? 1,
-          );
+          readout.current.textContent = audioGainToText(clip!.volume ?? 1);
+        } else if (intent.kind === "point") {
+          const point = volumePoints(clip!.automation, active.timeline.fps)?.[
+            intent.index
+          ];
+          readout.current.textContent = point
+            ? `${audioGainToText(gainTimesLane(clip!.volume ?? 1, point.gain))} at ${formatTimecode(clip!.start + Math.round(point.frame), active.timeline.fps)}`
+            : "";
         } else {
           readout.current.textContent = `${next.delta < 0 ? "-" : "+"}${formatTimecode(Math.abs(next.delta), active.timeline.fps)}`;
         }
@@ -607,9 +641,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
 
   /** A press on a gain line names its level there at once, before the pointer moves. */
   function holdGain(clip: Clip, fps: Fps, fine: boolean) {
-    const curve = latest.current.lanes.current
-      ?.querySelector(`[data-clip-mix="${CSS.escape(clip.id)}"] .tl-fade-curve`)
-      ?.getBoundingClientRect();
+    const curve = curveOf(clip);
     const label = readout.current;
     gain.current = curve
       ? {
@@ -639,8 +671,10 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { lanes, selection, timeline, rows, onSelect } = latest.current;
     const active = drag.current;
     const alone = kept.current;
+    const edit = pointClick.current;
     drag.current = null;
     kept.current = null;
+    pointClick.current = null;
     lanes.current?.removeAttribute("data-cursor");
     latest.current.onGesture(false);
     latest.current.onTrackDrag(false);
@@ -654,6 +688,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
         selection.ids.size
       )
         onSelect(emptySelection);
+      return;
+    }
+    if (outcome === "click" && edit) {
+      clear();
+      editPoint(edit.hit, edit.x);
       return;
     }
     if (outcome === "click" && active.intent.kind !== "blade") {
@@ -792,6 +831,14 @@ export function useLaneGestures(options: LaneGestureOptions) {
       latest.current;
     const hit = hitAt(event);
     const toggle = event.ctrlKey || event.metaKey;
+    const onLine =
+      tool === "pointer" &&
+      (hit?.mix === "gain" || typeof hit?.mix === "object") &&
+      intentAt(tool, timeline, hit) !== null;
+    if (onLine && toggle) return editPoint(hit!, event.clientX);
+    // Alt still drags a clip without its partners; only an Alt-click edits points.
+    pointClick.current =
+      onLine && event.altKey ? { hit: hit!, x: event.clientX } : null;
     const intent = intentAt(tool, timeline, hit, event.altKey);
     // A press on a selected clip keeps the selection, so several clips drag as one. A gain press
     // keeps it too, since a mostly horizontal gain drag becomes that same move.
@@ -860,7 +907,64 @@ export function useLaneGestures(options: LaneGestureOptions) {
     );
     if (intent.kind === "gain" && hit)
       holdGain(hit.clip, timeline.fps, event.shiftKey);
+    if (intent.kind === "point" && hit) {
+      const curve = curveOf(hit.clip);
+      pointBody.current = curve
+        ? { top: local(0, curve.top).y, body: curve.height }
+        : null;
+    }
   }
+
+  /**
+   * Alt- or Ctrl-click on a gain line adds a volume point there at the level the line has, so
+   * the sound does not change; on a point, it deletes the point. Each is one undo step, as in
+   * Resolve, where Alt-click adds a keyframe on a clip's volume line.
+   */
+  function editPoint(hit: Hit, clientX: number) {
+    const { timeline, onEdit } = latest.current;
+    const { clip } = hit;
+    const points = volumePoints(clip.automation, timeline.fps) ?? [];
+    if (typeof hit.mix === "object") {
+      const index = hit.mix.point;
+      onEdit("Delete volume point", [
+        {
+          type: "setClip",
+          clipId: clip.id,
+          automation: {
+            volume: points.filter((_, other) => other !== index),
+          },
+        },
+      ]);
+      return;
+    }
+    const frame = Math.max(
+      0,
+      Math.min(clip.duration, Math.round(frameAt(clientX) - clip.start)),
+    );
+    if (points.some((point) => Math.round(point.frame) === frame)) return;
+    const lane = volumeLane(clip);
+    const gain = lane
+      ? Math.round(
+          sampleAutomationLane(
+            lane,
+            (frame * timeline.fps.den) / timeline.fps.num,
+          ) * 1e6,
+        ) / 1e6
+      : 1;
+    onEdit("Add volume point", [
+      {
+        type: "setClip",
+        clipId: clip.id,
+        automation: { volume: [...points, { frame, gain }] },
+      },
+    ]);
+  }
+
+  /** The box a clip's gain line is drawn in, on screen. */
+  const curveOf = (clip: Clip) =>
+    latest.current.lanes.current
+      ?.querySelector(`[data-clip-mix="${CSS.escape(clip.id)}"] .tl-fade-curve`)
+      ?.getBoundingClientRect();
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
     if (gesture.current.phase === "idle") return hover(event);

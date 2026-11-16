@@ -13,6 +13,92 @@ import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import { TimelineError } from "./errors";
 import type { Clip, Fps } from "./schema";
 
+const microseconds = (seconds: number) => Math.round(seconds * 1e6) / 1e6;
+const frameSeconds = (frames: number, fps: Fps) =>
+  microseconds((frames * fps.den) / fps.num);
+
+/**
+ * A lane on a clip that starts `offset` seconds later in its source: its points move earlier, and
+ * one at the new start holds the level it had there. A negative offset only moves them later.
+ */
+function startLaneAt(lane: HfAutomationLane, offset: number): HfAutomationLane {
+  const moved = lane.points.map((point) => ({
+    ...point,
+    t: microseconds(point.t - offset),
+  }));
+  if (offset <= 0) return { ...lane, points: moved };
+  return {
+    ...lane,
+    points: [
+      { t: 0, v: sampleAutomationLane(lane, offset) },
+      ...moved.filter((point) => point.t > 0),
+    ],
+  };
+}
+
+/**
+ * Clip-local automation re-timed for an element that starts `seconds` earlier than the clip, as
+ * one does under a transition. A negative value reads such an element's automation back.
+ */
+export function offsetAutomation(automation: string, seconds: number) {
+  if (!seconds) return automation;
+  const parsed = parseAutomation(automation);
+  return serializeAutomation({
+    ...parsed,
+    lanes: parsed.lanes.map((lane) => startLaneAt(lane, -seconds)),
+  });
+}
+
+/** A point on a clip's volume lane: clip-local frames, and linear gain on top of the clip's gain. */
+export interface VolumePoint {
+  frame: number;
+  gain: number;
+}
+
+/** The clip's volume lane as points, or null when it has none. */
+export function volumePoints(
+  automation: string | null,
+  fps: Fps,
+): VolumePoint[] | null {
+  if (!automation) return null;
+  const lane = parseAutomation(automation).lanes.find(
+    (entry) => entry.target === VOLUME_TARGET,
+  );
+  return (
+    lane?.points.map((point) => ({
+      frame: Math.round(((point.t * fps.num) / fps.den) * 1e3) / 1e3,
+      gain: Math.round(point.v * 1e6) / 1e6,
+    })) ?? null
+  );
+}
+
+/**
+ * Automation with its volume lane replaced by straight runs between these points. Effect lanes
+ * stay; no points removes the volume lane, and with it automation that holds nothing else.
+ */
+export function withVolumePoints(
+  automation: string | null,
+  points: readonly VolumePoint[],
+  fps: Fps,
+) {
+  const parsed = automation
+    ? parseAutomation(automation)
+    : { version: HF_AUDIO_AUTOMATION_VERSION, lanes: [] };
+  const timed = points
+    .map((point) => ({ t: frameSeconds(point.frame, fps), v: point.gain }))
+    .sort((a, b) => a.t - b.t);
+  if (timed.some((point, index) => index && point.t === timed[index - 1]!.t))
+    throw new TimelineError(
+      "unsupported",
+      "Two volume points share a frame. Give each its own frame.",
+    );
+  const lanes = [
+    ...parsed.lanes.filter((lane) => lane.target !== VOLUME_TARGET),
+    ...(timed.length ? [{ target: VOLUME_TARGET, points: timed }] : []),
+  ];
+  return lanes.length ? serializeAutomation({ ...parsed, lanes }) : null;
+}
+
 /** Effective fades, in frames, using the same proportional clamp as preview and render. */
 export function clipFades(clip: Pick<Clip, "fadeIn" | "fadeOut" | "duration">) {
   return clampFadesToDuration(clip, clip.duration);
@@ -39,8 +125,7 @@ export function windowMix(
     fadeOut <= duration - nextIn
       ? fadeOut
       : 0;
-  const seconds = (frames: number) =>
-    Math.round(((frames * fps.den) / fps.num) * 1e6) / 1e6;
+  const seconds = (frames: number) => frameSeconds(frames, fps);
   const offset = seconds(from);
   const automation = clip.automation
     ? parseAutomation(clip.automation)
@@ -64,17 +149,10 @@ export function windowMix(
       : 1;
     return head * tail;
   };
-  const lanes = automation.lanes.map((lane) => {
-    if (from === 0) return lane;
-    // Known limit: a head trim loses earlier clip-local points; restoring them needs source-anchored keyframes.
-    const points = lane.points
-      .filter((point) => point.t > offset)
-      .map((point) => ({ ...point, t: Math.max(0, point.t - offset) }));
-    return {
-      ...lane,
-      points: [{ t: 0, v: sampleAutomationLane(lane, offset) }, ...points],
-    };
-  });
+  // Known limit: a head trim loses earlier clip-local points; restoring them needs source-anchored keyframes.
+  const lanes = automation.lanes.map((lane) =>
+    from === 0 ? lane : startLaneAt(lane, offset),
+  );
   const crossing = volume?.points.findLast((point) => point.t <= offset);
   if (
     partialIn ||

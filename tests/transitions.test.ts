@@ -284,3 +284,43 @@ test("Ctrl+T, Alt+T and Shift+T pick the nearest cut and shorten to fit with a r
     }),
   ).toEqual([{ type: "setTransition", from: "a", to: "b", transition: null }]);
 });
+
+test("a clip's own volume points play on the frames they are drawn at when a transition starts its element early", () => {
+  // sb's element starts 15 frames before its clip under a centred one-second dissolve.
+  const html = edit(shots, [
+    dissolve(30),
+    {
+      type: "setClip",
+      clipId: "sb",
+      automation: {
+        volume: [
+          { frame: 0, gain: 1 },
+          { frame: 60, gain: 0.5 },
+        ],
+      },
+    },
+  ]);
+  const written = JSON.parse(
+    /id="sb"[^>]*data-automation="([^"]*)"/
+      .exec(html)![1]!
+      .replaceAll("&quot;", '"'),
+  ) as { lanes: { points: { t: number; v: number }[] }[] };
+  expect(written.lanes[0]!.points).toEqual([
+    { t: 0.5, v: 1 },
+    { t: 2.5, v: 0.5 },
+  ]);
+  expect(clips(html).sb!.automation).toBe(
+    JSON.stringify({
+      version: 1,
+      lanes: [
+        {
+          target: "volume",
+          points: [
+            { t: 0, v: 1 },
+            { t: 2, v: 0.5 },
+          ],
+        },
+      ],
+    }),
+  );
+});

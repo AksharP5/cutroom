@@ -1,5 +1,5 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
-import { gainFromDrag } from "./mix";
+import { gainFromDrag, laneFromLevel } from "./mix";
 import type { GainDrag } from "./mix";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { z } from "zod";
@@ -10,7 +10,7 @@ import {
   normalizeTimeline,
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
-import { clipFades } from "../../shared/timeline/mix";
+import { clipFades, volumePoints } from "../../shared/timeline/mix";
 import type { MediaDrag } from "./mediaDrag";
 import { sourcePath } from "../../shared/media";
 import type {
@@ -41,6 +41,8 @@ export interface Point {
 export type Intent =
   | { kind: "gain"; clipId: string; alone: boolean }
   | { kind: "fade"; clipId: string; edge: "fadeIn" | "fadeOut" }
+  /** A volume point, by its index on the clip's volume lane. */
+  | { kind: "point"; clipId: string; index: number }
   | { kind: "move"; clipId: string; alone: boolean }
   | { kind: "trim"; clipId: string; edge: "start" | "end"; ripple: boolean }
   /** `left` ends where `right` starts; the cut between them moves. */
@@ -170,7 +172,7 @@ export interface Hit {
   clip: Clip;
   x: number;
   width: number;
-  mix?: "gain" | "fadeIn" | "fadeOut";
+  mix?: "gain" | "fadeIn" | "fadeOut" | { point: number };
 }
 
 /**
@@ -190,11 +192,14 @@ export function intentAt(
   if (timeline.tracks.find((track) => track.index === clip.track)?.locked)
     return null;
   if (tool === "blade") return { kind: "blade", clipId: clip.id };
+  // A point on the clip's first or last frame sits on its edge, where it is still the point.
+  if (tool === "pointer" && typeof hit.mix === "object" && clip.hasAudio)
+    return { kind: "point", clipId: clip.id, index: hit.mix.point };
   const reach = Math.min(EDGE_PX, width / 3);
   const edge = x < reach ? "start" : x >= width - reach ? "end" : null;
   if (tool === "pointer" && edge)
     return { kind: "trim", clipId: clip.id, edge, ripple: false };
-  if (tool === "pointer" && hit.mix && clip.hasAudio)
+  if (tool === "pointer" && typeof hit.mix === "string" && clip.hasAudio)
     return hit.mix === "gain"
       ? { kind: "gain", clipId: clip.id, alone }
       : { kind: "fade", clipId: clip.id, edge: hit.mix };
@@ -390,6 +395,8 @@ export interface DragInput {
   create?: readonly Track[];
   /** How far the pointer has taken a gain line. */
   gain?: GainDrag;
+  /** Where a held volume point is, in percent down its clip's body, and the body's height. */
+  level?: { at: number; body: number };
   /** The frame under the pointer. */
   frame: number;
   /** The track of the row under the pointer, or null between rows. */
@@ -444,6 +451,45 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
           ? []
           : [{ type: "setClip", clipId: clip.id, volume }],
         volume > 0 ? audioGainToDb(volume) : -60,
+        null,
+      );
+    }
+    case "point": {
+      const clip = find(intent.clipId);
+      const points = volumePoints(clip.automation, timeline.fps) ?? [];
+      const point = points[intent.index];
+      if (!point || !input.level) return still("Move volume point");
+      // A point stays between its neighbours, a frame from each, and on the clip.
+      const before = points[intent.index - 1];
+      const after = points[intent.index + 1];
+      const low = before ? Math.floor(before.frame) + 1 : 0;
+      const high = after ? Math.ceil(after.frame) - 1 : clip.duration;
+      const frame =
+        travel === 0 || low > high
+          ? point.frame
+          : Math.max(low, Math.min(high, Math.round(point.frame + travel)));
+      const gain = laneFromLevel(
+        clip,
+        timeline.fps,
+        frame,
+        input.level.at,
+        input.level.body,
+      );
+      const moved = points.map((each, index) =>
+        index === intent.index ? { frame, gain } : each,
+      );
+      return edit(
+        "Move volume point",
+        frame === point.frame && gain === point.gain
+          ? []
+          : [
+              {
+                type: "setClip",
+                clipId: clip.id,
+                automation: { volume: moved },
+              },
+            ],
+        frame - point.frame,
         null,
       );
     }

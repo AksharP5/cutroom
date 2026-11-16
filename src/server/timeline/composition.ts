@@ -38,6 +38,7 @@ import {
   readKeyframes,
 } from "./keyframes";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
+import { offsetAutomation } from "../../shared/timeline/mix";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -757,7 +758,12 @@ export function parseComposition(
       transitionIn: edges.in,
       transitionOut: edges.out,
       automation: element.attrs["data-automation"]
-        ? serializeAutomation(parseAutomation(element.attrs["data-automation"]))
+        ? offsetAutomation(
+            serializeAutomation(
+              parseAutomation(element.attrs["data-automation"]),
+            ),
+            -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
+          )
         : null,
       enabled:
         element.attrs["data-hidden"] === undefined ||
