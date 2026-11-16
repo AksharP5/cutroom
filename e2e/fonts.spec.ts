@@ -63,11 +63,15 @@ test("a font file imported from the Font menu is applied to the title and drawn 
   await expect(
     inspector.getByRole("combobox", { name: "Font", exact: true }),
   ).toHaveText("Cutroom Block");
+  // The menu shows the family at once; the title's own edit saves just after.
+  await expect
+    .poll(
+      async () =>
+        (await read()).timeline.clips.find((clip) => clip.id === "lower")?.title
+          ?.font,
+    )
+    .toBe("Cutroom Block");
   expect((await read()).timeline.fonts).toContain("Cutroom Block");
-  const title = (await read()).timeline.clips.find(
-    (clip) => clip.id === "lower",
-  );
-  expect(title?.title?.font).toBe("Cutroom Block");
   // Every letter of the block font is 0.6em wide and a space 0.3em: 11 letters and a space at 64px.
   const shown = page.frameLocator("iframe[data-live]").locator("#lower");
   await expect
