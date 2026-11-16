@@ -1,5 +1,6 @@
 import { clipEnd } from "../../shared/timeline/apply";
 import { sameTitle } from "../../shared/timeline/title";
+import { sameStyle } from "../../shared/timeline/elementStyle";
 import type {
   Clip,
   CommandInput,
@@ -27,6 +28,7 @@ function sameClip(seen: Clip, clip: Clip | undefined) {
       );
     // Every server answer parses a new title object, so a title is the same by its values.
     if (key === "title") return sameTitle(seen.title, clip.title);
+    if (key === "style") return sameStyle(seen.style, clip.style);
     if (key === "fx")
       return JSON.stringify(seen.fx) === JSON.stringify(clip.fx);
     return seen[key] === clip[key];

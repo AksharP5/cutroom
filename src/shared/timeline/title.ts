@@ -1,4 +1,4 @@
-import type { Fps, Title, TitleEdit } from "./schema";
+import type { Clip, Fps, Title, TitleEdit } from "./schema";
 
 /** Default entrance and exit lengths in seconds, rounded to the timeline's frames. */
 const DEFAULT_IN_SECONDS = 0.4;
@@ -55,3 +55,7 @@ export const sameTitle = (a: Title | null, b: Title | null) =>
           )
         : x === y;
     }));
+
+/** A Cutroom title, including one whose attributes Cutroom cannot read; its look is its own. */
+export const isTitle = (clip: Clip) =>
+  !!(clip.title || clip.sourceRestrictions?.title);

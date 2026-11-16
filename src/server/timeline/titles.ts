@@ -168,7 +168,7 @@ export const undeclaredFontReason = (
 ) =>
   declared.size
     ? `No @font-face rule in this project declares "${font}". Declared fonts: ${[...declared].join(", ")}.`
-    : `No @font-face rule in this project declares "${font}", or any other font. Leave the title's font unset.`;
+    : `No @font-face rule in this project declares "${font}", or any other font. Leave the font unset.`;
 
 /** Every attribute of a title, in the order a new title is written. Null removes one. */
 export function titleAttributes(

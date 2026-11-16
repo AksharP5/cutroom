@@ -6,7 +6,7 @@ import { CommandSchema } from "../../shared/timeline/schema";
 import { ApiError, api, json } from "../api";
 import { clipMenuItems } from "./clipMenu";
 import { editTimeline, hasClipboard, useTimeline } from "./timeline";
-import { copyTitleStyle, hasTitleStyle, pasteTitleStyle } from "./titleStyle";
+import { copiedStyle, copyStyle, pasteStyle } from "./copyStyle";
 import { useTransport } from "./transport";
 
 const PlanSchema = z.object({
@@ -71,16 +71,16 @@ export function openClipMenu(
       selection: selection.ids,
       frame: useTransport.getState().frame,
       clipboard: hasClipboard(projectId),
-      titleStyle: hasTitleStyle(projectId),
+      copiedStyle: copiedStyle(projectId),
       inspector: useWorkspace.getState().inspector,
       onReveal: row && (() => row.focus()),
       onInspector: () =>
         useWorkspace.setState(({ inspector }) => ({ inspector: !inspector })),
-      onCopyStyle: (title) => copyTitleStyle(projectId, title),
-      onPasteStyle: (titles) =>
-        pasteTitleStyle(
+      onCopyStyle: (clip) => copyStyle(projectId, clip),
+      onPasteStyle: (clips) =>
+        pasteStyle(
           projectId,
-          titles.map((title) => title.id),
+          clips.map((clip) => clip.id),
         ),
       clicked,
       onDuck: (bed, voices) =>

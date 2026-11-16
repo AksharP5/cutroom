@@ -6,6 +6,11 @@ import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
 // The export worker loads this file in Node, which needs the extension.
 import { FxChainInputSchema, FxNodeSchema, MAX_FX_NODES } from "./fx.ts";
+import {
+  ElementStyleEditSchema,
+  ElementStyleSchema,
+  fontFamily,
+} from "./elementStyle.ts";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -200,12 +205,7 @@ const titleMotion = z.object({
 
 export const TitleSchema = z.object({
   position: z.enum(TITLE_POSITIONS),
-  font: z
-    .string()
-    .regex(
-      /^[A-Za-z0-9](?:[A-Za-z0-9 _-]{0,98}[A-Za-z0-9])?$/,
-      "A font family uses letters, digits, spaces, hyphens and underscores.",
-    )
+  font: fontFamily
     .nullable()
     .describe(
       "A font family the composition declares with @font-face; null inherits the composition's font",
@@ -343,6 +343,9 @@ export const ClipSchema = z.object({
     .describe(
       "A Cutroom title's look and motion; null for every other clip. Change it with setClip.title and its words with setClip.text.",
     ),
+  style: ElementStyleSchema.default({}).describe(
+    "The clip's inline look, as setClip.style writes it: text style on text elements, fill, corner radius, shadow, blur, layout size, and fit on video and images. A field is left out when the clip sets no inline value Cutroom can read; the composition's stylesheets and animation then decide it.",
+  ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
     .default(0)
@@ -753,6 +756,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
         ),
       title: TitleEditSchema.optional().describe(
         "Change a Cutroom title's look or motion; omitted fields keep their values. Refused for clips that are not titles.",
+      ),
+      style: ElementStyleEditSchema.optional().describe(
+        "Restyle any visual clip that is not a Cutroom title, written as inline CSS on its element: omitted fields keep their values, null removes one and hands it back to the composition's stylesheets. Text fields need an element clip, objectFit a video or image. Inline style draws over stylesheets but not over the composition's own animation of the same property.",
       ),
       enabled: z
         .boolean()

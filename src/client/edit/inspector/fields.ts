@@ -67,7 +67,7 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
     }
     throw new Error("Use HH:MM:SS:FF, seconds with s, or frames with f.");
   }
-  if (!/^\d+(?:\.\d+)?\s*%?$/.test(input))
+  if (!/^-?\d+(?:\.\d+)?\s*%?$/.test(input))
     throw new Error("Enter a percentage, such as 75%.");
   return Number.parseFloat(input) / 100;
 }

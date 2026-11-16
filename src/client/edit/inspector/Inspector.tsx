@@ -37,6 +37,8 @@ import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { FxRack } from "./FxRack";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
+import { isTitle } from "../../../shared/timeline/title";
+import { StyleSection } from "./StyleSection";
 import { TransformFields } from "./TransformFields";
 import { valueAt } from "../../../shared/timeline/keyframes";
 import {
@@ -304,6 +306,8 @@ export function Inspector({
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [textOpen, setTextOpen] = useState(true);
   const [titleOpen, setTitleOpen] = useState(true);
+  // Closed until opened, so a text clip's Timing stays in view; the choice then holds.
+  const [styleOpen, setStyleOpen] = useState(false);
   const [timingOpen, setTimingOpen] = useState(true);
   useEffect(() => {
     // Timeline presses prevent the browser's usual blur. Commit before they change selection.
@@ -428,6 +432,8 @@ export function Inspector({
           (positionWarning.time * timeline.fps.num) / timeline.fps.den + 1e-6,
         )
       : null;
+  // A title's look is its own; the Style section is for every other visual clip.
+  const titled = !!clip && isTitle(clip);
   const name =
     clip &&
     (clip.label?.trim() ||
@@ -547,7 +553,7 @@ export function Inspector({
           <div className="inspector-clip" data-kind={clip.kind}>
             <strong title={name || undefined}>{name}</strong>
             <span>
-              {clip.title || clip.sourceRestrictions?.title
+              {titled
                 ? "Title"
                 : clip.kind === "element"
                   ? "Text"
@@ -601,7 +607,7 @@ export function Inspector({
               )}
             </details>
           )}
-          {(clip.title || clip.sourceRestrictions?.title) && (
+          {titled && (
             <TitleSection
               projectId={projectId}
               clip={clip}
@@ -712,6 +718,17 @@ export function Inspector({
                 disabled={track?.track.locked}
               />
             </details>
+          )}
+          {!isAudioKind(clip.kind) && !titled && (
+            <StyleSection
+              projectId={projectId}
+              clip={clip}
+              fps={timeline.fps}
+              fonts={timeline.fonts ?? []}
+              disabled={track?.track.locked ?? false}
+              open={styleOpen}
+              onToggle={setStyleOpen}
+            />
           )}
           {subject?.audio.map((audio) => {
             const fades = clipFades(audio);

@@ -93,7 +93,9 @@ test("inspector fields parse timecode, frames, seconds and percentages without a
   expect(parseField("150 %", "percent", fps)).toBe(1.5);
   for (const input of ["", "NaN", "12px", "-1f", "1:23", "00:00:01:01junk"])
     expect(() => parseField(input, "timecode", fps)).toThrow();
-  for (const input of ["Infinity", "5%junk", "-10%"])
+  // Tracking goes below zero; each field's own range refuses negatives elsewhere.
+  expect(parseField("-2.5%", "percent", fps)).toBe(-0.025);
+  for (const input of ["Infinity", "5%junk", "--10%", "-"])
     expect(() => parseField(input, "percent", fps)).toThrow();
 });
 

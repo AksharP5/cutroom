@@ -1,6 +1,8 @@
 import { clipEnd } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
+import { isAudioKind } from "../../shared/timeline/schema";
+import { isTitle } from "../../shared/timeline/title";
 
 /**
  * The clip menu, shared by the timeline, the picture and the menu key. Its edits are keymap
@@ -11,7 +13,7 @@ export function clipMenuItems({
   selection,
   frame,
   clipboard,
-  titleStyle,
+  copiedStyle,
   inspector,
   onReveal,
   onInspector,
@@ -27,14 +29,14 @@ export function clipMenuItems({
   frame: number;
   /** Clips have been copied in this project. */
   clipboard: boolean;
-  /** A title's style has been copied in this project. */
-  titleStyle: boolean;
+  /** The sort of clip whose look was copied in this project: a title, or any other visual clip. */
+  copiedStyle: "title" | "style" | null;
   inspector: boolean;
   /** Shows the clip's file in Media; null when the clip has no file listed there. */
   onReveal: (() => void) | null;
   onInspector(): void;
-  onCopyStyle(title: Clip): void;
-  onPasteStyle(titles: Clip[]): void;
+  onCopyStyle(clip: Clip): void;
+  onPasteStyle(clips: Clip[]): void;
   /** Ducks the clip under the voice: the other selected clips, or every voice over it. */
   onDuck(bed: Clip, voices: Clip[]): void;
   /** Sets each clip's gain so it measures -16 LUFS. */
@@ -44,7 +46,13 @@ export function clipMenuItems({
 }): MenuItem[] {
   const clips = timeline.clips.filter((clip) => selection.has(clip.id));
   const none = clips.length === 0;
-  const titles = clips.filter((clip) => clip.title);
+  // A title carries its title settings; any other picture its inline style.
+  const styled = clips.filter(
+    (clip) => !isAudioKind(clip.kind) && (clip.title || !isTitle(clip)),
+  );
+  const pastable = styled.filter(
+    (clip) => (copiedStyle === "title") === !!clip.title,
+  );
   const sound = clips.filter((clip) => clip.hasAudio);
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
   const voices = sound.filter((clip) => clip !== bed);
@@ -68,18 +76,18 @@ export function clipMenuItems({
     { action: "editSelectClipsSelectTrackAfter" },
     "separator",
     { action: "cutroomAddTitle" },
-    // Style rows appear only for titles, the one clip kind that has a style to carry.
-    ...(titles.length
+    // Sound has no look, so style rows appear only for pictures.
+    ...(styled.length
       ? [
           {
             label: "Copy style",
-            run: () => onCopyStyle(titles[0]!),
-            disabled: titles.length !== 1,
+            run: () => onCopyStyle(styled[0]!),
+            disabled: styled.length !== 1,
           },
           {
             label: "Paste style",
-            run: () => onPasteStyle(titles),
-            disabled: !titleStyle,
+            run: () => onPasteStyle(pastable),
+            disabled: !copiedStyle || !pastable.length,
           },
         ]
       : []),

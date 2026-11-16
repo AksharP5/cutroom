@@ -11,7 +11,7 @@ import type {
   Track,
   Transition,
 } from "./schema";
-import { cutTitle, defaultTitle, editTitle } from "./title";
+import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
 import { TimelineError } from "./errors";
 import { clipFades, windowMix, withVolumePoints } from "./mix";
 import { MAX_FX_NODES, asHfChain } from "./fx";
@@ -32,6 +32,7 @@ import {
 } from "./transition";
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
+import { editStyle, takesStyleField } from "./elementStyle";
 import {
   moveKeyframe,
   parseKeyframeValue,
@@ -653,6 +654,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         keyframes: null,
         text: null,
         title: null,
+        style: {},
         fadeIn: 0,
         fadeOut: 0,
         transitionIn: null,
@@ -706,6 +708,11 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             !batch.silentMedia.has(input.src)),
         link: separate ? id : null,
         volume: input.volume ?? null,
+        // New pictures are placed to fit the frame, as the writer places them.
+        style:
+          input.kind === "video" || input.kind === "image"
+            ? { objectFit: "contain" }
+            : {},
       });
       let tracks = timeline.tracks;
       let audio: Clip[] = [];
@@ -735,6 +742,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             kind: "audio",
             track: routed.track,
             hasAudio: true,
+            style: {},
           },
         ];
       }
@@ -1007,6 +1015,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           target.sourceRestrictions?.title ??
             `${target.label ?? target.id} is not a Cutroom title.`,
         );
+      if (command.style !== undefined) {
+        const refused = Object.keys(command.style).find(
+          (field) => !takesStyleField(target.kind, field),
+        );
+        const refusal = isAudioKind(target.kind)
+          ? "Audio clips have no style."
+          : isTitle(target)
+            ? `${clipName(target)} is a Cutroom title. Change its look with setClip.title.`
+            : refused === "objectFit"
+              ? `${clipName(target)} is not a video or image, so it has no fit.`
+              : refused
+                ? `${clipName(target)} has no words to style; text style needs a text element.`
+                : null;
+        if (refusal) throw new TimelineError("unsupported", refusal);
+      }
       if (command.fx !== undefined && !target.hasAudio)
         throw new TimelineError(
           "unsupported",
@@ -1066,6 +1089,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                   clip.title && {
                     title: editTitle(clip.title, command.title),
                   }),
+                ...(command.style !== undefined && {
+                  style: editStyle(clip.style, command.style),
+                }),
                 ...(command.enabled !== undefined && {
                   enabled: command.enabled,
                 }),
