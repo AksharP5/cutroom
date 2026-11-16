@@ -77,23 +77,28 @@ export const CompositionDiagnosticsSchema = z.object({
   diagnostics: z.array(CompositionDiagnosticSchema).max(20),
 });
 
+/**
+ * The timing a live update writes, and the pinned runtime re-reads when they change. A mounted
+ * composition's compiled host carries its length as the authored duration or end.
+ */
+export const previewTimingAttributes = [
+  "data-start",
+  "data-duration",
+  "data-end",
+  "data-media-start",
+  "data-playback-start",
+  "data-playback-rate",
+  "data-hf-authored-duration",
+  "data-hf-authored-end",
+] as const;
+
 export const PreviewTimingSchema = z.object({
   structure: z.string(),
   revision: z.string(),
   clips: z.array(
     z.object({
       id: z.string(),
-      values: z.record(
-        z.enum([
-          "data-start",
-          "data-duration",
-          "data-end",
-          "data-media-start",
-          "data-playback-start",
-          "data-playback-rate",
-        ]),
-        z.string().nullable(),
-      ),
+      values: z.record(z.enum(previewTimingAttributes), z.string().nullable()),
       title: z
         .object({
           attributes: z.array(z.tuple([z.string(), z.string().nullable()])),

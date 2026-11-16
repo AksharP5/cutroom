@@ -283,6 +283,43 @@ test("a clip holding another clip or a composition is structure, not a movable c
   );
 });
 
+test("a mounted composition's timing travels with the update, while its content and place stay structure", () => {
+  const mounted = source
+    .replace(/ id="(v|a|title)"/g, ' id="$1" data-hf-cutroom-clip-id="$1"')
+    .replace(
+      "<head>",
+      '<head><meta name="hf-scene-parts" content="{&quot;shared&quot;:&quot;1&quot;}">',
+    )
+    .replace(
+      "</main>",
+      '<div id="scene" data-hf-cutroom-clip-id="scene" data-composition-id="card" data-hf-scene="card" data-start="3" data-hf-authored-duration="2"><main data-hf-inner-root="true"><div class="card">Card</div></main></div></main>',
+    );
+  // The runtime parks scenes and re-runs their scripts by this manifest, from windows fixed at load.
+  expect(previewDocument(mounted, "index.html", "").html).not.toContain(
+    '<meta name="hf-scene-parts"',
+  );
+  const moved = mounted
+    .replace('data-start="3"', 'data-start="4"')
+    .replace(
+      'data-hf-authored-duration="2"',
+      'data-hf-authored-duration="1.5"',
+    );
+  expect(liveChange(mounted, moved)).toEqual({ remove: [], insert: [] });
+  const scene = snapshot(moved).clips.find(({ id }) => id === "scene")!;
+  expect(scene.slot).toBeNull();
+  expect(scene.values["data-start"]).toBe("4");
+  expect(scene.values["data-hf-authored-duration"]).toBe("1.5");
+  expect(liveChange(mounted, mounted.replace(">Card<", ">Other<"))).toBe(
+    "reload",
+  );
+  expect(
+    liveChange(
+      mounted,
+      mounted.replace(/<div id="scene".*?<\/div><\/main><\/div>/, ""),
+    ),
+  ).toBe("reload");
+});
+
 test("generated HF ids change nothing, and a referenced one is added again with its clip", () => {
   const generated = source.replace('id="v"', 'data-hf-id="hf-old" id="v"');
   expect(snapshot(generated).structure).toBe(
@@ -503,7 +540,7 @@ test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   },
 );
 
-test("scripted preview responses skip dependency and timing work, including forged markers", async () => {
+test("preview responses whose scripts read timing skip dependency and timing work, including forged markers", async () => {
   const root = await mkdtemp(join(tmpdir(), "cutroom-reload-only-"));
   const store = await createProjectStore({
     dataDir: root,
@@ -544,7 +581,10 @@ test("scripted preview responses skip dependency and timing work, including forg
     };
     await writeFile(
       path,
-      html.replace("</body>", "<script>window.authored=true</script></body>"),
+      html.replace(
+        "</body>",
+        "<script>window.at=document.querySelector('#title').dataset.start</script></body>",
+      ),
     );
     await preview("scripted");
     expect(dependencies).toHaveBeenCalledTimes(0);

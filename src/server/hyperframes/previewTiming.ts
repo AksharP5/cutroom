@@ -12,17 +12,8 @@ import {
   titleAttributes,
   titleStyle,
 } from "../timeline/titles";
+import { previewTimingAttributes } from "../../shared/preview";
 import type { PreviewTiming } from "../../shared/preview";
-
-/** Only these attributes are re-read by the pinned runtime's timing observer. */
-const timingAttributes = [
-  "data-start",
-  "data-duration",
-  "data-end",
-  "data-media-start",
-  "data-playback-start",
-  "data-playback-rate",
-] as const;
 
 /** Validate the owned title contract before masking any saved values or generating CSS. */
 function titleContract(
@@ -122,7 +113,8 @@ function titleContract(
 }
 
 /** Compare the compiled document, including scripts, styles and nested compositions.
- * Only numeric timing and validated Cutroom title data on identified leaf clips may differ,
+ * Only numeric timing on identified clips and mounted compositions, and validated Cutroom
+ * title data on identified leaf clips, may differ,
  * along with the top-level composition's length. A clip with no clip or composition inside
  * it can also come and go: it leaves the structure, and its place, its other attributes and
  * its markup travel with the snapshot so a loaded document can add or remove it exactly.
@@ -178,6 +170,12 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
     attribute(node, "data-hf-cutroom-clip-id") !== undefined &&
     attribute(node, "data-composition-id") === undefined &&
     attribute(node, "data-composition-src") === undefined;
+  // A mounted composition keeps its place and content; only its timing may change, and the
+  // runtime then nests its timeline again at the new start.
+  const isHost = (node: DefaultTreeAdapterTypes.Element) =>
+    node !== root &&
+    attribute(node, "data-hf-cutroom-clip-id") !== undefined &&
+    attribute(node, "data-composition-id") !== undefined;
   // Styles and document metadata inside a clip affect other elements, so that clip is structure.
   const nested = (node: DefaultTreeAdapterTypes.Element): boolean =>
     node.childNodes.some(
@@ -195,7 +193,9 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
   for (const node of elements)
     if (
       isClip(node) &&
-      timingAttributes.every((name) => validTiming(attribute(node, name))) &&
+      previewTimingAttributes.every((name) =>
+        validTiming(attribute(node, name)),
+      ) &&
       !nested(node)
     )
       movable.set(node, serializeOuter(node));
@@ -210,15 +210,13 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
       if (!("tagName" in node)) continue;
       const attrs = new Map(node.attrs.map(({ name, value }) => [name, value]));
       const id = attrs.get("data-hf-cutroom-clip-id");
-      if (id && isClip(node)) {
-        const values = {
-          "data-start": attrs.get("data-start") ?? null,
-          "data-duration": attrs.get("data-duration") ?? null,
-          "data-end": attrs.get("data-end") ?? null,
-          "data-media-start": attrs.get("data-media-start") ?? null,
-          "data-playback-start": attrs.get("data-playback-start") ?? null,
-          "data-playback-rate": attrs.get("data-playback-rate") ?? null,
-        };
+      if (id && (isClip(node) || isHost(node))) {
+        const values = Object.fromEntries(
+          previewTimingAttributes.map((name) => [
+            name,
+            attrs.get(name) ?? null,
+          ]),
+        ) as PreviewTiming["clips"][number]["values"];
         // References and malformed timing require the full runtime initialization path.
         if (
           Object.values(values).every((value) =>
@@ -238,8 +236,9 @@ export function previewTiming(html: string, dependencies = ""): PreviewTiming {
           });
           node.attrs = node.attrs.filter(
             ({ name }) =>
-              !timingAttributes.some((attribute) => attribute === name) &&
-              !title?.attributes.some(([attribute]) => attribute === name),
+              !previewTimingAttributes.some(
+                (attribute) => attribute === name,
+              ) && !title?.attributes.some(([attribute]) => attribute === name),
           );
           if (title) node.childNodes = [];
         }

@@ -11,9 +11,38 @@ const gsap = readFileSync(
 /** Cutroom's own state: media caches, review and view state, attachments, exports. */
 export const APP_STATE_DIR = ".cutroom";
 
+/**
+ * How an ordinary script could read something a live update changes: clip timing and title
+ * data, markup, which elements surround a clip, media time, the runtime's state, the bridge's
+ * messages, or code this scan cannot see. A script with none of these builds the same state
+ * from the edited source as it built from the loaded one, so moving and trimming clips cannot
+ * change what it made. Which clips it found by selector is checked in the page.
+ */
+const liveInputs = [
+  /\bgetAttribute/,
+  /\b(?:attributes|dataset|outerHTML|getHTML|innerText|outerText|XMLSerializer)\b/,
+  // Assigning markup writes it; reading or appending to it reads it.
+  /\binnerHTML\b(?!\s*=[^=])/,
+  /data-(?:start|duration|end|media-start|playback|volume|title|cutroom|hf-)/,
+  /\b(?:children|childNodes|childElementCount|(?:first|last)(?:Element)?Child|(?:next|previous)(?:Element)?Sibling)\b/,
+  /\b(?:createTreeWalker|createNodeIterator|elementsFromPoint|elementFromPoint)\b/,
+  /\bdocument\s*\.\s*(?:all|images|links|forms|embeds|plugins|scripts|anchors)\b/,
+  /\b(?:currentTime|playbackRate|getComputedStyle|checkVisibility)\b/,
+  /\b(?:MutationObserver|IntersectionObserver)\b/,
+  /\b(?:eval|Function|import)\b/,
+  /\b(?:postMessage|onmessage|MessageChannel|BroadcastChannel)\b|["'`]message["'`]/,
+  /\b__(?:player|hf\w*|clipManifest)\b/,
+];
+
+/** Whether a script could read what a live timing update changes. */
+export function readsLiveInputs(script: string) {
+  return liveInputs.some((pattern) => pattern.test(script));
+}
+
 /** The sole policy for live attribute updates, including script-free Cutroom titles.
- * Project markup cannot opt arbitrary scripts in.
- * Run on the compiler's source reads, before it adds its runtime and bootstrap scripts.
+ * Inline scripts qualify when they cannot read what an update changes; script files only
+ * when they are the pinned GSAP library. Run on the compiler's source reads, before it adds
+ * its runtime and bootstrap scripts.
  */
 export function previewTimingPolicy(dir: string) {
   let allowed = true;
@@ -52,7 +81,7 @@ export function previewTimingPolicy(dir: string) {
               ([name, value]) =>
                 name.startsWith("on") ||
                 name === "srcdoc" ||
-                /^javascript:/i.test(value.replace(/[\u0000-\u0020]/g, "")),
+                /^javascript:/i.test(value.replace(/[\u0000- ]/g, "")),
             )
           )
             allowed = false;
@@ -60,8 +89,11 @@ export function previewTimingPolicy(dir: string) {
           if (scene && !/\.html?(?:[?#].*)?$/i.test(scene)) allowed = false;
           if (tag === "script") {
             const src = attrs.get("src");
-            const inline = node.textContent?.trim();
-            if (!src || inline || /^(?:[a-z]+:|\/\/)/i.test(src))
+            const inline = node.textContent ?? "";
+            if (attrs.has("data-hyperframes-preview-runtime")) allowed = false;
+            else if (src === undefined) {
+              if (readsLiveInputs(inline)) allowed = false;
+            } else if (inline.trim() || /^(?:[a-z]+:|\/\/)/i.test(src))
               allowed = false;
             else {
               // Only the actual pinned library is exempt, never a filename or authored marker.

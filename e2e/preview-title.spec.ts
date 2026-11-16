@@ -537,7 +537,10 @@ for (const failure of [
     const { project, edit } = await fixture(
       request,
       page,
-      failure === "script" ? "<script>window.authored=true</script>" : "",
+      // A script that found the title may have built from its words when it loaded.
+      failure === "script"
+        ? "<script>window.lower=document.querySelector('#lower')</script>"
+        : "",
     );
     if (failure === "discovery") {
       await afterPaint(page, () =>

@@ -16,6 +16,7 @@ import type { CompositionScope } from "../timeline/composition";
 import { TimelineError } from "../../shared/timeline/apply";
 import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming } from "./previewTiming";
+import { previewTimingAttributes } from "../../shared/preview";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
 import { frameSeek } from "../../shared/frames";
@@ -54,6 +55,8 @@ interface PreviewWindow extends DiagnosticWindow {
   };
   /** Replaced each time the runtime lays out the composition's clips again. */
   __clipManifest?: unknown;
+  /** Nests each mounted composition's timeline again at its host's current start. */
+  __hfForceTimelineRebind?: () => void;
   /** Without `videoFrames`, it settles everything except native video decodes. */
   __hfWaitForSeekCompletion?: (options?: {
     videoFrames?: boolean;
@@ -136,6 +139,7 @@ function installPreviewBridge(
   seekInFrame: typeof frameSeek,
   /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
   [minRate, maxRate]: [number, number],
+  timingAttributes: readonly string[],
   texts: [string, string[]][],
   initialTiming:
     | (Pick<
@@ -148,7 +152,161 @@ function installPreviewBridge(
         })[];
       })
     | null,
+  /** The document's element ids and names, which scripts can reach as globals. */
+  named: string[] = [],
 ) {
+  // Authored scripts build their state once, from the elements they find. Record what any
+  // script asked the document for, so an edit that adds or removes a clip it could have
+  // found, or changes a title's words under it, loads a fresh document instead. Only the
+  // runtime's and this bridge's own lookups are left out, by the source of their frames.
+  const sought = new Map<Node, Set<string>>();
+  // A selector that tests an element's siblings matches others when a clip comes or goes.
+  let siblingSelectors = false;
+  const runtimeScript = Document.prototype.querySelector;
+  let runtimeUrl: string | undefined;
+  // A script cannot make its own lookups look like the runtime's.
+  Object.defineProperty(Error, "prepareStackTrace", {
+    value: undefined,
+    writable: false,
+    configurable: false,
+  });
+  const fromScript = () => {
+    runtimeUrl ??=
+      (
+        runtimeScript.call(
+          document,
+          "script[data-hyperframes-preview-runtime]",
+        ) as HTMLScriptElement | null
+      )?.src || undefined;
+    const limit = Error.stackTraceLimit;
+    Error.stackTraceLimit = Infinity;
+    const stack = new Error().stack ?? "";
+    Error.stackTraceLimit = limit;
+    return stack.split("\n").some((line) => {
+      if (line.includes("eval at")) return true;
+      const source = /\(?([^\s()]+):\d+:\d+\)?$/.exec(line)?.[1];
+      return (
+        source !== undefined &&
+        !source.startsWith("cutroom-bridge:") &&
+        source !== runtimeUrl
+      );
+    });
+  };
+  const seek = (root: Node, selector: string) => {
+    // Detached copies, such as this bridge's comparison clones, are not the page.
+    if (root !== document && !root.isConnected) return;
+    const selectors = sought.get(root) ?? new Set<string>();
+    if (selectors.has(selector) || !fromScript()) return;
+    selectors.add(selector);
+    sought.set(root, selectors);
+    if (/[+~]|:(?:nth|first|last|only)-|:has\(|:empty\b/.test(selector))
+      siblingSelectors = true;
+  };
+  const lookups: [object, string, (args: unknown[]) => string | null][] = [
+    ...[Document.prototype, Element.prototype].flatMap(
+      (prototype): [object, string, (args: unknown[]) => string | null][] => [
+        [prototype, "querySelector", ([selector]) => String(selector)],
+        [prototype, "querySelectorAll", ([selector]) => String(selector)],
+        [
+          prototype,
+          "getElementsByClassName",
+          ([names]) =>
+            String(names)
+              .split(/[\t\n\f\r ]+/)
+              .filter(Boolean)
+              .map((name) => `.${CSS.escape(name)}`)
+              .join("") || null,
+        ],
+        [
+          prototype,
+          "getElementsByTagName",
+          ([tag]) => (String(tag) === "*" ? "*" : CSS.escape(String(tag))),
+        ],
+        [
+          prototype,
+          "getElementsByTagNameNS",
+          ([, tag]) => (String(tag) === "*" ? "*" : CSS.escape(String(tag))),
+        ],
+      ],
+    ),
+    [
+      Document.prototype,
+      "getElementById",
+      ([id]) => `#${CSS.escape(String(id))}`,
+    ],
+    [
+      Document.prototype,
+      "getElementsByName",
+      ([name]) => `[name="${String(name).replace(/["\\]/g, "\\$&")}"]`,
+    ],
+  ];
+  for (const [prototype, name, selector] of lookups) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name)!;
+    const lookup = descriptor.value as (...args: unknown[]) => unknown;
+    Object.defineProperty(prototype, name, {
+      ...descriptor,
+      value(this: Node, ...args: unknown[]) {
+        const found = lookup.apply(this, args);
+        const text = selector(args);
+        if (text) seek(this, text);
+        return found;
+      },
+    });
+  }
+  // An element's id or name is also a global. Each read of one goes through a getter that
+  // records it, then answers as the browser would. Window's own properties take precedence
+  // over these names, so those are left alone.
+  for (const key of new Set(named)) {
+    if (key in window) continue;
+    const shadow = (): void =>
+      void Object.defineProperty(window, key, {
+        configurable: true,
+        enumerable: false,
+        get() {
+          seek(
+            document,
+            `#${CSS.escape(key)}, [name="${key.replace(/["\\]/g, "\\$&")}"]`,
+          );
+          Reflect.deleteProperty(window, key);
+          const value: unknown = Reflect.get(window, key);
+          shadow();
+          return value;
+        },
+        // A script's own global of that name replaces the element's.
+        set(value: unknown) {
+          Object.defineProperty(window, key, {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value,
+          });
+        },
+      });
+    shadow();
+  }
+  /** Whether a script could have found this connected element, or one inside or around it. */
+  const found = (element: Element) => {
+    if (siblingSelectors) return true;
+    const related = [element, ...element.querySelectorAll("*")];
+    for (let node = element.parentElement; node; node = node.parentElement)
+      related.push(node);
+    for (const [root, selectors] of sought) {
+      if (root !== document && element.contains(root)) return true;
+      for (const selector of selectors)
+        for (const candidate of related)
+          try {
+            if (
+              candidate !== root &&
+              root.contains(candidate) &&
+              candidate.matches(selector)
+            )
+              return true;
+          } catch {
+            return true;
+          }
+    }
+    return false;
+  };
   const animatedTitles = new Set<string>();
   const titleAnimations = new Map<string, Set<Animation>>();
   let timingRevision = initialTiming?.revision;
@@ -2729,14 +2887,6 @@ function installPreviewBridge(
               throw new Error("The preview clip is ambiguous.");
             elements.set(id, element);
           }
-          const attributes = [
-            "data-start",
-            "data-duration",
-            "data-end",
-            "data-media-start",
-            "data-playback-start",
-            "data-playback-rate",
-          ];
           const clips: unknown[] = timing.clips;
           const markup = new Map<string, unknown>();
           const incoming = clips.map((clip): LiveClip => {
@@ -2786,6 +2936,8 @@ function installPreviewBridge(
               element!.getAnimations({ subtree: true }).length
             )
               throw new Error("This clip needs animation discovery.");
+            if (found(element!))
+              throw new Error("A script found this clip when it loaded.");
             return { id, element: element!, space };
           });
           const removed = new Set(change.remove);
@@ -2847,7 +2999,7 @@ function installPreviewBridge(
             const element = added.get(id) ?? elements.get(id);
             if (!element) throw new Error("The preview clip is missing.");
             const values: [string, string | null][] = [];
-            for (const name of attributes) {
+            for (const name of timingAttributes) {
               const value: unknown = Reflect.get(clip.values, name);
               if (
                 value !== null &&
@@ -2937,9 +3089,29 @@ function installPreviewBridge(
                 )
               )
                 throw new Error("Scale titles require fresh rasterization.");
+              if (changed && !added.has(id) && found(element))
+                throw new Error("A script found this title when it loaded.");
               text = title.text;
             } else if (title !== null)
               throw new Error("The preview titles changed.");
+            // A mounted composition is nested again where its host now starts. One that starts
+            // part way in is not placed the same way when a document loads, so it reloads.
+            if (
+              element.hasAttribute("data-composition-id") &&
+              values.some(
+                ([name, value]) => element.getAttribute(name) !== value,
+              ) &&
+              values.some(
+                ([name, value]) =>
+                  (name === "data-playback-start" ||
+                    name === "data-media-start") &&
+                  (Number(value ?? 0) !== 0 ||
+                    Number(element.getAttribute(name) ?? 0) !== 0),
+              )
+            )
+              throw new Error(
+                "A composition with an in-point needs a fresh document.",
+              );
             writes.push({ id, element, values, text });
           }
           const gains = trackGains(data.gains);
@@ -3062,10 +3234,14 @@ function installPreviewBridge(
             // before it is drawn, rather than changing it after it is confirmed.
             const manifest = inserts.length ? win.__clipManifest : undefined;
             const changedTitles = new Set<Element>();
+            let movedHosts = false;
             for (const { id, element, values, text } of writes) {
               for (const [name, value] of values)
-                if (write(element, name, value) && text)
-                  changedTitles.add(element);
+                if (write(element, name, value)) {
+                  if (text) changedTitles.add(element);
+                  if (element.hasAttribute("data-composition-id"))
+                    movedHosts = true;
+                }
               if (text) {
                 const current = titleNodes(element);
                 if (JSON.stringify(current) !== JSON.stringify(text)) {
@@ -3119,6 +3295,13 @@ function installPreviewBridge(
             // Authored rules such as :has() or :nth-child() can start one on any element when
             // clips come and go, and it would run in real time. Only changed titles, which are
             // recreated below, may start one.
+            // A script that could have found an added clip would have built state for it.
+            if (inserts.some(({ element }) => found(element))) {
+              for (const step of undo.reverse()) step();
+              for (const animation of document.getAnimations())
+                if (!running.has(animation)) animation.cancel();
+              throw new Error("A script would find this clip when it loads.");
+            }
             const started = document.getAnimations().filter((animation) => {
               if (running.has(animation)) return false;
               const target =
@@ -3205,6 +3388,13 @@ function installPreviewBridge(
               throw new Error("The title animations did not retire.");
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
+            // The runtime nests a mounted composition's timeline at its host's start when it
+            // loads. Its rebind nests each one again where its host now starts.
+            if (movedHosts) {
+              if (typeof win.__hfForceTimelineRebind !== "function")
+                throw new Error("The runtime cannot move a composition.");
+              win.__hfForceTimelineRebind();
+            }
             if (inserts.length) await layoutPass(manifest);
             seekRuntime(data.time);
             document
@@ -3554,6 +3744,9 @@ export function previewDocument(
   const offset = location?.startTag?.endOffset ?? html.length;
   const sourceTexts: [string, string[]][] = [];
   const { sources, edits } = compositionScriptSources(document, composition);
+  // Scripts reach an element with an id or name as a global, without asking the document.
+  const ids = new Set<string>();
+  const names = new Set<string>();
   // The opaque frame needs CORS media for Web Audio, including gain above unity and its level tap.
   // Only the served preview changes; project source and its producer input stay untouched.
   const visit = (nodes: DefaultTreeAdapterTypes.ChildNode[], fps = 30) => {
@@ -3568,6 +3761,12 @@ export function previewDocument(
       const timing = new Map(
         node.attrs.map(({ name, value }) => [name, value]),
       );
+      if (timing.get("id")) ids.add(timing.get("id")!);
+      if (
+        timing.get("name") &&
+        ["img", "form", "embed", "object"].includes(node.tagName)
+      )
+        names.add(timing.get("name")!);
       const id = timing.get("data-hf-cutroom-clip-id");
       if (id && timing.has("data-start")) {
         const text = node.childNodes
@@ -3623,6 +3822,20 @@ export function previewDocument(
             });
         }
       }
+      // HyperFrames' editor swaps and parks scenes by this manifest, re-running a scene's
+      // scripts as the playhead nears it, from windows fixed when the page loads. Without it,
+      // a scene is its host's timing, which a live update can move, as in export.
+      const place = node.sourceCodeLocation;
+      if (
+        node.tagName === "meta" &&
+        timing.get("name") === "hf-scene-parts" &&
+        place
+      )
+        edits.push({
+          offset: place.startOffset,
+          end: place.endOffset,
+          text: "",
+        });
       if (
         (node.tagName === "audio" || node.tagName === "video") &&
         !node.attrs.some(({ name }) => name === "crossorigin")
@@ -3669,8 +3882,9 @@ export function previewDocument(
         ),
       })),
     },
+    [...ids, ...names],
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ${JSON.stringify(previewTimingAttributes)}, ...${args});\n//# sourceURL=cutroom-bridge:///bridge.js\n</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

@@ -31,6 +31,11 @@ async function fixture(
   css = "",
   /** One clip per line, as a hand-written or editor-indented source has them. */
   indented = false,
+  /** More clips, and the files they mount. */
+  {
+    clips = "",
+    files = {},
+  }: { clips?: string; files?: Record<string, string> } = {},
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -61,7 +66,9 @@ async function fixture(
     "-shortest",
     join(project.path, "talk.mp4"),
   ]);
-  const composition = `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div></main></body></html>`;
+  const composition = `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}video{position:absolute;inset:0;width:100%;height:100%}#title{position:absolute;top:20px;left:20px;color:white;font:24px sans-serif}${css}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30000/1001" data-duration="10"><video id="v1" src="talk.mp4" muted data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="0"></video><audio id="a1" src="talk.mp4" data-link="p1" data-start="0" data-duration="2.535867" data-media-start="0" data-track-index="1"></audio><video id="v2" src="talk.mp4" muted data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="0"></video><audio id="a2" src="talk.mp4" data-link="p2" data-start="2.535867" data-duration="7.464133" data-media-start="2.535867" data-track-index="1"></audio><div id="title" class="clip" data-start="1" data-duration="3" data-track-index="2">Chapter one</div>${clips}</main></body></html>`;
+  for (const [file, content] of Object.entries(files))
+    await writeFile(join(project.path, file), content);
   await writeFile(
     join(project.path, "index.html"),
     indented
@@ -256,7 +263,7 @@ async function matchesFresh(
           tab
             .locator("iframe[data-live]")
             .contentFrame()
-            .locator("main")
+            .locator("html")
             .evaluate(() => ({
               time: (
                 window as unknown as { __player?: { getTime(): number } }
@@ -270,6 +277,32 @@ async function matchesFresh(
                 held: video.hasAttribute("data-cutroom-held"),
                 style: video.getAttribute("style"),
               })),
+              // Where each mounted composition's timeline sits, and the time it shows.
+              compositions: [
+                ...document.querySelectorAll("[data-composition-id]"),
+              ].map((host) => {
+                const id = host.getAttribute("data-composition-id")!;
+                const timeline = (
+                  window as unknown as {
+                    __timelines?: Record<
+                      string,
+                      { startTime(): number; time(): number }
+                    >;
+                  }
+                ).__timelines?.[id];
+                return {
+                  id,
+                  timing: [...host.attributes]
+                    .filter(({ name }) =>
+                      /^data-(start|duration|end|playback|media|hf-authored)/.test(
+                        name,
+                      ),
+                    )
+                    .map(({ name, value }) => `${name}=${value}`),
+                  nested: timeline?.startTime(),
+                  time: timeline?.time(),
+                };
+              }),
               holds: [
                 ...document.querySelectorAll(
                   "[data-cutroom-video-hold], [data-cutroom-edit-frame]",
@@ -690,6 +723,140 @@ test("ripple delete, lift, razor, turning clips off and every undo keep the docu
   );
 });
 
+/** A GSAP entrance at a literal time on the root timeline, and a scene whose own script animates it. */
+const scripted = {
+  scripts:
+    '<script src="assets/vendor/gsap.min.js"></script><script>window.__timelines??={};window.__timelines.main=gsap.timeline({paused:true}).fromTo("#gtitle span",{x:-200,opacity:0},{x:0,opacity:1,duration:1},3);</script>',
+  clips:
+    '<div id="gtitle" class="clip" data-start="3" data-duration="3" data-track-index="3" style="position:absolute;left:20px;top:120px;color:#fff;font:32px sans-serif"><span style="display:inline-block">Entrance</span></div><div id="scene" data-composition-id="card" data-composition-src="card.html" data-start="5.005" data-duration="3.003" data-track-index="4" data-width="640" data-height="360" style="position:absolute;inset:0"></div>',
+  files: {
+    "card.html":
+      '<template><main data-composition-id="card" data-width="640" data-height="360" data-duration="3"><div class="card" style="position:absolute;left:40px;top:220px;width:200px;height:80px;background:#2b6cb0"></div></main><script>{const tl=gsap.timeline({paused:true});tl.fromTo(".card",{x:300,opacity:0},{x:0,opacity:1,duration:1},0);window.__timelines.card=tl;}</script></template>',
+  },
+};
+
+test("GSAP titles and a scripted scene move, trim and ripple in place and match fresh pictures", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(300000);
+  const { project, edit } = await fixture(
+    request,
+    page,
+    scripted.scripts,
+    "",
+    false,
+    scripted,
+  );
+  await waitForPreview(page, { timing: true });
+  const picture = page.locator("iframe[data-live]").contentFrame();
+  const original = await live(page);
+  const inPlace = async (
+    change: () => Promise<unknown>,
+    frames: number[],
+    label: string,
+  ) => {
+    const previous = await token(page);
+    await change();
+    await waitForPreview(page, { after: previous });
+    await waitForPreview(page);
+    expect(await live(page), label).toBe(original);
+    await matchesFresh(page, project.id, frames, label);
+  };
+  const history = (key: string) =>
+    page
+      .getByRole("button", { name: /^Current time/ })
+      .focus()
+      .then(() => page.keyboard.press(key));
+  await seek(page, 100);
+  await inPlace(
+    () =>
+      edit([{ type: "move", clipIds: ["gtitle"], by: 15, mode: "overwrite" }]),
+    [95, 105, 110, 120],
+    "move title",
+  );
+  await inPlace(
+    () =>
+      edit([
+        { type: "trim", clipId: "gtitle", edge: "end", to: 150, ripple: false },
+      ]),
+    [140, 150, 160],
+    "trim title",
+  );
+  await inPlace(
+    () =>
+      edit([{ type: "move", clipIds: ["scene"], by: 20, mode: "overwrite" }]),
+    [150, 165, 175, 190, 200, 260],
+    "move scene",
+  );
+  await expect(picture.locator("#scene")).toHaveAttribute(
+    "data-start",
+    String((170 * 1001) / 30000),
+  );
+  await inPlace(
+    () =>
+      edit([
+        { type: "trim", clipId: "scene", edge: "end", to: 230, ripple: false },
+      ]),
+    [180, 229, 230, 245],
+    "trim scene",
+  );
+  // Closing the first pair's gap moves the title, the scene and the second pair back.
+  await inPlace(
+    () => edit([{ type: "remove", clipIds: ["v1"], ripple: true }]),
+    [0, 20, 30, 50, 95, 100, 120, 160],
+    "ripple delete",
+  );
+  await inPlace(() => history("Control+z"), [30, 100, 175, 200], "undo");
+  await inPlace(() => history("Control+Shift+z"), [30, 100, 120], "redo");
+  // Trimming its head gives the scene an in-point, which only a fresh document places.
+  const previous = await token(page);
+  await edit([
+    { type: "trim", clipId: "scene", edge: "start", to: 100, ripple: false },
+  ]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).not.toBe(original);
+  await matchesFresh(page, project.id, [95, 100, 110, 140], "trim scene head");
+});
+
+test("a clip a script found by class comes and goes through a fresh document, while other clips stay in place", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180000);
+  const { project, edit } = await fixture(
+    request,
+    page,
+    '<script src="assets/vendor/gsap.min.js"></script><script>window.__timelines??={};window.__timelines.main=gsap.timeline({paused:true}).fromTo(gsap.utils.toArray("video"),{opacity:0.4},{opacity:1,duration:2},1);</script>',
+    "",
+    false,
+    {
+      clips:
+        '<div id="note" class="clip" data-start="5" data-duration="2" data-track-index="2" style="position:absolute;top:60px;left:20px;color:#fff">Note</div>',
+    },
+  );
+  await waitForPreview(page, { timing: true });
+  const original = await live(page);
+  await seek(page, 150);
+  // The script asked for every video, so a fresh document gives the new piece its tween too.
+  let previous = await token(page);
+  await edit([{ type: "split", at: 150, clipIds: ["v2"] }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  const razored = await live(page);
+  expect(razored).not.toBe(original);
+  await matchesFresh(page, project.id, [40, 149, 150, 151], "razor");
+  // The script did not find the note: lifting it keeps the fresh document.
+  await waitForPreview(page, { timing: true });
+  previous = await token(page);
+  await edit([{ type: "remove", clipIds: ["note"], ripple: false }]);
+  await waitForPreview(page, { after: previous });
+  await waitForPreview(page);
+  expect(await live(page)).toBe(razored);
+  await matchesFresh(page, project.id, [40, 150, 160], "lift note");
+});
+
 test("the edit after a burst of W, undo, D and lift at 7 keys a second keeps the document and matches a fresh picture", async ({
   page,
   request,
@@ -891,7 +1058,10 @@ test("MCP and disk edits refresh both tabs in place, while script and CSS change
   for (const transform of [
     (s: string) => s.replace("color:white", "color:yellow"),
     (s: string) =>
-      s.replace("</body>", "<script>window.testValue=42</script></body>"),
+      s.replace(
+        "</body>",
+        "<script>window.testValue=document.querySelector('#title').dataset.start</script></body>",
+      ),
     (s: string) => s.replace('id="title"', 'id="title" data-track-index="3"'),
     (s: string) =>
       s.replace(
@@ -1091,14 +1261,20 @@ for (const [name, scripts] of [
     "init-time GSAP",
     '<script src="assets/vendor/gsap.min.js"></script><script>const title=document.querySelector("#title");window.__timelines={main:gsap.timeline({paused:true}).fromTo(title,{x:-120},{x:0,duration:1},+title.dataset.start)};</script>',
   ],
-  ["noembed", "<noembed><script>window.authored=true</script></noembed>"],
-  ["noscript", "<noscript><script>window.authored=true</script></noscript>"],
+  [
+    "noembed",
+    "<noembed><script>window.at=document.querySelector('#title').dataset.start</script></noembed>",
+  ],
+  [
+    "noscript",
+    "<noscript><script>window.at=document.querySelector('#title').dataset.start</script></noscript>",
+  ],
   [
     "forged timing replies",
     '<script>addEventListener("message",e=>{if(e.data?.action!=="timing")return;parent.postMessage({type:"forged-timing-attempt"},"*");parent.postMessage({source:"cutroom-preview",id:e.data.id,timingRevision:e.data.timing.revision,state:{ready:true,root:true,error:null,width:640,height:360,fps:"30000/1001",time:0,playing:false}},"*")})</script>',
   ],
 ] as const)
-  test(`authored ${name} always reloads, even if the next source becomes script-free`, async ({
+  test(`authored ${name} that reads timing always reloads, even if the next source becomes script-free`, async ({
     page,
     request,
   }) => {
@@ -1206,7 +1382,9 @@ for (const scripted of [false, true])
     const { read, project } = await fixture(
       request,
       page,
-      scripted ? "<script>window.authored=true</script>" : "",
+      scripted
+        ? "<script>window.at=document.querySelector('#title').dataset.start</script>"
+        : "",
     );
     const initial = (await read()).timeline.clips.find(
       (clip) => clip.id === "title",

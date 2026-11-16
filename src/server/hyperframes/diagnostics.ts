@@ -258,5 +258,5 @@ export function compositionDiagnosticsScript(
   sources: ScriptSource[],
 ) {
   const input = JSON.stringify([entryFile, sources]).replaceAll("<", "\\u003c");
-  return `<script>(${installDiagnostics.toString()})(...${input});</script>`;
+  return `<script>(${installDiagnostics.toString()})(...${input});\n//# sourceURL=cutroom-bridge:///diagnostics.js\n</script>`;
 }
