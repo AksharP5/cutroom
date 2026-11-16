@@ -255,9 +255,12 @@ export function ValueField({
   before,
   after,
   half = false,
+  keyframe,
   onReset,
   ...props
 }: FieldProps & {
+  /** The row's keyframe diamond, at the end of its label. */
+  keyframe?: ReactNode;
   /** Takes one column of a paired row, so it lines up with the pairs around it. */
   half?: boolean;
   /** A control that shares the row, ahead of the value. */
@@ -268,15 +271,25 @@ export function ValueField({
 }) {
   const { id, handle, field, setDraft } = useValue(props);
   const { allowAuto, value, disabled, onCommit } = props;
+  const label = (
+    <label
+      {...handle}
+      title={onReset && !disabled ? "Double-click to reset" : undefined}
+      onDoubleClick={disabled ? undefined : onReset}
+    >
+      {props.label}
+    </label>
+  );
   return (
     <div className="inspector-field">
-      <label
-        {...handle}
-        title={onReset && !disabled ? "Double-click to reset" : undefined}
-        onDoubleClick={disabled ? undefined : onReset}
-      >
-        {props.label}
-      </label>
+      {keyframe ? (
+        <span className="inspector-label-cell">
+          {label}
+          {keyframe}
+        </span>
+      ) : (
+        label
+      )}
       <div
         className="inspector-value"
         data-paired={after || half ? "" : undefined}
@@ -333,6 +346,7 @@ export function FieldRow({
   label,
   disabled,
   extra,
+  keyframe,
   onReset,
   children,
 }: {
@@ -340,6 +354,8 @@ export function FieldRow({
   disabled?: boolean;
   /** A control beside the label, such as the scale link. */
   extra?: ReactNode;
+  /** The row's keyframe diamond, at the end of its label. */
+  keyframe?: ReactNode;
   onReset?(): void;
   children: ReactNode;
 }) {
@@ -352,6 +368,7 @@ export function FieldRow({
       >
         {label}
         {extra}
+        {keyframe}
       </span>
       <div className="inspector-value" data-paired="">
         {children}

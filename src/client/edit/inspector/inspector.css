@@ -590,3 +590,45 @@
 .inspector-markers [data-color="yellow"] {
   --marker: var(--marker-sand);
 }
+
+/* A keyframeable row's diamond sits at the end of its label, so values stay in one column. */
+.inspector-label-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.clip-inspector .inspector-keyframe {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.clip-inspector .inspector-keyframe::before {
+  content: "";
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: auto;
+  border: var(--stroke-hair) solid var(--glyph-faint);
+  transform: rotate(45deg);
+}
+.clip-inspector .inspector-keyframe[data-state="keyed"]::before {
+  border-color: var(--text-secondary);
+}
+.clip-inspector .inspector-keyframe[data-state="on"]::before {
+  border-color: var(--selection);
+  background: var(--selection);
+}
+.clip-inspector .inspector-keyframe:hover:not(:disabled)::before {
+  border-color: var(--text-primary);
+}
+.clip-inspector .inspector-keyframe:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

@@ -175,6 +175,26 @@ export async function commitTransformPreview(
   transformDraft = null;
 }
 
+/** Inline values that draw a keyframed property's draft, by CSS longhand. */
+export type KeyframeStyle = Record<string, string>;
+type KeyframeDraft = { clipId: string; style: KeyframeStyle | null };
+const keyframeTargets = new Set<(draft: KeyframeDraft) => void>();
+let keyframeDraft: KeyframeDraft | null = null;
+/** A keyframed property's value while it is scrubbed or typed; null restores the saved animation. */
+export function previewKeyframe(clipId: string, style: KeyframeStyle | null) {
+  keyframeDraft = { clipId, style };
+  for (const target of keyframeTargets) target(keyframeDraft);
+}
+
+export async function commitKeyframePreview(commit: () => Promise<boolean>) {
+  const draft = keyframeDraft;
+  const accepted = await commit();
+  // The saved document replaces the drafted one; an earlier commit never clears a later draft.
+  if (keyframeDraft !== draft) return;
+  if (!accepted && draft) previewKeyframe(draft.clipId, null);
+  keyframeDraft = null;
+}
+
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   let state: PreviewState = {
@@ -415,6 +435,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const transform = (draft: TransformDraft) => {
     send("transform", draft);
   };
+  const keyframe = (draft: KeyframeDraft) => {
+    send("keyframe", draft);
+  };
   const observe = (clipId: string | null) =>
     send("observe-position", {
       clipId,
@@ -447,6 +470,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       positionDraft = null;
     if (transformTargets.delete(transform) && !transformTargets.size)
       transformDraft = null;
+    if (keyframeTargets.delete(keyframe) && !keyframeTargets.size)
+      keyframeDraft = null;
     observers.delete(observe);
     if (warningSource === frame) {
       warningSource = null;
@@ -498,18 +523,26 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     async activate() {
       positionTargets.add(position);
       transformTargets.add(transform);
+      keyframeTargets.add(keyframe);
       // Keep both documents following the gesture until the new one has painted its latest
       // draft. Promotion runs immediately after this resolves, before another event can edit it.
       let shown: PositionDraft | null;
       let shownTransform: TransformDraft | null;
+      let shownKeyframe: KeyframeDraft | null;
       do {
         shown = positionDraft;
         shownTransform = transformDraft;
+        shownKeyframe = keyframeDraft;
         if (shown) position(shown);
         if (shownTransform) transform(shownTransform);
+        if (shownKeyframe) keyframe(shownKeyframe);
         await request("paint");
         closing.signal.throwIfAborted();
-      } while (shown !== positionDraft || shownTransform !== transformDraft);
+      } while (
+        shown !== positionDraft ||
+        shownTransform !== transformDraft ||
+        shownKeyframe !== keyframeDraft
+      );
       // A candidate follows a drag already under way before it can replace the picture.
       let editing: EditPicture | null;
       let hadEdit = false;

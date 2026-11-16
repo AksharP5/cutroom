@@ -1450,3 +1450,29 @@ input.tl-track-gain {
   cursor: ns-resize;
   user-select: none;
 }
+
+/* A clip's keyframes: diamonds along the foot of its body, on the text layer so a zoom never stretches them. */
+.tl-keyframe {
+  position: absolute;
+  bottom: 3px;
+  left: calc(var(--f) / var(--span) * 100%);
+  width: 13px;
+  height: 13px;
+  margin-left: -6.5px;
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+.tl-keyframe::before {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border: var(--stroke-hair) solid var(--on-selection);
+  background: var(--text-secondary);
+  transform: rotate(45deg);
+}
+.tl-keyframe.selected::before {
+  background: var(--selection);
+}
+.tl-keyframe:hover::before {
+  background: var(--text-primary);
+}

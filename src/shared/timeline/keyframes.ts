@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { KEYFRAME_PROPERTIES, KeyframeValueSchemas } from "./schema";
 import type { Clip, KeyframeEase, KeyframeProperty, Keyframes } from "./schema";
+import { transformStyle } from "./transform";
 
 export type KeyframeValues = {
   [P in KeyframeProperty]: z.output<(typeof KeyframeValueSchemas)[P]>;
@@ -272,3 +273,26 @@ export function shiftKeyframes(
     {},
   );
 }
+
+const CSS: {
+  [P in KeyframeProperty]: (value: KeyframeValues[P]) => [string, string];
+} = {
+  position: ({ x, y }) => ["translate", `${x}px ${y}px`],
+  scale: ({ x, y }) => [
+    "scale",
+    transformStyle({ scaleX: x, scaleY: y, rotation: null, crop: null }).scale!,
+  ],
+  rotation: (degrees) => ["rotate", `${degrees}deg`],
+  crop: (crop) => [
+    "clip-path",
+    transformStyle({ scaleX: null, scaleY: null, rotation: null, crop })[
+      "clip-path"
+    ]!,
+  ],
+  opacity: (opacity) => ["opacity", String(opacity)],
+};
+/** The CSS longhand and value that draw a property's value, for the stylesheet and drafts. */
+export const keyframeCss = <P extends KeyframeProperty>(
+  property: P,
+  value: KeyframeValues[P],
+) => CSS[property](value);

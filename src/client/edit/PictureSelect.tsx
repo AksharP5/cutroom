@@ -8,6 +8,13 @@ import { useWorkspace } from "../workspace";
 import { inspectorSubject } from "./inspector/fields";
 import { contains, cornerScale, dragOffset, pickHit } from "./pictureDrag";
 import { editTransform } from "../../shared/timeline/transform";
+import { valueAt } from "../../shared/timeline/keyframes";
+import {
+  cancelKeyframeDraft,
+  commitKeyframe,
+  draftKeyframe,
+  isKeyed,
+} from "./inspector/Keyframes";
 import {
   cancelPositionPreview,
   cancelTransformPreview,
@@ -83,6 +90,13 @@ function placeOutline(element: HTMLElement, box: PictureBox, scale: Offset) {
 }
 
 /** One Position change in flight: where the clip was and where the gesture has put it. */
+/** The clip-local frame under the playhead, held inside the clip: where a keyframed edit lands. */
+const playheadIn = (clip: Clip) =>
+  Math.max(
+    0,
+    Math.min(clip.duration - 1, useTransport.getState().frame - clip.start),
+  );
+
 interface Move {
   timeline: Timeline;
   clip: Clip;
@@ -304,11 +318,13 @@ export function PictureSelect({
   };
   /** The picture follows through the preview's draft path; the inspector shows the numbers. */
   const show = ({ clip, to }: Move) => {
-    previewPosition(clip.id, to.x, to.y);
+    if (isKeyed(clip, "position")) draftKeyframe(clip, "position", to);
+    else previewPosition(clip.id, to.x, to.y);
     usePictureMove.setState({ move: { clipId: clip.id, ...to } });
   };
   const restore = ({ clip, from }: Move) => {
-    cancelPositionPreview(clip.id, from.x, from.y);
+    if (isKeyed(clip, "position")) cancelKeyframeDraft(clip);
+    else cancelPositionPreview(clip.id, from.x, from.y);
     usePictureMove.setState({ move: null });
   };
   /** Release and key-up both end here: one command, so one undo step. */
@@ -319,6 +335,13 @@ export function PictureSelect({
       return;
     }
     const { projectId } = latest.current;
+    // The timeline already shows the edit, so the fields go straight to the new value.
+    usePictureMove.setState({ move: null });
+    // A keyframed position saves as the keyframe at the playhead.
+    if (isKeyed(clip, "position")) {
+      void commitKeyframe(projectId, clip, "position", playheadIn(clip), to);
+      return;
+    }
     void commitPositionPreview(() =>
       editTimeline(
         projectId,
@@ -327,8 +350,6 @@ export function PictureSelect({
         move.timeline,
       ),
     );
-    // The timeline already shows the edit, so the fields go straight to the new value.
-    usePictureMove.setState({ move: null });
   };
 
   /** A handle drag draws through the same drafts as the inspector's Scale fields. */
@@ -347,14 +368,17 @@ export function PictureSelect({
       x: scale(current.from.x, factor.x),
       y: scale(current.from.y, factor.y),
     };
-    previewTransform(
-      current.clip.id,
-      editTransform(current.clip, {
-        scaleX: current.to.x,
-        scaleY: current.to.y,
-      }),
-      current.clip,
-    );
+    if (isKeyed(current.clip, "scale"))
+      draftKeyframe(current.clip, "scale", current.to);
+    else
+      previewTransform(
+        current.clip.id,
+        editTransform(current.clip, {
+          scaleX: current.to.x,
+          scaleY: current.to.y,
+        }),
+        current.clip,
+      );
     usePictureScale.setState({
       scale: {
         clipId: current.clip.id,
@@ -371,8 +395,15 @@ export function PictureSelect({
     useWorkspace.setState({ gesture: false });
     usePictureScale.setState({ scale: null });
     const { clip, from, to } = current;
+    const keyed = isKeyed(clip, "scale");
     if (cancel || (to.x === from.x && to.y === from.y)) {
-      cancelTransformPreview(clip.id, clip);
+      if (keyed) cancelKeyframeDraft(clip);
+      else cancelTransformPreview(clip.id, clip);
+      return;
+    }
+    if (keyed) {
+      const { projectId } = latest.current;
+      void commitKeyframe(projectId, clip, "scale", playheadIn(clip), to);
       return;
     }
     void commitTransformPreview(clip, () =>
@@ -446,7 +477,7 @@ export function PictureSelect({
         return;
       }
       if (target.id !== clip?.id) select(hit, false);
-      const from = { x: target.x ?? 0, y: target.y ?? 0 };
+      const from = valueAt(target, "position", playheadIn(target));
       current.drag = {
         timeline: current.timeline,
         clip: target,
@@ -630,7 +661,7 @@ export function PictureSelect({
             x: shown.box.x + shown.box.width / 2,
             y: shown.box.y + shown.box.height / 2,
           };
-          const from = { x: clip.scaleX ?? 1, y: clip.scaleY ?? 1 };
+          const from = valueAt(clip, "scale", playheadIn(clip));
           event.currentTarget.setPointerCapture(event.pointerId);
           useWorkspace.setState({ gesture: true });
           scaling.current = {
@@ -853,7 +884,7 @@ export function PictureSelect({
           return;
         // The picture has focus, so the arrows move the clip instead of the playhead.
         event.preventDefault();
-        const from = { x: clip.x ?? 0, y: clip.y ?? 0 };
+        const from = valueAt(clip, "position", playheadIn(clip));
         const current = (nudge.current ??= {
           timeline: view.timeline,
           clip,

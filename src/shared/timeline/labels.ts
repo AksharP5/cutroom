@@ -320,7 +320,7 @@ export function editLabel(
               ? `${pending ? "Move" : "Moved"} the ${what} to ${at(command.to)}`
               : existing
                 ? `${pending ? "Change" : "Changed"} the ${what} at ${at(command.frame)}`
-                : `${pending ? "Add" : "Added"} a ${what} at ${at(command.frame)}`;
+                : `${pending ? "Add" : "Added"} ${command.property === "opacity" ? "an" : "a"} ${what} at ${at(command.frame)}`;
         return `${sentence}${named ? ` on ${target([command.clipId])}` : ""}`;
       }
       case "setTransition": {
