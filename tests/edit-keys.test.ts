@@ -39,6 +39,7 @@ const clip = (
   transitionIn: null,
   transitionOut: null,
   automation: null,
+  fx: [],
   enabled: true,
   hasAudio: false,
   startRef: null,
@@ -60,6 +61,7 @@ const sequence = (tracks: Partial<Track>[] = []): Timeline =>
       muted: false,
       solo: false,
       volume: 1,
+      fx: [],
       ...tracks.find((track) => track.index === index),
     })),
     clips: [

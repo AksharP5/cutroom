@@ -11,6 +11,7 @@ export const newTrack = (index: number, kind: Track["kind"]): Track => ({
   muted: false,
   solo: false,
   volume: 1,
+  fx: [],
 });
 
 /** Indexes are stable identities, shared with HTML's data-track-index. */

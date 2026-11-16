@@ -107,6 +107,23 @@ A clip with sound can carry a volume envelope, which the editor draws as points 
 
 `setClip.automation.volume` replaces the whole envelope with the points given, in any order; two points on one frame are refused, and so is an envelope on a clip without sound. Frames may be fractional, as baked ramps read back. `[]` removes the envelope and keeps effect lanes; `automation: null` removes every lane. The envelope multiplies with the clip's gain, its fades and its track's gain. It is clip-local, so it moves with the clip; a tail trim keeps it, and a razor or a head trim keeps the level at the cut but drops points before the clip's new first frame. A transition on a clip with an envelope crossfades with straight fades. A baked ramp may bend between its points; writing points back makes straight runs. Preview and export play the same envelope.
 
+### Audio effects
+
+A clip with sound, and a track, carry an effect chain in `fx`, in signal order. Reads list each effect as `{ "id": "n2", "type": "limiter", "params": { "limit": -6 } }`, leaving out parameters at their defaults; `enabled: false` marks a bypassed effect, `label` its name in the rack, and `preset` the preset that added it. `setClip.fx` and `setTrack.fx` take the whole chain:
+
+```json
+{
+  "type": "setClip",
+  "clipId": "voice",
+  "fx": [
+    { "preset": "voice-clean" },
+    { "type": "limiter", "params": { "limit": -3 } }
+  ]
+}
+```
+
+An entry is an effect, `{ type, params, enabled, label, id }`, or a preset, `{ preset }`, which adds that preset's effects in order. An entry naming an existing `id` of the same type keeps the values it leaves out, so `{ "id": "n2", "type": "limiter", "enabled": false }` bypasses that limiter and changes nothing else; new effects get the next free id, `n1`, `n2` and so on. `[]` removes every effect. Types are `gain`, `peaking`, `lowshelf`, `highshelf`, `highpass`, `lowpass`, `compressor`, `limiter`, `truepeak`, `gate`, `saturate`, `bitcrush`, `pitchshift`, `delay`, `chorus`, `phaser` and `reverb`; presets are HyperFrames' `voice-clean`, `voice-broadcast`, `voice-warm`, `rumble-cut`, `room-gate`, `boom-tame`, `harsh-tame`, `telephone`, `radio-am`, `megaphone`, `lofi-tape`, `pa-system`, `intercom`, `doofus-worble`, `chipmunk`, `giant`, `monster`, `room-tight`, `room-natural`, `hall`, `slap-echo` and `dub-throw`. Parameters are numbers in the effect's own units within its range, or one of its choices; anything else is refused with the effect's range, and nothing typed reaches the audio graph as text. A chain holds up to 32 effects. A clip's chain is its `data-fx-chain`; a track's goes on its bus and processes every clip on the track except those with `trackGainWarning`. A clip without sound, or one whose authored chain Cutroom cannot read (`sourceRestrictions.fx` says why), is refused. Editing a chain keeps what a voiceover carve or HyperFrames Studio marked on the effects it keeps. Each command is one undo step, and preview and export play the same chain.
+
 In the editor, drops, moves and overwrite pastes that remove a whole clip show one short notice naming the replaced clip, with Undo. Media or a paste placed over part of a clip names it as partly replaced in the same notice. A clip moved over part of another, and a trim, stay silent.
 
 ### Titles

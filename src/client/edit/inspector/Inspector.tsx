@@ -34,6 +34,7 @@ import { combinedGainText, inspectorSubject, timingCommands } from "./fields";
 import type { TimingField } from "./fields";
 import { TransitionSection } from "./TransitionSection";
 import { FieldRow, ValueCell, ValueField } from "./ValueField";
+import { FxRack } from "./FxRack";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { TransformFields } from "./TransformFields";
@@ -795,6 +796,20 @@ export function Inspector({
                     />
                   ))}
                 </FieldRow>
+                {audio.sourceRestrictions?.fx && (
+                  <p className="inspector-warning" role="note">
+                    {audio.sourceRestrictions.fx}
+                  </p>
+                )}
+                <FxRack
+                  fx={audio.fx}
+                  disabled={locked || !!audio.sourceRestrictions?.fx}
+                  onChange={(label, fx) =>
+                    void editTimeline(projectId, label, () => [
+                      { type: "setClip", clipId: audio.id, fx },
+                    ])
+                  }
+                />
                 {audio.automation && (
                   <button
                     className="inspector-clear-automation"

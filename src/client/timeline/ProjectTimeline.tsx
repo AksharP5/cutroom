@@ -33,6 +33,8 @@ import {
   useViewSettings,
 } from "./viewSettings";
 import { TrackGainDialog } from "./TrackGain";
+import { FxRack } from "../edit/inspector/FxRack";
+import { Modal } from "../components/Modal";
 import { clipName } from "../../shared/timeline/labels";
 import { MarkerEditor } from "./MarkerEditor";
 import type { Marker, Track } from "../../shared/timeline/schema";
@@ -104,6 +106,9 @@ export function ProjectTimeline({
   );
   const view = useTimeline((state) => state.view);
   const [gainTrack, setGainTrack] = useState<Track | null>(null);
+  /** The track whose effects are open, by index, so the dialog shows each edit as it lands. */
+  const [fxTrack, setFxTrack] = useState<number | null>(null);
+  const openFx = view?.timeline.tracks.find((track) => track.index === fxTrack);
   const [editingMarker, setEditingMarker] = useState<{
     marker: Marker;
     anchor: { x: number; y: number };
@@ -470,6 +475,7 @@ export function ProjectTimeline({
               run: () => voiceover.toggleArm(track),
             },
             { label: "Set gain...", run: () => setGainTrack(track) },
+            { label: "Effects...", run: () => setFxTrack(track.index) },
             {
               // A compact header has no room for the level, so the menu names it.
               label:
@@ -524,7 +530,30 @@ export function ProjectTimeline({
           onClose={() => setGainTrack(null)}
         />
       )}
+      {openFx && (
+        <Modal
+          title={`${openFx.name ?? "Track"} effects`}
+          onClose={() => setFxTrack(null)}
+        >
+          <div className="clip-inspector">
+            <FxRack
+              fx={openFx.fx}
+              onChange={(label, fx) =>
+                void editTimeline(projectId, label, () => [
+                  {
+                    type: "setTrack",
+                    index: openFx.index,
+                    kind: openFx.kind,
+                    fx,
+                  },
+                ])
+              }
+            />
+          </div>
+        </Modal>
+      )}
       <Timeline
+        onTrackFx={(track) => setFxTrack(track.index)}
         recording={
           recording ? { track: recording.track, start: recording.start } : null
         }

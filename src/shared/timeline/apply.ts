@@ -14,6 +14,16 @@ import type {
 import { cutTitle, defaultTitle, editTitle } from "./title";
 import { TimelineError } from "./errors";
 import { clipFades, windowMix, withVolumePoints } from "./mix";
+import { MAX_FX_NODES, asHfChain } from "./fx";
+import type { FxInput, FxNode } from "./fx";
+import {
+  mintAudioFxNodeId,
+  normalizeAudioFxParams,
+} from "@hyperframes/core/audio-fx";
+import {
+  audioFxPresetNodes,
+  getAudioFxPreset,
+} from "@hyperframes/core/audio-fx-presets";
 import {
   framesAfter,
   framesBefore,
@@ -108,6 +118,59 @@ export const randomClipId: NewId = (base, from, taken) => {
     if (!taken.has(id)) return id;
   }
 };
+
+/**
+ * The chain a command asks for, from the one there is. An effect named by an existing id keeps
+ * the values it leaves out, so `{ id, type, enabled: false }` bypasses it and nothing else.
+ */
+function buildFxChain(
+  previous: readonly FxNode[],
+  inputs: readonly FxInput[],
+): FxNode[] {
+  const nodes: FxNode[] = [];
+  for (const input of inputs) {
+    if ("preset" in input) {
+      const preset = getAudioFxPreset(input.preset)!;
+      nodes.push(
+        ...audioFxPresetNodes(preset, asHfChain(nodes)).map((node) => ({
+          id: node.id!,
+          type: node.type,
+          enabled: true,
+          label: node.label ?? null,
+          preset: preset.id,
+          params: node.params ?? {},
+        })),
+      );
+      continue;
+    }
+    const id = input.id ?? mintAudioFxNodeId(asHfChain(nodes));
+    if (nodes.some((node) => node.id === id))
+      throw new TimelineError(
+        "unsupported",
+        `Two effects have the id ${id}. Give each its own.`,
+      );
+    const kept = previous.find(
+      (node) => node.id === id && node.type === input.type,
+    );
+    nodes.push({
+      id,
+      type: input.type,
+      enabled: input.enabled ?? kept?.enabled ?? true,
+      label: input.label !== undefined ? input.label : (kept?.label ?? null),
+      preset: kept?.preset ?? null,
+      params: normalizeAudioFxParams(input.type, {
+        ...kept?.params,
+        ...input.params,
+      }),
+    });
+  }
+  if (nodes.length > MAX_FX_NODES)
+    throw new TimelineError(
+      "unsupported",
+      `A chain holds up to ${MAX_FX_NODES} effects.`,
+    );
+  return nodes;
+}
 
 /**
  * Source and timeline seconds are canonical at whole microseconds, as HTML and `cutroom.json` store
@@ -595,6 +658,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         transitionIn: null,
         transitionOut: null,
         automation: null,
+        fx: [],
         enabled: true,
         startRef: null,
         ...fields,
@@ -943,6 +1007,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           target.sourceRestrictions?.title ??
             `${target.label ?? target.id} is not a Cutroom title.`,
         );
+      if (command.fx !== undefined && !target.hasAudio)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} has no sound to process.`,
+        );
+      if (command.fx !== undefined && target.sourceRestrictions?.fx)
+        throw new TimelineError("unsupported", target.sourceRestrictions.fx);
       if (command.automation?.volume.length && !target.hasAudio)
         throw new TimelineError(
           "unsupported",
@@ -969,6 +1040,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 fadeOut,
                 ...(command.label !== undefined && { label: command.label }),
                 ...(command.volume !== undefined && { volume: command.volume }),
+                ...(command.fx !== undefined && {
+                  fx: buildFxChain(clip.fx, command.fx),
+                }),
                 ...(command.automation !== undefined && {
                   automation:
                     command.automation &&
@@ -1089,6 +1163,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             ...(command.muted !== undefined && { muted: command.muted }),
             ...(command.solo !== undefined && { solo: command.solo }),
             ...(command.volume !== undefined && { volume: command.volume }),
+            ...(command.fx !== undefined && {
+              fx: buildFxChain(current.fx, command.fx),
+            }),
           },
         ],
       };

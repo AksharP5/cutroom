@@ -39,6 +39,7 @@ import {
 } from "./keyframes";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { offsetAutomation } from "../../shared/timeline/mix";
+import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -757,6 +758,7 @@ export function parseComposition(
         : toFrames(readFadeSeconds(element.attrs["data-fade-out"]), fps),
       transitionIn: edges.in,
       transitionOut: edges.out,
+      fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
       automation: element.attrs["data-automation"]
         ? offsetAutomation(
             serializeAutomation(
@@ -1108,6 +1110,11 @@ function clipChanges(
       ]);
   if (before.automation !== after.automation)
     changes.push(["data-automation", after.automation]);
+  if (!Bun.deepEquals(before.fx, after.fx))
+    changes.push([
+      "data-fx-chain",
+      writeFxChain(after.fx, element.attrs["data-fx-chain"]),
+    ]);
   if (before.label !== after.label) {
     if (after.label === null)
       changes.push(["data-timeline-label", null], ["data-label", null]);
@@ -1195,18 +1202,20 @@ export function applyTrackMix(parsed: ParsedComposition): string {
       (element) => element.attrs["data-cutroom-track"] === String(track.index),
     );
     let id = group?.attrs.id;
+    const chain = writeFxChain(track.fx, group?.attrs["data-fx-chain"]);
     if (!id) {
       const base = `cutroom-${parsed.root.attrs["data-composition-id"]}-track-${track.index}`;
       id = base;
       for (let suffix = 2; used.has(id); suffix++) id = `${base}-${suffix}`;
       used.add(id);
       inserted.push(
-        `<hf-audio-group id="${escapeAttribute(id)}" data-cutroom-track="${track.index}" data-volume="${track.volume}"></hf-audio-group>`,
+        `<hf-audio-group id="${escapeAttribute(id)}" data-cutroom-track="${track.index}" data-volume="${track.volume}"${chain ? ` data-fx-chain="${escapeAttribute(chain)}"` : ""}></hf-audio-group>`,
       );
     } else {
       edits.push(
         ...attributeEdits(openingTag(spans, group!, id), html, [
           ["data-volume", String(track.volume)],
+          ["data-fx-chain", chain],
         ]),
       );
     }
@@ -1339,6 +1348,25 @@ function textRestriction(
   return undefined;
 }
 
+/** A clip's effects, or none when its chain cannot be read; `sourceRestrictions.fx` says why. */
+const readableFx = (attribute: string | undefined) => {
+  try {
+    return readFxChain(attribute);
+  } catch {
+    return [];
+  }
+};
+
+/** Why a clip's authored effect chain cannot be edited, when Cutroom cannot read it. */
+function fxRestriction(attribute: string | undefined) {
+  try {
+    readFxChain(attribute);
+    return undefined;
+  } catch (error) {
+    return `Its data-fx-chain cannot be read (${error instanceof Error ? error.message : String(error)}). Repair it in the source first.`;
+  }
+}
+
 /** Project source constraints once so browser and server commands make the same decision. */
 function sourceRestrictions(
   parsed: ParsedComposition,
@@ -1356,10 +1384,14 @@ function sourceRestrictions(
   const transform = isAudioKind(clip.kind)
     ? undefined
     : readClipStyle(parsed.elements.get(clip.id)!.attrs.style).restriction;
+  const fx = fxRestriction(
+    parsed.elements.get(clip.id)!.attrs["data-fx-chain"],
+  );
   const all = {
     ...restrictions,
     ...(read && "reason" in read && { title: read.reason }),
     ...(transform && { transform }),
+    ...(fx && { fx }),
   };
   return Object.keys(all).length ? all : undefined;
 }
@@ -2020,7 +2052,7 @@ export function patchComposition(
   const output = applyEdits(html, edits);
   // Unity buses are projected for playback; persist routing only once a track fader is used.
   if (
-    !after.tracks.some((track) => track.volume !== 1) &&
+    !after.tracks.some((track) => track.volume !== 1 || track.fx.length) &&
     !managedAudioGroups(parsed.root).length
   )
     return output;

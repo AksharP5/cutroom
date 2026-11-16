@@ -5,7 +5,9 @@ export function previewPolicy(assets: string) {
   return [
     "sandbox allow-scripts",
     "default-src 'none'",
-    `script-src 'unsafe-inline' 'unsafe-eval' ${assets}`,
+    // HyperFrames loads its compressor, limiter, gate and bitcrush worklets from a data: module.
+    // Inline scripts and eval already run here, so data: grants the document nothing new.
+    `script-src 'unsafe-inline' 'unsafe-eval' data: ${assets}`,
     `style-src 'unsafe-inline' ${assets}`,
     `img-src data: blob: ${assets}`,
     `media-src data: blob: ${assets}`,

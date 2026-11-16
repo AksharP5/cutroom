@@ -4,6 +4,8 @@ import {
 } from "@hyperframes/parsers/media-duration";
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
+// The export worker loads this file in Node, which needs the extension.
+import { FxChainInputSchema, FxNodeSchema, MAX_FX_NODES } from "./fx.ts";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -370,6 +372,13 @@ export const ClipSchema = z.object({
     .describe(
       "HyperFrames clip-local automation JSON, which may contain baked volume ramps",
     ),
+  fx: z
+    .array(FxNodeSchema)
+    .max(MAX_FX_NODES)
+    .default([])
+    .describe(
+      "Audio effects on the clip's sound, in signal order, from HyperFrames' data-fx-chain. enabled false is bypassed. Change them with setClip.fx",
+    ),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -381,6 +390,7 @@ export const ClipSchema = z.object({
       remove: z.string().optional(),
       text: z.string().optional(),
       title: z.string().optional(),
+      fx: z.string().optional(),
       transform: z.string().optional(),
     })
     .optional(),
@@ -399,6 +409,13 @@ export const TrackSchema = z.object({
     .default(1)
     .describe(
       "Linear track gain on top of each clip's gain: 0 is silence, 1 = 0 dB. Independent group stage, up to +12 dB per stage; authored-group clips are excluded and carry trackGainWarning",
+    ),
+  fx: z
+    .array(FxNodeSchema)
+    .max(MAX_FX_NODES)
+    .default([])
+    .describe(
+      "Audio effects on the track's bus, after its clips' own effects and before its gain. Excludes clips with trackGainWarning",
     ),
 });
 
@@ -700,6 +717,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Authored fade-out length in frames; 0 clears it. Playback proportionally scales fades to fit the clip.",
         ),
+      fx: FxChainInputSchema.optional().describe(
+        "Replace the clip's audio effects, in signal order. Each entry is an effect {type, params, enabled, id} or a preset {preset}; an entry naming an existing id keeps the values it leaves out. [] removes them",
+      ),
       opacity: opacity.nullable().optional(),
       x: position.optional(),
       y: position.optional(),
@@ -838,6 +858,9 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .describe(
           "Linear track gain, 0 for silence, 1 = 0 dB, up to +12 dB. Independent audio group stage in preview and export, up to +12 dB per stage. Clips already in an authored audio group are excluded; read trackGainWarning on each clip",
         ),
+      fx: FxChainInputSchema.optional().describe(
+        "Replace the track's audio effects, which process every clip on it together, as setClip.fx does for one clip",
+      ),
     })
     .describe(
       "Create a track or change its name, lock, auto-select, enable, mute, solo or gain. Mute covers all sound on the track, including embedded video audio. Gain excludes clips with trackGainWarning. Solo selects audio tracks and affects preview and export.",

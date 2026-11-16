@@ -3,17 +3,23 @@ import {
   parseAutomation,
 } from "@hyperframes/core/audio-automation";
 import { volumePoints } from "../../shared/timeline/mix";
+import { compactFxNode } from "../../shared/timeline/fx";
 import type { Timeline, TimelineView } from "../../shared/timeline/schema";
 
 /**
  * The timeline as agents read it: a clip's native automation becomes its volume points in
  * frames, as `setClip.automation` writes them, and the names of any other lanes, which can hold
- * hundreds of points.
+ * hundreds of points. Effects leave out parameters at their defaults.
  */
 export function agentTimeline(timeline: Timeline) {
   return {
     ...timeline,
-    clips: timeline.clips.map(({ automation, ...clip }) => {
+    tracks: timeline.tracks.map((track) => ({
+      ...track,
+      fx: track.fx.map(compactFxNode),
+    })),
+    clips: timeline.clips.map(({ automation, ...rest }) => {
+      const clip = { ...rest, fx: rest.fx.map(compactFxNode) };
       if (!automation) return { ...clip, automation: null };
       const volume = volumePoints(automation, timeline.fps);
       const lanes = parseAutomation(automation)
