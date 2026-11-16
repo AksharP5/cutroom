@@ -177,12 +177,20 @@ export async function toolSubject(
     case "project_import":
       return text("path");
     case "transcription_start":
-    case "transcript_import": {
+    case "transcript_import":
+    case "subtitles_import": {
       const media = text("mediaPath");
       return media && fileName(media);
     }
+    case "captions_edit":
+    case "captions_export":
     case "transcript_edit": {
-      const id = text("transcriptId");
+      // captions_edit names its transcript inside `edit`.
+      const id =
+        text("transcriptId") ??
+        z
+          .object({ transcriptId: z.string().trim().min(1) })
+          .safeParse(args.edit).data?.transcriptId;
       return id ? names?.transcript(id).catch(() => undefined) : undefined;
     }
     case "timeline_edit":

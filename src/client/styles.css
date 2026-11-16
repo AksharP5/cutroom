@@ -1851,6 +1851,51 @@ option {
   font-stretch: var(--stretch-mono);
   font-variant-numeric: tabular-nums;
 }
+.script-captions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding-bottom: 8px;
+}
+.script-captions > .text-button:first-child {
+  margin-left: -8px;
+}
+.script-captions .select-trigger {
+  height: 24px;
+  margin-right: auto;
+  padding: 0 6px;
+  font-size: var(--type-xs);
+}
+.script-captions-stale {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.script-captions-stale .text-button {
+  margin-left: -8px;
+}
+.script-caption-edit {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+}
+.script-caption-edit input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: var(--stroke-hair) solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+}
 .script-hint {
   margin-top: 12px;
   color: var(--text-tertiary);

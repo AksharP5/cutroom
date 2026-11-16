@@ -61,6 +61,25 @@ export function parseInput<T extends z.ZodType>(
   return parsed.data;
 }
 
+/** Whose history entry an edit is: the calling agent's, or the owner's when undefined. */
+export function historyWho(
+  reviews: ReviewService,
+  c: Context,
+  project: Project,
+): HistoryWho | undefined {
+  const token = c.req.header(AGENT_HEADER);
+  if (token === undefined) return undefined;
+  return {
+    kind: "agent",
+    name:
+      reviews.agent(project, token).turn.name ??
+      parseInput(
+        AgentNameSchema,
+        decodeURIComponent(c.req.header(AGENT_NAME_HEADER) ?? "Agent"),
+      ),
+  };
+}
+
 /** `reviews` must be the server's one review service, so every route shares its per-project queue. */
 export function createProjectRoutes(
   store: ProjectStore,
@@ -73,20 +92,8 @@ export function createProjectRoutes(
   ) => Promise<Readonly<JobState> | null> = async () => null,
 ) {
   const api = new Hono();
-  /** Whose history entry an edit is: the calling agent's, or the owner's when undefined. */
-  const agentWho = (c: Context, project: Project): HistoryWho | undefined => {
-    const token = c.req.header(AGENT_HEADER);
-    if (token === undefined) return undefined;
-    return {
-      kind: "agent",
-      name:
-        reviews.agent(project, token).turn.name ??
-        parseInput(
-          AgentNameSchema,
-          decodeURIComponent(c.req.header(AGENT_NAME_HEADER) ?? "Agent"),
-        ),
-    };
-  };
+  const agentWho = (c: Context, project: Project) =>
+    historyWho(reviews, c, project);
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.use("/projects", projectMutationGuard(reviews));
   api.get("/projects", async (c) => c.json({ projects: await store.list() }));

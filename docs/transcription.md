@@ -6,6 +6,8 @@ The runtime is discovered from `HYPERFRAMES_WHISPER_PATH`, `PATH`, or the existi
 
 Select a video or audio element in the Script panel and choose **Transcribe locally**. Select another clip to create another transcript. A multilingual recording requires an installed multilingual model.
 
+**Import transcript** also takes an SRT or WebVTT file. Its cue times are seconds into the selected media, and each cue's words share its time in proportion to their length. Captions from an imported file keep its cues as lines and their end times. Files are read strictly: a malformed time, a cue that ends before it starts, a missing `WEBVTT` header, or a file over 2 MB or 20,000 cues is refused with the line at fault.
+
 You can also import normalized JSON word timings:
 
 ```json

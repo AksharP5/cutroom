@@ -45,6 +45,8 @@ import {
 } from "../../shared/timeline/schema";
 import type {
   CommandBatch,
+  CommandInput,
+  Timeline,
   TimelineSettings,
   TimelineView,
   Track,
@@ -505,6 +507,29 @@ export function createTimelineRoutes(
     };
   };
 
+  /**
+   * Applies commands as one part of a larger edit, inside the caller's `store.mutate` window, so
+   * the whole edit is one undo step. The commands are built from the timeline as it is then.
+   */
+  const editInWindow = async (
+    project: Project,
+    composition: string,
+    commands: (timeline: Timeline) => CommandInput[],
+    agent: boolean,
+  ) => {
+    const current = await read(project, composition);
+    const prepared = await prepareEdit(
+      project,
+      CommandBatchSchema.parse({
+        composition,
+        expectedRevision: current.revision,
+        commands: commands(current.parsed.timeline),
+      }),
+      agent,
+    );
+    return prepared.save();
+  };
+
   const api = new Hono();
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.get("/projects/:id/timeline", async (c) => {
@@ -803,6 +828,7 @@ export function createTimelineRoutes(
     }
   });
   return Object.assign(api, {
+    editInWindow,
     subscribeAnimationFeedback(
       projectId: string,
       listener: (feedback: z.infer<typeof AnimationFeedbackSchema>) => void,

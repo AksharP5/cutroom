@@ -18,7 +18,13 @@ import {
   type TranscriptJob,
   type TranscriptView,
 } from "../../shared/project";
+import type { CaptionsView } from "../../shared/captions";
 import { SelectMenu } from "./SelectMenu";
+import {
+  CaptionControls,
+  CaptionsListSchema,
+  editCaptions,
+} from "./CaptionControls";
 import { ApiError, api, json, timecode } from "../api";
 
 const viewsSchema = z.object({ transcripts: z.array(TranscriptViewSchema) });
@@ -99,6 +105,11 @@ export const ScriptPanel = memo(function ScriptPanel({
 }) {
   const [media, setMedia] = useState<MediaClip[]>([]);
   const [views, setViews] = useState<TranscriptView[]>([]);
+  const [captions, setCaptions] = useState<CaptionsView[]>([]);
+  const [captionEdit, setCaptionEdit] = useState<{
+    wordId: string;
+    text: string;
+  } | null>(null);
   const [selectedClipKey, setSelectedClipKey] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [job, setJob] = useState<TranscriptJob | null>(() =>
@@ -135,17 +146,21 @@ export const ScriptPanel = memo(function ScriptPanel({
     const request = new AbortController();
     refreshRequest.current = request;
     try {
-      const [clips, scripts] = await Promise.all([
+      const [clips, scripts, placed] = await Promise.all([
         api(`/projects/${projectId}/media`, MediaListSchema, {
           signal: request.signal,
         }),
         api(`/projects/${projectId}/transcripts`, viewsSchema, {
           signal: request.signal,
         }),
+        api(`/projects/${projectId}/captions`, CaptionsListSchema, {
+          signal: request.signal,
+        }),
       ]);
       if (request.signal.aborted) return;
       setMedia(clips.media);
       setViews(scripts.transcripts);
+      setCaptions(placed.captions);
       const completed = scripts.transcripts.find(
         (transcript) => transcript.id === pendingTranscript.current,
       );
@@ -191,6 +206,9 @@ export const ScriptPanel = memo(function ScriptPanel({
     (transcript) =>
       selectedClip && clipKey(transcript) === clipKey(selectedClip),
   );
+  const activeCaptions = captions.find(
+    (item) => item.transcriptId === active?.id,
+  );
   const selectedWords = useMemo(
     () => active?.words.filter((word) => selectedIds.has(word.id)) ?? [],
     [active, selectedIds],
@@ -229,6 +247,26 @@ export const ScriptPanel = memo(function ScriptPanel({
     setSelected([]);
     anchor.current = null;
   }, [active?.id]);
+  useEffect(() => setCaptionEdit(null), [selected]);
+
+  /** Runs one captions action with the panel's busy state; edits refresh the project. */
+  const run = useCallback(
+    (action: () => Promise<unknown>, changesProject = true) => {
+      setBusy(true);
+      setError("");
+      void action()
+        .then(async () => {
+          if (!changesProject) return;
+          await onChange();
+          await refresh();
+        })
+        .catch((error: unknown) =>
+          setError(error instanceof Error ? error.message : String(error)),
+        )
+        .finally(() => setBusy(false));
+    },
+    [onChange, refresh],
+  );
   useEffect(() => {
     if (!job || job.status !== "running") return;
     const id = job.id;
@@ -405,16 +443,27 @@ export const ScriptPanel = memo(function ScriptPanel({
         <input
           ref={fileInput}
           type="file"
-          accept=".json"
+          accept=".json,.srt,.vtt"
           hidden
           onChange={(event) => {
             const file = event.target.files?.[0];
             if (!file || !selectedClip || busy) return;
             setBusy(true);
             setError("");
+            const format = /\.(srt|vtt)$/i.exec(file.name)?.[1]?.toLowerCase();
             void file
               .text()
               .then(async (text) => {
+                if (format) {
+                  const imported = await api(
+                    `/projects/${projectId}/transcripts/subtitles`,
+                    TranscriptViewSchema,
+                    json("POST", { ...selectedClip, format, text }),
+                  );
+                  setSelectedClipKey(clipKey(imported));
+                  await onChange();
+                  return;
+                }
                 const value: unknown = JSON.parse(text);
                 const parsed = z
                   .union([
@@ -496,6 +545,13 @@ export const ScriptPanel = memo(function ScriptPanel({
             <span>{active.mediaPath.split("/").at(-1)}</span>
             <span>{active.words.length} words</span>
           </div>
+          <CaptionControls
+            projectId={projectId}
+            transcriptId={active.id}
+            captions={activeCaptions}
+            busy={busy}
+            run={run}
+          />
           <div className="transcript-words" aria-label="Transcript words">
             {chunks.map((words) => (
               <TranscriptChunk
@@ -532,12 +588,69 @@ export const ScriptPanel = memo(function ScriptPanel({
           >
             Restore
           </button>
+          {activeCaptions &&
+            selectedWords.length === 1 &&
+            !selectedWords[0]!.cut && (
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() =>
+                  setCaptionEdit({
+                    wordId: selectedWords[0]!.id,
+                    text:
+                      activeCaptions.edits[selectedWords[0]!.id] ??
+                      selectedWords[0]!.text,
+                  })
+                }
+              >
+                Edit caption
+              </button>
+            )}
           <button className="text-button" onClick={askAboutSelection}>
             Ask agent
           </button>
           <button className="text-button" onClick={() => setSelected([])}>
             Clear
           </button>
+          {captionEdit && active && (
+            <form
+              className="script-caption-edit"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const edit = captionEdit;
+                run(() =>
+                  editCaptions(projectId, {
+                    action: "word",
+                    transcriptId: active.id,
+                    wordId: edit.wordId,
+                    text: edit.text,
+                  }).then(() => setCaptionEdit(null)),
+                );
+              }}
+            >
+              <input
+                aria-label="Caption text"
+                autoFocus
+                maxLength={200}
+                value={captionEdit.text}
+                onChange={(event) =>
+                  setCaptionEdit({ ...captionEdit, text: event.target.value })
+                }
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.stopPropagation();
+                  setCaptionEdit(null);
+                }}
+              />
+              <button
+                className="text-button"
+                type="submit"
+                disabled={busy || !captionEdit.text.trim()}
+              >
+                Save
+              </button>
+            </form>
+          )}
         </div>
       )}
     </section>

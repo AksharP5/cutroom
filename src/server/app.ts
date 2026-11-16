@@ -13,6 +13,7 @@ import { createReviewService } from "./projects/review";
 import { createProjectRoutes } from "./projects/routes";
 import { createProjectStore } from "./projects/store";
 import { createTimelineRoutes } from "./timeline/routes";
+import { createCaptionRoutes } from "./captions/routes";
 import { createWorkspaceRoutes } from "./workspace";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
@@ -119,6 +120,10 @@ export async function createApp(
     createProjectRoutes(projects, review, transcripts, media.media.proxyState),
   );
   app.route("/api/cutroom", timeline);
+  app.route(
+    "/api/cutroom",
+    createCaptionRoutes(projects, review, transcripts, timeline.editInWindow),
+  );
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);
