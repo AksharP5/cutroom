@@ -4,12 +4,16 @@ import {
   applyAll,
   copyClips,
   normalizeTimeline,
+  slideRange,
+  slipRange,
 } from "../src/shared/timeline/apply";
 import type { ClipOrigin } from "../src/shared/timeline/apply";
 import { CommandSchema } from "../src/shared/timeline/schema";
 import { editLabel } from "../src/shared/timeline/labels";
 import { countingIds } from "./clip-ids";
 import { syncOffsets } from "../src/shared/timeline/sync";
+import { volumePoints } from "../src/shared/timeline/mix";
+import { editKeys } from "../src/client/edit/keys";
 import type {
   Clip,
   CommandInput,
@@ -2150,10 +2154,10 @@ test("slip changes the source of a clip and its sound, never its place, and stop
   expect(slipped.clips.map((item) => item.mediaStart)).toEqual([1.5, 1.5]);
   // One second before the in point and two after the out point.
   expect(() => run(state, { type: "slip", clipId: "a", by: -31 })).toThrow(
-    "talk.mp4 can slip at most 30 frames earlier in its source.",
+    "talk.mp4 can slip at most 30 frames earlier in its source: then clip a would start before its source media.",
   );
   expect(() => run(state, { type: "slip", clipId: "a", by: 61 })).toThrow(
-    "talk.mp4 can slip at most 60 frames later in its source.",
+    "talk.mp4 can slip at most 60 frames later in its source: then clip a would run past the end of its source media.",
   );
   expect(
     run(state, { type: "slip", clipId: "a", by: 60 }).clips[0]!.mediaStart,
@@ -2204,7 +2208,7 @@ test("slide moves a clip between its neighbours, which trim to follow with their
     [...talk("a", 0, 30, 0), ...talk("b", 30, 30, 1), ...talk("c", 60, 30, 3)],
     avTracks,
   );
-  const slid = run(state, { type: "slide", clipId: "b", by: 10 });
+  const slid = run(state, { type: "slide", clipIds: ["b"], by: 10 });
   expect(positions(slid)).toEqual({
     a: [0, 0, 40],
     "a-sound": [1, 0, 40],
@@ -2217,16 +2221,16 @@ test("slide moves a clip between its neighbours, which trim to follow with their
     slid.clips.map((item) => [item.id, item.mediaStart]),
   );
   expect([source.a, source.b, source.c]).toEqual([0, 1, 3 + 10 / 30]);
-  expect(() => run(state, { type: "slide", clipId: "b", by: 30 })).toThrow(
-    "talk.mp4 can slide at most 29 frames later: then talk.mp4 would be shorter than one frame.",
+  expect(() => run(state, { type: "slide", clipIds: ["b"], by: 30 })).toThrow(
+    "talk.mp4 can slide at most 29 frames later: then clip c would be shorter than one frame.",
   );
   // c starts three seconds in, but a has only five seconds of source in all.
   const tight = timeline(
     [...talk("a", 0, 30, 4), ...talk("b", 30, 30, 1), ...talk("c", 60, 30, 3)],
     avTracks,
   );
-  expect(() => run(tight, { type: "slide", clipId: "b", by: 1 })).toThrow(
-    "talk.mp4 cannot slide later: talk.mp4 has no more source after its out point.",
+  expect(() => run(tight, { type: "slide", clipIds: ["b"], by: 1 })).toThrow(
+    "talk.mp4 cannot slide later: clip a would run past the end of its source media.",
   );
 });
 
@@ -2235,15 +2239,15 @@ test("slide into a gap shrinks it and stops at the next clip", () => {
     [clip("a", 0, 0, 30), clip("b", 0, 30, 30), clip("c", 0, 70, 30)],
     avTracks,
   );
-  expect(positions(run(state, { type: "slide", clipId: "b", by: 10 }))).toEqual(
-    {
-      a: [0, 0, 40],
-      b: [0, 40, 30],
-      c: [0, 70, 30],
-    },
-  );
-  expect(() => run(state, { type: "slide", clipId: "b", by: 11 })).toThrow(
-    "talk.mp4 can slide at most 10 frames later: then talk.mp4 would cover talk.mp4.",
+  expect(
+    positions(run(state, { type: "slide", clipIds: ["b"], by: 10 })),
+  ).toEqual({
+    a: [0, 0, 40],
+    b: [0, 40, 30],
+    c: [0, 70, 30],
+  });
+  expect(() => run(state, { type: "slide", clipIds: ["b"], by: 11 })).toThrow(
+    "talk.mp4 can slide at most 10 frames later: then clip c would overlap b on track 0.",
   );
 });
 
@@ -2272,4 +2276,195 @@ test("unlink separates picture and sound, link joins them again with any partner
   );
   expect(new Set(three.clips.map((item) => item.link)).size).toBe(1);
   expect(run(state, { type: "link", clipIds: ["a", "a-sound"] })).toBe(state);
+});
+
+// B-roll without sound between two interview shots, each with linked sound on A1.
+const interview = () =>
+  timeline(
+    [
+      ...talk("a", 0, 60, 0),
+      clip("b", 0, 60, 60, {
+        src: "broll.mp4",
+        mediaStart: 1,
+        sourceDuration: 5,
+      }),
+      ...talk("c", 120, 60, 2),
+    ],
+    avTracks,
+  );
+
+test("slide trims each neighbour's linked sound with its picture, and the sound's source limits it", () => {
+  const slid = run(interview(), { type: "slide", clipIds: ["b"], by: 10 });
+  expect(positions(slid)).toMatchObject({
+    a: [0, 0, 70],
+    "a-sound": [1, 0, 70],
+    b: [0, 70, 60],
+    c: [0, 130, 50],
+    "c-sound": [1, 130, 50],
+  });
+  const source = Object.fromEntries(
+    slid.clips.map((item) => [item.id, item.mediaStart]),
+  );
+  expect([source.c, source["c-sound"]]).toEqual([2 + 10 / 30, 2 + 10 / 30]);
+  // The sound has less source after its out point than the picture.
+  const short = timeline(
+    interview().clips.map((item) =>
+      item.id === "a-sound" ? { ...item, sourceDuration: 65 / 30 } : item,
+    ),
+    avTracks,
+  );
+  expect(
+    slideRange(short, [short.clips.find((item) => item.id === "b")!]),
+  ).toMatchObject({
+    max: 5,
+  });
+  expect(() => run(short, { type: "slide", clipIds: ["b"], by: 6 })).toThrow(
+    "broll.mp4 can slide at most 5 frames later: then clip a-sound would run past the end of its source media.",
+  );
+});
+
+test("clips next to each other slide as one block, and a clip between them refuses", () => {
+  const state = timeline(
+    [
+      clip("a", 0, 0, 60, { mediaStart: 1 }),
+      clip("b", 0, 60, 60, { mediaStart: 3 }),
+      clip("c", 0, 120, 60, { mediaStart: 6 }),
+    ],
+    avTracks,
+  );
+  const target = {
+    selection: new Set(["a", "b"]),
+    frame: 0,
+    trim: "slide" as const,
+  };
+  const slid = Array.from({ length: 5 }).reduce<Timeline>(
+    (current) =>
+      run(
+        current,
+        ...editKeys.editNudgeTrimStepNudgeForward.commands(current, target),
+      ),
+    state,
+  );
+  expect(positions(slid)).toEqual({
+    a: [0, 5, 60],
+    b: [0, 65, 60],
+    c: [0, 125, 55],
+  });
+  const [a, b, c] = slid.clips.map((item) => item.mediaStart!);
+  expect([a, b]).toEqual([1, 3]);
+  expect(c).toBeCloseTo(6 + 5 / 30, 9);
+  expect(() =>
+    run(state, { type: "slide", clipIds: ["a", "c"], by: 5 }),
+  ).toThrow(
+    "talk.mp4 is between clips that slide, so they cannot slide as one block.",
+  );
+});
+
+test("slip and slide stop at a transition's media instead of shortening it", () => {
+  const dissolve = (duration: number) => ({
+    kind: "dissolve" as const,
+    duration,
+    alignment: "center" as const,
+  });
+  // b shows source from 10 s, and the 20-frame dissolve needs 10 frames of it before its in point.
+  const state = timeline(
+    [
+      clip("a", 0, 0, 60, {
+        mediaStart: 1,
+        sourceDuration: 20,
+        transitionOut: dissolve(20),
+      }),
+      clip("b", 0, 60, 60, {
+        src: "b.mp4",
+        mediaStart: 10,
+        sourceDuration: 20,
+        transitionIn: dissolve(20),
+        transitionOut: dissolve(12),
+      }),
+      clip("c", 0, 120, 60, {
+        src: "c.mp4",
+        mediaStart: 12 / 30,
+        sourceDuration: 20,
+        transitionIn: dissolve(12),
+      }),
+    ],
+    avTracks,
+  );
+  const b = state.clips.find((item) => item.id === "b")!;
+  expect(slipRange(state, b)?.min).toBe(-290);
+  expect(() => run(state, { type: "slip", clipId: "b", by: -295 })).toThrow(
+    "b.mp4 can slip at most 290 frames earlier in its source: then the 20-frame transition between talk.mp4 and b.mp4 would not fit, since b.mp4 has 9 frames of media before its in point.",
+  );
+  // c has 12 frames before its in point, and the 12-frame dissolve on b|c needs 6.
+  expect(slideRange(state, [b]).min).toBe(-6);
+  expect(() => run(state, { type: "slide", clipIds: ["b"], by: -7 })).toThrow(
+    "b.mp4 can slide at most 6 frames earlier: then the 12-frame transition between b.mp4 and c.mp4 would not fit",
+  );
+  expect(
+    run(state, { type: "slide", clipIds: ["b"], by: -6 }).clips[2]!
+      .transitionIn,
+  ).toEqual(dissolve(12));
+});
+
+test("slip moves keyframes and volume points with the content, as a head trim does", () => {
+  const keyed = run(
+    timeline(
+      [
+        clip("a", 0, 30, 60, {
+          mediaStart: 2,
+          sourceDuration: 10,
+          hasAudio: true,
+        }),
+      ],
+      avTracks,
+    ),
+    {
+      type: "setKeyframe",
+      clipId: "a",
+      property: "opacity",
+      frame: 20,
+      value: 0.5,
+    },
+    {
+      type: "setKeyframe",
+      clipId: "a",
+      property: "opacity",
+      frame: 40,
+      value: 1,
+    },
+    {
+      type: "setClip",
+      clipId: "a",
+      automation: {
+        volume: [
+          { frame: 20, gain: 1 },
+          { frame: 40, gain: 0.5 },
+        ],
+      },
+    },
+  );
+  const slipped = run(keyed, { type: "slip", clipId: "a", by: 10 }).clips[0]!;
+  // Trimming the head 10 frames shows the same content from the same first frame.
+  const trimmed = run(keyed, {
+    type: "trim",
+    clipId: "a",
+    edge: "start",
+    to: 40,
+  }).clips[0]!;
+  expect(slipped.keyframes).toEqual(trimmed.keyframes);
+  expect(slipped.keyframes?.opacity?.map((keyframe) => keyframe.frame)).toEqual(
+    [10, 30],
+  );
+  expect(slipped.automation).toEqual(trimmed.automation);
+  expect(
+    volumePoints(slipped.automation, keyed.fps)?.map((point) => point.frame),
+  ).toEqual([0, 10, 30]);
+});
+
+test("link needs two different clips", () => {
+  const state = timeline(talk("a", 0, 30, 0), avTracks);
+  const apart = run(state, { type: "unlink", clipIds: ["a"] });
+  expect(() => run(apart, { type: "link", clipIds: ["a", "a"] })).toThrow(
+    "Linking takes two or more different clips.",
+  );
 });

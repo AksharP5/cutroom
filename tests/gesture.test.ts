@@ -596,13 +596,13 @@ test("a slide drag trims b's neighbours and stops at the next clip and a's last 
   const slide = drag({ kind: "slide", clipId: "b" }, ["b"], 150);
   const right = dragPreview(slide, { frame: 400, track: 0, reach: 0 });
   // The gap before c closes; a, with unmeasured source, extends to meet b.
-  expect(right.commands).toEqual([{ type: "slide", clipId: "b", by: 100 }]);
+  expect(right.commands).toEqual([{ type: "slide", clipIds: ["b"], by: 100 }]);
   expect(places(right.shown)).toMatchObject({
     a: [0, 0, 200],
     b: [0, 200, 100],
   });
   const left = dragPreview(slide, { frame: 0, track: 0, reach: 0 });
-  expect(left.commands).toEqual([{ type: "slide", clipId: "b", by: -99 }]);
+  expect(left.commands).toEqual([{ type: "slide", clipIds: ["b"], by: -99 }]);
   expect(places(left.shown)).toMatchObject({ a: [0, 0, 1], b: [0, 1, 100] });
   // b's end snaps to the marker at 250.
   expect(dragPreview(slide, { frame: 197, track: 0, reach: 5 })).toMatchObject({

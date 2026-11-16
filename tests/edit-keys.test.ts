@@ -305,9 +305,9 @@ test("with the Trim tool, comma and period slip the picture the way they point, 
     { type: "slip", clipId: "a", by: -1 },
     { type: "slip", clipId: "b", by: -1 },
   ]);
+  // The selection slides as one block.
   expect(trim("editNudgeTrimStepTrimMultiFrameLeft", "slide")).toEqual([
-    { type: "slide", clipId: "a", by: -5 },
-    { type: "slide", clipId: "b", by: -5 },
+    { type: "slide", clipIds: ["a", "b", "a-sound"], by: -5 },
   ]);
   // Alt slips only the sound.
   expect(

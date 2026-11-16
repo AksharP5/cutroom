@@ -366,6 +366,8 @@ export interface Drag {
   carried: readonly Clip[];
   /** The selected clips a move names. */
   named: readonly Clip[];
+  /** How far a slip or slide can go each way, in frames. */
+  range?: { min: number; max: number };
   targets: readonly number[];
 }
 
@@ -379,11 +381,16 @@ export function beginDrag(
 ): Drag {
   const named = timeline.clips.filter((clip) => selection.has(clip.id));
   const links = new Set(named.flatMap((clip) => clip.link ?? []));
-  const slid =
-    intent.kind === "slide" &&
+  const edited =
+    (intent.kind === "slide" || intent.kind === "slip") &&
     timeline.clips.find((clip) => clip.id === intent.clipId);
+  const slid = intent.kind === "slide" && edited;
   const carried = slid
-    ? slideRange(timeline, slid).sides.map(({ member }) => member)
+    ? timeline.clips.filter(
+        (clip) =>
+          clip.id === slid.id ||
+          (slid.link !== null && clip.link === slid.link),
+      )
     : intent.kind !== "move"
       ? []
       : intent.alone
@@ -404,6 +411,13 @@ export function beginDrag(
     origin,
     carried,
     named,
+    // Found once, by trying the edit, so each pointer move only clamps.
+    ...(edited && {
+      range:
+        intent.kind === "slip"
+          ? (slipRange(timeline, edited) ?? undefined)
+          : slideRange(timeline, [edited]),
+    }),
     targets: snapTargets(
       timeline,
       playhead,
@@ -672,7 +686,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
     }
     case "slip": {
       const clip = find(intent.clipId);
-      const range = slipRange(timeline, clip);
+      const { range } = drag;
       if (!range) return still("Slip");
       // The source follows the pointer, as in Resolve: dragging right shows earlier frames. It
       // stops at either end of the source.
@@ -686,7 +700,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
     }
     case "slide": {
       const clip = find(intent.clipId);
-      const range = slideRange(timeline, clip);
+      const range = drag.range ?? { min: 0, max: 0 };
       const hit = snap(
         [clip.start + travel, clipEnd(clip) + travel],
         targets,
@@ -699,7 +713,7 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
       );
       return edit(
         "Slide",
-        by ? [{ type: "slide", clipId: clip.id, by }] : [],
+        by ? [{ type: "slide", clipIds: [clip.id], by }] : [],
         by,
         hit && by === travel + hit.by ? hit.at : null,
       );

@@ -153,7 +153,7 @@ export function editLabel(
       case "slip":
         return `${pending ? "Slip" : "Slipped"}${named ? ` ${target([command.clipId])}` : ""} ${span(Math.abs(command.by))} ${command.by > 0 ? "later" : "earlier"} in its source${command.linked ? "" : ", without its linked clips"}`;
       case "slide":
-        return `${pending ? "Slide" : "Slid"}${named ? ` ${target([command.clipId])}` : ""} ${span(Math.abs(command.by))} ${command.by > 0 ? "right" : "left"} between its neighbours`;
+        return `${pending ? "Slide" : "Slid"}${named ? ` ${target(command.clipIds)}` : ""} ${span(Math.abs(command.by))} ${command.by > 0 ? "right" : "left"} between ${command.clipIds.length > 1 ? "their" : "its"} neighbours`;
       case "link":
         return `${pending ? "Link" : "Linked"} ${target(command.clipIds)}`;
       case "unlink":

@@ -669,19 +669,21 @@ export const CommandSchema = z.discriminatedUnion("type", [
         ),
     })
     .describe(
-      "Slip a video, audio or composition clip: it shows an earlier or later part of its source in the same place and length. Linked partners slip with it. Refused past either end of the source, saying how far it can go.",
+      "Slip a video, audio or composition clip: it shows an earlier or later part of its source in the same place and length. Linked partners slip with it. Keyframes and volume points move with the content they animate, as in a trim. Refused past either end of the source or past a transition's media, saying how far it can go.",
     ),
   z
     .object({
       type: z.literal("slide"),
-      clipId,
+      clipIds: clipIds.describe(
+        "The clips to slide; their linked partners come too. Clips next to each other on a track slide as one block",
+      ),
       by: z
         .number()
         .int()
-        .describe("Frames to move the clip; negative is earlier"),
+        .describe("Frames to move the clips; negative is earlier"),
     })
     .describe(
-      "Slide a clip between its neighbours: it moves, keeping its source in and out, while the clip that ends where it starts and the clip that starts where it ends trim to follow, so nothing else moves. Linked partners slide with their own neighbours. A gap beside the clip shrinks or grows instead of a neighbour. Refused when a neighbour would run out of source or below one frame, or the clip would cover another, saying how far it can go.",
+      "Slide clips between their neighbours: they move as one block, keeping their source in and out, while the clip that ends where the block starts and the clip that starts where it ends trim to follow, with those neighbours' linked partners, so nothing else moves. A gap beside the block shrinks or grows instead of a neighbour. Refused when a neighbour or its partner would run out of source or below one frame, a clip would cover another, or a transition on a changed cut would no longer fit, saying how far it can go; and when a clip that is not named sits between named ones.",
     ),
   z
     .object({
@@ -689,7 +691,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       clipIds: z.array(clipId).min(2).max(10_000),
     })
     .describe(
-      "Link clips so they select, move, trim and cut as one, as a video and its sound are. Partners of clips already linked join the new group.",
+      "Link two or more different clips so they select, move, trim and cut as one, as a video and its sound are. Partners of clips already linked join the new group.",
     ),
   z
     .object({

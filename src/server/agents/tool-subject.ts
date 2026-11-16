@@ -87,12 +87,12 @@ const clipsOf = (command: Command) => {
     case "remove":
     case "link":
     case "unlink":
+    case "slide":
       return command.clipIds;
     case "split":
       return command.clipIds ?? [];
     case "trim":
     case "slip":
-    case "slide":
     case "setClip":
     case "setTiming":
       return [command.clipId];

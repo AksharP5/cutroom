@@ -168,7 +168,7 @@ const removeSelection =
     return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
   };
 
-/** The selected clips, one from each linked group, since a slip or slide takes the partners along. */
+/** The selected clips, one from each linked group, since a slip takes the partners along. */
 function onePerLink(clips: readonly Clip[]) {
   const links = new Set<string>();
   return clips.filter((clip) => {
@@ -181,19 +181,18 @@ function onePerLink(clips: readonly Clip[]) {
 
 /**
  * Nudge moves the selected clips and their linked partners, overwriting what they land on. With
- * the Trim tool it slips or slides them instead, as in Resolve: a slip moves the picture the way
- * the key points, so period shows earlier source.
+ * the Trim tool it slips each of them, or slides them as one block, as in Resolve: a slip moves
+ * the picture the way the key points, so period shows earlier source.
  */
 const nudge =
   (by: number) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
     const selected = selectedIn(timeline, target);
+    // The selection slides as one block, so clips next to each other move together.
     if (target.trim === "slide")
-      return onePerLink(selected).map((clip) => ({
-        type: "slide",
-        clipId: clip.id,
-        by,
-      }));
+      return selected.length
+        ? [{ type: "slide", clipIds: selected.map((clip) => clip.id), by }]
+        : [];
     if (target.trim === "slip") {
       const sourced = selected.filter((clip) => clip.mediaStart !== null);
       // With nothing to slip, the engine says why about the first clip.

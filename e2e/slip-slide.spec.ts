@@ -47,9 +47,13 @@ async function pictureFrames(page: Page) {
 /**
  * Three shots of one 20-second file with its frame number burnt in, each with linked sound:
  * a shows source frames 60-119, b 300-359 and c 420-479, end to end from frame 0, unless
- * `gap` leaves that many frames between a and b.
+ * `gap` leaves that many frames between a and b. With `broll`, b is picture alone.
  */
-async function openProject(page: Page, request: APIRequestContext, gap = 0) {
+async function openProject(
+  page: Page,
+  request: APIRequestContext,
+  { gap = 0, broll = false } = {},
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -79,7 +83,7 @@ async function openProject(page: Page, request: APIRequestContext, gap = 0) {
     .map(
       ({ id, start, source }) =>
         `<video id="${id}" data-link="${id}" muted src="Frames.mp4" data-track-index="0" data-start="${start}" data-duration="2" data-media-start="${source}"></video>
-    <audio id="${id}-sound" data-link="${id}" src="Frames.mp4" data-track-index="1" data-start="${start}" data-duration="2" data-media-start="${source}"></audio>`,
+    ${broll && id === "b" ? "" : `<audio id="${id}-sound" data-link="${id}" src="Frames.mp4" data-track-index="1" data-start="${start}" data-duration="2" data-media-start="${source}"></audio>`}`,
     )
     .join("\n    ");
   await writeFile(
@@ -220,7 +224,7 @@ test("a clicked gap closes with Delete; drifted sound shows its offset until unl
   request,
 }) => {
   test.setTimeout(90_000);
-  const project = await openProject(page, request, 30);
+  const project = await openProject(page, request, { gap: 30 });
   const ppf = await settled(page);
   const lane = (await page.locator('[data-clip="a"]').boundingBox())!;
   // The middle of the 30-frame gap between a and b on V1.
@@ -250,4 +254,36 @@ test("a clicked gap closes with Delete; drifted sound shows its offset until unl
     .toBeNull();
   await page.keyboard.press("Control+z");
   await expect(page.locator('[data-clip-label="b"] .tl-sync')).toHaveText("-1");
+});
+
+test("sliding B-roll between interview shots trims their sound with their pictures", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const project = await openProject(page, request, { broll: true });
+  await page.keyboard.press("t");
+  const ppf = await settled(page);
+  const box = (await page.locator('[data-clip="b"]').boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + 5 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 12 * ppf, from.y, { steps: 6 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => {
+      const clips = await readClips(request, project.id);
+      return ["a", "a-sound", "b", "c", "c-sound"].map((id) => [
+        clips[id]?.start,
+        clips[id]?.duration,
+        clips[id]?.mediaStart,
+      ]);
+    })
+    .toEqual([
+      [0, 72, 2],
+      [0, 72, 2],
+      [72, 60, 10],
+      [132, 48, 14.4],
+      [132, 48, 14.4],
+    ]);
 });
