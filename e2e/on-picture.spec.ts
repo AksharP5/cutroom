@@ -707,7 +707,15 @@ for (const release of ["before", "after"] as const)
         );
       });
     });
-    const { at, selected, drawn, commands } = await open(page, request);
+    // Every edit here must load a new document: a script that reads timing keeps it on that path.
+    const { at, selected, drawn, commands } = await open(
+      page,
+      request,
+      composition.replace(
+        "</body>",
+        "<script>window.at=document.querySelector('#title').dataset.start</script></body>",
+      ),
+    );
     const picture = page.getByRole("application", { name: "Picture" });
     const handle = page.locator(".edit-select-outline b").first();
     await page.mouse.click(...at(100, 125));

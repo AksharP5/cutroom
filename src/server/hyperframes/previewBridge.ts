@@ -419,9 +419,11 @@ function installPreviewBridge(
       };
       check();
     });
-  const seekRuntime = (time: number) => {
+  /** Seeks the runtime, recording what it writes, including anything `prepare` makes it do. */
+  const seekRuntime = (time: number, prepare?: () => void) => {
     const generation = recordRuntime();
     try {
+      prepare?.();
       win.__player?.seek(time);
     } finally {
       if (generation !== null) {
@@ -2977,6 +2979,9 @@ function installPreviewBridge(
               )
             )
               throw new Error("This clip needs animation discovery.");
+            // The runtime composes Position offsets only for clips it found when it loaded.
+            if (["data-x", "data-y"].some((name) => element.hasAttribute(name)))
+              throw new Error("A positioned clip needs a fresh document.");
             added.set(id, element);
             return { id, element, parsed: parsed!, after, before };
           });
@@ -3389,14 +3394,12 @@ function installPreviewBridge(
             // Let the runtime invalidate its descriptor cache before seeking.
             await Promise.resolve();
             // The runtime nests a mounted composition's timeline at its host's start when it
-            // loads. Its rebind nests each one again where its host now starts.
-            if (movedHosts) {
-              if (typeof win.__hfForceTimelineRebind !== "function")
-                throw new Error("The runtime cannot move a composition.");
-              win.__hfForceTimelineRebind();
-            }
+            // loads. Its rebind nests each one again where its host now starts, and draws.
+            const rebind = win.__hfForceTimelineRebind;
+            if (movedHosts && typeof rebind !== "function")
+              throw new Error("The runtime cannot move a composition.");
             if (inserts.length) await layoutPass(manifest);
-            seekRuntime(data.time);
+            seekRuntime(data.time, movedHosts ? rebind : undefined);
             document
               .querySelector('meta[name="cutroom-mix-signature"]')
               ?.setAttribute("content", data.mixSignature);
