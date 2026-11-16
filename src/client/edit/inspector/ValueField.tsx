@@ -299,8 +299,8 @@ export function ValueField({
         {allowAuto && value !== null && (
           <button
             type="button"
-            aria-label="Restore source opacity"
-            title="Restore source opacity"
+            aria-label={`Restore source ${props.label.toLowerCase()}`}
+            title={`Restore source ${props.label.toLowerCase()}`}
             disabled={disabled}
             onClick={() => {
               setDraft(null);

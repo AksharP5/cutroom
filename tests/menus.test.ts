@@ -48,6 +48,7 @@ const timeline = normalizeTimeline({
       keyframes: null,
       text: null,
       title: null,
+      style: {},
       fadeIn: 0,
       fadeOut: 0,
       transitionIn: null,
@@ -71,7 +72,7 @@ const rows = (
     selection: new Set(state.selected ?? []),
     frame: 0,
     clipboard: false,
-    titleStyle: false,
+    copiedStyle: null,
     inspector: false,
     onReveal: null,
     onInspector() {},
@@ -131,13 +132,31 @@ test("the clip menu offers an edit only when its key would act on the selection"
     "Reveal media",
   ]);
   // A selected clip can be cut, lifted and turned off; split waits for the playhead inside it.
+  // Its style pastes once a picture's style, not a title's, has been copied.
   for (const frame of [30, 90])
     expect(disabled(rows({ selected: ["a"], clipboard: true, frame }))).toEqual(
-      [keymap.editM2SplitClip.label, "Reveal media"],
+      [keymap.editM2SplitClip.label, "Paste style", "Reveal media"],
     );
   expect(
     disabled(
-      rows({ selected: ["a"], clipboard: true, frame: 31, onReveal() {} }),
+      rows({
+        selected: ["a"],
+        clipboard: true,
+        frame: 31,
+        copiedStyle: "title",
+        onReveal() {},
+      }),
+    ),
+  ).toEqual(["Paste style"]);
+  expect(
+    disabled(
+      rows({
+        selected: ["a"],
+        clipboard: true,
+        frame: 31,
+        copiedStyle: "style",
+        onReveal() {},
+      }),
     ),
   ).toEqual([]);
 });

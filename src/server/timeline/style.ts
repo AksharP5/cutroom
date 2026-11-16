@@ -5,6 +5,14 @@ import { CropSchema } from "../../shared/timeline/schema";
 import type { Clip } from "../../shared/timeline/schema";
 import { transformStyle } from "../../shared/timeline/transform";
 import type { ClipTransform } from "../../shared/timeline/transform";
+import {
+  ElementStyleSchema,
+  styleDeclarations,
+} from "../../shared/timeline/elementStyle";
+import type {
+  ElementStyle,
+  StyleProperty,
+} from "../../shared/timeline/elementStyle";
 
 type ClipStyle = Pick<Clip, "opacity"> & ClipTransform;
 const OWNED = ["opacity", "scale", "rotate", "clip-path"] as const;
@@ -156,10 +164,114 @@ export function readClipStyle(style: string | undefined): ClipStyle & {
 }
 
 /** The owned declarations a clip's values write; null leaves one out. */
-export const clipStyle = (clip: ClipStyle): Record<Owned, string | null> => ({
+export const clipStyle = (
+  clip: ClipStyle & Pick<Clip, "style">,
+): Record<Owned | StyleProperty, string | null> => ({
   opacity: clip.opacity === null ? null : String(clip.opacity),
   ...transformStyle(clip),
+  ...styleDeclarations(clip.style),
 });
+
+const NUMBER = String.raw`-?\d+(?:\.\d+)?`;
+const HEX = "#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?";
+const exact = (pattern: string) => new RegExp(`^${pattern}$`);
+const PIXELS = exact(`(${NUMBER})px`);
+const px = (value: string) => {
+  const found = PIXELS.exec(value);
+  return found ? Number(found[1]) : undefined;
+};
+const GRADIENT = exact(
+  `linear-gradient\\((${NUMBER})deg, (${HEX}), (${HEX})\\)`,
+);
+const FILTER = exact(
+  `(?:drop-shadow\\((${NUMBER})px (${NUMBER})px (${NUMBER})px (${HEX})\\))? ?(?:blur\\((${NUMBER})px\\))?`,
+);
+/** Each owned property's value, read back only in the exact form `styleDeclarations` writes. */
+const READERS: Record<
+  StyleProperty,
+  (value: string) => Partial<Record<keyof ElementStyle, unknown>>
+> = {
+  "font-family": (value) => ({
+    fontFamily: /^"([^"\\]*)", sans-serif$/.exec(value)?.[1],
+  }),
+  "font-size": (value) => ({ fontSize: px(value) }),
+  "font-weight": (value) => ({
+    fontWeight: /^\d{3}$/.test(value) ? Number(value) : undefined,
+  }),
+  "letter-spacing": (value) => ({
+    letterSpacing: exact(`${NUMBER}em`).test(value)
+      ? Number.parseFloat(value)
+      : undefined,
+  }),
+  "line-height": (value) => ({
+    lineHeight: exact(NUMBER).test(value) ? Number(value) : undefined,
+  }),
+  color: (value) => ({ color: value }),
+  "text-align": (value) => ({ textAlign: value }),
+  "text-transform": (value) => ({ textTransform: value }),
+  background: (value) => {
+    const gradient = GRADIENT.exec(value);
+    return {
+      fill: gradient
+        ? { angle: Number(gradient[1]), from: gradient[2], to: gradient[3] }
+        : value,
+    };
+  },
+  "border-radius": (value) => ({ borderRadius: px(value) }),
+  filter: (value) => {
+    const found = value ? FILTER.exec(value) : null;
+    if (!found) return {};
+    const [, x, y, blur, color, radius] = found;
+    return {
+      shadow: color && {
+        x: Number(x),
+        y: Number(y),
+        blur: Number(blur),
+        color,
+      },
+      blur: radius === undefined ? undefined : Number(radius),
+    };
+  },
+  width: (value) => ({ width: px(value) }),
+  height: (value) => ({ height: px(value) }),
+  "object-fit": (value) => ({ objectFit: value }),
+};
+
+/**
+ * The inline look Cutroom owns, read from the last declaration of each property. A value in any
+ * other form, such as a stylesheet variable or a keyword, is left out: it stays as authored until
+ * the person sets that field, which replaces it.
+ */
+export function readElementStyle(style: string | undefined): ElementStyle {
+  const latest = new Map<string, string>();
+  for (const declaration of declarations(style ?? "")) {
+    const colon = declaration.indexOf(":");
+    if (colon > 0)
+      latest.set(
+        declaration.slice(0, colon).trim().toLowerCase(),
+        declaration.slice(colon + 1).trim(),
+      );
+  }
+  let read: ElementStyle = {};
+  for (const [property, reader] of Object.entries(READERS)) {
+    const value = latest.get(property);
+    if (value === undefined) continue;
+    const parsed = ElementStyleSchema.safeParse(
+      Object.fromEntries(
+        Object.entries(reader(value)).filter(
+          ([, field]) => field !== undefined,
+        ),
+      ),
+    );
+    // Only a value written exactly as Cutroom writes it, so reading never rounds or recases one.
+    if (
+      parsed.success &&
+      styleDeclarations(parsed.data)[property as StyleProperty] === value
+    )
+      read = { ...read, ...parsed.data };
+  }
+  return read;
+}
 
 /** Top-level declarations of a style attribute, split outside strings and parentheses. */
 function declarations(style: string) {
@@ -189,7 +301,7 @@ function declarations(style: string) {
  */
 export function writeClipStyle(
   style: string | undefined,
-  changes: Partial<Record<Owned, string | null>>,
+  changes: Partial<Record<Owned | StyleProperty, string | null>>,
 ): string | null {
   const kept = declarations(style ?? "").filter((declaration) => {
     const name = declaration

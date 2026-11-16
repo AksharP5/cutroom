@@ -265,13 +265,13 @@ export function createTimelineRoutes(
     // A font no rule declares would fall back to a system face that export may not share.
     const fonts = new Set(
       batch.commands.flatMap((command) => {
-        const font =
+        const fonts =
           command.type === "setClip"
-            ? command.title?.font
+            ? [command.title?.font, command.style?.fontFamily]
             : command.type === "insert" && command.clip.kind === "title"
-              ? command.clip.title.font
-              : undefined;
-        return font ? [font] : [];
+              ? [command.clip.title.font]
+              : [];
+        return fonts.filter((font) => typeof font === "string");
       }),
     );
     if (fonts.size) {

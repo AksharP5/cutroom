@@ -427,6 +427,7 @@ test("linked Changes has one row per history entry and keeps review and session 
   await expect(inspector.locator("summary")).toHaveText([
     "Transform",
     "Composite",
+    "Style",
     "Audio",
     "Timing",
   ]);

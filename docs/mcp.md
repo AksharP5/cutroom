@@ -191,6 +191,51 @@ The entrance starts on the clip's first frame and the exit ends on its last. Tai
 
 In the source a title is one text element marked `data-cutroom-title`, with each setting in a `data-title-*` attribute, and one `<style data-cutroom-titles>` block per composition that Cutroom writes and keeps current. There is no script and no extra file. A title must contain non-empty plain text, with `<br>` allowed for line breaks, and any named font must have an uncommented `@font-face` declaration in the composition or `index.html`. Invalid content, an undeclared font or an attribute value Cutroom does not write gives `title: null` and a reason in `sourceRestrictions.title`; the element stays on the timeline. Titles work in scene files as well as `index.html`.
 
+### Style
+
+`setClip.style` restyles any visual clip that is not a Cutroom title: an agent-written headline, a shape, an image, a video or a scene. Fields left out keep their values and `null` removes one:
+
+```json
+{
+  "type": "setClip",
+  "clipId": "headline",
+  "style": {
+    "fontFamily": "Oswald",
+    "fontSize": 140,
+    "fontWeight": 700,
+    "letterSpacing": 0.08,
+    "color": "#ffcc00",
+    "textTransform": "uppercase",
+    "shadow": { "x": 0, "y": 4, "blur": 12, "color": "#000000b3" }
+  }
+}
+```
+
+| Field             | Value                                                     | Written as                                                                        |
+| ----------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `fontFamily`      | a family in `timeline.fonts`                              | `font-family: "Oswald", sans-serif`                                               |
+| `fontSize`        | composition pixels, 1 to 2000                             | `font-size: 140px`                                                                |
+| `fontWeight`      | 100 to 900 in hundreds                                    | `font-weight: 700`                                                                |
+| `letterSpacing`   | em, -1 to 2: 0.08 is 8% of the font size                  | `letter-spacing: 0.08em`                                                          |
+| `lineHeight`      | multiple of the font size, 0.5 to 5                       | `line-height: 1.1`                                                                |
+| `color`           | `#rrggbb` or `#rrggbbaa`                                  | `color: #ffcc00`                                                                  |
+| `textAlign`       | `left`, `center`, `right`, `justify`                      | `text-align`                                                                      |
+| `textTransform`   | `none`, `uppercase`, `lowercase`, `capitalize`            | `text-transform`                                                                  |
+| `fill`            | a colour, or `{from, to, angle}` with colours and degrees | `background: #000000b3` or `background: linear-gradient(90deg, #ff0000, #0000ff)` |
+| `borderRadius`    | pixels                                                    | `border-radius: 24px`                                                             |
+| `shadow`          | `{x, y, blur, color}`, pixels and a colour                | `filter: drop-shadow(0px 4px 12px #000000b3)`                                     |
+| `blur`            | pixels                                                    | `filter: blur(2px)`, after any shadow                                             |
+| `width`, `height` | composition pixels                                        | `width: 480px`                                                                    |
+| `objectFit`       | `contain`, `cover`, `fill`, `none`, `scale-down`          | `object-fit: cover`                                                               |
+
+Text fields need a text element and `objectFit` a video or image; a clip of another kind, a title (use `setClip.title`) and audio are refused with `unsupported`, and so is a font no `@font-face` in the project declares. Every value is a number, a closed set or a colour pattern, so nothing an agent sends can add markup, an attribute, a `url()` or an expression to the file.
+
+Each field is one declaration in the clip's own `style` attribute, appended after what is there; every other declaration stays byte for byte, and no stylesheet or script is touched. Inline style wins over the composition's stylesheets but not over its animation of the same property, so check with `timeline_view`. `timeline_read` returns `style` on each clip with only the fields set inline in the form above; a value written another way, such as `color: var(--accent)`, is left out and kept until that field is set. Shadow and blur share `filter`, so setting either replaces an inline filter written another way. A Cutroom dip transition animates `filter` while it runs, which hides a clip's shadow and blur for its length.
+
+Preview and export draw the same style. A video or image whose only change is a `contain`, `cover` or `fill` fit keeps the direct FFmpeg export and the footage pipeline; any other style on it sends it to the browser, in preview and export alike.
+
+Paint order stays the track order: a clip on a higher track draws over a lower one. There is no separate z-index, because one would contradict the timeline and turn off the footage pipeline and the direct export for the whole composition. Move a clip to another track to bring it forward or send it back.
+
 ### Transitions
 
 A transition sits on a cut between two video, image or audio clips on one track. Set it with `setTransition`, naming the clip that ends at the cut and the one that starts there:

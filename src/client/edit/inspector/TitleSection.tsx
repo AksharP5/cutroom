@@ -74,7 +74,13 @@ const MAX_MOTION_FRAMES = 100_000;
 const MAX_SHADOW_BLUR = 200;
 const MAX_STROKE_WIDTH = 100;
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div className="inspector-field">
       <span className="inspector-label">{label}</span>
@@ -504,7 +510,7 @@ export function TitleSection({
 }
 
 /** One `#rrggbbaa` value, such as a plate: the colour and its opacity are edited apart. */
-function AlphaColourFields({
+export function AlphaColourFields({
   label,
   value,
   disabled,

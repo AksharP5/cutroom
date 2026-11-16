@@ -28,7 +28,12 @@ import {
   isAudioKind,
 } from "../../shared/timeline/schema";
 import { parseFpsWithDefault } from "@hyperframes/core";
-import { clipStyle, readClipStyle, writeClipStyle } from "./style";
+import {
+  clipStyle,
+  readClipStyle,
+  readElementStyle,
+  writeClipStyle,
+} from "./style";
 import { readPosition, positionAttributes } from "./position";
 import {
   KEYFRAMES_ATTRIBUTE,
@@ -749,6 +754,7 @@ export function parseComposition(
               ?.text ?? null)
           : null,
       title: title && "title" in title ? title.title : null,
+      style: isAudioKind(kind) ? {} : readElementStyle(element.attrs.style),
       // A transition's crossfade is its own, not the clip's fade.
       fadeIn: edges.in
         ? 0

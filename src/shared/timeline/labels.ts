@@ -4,6 +4,29 @@ import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
 import { formatTimecode } from "./timecode";
 import { TRANSITION_NAMES } from "./transition";
+import { ElementStyleSchema, styleDeclarations } from "./elementStyle";
+import type { StyleField } from "./elementStyle";
+
+/** How a summary names each style field, in the inspector's words. */
+const STYLE_NAMES = new Map<string, string>(
+  Object.entries({
+    fontFamily: "font",
+    fontSize: "font size",
+    fontWeight: "font weight",
+    letterSpacing: "tracking",
+    lineHeight: "leading",
+    color: "text colour",
+    textAlign: "text alignment",
+    textTransform: "case",
+    fill: "fill",
+    borderRadius: "corner radius",
+    shadow: "shadow",
+    blur: "blur",
+    width: "width",
+    height: "height",
+    objectFit: "fit",
+  } satisfies Record<StyleField, string>),
+);
 
 /** A clip's name as the timeline shows it. A title without a label goes by its first line. */
 export const clipName = (
@@ -267,6 +290,29 @@ export function editLabel(
               `Set title ${name} to ${[...(motion.preset ? [motion.preset] : []), ...length].join(", ")}`,
             );
           }
+        }
+        if (command.style !== undefined) {
+          const fields = Object.entries(command.style);
+          if (fields.length > 3)
+            parts.push(
+              fields.every(([, value]) => value === null)
+                ? "Reset style"
+                : `Set ${fields.length} style properties`,
+            );
+          else
+            for (const [field, value] of fields) {
+              const name = STYLE_NAMES.get(field);
+              const written =
+                value !== null &&
+                Object.values(
+                  styleDeclarations(
+                    ElementStyleSchema.parse({ [field]: value }),
+                  ),
+                ).find((declaration) => declaration !== null);
+              parts.push(
+                written ? `Set ${name} to ${written}` : `Reset ${name}`,
+              );
+            }
         }
         if (command.opacity !== undefined)
           parts.push(
