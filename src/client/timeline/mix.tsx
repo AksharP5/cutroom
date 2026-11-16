@@ -230,6 +230,49 @@ export function gainFromDrag({ from, dy, fine, body, lane, fade }: GainDrag) {
   return db <= SILENCE_DB ? 0 : gainOf(db - audioGainToDb(on));
 }
 
+/**
+ * The volume lane value that puts the line `at` percent down a body of this height at `frame`,
+ * through the clip's gain and the fades there. The line snaps to the clip's own gain within half
+ * a pixel of it, so a point can return to no change at any height.
+ */
+export function laneFromLevel(
+  clip: Clip,
+  fps: Fps,
+  frame: number,
+  at: number,
+  body: number,
+) {
+  const gain = clampAudioGain(clip.volume ?? 1);
+  const fade = fadeAt(clip, frame, clipFades(clip));
+  const through = fade > 0 ? fade : 1;
+  const level = Math.max(0, Math.min(100, at));
+  if (Math.abs(level - drawn(gain, 1, through, body)) <= 50 / body + 1e-6)
+    return 1;
+  const db = onScale(Math.max(0, 100 - (100 - level) / through), 0, body);
+  if (db <= SILENCE_DB) return 0;
+  const total = audioDbToGain(Math.round(db * 10) / 10);
+  return Math.min(
+    MAX_AUDIO_GAIN,
+    Math.round((gain > 0 ? total / gain : total) * 1e4) / 1e4,
+  );
+}
+
+/** The clip's volume points, where they are drawn in a body of this height. */
+export function drawnPoints(clip: Clip, fps: Fps, body: number) {
+  const lane = volumeLane(clip);
+  const fades = clipFades(clip);
+  return (
+    lane?.points.map((point) => {
+      const frame = (point.t * fps.num) / fps.den;
+      return {
+        at: (frame / clip.duration) * 100,
+        level: envelopeHeight(clip, fps, frame, body, lane, fades),
+        hidden: frame > clip.duration,
+      };
+    }) ?? []
+  );
+}
+
 /** Draw native automation and fades at the clip's gain level, in a body of this height. */
 export function fadePath(clip: Clip, fps: Fps, body: number) {
   const fades = clipFades(clip);
@@ -284,14 +327,21 @@ export const ClipMix = memo(function ClipMix({
         <path d={path} />
         <path className="tl-gain" data-mix="gain" d={path}>
           <title>
-            {`Gain ${audioGainToText(clip.volume ?? 1)}. Shift for fine adjustment.${
-              clip.automation
-                ? " Volume automation present: clear it in Inspector > Audio."
-                : ""
-            }`}
+            {`Gain ${audioGainToText(clip.volume ?? 1)}. Shift for fine adjustment. Alt-click adds a volume point.`}
           </title>
         </path>
       </svg>
+      {drawnPoints(clip, fps, body).map(({ at, level, hidden }, index) => (
+        <i
+          key={index}
+          className="tl-volume-point"
+          data-mix="point"
+          data-point={index}
+          hidden={hidden}
+          title="Volume point. Drag to move it, Alt-click to delete it."
+          style={{ "--at": `${at}%`, "--level": level }}
+        />
+      ))}
       <i
         className="tl-fade-handle"
         data-mix="fadeIn"

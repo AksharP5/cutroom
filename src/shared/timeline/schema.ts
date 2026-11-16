@@ -3,6 +3,7 @@ import {
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
+import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -14,6 +15,17 @@ const volume = z
   .number()
   .min(0)
   .max(MAX_AUDIO_GAIN, "Gain goes up to +12 dB per stage.");
+/** A clip-local volume point, as `setClip.automation` writes it and `timeline_read` shows it. */
+export const VolumePointSchema = z.object({
+  frame: z
+    .number()
+    .nonnegative()
+    .describe("Clip-local frame, 0 is the clip's first; fractions are allowed"),
+  gain: volume.describe(
+    "Linear gain on top of the clip's own: 1 = no change, 0.5 = -6 dB, 0 = silence, up to +12 dB",
+  ),
+});
+
 /** Static CSS values are canonical to six decimals, beyond CSS parser float precision. */
 const opacity = z
   .number()
@@ -665,10 +677,18 @@ export const CommandSchema = z.discriminatedUnion("type", [
           "Linear clip gain, 0 for silence, 1 = 0 dB, null = unity, up to +12 dB",
         ),
       automation: z
-        .null()
+        .object({
+          volume: z
+            .array(VolumePointSchema)
+            .max(MAX_AUTOMATION_POINTS)
+            .describe(
+              "The whole volume envelope, in straight runs between points; the first point's gain holds before it and the last one's after it. [] removes the envelope",
+            ),
+        })
+        .nullable()
         .optional()
         .describe(
-          "Clear HyperFrames automation, including baked volume ramps. Null only",
+          "Volume automation on a clip with sound, on top of its gain and fades. Replaces the volume envelope and keeps effect lanes; null clears every lane, including baked volume ramps",
         ),
       fadeIn: frame
         .optional()

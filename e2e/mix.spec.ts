@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { volumePoints } from "../src/shared/timeline/mix";
 import { z } from "zod";
 import { expect, test } from "./fixtures";
 
@@ -1330,3 +1331,145 @@ for (const density of ["compact", "normal", "tall"] as const)
       }
     }
   });
+
+test("Alt-click adds volume points, a drag moves one, Alt-click deletes one, each in one undo step, and export plays the envelope the meter shows", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(180_000);
+  const { api, read, music } = await openTone(page, request, "Volume points");
+  const fps = (await read()).timeline.fps;
+  const points = async () => volumePoints((await music()).automation, fps);
+  const history = async () =>
+    (
+      (await (await request.get(`${api}/history`)).json()) as {
+        entries: { label: string }[];
+      }
+    ).entries.map((entry) => entry.label);
+  const at = async (fraction: number) => {
+    const point = await lineAt(page, fraction);
+    await page.keyboard.down("Alt");
+    await page.mouse.click(point.x, point.y);
+    await page.keyboard.up("Alt");
+  };
+  // The clip is 300 frames long; the line is flat, so new points take its level.
+  await at(0.3);
+  await expect.poll(points).toEqual([{ frame: 90, gain: 1 }]);
+  await at(0.5);
+  await expect.poll(points).toEqual([
+    { frame: 90, gain: 1 },
+    { frame: 150, gain: 1 },
+  ]);
+  const twoPoints = (await read()).timeline;
+  const second = page.locator('[data-clip-mix="music"] [data-point="1"]');
+  await drag(page, '[data-clip-mix="music"] [data-point="1"]', 0, 14);
+  await expect.poll(async () => (await points())?.[1]?.gain).toBeLessThan(0.3);
+  const lowered = (await points())!;
+  expect(lowered[1]!.frame).toBe(150);
+  // The point is drawn where the line now is.
+  const drawn = (await second.boundingBox())!;
+  const line = await lineAt(page, 0.5);
+  expect(Math.abs(drawn.y + drawn.height / 2 - line.y)).toBeLessThan(1.5);
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await read()).timeline).toEqual(twoPoints);
+  await page.keyboard.press("Control+Shift+z");
+  await expect.poll(points).toEqual(lowered);
+  // A third point, then Alt-click on it takes it away again.
+  await at(0.8);
+  await expect.poll(async () => (await points())?.length).toBe(3);
+  const third = (await page
+    .locator('[data-clip-mix="music"] [data-point="2"]')
+    .boundingBox())!;
+  // A point takes presses once the pointer is over its clip.
+  await page.mouse.move(third.x + third.width / 2, third.y + third.height / 2);
+  await page.keyboard.down("Alt");
+  await page.mouse.click(third.x + third.width / 2, third.y + third.height / 2);
+  await page.keyboard.up("Alt");
+  await expect.poll(points).toEqual(lowered);
+  expect((await history()).slice(-7)).toEqual([
+    "Add volume point",
+    "Add volume point",
+    "Move volume point",
+    "Undid: Move volume point",
+    "Redid: Move volume point",
+    "Add volume point",
+    "Delete volume point",
+  ]);
+  await page.screenshot({ path: info.outputPath("volume-points.png") });
+
+  // Export, then play the same timeline and compare the meter with the file across the points.
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await dialog.getByRole("button", { name: "Export MP4" }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 90_000 });
+  const output = info.outputPath("points.mp4");
+  await writeFile(
+    output,
+    await (await request.get(`/api/render/${jobId}/download`)).body(),
+  );
+  await dialog.getByRole("button", { name: "Close dialog" }).click();
+  await page.getByRole("region", { name: "Viewer", exact: true }).click();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  const frame = page
+    .frames()
+    .find((frame) => frame.url().includes("/api/isolated/"))!;
+  const samples = await frame.evaluate(
+    () =>
+      new Promise<{ time: number; l: number; r: number }[]>((resolve) => {
+        const win = window as Window & {
+          __player?: { getTime(): number };
+          __hf?: {
+            audioMeter?: { read(): { master: { l: number; r: number } } };
+          };
+        };
+        const collected: { time: number; l: number; r: number }[] = [];
+        const take = () => {
+          const time = win.__player?.getTime() ?? 0;
+          if (time > 0.5)
+            collected.push({
+              time,
+              ...(win.__hf?.audioMeter?.read().master ?? { l: 0, r: 0 }),
+            });
+          if (time >= 9) resolve(collected);
+          else requestAnimationFrame(take);
+        };
+        take();
+      }),
+  );
+  await page.keyboard.press("k");
+  const evidence = [];
+  // Before the first point, halfway down the ramp, and after the last point.
+  for (const target of [2, 4, 7]) {
+    const sample = samples.reduce((best, next) =>
+      Math.abs(next.time - target) < Math.abs(best.time - target) ? next : best,
+    );
+    const exported = await peaks(output, sample.time);
+    const difference = [sample.l, sample.r].map(
+      (level, index) => 20 * Math.log10(level / exported[index]!),
+    );
+    evidence.push({
+      time: sample.time,
+      previewDb: [sample.l, sample.r].map((level) => 20 * Math.log10(level)),
+      exportDb: exported.map((level) => 20 * Math.log10(level)),
+      differenceDb: difference,
+    });
+  }
+  await writeFile(
+    info.outputPath("levels.json"),
+    JSON.stringify({ points: lowered, evidence }, null, 2),
+  );
+  for (const { differenceDb } of evidence)
+    for (const db of differenceDb) expect(Math.abs(db)).toBeLessThan(1);
+  const [unity, , low] = evidence;
+  const expected = 20 * Math.log10(lowered[1]!.gain);
+  expect(low!.exportDb[0]! - unity!.exportDb[0]!).toBeCloseTo(expected, 0);
+});

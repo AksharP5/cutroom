@@ -1481,3 +1481,26 @@ input.tl-track-gain {
   inset: 3.5px;
   transform: none;
 }
+/* A volume point sits on the line. Like the fade handles, it takes presses on hover or selection. */
+.tl-volume-point {
+  position: absolute;
+  left: calc(var(--at) - 3.5px);
+  top: calc(
+    var(--size-clip-name) + (100% - var(--size-clip-name) - 3px) *
+      var(--level) / 100 - 3.5px
+  );
+  width: 7px;
+  height: 7px;
+  background: var(--text-primary);
+  border: 1px solid var(--scrim);
+  rotate: 45deg;
+  cursor: move;
+  pointer-events: none;
+}
+.tl-mix[data-hover] .tl-volume-point,
+.tl-mix.selected .tl-volume-point {
+  pointer-events: auto;
+}
+.tl-lanes[data-cursor="point"] {
+  cursor: move;
+}

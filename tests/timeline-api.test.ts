@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
+import { parseAutomation } from "@hyperframes/core/audio-automation";
 import { ProjectSummarySchema } from "../src/shared/project";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import {
@@ -1012,12 +1013,12 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
 );
 
-test("MCP gain, authored fades and cleared automation read back exactly and undo in one step", async () => {
+test("MCP gain, authored fades and automation read back exactly and undo in one step", async () => {
   const fixture = await timelineFixture();
   const { project } = fixture;
   await writeFile(
     join(project.path, "index.html"),
-    `<main data-composition-id="main" data-duration="10" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="10" data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":1},{"t":10,"v":0}]}]}'></audio></main>`,
+    `<main data-composition-id="main" data-duration="10" data-fps="30"><audio id="music" src="music.wav" data-start="0" data-duration="10" data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":1},{"t":10,"v":0}]},{"target":"fx.n1.gain","points":[{"t":0,"v":0}]}]}'></audio></main>`,
   );
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -1027,8 +1028,14 @@ test("MCP gain, authored fades and cleared automation read back exactly and undo
     }),
   });
   const client = new Client({ name: "mix-test", version: "1" });
+  // Agents read automation as points, so a clip is checked field by field rather than by TimelineSchema.
   const result = z.object({
-    structuredContent: z.object({ result: TimelineViewSchema }),
+    structuredContent: z.object({
+      result: z.looseObject({
+        revision: z.string(),
+        timeline: z.looseObject({ clips: z.array(z.looseObject({})) }),
+      }),
+    }),
   });
   try {
     await client.connect(
@@ -1043,31 +1050,72 @@ test("MCP gain, authored fades and cleared automation read back exactly and undo
           arguments: { projectId: project.id },
         }),
       ).structuredContent.result;
+    const edit = async (commands: unknown[]) =>
+      result.parse(
+        await client.callTool({
+          name: "timeline_edit",
+          arguments: {
+            fullTimeline: true,
+            projectId: project.id,
+            expectedRevision: (await read()).revision,
+            commands,
+          },
+        }),
+      ).structuredContent.result;
     const initial = await read();
     const originalFiles = await fixture.files();
-    expect(initial.timeline.clips[0]?.automation).toBeString();
-    const gain = 10 ** (-12 / 20);
-    const changed = result.parse(
-      await client.callTool({
-        name: "timeline_edit",
-        arguments: {
-          fullTimeline: true,
-          projectId: project.id,
-          expectedRevision: initial.revision,
-          commands: [
-            {
-              type: "setClip",
-              clipId: "music",
-              volume: gain,
-              automation: null,
-              fadeIn: 1,
-              fadeOut: 120,
-            },
-            { type: "trim", clipId: "music", edge: "end", to: 60 },
+    // Seconds read as frames at 30 fps; the effect lane is named, not listed.
+    expect(initial.timeline.clips[0]?.automation).toEqual({
+      volume: [
+        { frame: 0, gain: 1 },
+        { frame: 300, gain: 0 },
+      ],
+      lanes: ["fx.n1.gain"],
+    });
+    const pointed = await edit([
+      {
+        type: "setClip",
+        clipId: "music",
+        automation: {
+          volume: [
+            { frame: 90, gain: 0.25 },
+            { frame: 30, gain: 1 },
           ],
         },
-      }),
-    ).structuredContent.result;
+      },
+    ]);
+    // Points are sorted, and the effect lane survives a new volume envelope.
+    expect(pointed.timeline.clips[0]?.automation).toEqual({
+      volume: [
+        { frame: 30, gain: 1 },
+        { frame: 90, gain: 0.25 },
+      ],
+      lanes: ["fx.n1.gain"],
+    });
+    expect(
+      parseAutomation(
+        /data-automation='([^']*)'/.exec(
+          await readFile(join(project.path, "index.html"), "utf8"),
+        )![1]!,
+      ).lanes.find((lane) => lane.target === "volume")?.points,
+    ).toEqual([
+      { t: 1, v: 1 },
+      { t: 3, v: 0.25 },
+    ]);
+    await fixture.request(`/projects/${project.id}/history/undo`, "POST");
+    expect((await read()).timeline).toEqual(initial.timeline);
+    const gain = 10 ** (-12 / 20);
+    const changed = await edit([
+      {
+        type: "setClip",
+        clipId: "music",
+        volume: gain,
+        automation: null,
+        fadeIn: 1,
+        fadeOut: 120,
+      },
+      { type: "trim", clipId: "music", edge: "end", to: 60 },
+    ]);
     expect(changed.timeline.clips[0]).toMatchObject({
       volume: gain,
       automation: null,
@@ -1075,7 +1123,7 @@ test("MCP gain, authored fades and cleared automation read back exactly and undo
       fadeIn: 1,
       fadeOut: 120,
     });
-    expect(await read()).toEqual(changed);
+    expect((await read()).timeline).toEqual(changed.timeline);
     await fixture.request(`/projects/${project.id}/history/undo`, "POST");
     expect((await read()).timeline).toEqual(initial.timeline);
     expect(await fixture.files()).toEqual(originalFiles);

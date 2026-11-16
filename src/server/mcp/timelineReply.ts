@@ -1,4 +1,34 @@
+import {
+  VOLUME_TARGET,
+  parseAutomation,
+} from "@hyperframes/core/audio-automation";
+import { volumePoints } from "../../shared/timeline/mix";
 import type { Timeline, TimelineView } from "../../shared/timeline/schema";
+
+/**
+ * The timeline as agents read it: a clip's native automation becomes its volume points in
+ * frames, as `setClip.automation` writes them, and the names of any other lanes, which can hold
+ * hundreds of points.
+ */
+export function agentTimeline(timeline: Timeline) {
+  return {
+    ...timeline,
+    clips: timeline.clips.map(({ automation, ...clip }) => {
+      if (!automation) return { ...clip, automation: null };
+      const volume = volumePoints(automation, timeline.fps);
+      const lanes = parseAutomation(automation)
+        .lanes.map((lane) => lane.target)
+        .filter((target) => target !== VOLUME_TARGET);
+      return {
+        ...clip,
+        automation: {
+          ...(volume && { volume }),
+          ...(lanes.length && { lanes }),
+        },
+      };
+    }),
+  };
+}
 
 function diff<T extends object, K extends keyof T>(
   before: readonly T[],
@@ -48,8 +78,8 @@ export function editReply(
   after: TimelineView,
   fullTimeline: boolean,
 ) {
-  const { timeline } = after;
-  const old = before.timeline;
+  const timeline = agentTimeline(after.timeline);
+  const old = agentTimeline(before.timeline);
   const tracks = diff(old.tracks, timeline.tracks, "index");
   const changedTracks = new Set([
     ...(tracks?.added ?? []).map((track) => track.index),
