@@ -429,7 +429,13 @@ export function createProjectRoutes(
         project,
         transcript.sourceFile,
         c.req.header(AGENT_HEADER),
-        () => transcripts.cutWords(project, transcriptId, input),
+        () =>
+          transcripts.cutWords(
+            project,
+            transcriptId,
+            input,
+            agentWho(c, project),
+          ),
         input.noteId,
       ),
     );
