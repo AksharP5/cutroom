@@ -321,8 +321,7 @@ export function MediaPanel({
     : media?.[0]?.path;
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
-  const { compositions, revision: compositionRevision } =
-    useCompositions(projectId);
+  const compositions = useCompositions(projectId);
   // The list appears once the project has a scene; the root alone needs no list.
   const [view, setView] = useState<"media" | "compositions">("media");
   const showing =
@@ -672,11 +671,7 @@ export function MediaPanel({
       )}
       <div className="media-body">
         {showing === "compositions" && compositions ? (
-          <CompositionList
-            projectId={projectId}
-            compositions={compositions}
-            revision={compositionRevision}
-          />
+          <CompositionList projectId={projectId} paths={compositions} />
         ) : media?.length === 0 ? (
           <div className="media-empty">
             <strong>{importing ? "Importing" : "No media yet"}</strong>

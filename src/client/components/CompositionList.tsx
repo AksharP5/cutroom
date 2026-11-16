@@ -15,57 +15,43 @@ import { openContextMenu } from "./ContextMenu";
 import { TimecodeText } from "./TimecodeText";
 
 const ListingSchema = z.object({ compositions: z.array(z.string()) });
-const fileChangeSchema = z.object({ path: z.string() });
+const FileChangeSchema = z.object({
+  path: z.string(),
+  version: z.string().nullable(),
+  affectedCompositions: z.array(z.string()).nullable(),
+});
+/** Saves arrive in bursts; one read after the last is enough. */
+const SETTLE_MS = 150;
 
-interface Composition {
-  path: string;
-  seconds: number | null;
-}
+const isHtml = (path: string) => /\.html?$/i.test(path);
+const rootFirst = (a: string, b: string) =>
+  a === ROOT_COMPOSITION ? -1 : b === ROOT_COMPOSITION ? 1 : a.localeCompare(b);
 
 /**
- * The project's compositions, root first, with their lengths, read again whenever an HTML file
- * changes. Null until the first listing.
+ * The project's composition files, root first. Read again only when an HTML file appears or is
+ * removed, since an edit to one never changes the list. Null until the first listing.
  */
 export function useCompositions(projectId: string) {
-  const [compositions, setCompositions] = useState<Composition[] | null>(null);
-  /** Bumped by each HTML change, so thumbnails are drawn again. */
-  const [revision, setRevision] = useState(0);
+  const [paths, setPaths] = useState<string[] | null>(null);
   useEffect(() => {
-    setCompositions(null);
+    setPaths(null);
+    let known: string[] = [];
     let request = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
       request.abort();
       request = new AbortController();
       const { signal } = request;
-      const project = `/api/projects/${encodeURIComponent(projectId)}`;
-      const { compositions: paths } = ListingSchema.parse(
-        await (await fetch(project, { signal })).json(),
+      const { compositions } = ListingSchema.parse(
+        await (
+          await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+            signal,
+          })
+        ).json(),
       );
-      const listed = await Promise.all(
-        paths
-          .toSorted((a, b) =>
-            a === ROOT_COMPOSITION
-              ? -1
-              : b === ROOT_COMPOSITION
-                ? 1
-                : a.localeCompare(b),
-          )
-          .map(async (path) => {
-            // A composition the engine cannot read is still listed, without a length.
-            const view = await api(
-              `/projects/${encodeURIComponent(projectId)}/timeline?composition=${encodeURIComponent(path)}`,
-              TimelineViewSchema,
-              { signal },
-            ).catch(() => null);
-            return {
-              path,
-              seconds:
-                view && frameTime(view.timeline.duration, view.timeline.fps),
-            };
-          }),
-      );
-      if (!signal.aborted) setCompositions(listed);
+      if (signal.aborted) return;
+      known = compositions.toSorted(rootFirst);
+      setPaths(known);
     };
     const reload = () =>
       void load().catch((error: unknown) => {
@@ -76,13 +62,15 @@ export function useCompositions(projectId: string) {
       projectId,
       "file-change",
       (event) => {
-        const change = fileChangeSchema.safeParse(JSON.parse(event.data));
-        if (!change.success || !/\.html?$/i.test(change.data.path)) return;
+        const change = FileChangeSchema.safeParse(JSON.parse(event.data));
+        if (
+          !change.success ||
+          !isHtml(change.data.path) ||
+          (change.data.version !== null && known.includes(change.data.path))
+        )
+          return;
         clearTimeout(timer);
-        timer = setTimeout(() => {
-          setRevision((value) => value + 1);
-          reload();
-        }, 150);
+        timer = setTimeout(reload, SETTLE_MS);
       },
     );
     return () => {
@@ -91,7 +79,98 @@ export function useCompositions(projectId: string) {
       request.abort();
     };
   }, [projectId]);
-  return { compositions, revision };
+  return paths;
+}
+
+/**
+ * Each listed composition's length in seconds and a version for its picture. Read when the list
+ * opens, then again only for compositions a source change affects, and for the one just left.
+ * The open composition's length is the editor's own timeline, so editing it reads nothing more.
+ */
+function useLengths(projectId: string, paths: readonly string[]) {
+  const [read, setRead] = useState<
+    ReadonlyMap<string, { seconds: number | null; version: number }>
+  >(new Map());
+  const openPath = useTimeline((state) => state.view?.composition);
+  const openSeconds = useTimeline((state) =>
+    state.view
+      ? frameTime(state.view.timeline.duration, state.view.timeline.fps)
+      : null,
+  );
+  const listed = paths.join("\n");
+  /** Reads lengths and redraws pictures for the given compositions. */
+  const remeasure = useRef<(targets: readonly string[]) => void>(() => {});
+  // Leaving a composition: what was edited there while it was open is read now.
+  const left = useRef(openPath);
+  useEffect(() => {
+    const previous = left.current;
+    left.current = openPath;
+    if (previous && previous !== openPath) remeasure.current([previous]);
+  }, [openPath]);
+  useEffect(() => {
+    const closing = new AbortController();
+    const stale = new Set<string>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = (targets: readonly string[]) =>
+      Promise.all(
+        targets.map(async (path) => {
+          // A composition the engine cannot read is still listed, without a length.
+          const view = await api(
+            `/projects/${encodeURIComponent(projectId)}/timeline?composition=${encodeURIComponent(path)}`,
+            TimelineViewSchema,
+            { signal: closing.signal },
+          ).catch(() => null);
+          return [
+            path,
+            view && frameTime(view.timeline.duration, view.timeline.fps),
+          ] as const;
+        }),
+      ).then((lengths) => {
+        if (closing.signal.aborted) return;
+        setRead((current) => {
+          const next = new Map(current);
+          for (const [path, seconds] of lengths)
+            next.set(path, {
+              seconds,
+              version: (current.get(path)?.version ?? 0) + 1,
+            });
+          return next;
+        });
+      });
+    remeasure.current = (targets) => void measure(targets);
+    const all = listed ? listed.split("\n") : [];
+    void measure(all);
+    const unsubscribe = subscribeProjectEvents(
+      projectId,
+      "file-change",
+      (event) => {
+        const change = FileChangeSchema.safeParse(JSON.parse(event.data));
+        if (!change.success || !isHtml(change.data.path)) return;
+        for (const path of change.data.affectedCompositions ?? all)
+          if (all.includes(path)) stale.add(path);
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const targets = [...stale];
+          stale.clear();
+          // The open composition is read when it is left.
+          const shown = useTimeline.getState().composition;
+          void measure(targets.filter((path) => path !== shown));
+        }, SETTLE_MS);
+      },
+    );
+    return () => {
+      closing.abort();
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, [projectId, listed]);
+  return (path: string) => {
+    const known = read.get(path);
+    return {
+      seconds: openPath === path ? openSeconds : (known?.seconds ?? null),
+      version: known?.version ?? 0,
+    };
+  };
 }
 
 const compositionName = (path: string) =>
@@ -104,21 +183,18 @@ const compositionName = (path: string) =>
  */
 export function CompositionList({
   projectId,
-  compositions,
-  revision,
+  paths,
 }: {
   projectId: string;
-  compositions: readonly Composition[];
-  revision: number;
+  paths: readonly string[];
 }) {
+  const length = useLengths(projectId, paths);
   const fps = useFps();
   const open = useTimeline((state) => state.composition);
   const { lint } = useLint(projectId);
   const [focused, setFocused] = useState<string>();
   const list = useRef<HTMLUListElement>(null);
-  const tabbable = compositions.some((item) => item.path === focused)
-    ? focused
-    : compositions[0]?.path;
+  const tabbable = paths.includes(focused ?? "") ? focused : paths[0];
   return (
     <ul
       className="media-list"
@@ -145,7 +221,8 @@ export function CompositionList({
         next.focus();
       }}
     >
-      {compositions.map(({ path, seconds }) => {
+      {paths.map((path) => {
+        const { seconds, version } = length(path);
         const findings =
           lint?.findings.filter(
             (finding) => finding.file === path && finding.severity !== "info",
@@ -215,7 +292,7 @@ export function CompositionList({
             <span className="media-thumb" aria-hidden="true">
               {seconds !== null && (
                 <img
-                  src={`/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(path)}?${new URLSearchParams({ t: (seconds / 3).toFixed(3), v: String(revision) })}`}
+                  src={`/api/projects/${encodeURIComponent(projectId)}/thumbnail/${encodeURIComponent(path)}?${new URLSearchParams({ t: (seconds / 3).toFixed(3), v: String(version) })}`}
                   alt=""
                   loading="lazy"
                 />
