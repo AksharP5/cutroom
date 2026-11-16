@@ -19,7 +19,7 @@ import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
 import { PictureSelect } from "./PictureSelect";
-import { useTimeline } from "./timeline";
+import { ROOT_COMPOSITION, useTimeline } from "./timeline";
 import { emptySelection } from "../timeline/selection";
 import type { SaveNote } from "./NoteLayer";
 import { transport, useTransport } from "./transport";
@@ -39,6 +39,7 @@ const READY_TIMEOUT = 15_000;
  */
 export function Viewer({
   projectId,
+  composition,
   change,
   zoom,
   mode,
@@ -47,6 +48,8 @@ export function Viewer({
   onSaveNote,
 }: {
   projectId: string;
+  /** The composition to show: the project's root, or a sub-composition opened from it. */
+  composition: string;
   /** The preview watcher owns invalidation, including edits from other tabs and disk. */
   change: { revision: number; path: string };
   zoom: Zoom;
@@ -197,11 +200,22 @@ export function Viewer({
   const refresh = useRef<ReturnType<
     typeof previewRefresh<typeof change>
   > | null>(null);
+  /** The composition each document shows, fixed when it is requested. */
+  const shownComposition = useRef(composition);
+  shownComposition.current = composition;
+  const documentCompositions = useRef(new Map<number, string>());
+  const previewQuery = (gen: number) => {
+    const shown = documentCompositions.current.get(gen) ?? ROOT_COMPOSITION;
+    return shown === ROOT_COMPOSITION
+      ? ""
+      : `&composition=${encodeURIComponent(shown)}`;
+  };
   const reload = (
     revision: number,
     deadline = performance.now() + READY_TIMEOUT,
   ) => {
     latest.current += 1;
+    documentCompositions.current.set(latest.current, shownComposition.current);
     loadingRevision.current = { gen: latest.current, revision };
     transition({ type: "navigate", gen: latest.current, deadline });
   };
@@ -249,7 +263,9 @@ export function Viewer({
           if (
             picture &&
             preview?.timingAllowed &&
-            change.path === "index.html" &&
+            change.path === ROOT_COMPOSITION &&
+            documentCompositions.current.get(picture.gen) ===
+              ROOT_COMPOSITION &&
             useTransport.getState().state.kind === "stopped" &&
             !editPicture()
           ) {
@@ -307,7 +323,7 @@ export function Viewer({
           ) {
             try {
               const response = await fetch(
-                `/api/projects/${encodeURIComponent(projectId)}/isolated-preview?cutroom-mix=1&v=${change.revision}`,
+                `/api/projects/${encodeURIComponent(projectId)}/isolated-preview?cutroom-mix=1&v=${change.revision}${previewQuery(picture.gen)}`,
                 { signal: AbortSignal.any([signal, preview.signal]) },
               );
               if (!response.ok)
@@ -372,6 +388,14 @@ export function Viewer({
     checking.current?.abort();
     refresh.current?.push(change);
   }, [change]);
+  // Opening a composition loads its document over the last picture, as an edit's reload does.
+  const opened = useRef(composition);
+  useLayoutEffect(() => {
+    if (opened.current === composition) return;
+    opened.current = composition;
+    checking.current?.abort();
+    reload(change.revision);
+  }, [composition]);
 
   useLayoutEffect(() => {
     for (const [gen, connection] of connections.current) {
@@ -680,7 +704,7 @@ export function Viewer({
               tabIndex={-1}
               sandbox="allow-scripts"
               allow="autoplay"
-              src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}&document=${documentId.current}-${gen}`}
+              src={`/api/projects/${encodeURIComponent(projectId)}/isolated-preview?v=${gen}&document=${documentId.current}-${gen}${previewQuery(gen)}`}
               data-live={gen === live?.gen || undefined}
               data-held={Boolean(retained) || undefined}
               data-retiring={gen === handoff.retiring || undefined}

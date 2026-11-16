@@ -4,7 +4,7 @@ import { destinationTracks } from "../../shared/timeline/tracks";
 import { dropPreview, placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { useViewSettings } from "../timeline/viewSettings";
-import { editTimeline } from "./timeline";
+import { editTimeline, useTimeline } from "./timeline";
 import { transport, useTransport } from "./transport";
 import { showToast } from "../workspace";
 
@@ -34,7 +34,11 @@ export function placeAtPlayhead(
         timeline.tracks,
         useViewSettings.getState().destinations,
       );
-      const placed = placedMedia(media, timeline.fps);
+      const placed = placedMedia(
+        media,
+        timeline.fps,
+        useTimeline.getState().composition,
+      );
       end = at + placed.frames;
       const picture = !isAudioKind(media.kind) && videoEnabled;
       const sound =

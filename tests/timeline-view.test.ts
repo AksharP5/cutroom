@@ -25,7 +25,7 @@ import {
   trackRows,
   zoomToSlider,
 } from "../src/client/timeline/math";
-import { localMediaPath } from "../src/shared/media";
+import { localMediaPath, sourcePath } from "../src/shared/media";
 import {
   clickSelection,
   emptySelection,
@@ -624,6 +624,18 @@ test("a media source resolves to one project file for the server and the timelin
   expect(localMediaPath("index.html", "https://example.com/a.mp4")).toBeNull();
   expect(localMediaPath("index.html", "//example.com/a.mp4")).toBeNull();
   expect(localMediaPath("index.html", "bad%zz.mp4")).toBeNull();
+});
+
+test("media placed in a composition is written from its folder and reads back as the same file", () => {
+  for (const [composition, path, src] of [
+    ["index.html", "media/talk.mp4", "media/talk.mp4"],
+    ["compositions/intro.html", "media/talk.mp4", "../media/talk.mp4"],
+    ["compositions/intro.html", "compositions/bed.wav", "bed.wav"],
+    ["scenes/a/b.html", "scenes/c/d.png", "../c/d.png"],
+  ] as const) {
+    expect(sourcePath(composition, path)).toBe(src);
+    expect(localMediaPath(composition, src)).toBe(path);
+  }
 });
 
 test("waveform dB mapping hides the noise floor and gives speech room without hitting the edges", () => {

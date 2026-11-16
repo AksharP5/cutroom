@@ -32,6 +32,12 @@ export interface ViewState {
   rows: FrameRange;
 }
 export type TimelineViewport = ReturnType<typeof createViewport>;
+/** A timeline's zoom and scroll; a fitted one fits again at its current length. */
+export interface ViewPlacement {
+  ppf: number;
+  scroll: number;
+  fitted: boolean;
+}
 
 /**
  * Owns zoom and scroll for one timeline. Pixels per frame is the `--ppf` property on `grid`, so
@@ -365,6 +371,26 @@ export function createViewport(
         beforeFit = ppf;
         zoom(fit, anchorNear(playhead), true);
       } else if (beforeFit) zoom(beforeFit, anchorNear(playhead), true);
+    },
+    /** The zoom and scroll now, to return to with `place`. */
+    placement: (): ViewPlacement => ({ ppf, scroll: exact, fitted }),
+    /**
+     * Shows a timeline at the zoom and scroll it was left at, or fitted when it has none, as a
+     * project opening does. The new timeline must be measured first.
+     */
+    place(placement: ViewPlacement | null) {
+      stop();
+      owed = null;
+      beforeFit = null;
+      if (!placement || placement.fitted) {
+        write(fit);
+        scrollTo(0);
+      } else {
+        write(clampPpf(placement.ppf, fit));
+        scrollTo(placement.scroll);
+      }
+      fitted = ppf === fit;
+      onChange(true);
     },
     state: (): ViewState => ({
       ppf,

@@ -37,9 +37,6 @@ export type SaveNote = (
   body: string,
 ) => Promise<string>;
 
-/** The viewer always shows the project's main composition. */
-const COMPOSITION = "index.html";
-
 interface Box {
   left: number;
   top: number;
@@ -102,6 +99,7 @@ export function NoteLayer({
   );
   const dispatch = (event: NoteEvent) => dispatchNote(projectId, event);
   const fps = useTransport((state) => state.fps);
+  const composition = useTimeline((state) => state.composition);
   const live = useRef<{
     pointer: number;
     frame: number;
@@ -144,7 +142,7 @@ export function NoteLayer({
 
   const numbers = noteNumbers(notes);
   const marks = notes.flatMap((item): Mark[] =>
-    item.compositionPath === COMPOSITION &&
+    item.compositionPath === composition &&
     item.review.status !== "withdrawn" &&
     item.review.status !== "accepted"
       ? [
@@ -553,7 +551,8 @@ function reviewDraft(draft: Draft, fps: Fps): EditorReviewDraft {
     id: draft.id,
     time: toSeconds(draft.frame, fps),
     ...(draft.end !== null && { endTime: toSeconds(draft.end, fps) }),
-    compositionPath: COMPOSITION,
+    // Notes belong to the composition the viewer shows.
+    compositionPath: useTimeline.getState().composition,
     point: draft.at,
     strokes: draft.strokes,
     elementIds: [...useTimeline.getState().selection.ids],

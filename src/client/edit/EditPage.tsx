@@ -55,6 +55,7 @@ import {
   useSource,
 } from "./source";
 import { SourceViewer } from "./SourceViewer";
+import { CompositionPath } from "./CompositionPath";
 import { ToolButtons } from "./ToolButtons";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
@@ -126,6 +127,7 @@ export function EditPage({
   const [zoom, setZoom] = useState<Zoom>("fit");
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
+  const composition = useTimeline((state) => state.composition);
   const snapping = useTimeline((state) => state.snapping);
   const source = useSource((state) => state.file !== null);
   const sourceShown = useSource((state) => state.shown);
@@ -176,7 +178,10 @@ export function EditPage({
           change.success &&
           change.data.projectId === projectId &&
           change.data.affectsPreview &&
-          (change.data.affectedCompositions?.includes("index.html") ?? true)
+          (change.data.affectedCompositions?.includes(
+            useTimeline.getState().composition,
+          ) ??
+            true)
         )
           setPreviewChange((value) => ({
             revision: value.revision + 1,
@@ -527,6 +532,7 @@ export function EditPage({
         <Viewer
           key={projectId}
           projectId={projectId}
+          composition={composition}
           change={previewChange}
           zoom={zoom}
           mode={mode}
@@ -560,6 +566,7 @@ export function EditPage({
         aria-label="Timeline"
         onPointerDownCapture={clearBrowserSelection}
       >
+        <CompositionPath projectId={projectId} projectName={projectName} />
         <ProjectTimeline
           voiceover={voiceover}
           projectId={projectId}

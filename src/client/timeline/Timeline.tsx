@@ -74,7 +74,7 @@ import type { LaneGestureOptions } from "./lanes";
 import type { Selection } from "./selection";
 import { useClipMotion } from "./motion";
 import { createViewport } from "./view";
-import type { TimelineViewport } from "./view";
+import type { TimelineViewport, ViewPlacement } from "./view";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
 import { useKeymap } from "../keymap";
@@ -148,6 +148,8 @@ export interface TimelineProps {
   onTrackMenu(event: MouseEvent, anchor: Element, row: Row | null): void;
   /** A right-click in the lanes, on a clip or on empty space. */
   onClipMenu(event: MouseEvent, anchor: Element, clip: Clip | null): void;
+  /** A double-clicked clip, which opens the composition it hosts. */
+  onOpenClip?(clip: Clip): void;
   recording?: { track: Track; start: number } | null;
   audioControls?(
     track: Track,
@@ -709,6 +711,9 @@ const TrackHeads = memo(function TrackHeads({
   });
 });
 
+/** Where each composition's timeline was zoomed and scrolled when it was left, by project. */
+const placements = new Map<string, ViewPlacement>();
+
 /**
  * The timeline read view: ruler, track headers, clips, markers, review pins and the playhead.
  * Scrolling and zooming write to the DOM directly; React renders only when the view leaves the
@@ -742,6 +747,7 @@ export function Timeline({
   onClipMenu,
   onOpenPin,
   onOpenMarker,
+  onOpenClip,
 }: TimelineProps) {
   const [takeTrack, setTakeTrack] = useState<Track | null>(null);
   useLayoutEffect(() => {
@@ -872,6 +878,7 @@ export function Timeline({
   });
   const gestures = useLaneGestures({
     timeline,
+    composition: source.composition,
     rows: layout.rows,
     newRows: layout.newRows,
     tracks,
@@ -976,6 +983,21 @@ export function Timeline({
       viewport.current = null;
     };
   }, [sizes]);
+
+  // Each composition keeps the zoom and scroll it was left at. Saved before the new timeline is
+  // measured, while the viewport still holds the one being left.
+  const shownComposition = useRef(source.composition);
+  useLayoutEffect(() => {
+    const view = viewport.current;
+    const left = shownComposition.current;
+    if (!view || left === source.composition) return;
+    placements.set(`${source.projectId}\n${left}`, view.placement());
+    shownComposition.current = source.composition;
+    view.measure({ frames, fps: { num: fps.num, den: fps.den } });
+    view.place(
+      placements.get(`${source.projectId}\n${source.composition}`) ?? null,
+    );
+  }, [source.projectId, source.composition]);
 
   useClipMotion(
     lanes,
@@ -1274,6 +1296,15 @@ export function Timeline({
             style={{ minHeight: layout.height }}
             data-tool={tool}
             {...gestures.handlers}
+            onDoubleClick={(event) => {
+              if (event.button !== 0) return;
+              // A press captures the pointer on the lanes, so the clip is found where it was.
+              const id = document
+                .elementFromPoint(event.clientX, event.clientY)
+                ?.closest<HTMLElement>("[data-clip]")?.dataset.clip;
+              const clip = timeline.clips.find((item) => item.id === id);
+              if (clip) onOpenClip?.(clip);
+            }}
             onContextMenu={(event) => {
               const element =
                 event.target instanceof Element

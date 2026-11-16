@@ -46,6 +46,8 @@ import type { TimelineViewport } from "./view";
 
 export interface LaneGestureOptions {
   timeline: Timeline;
+  /** The open composition, which writes dropped media from its own folder. */
+  composition: string;
   rows: readonly Row[];
   newRows: RowLayout["newRows"];
   /** The timeline's clips by track, as the canvas draws them outside a drag. */
@@ -936,7 +938,11 @@ export function useLaneGestures(options: LaneGestureOptions) {
     const { row, create } = destination(media.kind, event.clientY);
     destinationRow.current = create.length ? row : null;
     const { timeline, playhead } = latest.current;
-    const dragged = placedMedia(media, timeline.fps);
+    const dragged = placedMedia(
+      media,
+      timeline.fps,
+      latest.current.composition,
+    );
     const mode =
       event.shiftKey && (event.ctrlKey || event.metaKey)
         ? "insert"

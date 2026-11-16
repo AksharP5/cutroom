@@ -111,6 +111,20 @@ export function localMediaPath(sourceFile: string, src: string): string | null {
   return parts.join("/") || ".";
 }
 
+/** How `sourceFile` writes the project file `path` as a `src`: from its own folder. */
+export function sourcePath(sourceFile: string, path: string) {
+  const from = sourceFile.split("/").slice(0, -1);
+  const to = path.split("/");
+  let shared = 0;
+  while (
+    shared < from.length &&
+    shared < to.length - 1 &&
+    from[shared] === to[shared]
+  )
+    shared++;
+  return [...from.slice(shared).map(() => ".."), ...to.slice(shared)].join("/");
+}
+
 export const mediaSettings = {
   peakSampleRate: 48000,
   peakBucketSamples: 96,

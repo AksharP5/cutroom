@@ -23,7 +23,7 @@ const describe = (clip: Clip, view: TimelineView): SelectedClip => ({
 /** What the agent is told about the editor with each message: the open composition and the clips selected in it. */
 export function editorContext(): EditorContext {
   const { frame, fps, duration, state } = useTransport.getState();
-  const { view } = useTimeline.getState();
+  const { view, composition } = useTimeline.getState();
   const clips = view
     ? selectedClips(view).map((clip) => describe(clip, view))
     : [];
@@ -31,7 +31,7 @@ export function editorContext(): EditorContext {
     currentTime: frameTime(frame, fps),
     duration: frameTime(duration, fps),
     isPlaying: state.kind !== "stopped",
-    compositionPath: view?.composition ?? "index.html",
+    compositionPath: composition,
     selectedElementIds: clips.map((clip) => clip.id),
     selectedClips: clips,
   };

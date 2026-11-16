@@ -8,6 +8,7 @@ import { placedMedia } from "../timeline/gesture";
 import type { MediaDrag } from "../timeline/mediaDrag";
 import { showToast } from "../workspace";
 import { placeAtPlayhead } from "./placeMedia";
+import { ROOT_COMPOSITION } from "./timeline";
 import { createTransport, transport, useTransport } from "./transport";
 
 type Marks = Timeline["range"];
@@ -38,7 +39,7 @@ function sync() {
   const { file } = useSource.getState();
   if (!file) return;
   const { fps } = useTransport.getState();
-  const duration = placedMedia(file, fps).frames;
+  const duration = placedMedia(file, fps, ROOT_COMPOSITION).frames;
   const marks = pendingMarks ?? preferences.use.getState();
   const start =
     marks.in === null
