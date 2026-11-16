@@ -88,3 +88,78 @@ test("an agent's keyframes play in the open viewer at the frames between them, a
   await seekFrame(page, 15);
   await expect.poll(shown).toEqual({ left: 220, opacity: 1 });
 });
+
+test("the inspector keys Position at the playhead, shows the value between keyframes, and a diamond drags to retime", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(
+    request,
+    { name: "Keyframes inspector", width: 640, height: 360, duration: 2 },
+    box,
+  );
+  const timeline = async () =>
+    (
+      (await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json()) as {
+        timeline: { clips: { keyframes: unknown }[] };
+      }
+    ).timeline.clips[0]!.keyframes;
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="box"]').click();
+  const x = page.getByRole("textbox", { name: "Position X", exact: true });
+  const diamond = page.getByRole("button", {
+    name: "Position keyframe",
+    exact: true,
+  });
+  const left = () =>
+    page
+      .frameLocator("iframe[data-live]")
+      .locator("#box")
+      .evaluate((element) => Math.round(element.getBoundingClientRect().left));
+
+  // The diamond keys the value shown; typing a value at another frame keys it there.
+  await seekFrame(page, 0);
+  await diamond.click();
+  await expect(diamond).toHaveAttribute("aria-pressed", "true");
+  await seekFrame(page, 30);
+  await expect(diamond).toHaveAttribute("aria-pressed", "false");
+  await x.fill("200");
+  await x.press("Enter");
+  await expect(diamond).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(timeline).toEqual({
+    position: [
+      { frame: 0, value: { x: 0, y: 0 }, ease: "linear" },
+      { frame: 30, value: { x: 200, y: 0 }, ease: "linear" },
+    ],
+  });
+
+  // Between keyframes the field and the picture show the interpolated value.
+  await seekFrame(page, 10);
+  await expect(x).toHaveValue("66.67 px");
+  await expect.poll(left).toBe(287);
+
+  // Dragging the second diamond along the clip retimes it, as one undo step.
+  const second = page.locator('[data-keyframe="box:30"]');
+  const first = page.locator('[data-keyframe="box:0"]');
+  const [from, origin] = [
+    (await second.boundingBox())!,
+    (await first.boundingBox())!,
+  ];
+  const perFrame = (from.x - origin.x) / 30;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    from.x + from.width / 2 + perFrame * 15,
+    from.y + from.height / 2,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await expect(page.locator('[data-keyframe="box:45"]')).toBeVisible();
+  await expect
+    .poll(async () => JSON.stringify(await timeline()))
+    .toContain('"frame":45');
+  await page.keyboard.press("Control+z");
+  await expect(page.locator('[data-keyframe="box:30"]')).toBeVisible();
+});

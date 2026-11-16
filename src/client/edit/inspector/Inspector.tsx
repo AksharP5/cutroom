@@ -37,6 +37,16 @@ import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { TransformFields } from "./TransformFields";
+import { valueAt } from "../../../shared/timeline/keyframes";
+import {
+  KeyframeButton,
+  cancelKeyframeDraft,
+  commitKeyframe,
+  draftKeyframe,
+  isKeyed,
+  rounded,
+  useClipFrame,
+} from "./Keyframes";
 import { groupedChanges } from "./changes";
 import { ChangeList } from "./ChangeList";
 import { TimelineOverview } from "./TimelineOverview";
@@ -89,15 +99,32 @@ function PositionFields({
   disabled: boolean | undefined;
 }) {
   const move = usePictureMove((state) => state.move);
-  const shown = move?.clipId === clip.id ? move : clip;
+  const local = useClipFrame(clip);
+  const keyed = isKeyed(clip, "position");
+  const now = valueAt(clip, "position", local);
+  const value =
+    move?.clipId === clip.id ? move : { x: rounded(now.x), y: rounded(now.y) };
   return (
     <FieldRow
       label="Position"
       disabled={disabled}
+      keyframe={
+        <KeyframeButton
+          projectId={projectId}
+          clip={clip}
+          property="position"
+          disabled={disabled}
+        />
+      }
       onReset={() =>
-        void editTimeline(projectId, "Reset position", () => [
-          { type: "setClip", clipId: clip.id, x: null, y: null },
-        ])
+        keyed
+          ? void commitKeyframe(projectId, clip, "position", local, {
+              x: 0,
+              y: 0,
+            })
+          : void editTimeline(projectId, "Reset position", () => [
+              { type: "setClip", clipId: clip.id, x: null, y: null },
+            ])
       }
     >
       {(["x", "y"] as const).map((axis) => (
@@ -105,23 +132,36 @@ function PositionFields({
           key={`${clip.id}:${axis}`}
           axis={axis.toUpperCase()}
           label={`Position ${axis.toUpperCase()}`}
-          value={shown[axis] ?? 0}
+          value={value[axis]}
           initial={0}
           unit="pixels"
           min={-Infinity}
           fps={fps}
           disabled={disabled}
           onPreview={(value) =>
-            previewPosition(
-              clip.id,
-              axis === "x" ? value : (clip.x ?? 0),
-              axis === "y" ? value : (clip.y ?? 0),
-            )
+            keyed
+              ? draftKeyframe(clip, "position", { ...now, [axis]: value })
+              : previewPosition(
+                  clip.id,
+                  axis === "x" ? value : (clip.x ?? 0),
+                  axis === "y" ? value : (clip.y ?? 0),
+                )
           }
           onCancel={() =>
-            cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
+            keyed
+              ? cancelKeyframeDraft(clip)
+              : cancelPositionPreview(clip.id, clip.x ?? 0, clip.y ?? 0)
           }
           onCommit={async (value) => {
+            if (value === null) return;
+            if (keyed) {
+              draftKeyframe(clip, "position", { ...now, [axis]: value });
+              await commitKeyframe(projectId, clip, "position", local, {
+                ...now,
+                [axis]: value,
+              });
+              return;
+            }
             await commitPositionPreview(() =>
               editTimeline(projectId, "Edit position", () => [
                 { type: "setClip", clipId: clip.id, [axis]: value },
@@ -131,6 +171,66 @@ function PositionFields({
         />
       ))}
     </FieldRow>
+  );
+}
+
+/** Static opacity, or the keyframe at the playhead once Opacity has keyframes. */
+function OpacityField({
+  projectId,
+  clip,
+  fps,
+  disabled,
+}: {
+  projectId: string;
+  clip: Clip;
+  fps: Fps;
+  disabled: boolean | undefined;
+}) {
+  const local = useClipFrame(clip);
+  const keyed = isKeyed(clip, "opacity");
+  return (
+    <ValueField
+      label="Opacity"
+      allowAuto={!keyed}
+      max={1}
+      value={
+        keyed ? rounded(valueAt(clip, "opacity", local), true) : clip.opacity
+      }
+      initial={keyed ? 1 : null}
+      half
+      disabled={disabled}
+      keyframe={
+        <KeyframeButton
+          projectId={projectId}
+          clip={clip}
+          property="opacity"
+          disabled={disabled}
+        />
+      }
+      onReset={() =>
+        keyed
+          ? void commitKeyframe(projectId, clip, "opacity", local, 1)
+          : void editTimeline(projectId, "Restore source opacity", () => [
+              { type: "setClip", clipId: clip.id, opacity: null },
+            ])
+      }
+      unit="percent"
+      fps={fps}
+      onPreview={
+        keyed ? (opacity) => draftKeyframe(clip, "opacity", opacity) : undefined
+      }
+      onCancel={keyed ? () => cancelKeyframeDraft(clip) : undefined}
+      onCommit={(opacity) => {
+        if (keyed) {
+          if (opacity === null) return;
+          void commitKeyframe(projectId, clip, "opacity", local, opacity);
+          return;
+        }
+        void editTimeline(projectId, "Edit opacity", () => [
+          { type: "setClip", clipId: clip.id, opacity },
+        ]);
+      }}
+    />
   );
 }
 
@@ -525,24 +625,27 @@ export function Inspector({
                 type="button"
                 className="inspector-section-reset"
                 aria-label="Reset transform"
-                title="Reset transform. Double-click a row's label to reset just that row."
+                title="Reset transform. Keyframed rows keep their keyframes. Double-click a row's label to reset just that row."
                 disabled={
                   [clip.x, clip.y, clip.scaleX, clip.rotation, clip.crop].every(
                     (value) => value === null,
                   ) || track?.track.locked
                 }
                 onClick={() => {
+                  // Keyframed rows have no static value; their keyframes stay.
+                  const restricted = !!clip.sourceRestrictions?.transform;
                   void editTimeline(projectId, "Reset transform", () => [
                     {
                       type: "setClip",
                       clipId: clip.id,
-                      x: null,
-                      y: null,
-                      ...(!clip.sourceRestrictions?.transform && {
-                        scale: null,
-                        rotation: null,
-                        crop: null,
-                      }),
+                      ...(clip.x !== null || clip.y !== null
+                        ? { x: null, y: null }
+                        : {}),
+                      ...(!restricted &&
+                        clip.scaleX !== null && { scale: null }),
+                      ...(!restricted &&
+                        clip.rotation !== null && { rotation: null }),
+                      ...(!restricted && clip.crop !== null && { crop: null }),
                     },
                   ]);
                 }}
@@ -600,26 +703,12 @@ export function Inspector({
                 <CaretRight size={10} aria-hidden />
                 Composite
               </summary>
-              <ValueField
+              <OpacityField
                 key={clip.id}
-                label="Opacity"
-                allowAuto
-                max={1}
-                value={clip.opacity}
-                initial={null}
-                half
-                onReset={() =>
-                  void editTimeline(projectId, "Restore source opacity", () => [
-                    { type: "setClip", clipId: clip.id, opacity: null },
-                  ])
-                }
-                unit="percent"
+                projectId={projectId}
+                clip={clip}
                 fps={timeline.fps}
-                onCommit={(opacity) => {
-                  void editTimeline(projectId, "Edit opacity", () => [
-                    { type: "setClip", clipId: clip.id, opacity },
-                  ]);
-                }}
+                disabled={track?.track.locked}
               />
             </details>
           )}

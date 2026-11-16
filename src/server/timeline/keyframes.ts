@@ -10,9 +10,8 @@ import type {
   KeyframeProperty,
   Keyframes,
 } from "../../shared/timeline/schema";
-import { tracksOf } from "../../shared/timeline/keyframes";
+import { keyframeCss, tracksOf } from "../../shared/timeline/keyframes";
 import type { KeyframeValues } from "../../shared/timeline/keyframes";
-import { transformStyle } from "../../shared/timeline/transform";
 
 /** A clip's keyframes, in element-local seconds. The stylesheet below draws them. */
 export const KEYFRAMES_ATTRIBUTE = "data-cutroom-keyframes";
@@ -24,35 +23,27 @@ const FORMATS: {
   [P in KeyframeProperty]: {
     numbers(value: KeyframeValues[P]): number[];
     value(numbers: number[]): unknown;
-    css(value: KeyframeValues[P]): string;
   };
 } = {
   position: {
     numbers: ({ x, y }) => [x, y],
     value: ([x, y]) => ({ x, y }),
-    css: ({ x, y }) => `translate:${x}px ${y}px`,
   },
   scale: {
     numbers: ({ x, y }) => [x, y],
     value: ([x, y]) => ({ x, y }),
-    css: ({ x, y }) =>
-      `scale:${transformStyle({ scaleX: x, scaleY: y, rotation: null, crop: null }).scale}`,
   },
   rotation: {
     numbers: (degrees) => [degrees],
     value: ([degrees]) => degrees,
-    css: (degrees) => `rotate:${degrees}deg`,
   },
   crop: {
     numbers: ({ top, right, bottom, left }) => [top, right, bottom, left],
     value: ([top, right, bottom, left]) => ({ top, right, bottom, left }),
-    css: (crop) =>
-      `clip-path:${transformStyle({ scaleX: null, scaleY: null, rotation: null, crop })["clip-path"]}`,
   },
   opacity: {
     numbers: (opacity) => [opacity],
     value: ([opacity]) => opacity,
-    css: (opacity) => `opacity:${opacity}`,
   },
 };
 const ARITY: Record<KeyframeProperty, number> = {
@@ -175,7 +166,8 @@ function keyframeRules(attribute: string, fps: Fps): string | null {
   const blocks = <P extends KeyframeProperty>(property: P) => {
     const track = tracks[property];
     if (!track) return [];
-    const css = (value: KeyframeValues[P]) => FORMATS[property].css(value);
+    const css = (value: KeyframeValues[P]) =>
+      keyframeCss(property, value).join(":");
     const [first, last] = [track[0]!, track.at(-1)!];
     // Each property holds its first and last value over the whole animation.
     return [

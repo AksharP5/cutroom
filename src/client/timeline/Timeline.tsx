@@ -68,6 +68,7 @@ import { createBodies } from "./bodies";
 import type { Bodies } from "./bodies";
 import type { Tool } from "./gesture";
 import { TransitionLength, TransitionMark } from "./TransitionMark";
+import { KeyframeMarks } from "./KeyframeMarks";
 import { useLaneGestures } from "./lanes";
 import { mediaDrag, subscribeMediaDrag } from "./mediaDrag";
 import type { LaneGestureOptions } from "./lanes";
@@ -1479,6 +1480,29 @@ export function Timeline({
                             selected={selection.ids.has(clip.id)}
                             offline={offline.has(clip.id)}
                             synced={synced.has(clip.id)}
+                          />
+                        ))}
+                    {mounted &&
+                      clips
+                        .filter(
+                          (item) =>
+                            item.row === row &&
+                            item.clip.keyframes !== null &&
+                            item.clip.duration * mounted.labelPpf >=
+                              NAME_MIN_WIDTH,
+                        )
+                        .map(({ clip }) => (
+                          <KeyframeMarks
+                            key={`keyframes:${clip.id}`}
+                            timeline={timeline}
+                            clip={clip}
+                            selected={selection.ids.has(clip.id)}
+                            frameAt={(x) =>
+                              viewport.current?.frameAtClient(x) ?? 0
+                            }
+                            onSeek={onSeek}
+                            onEdit={onEdit}
+                            onGesture={onGesture}
                           />
                         ))}
                     {clips

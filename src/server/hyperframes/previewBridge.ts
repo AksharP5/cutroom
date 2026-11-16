@@ -556,6 +556,49 @@ function installPreviewBridge(
     if (observedClip)
       observationTimer = window.setTimeout(scheduleObservation, 350);
   };
+  /**
+   * A keyframed property's draft. Its animation draws over inline styles, so the draft is written
+   * as important, which outranks animations, and GSAP never parses the clip to fold it.
+   */
+  const keyframeProperties = [
+    "translate",
+    "scale",
+    "rotate",
+    "clip-path",
+    "opacity",
+  ] as const;
+  const keyframeOriginals = new Map<
+    HTMLElement | SVGElement,
+    Map<string, { value: string; priority: string }>
+  >();
+  const writeKeyframe = (clipId: string, style: Map<string, string> | null) => {
+    const element = clipElement(clipId);
+    if (!(element instanceof HTMLElement || element instanceof SVGElement))
+      return;
+    const original = keyframeOriginals.get(element) ?? new Map();
+    keyframeOriginals.set(element, original);
+    for (const property of style?.keys() ?? [])
+      if (!original.has(property))
+        original.set(property, {
+          value: element.style.getPropertyValue(property),
+          priority: element.style.getPropertyPriority(property),
+        });
+    for (const [property, saved] of original) {
+      const value = style?.get(property);
+      for (const target of [
+        element,
+        element instanceof HTMLVideoElement ? holds.get(element)?.canvas : null,
+      ]) {
+        if (value !== undefined)
+          target?.style.setProperty(property, value, "important");
+        else if (saved.value)
+          target?.style.setProperty(property, saved.value, saved.priority);
+        else target?.style.removeProperty(property);
+      }
+    }
+    if (!style) keyframeOriginals.delete(element);
+    scheduleBox();
+  };
   let observedClip: string | null = null;
   let observedText: string | null = null;
   /** The clip's saved transform longhands, which the warning compares while no draft shows. */
@@ -2374,6 +2417,19 @@ function installPreviewBridge(
           )
             scheduleObservation(data.hfId);
           return;
+        case "keyframe": {
+          if (!("clipId" in data) || typeof data.clipId !== "string") return;
+          if (!("style" in data)) return;
+          if (data.style === null) return writeKeyframe(data.clipId, null);
+          if (typeof data.style !== "object") return;
+          const style = new Map<string, string>();
+          for (const property of keyframeProperties) {
+            const value: unknown = Reflect.get(data.style, property);
+            if (typeof value === "string") style.set(property, value);
+          }
+          writeKeyframe(data.clipId, style);
+          return;
+        }
         case "transform": {
           if (!("clipId" in data) || typeof data.clipId !== "string") return;
           const style =
