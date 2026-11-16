@@ -7,14 +7,14 @@ import {
 } from "./renderIsolation.ts";
 import { DirectPlanSchema } from "./directSchema.ts";
 import type { VideoEncoder } from "./directExport.ts";
-import { ExportRangeSchema } from "../../shared/export.ts";
+import { ExportFormatSchema, ExportRangeSchema } from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
 
 const Input = z.object({
   projectDir: z.string(),
   outputPath: z.string(),
-  options: z.looseObject({ fps: FpsSchema }),
+  options: z.looseObject({ fps: FpsSchema, format: ExportFormatSchema }),
   sources: z.record(z.string(), z.string()).default({}),
   range: ExportRangeSchema.nullish(),
   scratchDir: z.string(),
@@ -84,11 +84,15 @@ try {
       maxBytes: engineConfig.extractCacheMaxBytes,
       minAgeMs: 0,
     });
+  // A GIF is made from a ProRes 4444 render, which keeps its alpha. HyperFrames' own GIF builds
+  // its palette from frame differences, which turns a title that appears and stays black.
+  const { gifLoop, ...options } = input.options;
+  const gif = options.format === "gif";
   const request = parseRenderRequest({
     version: 1,
     projectDir: input.projectDir,
-    outputPath: input.outputPath,
-    options: { ...input.options, engineConfig },
+    outputPath: gif ? join(input.scratchDir, "gif.mov") : input.outputPath,
+    options: { ...options, ...(gif && { format: "mov" }), engineConfig },
   });
   const logger = createConsoleLogger("warn");
   let audioLoweredDb: number | undefined;
@@ -150,7 +154,7 @@ try {
         fps: 30,
         width: 1920,
         height: 1080,
-        format: "mp4",
+        format: input.options.format === "gif" ? "mov" : input.options.format,
         quality: options.quality,
         crf: options.crf,
         bitrate: options.videoBitrate,
@@ -183,6 +187,17 @@ try {
       abort.signal,
     );
     audioLoweredDb = job.audioLoweredDb;
+  }
+  if (gif) {
+    send({ type: "progress", progress: 99, stage: "Encoding GIF" });
+    const { encodeGif } = await import("./gif.ts");
+    await encodeGif({
+      videoPath: request.outputPath,
+      outputPath: input.outputPath,
+      fps: request.options.fps,
+      loop: z.number().int().min(0).max(65535).default(0).parse(gifLoop),
+      signal: abort.signal,
+    });
   }
   send({
     type: "complete",

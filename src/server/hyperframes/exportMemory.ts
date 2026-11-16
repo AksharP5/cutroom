@@ -23,9 +23,15 @@ const browserBytes = (mediaClips: number) => (0.75 + 0.012 * mediaClips) * GiB;
  * browser's memory, and were still climbing, when they were stopped.
  */
 const furtherBrowserShare = 2;
-/** The render worker and encoder, plus HyperFrames' captured-frame cache, which grows to 1.5 GB. */
-const sharedBytes = (frames: number) =>
-  (1 + Math.min(1.5, frames / 1024)) * GiB;
+/**
+ * The render worker and the encoder of the captured frames. Within 1 GB at 1080p; at 4K the encoder
+ * alone peaked at 2.3 GB for libx264, 2.8 GB for VP9 and 4.0 GB for ProRes 4444 (1.05 GB at
+ * 1080p), with the worker's 0.25 GB beside it. Scaled by the frame's megapixels, rounded up.
+ */
+const encoderBytes = (outputPixels: number, prores: boolean) =>
+  Math.max(1, ((prores ? 0.55 : 0.4) * outputPixels) / 1e6) * GiB;
+/** HyperFrames' captured-frame cache, which grows to 1.5 GB. */
+const cacheBytes = (frames: number) => Math.min(1.5, frames / 1024) * GiB;
 /** Left free for the editor, the desktop and everything else running. */
 const reserveBytes = 2 * GiB;
 /**
@@ -40,17 +46,24 @@ export function planCaptureBrowsers({
   mediaClips,
   frames,
   sourcePixels = 0,
+  outputPixels = 0,
+  prores = false,
 }: {
   available: number;
   mediaClips: number;
   frames: number;
   /** The frame size, when FFmpeg encodes source parts while the browsers capture. */
   sourcePixels?: number;
+  /** The frame the export writes. */
+  outputPixels?: number;
+  /** The captured frames encode as ProRes 4444: a MOV, or the MOV a GIF is made from. */
+  prores?: boolean;
 }): { browsers: number } | { refusal: string } {
   const first = browserBytes(mediaClips);
   const needed =
     reserveBytes +
-    sharedBytes(frames) +
+    encoderBytes(outputPixels, prores) +
+    cacheBytes(frames) +
     first +
     (sourcePixels ? PARALLEL_ENCODES * sourceEncoderBytes(sourcePixels) : 0);
   if (available < needed)

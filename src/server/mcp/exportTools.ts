@@ -28,7 +28,7 @@ export function registerExportTools(
     "export_start",
     {
       description:
-        "Export MP4 through the editor's render jobs, of the root composition or one named by composition. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, and the next free project name in .cutroom/renders. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
+        "Export through the editor's render jobs, of the root composition or one named by composition: MP4 (H.264), MOV (ProRes 4444 with alpha), WebM (VP9 with alpha) or GIF. Areas nothing draws stay transparent in MOV, WebM and GIF, so hide a full-frame background for an overlay. Defaults to In to Out when both marks exist, otherwise the whole timeline, Standard quality, the composition's size and rate, and the next free project name in .cutroom/renders with the format's extension. Explicit frame ranges are half-open. A chosen directory must be an absolute existing folder. A filename that already exists in the folder is refused before the export starts. Only one export can run at a time across all projects and clients. If one is running, wait for it or use export_cancel with its jobId before starting another.",
       inputSchema: ExportStartSchema.extend({ projectId: z.string() }),
       annotations: edit,
     },

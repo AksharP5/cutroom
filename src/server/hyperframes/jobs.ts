@@ -26,7 +26,7 @@ import {
 } from "./ownedDirectories";
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
-import type { ExportOptions } from "../../shared/export";
+import type { ExportFormat, ExportOptions } from "../../shared/export";
 import { ExportStageSchema, compositionExportName } from "../../shared/export";
 import {
   estimateExportStage,
@@ -35,11 +35,24 @@ import {
 import type { ExportRate } from "../../shared/exportEstimate";
 
 type RenderOptions = Parameters<StudioApiAdapter["startRender"]>[0];
+/** Cutroom's output intent for one render, resolved against the composition it renders. */
+export type ExportRequest = Omit<ExportOptions, "gpu"> & {
+  /** On unless the request turned it off. */
+  gpu?: boolean;
+  /** The rendered frame. */
+  size?: { width: number; height: number };
+  /** In the export's own frames, which differ from the composition's when `retimed`. */
+  range: ExportOptions["range"];
+  /** The export plays at a rate other than the composition's. */
+  retimed?: boolean;
+};
 type RenderState = ReturnType<StudioApiAdapter["startRender"]> & {
   projectId: string;
   name: string;
   fps: RenderOptions["fps"];
   quality: "draft" | "standard" | "high";
+  format: ExportFormat;
+  size: ExportRequest["size"] | null;
   range: ExportOptions["range"];
   startedAt: number;
   finishedAt: number | null;
@@ -122,14 +135,16 @@ async function processGroupExited(pid: number, timeoutMs: number) {
 async function directPlan(
   options: RenderOptions,
   sources: Record<string, string> | undefined,
-  range: ExportOptions["range"] | undefined,
+  output: ExportRequest | undefined,
 ) {
   const entry = options.composition ?? "index.html";
   const unsupported = (
     [
+      // Transparent formats draw over a transparent page, which the planner's page colour isn't.
       [options.format !== "mp4", "it is not an MP4"],
       [entry !== "index.html", "it renders a sub-composition"],
       [options.outputResolution, "it changes the output size"],
+      [output?.retimed, "it changes the frame rate"],
       [
         options.pageMotionBlur && options.pageMotionBlur !== "off",
         "it adds motion blur",
@@ -156,7 +171,7 @@ async function directPlan(
       throw error;
     }));
   if (html === undefined) return undefined;
-  const planned = planDirectExport(html, options.fps, range ?? null);
+  const planned = planDirectExport(html, options.fps, output?.range ?? null);
   const plan =
     "reason" in planned
       ? planned
@@ -225,13 +240,18 @@ export function createRenderWorkers(configuration: {
       return jobs.get(jobId);
     },
     active,
+    /** Whether NVENC works, probed once. False when the server keeps exports on the CPU. */
+    gpuAvailable: () =>
+      configuration.gpu
+        ? (gpu ??= configuration.gpu())
+        : Promise.resolve(false),
     subscribe(listener: (job: RenderState) => void) {
       subscribers.add(listener);
       return () => {
         subscribers.delete(listener);
       };
     },
-    start(options: RenderOptions, output?: ExportOptions): RenderState {
+    start(options: RenderOptions, output?: ExportRequest): RenderState {
       if (closing) throw new HttpError(503, "The renderer is shutting down.");
       const running = active();
       if (running)
@@ -304,6 +324,8 @@ export function createRenderWorkers(configuration: {
           options.quality === "draft" || options.quality === "high"
             ? options.quality
             : "standard",
+        format: options.format,
+        size: output?.size ?? null,
         range: output?.range ?? null,
         startedAt: Date.now(),
         finishedAt: null,
@@ -355,10 +377,10 @@ export function createRenderWorkers(configuration: {
         );
         if (isCancelling()) return;
         const direct = useDirect
-          ? await directPlan(options, sources, output?.range)
+          ? await directPlan(options, sources, output)
           : undefined;
         const nvenc =
-          direct && configuration.gpu
+          direct && configuration.gpu && output?.gpu !== false
             ? (gpu ??= configuration.gpu())
             : undefined;
         const workload = await configuration.workload?.(
@@ -387,6 +409,10 @@ export function createRenderWorkers(configuration: {
               captured && direct
                 ? direct.plan.width * direct.plan.height
                 : undefined,
+            outputPixels: output?.size
+              ? output.size.width * output.size.height
+              : undefined,
+            prores: options.format === "mov" || options.format === "gif",
           });
         // An export drawn wholly from its sources needs no browser. If a source turns out to need
         // one, the worker fails with this refusal rather than starting browsers that would not fit.

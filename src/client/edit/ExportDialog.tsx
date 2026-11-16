@@ -2,13 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import {
   compositionExportName,
   defaultExportRange,
+  exportFormatDetails,
+  exportFormats,
+  exportFps,
   exportQualities,
+  exportRates,
+  exportSize,
+  exportSizes,
   ExportOptionsSchema,
   ExportDestinationSchema,
   exportRange,
   exportFilename,
 } from "../../shared/export";
-import type { ExportDestination, ExportQuality } from "../../shared/export";
+import type {
+  ExportDestination,
+  ExportFormat,
+  ExportQuality,
+  ExportSize,
+} from "../../shared/export";
 import { api } from "../api";
 import { Modal } from "../components/Modal";
 import { SelectMenu } from "../components/SelectMenu";
@@ -17,6 +28,7 @@ import { useWorkspace } from "../workspace";
 import {
   cancelExport,
   exportActive,
+  exportGpuAvailable,
   exportProject,
   observeExports,
   useExport,
@@ -27,6 +39,21 @@ import { TimecodeText } from "../components/TimecodeText";
 import { useTimeline } from "./timeline";
 import { captureFrame } from "./capture";
 import "./export.css";
+
+const formatNames: Record<ExportFormat, string> = {
+  mp4: "MP4",
+  mov: "MOV",
+  webm: "WebM",
+  gif: "GIF",
+};
+const sizeNames: Record<ExportSize, string> = {
+  project: "Project",
+  "1080p": "1080p",
+  "4k": "4K",
+};
+type RateChoice = "project" | `${(typeof exportRates)[number]}`;
+const rateLabel = (fps: { num: number; den: number }) =>
+  `${Number((fps.num / fps.den).toFixed(3))} fps`;
 
 const clock = (ms: number) => {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -177,7 +204,21 @@ function ExportDialog({
     timeline ? defaultExportRange(timeline) : "timeline",
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
-  const baseFilename = exportFilename(name);
+  const [format, setFormat] = useState<ExportFormat>("mp4");
+  const [sizeChoice, setSizeChoice] = useState<ExportSize>("project");
+  const [rate, setRate] = useState<RateChoice>("project");
+  const [gpu, setGpu] = useState(true);
+  const [gpuAvailable, setGpuAvailable] = useState(false);
+  useEffect(() => {
+    let current = true;
+    void exportGpuAvailable().then((available) => {
+      if (current) setGpuAvailable(available);
+    });
+    return () => {
+      current = false;
+    };
+  }, []);
+  const baseFilename = exportFilename(name, format);
   const [filename, setFilename] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
   const [destination, setDestination] = useState<ExportDestination | null>(
@@ -216,8 +257,54 @@ function ExportDialog({
     };
   }, [projectId, baseFilename, directory, hasJob]);
   const active = exportActive(job);
-  const fps = job ? job.fps : timeline?.fps;
-  const size = job ? job.size : composition;
+  const projectSize =
+    composition?.width && composition.height
+      ? { width: composition.width, height: composition.height }
+      : null;
+  // The options that fit this composition: 1080p or 4K only when they differ from its own size.
+  const sizeOptions = projectSize
+    ? exportSizes.flatMap((choice) => {
+        const size = exportSize(choice, projectSize);
+        if ("problem" in size || (choice !== "project" && !size.resolution))
+          return [];
+        return [
+          {
+            value: choice,
+            label: `${sizeNames[choice]}, ${size.width} × ${size.height}`,
+            size,
+          },
+        ];
+      })
+    : [];
+  const outputSize =
+    sizeOptions.find((option) => option.value === sizeChoice)?.size ??
+    projectSize;
+  const outputFps =
+    timeline &&
+    exportFps(
+      format,
+      rate === "project" ? timeline.fps : { num: Number(rate), den: 1 },
+    );
+  const rateOptions = timeline
+    ? [
+        {
+          value: "project" as const,
+          label: `Project, ${rateLabel(exportFps(format, timeline.fps))}`,
+        },
+        ...exportRates
+          .filter(
+            (value) =>
+              value * timeline.fps.den !== timeline.fps.num &&
+              exportFps(format, { num: value, den: 1 }).num === value,
+          )
+          .map((value) => ({
+            value: `${value}` as const,
+            label: rateLabel({ num: value, den: 1 }),
+          })),
+      ]
+    : [];
+  const fps = job ? job.fps : outputFps;
+  const size = job ? job.size : outputSize;
   // A range that can't export is shown in the dialog, never thrown during render.
   const range = ((): {
     frames: { start: number; end: number } | null;
@@ -235,6 +322,8 @@ function ExportDialog({
     }
   })();
   const frames = range.frames;
+  // A job's range is in its own frames; the dialog's is in the composition's.
+  const framesFps = job ? job.fps : (timeline?.fps ?? { num: 30, den: 1 });
   const exportButton = useRef<HTMLButtonElement>(null);
   const cannotExport = loading || !!destinationError || !timeline || !frames;
   const submit = () => {
@@ -243,15 +332,23 @@ function ExportDialog({
       filename: filename ?? destination?.filename,
       directory: directory ?? destination?.directory,
       range: null,
+      gpu,
     });
     if (!parsed.success) {
       setError(parsed.error.issues[0].message);
       return;
     }
     setError("");
-    void exportProject(projectId, name, parsed.data, quality, choice).catch(
-      (error: unknown) =>
-        setError(error instanceof Error ? error.message : String(error)),
+    if (!outputFps) return;
+    void exportProject(projectId, name, parsed.data, choice, {
+      quality,
+      format,
+      fps: outputFps,
+      size: outputSize,
+      resolution: sizeOptions.find((option) => option.value === sizeChoice)
+        ?.size.resolution,
+    }).catch((error: unknown) =>
+      setError(error instanceof Error ? error.message : String(error)),
     );
   };
   const openFile = (action: "open" | "reveal") => {
@@ -268,7 +365,12 @@ function ExportDialog({
       <div className="export-body">
         <div className="export-title">
           {job ? job.name : name}
-          <span>MP4 · H.264 / AAC</span>
+          {/* Before an export starts, the Format menu says this. */}
+          {job && (
+            <span>
+              {formatNames[job.format]} · {exportFormatDetails[job.format]}
+            </span>
+          )}
         </div>
         {!job && (
           <>
@@ -298,26 +400,33 @@ function ExportDialog({
             </fieldset>
           </>
         )}
-        {fps && frames && (
+        {timeline && frames && (
           <dl className="export-summary">
             <dt>{job ? "Range" : "Frames"}</dt>
             <dd className="mono">
-              <TimecodeText timecode={formatTimecode(frames.start, fps)} /> →{" "}
-              <TimecodeText timecode={formatTimecode(frames.end - 1, fps)} />
+              <TimecodeText
+                timecode={formatTimecode(frames.start, framesFps)}
+              />{" "}
+              →{" "}
+              <TimecodeText
+                timecode={formatTimecode(frames.end - 1, framesFps)}
+              />
             </dd>
             <dt>Duration</dt>
             <dd className="mono">
               <TimecodeText
-                timecode={formatTimecode(frames.end - frames.start, fps)}
+                timecode={formatTimecode(frames.end - frames.start, framesFps)}
               />
             </dd>
-            <dt>Project</dt>
-            <dd className="mono">
-              {size?.width && size.height
-                ? `${size.width} × ${size.height} · `
-                : ""}
-              {Number((fps.num / fps.den).toFixed(3))} fps
-            </dd>
+            {fps && (
+              <>
+                <dt>Output</dt>
+                <dd className="mono">
+                  {size ? `${size.width} × ${size.height} · ` : ""}
+                  {rateLabel(fps)}
+                </dd>
+              </>
+            )}
           </dl>
         )}
         {range.problem && (
@@ -328,17 +437,74 @@ function ExportDialog({
         {!job ? (
           <>
             <label className="export-field">
-              Quality
-              <SelectMenu<ExportQuality>
-                label="Quality"
-                value={quality}
-                onChange={setQuality}
-                options={exportQualities.map((value) => ({
+              Format
+              <SelectMenu<ExportFormat>
+                label="Format"
+                value={format}
+                onChange={(value) => {
+                  setFormat(value);
+                  // A typed name keeps its words and takes the format's extension.
+                  setFilename(
+                    (typed) =>
+                      typed?.replace(/\.(mp4|mov|webm|gif)$/i, `.${value}`) ??
+                      null,
+                  );
+                }}
+                options={exportFormats.map((value) => ({
                   value,
-                  label: value[0].toUpperCase() + value.slice(1),
+                  label: `${formatNames[value]} · ${exportFormatDetails[value]}`,
                 }))}
               />
             </label>
+            {/* ProRes and GIF have no quality setting. */}
+            {(format === "mp4" || format === "webm") && (
+              <label className="export-field">
+                Quality
+                <SelectMenu<ExportQuality>
+                  label="Quality"
+                  value={quality}
+                  onChange={setQuality}
+                  options={exportQualities.map((value) => ({
+                    value,
+                    label: value[0].toUpperCase() + value.slice(1),
+                  }))}
+                />
+              </label>
+            )}
+            {sizeOptions.length > 1 && (
+              <label className="export-field">
+                Size
+                <SelectMenu<ExportSize>
+                  label="Size"
+                  value={sizeChoice}
+                  onChange={setSizeChoice}
+                  options={sizeOptions}
+                />
+              </label>
+            )}
+            <label className="export-field">
+              Frame rate
+              <SelectMenu<RateChoice>
+                label="Frame rate"
+                value={
+                  rateOptions.some((option) => option.value === rate)
+                    ? rate
+                    : "project"
+                }
+                onChange={setRate}
+                options={rateOptions}
+              />
+            </label>
+            {gpuAvailable && format === "mp4" && (
+              <label className="export-check">
+                <input
+                  type="checkbox"
+                  checked={gpu}
+                  onChange={(event) => setGpu(event.target.checked)}
+                />
+                Encode on the GPU
+              </label>
+            )}
             <label className="export-field">
               File name
               <input
@@ -369,8 +535,12 @@ function ExportDialog({
         ) : (
           <>
             <dl className="export-summary">
-              <dt>Quality</dt>
-              <dd className="export-quality">{job.quality}</dd>
+              {(job.format === "mp4" || job.format === "webm") && (
+                <>
+                  <dt>Quality</dt>
+                  <dd className="export-quality">{job.quality}</dd>
+                </>
+              )}
               {job.status === "complete" && job.sizeBytes !== null && (
                 <>
                   <dt>File size</dt>
@@ -503,7 +673,7 @@ function ExportDialog({
               aria-disabled={cannotExport}
               onClick={submit}
             >
-              Export MP4
+              Export {formatNames[format]}
             </button>
           </>
         )}

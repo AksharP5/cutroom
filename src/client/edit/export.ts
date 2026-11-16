@@ -1,8 +1,16 @@
 import { z } from "zod";
 import { create } from "zustand";
 import type { Fps } from "../../shared/timeline/schema";
-import { ExportJobSchema, exportRange } from "../../shared/export";
-import type { ExportOptions, ExportQuality } from "../../shared/export";
+import {
+  ExportJobSchema,
+  exportRange,
+  retimeFrames,
+} from "../../shared/export";
+import type {
+  ExportFormat,
+  ExportOptions,
+  ExportQuality,
+} from "../../shared/export";
 import { useWorkspace } from "../workspace";
 import { trackRows } from "../timeline/math";
 import { ROOT_COMPOSITION, afterTimelineEdits, useTimeline } from "./timeline";
@@ -13,11 +21,14 @@ export interface ExportJob {
   name: string;
   jobId: string | null;
   outputPath: string;
+  /** The export's own rate, which its frames count in. */
   fps: Fps;
+  /** The rendered frame. */
   size: { width: number; height: number } | null;
   /** Null for a whole-timeline export of a project that is not open. */
   frames: { start: number; end: number } | null;
   quality: ExportQuality;
+  format: ExportFormat;
   status:
     | "starting"
     | "rendering"
@@ -73,7 +84,14 @@ function receiveExport(job: z.infer<typeof ExportJobSchema>) {
     open.projectId === job.projectId ? open.view?.timeline : undefined;
   const frames = sameJob
     ? current.frames
-    : (job.range ?? (timeline ? { start: 0, end: timeline.duration } : null));
+    : (job.range ??
+      (timeline
+        ? retimeFrames(
+            { start: 0, end: timeline.duration },
+            timeline.fps,
+            job.fps,
+          )
+        : null));
   const size = timeline ? useWorkspace.getState().composition : null;
   let notice = sameJob ? current.notice : "";
   if (job.audioLoweredDb !== undefined) {
@@ -89,11 +107,13 @@ function receiveExport(job: z.infer<typeof ExportJobSchema>) {
         sameJob && current.status === "cancelling" && job.status === "rendering"
           ? "cancelling"
           : job.status,
-      size: sameJob
-        ? current.size
-        : size?.width && size.height
-          ? { width: size.width, height: size.height }
-          : null,
+      size:
+        job.size ??
+        (sameJob
+          ? current.size
+          : size?.width && size.height
+            ? { width: size.width, height: size.height }
+            : null),
       frames,
       error: job.error ?? "",
       notice,
@@ -151,13 +171,28 @@ export function observeExports(projectId: string) {
   };
 }
 
+/** Whether exports drawn from their sources can encode on the GPU. */
+export const exportGpuAvailable = () =>
+  renderApi("/export-gpu", z.object({ available: z.boolean() })).then(
+    ({ available }) => available,
+    // Without an answer the dialog offers no GPU choice, and exports keep the server's default.
+    () => false,
+  );
+
 /** Starts the existing Studio job after all edits already shown have settled. */
 export async function exportProject(
   projectId: string,
   name: string,
   options: ExportOptions,
-  quality: ExportQuality,
   choice: "timeline" | "marks",
+  output: {
+    quality: ExportQuality;
+    format: ExportFormat;
+    fps: Fps;
+    size: { width: number; height: number } | null;
+    /** HyperFrames' size preset when the export draws at another size than the composition's. */
+    resolution: string | undefined;
+  },
 ) {
   if (exportActive(useExport.getState().job)) return;
   const shown = useTimeline.getState().view;
@@ -171,15 +206,11 @@ export async function exportProject(
       name,
       jobId: null,
       outputPath: `${options.directory}/${options.filename}`,
-      fps: timeline.fps,
-      size: (() => {
-        const size = useWorkspace.getState().composition;
-        return size?.width && size.height
-          ? { width: size.width, height: size.height }
-          : null;
-      })(),
-      frames,
-      quality,
+      fps: output.fps,
+      size: output.size,
+      frames: retimeFrames(frames, timeline.fps, output.fps),
+      quality: output.quality,
+      format: output.format,
       status: "starting",
       progress: 0,
       stage: "Waiting for edits",
@@ -208,8 +239,7 @@ export async function exportProject(
       const solo = rows.filter(({ track }) => track.solo).map(({ id }) => id);
       const muted = rows.filter(({ track }) => track.muted).map(({ id }) => id);
       updateJob({
-        frames: range,
-        fps: current.fps,
+        frames: retimeFrames(range, current.fps, output.fps),
         notice: [
           solo.length
             ? `${solo.join(", ")} soloed, other audio tracks are silent.`
@@ -238,9 +268,10 @@ export async function exportProject(
         {
           method: "POST",
           body: JSON.stringify({
-            format: "mp4",
-            quality,
-            fps: `${current.fps.num}/${current.fps.den}`,
+            format: output.format,
+            quality: output.quality,
+            fps: `${output.fps.num}/${output.fps.den}`,
+            ...(output.resolution && { resolution: output.resolution }),
             ...(composition !== ROOT_COMPOSITION && { composition }),
             cutroom: { ...options, range: choice === "marks" ? range : null },
           }),

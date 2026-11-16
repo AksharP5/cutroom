@@ -166,6 +166,7 @@ export async function alignRangeAudio(input: {
   const sample = (frame: number) =>
     Math.round((frame * den * SAMPLE_RATE) / num) -
     (planned?.startSeconds ?? 0) * SAMPLE_RATE;
+  const webm = input.outputPath.toLowerCase().endsWith(".webm");
   const first = sample(input.frames.start);
   const end = sample(input.frames.end);
   const result = await runFfmpeg(
@@ -182,16 +183,14 @@ export async function alignRangeAudio(input: {
       "1:a:0",
       "-c:v",
       "copy",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "192k",
+      // WebM carries Opus, as HyperFrames' own WebM exports do; MP4 and MOV carry AAC.
+      ...(webm
+        ? ["-c:a", "libopus", "-b:a", "128k"]
+        : ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
       "-af",
       `atrim=start_sample=${first}:end_sample=${end},asetpts=PTS-STARTPTS,apad=whole_len=${end - first}`,
       "-t",
       String(((input.frames.end - input.frames.start) * den) / num),
-      "-movflags",
-      "+faststart",
       "-y",
       input.outputPath,
     ],

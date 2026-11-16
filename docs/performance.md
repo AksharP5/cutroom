@@ -535,6 +535,24 @@ NVENC's settings for each tier were chosen against libx264's on four 10-second c
 
 The screen recording is the one clip where Standard NVENC trails, by 0.25 dB and 0.09 VMAF, at a 160 KB file. NVENC keeps to the H.264 level it signals, 4.0 at 1080p30, so grain at High stops near 16 Mbit/s, where libx264 writes 93 Mbit/s under the same level; its PSNR is 1.6 dB lower there and its VMAF higher. Spatial and temporal AQ, P7 and P6 lowered PSNR and VMAF or cost time without a gain. Encoding the camera clip took NVENC 1.4 s of wall time against libx264's 5.6 s, most of NVENC's CPU being the decoder. Comparing frames with different colour tags makes FFmpeg convert one side first, which cost 16 dB on these measurements before both sides were tagged alike.
 
+### Formats, sizes and rates
+
+MOV, WebM, GIF, another size and another frame rate are captured in the browser ([architecture](architecture.md#export-dialog)). On November 16, 2026, each case below exported the whole of a five-second 1080p30 composition, a title over a 640 x 360 picture-in-picture video, at Standard quality through the render workers, one at a time on a machine shared with other agents (13 to 14 GiB free). Two browsers captured each export. Peak memory is the summed PSS of the export's processes.
+
+| Export                |   Time | Peak memory |    Size |
+| --------------------- | -----: | ----------: | ------: |
+| MP4, 1080p, 30 fps    |  8.4 s |     2.57 GB |  0.7 MB |
+| MP4, 1080p, 24 fps    |  6.5 s |     2.57 GB |  0.6 MB |
+| MP4, 4K               | 12.8 s |     4.31 GB |  3.1 MB |
+| MOV (ProRes 4444)     | 11.0 s |     1.89 GB | 30.0 MB |
+| MOV (ProRes 4444), 4K | 26.2 s |     4.29 GB | 83.1 MB |
+| WebM (VP9 with alpha) | 11.1 s |     1.92 GB |  0.5 MB |
+| GIF                   | 15.8 s |     1.93 GB |  5.4 MB |
+
+Transparent formats capture PNG screenshots instead of JPEG, and GIF adds a ProRes render and its own encode, which accounts for their extra time. At 4K the peak is FFmpeg's encoder rather than the browsers: two-second ranges with one browser peaked with the encoder at 2.25 GB for libx264, 2.77 GB for VP9 and 4.02 GB for ProRes (also 4.02 GB for a GIF, which encodes ProRes first), against 1.05 GB for ProRes at 1080p and a 1080p H.264 encoder too small to show beside a 1.03 GB browser. The memory plan reserves that encoder by megapixel.
+
+Encode on the GPU, on a 20-second 1080p30 clip under film grain drawn wholly from its source (RTX 5060): 3.8 s and 3.8 s with NVENC (43.1 MB), 22.4 s and 24.5 s with libx264 (410.5 MB, which keeps grain at CRF 18; see [GPU encoding](#gpu-encoding) for quality at each tier).
+
 ## Scrubbing
 
 A ruler drag asks for a new frame on every pointer move. [Scrub proxies](architecture.md#scrub-proxies) answer those seeks from an all-intra 540-line copy of each video and show the exact frame once the pointer rests. On November 15, 2026 the same drag ran against `main` and this change: 3 s across 900 px of ruler at Fit, about 60 pointer moves a second, headless installed Chromium 155 at 1720x1050, alternating the two builds. A CDP screencast recorded every composited frame, and each frame's number was read back from blocks burned into the footage, so a picture counts only when the viewer showed a new source frame. The interview is a 90 s 1080p30 H.264 file (8 Mbit/s, 1 s GOP) with a title; the 300-clip timeline is `timelineWorkload` over a 720p copy, with each 2.5 s clip its own element.

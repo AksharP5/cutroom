@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { FpsSchema } from "./timeline/schema.ts";
-import type { Timeline } from "./timeline/schema";
+import type { Fps, Timeline } from "./timeline/schema";
+
+export const exportFormats = ["mp4", "mov", "webm", "gif"] as const;
+export const ExportFormatSchema = z.enum(exportFormats);
+export type ExportFormat = z.infer<typeof ExportFormatSchema>;
+/** What each format carries. MOV and WebM keep transparency, for overlays in another editor. */
+export const exportFormatDetails: Record<ExportFormat, string> = {
+  mp4: "H.264 / AAC",
+  mov: "ProRes 4444 with alpha / AAC",
+  webm: "VP9 with alpha / Opus",
+  gif: "Animated, no sound",
+};
 
 export const ExportRangeSchema = z
   .object({
@@ -16,9 +27,15 @@ export const ExportOptionsSchema = z.object({
     .trim()
     .min(1)
     .max(200)
-    .regex(/^[^/\\\x00-\x1f]+\.mp4$/i, "Use an MP4 file name without folders."),
+    .regex(
+      /^[^/\\\x00-\x1f]+\.(mp4|mov|webm|gif)$/i,
+      "Use an MP4, MOV, WebM or GIF file name without folders.",
+    ),
   directory: z.string().trim().min(1),
+  /** In the composition's frames. */
   range: ExportRangeSchema.nullable(),
+  /** Encode on the GPU when the export is drawn wholly from its sources and NVENC works. */
+  gpu: z.boolean().default(true),
 });
 export type ExportOptions = z.infer<typeof ExportOptionsSchema>;
 
@@ -33,6 +50,72 @@ export const exportQualities = ["draft", "standard", "high"] as const;
 export const ExportQualitySchema = z.enum(exportQualities);
 export type ExportQuality = z.infer<typeof ExportQualitySchema>;
 
+export const exportSizes = ["project", "1080p", "4k"] as const;
+export const ExportSizeSchema = z.enum(exportSizes);
+export type ExportSize = z.infer<typeof ExportSizeSchema>;
+
+const sizePresets = {
+  landscape: { "1080p": [1920, 1080], "4k": [3840, 2160] },
+  portrait: { "1080p": [1080, 1920], "4k": [2160, 3840] },
+  square: { "1080p": [1080, 1080], "4k": [2160, 2160] },
+} as const;
+
+/**
+ * The frame an export renders: the composition's own, or 1080p or 4K in its orientation. The
+ * browser draws the page at the larger size rather than stretching frames, so it may only grow
+ * by a whole factor, as HyperFrames' supersampling requires. `resolution` is HyperFrames' preset.
+ */
+export function exportSize(
+  choice: ExportSize,
+  composition: { width: number; height: number },
+):
+  | {
+      width: number;
+      height: number;
+      resolution?: `${keyof typeof sizePresets}${"" | "-4k"}`;
+    }
+  | { problem: string } {
+  const { width, height } = composition;
+  if (choice === "project") return { width, height };
+  const orientation =
+    width > height ? "landscape" : width < height ? "portrait" : "square";
+  const [targetWidth, targetHeight] = sizePresets[orientation][choice];
+  const name = choice === "4k" ? "4K" : choice;
+  if (width * targetHeight !== height * targetWidth)
+    return {
+      problem: `${name} needs a 16:9, 9:16 or square composition, and this one is ${width} × ${height}.`,
+    };
+  const scale = targetWidth / width;
+  if (scale > 1 && !Number.isInteger(scale))
+    return {
+      problem: `${name} is ${scale} times this ${width} × ${height} composition. Only whole multiples are drawn sharp.`,
+    };
+  if (scale === 1) return { width, height };
+  return {
+    width: targetWidth,
+    height: targetHeight,
+    resolution: `${orientation}${choice === "4k" ? "-4k" : ""}`,
+  };
+}
+
+export const exportRates = [24, 25, 30, 60] as const;
+export const ExportRateSchema = z.literal(exportRates);
+
+/** The rate an export plays at. GIF stops at 30 fps, as HyperFrames' render route does. */
+export const exportFps = (format: ExportFormat, fps: Fps): Fps =>
+  format === "gif" && fps.num / fps.den > 30 ? { num: 30, den: 1 } : fps;
+
+/** A composition's frames as frames of an export at another rate: those whose time falls inside. */
+export function retimeFrames(
+  frames: { start: number; end: number },
+  from: Fps,
+  to: Fps,
+) {
+  const at = (frame: number) =>
+    Math.ceil((frame * from.den * to.num) / (from.num * to.den));
+  return { start: at(frames.start), end: at(frames.end) };
+}
+
 export const ExportStartSchema = ExportDestinationSchema.partial().extend({
   composition: z
     .string()
@@ -43,6 +126,19 @@ export const ExportStartSchema = ExportDestinationSchema.partial().extend({
     ),
   range: z.union([z.enum(["timeline", "marks"]), ExportRangeSchema]).optional(),
   quality: ExportQualitySchema.default("standard"),
+  format: ExportFormatSchema.default("mp4"),
+  size: ExportSizeSchema.default("project").describe(
+    "project renders at the composition's size; 1080p and 4K draw the page at that size in its orientation, so a 4K export of a 1080p project is sharp",
+  ),
+  fps: ExportRateSchema.optional().describe(
+    "Frames per second; the composition's own rate when omitted. GIF stops at 30",
+  ),
+  gpu: z
+    .boolean()
+    .default(true)
+    .describe(
+      "Encode on an NVIDIA GPU when every frame is drawn from the sources and NVENC works",
+    ),
 });
 
 /** What an export of one composition is called: the project, then the scene's file name. */
@@ -54,13 +150,13 @@ export const compositionExportName = (
     ? projectName
     : `${projectName} ${(composition.split("/").at(-1) ?? composition).replace(/\.html?$/i, "")}`;
 
-export const exportFilename = (name: string) =>
+export const exportFilename = (name: string, format: ExportFormat = "mp4") =>
   `${
     name
       .replace(/[/\\\x00-\x1f]/g, "-")
       .trim()
-      .slice(0, 196) || "Cut"
-  }.mp4`;
+      .slice(0, 199 - format.length) || "Cut"
+  }.${format}`;
 
 /** A frame to save as a PNG still, named by the timecode the person saw. */
 export const StillRequestSchema = z.object({
@@ -104,7 +200,13 @@ export const ExportJobSchema = z.object({
   finishedAt: z.number().nullable(),
   fps: FpsSchema,
   quality: ExportQualitySchema,
+  format: ExportFormatSchema,
+  /** The rendered frame; null for a render started without Cutroom's options. */
+  size: z.object({ width: z.number(), height: z.number() }).nullable(),
+  /** In the export's own frames, at `fps`. */
   range: ExportRangeSchema.nullable(),
+  /** Set once an export drawn from its sources finishes. */
+  encoder: z.enum(["libx264", "h264_nvenc"]).optional(),
 });
 
 /**

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "@hyperframes/engine";
@@ -8,6 +8,7 @@ import {
   partEncoderArgs,
   sourceEncoder,
 } from "../src/server/hyperframes/directExport";
+import { createRenderWorkers } from "../src/server/hyperframes/jobs";
 import { probeNvenc } from "../src/server/hyperframes/nvenc";
 import type { DirectPlan } from "../src/server/hyperframes/directSchema";
 
@@ -132,6 +133,71 @@ test.skipIf(!Bun.which("ffmpeg"))(
         expect(await isX264(part.path)).toBe(preset.encoder === "libx264");
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  },
+  60_000,
+);
+
+/**
+ * The dialog's GPU switch and export_start's `gpu: false` keep an export drawn from its sources
+ * on libx264, without even probing the GPU. Left on, the server's probe decides.
+ */
+test.skipIf(!Bun.which("ffmpeg") || !Bun.which("node"))(
+  "an export with the GPU turned off encodes on the CPU",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-gpu-off-"));
+    let probes = 0;
+    const workers = createRenderWorkers({
+      scratchDir: `${root}-scratch`,
+      gpu: () => {
+        probes++;
+        return probeNvenc();
+      },
+    });
+    try {
+      const child = Bun.spawn(
+        [
+          "ffmpeg",
+          ...["-v", "error", "-f", "lavfi", "-i"],
+          "testsrc2=size=320x180:rate=30:duration=1",
+          ...["-c:v", "libx264", "-preset", "ultrafast"],
+          join(root, "source.mp4"),
+        ],
+        { stderr: "pipe" },
+      );
+      expect(await child.exited).toBe(0);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><html><head><meta charset="utf-8"><style>html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; } body { background: #111111; } .stage { position: relative; width: 100%; height: 100%; overflow: hidden; }</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="180" data-duration="0" class="stage"><video id="v" src="source.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="0" data-duration="1" data-media-start="0" data-track-index="0" muted></video></main></body></html>`,
+      );
+      const exported = async (gpu: boolean) => {
+        const filename = `gpu-${gpu}.mp4`;
+        const state = workers.start(
+          {
+            project: { id: "gpu", dir: root },
+            outputPath: join(root, filename),
+            format: "mp4",
+            fps,
+            quality: "standard",
+            jobId: filename,
+          },
+          { filename, directory: root, range: null, gpu },
+        );
+        while (state.status === "rendering") await Bun.sleep(20);
+        expect(state.error).toBeUndefined();
+        expect(state.renderer).toBe("direct");
+        return state.encoder;
+      };
+      expect(await exported(false)).toBe("libx264");
+      expect(probes).toBe(0);
+      expect(await exported(true)).toBe(
+        (await probeNvenc()) ? "h264_nvenc" : "libx264",
+      );
+      expect(probes).toBe(1);
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+      await rm(`${root}-scratch`, { recursive: true, force: true });
     }
   },
   60_000,
