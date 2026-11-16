@@ -27,26 +27,93 @@ void main() {
   gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
 }`;
 
+// Without `planes` it draws an RGBA picture. With them it converts the Y, U and V planes at
+// the picture's own size, each chroma sample covering its 2x2 block of luma, and then filters
+// the RGB to the screen, as the browser draws a <video>.
 const FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 at;
-uniform sampler2D picture;
+uniform sampler2D luma;
+uniform sampler2D cb;
+uniform sampler2D cr;
+uniform bool planes;
+uniform mat3 toRgb;
+uniform vec3 offset;
 uniform vec4 content;
 uniform vec4 shown;
 uniform float opacity;
 uniform float brightness;
 out vec4 colour;
+vec3 rgbAt(ivec2 texel) {
+  texel = clamp(texel, ivec2(0), textureSize(luma, 0) - 1);
+  vec3 ycbcr = vec3(
+    texelFetch(luma, texel, 0).r,
+    texelFetch(cb, texel / 2, 0).r,
+    texelFetch(cr, texel / 2, 0).r
+  );
+  return clamp(toRgb * (ycbcr - offset), 0.0, 1.0);
+}
 void main() {
   if (at.x < shown.x || at.y < shown.y || at.x > shown.z || at.y > shown.w) discard;
   vec2 uv = (at - content.xy) / content.zw;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
-  vec4 texel = texture(picture, uv);
-  colour = vec4(texel.rgb * brightness * opacity, opacity);
+  vec3 rgb;
+  if (!planes) rgb = texture(luma, uv).rgb;
+  else {
+    vec2 p = uv * vec2(textureSize(luma, 0)) - 0.5;
+    ivec2 i = ivec2(floor(p));
+    vec2 f = fract(p);
+    rgb = mix(
+      mix(rgbAt(i), rgbAt(i + ivec2(1, 0)), f.x),
+      mix(rgbAt(i + ivec2(0, 1)), rgbAt(i + ivec2(1, 1)), f.x),
+      f.y
+    );
+  }
+  colour = vec4(rgb * brightness * opacity, opacity);
 }`;
+
+/** Luma weights of the YCbCr matrices Cutroom's footage uses. */
+const WEIGHTS: Partial<Record<VideoMatrixCoefficients, [number, number]>> = {
+  bt709: [0.2126, 0.0722],
+  bt470bg: [0.299, 0.114],
+  smpte170m: [0.299, 0.114],
+};
+
+/**
+ * The column-major matrix and offset that turn 8-bit YCbCr samples, read as 0 to 1, into RGB.
+ * Null for a matrix this does not know, which then draws through the browser's own conversion.
+ */
+function conversion(space: VideoColorSpace) {
+  const weights = WEIGHTS[space.matrix ?? "bt709"];
+  if (!weights) return null;
+  const [kr, kb] = weights;
+  const kg = 1 - kr - kb;
+  const [lumaScale, chromaScale] = space.fullRange
+    ? [1, 1]
+    : [255 / 219, 255 / 224];
+  const red = 2 * (1 - kr) * chromaScale;
+  const blue = 2 * (1 - kb) * chromaScale;
+  return {
+    // Columns: what Y, Cb and Cr each add to red, green and blue.
+    matrix: [
+      ...[lumaScale, lumaScale, lumaScale],
+      ...[0, (-blue * kb) / kg, blue],
+      ...[red, (-red * kr) / kg, 0],
+    ],
+    offset: [space.fullRange ? 0 : 16 / 255, 128 / 255, 128 / 255],
+  };
+}
+
+/** Plane sizes of 8-bit 4:2:0 pictures, as a fraction of the picture. */
+const I420 = [1, 0.5, 0.5];
 
 /**
  * Draws pipeline layers on a WebGL2 canvas in composition pixels scaled to its backing store.
  * Shader sources are constants; only numbers reach the GPU.
+ *
+ * Decoded pictures go up as their own Y, U and V planes. Handing a software-decoded VideoFrame to
+ * `texImage2D` converts it through a canvas whose image cache keeps every converted picture, which
+ * after one drag across a long timeline held about 500 MB. Other layouts still take that path.
  */
 export function createCompositor(canvas: HTMLCanvasElement) {
   const gl = canvas.getContext("webgl2", {
@@ -78,32 +145,127 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   const shown = uniform("shown");
   const opacity = uniform("opacity");
   const brightness = uniform("brightness");
+  const planes = uniform("planes");
+  const toRgb = uniform("toRgb");
+  const offset = uniform("offset");
   const corners = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, corners);
   const local = gl.getAttribLocation(program, "local");
   gl.enableVertexAttribArray(local);
   gl.vertexAttribPointer(local, 2, gl.FLOAT, false, 0, 0);
-  const texture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  let allocated = { width: 0, height: 0 };
+  // One texture per plane; an RGBA picture uses the first.
+  const textures = ["luma", "cb", "cr"].map((name, unit) => {
+    const texture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(uniform(name), unit);
+    return { texture, unit, shape: "" };
+  });
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  /** Each layer's plane bytes, reused from draw to draw. */
+  const buffers: Uint8Array[] = [];
+
+  /** Allocates a texture only when its size or format changes; each draw replaces its pixels. */
+  const upload = (
+    plane: (typeof textures)[number],
+    width: number,
+    height: number,
+    format: number,
+    internal: number,
+    pixels: Uint8Array | VideoFrame,
+    stride = 0,
+  ) => {
+    gl.activeTexture(gl.TEXTURE0 + plane.unit);
+    const shape = `${width}x${height}:${internal}`;
+    if (plane.shape !== shape) {
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        internal,
+        width,
+        height,
+        0,
+        format,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+      plane.shape = shape;
+    }
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, stride);
+    if (pixels instanceof VideoFrame)
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        format,
+        gl.UNSIGNED_BYTE,
+        pixels,
+      );
+    else
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        width,
+        height,
+        format,
+        gl.UNSIGNED_BYTE,
+        pixels,
+      );
+  };
+
+  /** Copies a layer's planes out of its frame, or null when the browser must convert it. */
+  const copy = async (frame: VideoFrame, slot: number) => {
+    const convert = conversion(frame.colorSpace);
+    if (frame.format !== "I420" || !convert) return null;
+    const length = frame.allocationSize();
+    if ((buffers[slot]?.byteLength ?? 0) < length)
+      buffers[slot] = new Uint8Array(length);
+    const bytes = buffers[slot]!;
+    const layout = await frame.copyTo(bytes);
+    const { width, height } = frame.visibleRect!;
+    return {
+      convert,
+      planes: layout.map(({ offset, stride }, index) => ({
+        width: Math.ceil(width * I420[index]!),
+        height: Math.ceil(height * I420[index]!),
+        stride,
+        bytes: bytes.subarray(offset),
+      })),
+    };
+  };
 
   return {
     /**
      * Draws the layers bottom first over the page colour, or over nothing when it is null, in a
-     * `width` x `height` composition.
+     * `width` x `height` composition. The frames stay open until it resolves.
      */
-    draw(
+    async draw(
       layers: readonly Layer[],
       background: string | null,
       width: number,
       height: number,
     ) {
+      const copies = await Promise.all(
+        layers.map((layer, slot) => copy(layer.frame, slot)),
+      );
+      if (gl.isContextLost()) return;
+      // Sized after the copies, since resizing clears the picture still on screen. The canvas
+      // stays hidden until its first frame is drawn, so measure the picture it fills.
+      const box = (canvas.parentElement ?? canvas).getBoundingClientRect();
+      const backing = [box.width, box.height].map((side) =>
+        Math.max(1, Math.round(side * devicePixelRatio)),
+      );
+      if (canvas.width !== backing[0] || canvas.height !== backing[1])
+        [canvas.width, canvas.height] = backing as [number, number];
       gl.viewport(0, 0, canvas.width, canvas.height);
       const [r, g, b] = background
         ? [1, 3, 5].map(
@@ -113,7 +275,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       gl.clearColor(r!, g!, b!, background ? 1 : 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2f(view, width, height);
-      for (const layer of layers) {
+      for (const [index, layer] of layers.entries()) {
         if (layer.opacity <= 0) continue;
         const { width: iw, height: ih } = layer.intrinsic;
         // object-fit, centred as object-position's default.
@@ -149,39 +311,35 @@ export function createCompositor(canvas: HTMLCanvasElement) {
           new Float32Array([0, 0, width, 0, 0, height, width, height]),
           gl.STREAM_DRAW,
         );
-        // One allocation per picture size; each frame only replaces its pixels.
-        const { displayWidth: fw, displayHeight: fh } = layer.frame;
-        if (fw !== allocated.width || fh !== allocated.height) {
-          gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.RGBA,
-            fw,
-            fh,
-            0,
-            gl.RGBA,
-            gl.UNSIGNED_BYTE,
-            null,
-          );
-          allocated = { width: fw, height: fh };
+        const copied = copies[index];
+        if (copied) {
+          gl.uniform1i(planes, 1);
+          gl.uniformMatrix3fv(toRgb, false, copied.convert.matrix);
+          gl.uniform3fv(offset, copied.convert.offset);
+          for (const [at, plane] of copied.planes.entries())
+            upload(
+              textures[at]!,
+              plane.width,
+              plane.height,
+              gl.RED,
+              gl.R8,
+              plane.bytes,
+              plane.stride,
+            );
+        } else {
+          gl.uniform1i(planes, 0);
+          const { displayWidth: fw, displayHeight: fh } = layer.frame;
+          upload(textures[0]!, fw, fh, gl.RGBA, gl.RGBA, layer.frame);
         }
-        gl.texSubImage2D(
-          gl.TEXTURE_2D,
-          0,
-          0,
-          0,
-          gl.RGBA,
-          gl.UNSIGNED_BYTE,
-          layer.frame,
-        );
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     },
     lost: () => gl.isContextLost(),
     dispose() {
-      gl.deleteTexture(texture);
+      for (const { texture } of textures) gl.deleteTexture(texture);
       gl.deleteBuffer(corners);
       gl.deleteProgram(program);
+      buffers.length = 0;
     },
   };
 }
