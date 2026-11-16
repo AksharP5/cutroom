@@ -67,6 +67,7 @@ import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
 import { Viewer } from "./Viewer";
+import { useFollowVariables } from "./variables";
 import type { Zoom } from "./Viewer";
 
 /** A file change from the preview server's watcher, which owns preview invalidation. */
@@ -153,6 +154,7 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const composition = useTimeline((state) => state.composition);
+  useFollowVariables(projectId, composition);
   const snapping = useTimeline((state) => state.snapping);
   const source = useSource((state) => state.file !== null);
   const sourceShown = useSource((state) => state.shown);

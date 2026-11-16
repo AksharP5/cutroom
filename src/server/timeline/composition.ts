@@ -1196,13 +1196,79 @@ export function setElementAttributes(
     (item) => item.attrs.id === id,
   );
   if (!element) return null;
+  return rewriteAttributes(html, element, id, changes);
+}
+
+function rewriteAttributes(
+  html: string,
+  element: SourceElement,
+  name: string,
+  changes: readonly AttributeChange[],
+) {
   const spans = new Map(
     scanHtmlOpeningTags(html).map((span) => [span.start, span]),
   );
   return applyEdits(
     html,
-    attributeEdits(openingTag(spans, element, id), html, [...changes]),
+    attributeEdits(openingTag(spans, element, name), html, [...changes]),
   );
+}
+
+/** The attributes of the element with `id`, as written. Null when no element has that id. */
+export function elementAttributes(
+  html: string,
+  id: string,
+): Readonly<Record<string, string>> | null {
+  return (
+    [...descendants(parseElements(html).roots)].find(
+      (item) => item.attrs.id === id,
+    )?.attrs ?? null
+  );
+}
+
+const VARIABLES_ATTRIBUTE = "data-composition-variables";
+
+/**
+ * The element that carries a composition's variable declarations: the first that declares them
+ * (`<html>` in a page), otherwise where HyperFrames' SDK would put them, the composition root of a
+ * `<template>` file or the page's `<html>`.
+ */
+function variableDeclarer(html: string) {
+  const all: { element: SourceElement; inTemplate: boolean }[] = [];
+  const visit = (elements: SourceElement[], inTemplate: boolean) => {
+    for (const element of elements) {
+      all.push({ element, inTemplate });
+      visit(element.children, inTemplate);
+      visit(element.content, true);
+    }
+  };
+  visit(parseElements(html).roots, false);
+  const declaring = all.find(
+    ({ element }) => element.attrs[VARIABLES_ATTRIBUTE] !== undefined,
+  );
+  if (declaring) return declaring.element;
+  const page = all.find(({ element }) => element.tag === "html");
+  const root = all.find(
+    ({ element }) => element.attrs["data-composition-id"] !== undefined,
+  );
+  return (root?.inTemplate || !page ? root : page)?.element ?? null;
+}
+
+/** The raw `data-composition-variables` value HyperFrames reads for this composition. */
+export const declaredVariables = (html: string): string | undefined =>
+  variableDeclarer(html)?.attrs[VARIABLES_ATTRIBUTE];
+
+/** Replaces the composition's declarations, rewriting only that attribute. */
+export function declareVariables(html: string, json: string): string {
+  const element = variableDeclarer(html);
+  if (!element)
+    throw new TimelineError(
+      "unsupported",
+      "This file has no <html> element or composition root to declare variables on.",
+    );
+  return rewriteAttributes(html, element, `<${element.tag}>`, [
+    [VARIABLES_ATTRIBUTE, json],
+  ]);
 }
 
 /** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */

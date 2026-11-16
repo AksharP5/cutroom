@@ -706,3 +706,13 @@
   font-size: var(--type-xs);
   cursor: pointer;
 }
+
+/* A variable's words read as words, left to right, unlike the inspector's numbers. */
+.inspector-field input.inspector-variable-text {
+  text-align: left;
+  font: var(--weight-regular) var(--type-xs) / var(--leading-tight)
+    var(--font-sans);
+}
+.inspector-variables .inspector-value > button {
+  flex: none;
+}

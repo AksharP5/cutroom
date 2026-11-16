@@ -27,6 +27,7 @@ import { animationEvents } from "./animationFollowup";
 import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
 import { registerCaptionTools } from "./captionTools";
+import { registerVariableTools } from "./variableTools";
 import { compactLint } from "../../shared/lint";
 
 type LocalFetch = (
@@ -406,6 +407,7 @@ export function createMcpServer(options: McpOptions = {}) {
     (input) => request(`/transcription-jobs/${id(input.jobId)}`),
   );
   registerCaptionTools(registry, request);
+  registerVariableTools(registry, request);
   registry.registerTool(
     "history_list",
     {

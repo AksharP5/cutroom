@@ -33,6 +33,7 @@ import { TabOriginSchema } from "../shared/timeline/schema";
 import { VIEW_PATH } from "./projects/view";
 import type { FileChange } from "./hyperframes/api";
 import type { createHyperframesApi } from "./hyperframes/api";
+import type { createVariableRoutes } from "./projects/variables";
 
 export function createWorkspaceRoutes(options: {
   projects: ProjectStore;
@@ -50,6 +51,7 @@ export function createWorkspaceRoutes(options: {
   subscribeExports?: ReturnType<
     typeof createHyperframesApi
   >["subscribeExports"];
+  subscribeVariables?: ReturnType<typeof createVariableRoutes>["subscribe"];
 }) {
   const app = new Hono();
   app.use("/projects/:id/*", projectMutationGuard(options.review));
@@ -214,6 +216,14 @@ export function createWorkspaceRoutes(options: {
           .writeSSE({ event: "export", data: JSON.stringify(job) })
           .catch(() => {});
       });
+      const stopVariables = options.subscribeVariables?.(
+        project.id,
+        (change) => {
+          void stream
+            .writeSSE({ event: "variables", data: JSON.stringify(change) })
+            .catch(() => {});
+        },
+      );
       // One debounce per path, so a burst touching several files reports each of them.
       const timers = new Map<string, ReturnType<typeof setTimeout>>();
       const watcher = watch(
@@ -287,6 +297,7 @@ export function createWorkspaceRoutes(options: {
       } finally {
         stopPreview?.();
         stopExports?.();
+        stopVariables?.();
         stopAnimationFeedback?.();
         watcher.close();
         for (const timer of timers.values()) clearTimeout(timer);

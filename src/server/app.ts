@@ -15,6 +15,7 @@ import { createProjectStore } from "./projects/store";
 import { createTimelineRoutes } from "./timeline/routes";
 import { createCaptionRoutes } from "./captions/routes";
 import { createWorkspaceRoutes } from "./workspace";
+import { createVariableRoutes } from "./projects/variables";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
 import { allowsLocalRequest } from "./localAccess";
@@ -102,6 +103,7 @@ export async function createApp(
     .map((argument) => `'${argument.replaceAll("'", "'\\''")}'`)
     .join(" ");
   const timeline = createTimelineRoutes(projects, review);
+  const variables = createVariableRoutes(projects, review);
   app.route(
     "/api/cutroom",
     createWorkspaceRoutes({
@@ -113,6 +115,7 @@ export async function createApp(
       subscribePreview: editor.subscribe,
       subscribeAnimationFeedback: timeline.subscribeAnimationFeedback,
       subscribeExports: editor.subscribeExports,
+      subscribeVariables: variables.subscribe,
     }),
   );
   app.route(
@@ -120,6 +123,7 @@ export async function createApp(
     createProjectRoutes(projects, review, transcripts, media.media.proxyState),
   );
   app.route("/api/cutroom", timeline);
+  app.route("/api/cutroom", variables);
   app.route(
     "/api/cutroom",
     createCaptionRoutes(projects, review, transcripts, timeline.editInWindow),

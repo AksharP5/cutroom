@@ -90,7 +90,7 @@ export function Row({
 }
 
 /** Typed text that commits once, on Enter or on leaving the field. Escape puts the value back. */
-function DraftField({
+export function DraftField({
   label,
   value,
   disabled,
@@ -153,7 +153,7 @@ const parseHex = (text: string) => {
  * The system colour picker behind a swatch, with the same colour as typed hex. The picker reports
  * every colour it passes over; only the one it closes on is committed, so a pick is one edit.
  */
-function ColourFields({
+export function ColourFields({
   label,
   value,
   disabled,

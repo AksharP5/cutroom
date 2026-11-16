@@ -199,6 +199,11 @@ export async function toolSubject(
     }
     case "timeline_edit":
       return editedClips(args, names);
+    case "variables_set_default":
+      return text("id");
+    case "variables_declare":
+      return z.object({ id: z.string().trim().min(1) }).safeParse(args.variable)
+        .data?.id;
     default: {
       const id = text("noteId") ?? text("annotationId");
       return id ? names?.note(id).catch(() => undefined) : undefined;

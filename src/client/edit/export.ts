@@ -16,6 +16,7 @@ import { useWorkspace } from "../workspace";
 import { trackRows } from "../timeline/math";
 import { ROOT_COMPOSITION, afterTimelineEdits, useTimeline } from "./timeline";
 import { subscribeProjectEvents } from "../api";
+import type { VariableValues } from "../../shared/variables";
 
 export interface ExportJob {
   projectId: string;
@@ -208,6 +209,8 @@ export async function exportProject(
     size: { width: number; height: number } | null;
     /** HyperFrames' size preset when the export draws at another size than the composition's. */
     resolution: string | undefined;
+    /** Composition variable overrides, only those that differ from a default. */
+    variables: VariableValues;
   },
 ) {
   if (exportActive(useExport.getState().job)) return;
@@ -289,6 +292,9 @@ export async function exportProject(
             fps: `${output.fps.num}/${output.fps.den}`,
             ...(output.resolution && { resolution: output.resolution }),
             ...(composition !== ROOT_COMPOSITION && { composition }),
+            ...(Object.keys(output.variables).length && {
+              variables: output.variables,
+            }),
             cutroom: { ...options, range: choice === "marks" ? range : null },
           }),
         },
