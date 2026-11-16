@@ -323,7 +323,11 @@ async function read(
 ) {
   const [view, history] = await Promise.all([
     api(
-      `${project(projectId)}/timeline?composition=${encodeURIComponent(composition)}`,
+      `${project(projectId)}/timeline${
+        composition === ROOT_COMPOSITION
+          ? ""
+          : `?composition=${encodeURIComponent(composition)}`
+      }`,
       TimelineViewSchema,
       { signal },
     ),
