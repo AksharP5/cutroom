@@ -3,12 +3,22 @@ import type { PointerEvent } from "react";
 import type {
   Clip,
   CommandInput,
+  KeyframeEase,
   KeyframeProperty,
   Timeline,
 } from "../../shared/timeline/schema";
 import { KEYFRAME_PROPERTIES } from "../../shared/timeline/schema";
+import { openContextMenu } from "../components/ContextMenu";
 import { tracksOf } from "../../shared/timeline/keyframes";
 import { formatTimecode } from "../../shared/timeline/timecode";
+
+const EASES = [
+  ["linear", "Linear"],
+  ["ease-in", "Ease in"],
+  ["ease-out", "Ease out"],
+  ["ease-in-out", "Ease in and out"],
+  ["hold", "Hold"],
+] as const satisfies readonly (readonly [KeyframeEase, string])[];
 
 /** Pixels a press travels before it drags a keyframe instead of seeking to it. */
 const DRAG_PX = 3;
@@ -27,7 +37,8 @@ export function keyframeStops(clip: Clip) {
 /**
  * A clip's keyframes as diamonds along the foot of its body, one per frame whatever it keys. A press
  * seeks to it; a drag retimes every keyframe on that frame, within the clip and short of the
- * frames already keyed for those properties, as one undo step on release. Esc puts it back.
+ * frames already keyed for those properties, as one undo step on release. Esc puts it back. A
+ * right-click sets their ease or deletes them. A held keyframe is drawn square.
  */
 export function KeyframeMarks({
   timeline,
@@ -101,6 +112,15 @@ export function KeyframeMarks({
       })),
     );
   };
+  const easeAt = (frame: number, properties: KeyframeProperty[]) => {
+    const eases = new Set(
+      properties.map(
+        (property) =>
+          tracks[property]?.find((keyframe) => keyframe.frame === frame)?.ease,
+      ),
+    );
+    return eases.size === 1 ? [...eases][0] : undefined;
+  };
   return (
     <>
       {stops.map(([frame, properties]) => (
@@ -108,6 +128,43 @@ export function KeyframeMarks({
           key={frame}
           className={`tl-keyframe${selected ? " selected" : ""}`}
           data-keyframe={`${clip.id}:${frame}`}
+          data-ease={easeAt(frame, properties)}
+          onContextMenu={(event) => {
+            event.stopPropagation();
+            const ease = easeAt(frame, properties);
+            const commands = (
+              type: "setKeyframe" | "removeKeyframe",
+              next?: KeyframeEase,
+            ): CommandInput[] =>
+              properties.map((property) =>
+                type === "setKeyframe"
+                  ? { type, clipId: clip.id, property, frame, ease: next }
+                  : { type, clipId: clip.id, property, frame },
+              );
+            openContextMenu(
+              event,
+              "Keyframe",
+              [
+                ...EASES.map(([value, label]) => ({
+                  label,
+                  checked: ease === value,
+                  radio: true,
+                  run: () =>
+                    onEdit(
+                      `Set keyframe to ${label.toLowerCase()}`,
+                      commands("setKeyframe", value),
+                    ),
+                })),
+                "separator" as const,
+                {
+                  label: "Delete keyframe",
+                  run: () =>
+                    onEdit("Delete keyframe", commands("removeKeyframe")),
+                },
+              ],
+              event.currentTarget,
+            );
+          }}
           data-unscaled
           title={`${properties.join(", ")} at ${formatTimecode(clip.start + frame, timeline.fps)}`}
           style={{ "--f": clip.start + frame }}

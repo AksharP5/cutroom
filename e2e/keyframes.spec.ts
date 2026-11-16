@@ -163,3 +163,73 @@ test("the inspector keys Position at the playhead, shows the value between keyfr
   await page.keyboard.press("Control+z");
   await expect(page.locator('[data-keyframe="box:30"]')).toBeVisible();
 });
+
+test("Resolve's keyframe keys add, hold, step between and delete keyframes, and a diamond's menu sets its ease", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(
+    request,
+    { name: "Keyframe keys", width: 640, height: 360, duration: 2 },
+    box,
+  );
+  const keyframes = async () =>
+    (
+      (await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json()) as {
+        timeline: {
+          clips: {
+            keyframes: Record<string, { frame: number; ease: string }[]> | null;
+          }[];
+        };
+      }
+    ).timeline.clips[0]!.keyframes;
+  const playhead = page.getByRole("button", {
+    name: "Current time. Click to type a time.",
+    exact: true,
+  });
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="box"]').click();
+
+  // Ctrl+[ keys every transform property on a clip with none; its opacity stays the page's.
+  await seekFrame(page, 10);
+  await page.keyboard.press("Control+BracketLeft");
+  await expect
+    .poll(async () => Object.keys((await keyframes()) ?? {}))
+    .toEqual(["position", "scale", "rotation", "crop"]);
+  // Ctrl+] adds a held keyframe on the same properties, drawn square.
+  await seekFrame(page, 40);
+  await page.keyboard.press("Control+BracketRight");
+  await expect(page.locator('[data-keyframe="box:40"]')).toHaveAttribute(
+    "data-ease",
+    "hold",
+  );
+  expect((await keyframes())!.position!.map(({ ease }) => ease)).toEqual([
+    "linear",
+    "hold",
+  ]);
+
+  // [ and ] step between them.
+  await seekFrame(page, 0);
+  await page.keyboard.press("BracketRight");
+  await expect(playhead).toContainText("00:00:00:10");
+  await page.keyboard.press("BracketRight");
+  await expect(playhead).toContainText("00:00:01:10");
+  await page.keyboard.press("BracketLeft");
+  await expect(playhead).toContainText("00:00:00:10");
+
+  // The diamond's menu sets the ease of every keyframe on its frame.
+  await page.locator('[data-keyframe="box:10"]').click({ button: "right" });
+  await page.getByRole("menuitemradio", { name: "Ease out" }).click();
+  await expect
+    .poll(async () => (await keyframes())!.scale!.map(({ ease }) => ease))
+    .toEqual(["ease-out", "hold"]);
+
+  // Alt+] deletes the keyframes under the playhead.
+  await page.keyboard.press("Alt+BracketRight");
+  await expect(page.locator('[data-keyframe="box:10"]')).toHaveCount(0);
+  expect((await keyframes())!.position!.map(({ frame }) => frame)).toEqual([
+    40,
+  ]);
+});

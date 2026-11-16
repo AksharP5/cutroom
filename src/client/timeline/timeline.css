@@ -1476,3 +1476,8 @@ input.tl-track-gain {
 .tl-keyframe:hover::before {
   background: var(--text-primary);
 }
+/* A held keyframe keeps its value until the next one, so it is drawn square. */
+.tl-keyframe[data-ease="hold"]::before {
+  inset: 3.5px;
+  transform: none;
+}
