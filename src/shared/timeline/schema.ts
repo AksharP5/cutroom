@@ -50,6 +50,69 @@ export const CropSchema = z.object({
   left: cropEdge,
 });
 
+export const KEYFRAME_PROPERTIES = [
+  "position",
+  "scale",
+  "rotation",
+  "crop",
+  "opacity",
+] as const;
+export const KEYFRAME_EASES = [
+  "linear",
+  "ease-in",
+  "ease-out",
+  "ease-in-out",
+  "hold",
+] as const;
+/** A clip-local frame: 0 is the clip's first frame. Trims can leave keyframes outside the clip. */
+const keyframeFrame = z.number().int().min(-1_000_000).max(1_000_000);
+/** Keyframed position offsets are bounded so every generated CSS length stays exact. */
+const offset = z
+  .number()
+  .min(-100_000)
+  .max(100_000)
+  .overwrite((value) => Number(value.toFixed(6)) + 0);
+/** The value a keyframe holds for each property, in the static fields' units and precision. */
+export const KeyframeValueSchemas = {
+  position: z.object({ x: offset, y: offset }),
+  scale: z.object({ x: scale, y: scale }),
+  rotation,
+  crop: CropSchema,
+  opacity,
+} as const;
+const track = <T extends z.ZodType>(value: T) =>
+  z
+    .array(
+      z.object({
+        frame: keyframeFrame,
+        value,
+        ease: z.enum(KEYFRAME_EASES),
+      }),
+    )
+    .min(1)
+    .max(1_000)
+    .refine(
+      (keyframes) =>
+        keyframes.every(
+          (keyframe, index) =>
+            index === 0 || keyframe.frame > keyframes[index - 1]!.frame,
+        ),
+      "Keyframes are in frame order, one per frame.",
+    );
+/**
+ * Animated properties, each a list of keyframes in frame order. A property listed here has no
+ * static value: its static field is null while it has keyframes.
+ */
+export const KeyframesSchema = z
+  .object({
+    position: track(KeyframeValueSchemas.position),
+    scale: track(KeyframeValueSchemas.scale),
+    rotation: track(KeyframeValueSchemas.rotation),
+    crop: track(KeyframeValueSchemas.crop),
+    opacity: track(KeyframeValueSchemas.opacity),
+  })
+  .partial();
+
 /**
  * Plain clip text: explicit breaks and preserved source line breaks use `\n`,
  * whitespace runs collapse to one space, and each line is trimmed. No-break spaces are content.
@@ -248,6 +311,11 @@ export const ClipSchema = z.object({
     .default(null)
     .describe(
       "Pixels cut from each edge of the clip's own box. It does not change layout",
+    ),
+  keyframes: KeyframesSchema.nullable()
+    .default(null)
+    .describe(
+      "Animated position, scale, rotation, crop and opacity: per property, keyframes {frame, value, ease} in clip-local frames (0 is the clip's first frame), in the same units as the static fields, which are null while their property has keyframes. Before the first keyframe the property holds its value, and after the last. ease shapes the motion from that keyframe to the next: linear, ease-in, ease-out, ease-in-out, or hold, which keeps the value until the next keyframe. Keyframes travel with the clip through moves and trims; a trimmed clip can keep keyframes outside it. null is none.",
     ),
   text: z
     .string()
@@ -647,6 +715,55 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .describe("Change clip properties. Null clears a property."),
   z
     .object({
+      type: z.literal("setKeyframe"),
+      clipId,
+      property: z.enum(KEYFRAME_PROPERTIES),
+      frame: keyframeFrame.describe(
+        "Clip-local frame, 0 is the clip's first frame; inside the clip",
+      ),
+      value: z
+        .union([
+          z.number(),
+          z.object({ x: z.number().optional(), y: z.number().optional() }),
+          CropSchema.partial(),
+        ])
+        .optional()
+        .describe(
+          "position and scale take {x, y}; crop takes {top, right, bottom, left}; rotation and opacity take a number. Omitted fields, or an omitted value, keep what the clip shows at that frame",
+        ),
+      ease: z
+        .enum(KEYFRAME_EASES)
+        .optional()
+        .describe(
+          "The motion from this keyframe to the next; omitted keeps the keyframe's ease, linear for a new one",
+        ),
+    })
+    .describe(
+      "Add a keyframe on a clip's position, scale, rotation, crop or opacity, or change the one at that frame. The first keyframe turns the property's static value into keyframes. Keyframing scale or rotation on a clip with a static position keyframes the position too, at the same frame, so the two cannot drift.",
+    ),
+  z
+    .object({
+      type: z.literal("removeKeyframe"),
+      clipId,
+      property: z.enum(KEYFRAME_PROPERTIES),
+      frame: keyframeFrame,
+    })
+    .describe(
+      "Remove one keyframe. Removing a property's last keyframe leaves its value as the static value.",
+    ),
+  z
+    .object({
+      type: z.literal("moveKeyframe"),
+      clipId,
+      property: z.enum(KEYFRAME_PROPERTIES),
+      frame: keyframeFrame,
+      to: keyframeFrame.describe(
+        "Clip-local frame inside the clip, without a keyframe of the same property",
+      ),
+    })
+    .describe("Retime one keyframe, keeping its value and ease."),
+  z
+    .object({
       type: z.literal("setTransition"),
       from: clipId.describe("The outgoing clip, ending at the cut"),
       to: clipId.describe(
@@ -829,6 +946,9 @@ export const TimelineSettingsSchema = z.object({
 
 export type Fps = z.infer<typeof FpsSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
+export type Keyframes = z.infer<typeof KeyframesSchema>;
+export type KeyframeProperty = (typeof KEYFRAME_PROPERTIES)[number];
+export type KeyframeEase = (typeof KEYFRAME_EASES)[number];
 export type ClipKind = z.infer<typeof ClipKindSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type Marker = z.infer<typeof MarkerSchema>;

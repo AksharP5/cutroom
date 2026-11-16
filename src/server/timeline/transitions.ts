@@ -7,6 +7,8 @@ import {
 } from "@hyperframes/core/audio-automation";
 import { frameTime, toFrames, toSeconds } from "../../shared/timeline/apply";
 import { TransitionSchema } from "../../shared/timeline/schema";
+import { shiftKeyframes } from "../../shared/timeline/keyframes";
+import { KEYFRAME_ANIMATION } from "./keyframes";
 import type { Clip, Fps, Transition } from "../../shared/timeline/schema";
 import {
   framesAfter,
@@ -40,11 +42,13 @@ const RULES = [
     "--cutroom-transition-length:attr(data-duration type(<number>),0);" +
     "--cutroom-transition-in:0;--cutroom-transition-out:0;" +
     "--cutroom-transition-in-name:none;--cutroom-transition-out-name:none;" +
-    "animation-name:var(--cutroom-transition-in-name),var(--cutroom-transition-out-name);" +
-    "animation-duration:calc(var(--cutroom-transition-in)*1s),calc(var(--cutroom-transition-out)*1s);" +
-    "animation-delay:0s,calc((var(--cutroom-transition-length) - var(--cutroom-transition-out))*1s);" +
-    "animation-fill-mode:none,forwards;" +
-    "animation-timing-function:linear}",
+    // A keyframed clip's own animation comes first, so the transition draws over it.
+    `animation-name:${KEYFRAME_ANIMATION.name},var(--cutroom-transition-in-name),var(--cutroom-transition-out-name);` +
+    `animation-duration:${KEYFRAME_ANIMATION.duration},calc(var(--cutroom-transition-in)*1s),calc(var(--cutroom-transition-out)*1s);` +
+    `animation-delay:${KEYFRAME_ANIMATION.delay},0s,calc((var(--cutroom-transition-length) - var(--cutroom-transition-out))*1s);` +
+    `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},1,1;` +
+    `animation-fill-mode:${KEYFRAME_ANIMATION.fill},none,forwards;` +
+    `animation-timing-function:${KEYFRAME_ANIMATION.timing},linear,linear}`,
   ...(["dissolve", "dip"] as const).flatMap((kind) =>
     (["in", "out"] as const).map(
       (edge) =>
@@ -183,5 +187,6 @@ export function elementClip(clip: Clip, fps: Fps): Clip {
     fadeIn: transitionIn && straight ? transitionIn.duration : clip.fadeIn,
     fadeOut: transitionOut && straight ? transitionOut.duration : clip.fadeOut,
     automation: clip.automation ?? crossfadeAutomation(clip, fps),
+    keyframes: shiftKeyframes(clip.keyframes, -before),
   };
 }

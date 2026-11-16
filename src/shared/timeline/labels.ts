@@ -304,6 +304,25 @@ export function editLabel(
           parts.push("Clear automation");
         return `${parts.join("; ") || (pending ? fallback : "")}${named && (pending || parts.length) ? ` for ${target([command.clipId])}` : ""}`;
       }
+      case "setKeyframe":
+      case "removeKeyframe":
+      case "moveKeyframe": {
+        const clip = clips.find((clip) => clip.id === command.clipId);
+        const at = (frame: number) => time((clip?.start ?? 0) + frame);
+        const existing = clip?.keyframes?.[command.property]?.some(
+          (keyframe) => keyframe.frame === command.frame,
+        );
+        const what = `${command.property} keyframe`;
+        const sentence =
+          command.type === "removeKeyframe"
+            ? `${pending ? "Remove" : "Removed"} the ${what} at ${at(command.frame)}`
+            : command.type === "moveKeyframe"
+              ? `${pending ? "Move" : "Moved"} the ${what} to ${at(command.to)}`
+              : existing
+                ? `${pending ? "Change" : "Changed"} the ${what} at ${at(command.frame)}`
+                : `${pending ? "Add" : "Added"} a ${what} at ${at(command.frame)}`;
+        return `${sentence}${named ? ` on ${target([command.clipId])}` : ""}`;
+      }
       case "setTransition": {
         const cut = named
           ? ` between ${target([command.from, command.to])}`
