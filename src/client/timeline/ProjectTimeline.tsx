@@ -17,17 +17,12 @@ import { addTitleCommands } from "../edit/addTitle";
 import { addTransition, editKeys, trimmedPlayhead } from "../edit/keys";
 import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
-import {
-  clipboardEdit,
-  editTimeline,
-  loadTimeline,
-  useTimeline,
-} from "../edit/timeline";
+import { clipboardEdit, editTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
 import { isTyping, useKeymap } from "../keymap";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
-import { reportEditorError, showToast, useWorkspace } from "../workspace";
+import { showToast, useWorkspace } from "../workspace";
 import type { Tool } from "./gesture";
 import type { Row } from "./math";
 import { Timeline } from "./Timeline";
@@ -122,14 +117,6 @@ export function ProjectTimeline({
   const setSelection = (next: Selection) =>
     useTimeline.setState({ selection: next });
   const timeline = view?.timeline;
-  useEffect(() => {
-    const closing = new AbortController();
-    void loadTimeline(projectId, closing.signal).catch((error: unknown) => {
-      if (!closing.signal.aborted) reportEditorError("timeline", error);
-    });
-    return () => closing.abort();
-  }, [projectId, notes]);
-
   useEffect(() => {
     if (timeline)
       useTimeline.setState(({ selection: current }) => ({

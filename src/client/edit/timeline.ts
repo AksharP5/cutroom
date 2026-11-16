@@ -267,18 +267,15 @@ function shown(projectId: string): TimelineView | null {
   return timeline === view.timeline ? view : { ...view, timeline };
 }
 
-async function read(projectId: string, signal?: AbortSignal, notify = true) {
-  const [view, history] = await Promise.all([
-    api(`${project(projectId)}/timeline`, TimelineViewSchema, { signal }),
-    api(`${project(projectId)}/history`, HistorySchema, { signal }),
-  ]);
-  if (useTimeline.getState().projectId !== projectId) return view;
-  if (
-    confirmed?.projectId === projectId &&
-    confirmed.view.revision !== view.revision &&
-    notify
-  )
-    noticeOutside(confirmed.view, view);
+const readHistory = (projectId: string, signal?: AbortSignal) =>
+  api(`${project(projectId)}/history`, HistorySchema, { signal });
+
+/** Shows the engine's last answer, `confirmed`, with the undo history that came with it. */
+function settle(
+  projectId: string,
+  view: TimelineView,
+  history: z.infer<typeof HistorySchema>,
+) {
   historyHead = history.entries.findLast((entry) => !entry.undone)?.id;
   if (
     rippleRevision &&
@@ -287,10 +284,25 @@ async function read(projectId: string, signal?: AbortSignal, notify = true) {
     dismissRipple();
     rippleRevision = null;
   }
-  confirmed = { projectId, view };
   useTimeline.setState({ view: shown(projectId), history });
   // The engine read this timeline, so an earlier refusal no longer stands.
   reportEditorError("timeline", null);
+}
+
+async function read(projectId: string, signal?: AbortSignal, notify = true) {
+  const [view, history] = await Promise.all([
+    api(`${project(projectId)}/timeline`, TimelineViewSchema, { signal }),
+    readHistory(projectId, signal),
+  ]);
+  if (useTimeline.getState().projectId !== projectId) return view;
+  if (
+    confirmed?.projectId === projectId &&
+    confirmed.view.revision !== view.revision &&
+    notify
+  )
+    noticeOutside(confirmed.view, view);
+  confirmed = { projectId, view };
+  settle(projectId, view, history);
   return view;
 }
 
@@ -299,6 +311,33 @@ export const loadTimeline = (projectId: string, signal: AbortSignal) =>
     signal.throwIfAborted();
     await read(projectId, signal);
   });
+
+/** How long the first project file event waits for the rest of its burst. */
+const BURST_MS = 100;
+/** The read that will answer every file event received before it starts, for one open editor. */
+let refresh: { signal: AbortSignal; done: Promise<void> } | null = null;
+
+/**
+ * Reads the timeline again after a project file changed. One edit writes several files (the
+ * composition, `cutroom.json`, review state, and their temporary copies), each announced
+ * separately; the first event opens a short window and one queued read answers all of them. An
+ * event that arrives once that read has started may describe a later write, so it opens the next.
+ */
+export function refreshTimeline(projectId: string, signal: AbortSignal) {
+  if (refresh?.signal === signal) return refresh.done;
+  const next = {
+    signal,
+    done: new Promise((resolve) => setTimeout(resolve, BURST_MS)).then(() =>
+      enqueue(async () => {
+        if (refresh === next) refresh = null;
+        signal.throwIfAborted();
+        await read(projectId, signal);
+      }),
+    ),
+  };
+  refresh = next;
+  return next.done;
+}
 
 /**
  * Sends an edit's commands as they were made. When someone else edited first the revision is
@@ -547,7 +586,11 @@ export async function editTimeline(
         throw error;
       }
       pending = pending.filter((item) => item !== made);
-      await read(projectId);
+      // The answer is the view a read would return; only the undo history is still to read.
+      // Later writes, by anyone, announce themselves as project file events.
+      const history = await readHistory(projectId);
+      if (confirmed?.projectId === projectId)
+        settle(projectId, confirmed.view, history);
     });
     if (!made.dropped && useTimeline.getState().projectId === projectId) {
       if (report) {
