@@ -259,3 +259,55 @@ test("the composition list shows each scene's lint, opens it, and places it at t
   );
   await expect(timeline.locator('[data-clip="intro-sub"]')).toBeVisible();
 });
+
+test("Export inside a scene renders that scene from its own In to Out", async ({
+  page,
+  request,
+}) => {
+  const { project } = await scenes(request);
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await timeline.locator('[data-clip="intro"]').dblclick();
+  await expect(timeline.locator('[data-clip="intro-sub"]')).toBeVisible();
+  // Half a second marked inside the scene, from 2:00.
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("0200");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("i");
+  await page.getByRole("button", { name: /^Current time/ }).click();
+  await page.getByLabel("Go to time").pressSequentially("0214");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("o");
+
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  await expect(dialog).toContainText("Scenes intro");
+  await expect(dialog.getByLabel("File name", { exact: true })).toHaveValue(
+    "Scenes intro.mp4",
+  );
+  await expect(dialog.getByRole("radio", { name: "In to Out" })).toBeChecked();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await dialog.getByRole("button", { name: "Export MP4", exact: true }).click();
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+  const probe = await promisify(execFile)("ffprobe", [
+    "-v",
+    "error",
+    "-count_frames",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=nb_read_frames",
+    "-of",
+    "csv=p=0",
+    outputPath,
+  ]);
+  // 2:00 to 2:14 of the scene: fifteen frames, not the root's twelve seconds.
+  expect(probe.stdout.trim()).toBe("15");
+});

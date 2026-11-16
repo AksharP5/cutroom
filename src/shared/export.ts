@@ -34,9 +34,25 @@ export const ExportQualitySchema = z.enum(exportQualities);
 export type ExportQuality = z.infer<typeof ExportQualitySchema>;
 
 export const ExportStartSchema = ExportDestinationSchema.partial().extend({
+  composition: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "The composition to render, such as compositions/intro.html; the root, index.html, when omitted. Ranges, marks, size and rate are that composition's",
+    ),
   range: z.union([z.enum(["timeline", "marks"]), ExportRangeSchema]).optional(),
   quality: ExportQualitySchema.default("standard"),
 });
+
+/** What an export of one composition is called: the project, then the scene's file name. */
+export const compositionExportName = (
+  projectName: string,
+  composition: string,
+) =>
+  composition === "index.html"
+    ? projectName
+    : `${projectName} ${(composition.split("/").at(-1) ?? composition).replace(/\.html?$/i, "")}`;
 
 export const exportFilename = (name: string) =>
   `${

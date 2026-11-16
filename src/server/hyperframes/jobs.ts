@@ -27,7 +27,7 @@ import {
 import { HttpError } from "../../shared/errors";
 import { createJobMachine } from "../../shared/jobs";
 import type { ExportOptions } from "../../shared/export";
-import { ExportStageSchema } from "../../shared/export";
+import { ExportStageSchema, compositionExportName } from "../../shared/export";
 import {
   estimateExportStage,
   sampleExportRate,
@@ -186,6 +186,7 @@ export function createRenderWorkers(configuration: {
   /** Sizes the export's capture browsers to the memory free when it starts. */
   workload?: (
     projectId: string,
+    composition: string,
   ) => Promise<{ mediaClips: number; durationFrames: number }>;
   stopTimeoutMs?: number;
   startupTimeoutMs?: number;
@@ -294,7 +295,10 @@ export function createRenderWorkers(configuration: {
       const state: RenderState = {
         id: options.jobId,
         projectId: options.project.id,
-        name: options.project.title ?? options.project.id,
+        name: compositionExportName(
+          options.project.title ?? options.project.id,
+          options.composition ?? "index.html",
+        ),
         fps: options.fps,
         quality:
           options.quality === "draft" || options.quality === "high"
@@ -357,7 +361,10 @@ export function createRenderWorkers(configuration: {
           direct && configuration.gpu
             ? (gpu ??= configuration.gpu())
             : undefined;
-        const workload = await configuration.workload?.(options.project.id);
+        const workload = await configuration.workload?.(
+          options.project.id,
+          options.composition ?? "index.html",
+        );
         // One set of browsers captures every run the browser draws, sized to those frames.
         const captured = direct?.plan.segments.reduce(
           (frames, segment) =>
