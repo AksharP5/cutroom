@@ -36,6 +36,8 @@ export const useWorkspace = create(() => ({
     localStorage.getItem("cutroom.inspector") === null
       ? !matchMedia("(max-width: 1303px)").matches
       : localStorage.getItem("cutroom.inspector") !== "false",
+  /** The new editor's code panel: the project's files and the open one's source. */
+  code: localStorage.getItem("cutroom.code") === "true",
   /** Export progress and finished renders. */
   exports: false,
   exporting: false,
@@ -182,9 +184,11 @@ export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
     },
   }));
 
-useWorkspace.subscribe(({ newEditor, inspector }, previous) => {
+useWorkspace.subscribe(({ newEditor, inspector, code }, previous) => {
   if (inspector !== previous.inspector)
     localStorage.setItem("cutroom.inspector", String(inspector));
+  if (code !== previous.code)
+    localStorage.setItem("cutroom.code", String(code));
   if (newEditor !== previous.newEditor)
     localStorage.setItem(NEW_EDITOR_KEY, String(newEditor));
 });

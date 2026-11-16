@@ -21,6 +21,8 @@ The composer result does not show a reliable improvement. Browser-driver typing 
 
 The editor bundle contains one CodeMirror View instance instead of eight. The editor JavaScript fell from 6,176,227 to 5,110,853 bytes, and from 1,848,339 to 1,501,964 bytes with gzip. It retains the pinned upstream editor version and source-editing functionality.
 
+The new editor's code panel loads CodeMirror only when it first opens: its editor chunk (4.7 KB) and the CodeMirror chunk it shares with the embedded editor (511 KB, 177 KB with gzip) are not preloaded with the editor. On November 16, 2026 the panel added 0.2 KB to the app's entry script and 9 KB (3 KB with gzip) to the editor's own chunk, and the embedded editor's chunk shrank by the CodeMirror it now shares. Opening a project to a ready preview took a median 838 ms with the panel against 840 ms without (20 headed runs each, alternating builds). The first open of the panel showed the source in about 390 ms, and selecting a clip showed its element in about 110 ms.
+
 `bun run bench:transcripts` measures transcript listing separately. Reusing one parsed source per request reduced the 100-clip, 5,000-word workload from about 154 ms to 7 ms warm. The request still reads current source files; this does not rely on a cross-request cache.
 
 ## Timeline engine

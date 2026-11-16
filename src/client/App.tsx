@@ -154,9 +154,7 @@ export function App() {
     "projects" | "create" | "settings" | "shortcuts" | null
   >(null);
   useKeymap({ resolveCustomizedActions: () => setDialog("shortcuts") });
-  const [picker, setPicker] = useState<"file" | "directory" | "project" | null>(
-    null,
-  );
+  const [picker, setPicker] = useState<"file" | "directory" | null>(null);
   const [name, setName] = useState("");
   const projectName = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
@@ -768,7 +766,7 @@ export function App() {
                       onContext={onContext}
                       onSaveNote={saveNote}
                       onOpenNote={openReview}
-                      onFiles={() => setPicker("project")}
+                      projectPath={project.path}
                     />
                   ) : (
                     <Editor
@@ -944,8 +942,8 @@ export function App() {
                 New editor
               </label>
               <p>
-                Cutroom's own viewer, timeline, and inspector. Turn it off for
-                the embedded source editor.
+                Cutroom's own viewer, timeline, inspector, and code panel. Turn
+                it off for the embedded HyperFrames editor.
               </p>
               <label className="settings-toggle">
                 <input
@@ -1000,12 +998,6 @@ export function App() {
           onSelect={(path) => {
             const kind = picker;
             setPicker(null);
-            if (kind === "project") {
-              void navigator.clipboard
-                .writeText(path)
-                .catch(() => showToast("The path could not be copied."));
-              return;
-            }
             if (kind === "file") {
               const pending = attachmentResolve.current;
               attachmentResolve.current = null;

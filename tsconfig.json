@@ -11,7 +11,11 @@
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
-    "types": ["bun", "vite/client"]
+    "types": ["bun", "vite/client"],
+    // Vite dedupes CodeMirror's view to the root copy (vite.config.ts); types follow the same copy.
+    "paths": {
+      "@codemirror/view": ["./node_modules/@codemirror/view"]
+    }
   },
   "include": [
     "src",

@@ -7,7 +7,8 @@ import { isProjectIgnoredDir } from "@hyperframes/core/project-folders";
 import { localMediaPath } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
-import { isMissing, projectSourceTypes, projectWritePath } from "./path";
+import { projectSourceTypes } from "../../shared/sourcePaths";
+import { isMissing, projectWritePath } from "./path";
 
 function sourceReferences(source: string, path: string): string[] {
   const quoted = (text: string) =>
