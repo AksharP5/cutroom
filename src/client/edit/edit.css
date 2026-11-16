@@ -326,6 +326,72 @@
 .edit-select-guides i[data-axis="y"] {
   width: 100%;
 }
+/*
+ * Safe zones and the thirds grid. One static layer under the selection, placed only when the
+ * picture resizes; a drag never touches it. Each box carries a tick at the middle of every edge.
+ */
+.edit-guides {
+  position: absolute;
+  pointer-events: none;
+  contain: strict;
+}
+.edit-guides :is(i, b) {
+  position: absolute;
+}
+.edit-guides i[data-grid="x"] {
+  top: 0;
+  bottom: 0;
+  width: var(--stroke-hair);
+  background: var(--guide-quiet);
+}
+.edit-guides i[data-grid="y"] {
+  left: 0;
+  right: 0;
+  height: var(--stroke-hair);
+  background: var(--guide-quiet);
+}
+.edit-guides b {
+  border: var(--stroke-hair) solid var(--guide);
+  box-shadow:
+    0 0 0 var(--stroke-hair) var(--guide-casing),
+    inset 0 0 0 var(--stroke-hair) var(--guide-casing);
+}
+.edit-guides b::before,
+.edit-guides b::after {
+  content: "";
+  position: absolute;
+  --tick: calc(2 * var(--space-1));
+  /* Ticks are gradients, so their casing is a shadow of what they paint. */
+  filter: drop-shadow(0 0 var(--stroke-hair) var(--pencil-casing));
+}
+.edit-guides b::before {
+  left: calc(50% - var(--stroke-hair) / 2);
+  top: calc(-1 * var(--tick));
+  bottom: calc(-1 * var(--tick));
+  width: var(--stroke-hair);
+  background: linear-gradient(
+    var(--guide) 0 calc(2 * var(--tick)),
+    transparent 0 calc(100% - 2 * var(--tick)),
+    var(--guide) 0
+  );
+}
+.edit-guides b::after {
+  top: calc(50% - var(--stroke-hair) / 2);
+  left: calc(-1 * var(--tick));
+  right: calc(-1 * var(--tick));
+  height: var(--stroke-hair);
+  background: linear-gradient(
+    to right,
+    var(--guide) 0 calc(2 * var(--tick)),
+    transparent 0 calc(100% - 2 * var(--tick)),
+    var(--guide) 0
+  );
+}
+/* A vertical frame's caption line, higher than title-safe's bottom edge. */
+.edit-guides i[data-zone="caption"] {
+  height: 0;
+  border-top: var(--stroke-hair) dashed var(--guide);
+}
 /* Notes on the picture: pins, pencil strokes, and the open note's popover */
 .edit-notes {
   position: absolute;

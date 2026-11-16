@@ -535,3 +535,137 @@ test(
     ).toBeLessThanOrEqual(50);
   },
 );
+
+test(
+  "a picture drag reaches the picture within three frames on 500 clips",
+  { tag: "@performance" },
+  async ({ page, request }, info) => {
+    test.setTimeout(120_000);
+    const project = await timelineWorkload(request, 500);
+    const runs = [];
+    for (let run = 0; run < 3; run++) {
+      await page.goto("about:blank");
+      await page.goto(`/#project/${project.id}`);
+      await expect(
+        page.locator(".edit-stage[data-preview-ready]"),
+      ).toBeVisible();
+      await expect(page.locator("[data-clip]")).toHaveCount(500);
+      await page.waitForTimeout(4500);
+      const boxes = await page
+        .frameLocator("iframe[data-live]")
+        .locator("#title-0")
+        .evaluateHandle(() => {
+          const durations: number[] = [];
+          new PerformanceObserver((list) => {
+            for (const entry of list.getEntries())
+              if (entry.name === "cutroom:picture-boxes")
+                durations.push(entry.duration);
+          }).observe({ type: "measure" });
+          return durations;
+        });
+      // Each pointer move waits for the outline to land at the dragged clip's new place and for
+      // the frame after it: the move reaching the preview, its draft, the box read and the paint.
+      const delays = await page
+        .locator(".edit-select")
+        .evaluateHandle((surface) => {
+          const samples: number[] = [];
+          const outline = surface.querySelector<HTMLElement>(
+            ".edit-select-outline",
+          )!;
+          let pending: number | null = null;
+          surface.addEventListener(
+            "pointermove",
+            (event) => {
+              if ((event as PointerEvent).buttons) pending ??= event.timeStamp;
+            },
+            true,
+          );
+          new MutationObserver(() => {
+            const start = pending;
+            if (start === null) return;
+            pending = null;
+            requestAnimationFrame(() =>
+              setTimeout(() => samples.push(performance.now() - start), 0),
+            );
+          }).observe(outline, { attributes: true, subtree: true });
+          return samples;
+        });
+      const picture = await page.locator(".edit-picture").boundingBox();
+      if (!picture) throw new Error("Picture missing");
+      const scale = picture.width / 1920;
+      const at = (x: number) =>
+        [picture.x + x * scale, picture.y + 600 * scale] as const;
+      // The full-frame talking head, the heaviest picture to move. Each step is wider than a
+      // snap's hold, so every move lands somewhere new.
+      await page.mouse.click(...at(900));
+      await expect(positionField(page)).toHaveValue("0 px");
+      await page.mouse.move(...at(900));
+      await page.mouse.down();
+      for (let step = 1; step <= 30; step++) {
+        await page.mouse.move(...at(900 - step * 35));
+        await waitFrames(page, 1);
+      }
+      await waitFrames(page, 2);
+      await page.mouse.up();
+      await expect(positionField(page)).not.toHaveValue("0 px");
+      // The next run starts from the same picture.
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      await expect(positionField(page)).toHaveValue("0 px");
+      const samples = await delays.jsonValue();
+      runs.push({
+        run,
+        samples,
+        median: median(samples),
+        max: Math.max(...samples),
+        boxDurations: await boxes.jsonValue(),
+      });
+      await delays.dispose();
+      await boxes.dispose();
+    }
+    const medianMax = median(runs.map((run) => run.max));
+    const medianMedian = median(runs.map((run) => run.median));
+    const evidence = JSON.stringify(
+      {
+        browser: page.context().browser()?.version(),
+        budget: { median: 67, max: 100 },
+        medianMedian,
+        medianMax,
+        runs,
+      },
+      null,
+      2,
+    );
+    await info.attach("picture-drag.json", {
+      body: evidence,
+      contentType: "application/json",
+    });
+    if (process.env.CUTROOM_PICTURE_DRAG_OUT)
+      await writeFile(process.env.CUTROOM_PICTURE_DRAG_OUT, evidence);
+    console.log(
+      JSON.stringify({
+        pictureDrag: {
+          medianMedian,
+          medians: runs.map((run) => run.median),
+          maxima: runs.map((run) => run.max),
+          medianMax,
+          boxes: runs.map((run) => run.boxDurations),
+        },
+      }),
+    );
+    // Moves the browser coalesces into one outline update count once, from the earliest.
+    for (const run of runs)
+      expect(run.samples.length).toBeGreaterThanOrEqual(15);
+    // Locally (RTX 5060, Chromium 155) a move lands in 27 ms and the drag's first, slowest move
+    // in 52 to 67 ms, the same before and after snapping to other clips. CI's SwiftShader
+    // measured 42 to 45 ms and 70 to 82 ms. Moves get four 60 Hz frames, and the first the
+    // ~100 ms instant-response ceiling.
+    expect(
+      medianMedian,
+      "median of three median pointer-move to outline-paint delays",
+    ).toBeLessThanOrEqual(67);
+    expect(
+      medianMax,
+      "median of three maximum pointer-move to outline-paint delays",
+    ).toBeLessThanOrEqual(100);
+  },
+);

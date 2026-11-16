@@ -935,12 +935,18 @@ function installPreviewBridge(
   };
   type Box = { x: number; y: number; width: number; height: number };
   /** A clip's box in composition pixels: the iframe's viewport is the composition's frame. */
-  const boxOf = (element: Element): Box | null => {
+  const boxOf = (element: Element, opaque = false): Box | null => {
     const picture =
       element instanceof HTMLVideoElement
         ? (holds.get(element)?.canvas ?? element)
         : element;
-    if (!picture.checkVisibility({ checkVisibilityCSS: true })) return null;
+    if (
+      !picture.checkVisibility({
+        checkVisibilityCSS: true,
+        checkOpacity: opaque,
+      })
+    )
+      return null;
     let { left, top, right, bottom } = picture.getBoundingClientRect();
     if (right <= left || bottom <= top) {
       // A clip that only positions its children has no box of its own.
@@ -1374,11 +1380,28 @@ function installPreviewBridge(
       playing: Boolean(win.__player?.isPlaying()),
     };
   };
+  /** Every clip drawn on the picture, with its box: what a dragged clip can snap to. */
+  const shownClips = () =>
+    [...document.querySelectorAll("[data-hf-cutroom-clip-id]")].flatMap(
+      (element) => {
+        const box = boxOf(element, true);
+        return box
+          ? [{ clipId: element.getAttribute("data-hf-cutroom-clip-id")!, box }]
+          : [];
+      },
+    );
   const reply = (
     id?: string,
     error?: string,
-    hits?: ReturnType<typeof clipsAt>,
-    mixApplied?: boolean,
+    {
+      hits,
+      boxes,
+      mixApplied,
+    }: {
+      hits?: ReturnType<typeof clipsAt>;
+      boxes?: ReturnType<typeof shownClips>;
+      mixApplied?: boolean;
+    } = {},
   ) => {
     const diagnostics = win.__cutroomReadDiagnostics?.();
     parent.postMessage(
@@ -1389,6 +1412,7 @@ function installPreviewBridge(
         ...(timingRevision ? { timingRevision } : {}),
         error,
         hits,
+        boxes,
         mixApplied,
         ...(diagnostics?.length ? { diagnostics } : {}),
       },
@@ -2348,7 +2372,7 @@ function installPreviewBridge(
             ) ||
             !changes
           ) {
-            reply(id, undefined, undefined, false);
+            reply(id, undefined, { mixApplied: false });
             return;
           }
           for (const { element, volume } of changes)
@@ -2413,7 +2437,7 @@ function installPreviewBridge(
               await paint();
             }
           }
-          reply(id, undefined, undefined, true);
+          reply(id, undefined, { mixApplied: true });
           return;
         }
         case "observe-position":
@@ -2435,6 +2459,18 @@ function installPreviewBridge(
           observeBox();
           scheduleObservation();
           break;
+        case "boxes":
+          {
+            const start = performance.now();
+            const boxes = shownClips();
+            performance.measure("cutroom:picture-boxes", {
+              start,
+              end: performance.now(),
+            });
+            performance.clearMeasures("cutroom:picture-boxes");
+            reply(id, undefined, { boxes });
+          }
+          break;
         case "hit":
           if (
             !("x" in data) ||
@@ -2453,7 +2489,7 @@ function installPreviewBridge(
               end: performance.now(),
             });
             performance.clearMeasures("cutroom:picture-hit");
-            reply(id, undefined, hits);
+            reply(id, undefined, { hits });
           }
           return;
         case "position-fold":

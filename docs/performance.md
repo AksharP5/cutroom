@@ -363,6 +363,21 @@ Each cost is the median of three per-run maxima. Reads are per fresh load; playb
 | 10 ms Position style read          | 10.3, 10.4, 10.8 ms |        10.4 ms |  < 5 ms | Fail   |
 | 60 ms picture hit                  | 86.5, 88.8, 87.1 ms |        87.1 ms | ≤ 50 ms | Fail   |
 
+### Dragging on the picture
+
+A drag sends one `boxes` request when it starts, so a dragged clip can snap to the others drawn on the picture. It answers with every visible clip's box and costs the preview 0.6 to 1.1 ms on the 500-clip workload; the drag snaps to the frame alone until it arrives and never waits for it. Each pointer move then compares the box's three edges with a few dozen lines, with no further bridge requests. The safe-zone and grid layer is static and never redrawn during a drag.
+
+`bun run test:perf --grep 'picture drag'` moves the full-frame talking head across the 500-clip workload in 30 steps, one per animation frame, each wider than a snap's hold, and times each move from its `pointermove` to a task after the frame in which the outline lands at the new place. That covers the move reaching the preview, its draft, the box read and the outline. The median of each load's moves must be at most 67 ms (four 60 Hz frames), and the slowest, which is always the drag's first move, at most 100 ms, each judged as the median of three loads. CI's SwiftShader runners measured medians of 42 to 45 ms and slowest moves of 70 to 82 ms. Moves the browser coalesces into one outline update count once, from the earliest. `CUTROOM_PICTURE_DRAG_OUT` saves every sample.
+
+On November 16, 2026 production builds of main (`8a21e4a`) and this change ran alternately, two sessions each of three fresh loads, on installed Chromium 155 headless with hardware ANGLE on the RTX 5060, at 1720x1050, muted:
+
+| Build             | Move median, per load | Slowest move, per load | `boxes` request |
+| ----------------- | --------------------: | ---------------------: | --------------: |
+| main              |       26.7 to 27.1 ms |        55.5 to 61.5 ms |            none |
+| snapping to clips |       27.0 to 27.5 ms |        52.0 to 67.3 ms |   0.6 to 1.1 ms |
+
+The slowest move is the drag's first on both builds, and its spread is the same run-to-run noise. Picture selection paint in the same sessions: 33.2 and 35.2 ms on main, 30.7, 33.2 and 38.7 ms with this change, against its 50 ms gate.
+
 ## Paused timing edits
 
 A saved timing-only edit can update an isolated, script-free preview in place while stopped. The compiler policy checks root and mounted source files before runtime injection, including template contents and hoisted fallback markup. Only the exact pinned GSAP library is exempt from the authored-script restriction. Authored timelines, handlers and other scripts always reload. Before a patch, the bridge compares the current live DOM with its last confirmed structure. It applies canonical timing to linked partners together, then confirms the decoded hold canvas through the existing seek/paint path.

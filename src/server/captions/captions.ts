@@ -3,6 +3,7 @@ import { HttpError } from "../../shared/errors";
 import { CaptionsSchema } from "../../shared/captions";
 import type { CaptionStyle, Captions } from "../../shared/captions";
 import { canonicalSeconds } from "../../shared/timeline/apply";
+import { captionInset } from "../../shared/safeZones";
 import { cueOf } from "./subtitles";
 
 /** Marks a captions composition's root; the value is the file format's version. */
@@ -141,21 +142,21 @@ const STYLE_RULES: Record<CaptionStyle, { weight: number; word: string }> = {
 };
 
 /**
- * The captions stylesheet. Lines sit at the bottom of the title-safe box (10% in from every
- * edge), higher on a vertical frame to clear app controls. The runtime's CSS adapter seeks each
+ * The captions stylesheet. Lines sit where `captionInset` puts them, the zone the viewer's
+ * safe-zone overlay draws. The runtime's CSS adapter seeks each
  * word's animation in its line's own time, so preview and export draw the same frame.
  */
 function stylesheet(style: CaptionStyle, frame: CaptionsFrame) {
   const scope = `[data-composition-id="${frame.id}"]`;
   const size = Math.round(Math.min(frame.width, frame.height) * 0.056);
-  const bottom = frame.width >= frame.height ? 10 : 28;
+  const inset = captionInset(frame);
   const { weight, word } = STYLE_RULES[style];
   return [
     `@keyframes cutroom-caption-ahead{from,to{color:rgba(255,255,255,.5)}}`,
     `@keyframes cutroom-caption-now{from,to{color:${ACCENT}}}`,
     `@keyframes cutroom-caption-mark{from,to{background-color:${ACCENT};color:#111;text-shadow:none}}`,
     `${scope}{position:absolute;inset:0;overflow:visible;pointer-events:none}`,
-    `${scope} .caption-stage{position:absolute;left:10%;right:10%;top:0;bottom:${bottom}%}`,
+    `${scope} .caption-stage{position:absolute;left:${inset.side}%;right:${inset.side}%;top:0;bottom:${inset.bottom}%}`,
     `${scope} .caption-group{position:absolute;left:0;right:0;bottom:0;max-width:100%;margin:0;text-align:center;font-size:${size}px;line-height:1.25;font-weight:${weight};color:#fff;overflow-wrap:anywhere}`,
     `${scope} .caption-word{display:inline-block;padding:0 .12em;border-radius:.16em;text-shadow:0 .05em .2em rgba(0,0,0,.8),0 0 .08em rgba(0,0,0,.9);${word}}`,
   ].join("\n");

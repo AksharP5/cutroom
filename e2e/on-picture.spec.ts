@@ -754,6 +754,8 @@ for (const release of ["before", "after"] as const)
       expect((await drawn("title")).left).toBe(61);
       await page.mouse.move(...at(100, 125));
       await page.mouse.down();
+      // Lower's left edge is four pixels away; this drag is about the handoff, not snapping.
+      await page.keyboard.down("Control");
       await page.mouse.move(...at(104, 125), { steps: 2 });
       await expect.poll(async () => (await drawn("title")).left).toBe(64);
       await expect(handle).toBeVisible();
@@ -772,6 +774,7 @@ for (const release of ["before", "after"] as const)
       );
       await expect.poll(async () => (await drawn("title")).left).toBe(60);
       if (release === "after") await page.mouse.up();
+      await page.keyboard.up("Control");
 
       await expect(selected).toHaveText("Title");
       await expect(picture).toBeFocused();
@@ -1230,3 +1233,155 @@ for (const transform of [
     await expect(selected).toHaveText("Shot");
   });
 }
+
+test("safe zones and the grid show over the picture, stay as left, and never reach a saved frame", async ({
+  page,
+  request,
+}) => {
+  const { project } = await open(page, request);
+  const picture = (await page.locator(".edit-picture").boundingBox())!;
+  const safe = page.getByRole("button", { name: "Safe zones", exact: true });
+  const grid = page.getByRole("button", { name: "Grid", exact: true });
+  const zone = (name: string) =>
+    page.locator(`.edit-guides [data-zone="${name}"]`);
+  const thirds = page.locator(".edit-guides [data-grid]");
+  /** A guide's box as a percent of the picture. */
+  const share = async (name: string) => {
+    const box = (await zone(name).boundingBox())!;
+    return [
+      ((box.x - picture.x) / picture.width) * 100,
+      ((box.y - picture.y) / picture.height) * 100,
+      ((box.x + box.width - picture.x) / picture.width) * 100,
+      ((box.y + box.height - picture.y) / picture.height) * 100,
+    ];
+  };
+  const close = (actual: number[], expected: number[]) =>
+    actual.forEach((value, index) =>
+      expect(Math.abs(value - expected[index]!)).toBeLessThan(0.5),
+    );
+
+  await expect(safe).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".edit-guides")).toHaveCount(0);
+  const saved = async (name: string) => {
+    await page.keyboard.press("Control+Alt+g");
+    await expect(
+      page.getByText(`Saved On picture 00-00-00-00${name}.png`),
+    ).toBeVisible({ timeout: 30_000 });
+    return readFile(
+      join(project.path, `.cutroom/renders/On picture 00-00-00-00${name}.png`),
+    );
+  };
+  const plain = await saved("");
+
+  await safe.click();
+  await expect(safe).toHaveAttribute("aria-pressed", "true");
+  // The hyperframes-studio skill's boxes: action-safe 5% in, title-safe 10% in.
+  close(await share("action"), [5, 5, 95, 95]);
+  close(await share("title"), [10, 10, 90, 90]);
+  // A wide frame's captions sit on title-safe's bottom edge, so no line of their own.
+  await expect(zone("caption")).toHaveCount(0);
+  await expect(thirds).toHaveCount(0);
+  await page.keyboard.press("Shift+G");
+  await expect(grid).toHaveAttribute("aria-pressed", "true");
+  await expect(thirds).toHaveCount(4);
+  const first = (await thirds.first().boundingBox())!;
+  expect((first.x - picture.x) / picture.width).toBeCloseTo(1 / 3, 2);
+
+  // The composition never carries them, so a saved frame is the frame without them.
+  expect(
+    await page
+      .frameLocator("iframe[data-live]")
+      .locator(".edit-guides, [data-zone], [data-grid]")
+      .count(),
+  ).toBe(0);
+  expect((await saved(" 2")).equals(plain)).toBe(true);
+
+  // Both stay on for the next project opened, until the keys turn them off.
+  await page.reload();
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await expect(zone("title")).toBeVisible();
+  await expect(thirds).toHaveCount(4);
+  await page.keyboard.press("Alt+Shift+S");
+  await page.keyboard.press("Shift+G");
+  await expect(page.locator(".edit-guides")).toHaveCount(0);
+  await expect(safe).toHaveAttribute("aria-pressed", "false");
+});
+
+test("a vertical frame shows where captions sit, from the same numbers the captions use", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(request, {
+    name: "Vertical",
+    width: 1080,
+    height: 1920,
+    duration: 4,
+  });
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage[data-preview-ready]")).toBeVisible();
+  await page.keyboard.press("Alt+Shift+S");
+  const picture = (await page.locator(".edit-picture").boundingBox())!;
+  const line = (await page
+    .locator('.edit-guides [data-zone="caption"]')
+    .boundingBox())!;
+  // 28% up from the bottom, across title-safe's width.
+  expect((line.y - picture.y) / picture.height).toBeCloseTo(0.72, 2);
+  expect((line.x - picture.x) / picture.width).toBeCloseTo(0.1, 2);
+  expect((line.x + line.width - picture.x) / picture.width).toBeCloseTo(0.9, 2);
+});
+
+test("a dragged clip snaps to safe zones while they show and to other clips, and Ctrl lets go", async ({
+  page,
+  request,
+}) => {
+  const { at, scale, selected, drawn } = await open(page, request);
+  const guide = page.locator('.edit-select-guides i[data-axis="x"]');
+  const picture = (await page.locator(".edit-picture").boundingBox())!;
+  const guideAt = async () =>
+    ((await guide.boundingBox())!.x - picture.x) / scale;
+
+  // Title's right edge (260) dragged to three pixels short of action-safe's right edge (608).
+  const dragTitle = async () => {
+    await page.mouse.move(...at(100, 125));
+    await page.mouse.down();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(...at(445, 125), { steps: 8 });
+  };
+  await page.mouse.click(...at(100, 125));
+  await expect(selected).toHaveText("Title");
+  await dragTitle();
+  await expect.poll(async () => (await drawn("title")).left).toBe(405);
+  await expect(guide).toBeHidden();
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+
+  await page.keyboard.press("Alt+Shift+S");
+  await dragTitle();
+  await expect.poll(async () => (await drawn("title")).left).toBe(408);
+  await expect(guide).toBeVisible();
+  expect(Math.abs((await guideAt()) - 608)).toBeLessThanOrEqual(1 / scale);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await page.keyboard.press("Alt+Shift+S");
+
+  // Badge's centre (240) dragged to three pixels short of Words' centre (460).
+  await page.mouse.click(...at(250, 125));
+  await expect(selected).toHaveText("Badge");
+  await page.mouse.move(...at(250, 125));
+  await page.mouse.down();
+  await page.keyboard.down("Shift");
+  await page.mouse.move(...at(467, 125), { steps: 8 });
+  await expect.poll(async () => (await drawn("badge")).left).toBe(420);
+  await expect(guide).toBeVisible();
+  expect(Math.abs((await guideAt()) - 460)).toBeLessThanOrEqual(1 / scale);
+  await page.keyboard.down("Control");
+  await expect(guide).toBeHidden();
+  await expect.poll(async () => (await drawn("badge")).left).toBe(417);
+  await page.keyboard.up("Control");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  // The release saves where the snap put it.
+  await expect(positionField(page)).toHaveValue("220 px");
+});

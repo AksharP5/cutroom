@@ -59,6 +59,13 @@ export const PictureHitSchema = z.object({
 });
 export type PictureHit = z.infer<typeof PictureHitSchema>;
 
+/** A clip drawn on the shown frame, and its box. */
+export const ShownClipSchema = z.object({
+  clipId: z.string(),
+  box: PictureBoxSchema,
+});
+export type ShownClip = z.infer<typeof ShownClipSchema>;
+
 export const CompositionDiagnosticSchema = z.object({
   file: z.string(),
   message: z.string(),
@@ -121,6 +128,7 @@ export const PreviewReplySchema = z.object({
   state: PreviewStateSchema,
   error: z.string().optional(),
   hits: z.array(PictureHitSchema).optional(),
+  boxes: z.array(ShownClipSchema).optional(),
   timingRevision: z.string().optional(),
   mixApplied: z.boolean().optional(),
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),

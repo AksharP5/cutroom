@@ -29,6 +29,7 @@ import type {
   PictureBox,
   PictureHit,
   PlaybackClock,
+  ShownClip,
   PreviewState,
   TrackGainPreview,
 } from "../../shared/preview";
@@ -111,10 +112,15 @@ export const pictureBox = {
   },
 };
 
-let hitTarget: ((x: number, y: number) => Promise<PictureHit[]>) | null = null;
+let pictureTarget: {
+  hit(x: number, y: number): Promise<PictureHit[]>;
+  boxes(): Promise<ShownClip[]>;
+} | null = null;
 /** The clips under a point of the shown picture, topmost first, in composition pixels. */
 export const hitPicture = (x: number, y: number) =>
-  hitTarget?.(x, y) ?? Promise.resolve([]);
+  pictureTarget?.hit(x, y) ?? Promise.resolve([]);
+/** Every clip drawn on the shown picture, with its box in composition pixels. */
+export const shownClips = () => pictureTarget?.boxes() ?? Promise.resolve([]);
 
 /** A move under way on the picture, which the inspector's Position fields show until it ends. */
 export const usePictureMove = create<{
@@ -474,8 +480,11 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       text: observedText,
       transform: observedTransform,
     });
-  const hit = async (x: number, y: number) =>
-    (await request("hit", { x, y })).hits ?? [];
+  const picture = {
+    hit: async (x: number, y: number) =>
+      (await request("hit", { x, y })).hits ?? [],
+    boxes: async () => (await request("boxes")).boxes ?? [],
+  };
   const edit = seekQueue<EditPicture | null>(
     async (picture) => {
       const { frame, fps } = useTransport.getState();
@@ -509,7 +518,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       useTextWarning.setState({ warning: null });
       pictureBox.publish(null);
     }
-    if (hitTarget === hit) hitTarget = null;
+    if (pictureTarget === picture) pictureTarget = null;
     if (preparingSource === frame) {
       preparingSource = null;
       usePreparing.setState({ copies: null });
@@ -608,7 +617,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     present() {
       if (closing.signal.aborted) return;
       warningSource = frame;
-      hitTarget = hit;
+      pictureTarget = picture;
       observers.add(observe);
       observe(observedClip);
       send("meter", { enabled: true });
