@@ -99,6 +99,7 @@ import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
 import {
   PROXY_PIECE_PARAM,
+  framesOf,
   proxyExposedHeaders,
   proxyPreview,
   scrubPreview,
@@ -855,6 +856,30 @@ export function createHyperframesApi(
       headers.set("X-Content-Type-Options", "nosniff");
       headers.set("Referrer-Policy", "no-referrer");
     };
+    if (path === "frames") {
+      const response = await framesOf(
+        await store.get(projectId),
+        url.searchParams.get("path") ?? undefined,
+      ).then(
+        (grid) =>
+          Response.json(grid, { headers: { "cache-control": "no-store" } }),
+        (error: unknown) => {
+          if (error instanceof HttpError)
+            return Response.json(
+              { error: error.message },
+              { status: error.status },
+            );
+          if (error instanceof z.ZodError)
+            return Response.json(
+              { error: "Choose a media path." },
+              { status: 400 },
+            );
+          throw error;
+        },
+      );
+      isolate(response.headers);
+      return response;
+    }
     if (media && (path === "scrub" || path.startsWith("scrub/"))) {
       // Returned as built, so Bun answers the video's byte-range requests from the file.
       const response = await scrubPreview(
