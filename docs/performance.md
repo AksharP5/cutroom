@@ -783,4 +783,16 @@ A piece of 1080p60 takes 0.35 s with NVENC once a run has started; starting a ru
 
 While the proxy is made, its pieces take as much disk as the finished file will; the finished file is written beside them and they are removed 30 s later, so for a moment a recording's proxy takes twice its size.
 
-Chromium's HLS player shows the frame nearest a paused seek, where an MP4 shows the frame at or before it. At a frame's own time, where the runtime seeks, they agree: twelve consecutive frames read the same from the pieces and from the finished file. Between frames they can differ by one.
+Once it has jumped to a later piece, Chromium's HLS player shows the frame nearest a paused seek, where an MP4 shows the frame at or before it. The viewer seeks a quarter of a frame into each frame, where both show it; see Frames on a millisecond clock, below.
+
+## Frames on a millisecond clock
+
+On November 16, 2026, a 60 fps timeline over 60 fps recordings on Matroska's millisecond clock, as OBS writes them: half a second from 2 s in, stepped one frame at a time with the arrow key, each picture read by the number burned into it and compared with the frames an MP4 export of the same timeline wrote (`e2e/frame-rounding.spec.ts`, installed Chromium 155, headless).
+
+| Frames matching export, of 30   | Before | After |
+| ------------------------------- | -----: | ----: |
+| HEVC, pipeline off (proxy)      |     15 |    30 |
+| HEVC, pipeline on               |     20 |    30 |
+| H.264 in Matroska, pipeline off |     15 |    30 |
+
+Before, a step left the previous picture up at every other frame (HyperFrames' runtime does not move a paused video for less than 20 ms, and a 60 fps frame is 16.7 ms), and the pipeline and the finished proxy showed the frame before wherever the millisecond clock rounded a frame's start up. A wider matrix through the viewer, against direct exports, matched at every frame after the change: 30 and 29.97 fps sources on 60 and 30 fps timelines, 59.94 fps on 60 (where the two grids drift apart) and on 59.94, 60 fps on 30, a clip starting at 7.123 s, MP4 sources on a millisecond clock through the pipeline, and frames 24,000 to 24,011 of a seven-minute HEVC recording while its proxy was still in pieces, with the pipeline off and on.

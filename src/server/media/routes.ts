@@ -10,6 +10,7 @@ import { createMediaService } from "./service";
 import type { MediaService } from "./service";
 import { peakRange } from "./range";
 import { piecePlaylist } from "./pieces";
+import { frameGrid } from "./frames";
 
 const PathSchema = z.string().min(1).max(4096);
 const KeySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -119,6 +120,13 @@ export function createMediaRoutes(
         { headers: h },
       );
     });
+  // Where export puts the video's frames, which the footage pipeline shows the same way.
+  api.get("/projects/:id/media/frames", async (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(
+      await framesOf(await store.get(c.req.param("id")), c.req.query("path")),
+    );
+  });
   // The footage pipeline's reads: a project video's own bytes, in ranges. Only video containers
   // outside hidden folders, checked on the path asked for and on the file a link resolves to.
   api.get("/projects/:id/media/source", async (c) => {
@@ -160,6 +168,14 @@ export function createMediaRoutes(
     );
   });
   return Object.assign(api, { media, dispose: () => media.dispose() });
+}
+
+/** A project video's frame grid; files that are not media answer 422. */
+export async function framesOf(project: Project, path: string | undefined) {
+  const file = await projectPath(project, PathSchema.parse(path));
+  return frameGrid(file).catch(() => {
+    throw new HttpError(422, "The file has no readable video.");
+  });
 }
 
 /**

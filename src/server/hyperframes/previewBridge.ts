@@ -18,6 +18,8 @@ import { canonicalText } from "../../shared/timeline/schema";
 import { previewTiming } from "./previewTiming";
 import type { PreviewTiming } from "../../shared/preview";
 import type { EditFrame } from "../../shared/preview";
+import { frameSeek } from "../../shared/frames";
+import type { FrameGrid } from "../../shared/frames";
 
 interface PreviewWindow extends DiagnosticWindow {
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
@@ -131,6 +133,7 @@ export function liveUpdatePlan(
 /** Runs inside the opaque preview. The only commands affect its own picture and playback. */
 function installPreviewBridge(
   plan: typeof liveUpdatePlan,
+  seekInFrame: typeof frameSeek,
   /** The pinned runtime's playback-rate bounds, so the bridge clamps rates as it does. */
   [minRate, maxRate]: [number, number],
   texts: [string, string[]][],
@@ -1490,8 +1493,8 @@ function installPreviewBridge(
               requestAnimationFrame(() => resolve()),
             );
           }
-          // Match the runtime's media-element lead, avoiding a decode on the preceding
-          // frame when an exact rational boundary rounds down in the native decoder.
+          // With the runtime's media-element lead, at the place export's frame shows.
+          await loadGrid(element);
           element.currentTime = edge.time + 0.00001;
         }
         return element;
@@ -1651,7 +1654,7 @@ function installPreviewBridge(
     if (parked.has(media)) return;
     if (media instanceof HTMLVideoElement) deferredSeeks.delete(media);
     // While "playing", the time runs on like a real element's, so the runtime sees no drift.
-    let time = mediaTime.get!.call(media);
+    let time = mediaTime.get.call(media);
     let paused = true;
     let playedAt = 0;
     const now = () =>
@@ -1711,7 +1714,7 @@ function installPreviewBridge(
     if (load) {
       media.preload = "auto";
       const time = expectedMediaTime(media);
-      if (time !== null) mediaTime.set!.call(media, time);
+      if (time !== null) mediaTime.set.call(media, time);
     }
   };
   const rootMedia = (kind: "video" | "audio") =>
@@ -2002,22 +2005,31 @@ function installPreviewBridge(
               );
               continue;
             }
+            // Frames are placed by each source's grid, which a new source reads first.
+            await Promise.all(videos.map(loadGrid));
+            if (version !== pictureVersion) return;
+            // A grid that just came moved its videos; their frames are on the way.
+            if (videos.some((video) => video.seeking)) continue;
             // A video the runtime has not moved to this time would be held at its old frame,
-            // for instance one that came back into view while its seek stalled. Move it.
-            // Each video is moved at most once for this picture; if it is still off once that
-            // seek has settled, the runtime's own placement stands, as it did before.
+            // for instance one that came back into view while its seek stalled, or one a step
+            // of a frame moved less than the runtime's 20 ms tolerance at 50 fps and above.
+            // Move it. Each video is moved at most once for this picture; if it is still off
+            // once that seek has settled, the runtime's own placement stands.
             const stale = videos.flatMap((video) => {
               const time = expectedMediaTime(video);
               return time !== null &&
                 !corrected.has(video) &&
-                Math.abs(mediaTime.get!.call(video) - time) > 0.02
+                Math.abs(
+                  nativeTime.get!.call(video) -
+                    framePosition(video, time + 1e-5),
+                ) > 1e-4
                 ? [{ video, time }]
                 : [];
             });
             if (stale.length) {
               for (const { video, time } of stale) {
                 corrected.add(video);
-                mediaTime.set!.call(video, time + 1e-5);
+                mediaTime.set.call(video, time + 1e-5);
               }
               const root = document.documentElement;
               root.setAttribute(
@@ -2044,7 +2056,7 @@ function installPreviewBridge(
                   new VideoFrame(video).close();
                 } catch {
                   corrected.add(video);
-                  mediaTime.set!.call(video, mediaTime.get!.call(video));
+                  mediaTime.set.call(video, mediaTime.get.call(video));
                 }
               }
               await new Promise<void>((resolve) =>
@@ -2189,12 +2201,91 @@ function installPreviewBridge(
       await new Promise((resolve) => setTimeout(resolve, 10));
     return proxy.readyState >= 2 ? proxy : null;
   };
-  // While proxies stand in, the sources seek only once the playhead rests. An abandoned
-  // seek still decodes up to a whole GOP, which starves the proxies' decoder.
-  const mediaTime = Object.getOwnPropertyDescriptor(
+  /** Each source's frame grid, by project path, once the server has read it. */
+  const grids = new Map<string, Promise<FrameGrid>>();
+  const known = new Map<string, FrameGrid>();
+  /** Reads a video's frame grid once; null when it has none or the server cannot read it. */
+  const loadGrid = (video: HTMLVideoElement) => {
+    const path = scrubPath(video);
+    if (!path) return Promise.resolve(null);
+    let grid = grids.get(path);
+    if (!grid) {
+      grid = fetch(`${capability}frames?path=${encodeURIComponent(path)}`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body: unknown) =>
+          body &&
+          typeof body === "object" &&
+          "start" in body &&
+          typeof body.start === "number" &&
+          Number.isFinite(body.start) &&
+          "rate" in body &&
+          typeof body.rate === "number" &&
+          Number.isFinite(body.rate) &&
+          body.rate > 0
+            ? { start: body.start, rate: body.rate }
+            : null,
+        )
+        .catch(() => null)
+        .then((found) => {
+          known.set(path, found);
+          // A paused video the runtime placed before the grid came moves to export's frame.
+          if (found)
+            for (const video of document.querySelectorAll("video"))
+              if (
+                scrubPath(video) === path &&
+                video.paused &&
+                !asked.has(video) &&
+                !parked.has(video) &&
+                !deferredSeeks.has(video)
+              )
+                mediaTime.set.call(video, nativeTime.get!.call(video));
+          return found;
+        });
+      grids.set(path, grid);
+    }
+    return grid;
+  };
+  /**
+   * Where a paused video is put to show the frame export writes at `time`, which the runtime
+   * asks for with its 10 microsecond lead. Without a grid, the time itself.
+   */
+  const framePosition = (media: HTMLMediaElement, time: number) => {
+    const path = media instanceof HTMLVideoElement ? scrubPath(media) : null;
+    const grid = path ? known.get(path) : null;
+    return grid ? seekInFrame(grid, time) : time;
+  };
+  const nativeTime = Object.getOwnPropertyDescriptor(
     HTMLMediaElement.prototype,
     "currentTime",
   )!;
+  /** The time a paused video was asked for, while it rests where that time's frame shows. */
+  const asked = new WeakMap<HTMLMediaElement, { time: number; at: number }>();
+  /**
+   * Every video's `currentTime`: a paused seek goes to where export's frame shows, and reads
+   * back as the time asked for until the video moves, so the runtime sees its own time.
+   */
+  const mediaTime = {
+    get(this: HTMLMediaElement): number {
+      const at: number = nativeTime.get!.call(this);
+      const entry = asked.get(this);
+      // Media clocks keep microseconds.
+      return entry && Math.abs(at - entry.at) < 1e-6 ? entry.time : at;
+    },
+    set(this: HTMLMediaElement, time: number) {
+      if (this instanceof HTMLVideoElement) void loadGrid(this);
+      const at = this.paused ? framePosition(this, time) : time;
+      if (at === time) asked.delete(this);
+      else asked.set(this, { time, at });
+      nativeTime.set!.call(this, at);
+    },
+  };
+  Object.defineProperty(HTMLVideoElement.prototype, "currentTime", {
+    configurable: true,
+    enumerable: true,
+    ...mediaTime,
+  });
+  // While proxies stand in, the sources seek only once the playhead rests. An abandoned
+  // seek still decodes up to a whole GOP, which starves the proxies' decoder.
   const deferredSeeks = new Map<HTMLVideoElement, number>();
   let deferring = false;
   const unsuppress = (video: HTMLVideoElement) => {
@@ -2206,7 +2297,7 @@ function installPreviewBridge(
     if (Object.hasOwn(video, "currentTime")) return;
     Object.defineProperty(video, "currentTime", {
       configurable: true,
-      get: () => deferredSeeks.get(video) ?? mediaTime.get!.call(video),
+      get: () => deferredSeeks.get(video) ?? mediaTime.get.call(video),
       set: (time: number) => {
         const path = deferring ? scrubPath(video) : null;
         const proxy = path ? scrubSources.get(path)?.proxy : undefined;
@@ -2217,7 +2308,7 @@ function installPreviewBridge(
           return;
         }
         if (deferredSeeks.delete(video)) unsuppress(video);
-        mediaTime.set!.call(video, time);
+        mediaTime.set.call(video, time);
       },
     });
   };
@@ -2225,7 +2316,7 @@ function installPreviewBridge(
     for (const [video, time] of deferredSeeks) {
       deferredSeeks.delete(video);
       unsuppress(video);
-      mediaTime.set!.call(video, time);
+      mediaTime.set.call(video, time);
     }
   };
   /**
@@ -2253,9 +2344,10 @@ function installPreviewBridge(
     try {
       for (const [index, video] of videos.entries()) {
         const proxy = proxies[index]!;
+        // Its frames are the source's, so it shows the source's frame from the same place.
         // Media clocks keep microseconds, far finer than any frame.
-        if (Math.abs(proxy.currentTime - video.currentTime) > 1e-4)
-          proxy.currentTime = video.currentTime;
+        const at = framePosition(video, video.currentTime);
+        if (Math.abs(proxy.currentTime - at) > 1e-4) proxy.currentTime = at;
         const seeked = performance.now() + 1000;
         while (proxy.seeking) {
           if (version !== pictureVersion) return true;
@@ -3578,7 +3670,7 @@ export function previewDocument(
       })),
     },
   ]).replaceAll("<", "\\u003c");
-  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
+  const bridge = `${mixSignature ? `<meta name="cutroom-mix-signature" content="${mixSignature}">` : ""}${compositionDiagnosticsScript(composition, sources)}<script>(${installPreviewBridge.toString()})(${liveUpdatePlan.toString()}, ${frameSeek.toString()}, ${JSON.stringify([MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE])}, ...${args});</script>`;
   // All normalization edits are in the body or attributes after the head's opening tag.
   const insertion = location?.startTag ? offset : normalized.length;
   return {

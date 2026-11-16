@@ -12,6 +12,8 @@ import type { Appearance, Shown } from "./layers";
 import { sourceCache } from "./sources";
 import { usePipeline } from "./setting";
 import { chromeColourGuess } from "../../shared/videoColour";
+import { FrameGridSchema, frameSeek } from "../../shared/frames";
+import type { FrameGrid } from "../../shared/frames";
 
 type Plan = Exclude<PipelinePlan, { reason: string }>;
 
@@ -27,7 +29,13 @@ interface Source {
   proxy: SourceDecoder | null;
   askProxy: () => Promise<void> | null;
   intrinsic: { width: number; height: number };
+  /** Where export puts the file's frames, or null to show them at their own times. */
+  grid: FrameGrid;
 }
+
+/** The frame a source shows at a media time: the one export writes there. */
+const indexAt = (found: Source, time: number) =>
+  found.playing.indexAt(found.grid ? frameSeek(found.grid, time) : time);
 
 /**
  * The lane drawn from last when it has the frame or is on its way, else the other lane. A jump
@@ -141,6 +149,15 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
   };
   const sources = sourceCache(async (path): Promise<Source> => {
+    // A file the server cannot read a grid for shows its frames at their own times.
+    const grid = fetch(
+      `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/frames?path=${encodeURIComponent(path)}`,
+      { signal: closing.signal },
+    )
+      .then(async (response) =>
+        response.ok ? FrameGridSchema.parse(await response.json()) : null,
+      )
+      .catch(() => null);
     const lanes = (url: string) =>
       Promise.all([
         openSource(url, closing.signal),
@@ -172,6 +189,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       playing: decoder,
       proxy: null,
       intrinsic,
+      grid: await grid,
       // A proxy still being made answers 202. Moving seeks use the source until it exists, and
       // a draw that wants it asks again, at most every two seconds.
       askProxy: () => {
@@ -248,7 +266,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       shown.map(async (layer) => {
         const found = await source(layer.clip.src!);
         if (!found.proxy) void found.askProxy();
-        const index = found.playing.indexAt(layer.time);
+        const index = indexAt(found, layer.time);
         const lane = laneFor(found, index);
         // Moving seeks draw the proxy, whose frame N is the source's frame N.
         const decoder = (moving ? found.proxy : null) ?? lane;
@@ -388,7 +406,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       sources.add(src);
       void source(src)
         .then((found) => {
-          const index = found.playing.indexAt(layer.time);
+          const index = indexAt(found, layer.time);
           // The playing lane may hold it now, but drops it as the playhead moves on.
           const spare = found.lanes.find((lane) => lane !== found.playing)!;
           if (!spare.has(index) && !spare.reaches(index))
