@@ -1507,6 +1507,138 @@ function installPreviewBridge(
         if (frame instanceof VideoFrame) frame.close();
     }
   };
+  // Footage pipeline: the parent draws every root video beneath this document. Those videos stay
+  // in the DOM the runtime and the live-update checks compare, but never load: their media
+  // properties answer as a ready, seeked element. A constructed sheet, outside the DOM, hides
+  // them and clears the page's background so the parent's picture shows through.
+  const ROOT_COMPOSITION =
+    "[data-composition-id]:not([data-composition-id] [data-composition-id])";
+  const pipelineSheet = new CSSStyleSheet();
+  // A frame whose document's colour scheme differs from the dark editor's gets an opaque white
+  // backdrop. The scheme only picks system colours, so the default text colour stays black.
+  pipelineSheet.replaceSync(
+    ":root { color-scheme: dark !important; } :where(:root) { color: #000; }" +
+      `html, body, ${ROOT_COMPOSITION} { background: transparent !important; }` +
+      `${ROOT_COMPOSITION} > video { opacity: 0 !important; }`,
+  );
+  let pipelineActive = false;
+  /** Parked media, and whether parking released media the element had loaded. */
+  const parked = new Map<HTMLMediaElement, { released: boolean }>();
+  const PARKED = [
+    "currentTime",
+    "readyState",
+    "networkState",
+    "seeking",
+    "paused",
+    "preload",
+    "play",
+    "pause",
+    "load",
+  ];
+  const park = (media: HTMLMediaElement) => {
+    if (parked.has(media)) return;
+    if (media instanceof HTMLVideoElement) deferredSeeks.delete(media);
+    // While "playing", the time runs on like a real element's, so the runtime sees no drift.
+    let time = mediaTime.get!.call(media);
+    let paused = true;
+    let playedAt = 0;
+    const now = () =>
+      paused
+        ? time
+        : time + ((performance.now() - playedAt) / 1000) * media.playbackRate;
+    // An element that already loaded gives its media back; its src stays in the DOM.
+    const released = media.readyState > HTMLMediaElement.HAVE_NOTHING;
+    if (released) {
+      media.pause();
+      media.srcObject = new MediaStream();
+    }
+    parked.set(media, { released });
+    const value = (get: () => unknown) => ({ configurable: true, get });
+    Object.defineProperties(media, {
+      currentTime: {
+        configurable: true,
+        get: now,
+        set: (next: number) => {
+          time = next;
+          playedAt = performance.now();
+        },
+      },
+      readyState: value(() => HTMLMediaElement.HAVE_ENOUGH_DATA),
+      networkState: value(() => HTMLMediaElement.NETWORK_IDLE),
+      seeking: value(() => false),
+      paused: value(() => paused),
+      preload: { configurable: true, get: () => "none", set: () => {} },
+      play: {
+        configurable: true,
+        value: () => {
+          if (paused) {
+            paused = false;
+            playedAt = performance.now();
+          }
+          return Promise.resolve();
+        },
+      },
+      pause: {
+        configurable: true,
+        value: () => {
+          time = now();
+          paused = true;
+        },
+      },
+      load: { configurable: true, value: () => {} },
+    });
+  };
+  const unpark = (media: HTMLMediaElement, load: boolean) => {
+    const entry = parked.get(media);
+    if (!entry) return;
+    parked.delete(media);
+    for (const name of PARKED) Reflect.deleteProperty(media, name);
+    if (entry.released) media.srcObject = null;
+    // Load where the runtime will want it, its media start for a clip still to come, so the
+    // cut never waits for a seek.
+    if (load) {
+      media.preload = "auto";
+      const time = expectedMediaTime(media);
+      if (time !== null) mediaTime.set!.call(media, time);
+    }
+  };
+  const rootMedia = (kind: "video" | "audio") =>
+    document.querySelectorAll<HTMLMediaElement>(
+      `${ROOT_COMPOSITION} > ${kind}`,
+    );
+  /** Sound near the playhead stays loaded; the rest waits until the playhead comes near. */
+  const AUDIO_BEHIND = 2;
+  const AUDIO_AHEAD = 8;
+  const residentAudio = (moving: boolean) => {
+    if (!pipelineActive) return;
+    const time = win.__player?.getTime() ?? 0;
+    for (const audio of rootMedia("audio")) {
+      const clip = win.__hf?.clipWindow?.(audio);
+      const near =
+        !clip ||
+        (clip.end > time - AUDIO_BEHIND && clip.start < time + AUDIO_AHEAD);
+      if (!near) park(audio);
+      // A moving playhead loads nothing new; it rests or plays soon enough.
+      else if (!moving) unpark(audio, true);
+    }
+  };
+  let residency = 0;
+  const parkRootVideos = () => {
+    if (!pipelineActive) return;
+    for (const video of rootMedia("video")) park(video);
+  };
+  const setPipeline = (active: boolean) => {
+    pipelineActive = active;
+    const sheets = document.adoptedStyleSheets.filter(
+      (sheet) => sheet !== pipelineSheet,
+    );
+    document.adoptedStyleSheets = active ? [...sheets, pipelineSheet] : sheets;
+    clearInterval(residency);
+    if (active) {
+      parkRootVideos();
+      residentAudio(false);
+    } else for (const media of [...parked.keys()]) unpark(media, false);
+  };
   const holdStyle = document.createElement("style");
   holdStyle.textContent =
     "video[data-cutroom-held] { visibility: hidden !important; }" +
@@ -1649,7 +1781,7 @@ function installPreviewBridge(
    * Where the runtime places a constant-rate video's media at the playhead, from its own
    * resolved clip window. Null when it cannot be known here, such as for speed ramps.
    */
-  const expectedMediaTime = (video: HTMLVideoElement) => {
+  const expectedMediaTime = (video: HTMLMediaElement) => {
     const clip = win.__hf?.clipWindow?.(video);
     const time = win.__player?.getTime();
     const automation = video.getAttribute("data-automation");
@@ -2832,6 +2964,7 @@ function installPreviewBridge(
             }));
             timingRevision = timing.revision;
             titleStyle = nextTitleStyle;
+            parkRootVideos();
             scheduleObservation();
             scheduleBox();
           } finally {
@@ -2841,6 +2974,16 @@ function installPreviewBridge(
         }
         case "inspect":
           rememberTitleAnimations();
+          break;
+        case "pipeline":
+          if (!("active" in data) || typeof data.active !== "boolean") return;
+          if (data.active === pipelineActive) break;
+          setPipeline(data.active);
+          // The runtime took the parked videos as seeked; seek again so they load and draw.
+          if (!data.active && !win.__player?.isPlaying()) {
+            seekRuntime(win.__player?.getTime() ?? 0);
+            await refreshPicture();
+          }
           break;
         case "cancel-edit":
           // Let the one pending seek finish without painting a stale edge. The queued
@@ -2861,13 +3004,18 @@ function installPreviewBridge(
           for (const video of holds.keys()) releasePlaying(video);
           // Playback changes which clips show, as seeks do.
           recordRuntime();
+          residentAudio(false);
           win.__player?.play();
+          clearInterval(residency);
+          if (pipelineActive)
+            residency = window.setInterval(() => residentAudio(false), 1000);
           observePlaying();
           refreshBoxAnimations();
           if (metering && !animation) levels();
           break;
         case "pause":
           win.__player?.pause();
+          clearInterval(residency);
           cancelAnimationFrame(animation);
           animation = 0;
           if (metering) levels();
@@ -2920,12 +3068,14 @@ function installPreviewBridge(
             } finally {
               deferring = false;
             }
+            residentAudio(true);
             if (await showScrubPicture(version).catch(() => false)) {
               if (version === pictureVersion) clearEditPicture();
               picture = new Promise((resolve) =>
                 setTimeout(resolve, SCRUB_REST_MS),
               ).then(async () => {
                 if (version !== pictureVersion) return;
+                residentAudio(false);
                 applySeeks();
                 const restored = refreshPicture();
                 const exact = pictureVersion;
@@ -2950,6 +3100,7 @@ function installPreviewBridge(
             break;
           }
           seekRuntime(data.time);
+          residentAudio(false);
           if (!win.__player?.isPlaying()) {
             const restored = refreshPicture();
             const version = pictureVersion;

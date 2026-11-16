@@ -15,7 +15,7 @@ type Element = DefaultTreeAdapterTypes.Element;
 type Refusal = { reason: string };
 
 /** Cutroom's starter page loads GSAP, which does nothing until a script uses it. */
-const LIBRARY_SCRIPTS = new Set(["assets/vendor/gsap.min.js"]);
+export const LIBRARY_SCRIPTS = new Set(["assets/vendor/gsap.min.js"]);
 
 /**
  * Declarations that may reach the page, body or composition root. A full-frame opaque video
@@ -36,7 +36,7 @@ const FREE_PROPERTIES = new Set([
   "letter-spacing",
   "z-index",
 ]);
-const declarationsOf = (css: string) => {
+export const declarationsOf = (css: string) => {
   const found: Declaration[] = [];
   transformStyleAttribute({
     code: Buffer.from(css),
@@ -48,8 +48,8 @@ const declarationsOf = (css: string) => {
   });
   return found;
 };
-const key = (declaration: Declaration) => JSON.stringify(declaration);
-const PINNED = new Set(
+export const key = (declaration: Declaration) => JSON.stringify(declaration);
+export const PINNED = new Set(
   declarationsOf(
     "margin:0;padding:0;width:100%;height:100%;overflow:hidden;position:relative;position:static",
   ).map(key),
@@ -58,7 +58,7 @@ const PINNED = new Set(
 const VIDEO_REQUIRED = declarationsOf(
   "position:absolute;inset:0;width:100%;height:100%",
 ).map(key);
-const VIDEO_FITS = new Map(
+export const VIDEO_FITS = new Map(
   (["contain", "fill", "cover"] as const).map((fit) => [
     key(declarationsOf(`object-fit:${fit}`)[0]!),
     fit,
@@ -114,7 +114,7 @@ const IMAGE_ATTRIBUTES = new Set([
   "data-hf-id",
   ...POSITION_ATTRIBUTES,
 ]);
-const ROOT_ATTRIBUTES = new Set([
+export const ROOT_ATTRIBUTES = new Set([
   "id",
   "class",
   "data-composition-id",
@@ -161,9 +161,9 @@ export function activeContent(root: Element): string | undefined {
   return undefined;
 }
 
-const attribute = (element: Element, name: string) =>
+export const attribute = (element: Element, name: string) =>
   element.attrs.find((entry) => entry.name === name)?.value;
-const elements = (node: DefaultTreeAdapterTypes.ParentNode) =>
+export const elements = (node: DefaultTreeAdapterTypes.ParentNode) =>
   node.childNodes.filter(defaultTreeAdapter.isElementNode);
 
 /** Whether a selector's subject could be this element. Unknown parts count as a match. */
@@ -193,7 +193,7 @@ function mayMatch(selector: SelectorComponent[], element: Element) {
  * Stacking from Cutroom's track layer: z-index by `data-track-index`, unless anything else sets
  * one; and the background declarations that may reach the page, body or composition root.
  */
-type Stacking = {
+export type Stacking = {
   trackZ: Map<string, number>;
   authored: boolean;
   backgrounds: { element: Element; declaration: Declaration }[];
@@ -219,10 +219,11 @@ function trackOf(selectors: SelectorComponent[][]) {
   return found.length === 1 ? found[0] : undefined;
 }
 
-function checkStylesheet(
+export function checkStylesheet(
   css: string,
   protectedElements: { element: Element; clip: boolean }[],
   stacking: Stacking,
+  pinned: ReadonlySet<string> = PINNED,
 ): string | undefined {
   let refusal: string | undefined;
   const visit = (rules: Rule[], tracks: boolean) => {
@@ -280,7 +281,7 @@ function checkStylesheet(
             ? declaration.property === "box-sizing" ||
               declaration.property === "z-index"
             : FREE_PROPERTIES.has(declaration.property) ||
-              PINNED.has(key(declaration));
+              pinned.has(key(declaration));
           if (!allowed) {
             refusal = `a stylesheet sets ${declaration.property} on <${element.tagName}>`;
             return;
@@ -307,7 +308,7 @@ function checkStylesheet(
   return refusal;
 }
 
-const seconds = (value: string | undefined) => {
+export const seconds = (value: string | undefined) => {
   if (value === undefined || !/^\s*\d+(\.\d+)?\s*$/.test(value)) return null;
   return Number(value);
 };
@@ -541,7 +542,7 @@ function solidColour(declaration: Declaration) {
  * since the canvas takes it from them, and every background that may reach the page, body or
  * composition root is that same opaque colour.
  */
-function pageColour(
+export function pageColour(
   found: Stacking["backgrounds"],
   { page, body }: { page: Element; body: Element },
 ) {
@@ -560,7 +561,7 @@ function pageColour(
  * no placement. One that may leave the frame uncovered or show through needs a known page colour
  * beneath it. A still's coverage depends on its size, which the server reads before export.
  */
-function placedClip(
+export function placedClip(
   element: Element,
   frame: { width: number; height: number; beneath: string | null },
 ): Pick<SourceSegment, "still" | "placement"> | Refusal {
