@@ -9,6 +9,7 @@ import { HttpError } from "../../shared/errors";
 import { createMediaService } from "./service";
 import type { MediaService } from "./service";
 import { peakRange } from "./range";
+import { piecePlaylist } from "./pieces";
 
 const PathSchema = z.string().min(1).max(4096);
 const KeySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -205,17 +206,48 @@ export async function scrubPreview(
 
 /** Response headers the sandboxed preview's runtime reads from an editing proxy request. */
 export const proxyExposedHeaders = "retry-after, x-hf-proxy-progress";
+/** The query naming one piece of an editing proxy, or `init` for their shared header. */
+export const PROXY_PIECE_PARAM = "cutroom-piece";
+const PieceSchema = z.union([
+  z.literal("init"),
+  z.coerce.number().int().nonnegative().safe(),
+]);
 
 /**
  * The editing proxy for HyperFrames' runtime, which asks `<asset>?hf-proxy=h264` for a video its
- * browser cannot decode: 202 with its progress while the proxy is made, then the MP4, with byte
- * ranges. Null for a video Cutroom makes no proxy of, which HyperFrames' own transcoder keeps.
+ * browser cannot decode. While the proxy is made, once its pieces are planned, the answer is an
+ * HLS playlist of them, which the preview's `<video>` plays as it would the file: each piece is
+ * fetched as the playhead needs it and made first. Then the MP4, with byte ranges. 202 with
+ * progress until either exists. Null for a video Cutroom makes no proxy of, which HyperFrames' own
+ * transcoder keeps. `name` is the asset's file name as the request spelled it, for the playlist.
  */
 export async function proxyPreview(
   media: MediaService,
   project: Project,
   path: string,
+  {
+    name,
+    piece,
+    signal,
+  }: { name: string; piece: string | null; signal: AbortSignal },
 ): Promise<Response | null> {
+  const headers = { "cache-control": "no-store" };
+  if (piece !== null) {
+    const parsed = PieceSchema.safeParse(piece);
+    if (!parsed.success)
+      return new Response("Choose a piece.", { status: 400, headers });
+    const body = await media
+      .proxyPiece(project, path, parsed.data, signal)
+      .catch((error: unknown) => {
+        if (error instanceof HttpError)
+          return new Response(error.message, { status: error.status, headers });
+        throw error;
+      });
+    if (!body || body instanceof Response) return body;
+    return new Response(body, {
+      headers: { ...headers, "content-type": "video/mp4" },
+    });
+  }
   const result = await media
     .request(project, path, "proxy")
     .catch((error: unknown) => {
@@ -225,18 +257,29 @@ export async function proxyPreview(
   if (!result) return null;
   if (result.artifact)
     return new Response(Bun.file(result.artifact), {
-      headers: { "content-type": "video/mp4", "cache-control": "no-store" },
+      headers: { ...headers, "content-type": "video/mp4" },
     });
   if (result.state.status === "failed")
-    return new Response(result.state.error, {
-      status: 502,
-      headers: { "cache-control": "no-store" },
-    });
+    return new Response(result.state.error, { status: 502, headers });
+  if (result.pieces?.cuts.length)
+    return new Response(
+      piecePlaylist(
+        result.pieces,
+        (piece) => `${name}?hf-proxy=h264&${PROXY_PIECE_PARAM}=${piece}`,
+      ),
+      {
+        headers: {
+          ...headers,
+          "content-type": "application/vnd.apple.mpegurl",
+        },
+      },
+    );
   return new Response(null, {
     status: 202,
     headers: {
-      "cache-control": "no-store",
-      "retry-after": "1",
+      ...headers,
+      // Planning the pieces reads the file's packets, well under a second.
+      "retry-after": result.pieces ? "1" : "0.25",
       "x-hf-proxy-progress": result.state.progress.toFixed(3),
     },
   });

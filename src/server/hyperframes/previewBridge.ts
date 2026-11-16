@@ -2036,6 +2036,17 @@ function installPreviewBridge(
             // Acquire every decoded frame before replacing any displayed picture.
             const frames = captureFrames(videos);
             if (!frames) {
+              // An editing proxy playing from its pieces has no frame to give after it loads
+              // until it is sought, even to where it is. Seek each such video once.
+              for (const video of videos) {
+                if (corrected.has(video)) continue;
+                try {
+                  new VideoFrame(video).close();
+                } catch {
+                  corrected.add(video);
+                  mediaTime.set!.call(video, mediaTime.get!.call(video));
+                }
+              }
               await new Promise<void>((resolve) =>
                 requestAnimationFrame(() => resolve()),
               );

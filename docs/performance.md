@@ -761,4 +761,25 @@ Before and after, on a fresh project of one 10 s HEVC 1080p30 clip, headed in Ch
 
 A minute of 4K 10-bit HEVC shows "Preparing footage" 1.7 s after opening and its picture after 17 s. Before one editing proxy could run beside a filmstrip, the same clip waited 28 s for its filmstrip first.
 
-On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matroska, checked locally and deleted), NVENC made the proxy in 93 s (5.4 s a minute, 25 MB a minute) and libx264 in 140 s (19 MB a minute). All 62,509 frame times matched the recording's, and sampled frames differed from it by 0.2/255 on average. In the editor the clip played 86 pictures in 3 s through the pipeline, with 30 ms steps. The whole file is made before the clip shows a picture, so that recording showed "Preparing footage" for 95 s; making the proxy in pieces that play as they finish would show the start sooner.
+On one of the owner's OBS recordings (HEVC Main, 1080p60, 17.4 minutes, in Matroska, checked locally and deleted), NVENC made the proxy in 93 s (5.4 s a minute, 25 MB a minute) and libx264 in 140 s (19 MB a minute). All 62,509 frame times matched the recording's, and sampled frames differed from it by 0.2/255 on average. In the editor the clip played 86 pictures in 3 s through the pipeline, with 30 ms steps.
+
+### Long recordings, piece by piece
+
+The whole file used to be made before the clip played, so that recording showed "Preparing footage" for 95 s. Now the proxy is made in pieces of about four seconds that play as each is made, the piece under the playhead first. Measured on November 16, 2026, headed in Chromium 155 (Wayland), on a fresh project of one clip, the playhead moved with the timecode entry once the viewer reported ready. Two clips: a 15-minute HEVC 1080p60 stand-in (NVENC, a keyframe every 4.2 s, two B-frames, millisecond times in Matroska, a frame number in blocks along its top, read off the viewer), and the 17.4-minute recording above. Scrub proxies and filmstrips were made alongside, as in use.
+
+| 15-minute stand-in, footage pipeline off        |               Before |                                             After |
+| ----------------------------------------------- | -------------------: | ------------------------------------------------: |
+| "Preparing footage" on screen                   |               83.7 s |                                             2.7 s |
+| Viewer ready                                    |                6.1 s |                                             4.0 s |
+| Exact frame at 10:00, after moving there        |               76.9 s |                                             1.2 s |
+| Playing on from 10:00, 3 s                      |           after 77 s | at once: frames 36,000 to 36,181, each sample new |
+| Exact frame after moving to 3:20, 14:00, 7:30.5 | after the whole file |                                   1.3, 1.1, 1.2 s |
+| Proxy finished                                  |                 87 s |                                              89 s |
+
+With the footage pipeline on, the same steps took 3.7 s to ready, 1.3 s to the frame at 10:00 and 1.2 s for each move; HyperFrames draws the clip from its pieces until the proxy is finished, then the pipeline draws it. On the recording, the viewer was ready in 4.0 s against 6.0 s, the picture at 10:00 came 1.3 s after moving there against 91 s, each far move took 1.2 to 1.5 s, and the proxy was finished at 102 s against 101 s. All 62,509 of its frame times matched the recording's again, and frames on both sides of a cut differed from the recording by 0.17 to 0.21/255.
+
+A piece of 1080p60 takes 0.35 s with NVENC once a run has started; starting a run costs about 0.5 s more, most of it NVENC's, plus decoding from the source's keyframe before the cut. Planning reads only the packets: 0.3 s for the recording. One run makes pieces as fast as the whole-file encode did (10.6 s against 10.9 s for two minutes), and joining them into the finished file took 3 s for 15 minutes.
+
+While the proxy is made, its pieces take as much disk as the finished file will; the finished file is written beside them and they are removed 30 s later, so for a moment a recording's proxy takes twice its size.
+
+Chromium's HLS player shows the frame nearest a paused seek, where an MP4 shows the frame at or before it. At a frame's own time, where the runtime seeks, they agree: twelve consecutive frames read the same from the pieces and from the finished file. Between frames they can differ by one.

@@ -7,8 +7,9 @@ import { createJobMachine } from "../../shared/jobs";
 import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
-import { FilmstripSchema, MediaInfoSchema } from "./protocol";
-import type { MediaKind } from "./protocol";
+import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
+import type { MediaKind, MediaTask, Pieces } from "./protocol";
+import { fragmentsStart, pieceSpans } from "./pieces";
 import { startMediaWorker } from "./process";
 import { makesProxy } from "./settings";
 import { probeNvenc } from "../hyperframes/nvenc";
@@ -23,7 +24,31 @@ type MediaResult = {
   key: string;
   artifact?: string;
   metadata?: z.infer<typeof FilmstripSchema>;
+  /** An editing proxy's pieces, once they are planned. */
+  pieces?: Pieces;
   state: Readonly<JobState>;
+  job?: MediaJob;
+};
+/** An editing proxy made piece by piece, the pieces the preview asks for first. */
+type ProxyWork = {
+  pieces: Pieces;
+  /** Where the pieces and the joined file are made, beside the cache entry. */
+  directory: string;
+  encoder?: "nvenc" | "x264";
+  done: Set<number>;
+  /** Requests waiting for a piece, by index; `first` waits for any. */
+  waiters: Map<
+    number | "first",
+    Set<ReturnType<typeof Promise.withResolvers<void>>>
+  >;
+  /** Requests waiting now, which keep this proxy ahead of the others. */
+  waiting: number;
+  /** The piece asked for last, and when, by request order. */
+  asked?: number;
+  askedAt: number;
+  /** Where the encoder goes on when nothing is asked: after its last run. */
+  cursor: number;
+  run?: { next: number; end: number; stop(): void };
 };
 type MediaJob = {
   kind: MediaKind;
@@ -32,6 +57,7 @@ type MediaJob = {
   run: () => Promise<void>;
   cancel?: () => void;
   retryAt?: number;
+  work?: ProxyWork;
 };
 const artifacts = {
   probe: "probe.json",
@@ -40,12 +66,14 @@ const artifacts = {
   frame: "frame.jpg",
   scrub: "scrub.mp4",
   proxy: "proxy.mp4",
+  pieces: "pieces.json",
 } satisfies Record<MediaKind, string>;
 /** A clip with no editing proxy shows no picture at all, so its proxy comes before strips. */
 const priority = {
   frame: 0,
   probe: 1,
   peaks: 1,
+  pieces: 1,
   proxy: 2,
   filmstrip: 3,
   scrub: 4,
@@ -57,7 +85,8 @@ const recipe = {
   filmstrip: "media-v6",
   frame: "media-v6",
   scrub: "media-v7",
-  proxy: "media-v6",
+  proxy: "media-v8",
+  pieces: "media-v8",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 const background = (kind: MediaKind) =>
@@ -114,9 +143,13 @@ export function createMediaService(
     options.removeDirectory ??
     ((directory: string) => rm(directory, { recursive: true, force: true }));
   const pump = () => {
+    // A proxy the preview waits on goes before the others, the latest asked first.
+    const demand = (job: MediaJob) =>
+      job.work?.waiting ? job.work.askedAt : -1;
     queue.sort(
       (a, b) =>
         priority[a.kind] - priority[b.kind] ||
+        demand(b) - demand(a) ||
         (a.kind === "frame"
           ? b.sequence - a.sequence
           : a.sequence - b.sequence),
@@ -133,12 +166,264 @@ export function createMediaService(
       );
       if (index === -1) break;
       const job = queue.splice(index, 1)[0]!;
-      job.machine.transition({ status: "running", progress: 0 });
+      // A proxy that gave way to another keeps its progress.
+      job.machine.transition({
+        status: "running",
+        progress:
+          job.machine.state.status === "running"
+            ? job.machine.state.progress
+            : 0,
+      });
       const task = job.run().finally(() => {
         running.delete(job);
         pump();
       });
       running.set(job, task);
+    }
+  };
+  const workerUrl =
+    options.workerUrl ?? new URL("./worker.ts", import.meta.url);
+  /** Lets the requests waiting for a piece, or for any piece, go on. */
+  const settle = (work: ProxyWork, piece: number | "first", error?: Error) => {
+    for (const waiter of work.waiters.get(piece) ?? [])
+      if (error) waiter.reject(error);
+      else waiter.resolve();
+    work.waiters.delete(piece);
+  };
+  /** Pieces of finished or abandoned proxies, removed once nothing can be reading them. */
+  const retiring = new Map<string, ReturnType<typeof setTimeout>>();
+  const retire = (directory: string, delay = 30_000) => {
+    clearTimeout(retiring.get(directory));
+    retiring.set(
+      directory,
+      setTimeout(() => {
+        retiring.delete(directory);
+        removeDirectory(directory).catch((error: unknown) =>
+          cleanupErrors.push(
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+        );
+      }, delay),
+    );
+  };
+  /**
+   * The preview waits for a piece of this proxy, or for any piece: the piece is made next,
+   * and this proxy takes the encoder from one nobody waits on.
+   */
+  const demand = (job: MediaJob, piece?: number) => {
+    const work = job.work!;
+    work.askedAt = sequence++;
+    if (piece !== undefined) {
+      work.asked = piece;
+      const run = work.run;
+      // A piece the current run makes next, or the one after, is on its way.
+      if (run && piece >= run.next && piece <= run.next + 1 && piece < run.end)
+        return;
+      run?.stop();
+    }
+    if (!running.has(job))
+      for (const other of running.keys())
+        if (other.kind === "proxy" && !other.work?.waiting)
+          other.work?.run?.stop();
+    pump();
+  };
+  /** A piece cut from a finished proxy, for a preview that started on its pieces. */
+  const extract = async (file: string, pieces: Pieces, piece: number) => {
+    const ffmpeg = Bun.which("ffmpeg");
+    if (!ffmpeg)
+      throw new HttpError(
+        503,
+        "FFmpeg and ffprobe are required for timeline media previews.",
+      );
+    const from = piece ? pieces.cuts[piece - 1] : undefined;
+    const to = pieces.cuts[piece];
+    const sound = pieces.audio === "aac";
+    // Copying starts at the keyframe before the cut; the packets before it are the last piece's.
+    const drop = `noise=drop=lt(pts*tb\\,${from ?? 0})`;
+    const child = Bun.spawn(
+      [
+        ...[ffmpeg, "-nostdin", "-v", "error", "-copyts"],
+        ...(from === undefined ? [] : ["-ss", String(from)]),
+        ...["-i", file],
+        ...(to === undefined ? [] : ["-to", String(to)]),
+        ...["-map", "0:v:0", ...(sound ? ["-map", "0:a:0"] : [])],
+        ...["-c", "copy", "-bsf:v", drop, ...(sound ? ["-bsf:a", drop] : [])],
+        ...["-avoid_negative_ts", "disabled", "-fflags", "+bitexact"],
+        ...["-f", "mp4", "-movflags"],
+        "+frag_keyframe+empty_moov+default_base_moof+frag_discont+skip_trailer",
+        "pipe:1",
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const [bytes, errors, code] = await Promise.all([
+      new Response(child.stdout).bytes(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    if (code !== 0)
+      throw new Error(errors.trim() || `FFmpeg exited with code ${code}.`);
+    return bytes;
+  };
+  /** Another proxy is waited on while this one is not: this one gives way after its piece. */
+  const givesWay = (job: MediaJob) =>
+    !job.work?.waiting &&
+    queue.some((other) => other.kind === "proxy" && other.work?.waiting);
+  const runProxy = async (
+    job: MediaJob,
+    work: ProxyWork,
+    context: Pick<MediaTask, "source" | "ffmpeg" | "ffprobe" | "info"> & {
+      identity: string;
+      directory: string;
+      cache: string;
+    },
+  ) => {
+    const { machine } = job;
+    const { pieces } = work;
+    const spans = pieceSpans(pieces);
+    const task = (proxy: MediaTask["proxy"]) =>
+      startMediaWorker(
+        {
+          kind: "proxy",
+          source: context.source,
+          directory: work.directory,
+          ffmpeg: context.ffmpeg,
+          ffprobe: context.ffprobe,
+          info: context.info,
+          encoder: work.encoder,
+          proxy,
+        },
+        workerUrl,
+        options.stopTimeoutMs ?? 1000,
+        (event) => {
+          if (event.type !== "piece") return;
+          work.done.add(event.index);
+          work.cursor = event.index + 1;
+          if (work.run) work.run.next = event.index + 1;
+          settle(work, event.index);
+          settle(work, "first");
+          if (machine.state.status === "running")
+            machine.transition({
+              status: "running",
+              progress:
+                (0.99 *
+                  [...work.done].reduce(
+                    (sum, index) => sum + spans[index]!.length,
+                    0,
+                  )) /
+                pieces.end,
+            });
+          if (givesWay(job)) work.run?.stop();
+        },
+      );
+    let failure: string | undefined;
+    try {
+      if (work.encoder === undefined) {
+        work.encoder = (await (nvenc ??= (options.nvenc ?? probeNvenc)()))
+          ? "nvenc"
+          : "x264";
+        // Pieces a crash or an earlier attempt left are not trusted.
+        clearTimeout(retiring.get(work.directory));
+        retiring.delete(work.directory);
+        await removeDirectory(work.directory);
+        await mkdir(work.directory, { recursive: true });
+      }
+      while (work.done.size < spans.length) {
+        if (machine.state.status !== "running") return;
+        if (givesWay(job)) {
+          queue.push(job);
+          return;
+        }
+        // The piece asked for last, else the next one on from the last run, so the pieces
+        // after the playhead follow it.
+        const missing = (index: number) => !work.done.has(index);
+        const first =
+          work.asked !== undefined && missing(work.asked)
+            ? work.asked
+            : ([...spans.keys()].find(
+                (index) => index >= work.cursor && missing(index),
+              ) ?? [...spans.keys()].find(missing)!);
+        let end = first + 1;
+        while (end < spans.length && missing(end)) end++;
+        const worker = task({ step: "encode", pieces, first, end });
+        let stopped = false;
+        work.run = {
+          next: first,
+          end,
+          stop() {
+            stopped = true;
+            worker.cancel();
+          },
+        };
+        job.cancel = worker.cancel;
+        try {
+          await worker.done;
+        } catch (error) {
+          if (stopped || machine.state.status !== "running") continue;
+          // NVENC can still fail on a frame wider than 4096 pixels or at the driver's session
+          // limit. Pieces from two encoders do not join, so libx264 makes them all again.
+          if (work.encoder !== "nvenc") throw error;
+          work.encoder = "x264";
+          work.done.clear();
+          await removeDirectory(work.directory);
+          await mkdir(work.directory, { recursive: true });
+        } finally {
+          job.cancel = undefined;
+          work.run = undefined;
+        }
+      }
+      if (machine.state.status !== "running") return;
+      const joining = task({ step: "join", pieces });
+      job.cancel = joining.cancel;
+      try {
+        await joining.done;
+      } finally {
+        job.cancel = undefined;
+      }
+      if (machine.state.status !== "running") return;
+      if ((await fingerprint(context.source)) !== context.identity)
+        throw new Error(
+          "The source media changed during preview generation. Request it again.",
+        );
+      await mkdir(context.directory, { recursive: true });
+      await rename(
+        join(work.directory, artifacts.proxy),
+        join(context.directory, artifacts.proxy),
+      );
+      await trimCache(context.cache, context.directory);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    } finally {
+      // A proxy that gave way is still queued, with its pieces.
+      if (!queue.includes(job)) {
+        if (machine.state.status === "cancelling")
+          machine.transition({
+            status: "cancelled",
+            progress: machine.state.progress,
+          });
+        else if (failure)
+          machine.transition({
+            status: "failed",
+            progress: machine.state.progress,
+            error: failure,
+          });
+        else machine.transition({ status: "done", progress: 1 });
+        const ended =
+          machine.state.status === "done"
+            ? undefined
+            : new Error(
+                machine.state.status === "failed"
+                  ? machine.state.error
+                  : "The editing proxy was cancelled.",
+              );
+        for (const piece of [...work.waiters.keys()])
+          settle(work, piece, ended);
+        if (machine.state.status === "failed")
+          job.retryAt = Date.now() + (options.failureTtlMs ?? 30_000);
+        else jobs.delete(context.directory);
+        // A preview that started on the pieces may still ask for one, which the finished file
+        // then answers; the pieces go once nothing can be reading them.
+        retire(work.directory);
+      }
     }
   };
   const request = async (
@@ -161,7 +446,10 @@ export function createMediaService(
       if (kind === "peaks" && !info.channels)
         throw new HttpError(422, "The media has no audio stream.");
       if (
-        (kind === "filmstrip" || kind === "scrub" || kind === "proxy") &&
+        (kind === "filmstrip" ||
+          kind === "scrub" ||
+          kind === "proxy" ||
+          kind === "pieces") &&
         !info.video
       )
         throw new HttpError(422, "The media has no video stream.");
@@ -175,6 +463,12 @@ export function createMediaService(
         if (time >= info.video.duration && info.video.duration > 0)
           throw new HttpError(400, "The frame time is outside the video.");
       }
+    }
+    let pieces: Pieces | undefined;
+    if (kind === "proxy") {
+      const plan = await request(project, path, "pieces");
+      if (!plan.artifact) return plan;
+      pieces = PiecesSchema.parse(await Bun.file(plan.artifact).json());
     }
     const key = createHash("sha256")
       .update(`${recipe[kind]}\0${kind}\0${identity}\0${frame ?? ""}`)
@@ -200,6 +494,7 @@ export function createMediaService(
           kind === "filmstrip"
             ? FilmstripSchema.parse(await Bun.file(cached).json())
             : undefined,
+        pieces,
         state: { status: "done", progress: 1 },
       };
     if (closing)
@@ -211,7 +506,7 @@ export function createMediaService(
     if (existing) {
       if (kind === "frame" && existing.machine.state.status === "queued")
         existing.sequence = Math.max(existing.sequence, requestSequence);
-      return { key, state: existing.machine.state };
+      return { key, pieces, state: existing.machine.state, job: existing };
     }
     const ffmpeg = Bun.which("ffmpeg");
     const ffprobe = Bun.which("ffprobe");
@@ -230,12 +525,6 @@ export function createMediaService(
         let failure: string | undefined;
         let cleanupFailure: string | undefined;
         try {
-          const encoder =
-            kind === "proxy"
-              ? (await (nvenc ??= (options.nvenc ?? probeNvenc)()))
-                ? ("nvenc" as const)
-                : ("x264" as const)
-              : undefined;
           scratch = await mkdtemp(join(cache, ".media-"));
           if (machine.state.status === "cancelling") return;
           const worker = startMediaWorker(
@@ -247,13 +536,18 @@ export function createMediaService(
               ffprobe,
               info,
               time,
-              encoder,
             },
-            options.workerUrl ?? new URL("./worker.ts", import.meta.url),
+            workerUrl,
             options.stopTimeoutMs ?? 1000,
-            (progress) => {
-              if (machine.state.status === "running")
-                machine.transition({ status: "running", progress });
+            (event) => {
+              if (
+                event.type === "progress" &&
+                machine.state.status === "running"
+              )
+                machine.transition({
+                  status: "running",
+                  progress: event.progress,
+                });
             },
           );
           job.cancel = worker.cancel;
@@ -304,10 +598,32 @@ export function createMediaService(
         }
       },
     };
+    if (pieces) {
+      const work: ProxyWork = {
+        pieces,
+        directory: join(cache, `.pieces-${key}`),
+        done: new Set(),
+        waiters: new Map(),
+        waiting: 0,
+        askedAt: 0,
+        cursor: 0,
+      };
+      job.work = work;
+      job.run = () =>
+        runProxy(job, work, {
+          source,
+          identity,
+          info,
+          ffmpeg,
+          ffprobe,
+          directory,
+          cache,
+        });
+    }
     jobs.set(directory, job);
     queue.push(job);
     pump();
-    return { key, state: machine.state };
+    return { key, pieces, state: machine.state, job };
   };
   return {
     request,
@@ -331,8 +647,74 @@ export function createMediaService(
       );
       return result?.state ?? null;
     },
-    proxy(project: Project, key: string) {
-      return projectPath(project, `.cutroom/cache/${key}/${artifacts.proxy}`);
+    /**
+     * One piece of a video's editing proxy, or the header every piece shares, for the preview's
+     * playlist: made next if it is not made yet, and cut from the finished file once that
+     * exists. Null for a video that needs no proxy.
+     */
+    async proxyPiece(
+      project: Project,
+      path: string,
+      piece: number | "init",
+      signal: AbortSignal,
+    ): Promise<Blob | null> {
+      const result = await request(project, path, "proxy").catch(
+        (error: unknown) => {
+          if (error instanceof HttpError && error.status === 422) return null;
+          throw error;
+        },
+      );
+      if (!result) return null;
+      const { pieces, job } = result;
+      if (!pieces)
+        throw new HttpError(409, "The editing proxy is not planned yet.");
+      if (piece !== "init" && piece > pieces.cuts.length)
+        throw new HttpError(404, "The editing proxy has no such piece.");
+      if (result.artifact) {
+        const bytes = await extract(
+          result.artifact,
+          pieces,
+          piece === "init" ? 0 : piece,
+        );
+        const start = fragmentsStart(bytes);
+        return new Blob([
+          piece === "init" ? bytes.subarray(0, start) : bytes.subarray(start),
+        ]);
+      }
+      const work = job?.work;
+      if (!work || result.state.status === "failed")
+        throw new HttpError(
+          422,
+          result.state.status === "failed"
+            ? result.state.error
+            : "The editing proxy is not being made.",
+        );
+      const made = () =>
+        piece === "init" ? work.done.size > 0 : work.done.has(piece);
+      if (!made()) {
+        const waiter = Promise.withResolvers<void>();
+        const key = piece === "init" ? "first" : piece;
+        const waiters = work.waiters.get(key) ?? new Set();
+        work.waiters.set(key, waiters.add(waiter));
+        const abort = () => waiter.reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        work.waiting++;
+        try {
+          demand(job, piece === "init" ? undefined : piece);
+          await waiter.promise;
+        } finally {
+          work.waiting--;
+          waiters.delete(waiter);
+          signal.removeEventListener("abort", abort);
+        }
+      }
+      return Bun.file(
+        join(
+          work.directory,
+          "pieces",
+          `${piece === "init" ? "init" : piece}.mp4`,
+        ),
+      );
     },
     async dispose() {
       closing = true;
@@ -348,12 +730,32 @@ export function createMediaService(
         });
         job.cancel?.();
       }
-      for (const job of queue.splice(0))
+      for (const job of queue.splice(0)) {
         job.machine.transition({
           status: "cancelled",
           progress: job.machine.state.progress,
         });
+        if (!job.work) continue;
+        for (const piece of [...job.work.waiters.keys()])
+          settle(
+            job.work,
+            piece,
+            new Error("The editing proxy was cancelled."),
+          );
+        retire(job.work.directory, 0);
+      }
       await Promise.all([...running.values()]);
+      await Promise.all(
+        [...retiring].map(([directory, timer]) => {
+          clearTimeout(timer);
+          retiring.delete(directory);
+          return removeDirectory(directory).catch((error: unknown) =>
+            cleanupErrors.push(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+        }),
+      );
       if (cleanupErrors.length)
         throw new AggregateError(
           cleanupErrors,

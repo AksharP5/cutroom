@@ -98,6 +98,7 @@ import {
 import { trackGainPreview } from "./trackGainPreview";
 import { parseFps } from "@hyperframes/core";
 import {
+  PROXY_PIECE_PARAM,
   proxyExposedHeaders,
   proxyPreview,
   scrubPreview,
@@ -923,12 +924,17 @@ export function createHyperframesApi(
           !composition &&
           url.searchParams.get("hf-proxy") === "h264" &&
           [...url.searchParams.keys()].every((name) =>
-            ["hf-proxy", "hf-proxy-retry"].includes(name),
+            ["hf-proxy", "hf-proxy-retry", PROXY_PIECE_PARAM].includes(name),
           )
             ? await proxyPreview(
                 media,
                 project,
                 relative(project.path, canonical),
+                {
+                  name: url.pathname.slice(url.pathname.lastIndexOf("/") + 1),
+                  piece: url.searchParams.get(PROXY_PIECE_PARAM),
+                  signal: c.req.raw.signal,
+                },
               )
             : null;
         if (proxy) {

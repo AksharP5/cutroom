@@ -1,6 +1,6 @@
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { z } from "zod";
 import { encodePeaks, peakSampleRate } from "./peaks";
 import {
@@ -8,7 +8,16 @@ import {
   MediaEventSchema,
   MediaInfoSchema,
   MediaTaskSchema,
+  PiecesSchema,
 } from "./protocol";
+import {
+  cutPieces,
+  firstTrack,
+  fragmentStart,
+  pieceAt,
+  pieceSpans,
+  streamBoxes,
+} from "./pieces";
 import { mediaSettings } from "../../shared/media";
 import { proxyFilter, scaleFilter, scrubFilter, tileWidth } from "./settings";
 import { chromeColourGuess } from "../hyperframes/videoColour";
@@ -37,17 +46,26 @@ const transparent = (stream: {
 
 async function run(
   args: string[],
-  consume?: (stream: ReadableStream<Uint8Array>) => Promise<unknown>,
-  onLine?: (line: string) => void,
+  {
+    consume,
+    onLine,
+    feed,
+  }: {
+    consume?: (stream: ReadableStream<Uint8Array>) => Promise<unknown>;
+    onLine?: (line: string) => void;
+    /** Writes the process's input, for a file made of pieces. */
+    feed?: (stdin: Bun.FileSink) => Promise<void>;
+  } = {},
 ) {
   if (cancelled) throw new Error("Media job cancelled.");
   const process = Bun.spawn(args, {
     cwd: task.directory,
-    stdin: "ignore",
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
   child = process;
+  const fed = feed ? feed(process.stdin) : process.stdin.end();
   let tail = "";
   const errors = (async () => {
     const decoder = new TextDecoder();
@@ -63,9 +81,10 @@ async function run(
     if (onLine && remaining) onLine(remaining);
   })();
   try {
-    const result = await (consume
-      ? consume(process.stdout)
-      : new Response(process.stdout).text());
+    const [result] = await Promise.all([
+      consume ? consume(process.stdout) : new Response(process.stdout).text(),
+      fed,
+    ]);
     const code = await process.exited;
     await errors;
     if (cancelled) throw new Error("Media job cancelled.");
@@ -217,11 +236,13 @@ try {
         "s16le",
         "pipe:1",
       ],
-      async (stream) => {
-        await Bun.write(
-          join(task.directory, "peaks.bin"),
-          await encodePeaks(stream, channels),
-        );
+      {
+        consume: async (stream) => {
+          await Bun.write(
+            join(task.directory, "peaks.bin"),
+            await encodePeaks(stream, channels),
+          );
+        },
       },
     );
   } else {
@@ -263,8 +284,8 @@ try {
         "+faststart",
         "scrub.mp4",
       ]);
-    } else if (task.kind === "proxy") {
-      const streams = z
+    } else if (task.kind === "pieces") {
+      const probe = z
         .object({
           streams: z.array(
             z.object({
@@ -273,6 +294,7 @@ try {
               time_base: z.string().regex(/^\d+\/\d+$/),
             }),
           ),
+          format: z.object({ start_time: z.string().optional() }),
         })
         .parse(
           JSON.parse(
@@ -285,31 +307,90 @@ try {
                   "error",
                   ...localMediaInputOptions,
                   "-show_entries",
-                  "stream=codec_type,codec_name,time_base",
+                  "stream=codec_type,codec_name,time_base:format=start_time",
                   "-of",
                   "json",
                   task.source,
                 ]),
               ),
           ),
-        ).streams;
-      const audio = streams.find((stream) => stream.codec_type === "audio");
-      const timeBase = streams.find(
+        );
+      const timeBase = probe.streams.find(
         (stream) => stream.codec_type === "video",
       )!.time_base;
-      const filter = `${await colourTags(video)},${proxyFilter(video)},format=yuv420p`;
-      // Every source frame at its own timestamp, so the preview's frame N is the source's frame N
-      // and export, which reads the source, shows what the preview did. A keyframe every half
-      // second bounds what a seek decodes; no B-frames, so a decoder puts out each frame at once.
-      const gop = String(Math.max(1, Math.round(video.fps / 2)));
-      const encoders = {
-        nvenc: ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq"],
-        x264: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
-      };
-      // About libx264's CRF 20: a picture for editing, while export reads the source.
-      const nvencRate = ["-rc", "vbr", "-cq", "25", "-b:v", "0"];
-      const encode = (encoder: keyof typeof encoders) =>
-        run(
+      const tick = rational(timeBase, "/");
+      // Export, and FFmpeg by default, start the clock at the file's first timestamp.
+      const start = Number(probe.format.start_time ?? 0) || 0;
+      const packets = z
+        .string()
+        .parse(
+          await run([
+            task.ffprobe,
+            "-v",
+            "error",
+            ...localMediaInputOptions,
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts,flags",
+            "-of",
+            "csv=p=0",
+            task.source,
+          ]),
+        );
+      // Every frame's time, from the packets alone, which read in a fraction of the decode. A
+      // packet marked to be discarded, such as one an edit list trims, is not a frame.
+      const times = [
+        ...new Set(
+          packets
+            .split("\n")
+            .map((line) => line.split(","))
+            .filter(
+              ([pts, flags]) =>
+                /^-?\d+$/.test(pts ?? "") && !flags?.includes("D"),
+            )
+            .map(([pts]) => Number(pts) * tick - start),
+        ),
+      ].sort((a, b) => a - b);
+      await Bun.write(
+        join(task.directory, "pieces.json"),
+        JSON.stringify(
+          PiecesSchema.parse({
+            timeBase,
+            start,
+            audio:
+              probe.streams.find((stream) => stream.codec_type === "audio")
+                ?.codec_name ?? null,
+            ...cutPieces(times, 1 / video.fps),
+          }),
+        ),
+      );
+    } else if (task.kind === "proxy") {
+      const step = task.proxy;
+      if (!step) throw new Error("The editing proxy step is missing.");
+      const { pieces } = step;
+      const sound = pieces.audio === "aac";
+      const directory = join(task.directory, "pieces");
+      if (step.step === "encode") {
+        const { first, end } = step;
+        const from = first ? pieces.cuts[first - 1] : undefined;
+        const to = pieces.cuts[end - 1];
+        const encoders = {
+          nvenc: [
+            ...["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq"],
+            ...["-rc", "vbr", "-cq", "25", "-b:v", "0"],
+          ],
+          // About libx264's CRF 20: a picture for editing, while export reads the source.
+          x264: [
+            ...["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
+            ...["-threads", "4"],
+          ],
+        };
+        await mkdir(directory, { recursive: true });
+        // Each fragment goes to the piece its first frame's time falls in. A piece is whole
+        // once the next one begins, or, for the run's last, once FFmpeg finishes.
+        let piece: { index: number; file: Bun.FileSink } | undefined;
+        await run(
           [
             task.ffmpeg,
             "-nostdin",
@@ -321,64 +402,171 @@ try {
             "-filter_threads",
             "2",
             ...localMediaInputOptions,
+            // The source's own timestamps from its start, as export reads them, from whichever
+            // piece this run starts at. Seeking decodes from the keyframe before and keeps
+            // only the frames after the cut.
+            "-copyts",
+            "-start_at_zero",
+            ...(from === undefined ? [] : ["-ss", String(from)]),
+            "-i",
+            task.source,
+            ...(to === undefined ? [] : ["-to", String(to)]),
+            "-map",
+            "0:v:0",
+            ...(sound ? ["-map", "0:a:0"] : []),
+            "-sn",
+            "-dn",
+            "-vf",
+            `${await colourTags(video)},${proxyFilter(video)},format=yuv420p`,
+            // Every source frame at its own timestamp, so the preview's frame N is the source's
+            // frame N and export, which reads the source, shows what the preview did.
+            "-fps_mode",
+            "passthrough",
+            // The source's own clock, so a Matroska file's millisecond times stay as they are.
+            "-enc_time_base:v",
+            pieces.timeBase,
+            ...encoders[task.encoder ?? "x264"],
+            "-profile:v",
+            "high",
+            // A keyframe every half second bounds what a seek decodes; no B-frames, so a decoder
+            // puts out each frame at once. Each piece starts on a keyframe of its own.
+            "-g",
+            String(Math.max(1, Math.round(video.fps / 2))),
+            "-bf",
+            "0",
+            "-forced-idr",
+            "1",
+            ...(end - first > 1
+              ? [
+                  "-force_key_frames",
+                  pieces.cuts
+                    .slice(first, end - 1)
+                    .map(String)
+                    .join(","),
+                ]
+              : []),
+            // AAC pieces carry the source's packets from the cut on, as the joined file does.
+            ...(sound
+              ? [
+                  "-c:a",
+                  "copy",
+                  "-bsf:a",
+                  `noise=drop=lt(pts*tb\\,${from ?? 0})`,
+                ]
+              : ["-an"]),
+            "-avoid_negative_ts",
+            "disabled",
+            "-fflags",
+            "+bitexact",
+            // A fragment at every keyframe, each carrying its own time, so any piece plays after
+            // the shared header and the pieces in order are one file.
+            "-f",
+            "mp4",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof+frag_discont+skip_trailer",
+            "pipe:1",
+          ],
+          {
+            consume: async (stream) => {
+              const header: Uint8Array[] = [];
+              let track: ReturnType<typeof firstTrack> | undefined;
+              for await (const box of streamBoxes(stream)) {
+                const type = String.fromCharCode(...box.subarray(4, 8));
+                if (!track) {
+                  header.push(box);
+                  if (type !== "moov") continue;
+                  track = firstTrack(box.subarray(8));
+                  // Every run writes the same header; it is kept from the first.
+                  const init = Bun.file(join(directory, "init.mp4"));
+                  if (!(await init.exists())) {
+                    await Bun.write(
+                      join(directory, "init.tmp"),
+                      Buffer.concat(header),
+                    );
+                    await rename(join(directory, "init.tmp"), init.name!);
+                  }
+                  continue;
+                }
+                if (type === "moof") {
+                  const index = pieceAt(
+                    pieces,
+                    fragmentStart(box.subarray(8), track.id) / track.timescale,
+                  );
+                  // Pieces outside this run may be made already; they are never written here.
+                  if (index < first || index >= end)
+                    throw new Error(
+                      `The editing proxy run for pieces ${first} to ${end - 1} made a frame of piece ${index}.`,
+                    );
+                  if (piece?.index !== index) {
+                    if (piece) {
+                      await piece.file.end();
+                      emit({ type: "piece", index: piece.index });
+                    }
+                    piece = {
+                      index,
+                      file: Bun.file(join(directory, `${index}.mp4`)).writer(),
+                    };
+                  }
+                }
+                piece?.file.write(box);
+              }
+            },
+          },
+        );
+        if (piece) {
+          await piece.file.end();
+          emit({ type: "piece", index: piece.index });
+        }
+      } else {
+        const files = [
+          "init.mp4",
+          ...pieceSpans(pieces).map((_, index) => `${index}.mp4`),
+        ].map((name) => Bun.file(join(directory, name)));
+        await run(
+          [
+            task.ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-copyts",
+            ...localMediaInputOptions,
+            "-f",
+            "mp4",
+            "-i",
+            "pipe:0",
+            ...localMediaInputOptions,
+            // The sound from the source on the pieces' clock: the source's own, from its start.
+            ...(pieces.start ? ["-itsoffset", String(-pieces.start)] : []),
             "-i",
             task.source,
             "-map",
             "0:v:0",
             "-map",
-            "0:a:0?",
-            "-sn",
-            "-dn",
-            "-vf",
-            filter,
-            "-fps_mode",
-            "passthrough",
-            // The source's own clock, so a Matroska file's millisecond times stay as they are.
-            "-enc_time_base:v",
-            timeBase,
-            ...encoders[encoder],
-            ...(encoder === "nvenc" ? nvencRate : ["-threads", "4"]),
-            "-profile:v",
-            "high",
-            "-g",
-            gop,
-            "-bf",
-            "0",
+            "1:a:0?",
+            "-c:v",
+            "copy",
             // AAC copies exactly; anything else becomes AAC, which MP4 and every browser hold.
             "-c:a",
-            audio?.codec_name === "aac" ? "copy" : "aac",
-            ...(audio?.codec_name === "aac" ? [] : ["-b:a", "256k"]),
+            sound ? "copy" : "aac",
+            ...(sound ? [] : ["-b:a", "256k"]),
             "-movflags",
             "+faststart",
-            "-progress",
-            "pipe:1",
-            "-stats_period",
-            "0.5",
             "-y",
             "proxy.mp4",
           ],
-          async (stream) => {
-            const decoder = new TextDecoder();
-            let reported = 0;
-            for await (const chunk of stream) {
-              const done = /out_time_us=(\d+)/.exec(
-                decoder.decode(chunk, { stream: true }),
-              );
-              const progress =
-                done && video.duration
-                  ? Math.min(0.99, Number(done[1]) / 1e6 / video.duration)
-                  : 0;
-              if (progress - reported < 0.01) continue;
-              reported = progress;
-              emit({ type: "progress", progress });
-            }
+          {
+            // The header, then every piece's fragments in order: one fragmented file.
+            feed: async (stdin) => {
+              for (const file of files)
+                for await (const chunk of file.stream()) {
+                  stdin.write(chunk);
+                  await stdin.flush();
+                }
+              await stdin.end();
+            },
           },
         );
-      // NVENC can still fail on a frame wider than 4096 pixels or at the driver's session limit.
-      await encode(task.encoder ?? "x264").catch((error: unknown) => {
-        if (cancelled || task.encoder !== "nvenc") throw error;
-        return encode("x264");
-      });
+      }
     } else if (task.kind === "frame") {
       await run([
         ...ffmpeg,
@@ -428,14 +616,15 @@ try {
           "1",
           "frames/frame-%06d.png",
         ],
-        undefined,
-        (line) => {
-          if (!line.includes("showinfo")) return;
-          const match = /pts_time:([\d.eE+-]+)/.exec(line);
-          if (!match) return;
-          const time = Number(match[1]);
-          maxGap = Math.max(maxGap, time - lastKey);
-          lastKey = time;
+        {
+          onLine: (line) => {
+            if (!line.includes("showinfo")) return;
+            const match = /pts_time:([\d.eE+-]+)/.exec(line);
+            if (!match) return;
+            const time = Number(match[1]);
+            maxGap = Math.max(maxGap, time - lastKey);
+            lastKey = time;
+          },
         },
       );
       let count = (await readdir(join(task.directory, "frames"))).length;
