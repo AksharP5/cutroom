@@ -112,6 +112,18 @@ export const keymap = {
     keys: ["Down"],
     repeat: true,
   },
+  controlKeyframePrev: {
+    area: "Playhead",
+    label: "Previous keyframe",
+    keys: ["["],
+    repeat: true,
+  },
+  controlKeyframeNext: {
+    area: "Playhead",
+    label: "Next keyframe",
+    keys: ["]"],
+    repeat: true,
+  },
   controlMarkersPrev: {
     area: "Playhead",
     label: "Previous marker",
@@ -406,6 +418,21 @@ export const keymap = {
   // Shift+T is "add audio-only transition" in the owner's Resolve preset, so a title takes Alt too.
   cutroomAddTitle: { area: "Edit", label: "Add title", keys: ["Alt+Shift+T"] },
   markMarkerAdd: { area: "Marks", label: "Add a marker", keys: ["M"] },
+  markKeyframeMakeDynamic: {
+    area: "Edit",
+    label: "Add keyframe",
+    keys: ["Ctrl+["],
+  },
+  markKeyframeMakeStatic: {
+    area: "Edit",
+    label: "Add held keyframe",
+    keys: ["Ctrl+]"],
+  },
+  markKeyframeDelete: {
+    area: "Edit",
+    label: "Delete keyframe",
+    keys: ["Alt+]"],
+  },
   editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
   viewStillsStillGrab: {
     area: "View",
@@ -480,6 +507,8 @@ const named: Record<string, string> = {
   Backslash: "\\",
   Comma: ",",
   Period: ".",
+  BracketLeft: "[",
+  BracketRight: "]",
 };
 
 /** The combo a key press makes, by key position so Shift never changes the key's name. */

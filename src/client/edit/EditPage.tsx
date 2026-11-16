@@ -32,6 +32,8 @@ import {
   useTimingEdit,
 } from "./inspector/Inspector";
 import { matchFrame } from "./keys";
+import { keyAt, keyframeFrames, removeAt } from "./keyframeKeys";
+import { inspectorSubject } from "./inspector/fields";
 import { editorContext, publishSelection } from "./agentContext";
 import { ExportControl } from "./ExportDialog";
 import { SelectMenu } from "../components/SelectMenu";
@@ -316,6 +318,46 @@ export function EditPage({
     showSource(false);
     transport.seek(frame);
   };
+  /** [ and ] step through the selected clips' keyframes, or every clip's when none is selected. */
+  const keyframe = (
+    to: (frames: number[], frame: number) => number | undefined,
+    none: string,
+  ) => {
+    const { view, selection } = useTimeline.getState();
+    if (!view) return;
+    const selected = view.timeline.clips.filter((clip) =>
+      selection.ids.has(clip.id),
+    );
+    const frames = keyframeFrames(
+      selected.length ? selected : view.timeline.clips,
+    );
+    const frame = to(frames, transport.use.getState().frame);
+    if (frame === undefined)
+      return void notice(frames.length ? none : "No keyframes yet.");
+    showSource(false);
+    transport.seek(frame);
+  };
+  /** The selected clip and the frame of it under the playhead, for the keys that key it. */
+  const keyedClip = () => {
+    const { view, selection } = useTimeline.getState();
+    const clip = view && inspectorSubject(view.timeline, selection)?.clip;
+    if (!clip) return void notice("Select a clip to keyframe it.");
+    const frame = transport.use.getState().frame - clip.start;
+    if (frame < 0 || frame >= clip.duration)
+      return void notice("Move the playhead over the clip to keyframe it.");
+    return { clip, frame };
+  };
+  const addKeyframe = (ease: "linear" | "hold") => {
+    const at = keyedClip();
+    if (!at) return;
+    const commands = keyAt(at.clip, at.frame, ease);
+    if (!commands.length) return void notice("Sound has nothing to keyframe.");
+    void editTimeline(
+      projectId,
+      ease === "hold" ? "Add held keyframe" : "Add keyframe",
+      () => commands,
+    );
+  };
   /** Opens the inspector on the selected clip with one of its Timing fields ready to type in. */
   const timingField = (field: "Duration" | "Speed") => {
     useWorkspace.setState({ inspector: true });
@@ -346,6 +388,26 @@ export function EditPage({
       jump((stops, frame) => stops.findLast((stop) => stop < frame) ?? 0),
     controlClipNext: () =>
       jump((stops, frame) => stops.find((stop) => stop > frame) ?? last()),
+    controlKeyframePrev: () =>
+      keyframe(
+        (frames, frame) => frames.findLast((at) => at < frame),
+        "No keyframe before the playhead.",
+      ),
+    controlKeyframeNext: () =>
+      keyframe(
+        (frames, frame) => frames.find((at) => at > frame),
+        "No keyframe after the playhead.",
+      ),
+    markKeyframeMakeDynamic: () => addKeyframe("linear"),
+    markKeyframeMakeStatic: () => addKeyframe("hold"),
+    markKeyframeDelete: () => {
+      const at = keyedClip();
+      if (!at) return;
+      const commands = removeAt(at.clip, at.frame);
+      if (!commands.length)
+        return void notice("No keyframe at the playhead on this clip.");
+      void editTimeline(projectId, "Delete keyframe", () => commands);
+    },
     controlMarkersPrev: () =>
       marker(
         (frames, frame) => frames.findLast((at) => at < frame),
