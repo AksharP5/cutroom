@@ -320,3 +320,54 @@ for (const [name, html] of [
   test(`a clip with ${name} uses the browser`, () => {
     expect(planDirectExport(html, fps, null)).toHaveProperty("reason");
   });
+
+test("a script, stylesheet, frame or event handler anywhere in the composition sends the export to frame capture", () => {
+  const plain = (extra: string) =>
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111}</style></head><body><main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="2">
+${extra}
+<video id="v" src="talk.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`;
+  // Beneath the video for its whole length, each would be ignored if only the top clip counted.
+  const under = (inner: string, attributes = "") =>
+    plain(
+      `<div id="note" class="clip" data-start="0" data-duration="2" data-track-index="0"${attributes}>${inner}</div>`,
+    );
+  expect(planDirectExport(under("Name"), fps, null)).toMatchObject({
+    segments: [{ kind: "source" }],
+  });
+  const cases: [string, string][] = [
+    [
+      under("<script>document.querySelector('video').style.scale = 2</script>"),
+      "note has a <script>",
+    ],
+    [under("<style>video{filter:invert(1)}</style>"), "note has a <style>"],
+    [
+      under(`<img src="x.png" onerror="document.body.remove()">`),
+      "note has an onerror handler",
+    ],
+    [
+      under(`<svg onload="document.body.remove()"></svg>`),
+      "note has an onload handler",
+    ],
+    [
+      under(`<svg><script>document.body.remove()</script></svg>`),
+      "note has a <script>",
+    ],
+    [
+      under(
+        `<iframe srcdoc="<script>parent.document.body.remove()</script>"></iframe>`,
+      ),
+      "note has a <iframe>",
+    ],
+    [under(`<object data="movie.swf"></object>`), "note has a <object>"],
+    [
+      under("Name", ` onclick="document.body.remove()"`),
+      "note has an onclick handler",
+    ],
+    [
+      plain(`<script>document.body.remove()</script>`),
+      "the composition has a <script>",
+    ],
+  ];
+  for (const [html, reason] of cases)
+    expect(planDirectExport(html, fps, null)).toEqual({ reason });
+});
