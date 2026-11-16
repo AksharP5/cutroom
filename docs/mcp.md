@@ -166,6 +166,41 @@ A transition owns the fades on its edges: `setClip.fadeIn` or `fadeOut` there is
 
 In the source each clip's element runs past the cut by its share of the transition, with `data-transition-in` or `data-transition-out` and their `-duration` and `-align` attributes. One `<style data-cutroom-transitions>` block ramps the picture: a dissolve fades the clip later in the document, and marks the other `-under`. Sound plays a generated `data-automation` volume envelope; a clip with its own volume automation keeps it and crossfades with straight `data-fade-in`/`data-fade-out` instead. Preview, `timeline_view` and export play the same attributes through the same runtime.
 
+### Keyframes
+
+Position, Scale, Rotation, Crop and Opacity can each be animated with keyframes on a visual clip. `timeline_read` returns them in `clip.keyframes`: per property, a list of `{ frame, value, ease }` in clip-local frames, where 0 is the clip's first frame, in the same units as the static fields. `keyframes` is `null` on a clip without any. A keyframed property has no static value, so its static fields read `null`:
+
+```json
+"keyframes": {
+  "opacity": [
+    { "frame": 0, "value": 0, "ease": "linear" },
+    { "frame": 15, "value": 1, "ease": "linear" }
+  ],
+  "position": [
+    { "frame": 0, "value": { "x": -200, "y": 0 }, "ease": "ease-out" },
+    { "frame": 20, "value": { "x": 0, "y": 0 }, "ease": "linear" }
+  ]
+}
+```
+
+Before its first keyframe a property holds the first value, and after its last the last one. `ease` shapes the motion from that keyframe to the next, as CSS does: `linear`, `ease-in` (starts slowly), `ease-out` (ends slowly), `ease-in-out`, or `hold`, which keeps the value until the next keyframe. `position` and `scale` values are `{ x, y }`, `crop` is `{ top, right, bottom, left }`, and `rotation` and `opacity` are numbers.
+
+Three commands edit them, each one undo step in a batch:
+
+```json
+{ "type": "setKeyframe", "clipId": "logo", "property": "scale", "frame": 0, "value": { "x": 0.8, "y": 0.8 }, "ease": "ease-out" }
+{ "type": "removeKeyframe", "clipId": "logo", "property": "scale", "frame": 0 }
+{ "type": "moveKeyframe", "clipId": "logo", "property": "scale", "frame": 0, "to": 12 }
+```
+
+`setKeyframe` adds a keyframe or changes the one at that frame. Fields it leaves out of `value`, or the whole `value`, keep what the clip shows at that frame, so `{ "property": "position", "frame": 30, "value": { "x": 80 } }` moves only X. The first keyframe on a property replaces its static value, and `setClip` refuses a keyframed property. `removeKeyframe` takes one away; the last one leaves its value as the static value. `moveKeyframe` retimes one, keeping its value and ease. A new or moved keyframe must lie inside the clip and on a frame without another keyframe of that property.
+
+Keyframing Scale or Rotation on a clip with a static Position keyframes the Position too, at the same frame. The runtime draws a static Position with GSAP, which would fold an animated scale or rotation into the clip's transform once and then draw it twice.
+
+Keyframes stay on the content they animate. Moves and ripples carry them; trimming the head shifts them so each stays on its frame of footage, which can leave keyframes before the clip's first frame or after its last, where they still shape the motion inside the clip. A razor gives each piece the keyframes, so both pieces show what the whole clip showed. A transition draws over them: a dissolve fades from or to whatever the keyframes show.
+
+In the source a keyframed clip carries a `data-cutroom-keyframes` attribute, `"opacity 0 0, 0.5 1; position 0 -200 0 ease-out, 0.666667 0 0"`, with times in seconds from the element's start. One `<style data-cutroom-keyframe-style>` block, which Cutroom rewrites with every edit and removes when no clip has keyframes, turns each attribute value into a CSS animation of the inline longhands `translate`, `scale`, `rotate`, `clip-path` and `opacity`. HyperFrames' CSS adapter seeks it in clip-local time, so preview, `timeline_view` and export draw the same frames, and no script is written. Cutroom titles and transitions run it first in their own animation list, so a title's entrance or a dissolve fades over the keyframed opacity. A clip whose own stylesheet animates it keeps that animation in place of the keyframes. Exports of a composition with keyframes use frame capture.
+
 ### Animated titles
 
 For motion the presets do not cover, write the animation yourself as below.

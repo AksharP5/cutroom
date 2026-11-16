@@ -30,6 +30,14 @@ import {
 import { parseFpsWithDefault } from "@hyperframes/core";
 import { clipStyle, readClipStyle, writeClipStyle } from "./style";
 import { readPosition, positionAttributes } from "./position";
+import {
+  KEYFRAMES_ATTRIBUTE,
+  KEYFRAME_STYLE_ATTRIBUTE,
+  keyframeStyle,
+  keyframesAttribute,
+  readKeyframes,
+} from "./keyframes";
+import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -667,6 +675,14 @@ export function parseComposition(
     const referencedEnd = reference && timing(reference).finish;
     const volume = parseNumeric(element.attrs["data-volume"]);
     const style = readClipStyle(element.attrs.style);
+    // Stored at element-local frames; the element starts before the clip under a transition.
+    const keyframes = isAudioKind(kind)
+      ? null
+      : shiftKeyframes(
+          readKeyframes(element.attrs[KEYFRAMES_ATTRIBUTE], fps),
+          edges.in ? framesBefore(edges.in) : 0,
+        );
+    const keyed = keyframes ?? {};
     const group = element.attrs["data-audio-group"];
     const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
@@ -710,13 +726,21 @@ export function parseComposition(
           trackGainWarning: `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`,
         }),
       volume: volume !== null && volume >= 0 ? volume : null,
-      opacity: style.opacity,
-      x: isAudioKind(kind) ? null : readPosition(element.attrs, "x"),
-      y: isAudioKind(kind) ? null : readPosition(element.attrs, "y"),
-      scaleX: isAudioKind(kind) ? null : style.scaleX,
-      scaleY: isAudioKind(kind) ? null : style.scaleY,
-      rotation: isAudioKind(kind) ? null : style.rotation,
-      crop: isAudioKind(kind) ? null : style.crop,
+      // A keyframed property has no static value: its animation draws over any.
+      opacity: keyed.opacity ? null : style.opacity,
+      x:
+        isAudioKind(kind) || keyed.position
+          ? null
+          : readPosition(element.attrs, "x"),
+      y:
+        isAudioKind(kind) || keyed.position
+          ? null
+          : readPosition(element.attrs, "y"),
+      scaleX: isAudioKind(kind) || keyed.scale ? null : style.scaleX,
+      scaleY: isAudioKind(kind) || keyed.scale ? null : style.scaleY,
+      rotation: isAudioKind(kind) || keyed.rotation ? null : style.rotation,
+      crop: isAudioKind(kind) || keyed.crop ? null : style.crop,
+      keyframes,
       text:
         kind === "element"
           ? (elementText(element, textLayout.get(element)?.preserveLines)
@@ -798,7 +822,8 @@ export function parseComposition(
           (element.tag === "style" &&
             element.attrs["data-cutroom-track-stacking"] === undefined &&
             element.attrs["data-cutroom-titles"] === undefined &&
-            element.attrs[TRANSITION_STYLE_ATTRIBUTE] === undefined),
+            element.attrs[TRANSITION_STYLE_ATTRIBUTE] === undefined &&
+            element.attrs[KEYFRAME_STYLE_ATTRIBUTE] === undefined),
       )
       .map((element) => html.slice(element.openEnd, element.end)),
     fonts,
@@ -1058,6 +1083,9 @@ function clipChanges(
   );
   if (Object.keys(style).length)
     changes.push(["style", writeClipStyle(element.attrs.style, style)]);
+  const keyframes = keyframesAttribute(after.keyframes, fps);
+  if (keyframesAttribute(before.keyframes, fps) !== keyframes)
+    changes.push([KEYFRAMES_ATTRIBUTE, keyframes]);
   if (before.volume !== after.volume)
     changes.push([
       "data-volume",
@@ -1707,8 +1735,10 @@ function managedStyleEdits(
   parsed: ParsedComposition,
   attribute: string,
   style: string | null,
+  /** Remove the block once nothing uses it, for a block whose rules follow the clips. */
+  removeUnused = false,
 ): Edit[] {
-  if (style === null) return [];
+  if (style === null && !removeUnused) return [];
   const styles = scopeElements(parsed.roots, parsed.scope).filter(
     (element) => element.tag === "style",
   );
@@ -1716,6 +1746,18 @@ function managedStyleEdits(
     (element) => element.attrs[attribute] !== undefined,
   );
   const removed = extra.map(({ start, end }) => ({ start, end, text: "" }));
+  if (style === null)
+    return block
+      ? [
+          {
+            start: block.start,
+            // With the line break written after it.
+            end: block.end + (parsed.html[block.end] === "\n" ? 1 : 0),
+            text: "",
+          },
+          ...removed,
+        ]
+      : removed;
   if (block)
     return parsed.html.slice(block.start, block.end) === style
       ? removed
@@ -1828,6 +1870,18 @@ export function patchComposition(
       after.clips.some((clip) => clip.transitionIn || clip.transitionOut)
         ? transitionStyle()
         : null,
+    ),
+    ...managedStyleEdits(
+      parsed,
+      KEYFRAME_STYLE_ATTRIBUTE,
+      keyframeStyle(
+        after.clips.flatMap(
+          (clip) =>
+            keyframesAttribute(elementClip(clip, fps).keyframes, fps) ?? [],
+        ),
+        fps,
+      ),
+      true,
     ),
   ];
   const under = dissolveLayers(parsed, after, origins);

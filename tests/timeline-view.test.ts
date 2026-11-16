@@ -65,6 +65,7 @@ const clip = (
   scaleY: null,
   rotation: null,
   crop: null,
+  keyframes: null,
   text: null,
   title: null,
   fadeIn: 0,

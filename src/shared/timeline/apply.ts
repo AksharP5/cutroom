@@ -6,6 +6,7 @@ import type {
   InsertClip,
   InsertTitle,
   InsertComposition,
+  KeyframeProperty,
   Timeline,
   Track,
   Transition,
@@ -21,6 +22,16 @@ import {
 } from "./transition";
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
+import {
+  moveKeyframe,
+  parseKeyframeValue,
+  removeKeyframe,
+  setKeyframe,
+  shiftKeyframes,
+  tracksOf,
+  valueAt,
+} from "./keyframes";
+import type { KeyframeValues } from "./keyframes";
 
 export { TimelineError } from "./errors";
 export type { TimelineErrorCode } from "./errors";
@@ -576,6 +587,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         scaleY: null,
         rotation: null,
         crop: null,
+        keyframes: null,
         text: null,
         title: null,
         fadeIn: 0,
@@ -887,6 +899,32 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "unsupported",
           target.sourceRestrictions.transform,
         );
+      const tracks = tracksOf(target);
+      // Scale and rotation keyframes keep the position in keyframes too (see `settle`).
+      const keyed = (
+        [
+          ["position", command.x !== undefined || command.y !== undefined],
+          [
+            "scale",
+            command.scale !== undefined ||
+              command.scaleX !== undefined ||
+              command.scaleY !== undefined,
+          ],
+          ["rotation", command.rotation !== undefined],
+          ["crop", command.crop !== undefined],
+          ["opacity", command.opacity !== undefined],
+        ] as const
+      ).find(
+        ([property, edited]) =>
+          edited &&
+          (tracks[property] ||
+            (property === "position" && (tracks.scale || tracks.rotation))),
+      );
+      if (keyed)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} animates its ${keyed[0]} with keyframes. Change it with setKeyframe, or remove its keyframes first.`,
+        );
       if (command.text !== undefined) {
         if (target.text === null)
           throw new TimelineError(
@@ -949,6 +987,64 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               }
             : clip,
         ),
+      };
+    }
+    case "setKeyframe":
+    case "removeKeyframe":
+    case "moveKeyframe": {
+      const target = find(command.clipId);
+      const { property } = command;
+      if (isAudioKind(target.kind))
+        throw new TimelineError(
+          "unsupported",
+          `Audio clips have no ${property} to keyframe.`,
+        );
+      if (property !== "opacity" && target.sourceRestrictions?.transform)
+        throw new TimelineError(
+          "unsupported",
+          target.sourceRestrictions.transform,
+        );
+      const keyframes = tracksOf(target)[property] ?? [];
+      const at = (frame: number) =>
+        keyframes.some((keyframe) => keyframe.frame === frame);
+      const inside = (frame: number) => {
+        if (frame < 0 || frame >= target.duration)
+          throw new TimelineError(
+            "out_of_bounds",
+            `Frame ${frame} is outside ${clipName(target)}, which runs from frame 0 to ${target.duration - 1}.`,
+          );
+      };
+      const edited = (() => {
+        if (command.type === "setKeyframe") {
+          if (!at(command.frame)) inside(command.frame);
+          return setKeyframe(
+            target,
+            property,
+            command.frame,
+            keyframeValue(target, property, command.frame, command.value),
+            command.ease,
+          );
+        }
+        if (!at(command.frame))
+          throw new TimelineError(
+            "not_found",
+            `${clipName(target)} has no ${property} keyframe at frame ${command.frame}.`,
+          );
+        if (command.type === "removeKeyframe")
+          return removeKeyframe(target, property, command.frame);
+        if (command.to === command.frame) return target;
+        inside(command.to);
+        if (at(command.to))
+          throw new TimelineError(
+            "overlap",
+            `${clipName(target)} already has a ${property} keyframe at frame ${command.to}.`,
+          );
+        return moveKeyframe(target, property, command.frame, command.to);
+      })();
+      if (edited === target) return timeline;
+      return {
+        ...timeline,
+        clips: clips.map((clip) => (clip === target ? edited : clip)),
       };
     }
     case "setTrack": {
@@ -1544,6 +1640,30 @@ function assertRippleSync(
   }
 }
 
+/** A keyframe's value from a command: its fields over what the clip shows at that frame. */
+function keyframeValue<P extends KeyframeProperty>(
+  clip: Clip,
+  property: P,
+  frame: number,
+  value: Extract<Command, { type: "setKeyframe" }>["value"],
+): KeyframeValues[P] {
+  const current = valueAt(clip, property, frame);
+  const parsed = parseKeyframeValue(
+    property,
+    value === undefined
+      ? current
+      : typeof value === "object" && typeof current === "object"
+        ? { ...current, ...value }
+        : value,
+  );
+  if (!parsed.success)
+    throw new TimelineError(
+      "unsupported",
+      `That is not a ${property} value: ${parsed.error.issues[0]?.message ?? "invalid"}. position and scale take {x, y}, crop takes {top, right, bottom, left}, rotation and opacity take a number.`,
+    );
+  return parsed.data;
+}
+
 function advance(clip: Clip, frames: number, fps: Fps): number | null {
   return clip.mediaStart === null
     ? null
@@ -1566,6 +1686,8 @@ function windowClip(
     start,
     duration,
     mediaStart: advance(clip, start - clip.start, fps),
+    // Keyframes stay on the frames of content they animate.
+    keyframes: shiftKeyframes(clip.keyframes, start - clip.start),
     // A piece cut from a clip keeps a transition only on an edge it still has.
     ...(mode === "cut" && start !== clip.start && { transitionIn: null }),
     ...(mode === "cut" && end !== clipEnd(clip) && { transitionOut: null }),
