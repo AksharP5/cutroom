@@ -62,6 +62,10 @@ test("plain footage under titles is drawable, with each video's fit and the page
   expect(plan.order).toEqual(["a", "b", "broll", "title"]);
 });
 
+/** A HyperFrames clip above the footage holding `inner`. */
+const card = (inner: string) =>
+  `<div id="card" class="clip" data-start="0" data-duration="1" data-track-index="4">${inner}</div>`;
+
 test("whatever HyperFrames must draw beneath a video keeps the composition on HyperFrames", () => {
   const cases: [string, string, string][] = [
     [
@@ -86,6 +90,47 @@ test("whatever HyperFrames must draw beneath a video keeps the composition on Hy
       "<style>video{filter:blur(4px)}</style>",
       "a stylesheet sets filter on <video>",
     ],
+    // Inside a clip, where only a walk of every element finds them.
+    [
+      card("<script>document.body.remove()</script>"),
+      "",
+      "card has a <script>",
+    ],
+    [card("<style>video{filter:invert(1)}</style>"), "", "card has a <style>"],
+    [
+      card(`<img src="x.png" onerror="document.body.remove()">`),
+      "",
+      "card has an onerror handler",
+    ],
+    [
+      card(`<svg onload="document.body.remove()"></svg>`),
+      "",
+      "card has an onload handler",
+    ],
+    [
+      card(
+        `<iframe srcdoc="<script>parent.postMessage(1, '*')</script>"></iframe>`,
+      ),
+      "",
+      "card has a <iframe>",
+    ],
+    // Blending reads the pipeline's canvas beneath, which the preview cannot see.
+    [
+      card('<b style="mix-blend-mode:difference">Name</b>'),
+      "",
+      "b sets mix-blend-mode",
+    ],
+    [
+      "",
+      "<style>.clip{backdrop-filter:blur(8px)}</style>",
+      "a stylesheet sets backdrop-filter",
+    ],
+    // A video between frames is one the pipeline would draw a frame early or late.
+    [
+      `<video id="early" src="talk.mp4" muted data-start="0.01" data-duration="1" data-track-index="5" style="${fill}"></video>`,
+      "",
+      "early starts or ends between frames",
+    ],
   ];
   for (const [extra, head, reason] of cases)
     expect(planPreviewPipeline(page(extra, head), fps)).toEqual({
@@ -98,6 +143,31 @@ test("whatever HyperFrames must draw beneath a video keeps the composition on Hy
   ]);
   expect(planPreviewPipeline(under, fps)).toEqual({
     reason: "title lies beneath broll",
+  });
+});
+
+test("a transition the pipeline would draw differently keeps the composition on HyperFrames", () => {
+  const dissolve: CommandInput = {
+    type: "setTransition",
+    from: "a",
+    to: "b",
+    transition: { kind: "dissolve", duration: 10, alignment: "center" },
+  };
+  expect(drawable(edit(page(), [dissolve])).drawable.b).toBe("cover");
+  // A dissolve animates opacity from the clip's own, which the pipeline draws only at 1.
+  expect(
+    planPreviewPipeline(
+      edit(page(), [dissolve, { type: "setClip", clipId: "b", opacity: 0.5 }]),
+      fps,
+    ),
+  ).toEqual({ reason: "b has a transition the pipeline cannot draw" });
+  // Without Cutroom's transitions sheet the attributes animate nothing.
+  const bare = edit(page(), [dissolve]).replace(
+    /<style data-cutroom-transitions[^>]*>[\s\S]*?<\/style>/,
+    "",
+  );
+  expect(planPreviewPipeline(bare, fps)).toEqual({
+    reason: "a has a transition the pipeline cannot draw",
   });
 });
 

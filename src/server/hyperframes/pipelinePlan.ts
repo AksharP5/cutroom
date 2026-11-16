@@ -1,3 +1,5 @@
+import { transform } from "lightningcss";
+import type { Declaration } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
@@ -10,6 +12,7 @@ import {
 } from "../timeline/transitions.ts";
 import {
   LIBRARY_SCRIPTS,
+  activeContent,
   PINNED,
   ROOT_ATTRIBUTES,
   VIDEO_FITS,
@@ -32,6 +35,53 @@ const TRANSITION_RULES = /<style[^>]*>([\s\S]*)<\/style>/
   .trim();
 const TRANSITION_ATTRIBUTE =
   /^data-transition-(in|out)(-duration|-align|-under)?$/;
+/**
+ * Effects that blend with whatever lies beneath. Beneath a HyperFrames layer is the pipeline's
+ * canvas, which the preview document cannot see, so these must keep their initial values.
+ */
+const BACKDROP = new Set(["mix-blend-mode", "backdrop-filter"]);
+const UNBLENDED = new Set(
+  declarationsOf("mix-blend-mode:normal;backdrop-filter:none").map(key),
+);
+const blends = (declaration: Declaration) => {
+  const name =
+    declaration.property === "unparsed"
+      ? declaration.value.propertyId.property
+      : declaration.property === "custom"
+        ? declaration.value.name
+        : declaration.property;
+  return BACKDROP.has(name) && !UNBLENDED.has(key(declaration)) ? name : null;
+};
+function blendInStylesheet(css: string) {
+  let found: string | null = null;
+  transform({
+    filename: "composition.css",
+    code: Buffer.from(css),
+    visitor: {
+      Declaration(declaration) {
+        found ??= blends(declaration);
+      },
+    },
+  });
+  return found;
+}
+/** The first element under `node`, itself included, whose inline style blends. */
+function blendInline(node: Element): string | null {
+  try {
+    const found = declarationsOf(attribute(node, "style") ?? "")
+      .map(blends)
+      .find(Boolean);
+    if (found) return `${attribute(node, "id") ?? node.tagName} sets ${found}`;
+  } catch {
+    return `${attribute(node, "id") ?? node.tagName} has an unreadable style`;
+  }
+  for (const child of elements(node)) {
+    const found = blendInline(child);
+    if (found) return found;
+  }
+  return null;
+}
+
 const text = (element: Element) =>
   element.childNodes
     .filter(defaultTreeAdapter.isTextNode)
@@ -64,6 +114,11 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   for (const element of [page, body])
     if (element.attrs.some((entry) => entry.name !== "lang"))
       return { reason: `<${element.tagName}> has attributes` };
+  // A script, stylesheet, frame or event handler anywhere could change any clip.
+  const active = activeContent(root);
+  if (active) return { reason: active };
+  const blended = blendInline(page);
+  if (blended) return { reason: blended };
   const unknown = root.attrs.find((entry) => !ROOT_ATTRIBUTES.has(entry.name));
   if (unknown) return { reason: `the composition has ${unknown.name}` };
   const width = Number(attribute(root, "data-width"));
@@ -118,8 +173,6 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
       continue;
-    if (element.tagName === "script" || element.tagName === "style")
-      return { reason: `the composition has a <${element.tagName}>` };
     if (
       attribute(element, "data-hidden") !== undefined ||
       element.tagName === "audio"
@@ -223,6 +276,8 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     ...videos.map(({ element }) => ({ element, clip: true })),
   ];
   for (const css of styles) {
+    const blend = blendInStylesheet(css);
+    if (blend) return { reason: `a stylesheet sets ${blend}` };
     const refusal = checkStylesheet(css, protectedElements, stacking, pinned);
     if (refusal) return { reason: refusal };
   }
