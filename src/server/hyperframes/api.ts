@@ -5,18 +5,29 @@ import {
   defaultExportRange,
   compositionExportName,
   exportFilename,
+  exportFps,
   exportRange,
+  exportSize,
+  ExportFormatSchema,
   ExportOptionsSchema,
   ExportStartSchema,
+  retimeFrames,
   StillRequestSchema,
 } from "../../shared/export";
-import type { ExportOptions } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
@@ -55,6 +66,7 @@ import {
   thumbnailRendererVersion,
 } from "./thumbnails";
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
+import type { ExportRequest } from "./jobs";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
@@ -205,7 +217,7 @@ export function createHyperframesApi(
       maxBytes: 2 * 1024 ** 3,
     },
     workload: async (id, composition) => {
-      const timeline = await readTimeline(id, composition);
+      const { timeline } = await readComposition(id, composition);
       return {
         mediaClips: timeline.clips.filter(
           (clip) => clip.kind === "video" || isAudioKind(clip.kind),
@@ -220,9 +232,9 @@ export function createHyperframesApi(
         ),
       ),
   });
-  const exportRequest = new AsyncLocalStorage<ExportOptions>();
-  /** A composition's timeline, as the editor reads it, for an export's range, rate and size. */
-  const readTimeline = async (projectId: string, composition: string) => {
+  const exportRequest = new AsyncLocalStorage<ExportRequest>();
+  /** A composition's timeline and frame size, as the editor reads them, for an export. */
+  const readComposition = async (projectId: string, composition: string) => {
     const project = await store.get(projectId);
     const [source, document] = await Promise.all([
       readSource(project, composition),
@@ -234,11 +246,23 @@ export function createHyperframesApi(
       composition,
       mediaSources(source.content, scope),
     );
-    return parseComposition(
+    const { timeline, root } = parseComposition(
       source.content,
       document.timelines[composition] ?? emptyTimelineSettings(),
       { scope, mediaLengths: lengths },
-    ).timeline;
+    );
+    // The preview and frame capture render a composition without a size at 1920 x 1080.
+    const size = (name: string, fallback: number) => {
+      const value = Number(root.attrs[name]);
+      return Number.isFinite(value) && value > 0 ? value : fallback;
+    };
+    return {
+      timeline,
+      size: {
+        width: size("data-width", 1920),
+        height: size("data-height", 1080),
+      },
+    };
   };
   /** A composition named by a caller, as the project path the timeline routes use. */
   const exportedComposition = (requested: string | undefined) => {
@@ -253,7 +277,13 @@ export function createHyperframesApi(
     const input = ExportStartSchema.parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
     const composition = exportedComposition(input.composition);
-    const timeline = await readTimeline(project.id, composition);
+    const { timeline, size } = await readComposition(project.id, composition);
+    const output = exportSize(input.size, size);
+    if ("problem" in output) throw new HttpError(400, output.problem);
+    const fps = exportFps(
+      input.format,
+      input.fps ? { num: input.fps, den: 1 } : timeline.fps,
+    );
     const choice = input.range ?? defaultExportRange(timeline);
     let frames;
     try {
@@ -276,7 +306,10 @@ export function createHyperframesApi(
       input.filename ??
       (await nextExportName(
         directory,
-        exportFilename(compositionExportName(project.name, composition)),
+        exportFilename(
+          compositionExportName(project.name, composition),
+          input.format,
+        ),
       ));
     // Enter the dialog's route with the caller's identity. It owns destination validation and registration.
     return api.request(
@@ -285,14 +318,16 @@ export function createHyperframesApi(
         method: "POST",
         headers: c.req.raw.headers,
         body: JSON.stringify({
-          format: "mp4",
+          format: input.format,
           quality: input.quality,
-          fps: `${timeline.fps.num}/${timeline.fps.den}`,
+          fps: `${fps.num}/${fps.den}`,
+          ...(output.resolution && { resolution: output.resolution }),
           ...(composition !== "index.html" && { composition }),
           cutroom: {
             directory,
             filename,
             range: choice === "timeline" ? null : frames,
+            gpu: input.gpu,
           },
         }),
       },
@@ -337,36 +372,53 @@ export function createHyperframesApi(
       .object({ cutroom: ExportOptionsSchema.optional() })
       .parse(body);
     if (!cutroom) return next();
-    if (
-      z.object({ format: z.literal("mp4") }).safeParse(body).success === false
-    )
-      throw new HttpError(400, "Named exports use MP4.");
+    const request = z
+      .object({
+        format: ExportFormatSchema,
+        fps: z.union([z.string(), z.number()]),
+        resolution: z.string().optional(),
+        composition: z.string().optional(),
+      })
+      .safeParse(body);
+    if (!request.success)
+      throw new HttpError(
+        400,
+        "Named exports choose MP4, MOV, WebM or GIF, and a frame rate.",
+      );
+    const { format, composition, resolution } = request.data;
+    if (extname(cutroom.filename).slice(1).toLowerCase() !== format)
+      throw new HttpError(
+        400,
+        `Name a ${format.toUpperCase()} export with .${format}.`,
+      );
     if (!isAbsolute(cutroom.directory))
       throw new HttpError(400, "Enter an absolute output folder.");
     const project = await store.get(c.req.param("id"));
-    if (cutroom.range) {
-      const { fps, composition } = z
-        .object({
-          fps: z.union([z.string(), z.number()]),
-          composition: z.string().optional(),
-        })
-        .parse(body);
-      const timeline = await readTimeline(
-        project.id,
-        exportedComposition(composition),
+    const { timeline, size: composed } = await readComposition(
+      project.id,
+      exportedComposition(composition),
+    );
+    const rate = parseFps(request.data.fps);
+    if (!rate.ok) throw new HttpError(400, "Choose a valid frame rate.");
+    // The render route plays GIF at 30 fps at most; the range follows the rate it renders.
+    const fps = exportFps(format, rate.value);
+    const size = (["project", "1080p", "4k"] as const)
+      .map((choice) => exportSize(choice, composed))
+      .find((size) => !("problem" in size) && size.resolution === resolution);
+    if (!size || "problem" in size)
+      throw new HttpError(
+        400,
+        `${resolution} doesn't fit this ${composed.width} × ${composed.height} composition. Choose its own size, 1080p or 4K.`,
       );
-      const rate = parseFps(fps);
-      if (
-        !rate.ok ||
-        rate.value.num * timeline.fps.den !== timeline.fps.num * rate.value.den
-      )
-        throw new HttpError(
-          400,
-          "A marked export must use the project's frame rate.",
-        );
-      if (cutroom.range.end > timeline.duration)
-        throw new HttpError(400, "In and Out must be inside the timeline.");
-    }
+    if (cutroom.range && cutroom.range.end > timeline.duration)
+      throw new HttpError(400, "In and Out must be inside the timeline.");
+    const range =
+      cutroom.range && retimeFrames(cutroom.range, timeline.fps, fps);
+    if (range && range.end <= range.start)
+      throw new HttpError(
+        400,
+        `In to Out is shorter than one frame at ${Number((fps.num / fps.den).toFixed(3))} fps.`,
+      );
     const defaultDirectory = await projectStatePath(
       project,
       ".cutroom/renders",
@@ -375,7 +427,16 @@ export function createHyperframesApi(
     if (cutroom.directory === defaultDirectory)
       await mkdir(defaultDirectory, { recursive: true });
     const directory = await realpath(cutroom.directory);
-    await exportRequest.run({ ...cutroom, directory }, next);
+    await exportRequest.run(
+      {
+        ...cutroom,
+        directory,
+        range,
+        size: { width: size.width, height: size.height },
+        retimed: fps.num * timeline.fps.den !== timeline.fps.num * fps.den,
+      },
+      next,
+    );
     if (c.res.ok) {
       const started = z
         .object({ jobId: z.string(), status: z.string() })
@@ -1015,7 +1076,14 @@ export function createHyperframesApi(
     finishedAt: job.finishedAt,
     fps: job.fps,
     quality: job.quality,
+    format: job.format,
+    size: job.size,
     range: job.range,
+    encoder: job.encoder,
+  });
+  api.get("/export-gpu", async (c) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({ available: await renders.gpuAvailable() });
   });
   // One export runs at a time across projects, so any editor can find and control it.
   api.get("/export-jobs", (c) => {

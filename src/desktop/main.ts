@@ -107,8 +107,8 @@ async function start() {
       })
       .parse(value);
     const path = await realpath(input.path);
-    if (!path.toLowerCase().endsWith(".mp4") || !(await stat(path)).isFile())
-      throw new Error("Choose an exported MP4 file.");
+    if (!/\.(mp4|mov|webm|gif)$/i.test(path) || !(await stat(path)).isFile())
+      throw new Error("Choose an exported MP4, MOV, WebM or GIF file.");
     if (input.action === "reveal") {
       shell.showItemInFolder(path);
       return;

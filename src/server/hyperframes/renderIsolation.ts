@@ -366,7 +366,7 @@ export function registerRenderIsolation(
           const audio = JSON.stringify(
             new URL("./rangeAudio.ts", import.meta.url).href,
           );
-          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
+          source = `import { cp as cutroomCopyProject } from "node:fs/promises";\nimport { renameSync as cutroomRename } from "node:fs";\nimport { publishRangeProgress, spanParts as cutroomSpanParts, capturedFrame as cutroomCapturedFrame, capturesList as cutroomCapturesList, encodeCaptured as cutroomEncodeCaptured } from ${observer};\nimport { alignRangeAudio, mixRangeAudio as cutroomMixRangeAudio } from ${audio};\nconst cutroomRangeFps = ${fps};\nconst cutroomRange = ${JSON.stringify(range.range)};\n${source}`;
           // The planner materializes source links before its HTTP server sees
           // them. Apply the same project boundary before copying their bytes.
           source = replaceOnce(
@@ -394,6 +394,13 @@ export function registerRenderIsolation(
             source,
             'const workDir = mkdtempSync7(join45(tmpdir4(), "hf-render-span-"));',
             `const workDir = mkdtempSync7(join45(${JSON.stringify(range.scratchDir)}, "hf-render-span-"));`,
+            url,
+          );
+          // A span's chunk encodes MOV and WebM as a distributed render does, with their alpha.
+          source = replaceOnce(
+            source,
+            '  if (config.format !== "mp4") {\n    throw new RenderSpanUnsupportedError(',
+            '  if (config.format !== "mp4" && config.format !== "mov" && config.format !== "webm") {\n    throw new RenderSpanUnsupportedError(',
             url,
           );
           // The local chunk engine supports rational fps; the distributed
@@ -467,7 +474,7 @@ export function registerRenderIsolation(
     }`,
             `    const parts = await cutroomSpanParts(slices, startFrame, endFrame, async (slice, range, index) => {
       throwIfAborted(config.abortSignal);
-      const part = join45(partsDir, \`part-\${String(index).padStart(4, "0")}.mp4\`);
+      const part = join45(partsDir, \`part-\${String(index).padStart(4, "0")}.\${config.format}\`);
       await renderChunk(planDir, slice.index, part, { frameRange: range });
       return part;
     });`,
@@ -513,8 +520,10 @@ export function registerRenderIsolation(
           source = replaceOnce(
             source,
             "    await writeStitchedMp4(parts, outputPath);",
-            `    const cutroomVideo = join45(workDir, "range.mp4");
-    await writeStitchedMp4(parts, cutroomVideo);
+            `    const cutroomVideo = join45(workDir, \`range.\${config.format}\`);
+    if (config.format === "mp4") await writeStitchedMp4(parts, cutroomVideo);
+    else if (parts.length === 1) cutroomRename(parts[0], cutroomVideo);
+    else throw new Error(\`A \${config.format} range rendered \${parts.length} parts; it should render one.\`);
     await alignRangeAudio({
       videoPath: cutroomVideo, audioPath: resolvePlanAudioPath(planDir), outputPath,
       fps: cutroomRangeFps, frames: { start: startFrame, end: endFrame },

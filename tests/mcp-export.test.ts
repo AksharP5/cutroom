@@ -144,6 +144,118 @@ test("MCP exports share dialog defaults, frame ranges, naming and cancel cleanup
   }
 });
 
+// An agent chooses the same format, size and rate the dialog offers; marks follow the export's rate.
+test("MCP exports choose a format, a supersampled size and a frame rate", async () => {
+  const f = await fixture();
+  try {
+    const p = await f.store.create({
+      name: "Overlay",
+      duration: 2,
+      width: 640,
+      height: 360,
+    });
+    const document = await f.store.document(p);
+    await f.store.writeDocument(
+      p,
+      Object.assign(document, {
+        timelines: {
+          "index.html": {
+            tracks: [],
+            markers: [],
+            range: { in: 10 / 30, out: 31 / 30 },
+          },
+        },
+      }),
+    );
+    const directory = join(p.path, ".cutroom/renders");
+    for (const c of [
+      {
+        input: { format: "mov", size: "4k", fps: 24 },
+        filename: "Overlay.mov",
+        size: { width: 3840, height: 2160 },
+        fps: { num: 24, den: 1 },
+        // 10 to 31 at 30 fps covers 0.333 s to 1.033 s: frames 8 to 24 at 24 fps.
+        range: { start: 8, end: 25 },
+      },
+      {
+        input: { format: "gif", fps: 60 },
+        filename: "Overlay.gif",
+        size: { width: 640, height: 360 },
+        fps: { num: 30, den: 1 },
+        range: { start: 10, end: 31 },
+      },
+      {
+        input: { format: "webm", size: "1080p" },
+        filename: "Overlay.webm",
+        size: { width: 1920, height: 1080 },
+        fps: { num: 30, den: 1 },
+        range: { start: 10, end: 31 },
+      },
+    ] as const) {
+      const started = result(
+        Started,
+        await f.client.callTool({
+          name: "export_start",
+          arguments: { projectId: p.id, ...c.input },
+        }),
+      );
+      expect(started.outputPath).toBe(join(directory, c.filename));
+      const status = result(
+        ExportJobSchema,
+        await f.client.callTool({
+          name: "export_status",
+          arguments: { jobId: started.jobId },
+        }),
+      );
+      expect(status.format).toBe(c.input.format);
+      expect(status.size).toEqual(c.size);
+      expect(status.fps).toEqual(c.fps);
+      expect(status.range).toEqual(c.range);
+      await f.client.callTool({
+        name: "export_cancel",
+        arguments: { jobId: started.jobId },
+      });
+    }
+    for (const [input, message] of [
+      [
+        { format: "mov", filename: "Overlay.mp4" },
+        "Name a MOV export with .mov",
+      ],
+      [{ format: "mkv" }, "format"],
+      [{ fps: 48 }, "fps"],
+      // 0.467 s to 0.5 s holds no frame at 24 fps.
+      [{ range: { start: 14, end: 15 }, fps: 24 }, "shorter than one frame"],
+    ] as const) {
+      const refused = await f.client.callTool({
+        name: "export_start",
+        arguments: { projectId: p.id, ...input },
+      });
+      expect(refused.isError, JSON.stringify(input)).toBe(true);
+      expect(JSON.stringify(refused.content)).toContain(message);
+    }
+    // 4K is not a whole multiple of 1280 x 960, nor its shape.
+    const square = await f.store.create({
+      name: "Four three",
+      duration: 1,
+      width: 1280,
+      height: 960,
+    });
+    const refused = await f.client.callTool({
+      name: "export_start",
+      arguments: { projectId: square.id, size: "4k" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain(
+      "4K needs a 16:9, 9:16 or square composition",
+    );
+    expect(
+      await (await f.app.request("/api/export-jobs")).json(),
+    ).toMatchObject({ jobs: [] });
+  } finally {
+    await f.close();
+  }
+});
+
 test("exports accept chosen presets and folders, refuse invalid destinations/ranges and expose errors", async () => {
   const f = await fixture();
   try {

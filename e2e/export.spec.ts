@@ -421,6 +421,65 @@ test("Shift+8 defaults to marked frames and exports their exact duration", async
   await expectEncoded(path, 10 / 30);
 });
 
+test("the dialog exports marked frames as a ProRes 4444 MOV at another frame rate", async ({
+  page,
+  request,
+}, testInfo) => {
+  const { project } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+  await page.getByRole("region", { name: "Viewer" }).click();
+  // Frames 5 to 14 at 30 fps: 0.167 s to 0.467 s, which holds frames 4 to 11 at 24 fps.
+  await page.keyboard.press("Home");
+  for (let frame = 0; frame < 5; frame++)
+    await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("i");
+  for (let frame = 5; frame < 14; frame++)
+    await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("o");
+  await page.keyboard.press("Shift+8");
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  const filename = dialog.getByLabel("File name", { exact: true });
+  await filename.fill("Overlay.mp4");
+  await dialog.getByLabel("Format", { exact: true }).click();
+  await dialog.getByRole("option", { name: /^MOV/ }).click();
+  // A typed name keeps its words and takes the format's extension; ProRes has no quality tiers.
+  await expect(filename).toHaveValue("Overlay.mov");
+  await expect(dialog.getByLabel("Quality", { exact: true })).toHaveCount(0);
+  await dialog.getByLabel("Frame rate", { exact: true }).click();
+  await dialog.getByRole("option", { name: "24 fps", exact: true }).click();
+  await expect(dialog).toContainText("320 × 240 · 24 fps");
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await dialog.getByRole("button", { name: "Export MOV", exact: true }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+  const result = await request.get(`/api/render/${jobId}/download`);
+  const path = testInfo.outputPath("Overlay.mov");
+  await writeFile(path, await result.body());
+  const { stdout } = await promisify(execFile)("ffprobe", [
+    ...["-v", "error", "-count_frames", "-select_streams", "v:0"],
+    ...["-show_entries", "stream=codec_name,profile,pix_fmt,r_frame_rate"],
+    ...["-show_entries", "stream=nb_read_frames", "-of", "json", path],
+  ]);
+  expect(JSON.parse(stdout)).toMatchObject({
+    streams: [
+      {
+        codec_name: "prores",
+        profile: "4444",
+        pix_fmt: expect.stringMatching(/^yuva444p/),
+        r_frame_rate: "24/1",
+        nb_read_frames: "8",
+      },
+    ],
+  });
+});
+
 test("Cancel stops the real render and removes a named partial file", async ({
   page,
   request,

@@ -42,3 +42,30 @@ test("browsers capturing beside FFmpeg's source encoders leave room for them", (
     planCaptureBrowsers({ ...plan, sourcePixels: 1920 * 1080 }),
   ).toHaveProperty("refusal");
 });
+
+test("a 4K export leaves room for its encoder, which ProRes needs most of", () => {
+  // At 4K the encoder held 2.3 GB for H.264 and 4.0 GB for ProRes beside the browsers.
+  const plan = { mediaClips: 2, frames: 150 };
+  const uhd = 3840 * 2160;
+  expect(
+    planCaptureBrowsers({
+      ...plan,
+      available: 6 * GiB,
+      outputPixels: 1920 * 1080,
+    }),
+  ).toEqual({ browsers: 2 });
+  expect(
+    planCaptureBrowsers({ ...plan, available: 6 * GiB, outputPixels: uhd }),
+  ).toHaveProperty("refusal");
+  expect(
+    planCaptureBrowsers({ ...plan, available: 8 * GiB, outputPixels: uhd }),
+  ).toEqual({ browsers: 2 });
+  expect(
+    planCaptureBrowsers({
+      ...plan,
+      available: 8 * GiB,
+      outputPixels: uhd,
+      prores: true,
+    }),
+  ).toEqual({ browsers: 1 });
+});
