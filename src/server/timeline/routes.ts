@@ -17,6 +17,7 @@ import type { ReviewService } from "../projects/review";
 import type { z } from "zod";
 import { posix } from "node:path";
 import { Hono } from "hono";
+import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
@@ -421,6 +422,20 @@ export function createTimelineRoutes(
           } satisfies TimelineView;
         }),
       );
+    } catch (error) {
+      return refused(c, error);
+    }
+  });
+  // Which clips the viewer's footage pipeline may draw; only the entry composition has one.
+  api.get("/projects/:id/pipeline", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    c.header("cache-control", "no-store");
+    try {
+      const { source, parsed } = await read(project, "index.html");
+      return c.json({
+        revision: source.version,
+        plan: planPreviewPipeline(source.content, parsed.timeline.fps),
+      });
     } catch (error) {
       return refused(c, error);
     }

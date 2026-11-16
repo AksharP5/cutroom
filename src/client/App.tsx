@@ -50,6 +50,7 @@ import { StatusBar } from "./components/StatusBar";
 import { clearToasts, showToast, useWorkspace } from "./workspace";
 import { actionFor, focusPanel, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
+import { usePipeline } from "./pipeline/pipeline";
 
 const Editor = lazy(() =>
   import("./editor/CutroomEditor").then((module) => ({
@@ -134,6 +135,7 @@ export function App() {
   const chatVisible = workPanel === "agent";
   const notebookVisible = workPanel === "notebook";
   const newEditor = useWorkspace((state) => state.newEditor);
+  const footagePipeline = usePipeline((state) => state.enabled);
   const newNotes = projectDocument.items.filter(
     (item) => item.review.status === "open",
   );
@@ -929,6 +931,20 @@ export function App() {
               <p>
                 Cutroom's own viewer, timeline, and inspector. Turn it off for
                 the embedded source editor.
+              </p>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={footagePipeline}
+                  onChange={(event) =>
+                    usePipeline.setState({ enabled: event.target.checked })
+                  }
+                />
+                GPU footage playback
+              </label>
+              <p>
+                Experimental. Decodes and draws video clips in Cutroom's own
+                pipeline, with titles and graphics from HyperFrames on top.
               </p>
             </section>
             <section>

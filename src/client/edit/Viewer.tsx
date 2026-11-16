@@ -27,6 +27,7 @@ import { connectPreview } from "./preview";
 import { previewRefresh } from "./previewRefresh";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
+import { attachPipeline, usePipeline } from "../pipeline/pipeline";
 
 export type Zoom = "fit" | "actual";
 
@@ -74,6 +75,19 @@ export function Viewer({
   const connections = useRef(
     new Map<number, ReturnType<typeof connectPreview>>(),
   );
+  // The footage pipeline draws the videos beneath the preview while it is active.
+  const pipelineCanvas = useRef<HTMLCanvasElement>(null);
+  const pipelineEnabled = usePipeline((state) => state.enabled);
+  const pipelineActive = usePipeline((state) => state.active);
+  useEffect(() => {
+    const canvas = pipelineCanvas.current;
+    if (!pipelineEnabled || !canvas) return;
+    return attachPipeline(projectId, canvas);
+  }, [projectId, pipelineEnabled]);
+  useEffect(() => {
+    for (const connection of connections.current.values())
+      connection.pipeline(pipelineActive);
+  }, [pipelineActive]);
   const draftId = useProjectNotes(
     (state) => state.projects[projectId]?.draft?.id,
   );
@@ -501,6 +515,7 @@ export function Viewer({
     connections.current.set(gen, preview);
     try {
       await preview.inspect();
+      if (usePipeline.getState().active) preview.pipeline(true);
       const resume = () => {
         settled.current?.();
         settled.current = null;
@@ -621,6 +636,9 @@ export function Viewer({
           useTimeline.setState({ selection: emptySelection });
       }}
       data-preview-timing-ready={timingReady === live?.gen || undefined}
+      data-pipeline={
+        pipelineEnabled ? (pipelineActive ? "on" : "off") : undefined
+      }
       data-preview-ready={
         handoff.kind === "showing" &&
         (handoff.confirmed?.revision === revision || mixedRevision === revision)
@@ -634,6 +652,11 @@ export function Viewer({
         data-empty={!live || undefined}
         style={box}
       >
+        <canvas
+          ref={pipelineCanvas}
+          className="edit-pipeline"
+          hidden={!pipelineActive}
+        />
         {slots.map((gen) => {
           const retained =
             handoff.kind === "promoting" &&
