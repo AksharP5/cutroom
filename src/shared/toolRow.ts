@@ -191,6 +191,16 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the variable ${target}` : "a variable"),
   },
+  fonts_list: {
+    verb: ["Listed", "Listing", "List"],
+    kind: "project",
+    object: () => "fonts",
+  },
+  fonts_add: {
+    verb: ["Added", "Adding", "Add"],
+    kind: "edit",
+    object: (target) => (target ? `the font ${target}` : "a font"),
+  },
   history_list: { verb: read, kind: "project", object: () => "the history" },
   history_undo: {
     verb: ["Undid", "Undoing", "Undo"],

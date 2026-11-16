@@ -16,7 +16,7 @@ With Select, the picture is a direct surface. Rest the pointer on a clip and a t
 
 A text clip has a Text section above Transform. Double-click the clip on the picture to open the inspector on that field with the words selected, ready to type over. Enter or leaving the field saves the words as one undo step, Shift+Enter starts a new line, and Esc discards the typing. Line breaks are written as `<br>`; other whitespace collapses as HTML renders it by default. The field is shown but disabled, with the reason under it, when the text has markup inside it, keeps its exact spacing (`<pre>` or an inline `white-space: pre`), or a script writes it by id. Shapes and media have no Text section.
 
-Every visual clip that is not a Cutroom title has a Style section below Composite. It starts closed; once opened it stays open as the selection changes. A clip with words starts it with Font, Weight, Size, Tracking, Leading, Colour, Align and Case; then every clip has Box (width and height), Fill (a colour or a two-colour gradient), Radius, Shadow and Blur, and a video or image adds Fit. Each row starts at Auto, meaning the composition's own stylesheet decides, so a headline an agent wrote keeps its look until you change a row. Setting a row writes that one property inline on the clip and is one undo step; typing `auto`, the row's restore button or a double-click on its label hands it back. Tracking and Leading are percentages of the font size, Font lists the families the project declares, and Shadow follows what the clip draws (its letters, its rounded box, an image's transparency). The head's Reset style button clears every row in one step. Copy style and Paste style in the clip menu carry one clip's style to others; rows a clip cannot take, such as text style on a shape, are left out. The composition's own animation still wins over a row it animates, as it does over Opacity.
+Every visual clip that is not a Cutroom title has a Style section below Composite. It starts closed; once opened it stays open as the selection changes. A clip with words starts it with Font, Weight, Size, Tracking, Leading, Colour, Align and Case; then every clip has Box (width and height), Fill (a colour or a two-colour gradient), Radius, Shadow and Blur, and a video or image adds Fit. Each row starts at Auto, meaning the composition's own stylesheet decides, so a headline an agent wrote keeps its look until you change a row. Setting a row writes that one property inline on the clip and is one undo step; typing `auto`, the row's restore button or a double-click on its label hands it back. Tracking and Leading are percentages of the font size, Font lists the families the project declares and ends with [Add font...](#fonts), and Shadow follows what the clip draws (its letters, its rounded box, an image's transparency). The head's Reset style button clears every row in one step. Copy style and Paste style in the clip menu carry one clip's style to others; rows a clip cannot take, such as text style on a shape, are left out. The composition's own animation still wins over a row it animates, as it does over Opacity.
 
 The viewer fits the composition inside the stage with a 12px margin, on whole pixels. Fit and 100% are in the zoom menu.
 
@@ -191,7 +191,7 @@ A title is a text clip with a preset entrance and exit: Fade, Slide, Scale, Wipe
 
 Select one title and the inspector shows a Title section between Text and Transform: Font, Weight, Size, Colour, Align, Position, Plate, Shadow, Stroke, In and Out. Every change is one undo step and shows on the picture as soon as it saves.
 
-- Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font. New projects declare Instrument Sans, Oswald, Fraunces and Martian Mono. To add another, put its file in the project and declare it with `@font-face`.
+- Font lists the families the project declares with `@font-face`, plus Default, which uses the composition's own font. New projects declare Instrument Sans, Oswald, Fraunces and Martian Mono. [Add font...](#fonts) at the end of the menu adds another and applies it.
 - Size is in composition pixels; drag its label or use Up and Down, as with Position.
 - Colour is a swatch that opens the system colour picker, with the same colour as six hex digits beside it. Moving through colours in the picker saves once, when the picker closes.
 - Position picks one of five places on the picture and clears any Position X/Y offset in the same undo step, so the title lands on the place you chose.
@@ -219,6 +219,15 @@ A title is one element in the composition's HTML plus one stylesheet block Cutro
 If a source edit gives a title an undeclared font, invalid settings, markup other than `<br>`, or empty words, the timeline reads it as an ordinary element with `title: null` and a reason in `sourceRestrictions.title`. Repair its source before changing title settings.
 
 Titles an agent wrote as sub-composition files or root scripts are left as they are and keep the behavior described above.
+
+### Fonts
+
+**Add font...** at the end of any Font menu, in the Title or Style section, adds a font to the project and applies it to the selected clip:
+
+- Search Google Fonts, pick a family and tick the weights you want, then Add. Cutroom downloads one file per weight.
+- Or choose **Import files**, or drop files on the dialog: `.ttf`, `.otf`, `.woff` or `.woff2`, up to 20 MB each. The family, weight and italic come from the font file itself; a variable font keeps its whole weight range.
+
+Either way the files are copied into the project's `assets/fonts` folder and declared with `@font-face` in `index.html`, so the viewer and every export use those files, with no network needed after the download. The family then shows in every Font menu and agents can use it. Adding a font is one undo step, and undo removes its files too. A family `index.html` already declares by hand is refused, so an added font never shadows one you wrote. Without a connection, the Google search and download say so and nothing is written.
 
 ### Transitions
 
