@@ -451,6 +451,13 @@ export const TimelineSchema = z.object({
   clips: z.array(ClipSchema),
   markers: z.array(MarkerSchema),
   range: RangeSchema,
+  masterFx: z
+    .array(FxNodeSchema)
+    .max(MAX_FX_NODES)
+    .optional()
+    .describe(
+      "Audio effects on the whole mix, the composition root's master bus, after every track. Omitted when it has none. Change them with setMaster",
+    ),
   /** Projected by the parser from the project's `@font-face` rules, never written back. */
   fonts: z
     .array(z.string())
@@ -864,6 +871,14 @@ export const CommandSchema = z.discriminatedUnion("type", [
     })
     .describe(
       "Create a track or change its name, lock, auto-select, enable, mute, solo or gain. Mute covers all sound on the track, including embedded video audio. Gain excludes clips with trackGainWarning. Solo selects audio tracks and affects preview and export.",
+    ),
+  z
+    .object({
+      type: z.literal("setMaster"),
+      fx: FxChainInputSchema,
+    })
+    .describe(
+      "Replace the master bus effects, which process the whole mix after every track, as setClip.fx does for one clip. Loudness normalization of the mix is a gain effect here",
     ),
   z
     .object({

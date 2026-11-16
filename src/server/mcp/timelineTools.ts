@@ -11,9 +11,13 @@ import type { RequestOptions } from "./server";
 import { agentTimeline, editReply, filterTimeline } from "./timelineReply";
 import {
   CommandBatchSchema,
+  CommandSchema,
   CopyClipsSchema,
   TimelineViewSchema,
 } from "../../shared/timeline/schema";
+import type { CommandInput, TimelineView } from "../../shared/timeline/schema";
+import { mixLoudnessFx } from "../../shared/timeline/fx";
+import { DuckRequestSchema, LoudnessRequestSchema } from "../timeline/audio";
 
 type JsonRequest = (
   path: string,
@@ -124,7 +128,7 @@ export function registerTimelineTools(
     "timeline_read",
     {
       description:
-        "Read the timeline in integer frames at the composition's fps: tracks (including empty ones), clips, markers, the in/out range, and the revision to pass to timeline_edit. On long timelines pass from/to and tracks to get only the clips and markers there; tracks and the revision always cover the whole timeline. agentChanges lists clips still awaiting the owner's review; pass clipEdits: true for the owner and agent edit ledger behind it. Clip fields: x/y are additive offsets in composition CSS pixels on top of authored CSS and animation, not coordinates; positive x is right, positive y is down, null is none. scaleX/scaleY (1 = own size), rotation (degrees clockwise about the centre) and crop (pixels off each edge of the clip's own box) apply on top of authored transforms; null is none, and sourceRestrictions.transform says why setClip would refuse them. The composition's own animation can override all of these, so check with timeline_view; they never move linked audio. keyframes animates position, scale, rotation, crop and opacity: per property, keyframes {frame, value, ease} at clip-local frames (0 is the clip's first frame), in the static fields' units, which read null while their property has keyframes; ease (linear, ease-in, ease-out, ease-in-out, hold) shapes the motion to the next keyframe, and the value holds before the first and after the last. Edit them with setKeyframe, removeKeyframe and moveKeyframe. text holds a text element's words, with <br> and preserved source line breaks as newlines; sourceRestrictions.text says why setClip text would be refused. title holds a Cutroom title's look and motion. volume is linear clip gain (1 = 0 dB, null = unity). A track's volume is a separate gain stage on top; clips with trackGainWarning keep their authored audio group and skip it. Each stage goes up to +12 dB. automation is null or the clip's volume envelope: volume lists points {frame, gain} at clip-local frames, gain being linear on top of the clip's gain (1 = no change), straight between points and held before the first and after the last; set it with setClip.automation {volume: [...]}. lanes names effect-parameter lanes, which setClip.automation keeps. A baked ramp may bend between points; writing points back makes straight runs. fx on a clip or a track is its audio effect chain in signal order: {id, type, params} with params left out at their defaults, enabled false when bypassed, and preset naming the preset that added it. A track's chain processes every clip on it except those with trackGainWarning. Change them with setClip.fx and setTrack.fx, which take the whole chain; an entry with an existing id keeps the values it leaves out, and {preset} adds a preset's effects. fadeIn/fadeOut are authored frame lengths; playback scales both by min(1, duration / (fadeIn + fadeOut)). transitionIn/transitionOut hold a cut's transition on both clips that meet there; clip start and duration stay at the cut, and the media running past it under the transition is not counted.",
+        "Read the timeline in integer frames at the composition's fps: tracks (including empty ones), clips, markers, the in/out range, and the revision to pass to timeline_edit. On long timelines pass from/to and tracks to get only the clips and markers there; tracks and the revision always cover the whole timeline. agentChanges lists clips still awaiting the owner's review; pass clipEdits: true for the owner and agent edit ledger behind it. Clip fields: x/y are additive offsets in composition CSS pixels on top of authored CSS and animation, not coordinates; positive x is right, positive y is down, null is none. scaleX/scaleY (1 = own size), rotation (degrees clockwise about the centre) and crop (pixels off each edge of the clip's own box) apply on top of authored transforms; null is none, and sourceRestrictions.transform says why setClip would refuse them. The composition's own animation can override all of these, so check with timeline_view; they never move linked audio. keyframes animates position, scale, rotation, crop and opacity: per property, keyframes {frame, value, ease} at clip-local frames (0 is the clip's first frame), in the static fields' units, which read null while their property has keyframes; ease (linear, ease-in, ease-out, ease-in-out, hold) shapes the motion to the next keyframe, and the value holds before the first and after the last. Edit them with setKeyframe, removeKeyframe and moveKeyframe. text holds a text element's words, with <br> and preserved source line breaks as newlines; sourceRestrictions.text says why setClip text would be refused. title holds a Cutroom title's look and motion. volume is linear clip gain (1 = 0 dB, null = unity). A track's volume is a separate gain stage on top; clips with trackGainWarning keep their authored audio group and skip it. Each stage goes up to +12 dB. automation is null or the clip's volume envelope: volume lists points {frame, gain} at clip-local frames, gain being linear on top of the clip's gain (1 = no change), straight between points and held before the first and after the last; set it with setClip.automation {volume: [...]}. lanes names effect-parameter lanes, which setClip.automation keeps. A baked ramp may bend between points; writing points back makes straight runs. fx on a clip or a track is its audio effect chain in signal order: {id, type, params} with params left out at their defaults, enabled false when bypassed, and preset naming the preset that added it. A track's chain processes every clip on it except those with trackGainWarning. timeline.masterFx, when present, is the master bus chain over the whole mix, set with setMaster; audio_loudness puts the mix's loudness gain there. Change them with setClip.fx and setTrack.fx, which take the whole chain; an entry with an existing id keeps the values it leaves out, and {preset} adds a preset's effects. fadeIn/fadeOut are authored frame lengths; playback scales both by min(1, duration / (fadeIn + fadeOut)). transitionIn/transitionOut hold a cut's transition on both clips that meet there; clip start and duration stay at the cut, and the media running past it under the transition is not counted.",
       inputSchema: {
         ...input,
         from: z
@@ -210,6 +214,124 @@ export function registerTimelineTools(
             fullTimeline || !exact,
           ),
       });
+    },
+  );
+  /** Applies mix commands as one undo step, reporting what was measured beside the changes. */
+  const commit = (
+    projectId: string,
+    before: TimelineView,
+    label: string,
+    commands: CommandInput[],
+    measured: object,
+  ) =>
+    request(
+      `/projects/${id(projectId)}/commands`,
+      "POST",
+      {
+        composition: before.composition,
+        expectedRevision: before.revision,
+        label,
+        commands,
+      },
+      {
+        reply: (result) => ({
+          measured,
+          ...editReply(before, TimelineViewSchema.parse(result), false),
+        }),
+      },
+    );
+  /** Measures what a mix edit needs where the media is, then commits it. */
+  const applyPlan = async (
+    projectId: string,
+    composition: string,
+    kind: "duck" | "loudness",
+    body: object,
+  ) => {
+    const before = await readView(projectId, composition);
+    if (!before.ok) return before.failure;
+    const planned = await fetchLocal(
+      `/api/cutroom/projects/${id(projectId)}/audio/${kind}?composition=${id(composition)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!planned.ok) return failedResponse(planned);
+    const { label, commands, ...measured } = z
+      .looseObject({ label: z.string(), commands: z.array(CommandSchema) })
+      .parse(await planned.json());
+    return commit(projectId, before.view, label, commands, measured);
+  };
+  const edits = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    openWorldHint: false,
+  };
+  server.registerTool(
+    "audio_duck",
+    {
+      description:
+        "Duck a clip, such as a music bed, under the voice: its volume comes down by depth dB while any voice speaks, over attack seconds before speech and back over release seconds after, staying down through pauses too short to come back up in. Speech is found in what each voice clip plays. The result is the bed's volume points (timeline_read automation.volume), multiplied into any it had, as one undo step; the owner can drag them. Reply: measured.voices (the clips listened to), measured.speech (spans found), and the edit's changes. Run it again after moving the voice, or undo it first, since it multiplies into the points that are there.",
+      inputSchema: { ...input, ...DuckRequestSchema.shape },
+      annotations: edits,
+    },
+    ({ projectId, composition, ...duck }) =>
+      applyPlan(projectId, composition, "duck", duck),
+  );
+  server.registerTool(
+    "audio_loudness",
+    {
+      description:
+        "Normalize loudness with an EBU R128 meter (FFmpeg ebur128), as gain only. With clipIds, measure what each clip plays at its file's own level and set its clip gain so it reaches target LUFS (default -16), held at +12 dB; measured.clips gives each clip's measured LUFS, true peak, and the level it reaches. With jobId, measure a finished whole-timeline export from export_start and set a Loudness gain effect on the master bus (timeline masterFx, setMaster) so the next export reaches target; export again to deliver it. Each is one undo step.",
+      inputSchema: {
+        ...input,
+        target: LoudnessRequestSchema.shape.target,
+        clipIds: LoudnessRequestSchema.shape.clipIds.optional(),
+        jobId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A finished whole-timeline export to measure the mix from"),
+      },
+      annotations: edits,
+    },
+    async ({ projectId, composition, target, clipIds, jobId }) => {
+      if (clipIds && !jobId)
+        return applyPlan(projectId, composition, "loudness", {
+          clipIds,
+          target,
+        });
+      if (!jobId || clipIds)
+        return failed(400, "Pass clipIds for clips or jobId for the mix.");
+      const before = await readView(projectId, composition);
+      if (!before.ok) return before.failure;
+      const measuring = await fetchLocal(`/api/render/${id(jobId)}/loudness`);
+      if (!measuring.ok) return failedResponse(measuring);
+      const measured = z
+        .object({
+          lufs: z.number().nullable(),
+          truePeak: z.number().nullable(),
+        })
+        .parse(await measuring.json());
+      if (measured.lufs === null)
+        return failed(422, "The export is silent under the meter's gate.");
+      return commit(
+        projectId,
+        before.view,
+        `Normalize mix to ${target} LUFS`,
+        [
+          {
+            type: "setMaster",
+            fx: mixLoudnessFx(
+              before.view.timeline.masterFx ?? [],
+              measured.lufs,
+              target,
+            ),
+          },
+        ],
+        measured,
+      );
     },
   );
   server.registerTool(

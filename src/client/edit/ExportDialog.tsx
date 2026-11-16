@@ -1,3 +1,4 @@
+import { MixLoudness } from "./MixLoudness";
 import { useEffect, useRef, useState } from "react";
 import {
   compositionExportName,
@@ -551,6 +552,11 @@ function ExportDialog({
               )}
             </dl>
             <p className="export-path">{job.outputPath}</p>
+            {job.status === "complete" &&
+              job.jobId &&
+              job.projectId === projectId && (
+                <MixLoudness projectId={projectId} jobId={job.jobId} />
+              )}
             {active || job.status === "complete" ? (
               <JobProgress job={job} />
             ) : null}

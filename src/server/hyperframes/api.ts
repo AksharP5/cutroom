@@ -68,6 +68,7 @@ import {
 import { STAGING_PREFIX, createRenderWorkers } from "./jobs";
 import { createRenderIndex } from "./renders";
 import type { ExportRequest } from "./jobs";
+import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
 import { previewPolicy } from "./isolation";
@@ -1131,6 +1132,20 @@ export function createHyperframesApi(
     if (!job) throw new HttpError(404, "Export job not found.");
     c.header("Cache-Control", "no-store");
     return c.json(snapshot(job));
+  });
+  // The whole mix as an export wrote it, measured with FFmpeg's EBU R128 meter.
+  api.get("/render/:jobId/loudness", async (c) => {
+    const job = renders.get(c.req.param("jobId"));
+    if (!job) throw new HttpError(404, "Export job not found.");
+    if (job.status !== "complete")
+      throw new HttpError(409, "The export has not finished.");
+    if (job.range)
+      throw new HttpError(
+        422,
+        "A range export holds part of the mix. Export the whole timeline to measure it.",
+      );
+    c.header("Cache-Control", "no-store");
+    return c.json(await measureLoudness(job.outputPath));
   });
   api.post("/render/:jobId/cancel", async (c) => {
     const job = renders.get(c.req.param("jobId"));

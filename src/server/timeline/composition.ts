@@ -786,6 +786,7 @@ export function parseComposition(
 
   const rootDuration = parseNumeric(root.attrs["data-duration"]);
   const rootDurationAuthored = rootDuration !== null && rootDuration > 0;
+  const masterFx = readableFx(root.attrs["data-fx-chain"]);
   const timeline = normalizeTimeline({
     fps,
     duration: rootDurationAuthored
@@ -806,6 +807,7 @@ export function parseComposition(
       out:
         settings.range.out === null ? null : toFrames(settings.range.out, fps),
     },
+    ...(masterFx.length && { masterFx }),
   });
   const parsed: ParsedComposition = {
     html,
@@ -2043,11 +2045,29 @@ export function patchComposition(
   for (const [at, texts] of inserts)
     edits.push({ start: at, end: at, text: texts.join("") });
 
-  if (parsed.rootDurationAuthored && after.duration !== before.duration)
+  const rootChanges: AttributeChange[] = [
+    ...(parsed.rootDurationAuthored && after.duration !== before.duration
+      ? [["data-duration", String(toSeconds(after.duration, fps))] as const]
+      : []),
+    ...(!Bun.deepEquals(before.masterFx ?? [], after.masterFx ?? [])
+      ? [
+          [
+            "data-fx-chain",
+            writeFxChain(
+              after.masterFx ?? [],
+              parsed.root.attrs["data-fx-chain"],
+            ),
+          ] as const,
+        ]
+      : []),
+  ];
+  if (rootChanges.length)
     edits.push(
-      ...attributeEdits(openingTag(spans, parsed.root, "root"), html, [
-        ["data-duration", String(toSeconds(after.duration, fps))],
-      ]),
+      ...attributeEdits(
+        openingTag(spans, parsed.root, "root"),
+        html,
+        rootChanges,
+      ),
     );
   const output = applyEdits(html, edits);
   // Unity buses are projected for playback; persist routing only once a track fader is used.

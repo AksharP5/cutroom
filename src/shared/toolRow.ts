@@ -268,6 +268,16 @@ const cutroomTools: Record<
     kind: "edit",
     object: () => "the export",
   },
+  audio_duck: {
+    verb: ["Ducked", "Ducking", "Duck"],
+    kind: "edit",
+    object: () => "the music under the voice",
+  },
+  audio_loudness: {
+    verb: ["Normalized", "Normalizing", "Normalize"],
+    kind: "edit",
+    object: () => "loudness",
+  },
 };
 /** Every Cutroom tool that has its own wording, so a new tool cannot ship without one. */
 export const describedCutroomTools = Object.keys(cutroomTools);
