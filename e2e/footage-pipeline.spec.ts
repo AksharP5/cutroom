@@ -96,10 +96,12 @@ async function edit(
   expect(response.ok(), await response.text()).toBe(true);
 }
 
-/** PNG screenshots of the viewer's picture at each frame, with the pipeline on or off. */
+/** PNG screenshots of the viewer at each frame, with the pipeline on or off. */
 async function pictures(
   page: Page,
   project: Project,
+  /** Timecode's frames per second, which is 30 for 29.97 and 24 for 23.976. */
+  fps: number,
   frames: number[],
   pipeline: boolean,
 ) {
@@ -108,29 +110,57 @@ async function pictures(
     if (window === window.top)
       localStorage.setItem("cutroom.footagePipeline", String(on));
   }, pipeline);
-  await page.goto(`/#project/${project.id}`);
   const stage = page.locator(".edit-stage");
+  const shots: string[] = [];
+  await page.goto(`/#project/${project.id}`);
   await expect(stage).toHaveAttribute("data-preview-ready");
   if (pipeline) await expect(stage).toHaveAttribute("data-pipeline", "on");
   else await expect(stage).not.toHaveAttribute("data-pipeline");
-  const shots: string[] = [];
   for (const frame of frames) {
-    await page.keyboard.press("Home");
-    for (let step = 0; step < frame; step++)
-      await page.keyboard.press("ArrowRight");
+    // One typed seek per frame: stepping into a transition under load can leave HyperFrames
+    // holding a clip's transition animation several times over, which composes its opacity.
+    await page
+      .getByRole("button", { name: "Current time. Click to type a time." })
+      .click();
+    const time = page.getByRole("textbox", { name: "Go to time" });
+    await time.pressSequentially(
+      String(Math.floor(frame / fps) * 100 + (frame % fps)).padStart(8, "0"),
+    );
+    await time.press("Enter");
     if (pipeline)
       await expect(page.locator(".edit-pipeline")).toHaveAttribute(
         "data-frame",
         String(frame),
       );
     await expect(stage).toHaveAttribute("data-preview-ready");
-    // The exact source frame replaces any stand-in once the playhead rests.
-    await page.waitForTimeout(700);
-    shots.push(
-      (await page.locator(".edit-picture").screenshot()).toString("base64"),
-    );
+    // The exact source frames replace any stand-in once the playhead rests, later on a slow
+    // runner: compare only a picture that two screenshots 300 ms apart agree on.
+    const picture = page.locator(".edit-picture");
+    let shot = (await picture.screenshot()).toString("base64");
+    for (let tries = 0; tries < 20; tries++) {
+      await page.waitForTimeout(300);
+      const next = (await picture.screenshot()).toString("base64");
+      if (next === shot) break;
+      shot = next;
+    }
+    // The reference itself must draw each transition once.
+    const preview = page
+      .frames()
+      .find((frame) => frame.url().includes("/api/isolated/"))!;
+    expect(
+      await preview.evaluate(() =>
+        [...document.querySelectorAll("video")].some((video) => {
+          const names = video
+            .getAnimations()
+            .map((animation) => (animation as CSSAnimation).animationName);
+          return new Set(names).size !== names.length;
+        }),
+      ),
+      `frame ${frame} has a repeated animation`,
+    ).toBe(false);
+    shots.push(shot);
+    if (pipeline) await expect(stage).toHaveAttribute("data-pipeline", "on");
   }
-  if (pipeline) await expect(stage).toHaveAttribute("data-pipeline", "on");
   return shots;
 }
 
@@ -198,18 +228,29 @@ async function expectSamePictures(
   }
 }
 
-async function parity(browser: Browser, project: Project, frames: number[]) {
+async function parity(
+  browser: Browser,
+  project: Project,
+  fps: number,
+  frames: number[],
+) {
   const context = await browser.newContext({
     viewport: { width: 1720, height: 1050 },
   });
   try {
-    const off = await pictures(await context.newPage(), project, frames, false);
+    const off = await pictures(
+      await context.newPage(),
+      project,
+      fps,
+      frames,
+      false,
+    );
     const onContext = await browser.newContext({
       viewport: { width: 1720, height: 1050 },
     });
     try {
       const page = await onContext.newPage();
-      const on = await pictures(page, project, frames, true);
+      const on = await pictures(page, project, fps, frames, true);
       await expectSamePictures(page, off, on, frames);
     } finally {
       await onContext.close();
@@ -230,7 +271,12 @@ for (const rate of [
     test.setTimeout(240_000);
     const created = await cutsProject(request, rate);
     // Each side of both cuts, and frames inside each clip.
-    await parity(browser, created, [0, 1, 29, 30, 31, 59, 60, 61, 100]);
+    await parity(
+      browser,
+      created,
+      Math.round(rate.num / rate.den),
+      [0, 1, 29, 30, 31, 59, 60, 61, 100],
+    );
   });
 
 /** Two cuts on V1 with media offsets, the second of a different file and size. */
@@ -304,6 +350,7 @@ test("the footage pipeline places, crops, fades and dissolves clips as HyperFram
   await parity(
     browser,
     created,
+    30,
     [10, 34, 37, 39, 43, 46, 74, 77, 80, 83, 86, 100],
   );
 });
