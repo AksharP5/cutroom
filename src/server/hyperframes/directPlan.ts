@@ -126,6 +126,41 @@ const ROOT_ATTRIBUTES = new Set([
   "data-hf-id",
 ]);
 
+/** Elements that run code, or bring in styles or another document, wherever they sit. */
+const ACTIVE_ELEMENTS = new Set([
+  "script",
+  "style",
+  "link",
+  "iframe",
+  "frame",
+  "object",
+  "embed",
+]);
+
+/**
+ * Why something inside the composition could change what any frame shows, or undefined. A script
+ * or event handler can rewrite any clip, a nested stylesheet can restyle one, and a frame or
+ * plugin draws a document of its own, so none of them may hide inside a clip.
+ */
+export function activeContent(root: Element): string | undefined {
+  const inside = (element: Element): string | undefined => {
+    if (ACTIVE_ELEMENTS.has(element.tagName)) return `a <${element.tagName}>`;
+    const handler = element.attrs.find((entry) => /^on/i.test(entry.name));
+    if (handler) return `an ${handler.name} handler`;
+    for (const child of elements(element)) {
+      const found = inside(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  for (const clip of elements(root)) {
+    const found = inside(clip);
+    if (found)
+      return `${attribute(clip, "id") ?? "the composition"} has ${found}`;
+  }
+  return undefined;
+}
+
 const attribute = (element: Element, name: string) =>
   element.attrs.find((entry) => entry.name === name)?.value;
 const elements = (node: DefaultTreeAdapterTypes.ParentNode) =>
@@ -319,6 +354,8 @@ export function planDirectExport(
     return { reason: "the body holds more than the composition" };
   if (strayText(body) || strayText(root))
     return { reason: "the composition has text outside a clip" };
+  const active = activeContent(root);
+  if (active) return { reason: active };
   for (const element of [page, body])
     if (element.attrs.some((entry) => entry.name !== "lang"))
       return { reason: `<${element.tagName}> has attributes` };
@@ -373,8 +410,6 @@ export function planDirectExport(
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
       continue;
-    if (element.tagName === "script" || element.tagName === "style")
-      return { reason: `the composition has a <${element.tagName}>` };
     if (attribute(element, "data-hidden") !== undefined) continue;
     const start = seconds(attribute(element, "data-start"));
     const duration = seconds(attribute(element, "data-duration"));
