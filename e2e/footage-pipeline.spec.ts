@@ -96,6 +96,34 @@ async function edit(
   expect(response.ok(), await response.text()).toBe(true);
 }
 
+/**
+ * The exact source frames replace any stand-in once the playhead rests, later on a slow runner:
+ * a screenshot of the viewer that two taken 300 ms apart agree on.
+ */
+async function settledShot(page: Page) {
+  const picture = page.locator(".edit-picture");
+  let shot = (await picture.screenshot()).toString("base64");
+  for (let tries = 0; tries < 20; tries++) {
+    await page.waitForTimeout(300);
+    const next = (await picture.screenshot()).toString("base64");
+    if (next === shot) break;
+    shot = next;
+  }
+  return shot;
+}
+
+/** Moves the playhead by typing the frame's timecode. */
+async function typeFrame(page: Page, frame: number, fps: number) {
+  await page
+    .getByRole("button", { name: "Current time. Click to type a time." })
+    .click();
+  const time = page.getByRole("textbox", { name: "Go to time" });
+  await time.pressSequentially(
+    String(Math.floor(frame / fps) * 100 + (frame % fps)).padStart(8, "0"),
+  );
+  await time.press("Enter");
+}
+
 /** PNG screenshots of the viewer at each frame, with the pipeline on or off. */
 async function pictures(
   page: Page,
@@ -119,30 +147,14 @@ async function pictures(
   for (const frame of frames) {
     // One typed seek per frame: stepping into a transition under load can leave HyperFrames
     // holding a clip's transition animation several times over, which composes its opacity.
-    await page
-      .getByRole("button", { name: "Current time. Click to type a time." })
-      .click();
-    const time = page.getByRole("textbox", { name: "Go to time" });
-    await time.pressSequentially(
-      String(Math.floor(frame / fps) * 100 + (frame % fps)).padStart(8, "0"),
-    );
-    await time.press("Enter");
+    await typeFrame(page, frame, fps);
     if (pipeline)
       await expect(page.locator(".edit-pipeline")).toHaveAttribute(
         "data-frame",
         String(frame),
       );
     await expect(stage).toHaveAttribute("data-preview-ready");
-    // The exact source frames replace any stand-in once the playhead rests, later on a slow
-    // runner: compare only a picture that two screenshots 300 ms apart agree on.
-    const picture = page.locator(".edit-picture");
-    let shot = (await picture.screenshot()).toString("base64");
-    for (let tries = 0; tries < 20; tries++) {
-      await page.waitForTimeout(300);
-      const next = (await picture.screenshot()).toString("base64");
-      if (next === shot) break;
-      shot = next;
-    }
+    const shot = await settledShot(page);
     // The reference itself must draw each transition once.
     const preview = page
       .frames()
@@ -364,4 +376,101 @@ test("the footage pipeline places, crops, fades and dissolves clips as HyperFram
     30,
     [10, 34, 37, 39, 43, 46, 74, 77, 80, 83, 86, 100],
   );
+});
+
+test("an edit or a jump at rest shows the right frame at once and settles on HyperFrames' picture", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(240_000);
+  const rate = { num: 30000, den: 1001 };
+  const created = await cutsProject(request, rate);
+  // The stand-in needs a.mp4's scrub proxy, made before the viewer opens.
+  await expect
+    .poll(
+      async () =>
+        (
+          await request.get(
+            `/api/cutroom/projects/${created.id}/media/scrub?path=a.mp4`,
+          )
+        ).status(),
+      { timeout: 60_000 },
+    )
+    .toBe(200);
+  const context = await browser.newContext({
+    viewport: { width: 1720, height: 1050 },
+  });
+  try {
+    const page = await context.newPage();
+    await pictures(page, created, 30, [20], true);
+    // Each picture the pipeline draws, by the number in its band, and whether it stood in.
+    await page.evaluate(
+      ({ band, height }) => {
+        const canvas =
+          document.querySelector<HTMLCanvasElement>(".edit-pipeline")!;
+        const read = document.createElement("canvas");
+        const context = read.getContext("2d", { willReadFrequently: true })!;
+        const drawn: { frame: number; number: number; standIn: boolean }[] = [];
+        new MutationObserver(() => {
+          read.width = canvas.width;
+          read.height = canvas.height;
+          context.drawImage(canvas, 0, 0);
+          const y = Math.round(((band / 2) * canvas.height) / height);
+          let number = 0;
+          for (let bit = 0; bit < 16; bit++) {
+            const x = Math.round(((bit + 0.5) / 16) * canvas.width);
+            if (context.getImageData(x, y, 1, 1).data[0]! > 128)
+              number |= 1 << bit;
+          }
+          drawn.push({
+            frame: Number(canvas.dataset.frame),
+            number,
+            standIn: canvas.dataset.standin === "true",
+          });
+        }).observe(canvas, {
+          attributes: true,
+          attributeFilter: ["data-frame", "data-standin"],
+        });
+        Object.assign(window, { pipelineDrawn: drawn });
+      },
+      { band: BAND, height: HEIGHT },
+    );
+    const pipeline = page.locator(".edit-pipeline");
+    const settled = async (frame: number) => {
+      await expect(pipeline).toHaveAttribute("data-frame", String(frame));
+      await expect(pipeline).toHaveAttribute("data-standin", "false");
+      await expect(page.locator(".edit-stage")).toHaveAttribute(
+        "data-preview-ready",
+      );
+      const drawn = await page.evaluate(() =>
+        (
+          window as unknown as {
+            pipelineDrawn: {
+              frame: number;
+              number: number;
+              standIn: boolean;
+            }[];
+          }
+        ).pipelineDrawn.splice(0),
+      );
+      return drawn.filter((picture) => picture.frame === frame);
+    };
+    // W at frame 20, inside v0, brings v1 to the playhead: a.mp4 from its frame 47.
+    await page.keyboard.press("KeyW");
+    const trimmed = await settled(20);
+    expect(trimmed.length).toBeGreaterThan(0);
+    expect(new Set(trimmed.map(({ number }) => number))).toEqual(new Set([47]));
+    const shots = [await settledShot(page)];
+    // Back to frame 5, v0's a.mp4 frame 5: neither decoder reaches back, so the proxy stands in.
+    await typeFrame(page, 5, 30);
+    const jumped = await settled(5);
+    expect(jumped.some(({ standIn }) => standIn)).toBe(true);
+    expect(new Set(jumped.map(({ number }) => number))).toEqual(new Set([5]));
+    shots.push(await settledShot(page));
+    const reference = await context.newPage();
+    const off = await pictures(reference, created, 30, [20, 5], false);
+    await expectSamePictures(reference, off, shots, [20, 5]);
+  } finally {
+    await context.close();
+  }
 });

@@ -126,3 +126,56 @@ export function shownAt(
     .sort((a, b) => a.level - b.level || a.index - b.index)
     .map(({ level: _level, index: _index, ...rest }) => rest);
 }
+
+/**
+ * The layers a frame draws: nothing shows beneath an opaque clip that fills the frame untouched.
+ * Null when the frame needs HyperFrames.
+ */
+export function visibleAt(timeline: Timeline, plan: Plan, frame: number) {
+  const all = shownAt(timeline, plan, frame);
+  if (!all) return null;
+  const covering = all.findLastIndex(
+    ({ clip, fit, opacity, brightness }) =>
+      opacity === 1 &&
+      brightness === 1 &&
+      fit !== "contain" &&
+      !clip.x &&
+      !clip.y &&
+      (clip.scaleX ?? 1) >= 1 &&
+      (clip.scaleY ?? 1) >= 1 &&
+      !clip.rotation &&
+      !Object.values(clip.crop ?? {}).some(Boolean),
+  );
+  return all.slice(Math.max(0, covering));
+}
+
+/** A clip that comes into view at `frame`: it starts there, or what covered it ends. */
+export interface Appearance {
+  frame: number;
+  layer: Shown;
+}
+
+/**
+ * Every clip that comes into view after `from` and up to `to`, in time order, whether it starts
+ * there or a clip above it stops covering it. Each needs its opening decoded before the clock
+ * gets there. Stops at a frame that needs HyperFrames.
+ */
+export function appearances(
+  timeline: Timeline,
+  plan: Plan,
+  from: number,
+  to: number,
+): Appearance[] {
+  const found: Appearance[] = [];
+  let before = new Set(
+    visibleAt(timeline, plan, from)?.map(({ clip }) => clip.id),
+  );
+  for (let frame = from + 1; frame <= to; frame++) {
+    const layers = visibleAt(timeline, plan, frame);
+    if (!layers) break;
+    for (const layer of layers)
+      if (!before.has(layer.clip.id)) found.push({ frame, layer });
+    before = new Set(layers.map(({ clip }) => clip.id));
+  }
+  return found;
+}

@@ -11,7 +11,7 @@ import {
   patchComposition,
 } from "../src/server/timeline/composition";
 import { planPreviewPipeline } from "../src/server/hyperframes/pipelinePlan";
-import { shownAt } from "../src/client/pipeline/layers";
+import { appearances, shownAt, visibleAt } from "../src/client/pipeline/layers";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
 import { defaultTitle } from "../src/shared/timeline/title";
 import { countingIds } from "./clip-ids";
@@ -238,4 +238,26 @@ test("frames show the right media time, stacking and transition opacity", () => 
     ],
   };
   expect(shownAt(other, plan, 120)).toBeNull();
+});
+
+test("playback prepares clips that come back into view, not only clips that start", () => {
+  const html = page();
+  const plan = drawable(html);
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  // The b-roll fills the frame opaquely from 30 to 60, so nothing beneath it is decoded.
+  expect(visibleAt(timeline, plan, 45)!.map(({ clip }) => clip.id)).toEqual([
+    "broll",
+  ]);
+  expect(
+    appearances(timeline, plan, 0, 100).map(({ frame, layer }) => ({
+      frame,
+      id: layer.clip.id,
+      time: Math.round(layer.time * 1000) / 1000,
+    })),
+  ).toEqual([
+    { frame: 30, id: "broll", time: 2 },
+    // a never starts here: the b-roll above it ends, and its picture resumes two seconds in.
+    { frame: 60, id: "a", time: 2 },
+    { frame: 90, id: "b", time: 10 },
+  ]);
 });
