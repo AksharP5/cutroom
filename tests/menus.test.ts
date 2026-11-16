@@ -105,6 +105,7 @@ test("a menu row for a keymap action shows the keymap's label and its first key"
     "editBackspace",
     "editDelete",
     "editClipEnabled",
+    "editLink",
     "editSelectClipsSelectTrackAfter",
   ];
   expect(rows({}).map(itemText)).toEqual([
@@ -129,14 +130,31 @@ test("the clip menu offers an edit only when its key would act on the selection"
     keymap.editBackspace.label,
     keymap.editDelete.label,
     keymap.editClipEnabled.label,
+    keymap.editLink.label,
     "Reveal media",
   ]);
-  // A selected clip can be cut, lifted and turned off; split waits for the playhead inside it.
-  // Its style pastes once a picture's style, not a title's, has been copied.
+  // A selected clip can be cut, lifted and turned off; split waits for the playhead inside it,
+  // and one clip has nothing to link to. Its style pastes once a picture's style, not a
+  // title's, has been copied.
   for (const frame of [30, 90])
     expect(disabled(rows({ selected: ["a"], clipboard: true, frame }))).toEqual(
-      [keymap.editM2SplitClip.label, "Paste style", "Reveal media"],
+      [
+        keymap.editM2SplitClip.label,
+        keymap.editLink.label,
+        "Paste style",
+        "Reveal media",
+      ],
     );
+  // A linked clip shows Link clips checked, and the row unlinks it.
+  const linked = {
+    ...timeline,
+    clips: timeline.clips.map((clip) => ({ ...clip, link: "lk" })),
+  };
+  expect(
+    rows({ timeline: linked, selected: ["a"] }).find(
+      (item) => "action" in item && item.action === "editLink",
+    ),
+  ).toMatchObject({ disabled: false, checked: true });
   expect(
     disabled(
       rows({
@@ -147,7 +165,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
         onReveal() {},
       }),
     ),
-  ).toEqual(["Paste style"]);
+  ).toEqual([keymap.editLink.label, "Paste style"]);
   expect(
     disabled(
       rows({
@@ -158,7 +176,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
         onReveal() {},
       }),
     ),
-  ).toEqual([]);
+  ).toEqual([keymap.editLink.label]);
 });
 
 test("the shortcut sheet lists every keymap action once", () => {

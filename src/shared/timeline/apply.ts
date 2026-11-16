@@ -583,6 +583,145 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       assertRippleSync(timeline, next, tracks, copies);
       return { ...timeline, clips: next };
     }
+    case "closeGap": {
+      const track = trackAt(command.track);
+      if (!track)
+        throw new TimelineError(
+          "not_found",
+          `Track ${command.track} does not exist.`,
+        );
+      const name = trackLabel(timeline, track.index);
+      if (track.locked)
+        throw new TimelineError("locked", `Track ${name} is locked.`);
+      const gap = gapAt(timeline, track.index, command.at);
+      if (!gap) {
+        const inside = clips.find(
+          (clip) =>
+            clip.track === track.index &&
+            clip.start <= command.at &&
+            command.at < clipEnd(clip),
+        );
+        throw new TimelineError(
+          "out_of_bounds",
+          inside
+            ? `Frame ${command.at} on ${name} is inside ${clipName(inside)}, not a gap.`
+            : `Nothing follows frame ${command.at} on ${name}, so there is no gap to close.`,
+        );
+      }
+      const tracks = rippleTracks(timeline, [track.index]);
+      // Resolve closes a gap only when the time is empty on every track it ripples.
+      const blocking = clips.find(
+        (clip) =>
+          tracks.has(clip.track) &&
+          clip.start < gap.to &&
+          clipEnd(clip) > gap.from,
+      );
+      if (blocking) {
+        const other = trackLabel(timeline, blocking.track);
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(blocking)} on ${other} is in the gap. Turn off auto-select on ${other} to close the gap without it.`,
+        );
+      }
+      const next = removeTime(
+        clips,
+        tracks,
+        () => gap.from,
+        gap.to - gap.from,
+        timeline,
+        mint,
+      );
+      // Nothing is cut, so every clip keeps its id; linked clips must move by the same amount.
+      const shift = (clip: Clip) => clip.start - byId.get(clip.id)!.start;
+      for (const clip of next) {
+        const stranded =
+          clip.link !== null &&
+          next.find(
+            (other) => other.link === clip.link && shift(other) !== shift(clip),
+          );
+        if (!stranded) continue;
+        const other = trackLabel(
+          timeline,
+          shift(clip) ? stranded.track : clip.track,
+        );
+        throw new TimelineError(
+          "unsupported",
+          `Linked clips of ${clipName(clip)} on ${other} do not ripple, so closing the gap would put them out of sync. Turn on auto-select on ${other}, or unlink them.`,
+        );
+      }
+      return { ...timeline, clips: next };
+    }
+    case "slip": {
+      const target = find(command.clipId);
+      const edit = slipEdit(timeline, target, command.linked);
+      if (!edit)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} has no source to slip.`,
+        );
+      if (command.by === 0) return timeline;
+      return within(timeline, edit, command.by, (frames, later) =>
+        frames
+          ? `${clipName(target)} can slip at most ${frameCount(frames)} ${later ? "later" : "earlier"} in its source`
+          : `${clipName(target)} cannot slip ${later ? "later" : "earlier"}`,
+      );
+    }
+    case "slide": {
+      const named = command.clipIds.map(find);
+      const edit = slideEdit(timeline, named);
+      if (command.by === 0) return timeline;
+      const name = clipName(named[0]!);
+      return within(timeline, edit, command.by, (frames, later) =>
+        frames
+          ? `${name} can slide at most ${frameCount(frames)} ${later ? "later" : "earlier"}`
+          : `${name} cannot slide ${later ? "later" : "earlier"}`,
+      );
+    }
+    case "link": {
+      const named = [...new Set(command.clipIds)].map(find);
+      if (named.length < 2)
+        throw new TimelineError(
+          "unsupported",
+          "Linking takes two or more different clips.",
+        );
+      const members = withPartners(clips, named);
+      const [first] = members;
+      if (
+        first?.link &&
+        members.every((clip) => clip.link === first.link) &&
+        members.length ===
+          clips.filter((clip) => clip.link === first.link).length
+      )
+        return timeline;
+      const link = uniqueName(taken, "lk", 1);
+      const ids = new Set(members.map((clip) => clip.id));
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          ids.has(clip.id) ? { ...clip, link } : clip,
+        ),
+      };
+    }
+    case "unlink": {
+      const named = new Set(command.clipIds.map(find));
+      const links = new Set([...named].flatMap((clip) => clip.link ?? []));
+      if (!links.size) return timeline;
+      // A partner left on its own is unlinked too.
+      const left = new Map<string, number>();
+      for (const clip of clips)
+        if (clip.link && links.has(clip.link) && !named.has(clip))
+          left.set(clip.link, (left.get(clip.link) ?? 0) + 1);
+      return {
+        ...timeline,
+        clips: clips.map((clip) =>
+          clip.link &&
+          links.has(clip.link) &&
+          (named.has(clip) || (left.get(clip.link) ?? 0) < 2)
+            ? { ...clip, link: null }
+            : clip,
+        ),
+      };
+    }
     case "insert": {
       const { clip: input, track, at, mode } = command;
       if (command.linkedAudio && input.kind !== "video")
@@ -1583,14 +1722,255 @@ function shiftAfter(
   return next;
 }
 
-function refuseRippleCut(clip: Clip, timeline: Timeline): never {
-  const kind = timeline.tracks.find(
-    (track) => track.index === clip.track,
-  )!.kind;
+/** A track as its header names it: V1 for the first video track, A2 for the second audio one. */
+function trackLabel(timeline: Timeline, index: number) {
+  const kind = timeline.tracks.find((track) => track.index === index)!.kind;
   const number = timeline.tracks.filter(
-    (track) => track.kind === kind && track.index <= clip.track,
+    (track) => track.kind === kind && track.index <= index,
   ).length;
-  const track = `${kind === "audio" ? "A" : "V"}${number}`;
+  return `${kind === "audio" ? "A" : "V"}${number}`;
+}
+
+const frameCount = (frames: number) =>
+  `${frames} ${frames === 1 ? "frame" : "frames"}`;
+
+/**
+ * The empty time around `frame` on a track: from the end of the clip before it, or the timeline's
+ * start, to the start of the clip after it. Null inside a clip and after a track's last clip,
+ * which Resolve does not count as a gap.
+ */
+export function gapAt(
+  timeline: Pick<Timeline, "clips">,
+  track: number,
+  frame: number,
+): { from: number; to: number } | null {
+  let from = 0;
+  let to = Infinity;
+  for (const clip of timeline.clips) {
+    if (clip.track !== track) continue;
+    const end = clipEnd(clip);
+    if (clip.start <= frame && frame < end) return null;
+    if (end <= frame) from = Math.max(from, end);
+    else to = Math.min(to, clip.start);
+  }
+  return to === Infinity ? null : { from, to };
+}
+
+/**
+ * A slip as a function of its frames: the clip, and with `linked` its partners that play a source,
+ * show other source in the same place. Both edges of each window move together, so keyframes and
+ * volume points follow their content as a trim's do. Null when the clip has no source to slip.
+ */
+function slipEdit(timeline: Timeline, clip: Clip, linked: boolean) {
+  if (clip.mediaStart === null) return null;
+  const members = new Set(
+    (linked ? withPartners(timeline.clips, [clip]) : [clip]).filter(
+      (member) => member.mediaStart !== null,
+    ),
+  );
+  return (by: number): Timeline => ({
+    ...timeline,
+    clips: timeline.clips.map((member) =>
+      members.has(member)
+        ? {
+            ...windowClip(
+              member,
+              member.start + by,
+              clipEnd(member) + by,
+              timeline.fps,
+              "trim",
+            ),
+            start: member.start,
+          }
+        : member,
+    ),
+  });
+}
+
+/**
+ * A slide as a function of its frames. The named clips and their partners move as one block,
+ * keeping their source. On each of their tracks the clip ending where the block starts and the
+ * clip starting where it ends trim to follow, and so do those neighbours' linked partners, as a
+ * trim moves a partner's edge with its own. A gap beside the block shrinks or grows instead. A clip
+ * that would trim on both sides lies inside the block, which is refused.
+ */
+function slideEdit(timeline: Timeline, named: Clip[]) {
+  const { clips, fps } = timeline;
+  const members = new Set(withPartners(clips, named).map((clip) => clip.id));
+  const starts = new Set<string>();
+  const ends = new Set<string>();
+  for (const member of clips) {
+    if (!members.has(member.id)) continue;
+    const others = clips.filter(
+      (other) => other.track === member.track && !members.has(other.id),
+    );
+    const left = others.find((other) => clipEnd(other) === member.start);
+    const right = others.find((other) => other.start === clipEnd(member));
+    if (left) for (const clip of withPartners(clips, [left])) ends.add(clip.id);
+    if (right)
+      for (const clip of withPartners(clips, [right])) starts.add(clip.id);
+  }
+  const inside = clips.find((clip) => starts.has(clip.id) && ends.has(clip.id));
+  if (inside)
+    throw new TimelineError(
+      "unsupported",
+      `${clipName(inside)} is between clips that slide, so they cannot slide as one block. Select it too, or slide them apart.`,
+    );
+  return (by: number): Timeline => ({
+    ...timeline,
+    clips: clips.map((clip) =>
+      members.has(clip.id)
+        ? { ...clip, start: clip.start + by }
+        : starts.has(clip.id) || ends.has(clip.id)
+          ? windowClip(
+              clip,
+              clip.start + (starts.has(clip.id) ? by : 0),
+              clipEnd(clip) + (ends.has(clip.id) ? by : 0),
+              fps,
+              "trim",
+            )
+          : clip,
+    ),
+  });
+}
+
+/**
+ * Refuses an edit that would shorten a transition on a cut it changed, as Resolve stops a slip or
+ * slide at a transition's handles. A transition that did not fit before is left to fit as it can.
+ */
+function assertTransitionsFit(before: Timeline, after: Timeline) {
+  const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
+  for (const incoming of after.clips) {
+    const transition = incoming.transitionIn;
+    if (!transition) continue;
+    const outgoing = after.clips.find(
+      (clip) =>
+        clip.id !== incoming.id &&
+        clip.track === incoming.track &&
+        clipEnd(clip) === incoming.start &&
+        sameTransition(clip.transitionOut, transition),
+    );
+    if (!outgoing) continue;
+    const was = [previous.get(outgoing.id), previous.get(incoming.id)];
+    if (was[0] === outgoing && was[1] === incoming) continue;
+    const room = transitionRoom(
+      after.fps,
+      outgoing,
+      incoming,
+      transition.alignment,
+    );
+    if (room.frames >= transition.duration) continue;
+    if (
+      was[0] &&
+      was[1] &&
+      transitionRoom(before.fps, was[0], was[1], transition.alignment).frames <
+        transition.duration
+    )
+      continue;
+    throw new TimelineError(
+      "out_of_bounds",
+      `The ${transition.duration}-frame transition between ${clipName(outgoing)} and ${clipName(incoming)} would not fit, since ${room.reason}.`,
+    );
+  }
+}
+
+/** An edit's result as the engine takes it, or the refusal. */
+function attempt(before: Timeline, after: Timeline) {
+  try {
+    assertTransitionsFit(before, after);
+    settle(before, after);
+    return null;
+  } catch (error) {
+    if (error instanceof TimelineError) return error;
+    throw error;
+  }
+}
+
+/** Refusals that say there is no more room; any other, such as a locked track, is not a limit. */
+const outOfRoom = (error: TimelineError) =>
+  error.code === "out_of_bounds" || error.code === "overlap";
+
+/**
+ * How many frames a one-parameter edit can go each way before the engine refuses it, found by
+ * trying it, with the refusal just past each limit. Every rule the engine applies counts: source
+ * ends, neighbours and their partners, the next clip, transitions and locks.
+ */
+function reach(before: Timeline, edit: (by: number) => Timeline) {
+  const side = (sign: 1 | -1) => {
+    let fits = 0;
+    let fails = 0;
+    let error: TimelineError | null = null;
+    for (let frames = 1; frames <= 1 << 24; frames *= 2) {
+      error = attempt(before, edit(sign * frames));
+      if (error) {
+        fails = frames;
+        break;
+      }
+      fits = frames;
+    }
+    if (!error) return { frames: Infinity, error: null };
+    while (fails - fits > 1) {
+      const middle = (fits + fails) >> 1;
+      const refusal = attempt(before, edit(sign * middle));
+      if (refusal) {
+        fails = middle;
+        error = refusal;
+      } else fits = middle;
+    }
+    return { frames: fits, error };
+  };
+  return { earlier: side(-1), later: side(1) };
+}
+
+/** Applies a slip or slide, or refuses it with how far it can go and what stops it there. */
+function within(
+  before: Timeline,
+  edit: (by: number) => Timeline,
+  by: number,
+  describe: (frames: number, later: boolean) => string,
+) {
+  const after = edit(by);
+  const refusal = attempt(before, after);
+  if (!refusal) return after;
+  if (!outOfRoom(refusal)) throw refusal;
+  const side = reach(before, edit)[by > 0 ? "later" : "earlier"];
+  if (side.error && !outOfRoom(side.error)) throw side.error;
+  const reason = (side.error ?? refusal).message.replace(/\.$/, "");
+  const limit = reason.charAt(0).toLowerCase() + reason.slice(1);
+  throw new TimelineError(
+    "out_of_bounds",
+    side.frames
+      ? `${describe(side.frames, by > 0)}: then ${limit}.`
+      : `${describe(0, by > 0)}: ${limit}.`,
+  );
+}
+
+const range = (before: Timeline, edit: (by: number) => Timeline) => {
+  const { earlier, later } = reach(before, edit);
+  return { min: 0 - earlier.frames, max: later.frames };
+};
+
+/**
+ * How far a clip can slip, in frames: negative shows earlier source. With `linked`, partners that
+ * play a source slip too and limit it. Null when the clip has no source to slip.
+ */
+export function slipRange(timeline: Timeline, clip: Clip, linked = true) {
+  const edit = slipEdit(timeline, clip, linked);
+  return edit && range(timeline, edit);
+}
+
+/** How far clips can slide as one block, in frames; none when they cannot form one. */
+export function slideRange(timeline: Timeline, clips: Clip[]) {
+  try {
+    return range(timeline, slideEdit(timeline, clips));
+  } catch (error) {
+    if (error instanceof TimelineError) return { min: 0, max: 0 };
+    throw error;
+  }
+}
+
+function refuseRippleCut(clip: Clip, timeline: Timeline): never {
+  const track = trackLabel(timeline, clip.track);
   const name = clip.label ?? clip.src?.split("/").at(-1) ?? clip.id;
   throw new TimelineError(
     "unsupported",

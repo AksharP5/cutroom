@@ -56,6 +56,25 @@ const budgets = {
     editorRestyled: 3300, // 2176 to 2179
     previewForced: 8, // 1 to 2
   },
+  // 40 pointer moves of up to 9 px on a clip's body with the Trim tool, then Esc. Each move
+  // decodes the slipped clip's in and out in turn for the viewer.
+  slip: {
+    commits: 4, // 3
+    bodyPaints: 50, // 39
+    editorLayouts: 56, // 43
+    editorForced: 10, // 6
+    editorRestyled: 3300, // 2179 to 2180
+    previewForced: 30, // 17 to 19
+  },
+  // The same on its name strip, which slides it between its neighbours.
+  slide: {
+    commits: 4, // 2
+    bodyPaints: 50, // 39
+    editorLayouts: 56, // 41
+    editorForced: 10, // 4
+    editorRestyled: 3300, // 2197
+    previewForced: 30, // 16
+  },
   // Each edit, until the preview shows it and the editor has been quiet for 30 frames.
   "ripple delete": {
     commits: 45, // 27 to 34
@@ -70,6 +89,21 @@ const budgets = {
     editorLayouts: 20, // 10 to 13
     editorForced: 8, // 3
     previewForced: 900, // 747 to 748
+  },
+  // Comma with the Trim tool slips the selected clip a frame; after S, period slides it.
+  "slip key": {
+    commits: 45, // 20 to 21
+    bodyPaints: 24, // 3
+    editorLayouts: 20, // 5
+    editorForced: 8, // 0
+    previewForced: 900, // 774 to 775
+  },
+  "slide key": {
+    commits: 45, // 16 to 18
+    bodyPaints: 24, // 3
+    editorLayouts: 20, // 2
+    editorForced: 8, // 1
+    previewForced: 900, // 2
   },
   W: {
     commits: 45, // 24 to 33
@@ -211,11 +245,11 @@ test(
     const clip = page.locator('[data-clip="talk-3"]');
     const box = (await clip.boundingBox())!;
     const y = box.y + box.height / 2;
-    const pointerGesture = async (x: (step: number) => number) => {
-      await page.mouse.move(x(0), y);
+    const pointerGesture = async (x: (step: number) => number, at = y) => {
+      await page.mouse.move(x(0), at);
       await page.mouse.down();
       for (let step = 1; step <= 40; step++) {
-        await page.mouse.move(x(step), y);
+        await page.mouse.move(x(step), at);
         await frames(page);
       }
       await page.keyboard.press("Escape");
@@ -288,6 +322,23 @@ test(
       previewFrames = await counted;
     });
 
+    // The Trim tool slips a clip by its body and slides it by its name strip.
+    await page.keyboard.press("t");
+    const trimmed = (await clip.boundingBox())!;
+    const body = trimmed.y + trimmed.height - 4;
+    const centre = trimmed.x + trimmed.width / 2;
+    await measure("slip", () =>
+      pointerGesture((step) => centre + (step % 10), body),
+    );
+    await measure("slide", () =>
+      pointerGesture((step) => centre + (step % 10), trimmed.y + 4),
+    );
+    await page.mouse.click(centre, body);
+    await page.waitForTimeout(300);
+    await measure("slip key", () => edit(() => page.keyboard.press(",")));
+    await page.keyboard.press("s");
+    await measure("slide key", () => edit(() => page.keyboard.press(".")));
+
     const report = Object.fromEntries(
       Object.entries(results).map(([gesture, work]) => [
         gesture,
@@ -320,6 +371,10 @@ test(
       "ripple delete",
       "undo",
       "W",
+      "slip",
+      "slide",
+      "slip key",
+      "slide key",
       "scrub",
       "play",
     ] as const)

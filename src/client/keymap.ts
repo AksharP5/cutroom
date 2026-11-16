@@ -370,28 +370,46 @@ export const keymap = {
   editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
   editNudgeTrimStepNudgeReverse: {
     area: "Edit",
-    label: "Nudge clips one frame earlier",
+    label: "Nudge, slip or slide one frame left",
     keys: [","],
     repeat: true,
   },
   editNudgeTrimStepNudgeForward: {
     area: "Edit",
-    label: "Nudge clips one frame later",
+    label: "Nudge, slip or slide one frame right",
     keys: ["."],
     repeat: true,
   },
   editNudgeTrimStepTrimMultiFrameLeft: {
     area: "Edit",
-    label: "Nudge clips five frames earlier",
+    label: "Nudge, slip or slide five frames left",
     keys: ["Shift+,"],
     repeat: true,
   },
   editNudgeTrimStepTrimMultiFrameRight: {
     area: "Edit",
-    label: "Nudge clips five frames later",
+    label: "Nudge, slip or slide five frames right",
     keys: ["Shift+."],
     repeat: true,
   },
+  trimToggleSlideMode: {
+    area: "Edit",
+    label: "Switch Trim keys between slip and slide",
+    keys: ["S"],
+  },
+  editSlipAudioOneFrameReverse: {
+    area: "Edit",
+    label: "Slip sound one frame left",
+    keys: ["Alt+,"],
+    repeat: true,
+  },
+  editSlipAudioOneFrameForward: {
+    area: "Edit",
+    label: "Slip sound one frame right",
+    keys: ["Alt+."],
+    repeat: true,
+  },
+  editLink: { area: "Edit", label: "Link clips", keys: ["Ctrl+Alt+L"] },
   clipChangeClipDuration: {
     area: "Edit",
     label: "Change clip duration",
@@ -460,7 +478,6 @@ export const keymap = {
 export const missing = {
   editSelectEditPoint: { label: "edit point selection", keys: ["V"] },
   editToggleEditPointType: { label: "edit point types", keys: ["U"] },
-  trimToggleSlideMode: { label: "slip or slide", keys: ["S"] },
   clipFreezeFrame: { label: "freeze frames", keys: ["Shift+R"] },
 } satisfies Record<string, { label: string; keys: readonly string[] }>;
 

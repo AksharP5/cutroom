@@ -1433,11 +1433,12 @@ function installPreviewBridge(
     }
     editPreloads.clear();
   };
-  const showEditPicture = async (edges: EditFrame[], version: number) => {
-    // Reuse the document's source elements, even beyond their saved trim windows.
-    // The runtime is paused; its normal seek restores all media on release.
-    await win.__hfWaitForSeekCompletion?.();
-    const deadline = performance.now() + FRAME_TIMEOUT;
+  /** Seeks the edges' sources together and captures their frames, or null when superseded. */
+  const captureEdges = async (
+    edges: EditFrame[],
+    version: number,
+    deadline: number,
+  ): Promise<(VideoFrame | HTMLImageElement)[] | null> => {
     const sources = await Promise.all(
       edges.map(async (edge) => {
         const element = clipElement(edge.clipId);
@@ -1473,43 +1474,69 @@ function installPreviewBridge(
       }),
     );
     const frames: (VideoFrame | HTMLImageElement)[] = [];
-    try {
-      for (;;) {
-        if (retired || version !== pictureVersion) return;
-        if (performance.now() > deadline)
-          throw new Error("The preview did not draw the edit frame in time.");
-        if (
-          sources.some((source) =>
+    for (;;) {
+      if (retired || version !== pictureVersion) return null;
+      if (performance.now() > deadline)
+        throw new Error("The preview did not draw the edit frame in time.");
+      if (
+        sources.some((source) =>
+          source instanceof HTMLVideoElement
+            ? source.seeking || source.readyState < 2
+            : !source.complete || !source.naturalWidth,
+        )
+      ) {
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+        continue;
+      }
+      try {
+        for (const source of sources)
+          frames.push(
             source instanceof HTMLVideoElement
-              ? source.seeking || source.readyState < 2
-              : !source.complete || !source.naturalWidth,
-          )
-        ) {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
+              ? new VideoFrame(source)
+              : source,
           );
-          continue;
-        }
-        try {
-          for (const source of sources)
-            frames.push(
-              source instanceof HTMLVideoElement
-                ? new VideoFrame(source)
-                : source,
-            );
-          break;
-        } catch (error) {
-          for (const frame of frames)
-            if (frame instanceof VideoFrame) frame.close();
-          frames.length = 0;
-          if (!(
-            error instanceof DOMException && error.name === "InvalidStateError"
-          ))
-            throw error;
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve()),
-          );
-        }
+        break;
+      } catch (error) {
+        for (const frame of frames)
+          if (frame instanceof VideoFrame) frame.close();
+        frames.length = 0;
+        if (!(
+          error instanceof DOMException && error.name === "InvalidStateError"
+        ))
+          throw error;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve()),
+        );
+      }
+    }
+    return frames;
+  };
+
+  const showEditPicture = async (edges: EditFrame[], version: number) => {
+    // Reuse the document's source elements, even beyond their saved trim windows.
+    // The runtime is paused; its normal seek restores all media on release.
+    await win.__hfWaitForSeekCompletion?.();
+    const deadline = performance.now() + FRAME_TIMEOUT;
+    // One element shows one frame at a time, so a slip's in and out of the same clip are
+    // decoded in turn; different clips still seek together.
+    const rounds: EditFrame[][] = [];
+    for (const edge of edges) {
+      const round = rounds.find(
+        (each) => !each.some((other) => other.clipId === edge.clipId),
+      );
+      if (round) round.push(edge);
+      else rounds.push([edge]);
+    }
+    const frames: (VideoFrame | HTMLImageElement)[] = [];
+    try {
+      for (const round of rounds) {
+        const captured = await captureEdges(round, version, deadline);
+        if (!captured) return;
+        // Put each frame back in the order the edges asked for.
+        for (const [index, frame] of captured.entries())
+          frames[edges.indexOf(round[index]!)] = frame;
       }
       const { width, height } = state();
       const canvas = editCanvas ?? document.createElement("canvas");

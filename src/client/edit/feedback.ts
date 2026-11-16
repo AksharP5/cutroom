@@ -6,6 +6,7 @@ import type {
 } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { clipName } from "../../shared/timeline/labels";
+import { gapAt } from "../../shared/timeline/apply";
 
 /**
  * Names what an overwrite took. A clip replaced whole is always named. One that lost only part
@@ -94,6 +95,13 @@ export function rippleFeedback(
         );
         end = Math.max(end, clip.start + clip.duration);
       }
+    }
+    if (command.type === "closeGap") {
+      const gap = gapAt(before, command.track, command.at);
+      if (!gap) continue;
+      ripple = true;
+      targetTracks.add(command.track);
+      frames -= gap.to - gap.from;
     }
     if (command.type === "insert" && command.mode === "insert") {
       ripple = true;

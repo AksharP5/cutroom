@@ -292,6 +292,47 @@ test("nudge moves the selection and its linked partners, overwriting, and stops 
   expect(press("editNudgeTrimStepNudgeForward", timeline, 0)).toEqual([]);
 });
 
+test("with the Trim tool, comma and period slip the picture the way they point, or slide after S", () => {
+  const timeline = sequence(musicOff);
+  const trim = (key: keyof typeof editKeys, mode: "slip" | "slide") =>
+    editKeys[key].commands(timeline, {
+      selection: new Set(["a", "a-sound", "b"]),
+      frame: 0,
+      trim: mode,
+    });
+  // One command per linked group: the partner follows.
+  expect(trim("editNudgeTrimStepNudgeForward", "slip")).toEqual([
+    { type: "slip", clipId: "a", by: -1 },
+    { type: "slip", clipId: "b", by: -1 },
+  ]);
+  // The selection slides as one block.
+  expect(trim("editNudgeTrimStepTrimMultiFrameLeft", "slide")).toEqual([
+    { type: "slide", clipIds: ["a", "b", "a-sound"], by: -5 },
+  ]);
+  // Alt slips only the sound.
+  expect(
+    press("editSlipAudioOneFrameForward", timeline, 0, ["a", "a-sound"]),
+  ).toEqual([{ type: "slip", clipId: "a-sound", by: -1, linked: false }]);
+});
+
+test("Delete closes a selected gap, and Ctrl+Alt+L unlinks linked clips or links the rest", () => {
+  const timeline = sequence();
+  const gap = { track: 1, from: 0, to: 200 };
+  for (const key of ["editDelete", "editBackspace"] as const)
+    expect(
+      editKeys[key].commands(timeline, { selection: new Set(), frame: 0, gap }),
+    ).toEqual([{ type: "closeGap", track: 1, at: 0 }]);
+  expect(press("editLink", timeline, 0, ["a", "b"])).toEqual([
+    { type: "unlink", clipIds: ["a", "b"] },
+  ]);
+  expect(press("editLink", timeline, 0, ["b", "title"])).toEqual([
+    { type: "link", clipIds: ["b", "title"] },
+  ]);
+  expect(() => press("editLink", timeline, 0, ["b"])).toThrow(
+    "Select two or more clips to link.",
+  );
+});
+
 test("Alt+Up and Alt+Down move clips a track within their kind, never over another clip", () => {
   const timeline = sequence(musicOff);
   // Up is a higher video track and a lower audio track; the sound on A1 has none and stays.

@@ -14,6 +14,7 @@ import type {
 } from "../../shared/timeline/schema";
 import type { Action } from "../keymap";
 import type { MediaDrag } from "../timeline/mediaDrag";
+import type { Gap } from "../timeline/selection";
 
 /** What an editing key acts on, read when the key is pressed. */
 export interface EditTarget {
@@ -23,6 +24,10 @@ export interface EditTarget {
   frame: number;
   /** A selected transition, named by the clip it leads into. */
   transition?: string;
+  /** A selected gap, which Delete and Backspace close. */
+  gap?: Gap;
+  /** With the Trim tool, what comma and period do to the selected clips, as Resolve's S picks. */
+  trim?: "slip" | "slide";
 }
 
 interface EditKey {
@@ -139,6 +144,11 @@ const outgoing = (timeline: Timeline, to: Clip) =>
 const removeSelection =
   (ripple: boolean) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    // A selected gap closes with either key, as in Resolve.
+    if (target.gap)
+      return [
+        { type: "closeGap", track: target.gap.track, at: target.gap.from },
+      ];
     // A selected transition is what Delete and Backspace remove.
     if (target.transition !== undefined) {
       const to = timeline.clips.find((clip) => clip.id === target.transition);
@@ -158,13 +168,65 @@ const removeSelection =
     return clipIds.length ? [{ type: "remove", clipIds, ripple }] : [];
   };
 
-/** Nudge moves the selected clips and their linked partners, overwriting what they land on. */
+/** The selected clips, one from each linked group, since a slip takes the partners along. */
+function onePerLink(clips: readonly Clip[]) {
+  const links = new Set<string>();
+  return clips.filter((clip) => {
+    if (clip.link === null) return true;
+    if (links.has(clip.link)) return false;
+    links.add(clip.link);
+    return true;
+  });
+}
+
+/**
+ * Nudge moves the selected clips and their linked partners, overwriting what they land on. With
+ * the Trim tool it slips each of them, or slides them as one block, as in Resolve: a slip moves
+ * the picture the way the key points, so period shows earlier source.
+ */
 const nudge =
   (by: number) =>
   (timeline: Timeline, target: EditTarget): CommandInput[] => {
-    const clipIds = selectedIn(timeline, target).map((clip) => clip.id);
+    const selected = selectedIn(timeline, target);
+    // The selection slides as one block, so clips next to each other move together.
+    if (target.trim === "slide")
+      return selected.length
+        ? [{ type: "slide", clipIds: selected.map((clip) => clip.id), by }]
+        : [];
+    if (target.trim === "slip") {
+      const sourced = selected.filter((clip) => clip.mediaStart !== null);
+      // With nothing to slip, the engine says why about the first clip.
+      return onePerLink(sourced.length ? sourced : selected.slice(0, 1)).map(
+        (clip) => ({ type: "slip", clipId: clip.id, by: -by }),
+      );
+    }
+    const clipIds = selected.map((clip) => clip.id);
     return clipIds.length ? [{ type: "move", clipIds, by }] : [];
   };
+
+/** Alt+comma and Alt+period slip the selected sound alone, out of sync with its picture. */
+const slipSound =
+  (by: number) =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] =>
+    selectedIn(timeline, target)
+      .filter((clip) => isAudioKind(clip.kind) && clip.mediaStart !== null)
+      .map((clip) => ({
+        type: "slip",
+        clipId: clip.id,
+        by: -by,
+        linked: false,
+      }));
+
+/** Ctrl+Alt+L unlinks the selected clips when any is linked, otherwise links them, as in Resolve. */
+const toggleLink = (timeline: Timeline, target: EditTarget): CommandInput[] => {
+  const clips = selectedIn(timeline, target);
+  const clipIds = clips.map((clip) => clip.id);
+  if (clips.some((clip) => clip.link !== null))
+    return [{ type: "unlink", clipIds }];
+  if (clipIds.length < 2)
+    throw new TimelineError("unsupported", "Select two or more clips to link.");
+  return [{ type: "link", clipIds }];
+};
 
 /**
  * Moves the selected clips to the next track of their kind as the headers stack them: up is a
@@ -345,6 +407,15 @@ export const editKeys = {
   editNudgeTrimStepNudgeForward: { label: "Nudge", commands: nudge(1) },
   editNudgeTrimStepTrimMultiFrameLeft: { label: "Nudge", commands: nudge(-5) },
   editNudgeTrimStepTrimMultiFrameRight: { label: "Nudge", commands: nudge(5) },
+  editSlipAudioOneFrameReverse: {
+    label: "Slip sound",
+    commands: slipSound(-1),
+  },
+  editSlipAudioOneFrameForward: {
+    label: "Slip sound",
+    commands: slipSound(1),
+  },
+  editLink: { label: "Link clips", commands: toggleLink },
   editMoveClipsUp: { label: "Move clips up", commands: moveTrack(true) },
   editMoveClipsDown: { label: "Move clips down", commands: moveTrack(false) },
   markMarkerAdd: {

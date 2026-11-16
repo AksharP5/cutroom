@@ -72,6 +72,8 @@ export const useTimeline = create(() => ({
   selection: emptySelection as Selection,
   /** Dragged edges snap to clip edges, the playhead, markers, and in and out. Session state. */
   snapping: true,
+  /** What the Trim tool's comma and period do, switched with S as in Resolve. Session state. */
+  trimKeys: "slip" as "slip" | "slide",
 }));
 
 /** An edit as the user made it: commands built once, from the view they saw. */

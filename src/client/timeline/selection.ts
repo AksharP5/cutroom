@@ -1,4 +1,4 @@
-import { clipEnd } from "../../shared/timeline/apply";
+import { clipEnd, gapAt } from "../../shared/timeline/apply";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { FrameRange } from "./math";
 
@@ -8,6 +8,28 @@ export interface Selection {
   anchor: string | null;
   /** A selected transition, named by the clip it leads into. It is selected alone. */
   transition?: string;
+  /** A selected gap between clips on a track, which Delete closes. It is selected alone. */
+  gap?: Gap;
+}
+
+export interface Gap {
+  track: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * The gap a click on an empty lane selects, as in Resolve: the empty time between two clips, or
+ * before a track's first clip. Null after the last clip and on a locked track.
+ */
+export function gapSelection(
+  timeline: Timeline,
+  track: number,
+  frame: number,
+): Selection | null {
+  if (lockedTracks(timeline).has(track)) return null;
+  const gap = gapAt(timeline, track, frame);
+  return gap ? { ids: new Set(), anchor: null, gap: { track, ...gap } } : null;
 }
 export const emptySelection: Selection = { ids: new Set(), anchor: null };
 
@@ -167,6 +189,13 @@ export function pruneSelection(
   timeline: Timeline,
   current: Selection,
 ): Selection {
+  const { gap } = current;
+  if (gap) {
+    const now = gapSelection(timeline, gap.track, gap.from)?.gap;
+    return now?.from === gap.from && now.to === gap.to
+      ? current
+      : emptySelection;
+  }
   if (current.transition !== undefined)
     return selectable(timeline).some(
       (clip) => clip.id === current.transition && clip.transitionIn,

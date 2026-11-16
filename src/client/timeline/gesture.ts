@@ -8,6 +8,8 @@ import {
   applyAll,
   clipEnd,
   normalizeTimeline,
+  slideRange,
+  slipRange,
 } from "../../shared/timeline/apply";
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades, volumePoints } from "../../shared/timeline/mix";
@@ -47,6 +49,10 @@ export type Intent =
   | { kind: "trim"; clipId: string; edge: "start" | "end"; ripple: boolean }
   /** `left` ends where `right` starts; the cut between them moves. */
   | { kind: "roll"; left: string; right: string }
+  /** The clip shows another part of its source in the same place. */
+  | { kind: "slip"; clipId: string }
+  /** The clip moves between its neighbours, which trim to follow. */
+  | { kind: "slide"; clipId: string }
   | { kind: "blade"; clipId: string }
   | { kind: "marquee" };
 
@@ -172,14 +178,18 @@ export interface Hit {
   clip: Clip;
   x: number;
   width: number;
+  /** The press is on the clip's name strip, along its top. */
+  strip?: boolean;
   mix?: "gain" | "fadeIn" | "fadeOut" | { point: number };
 }
 
 /**
  * What a press means, as on Resolve's Edit page. The pointer moves a clip by its body and
- * resizes it by an edge. The Trim tool ripples an edge and rolls a cut between two clips; its
- * press on a body only selects. The blade cuts the clip it is on. A press on an empty lane draws
- * a marquee. Null when the press starts nothing, as on a locked track.
+ * resizes it by an edge. The Trim tool ripples an edge and rolls a cut between two clips; on a
+ * body it slips the clip's source, and on the name strip it slides the clip between its
+ * neighbours. A clip with no source to slip only selects there. The blade cuts the clip it is on.
+ * A press on an empty lane draws a marquee. Null when the press starts nothing, as on a locked
+ * track.
  */
 export function intentAt(
   tool: Tool,
@@ -204,7 +214,13 @@ export function intentAt(
       ? { kind: "gain", clipId: clip.id, alone }
       : { kind: "fade", clipId: clip.id, edge: hit.mix };
   if (!edge)
-    return tool === "pointer" ? { kind: "move", clipId: clip.id, alone } : null;
+    return tool === "pointer"
+      ? { kind: "move", clipId: clip.id, alone }
+      : hit.strip
+        ? { kind: "slide", clipId: clip.id }
+        : clip.mediaStart === null
+          ? null
+          : { kind: "slip", clipId: clip.id };
   const cut = edge === "start" ? clip.start : clipEnd(clip);
   const neighbour = timeline.clips.find(
     (other) =>
@@ -343,10 +359,15 @@ export interface Drag {
   timeline: Timeline;
   /** The frame under the pointer at the press. */
   origin: number;
-  /** Clips a move carries: the selection, with linked partners unless Alt was held. */
+  /**
+   * Clips a move carries: the selection, with linked partners unless Alt was held. A slide
+   * carries the clip and its partners.
+   */
   carried: readonly Clip[];
   /** The selected clips a move names. */
   named: readonly Clip[];
+  /** How far a slip or slide can go each way, in frames. */
+  range?: { min: number; max: number };
   targets: readonly number[];
 }
 
@@ -360,8 +381,17 @@ export function beginDrag(
 ): Drag {
   const named = timeline.clips.filter((clip) => selection.has(clip.id));
   const links = new Set(named.flatMap((clip) => clip.link ?? []));
-  const carried =
-    intent.kind !== "move"
+  const edited =
+    (intent.kind === "slide" || intent.kind === "slip") &&
+    timeline.clips.find((clip) => clip.id === intent.clipId);
+  const slid = intent.kind === "slide" && edited;
+  const carried = slid
+    ? timeline.clips.filter(
+        (clip) =>
+          clip.id === slid.id ||
+          (slid.link !== null && clip.link === slid.link),
+      )
+    : intent.kind !== "move"
       ? []
       : intent.alone
         ? named
@@ -381,6 +411,13 @@ export function beginDrag(
     origin,
     carried,
     named,
+    // Found once, by trying the edit, so each pointer move only clamps.
+    ...(edited && {
+      range:
+        intent.kind === "slip"
+          ? (slipRange(timeline, edited) ?? undefined)
+          : slideRange(timeline, [edited]),
+    }),
     targets: snapTargets(
       timeline,
       playhead,
@@ -645,6 +682,40 @@ export function dragPreview(drag: Drag, input: DragInput): Preview {
         to === from ? [] : commands(to),
         to - from,
         hit?.at === to ? to : null,
+      );
+    }
+    case "slip": {
+      const clip = find(intent.clipId);
+      const { range } = drag;
+      if (!range) return still("Slip");
+      // The source follows the pointer, as in Resolve: dragging right shows earlier frames. It
+      // stops at either end of the source.
+      const by = Math.max(range.min, Math.min(range.max, -travel));
+      return edit(
+        "Slip",
+        by ? [{ type: "slip", clipId: clip.id, by }] : [],
+        -by,
+        null,
+      );
+    }
+    case "slide": {
+      const clip = find(intent.clipId);
+      const range = drag.range ?? { min: 0, max: 0 };
+      const hit = snap(
+        [clip.start + travel, clipEnd(clip) + travel],
+        targets,
+        input.reach,
+      );
+      // A neighbour that runs out of source or length holds the clip, as in Resolve.
+      const by = Math.max(
+        range.min,
+        Math.min(range.max, travel + (hit?.by ?? 0)),
+      );
+      return edit(
+        "Slide",
+        by ? [{ type: "slide", clipIds: [clip.id], by }] : [],
+        by,
+        hit && by === travel + hit.by ? hit.at : null,
       );
     }
     case "blade":

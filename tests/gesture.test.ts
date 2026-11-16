@@ -496,7 +496,7 @@ test("Esc cancels an armed press or a drag, and a second press never replaces th
   expect(step(idle, { type: "cancel" }).outcome).toBeNull();
 });
 
-test("a press means move, resize, ripple, roll, or razor by tool and by where it lands", () => {
+test("a press means move, resize, ripple, roll, slip, slide, or razor by tool and by where it lands", () => {
   const timeline = sequence();
   const [a, b, c] = timeline.clips as [Clip, Clip, Clip];
   const hit = (target: Clip, x: number) => ({ clip: target, x, width: 200 });
@@ -543,7 +543,23 @@ test("a press means move, resize, ripple, roll, or razor by tool and by where it
     edge: "start",
     ripple: true,
   });
-  expect(intentAt("trim", timeline, hit(b, 100))).toBeNull();
+  // Trim on a body slips the clip; on its name strip it slides it. A clip without a source to
+  // slip only selects there.
+  expect(intentAt("trim", timeline, hit(b, 100))).toEqual({
+    kind: "slip",
+    clipId: "b",
+  });
+  expect(intentAt("trim", timeline, { ...hit(b, 100), strip: true })).toEqual({
+    kind: "slide",
+    clipId: "b",
+  });
+  expect(
+    intentAt(
+      "trim",
+      timeline,
+      hit({ ...b, kind: "element", mediaStart: null }, 100),
+    ),
+  ).toBeNull();
 
   expect(intentAt("blade", timeline, hit(b, 3))).toEqual({
     kind: "blade",
@@ -560,6 +576,39 @@ test("a press means move, resize, ripple, roll, or razor by tool and by where it
   expect(
     intentAt("pointer", sequence([{ index: 0, locked: true }]), hit(b, 100)),
   ).toBeNull();
+});
+
+test("a slip drag moves b's source with the pointer and stops at the source's ends", () => {
+  // b shows source frames 50 to 150 of 200.
+  const slip = drag({ kind: "slip", clipId: "b" }, ["b"], 150);
+  const right = dragPreview(slip, { frame: 180, track: 0, reach: 5 });
+  expect(right).toMatchObject({ label: "Slip", valid: true, delta: 30 });
+  expect(right.commands).toEqual([{ type: "slip", clipId: "b", by: -30 }]);
+  expect(
+    dragPreview(slip, { frame: 400, track: 0, reach: 5 }).commands,
+  ).toEqual([{ type: "slip", clipId: "b", by: -50 }]);
+  const left = dragPreview(slip, { frame: 0, track: 0, reach: 5 });
+  expect(left.commands).toEqual([{ type: "slip", clipId: "b", by: 50 }]);
+  expect(places(left.shown)).toEqual(places(sequence()));
+});
+
+test("a slide drag trims b's neighbours and stops at the next clip and a's last frame", () => {
+  const slide = drag({ kind: "slide", clipId: "b" }, ["b"], 150);
+  const right = dragPreview(slide, { frame: 400, track: 0, reach: 0 });
+  // The gap before c closes; a, with unmeasured source, extends to meet b.
+  expect(right.commands).toEqual([{ type: "slide", clipIds: ["b"], by: 100 }]);
+  expect(places(right.shown)).toMatchObject({
+    a: [0, 0, 200],
+    b: [0, 200, 100],
+  });
+  const left = dragPreview(slide, { frame: 0, track: 0, reach: 0 });
+  expect(left.commands).toEqual([{ type: "slide", clipIds: ["b"], by: -99 }]);
+  expect(places(left.shown)).toMatchObject({ a: [0, 0, 1], b: [0, 1, 100] });
+  // b's end snaps to the marker at 250.
+  expect(dragPreview(slide, { frame: 197, track: 0, reach: 5 })).toMatchObject({
+    snap: 250,
+    delta: 50,
+  });
 });
 
 test("edges snap to the nearest target in reach and to nothing beyond it", () => {

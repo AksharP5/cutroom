@@ -644,6 +644,65 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .describe("Lift or ripple delete clips and their linked partners."),
   z
     .object({
+      type: z.literal("closeGap"),
+      track: frame,
+      at: frame.describe("Any frame inside the gap"),
+    })
+    .describe(
+      "Close the empty gap between clips on a track, as selecting it and pressing Delete does: everything after it moves earlier by its length on this track and every unlocked auto-select track. Refused when a clip on one of those tracks is in the gap's time, naming it; turning off auto-select on its track closes the gap without it. The space after a track's last clip is not a gap.",
+    ),
+  z
+    .object({
+      type: z.literal("slip"),
+      clipId,
+      by: z
+        .number()
+        .int()
+        .describe(
+          "Frames to move the clip's source in and out points; positive shows later source material",
+        ),
+      linked: z
+        .boolean()
+        .default(true)
+        .describe(
+          "False slips only this clip, leaving its linked partners' sources where they are, which puts them out of sync",
+        ),
+    })
+    .describe(
+      "Slip a video, audio or composition clip: it shows an earlier or later part of its source in the same place and length. Linked partners slip with it. Keyframes and volume points move with the content they animate, as in a trim. Refused past either end of the source or past a transition's media, saying how far it can go.",
+    ),
+  z
+    .object({
+      type: z.literal("slide"),
+      clipIds: clipIds.describe(
+        "The clips to slide; their linked partners come too. Clips next to each other on a track slide as one block",
+      ),
+      by: z
+        .number()
+        .int()
+        .describe("Frames to move the clips; negative is earlier"),
+    })
+    .describe(
+      "Slide clips between their neighbours: they move as one block, keeping their source in and out, while the clip that ends where the block starts and the clip that starts where it ends trim to follow, with those neighbours' linked partners, so nothing else moves. A gap beside the block shrinks or grows instead of a neighbour. Refused when a neighbour or its partner would run out of source or below one frame, a clip would cover another, or a transition on a changed cut would no longer fit, saying how far it can go; and when a clip that is not named sits between named ones.",
+    ),
+  z
+    .object({
+      type: z.literal("link"),
+      clipIds: z.array(clipId).min(2).max(10_000),
+    })
+    .describe(
+      "Link two or more different clips so they select, move, trim and cut as one, as a video and its sound are. Partners of clips already linked join the new group.",
+    ),
+  z
+    .object({
+      type: z.literal("unlink"),
+      clipIds,
+    })
+    .describe(
+      "Unlink clips from their partners so each edits alone. A partner left on its own is unlinked too.",
+    ),
+  z
+    .object({
       type: z.literal("insert"),
       mode: z
         .enum(["place", "overwrite", "insert"])
