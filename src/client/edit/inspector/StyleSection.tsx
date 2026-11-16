@@ -12,20 +12,10 @@ import type {
 import type { Clip, Fps } from "../../../shared/timeline/schema";
 import { SelectMenu } from "../../components/SelectMenu";
 import { editTimeline } from "../timeline";
+import { FontMenu, WEIGHT_LABELS } from "./FontMenu";
 import { AlphaColourFields, Row } from "./TitleSection";
 import { FieldRow, ValueCell, ValueField } from "./ValueField";
 
-const WEIGHT_LABELS: Record<(typeof STYLE_WEIGHTS)[number], string> = {
-  100: "Thin",
-  200: "Extra light",
-  300: "Light",
-  400: "Regular",
-  500: "Medium",
-  600: "Semibold",
-  700: "Bold",
-  800: "Extra bold",
-  900: "Black",
-};
 const ALIGN_LABELS: Record<(typeof STYLE_ALIGNMENTS)[number], string> = {
   left: "Left",
   center: "Centre",
@@ -180,15 +170,13 @@ function TextStyleFields({
   return (
     <>
       <Row label="Font">
-        <SelectMenu
-          label="Font"
-          value={style.fontFamily ?? ""}
+        <FontMenu
+          projectId={projectId}
+          value={style.fontFamily ?? null}
+          fonts={fonts}
+          unset="Auto"
           disabled={disabled}
-          options={[
-            { value: "", label: "Auto" },
-            ...fonts.map((font) => ({ value: font, label: font })),
-          ]}
-          onChange={(font) => set({ fontFamily: font || null })}
+          onChange={(font) => set({ fontFamily: font })}
         />
       </Row>
       <Row label="Weight">

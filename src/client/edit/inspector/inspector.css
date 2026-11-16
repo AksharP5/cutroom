@@ -716,3 +716,70 @@
 .inspector-variables .inspector-value > button {
   flex: none;
 }
+/* Add font: Google search above the weights of the family picked, files dropped anywhere on it. */
+.font-dialog {
+  display: grid;
+  gap: var(--space-2);
+  padding: 16px 16px 0;
+}
+.font-dialog[data-dragging] {
+  outline: var(--stroke-hair) solid var(--selection);
+  outline-offset: -1px;
+}
+.font-dialog input[type="search"] {
+  width: 100%;
+  height: 32px;
+}
+.font-results {
+  display: grid;
+  height: calc(var(--size-row) * 8);
+  overflow-y: auto;
+  align-content: start;
+}
+.font-results button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--size-row);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-control);
+  text-align: left;
+}
+.font-results button:hover:not(:disabled) {
+  background: var(--overlay-hover);
+}
+.font-results button[aria-selected="true"] {
+  background: var(--surface-active);
+}
+.font-results small {
+  color: var(--text-tertiary);
+  font-size: var(--type-2xs);
+}
+.font-weights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.font-weights legend {
+  margin-bottom: var(--space-1);
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.font-weights label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--type-sm);
+}
+.font-weights input {
+  margin: 0;
+  accent-color: var(--text-primary);
+}
+.font-actions .secondary-button {
+  margin-right: auto;
+}

@@ -270,6 +270,7 @@ test("a new project's Font menu offers four fonts, and each draws its own face",
     "Oswald",
     "Fraunces",
     "Martian Mono",
+    "Add font...",
   ]);
   await page.keyboard.press("Escape");
 

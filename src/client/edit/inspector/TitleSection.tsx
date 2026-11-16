@@ -22,6 +22,7 @@ import type {
 import { formatPercent } from "../../../shared/timeline/labels";
 import { reachedByKeyboard, restoreMenuFocus } from "../../keymap";
 import { SelectMenu } from "../../components/SelectMenu";
+import { FontMenu } from "./FontMenu";
 import { showToast } from "../../workspace";
 import { editTimeline } from "../timeline";
 import { parseField } from "./fields";
@@ -251,15 +252,13 @@ export function TitleSection({
       ) : (
         <>
           <Row label="Font">
-            <SelectMenu
-              label="Font"
-              value={title.font ?? ""}
+            <FontMenu
+              projectId={projectId}
+              value={title.font}
+              fonts={fonts}
+              unset="Default"
               disabled={disabled}
-              options={[
-                { value: "", label: "Default" },
-                ...fonts.map((font) => ({ value: font, label: font })),
-              ]}
-              onChange={(font) => edit({ font: font || null })}
+              onChange={(font) => edit({ font })}
             />
           </Row>
           <Row label="Weight">

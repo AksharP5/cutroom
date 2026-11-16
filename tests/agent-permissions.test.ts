@@ -30,6 +30,7 @@ const reads = [
   "captions_list",
   "captions_export",
   "variables_list",
+  "fonts_list",
   "history_list",
   "review_list",
   "export_status",

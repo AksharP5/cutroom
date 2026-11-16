@@ -180,6 +180,8 @@ export async function toolSubject(
     }
     case "project_import":
       return text("path");
+    case "fonts_add":
+      return text("family");
     case "transcription_start":
     case "transcript_import":
     case "subtitles_import": {
