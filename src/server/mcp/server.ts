@@ -247,7 +247,7 @@ export function createMcpServer(options: McpOptions = {}) {
     "media_list",
     {
       description:
-        "List local audio and video clips with source element IDs and timing. A video the browser cannot decode, such as HEVC, ProRes or DNxHR, has proxy: the editing copy the preview plays, made in the background from the moment it is asked for (queued, running with progress 0 to 1, done, or failed with error). Until it is done that clip shows no picture in the preview; timeline_view and export read the original file and are unaffected.",
+        "List local audio and video clips with source element IDs and timing. A video the browser cannot decode, such as HEVC, ProRes or DNxHR, has proxy: the editing copy the preview plays, made in the background from the moment it is asked for (queued, running with progress 0 to 1, done, or failed with error). While it runs the preview plays the clip piece by piece, making the part at the playhead first; timeline_view and export read the original file and are unaffected.",
       inputSchema: project,
       annotations: readOnly,
     },

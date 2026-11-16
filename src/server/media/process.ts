@@ -7,7 +7,13 @@ export function startMediaWorker(
   task: MediaTask,
   workerUrl: URL,
   stopTimeoutMs: number,
-  onProgress: (progress: number) => void = () => {},
+  /** Progress, and each piece of an editing proxy as it is made. */
+  onEvent: (
+    event: Exclude<
+      z.infer<typeof MediaEventSchema>,
+      { type: "done" | "error" }
+    >,
+  ) => void = () => {},
 ) {
   const child = Bun.spawn([process.execPath, fileURLToPath(workerUrl)], {
     stdin: "pipe",
@@ -39,7 +45,7 @@ export function startMediaWorker(
     const read = (text: string) => {
       if (!text.trim()) return;
       const event = MediaEventSchema.parse(JSON.parse(text));
-      if (event.type === "progress") onProgress(event.progress);
+      if (event.type === "progress" || event.type === "piece") onEvent(event);
       else outcome = event;
     };
     const decoder = new TextDecoder();
