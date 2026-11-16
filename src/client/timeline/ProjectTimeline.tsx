@@ -19,7 +19,8 @@ import { useTextEdit } from "../edit/preview";
 import { showSource, useSource } from "../edit/source";
 import { clipboardEdit, editTimeline, useTimeline } from "../edit/timeline";
 import { transport, useTransport, velocity } from "../edit/transport";
-import { isTyping, useKeymap } from "../keymap";
+import { isTyping, keymap, useKeymap } from "../keymap";
+import { leaveComposition, openHost } from "../edit/compositions";
 import { noteNumbers } from "../review";
 import type { Action } from "../keymap";
 import { showToast, useWorkspace } from "../workspace";
@@ -315,7 +316,28 @@ export function ProjectTimeline({
           selectionFromPlayhead(timeline, clock.frame(), "backward", true),
         );
     },
-    editDeselectAll: () => setSelection(emptySelection),
+    editDeselectAll: (key) => {
+      // Esc with nothing selected steps out of a sub-composition, as in Studio.
+      const { ids, transition } = useTimeline.getState().selection;
+      if (
+        keymap.editDeselectAll.keys[key] === "Esc" &&
+        !ids.size &&
+        !transition &&
+        leaveComposition(projectId)
+      )
+        return;
+      setSelection(emptySelection);
+    },
+    cutroomOpenComposition: () => {
+      const { selection, view } = useTimeline.getState();
+      const [id, ...others] = selection.ids;
+      const clip = view?.timeline.clips.find((item) => item.id === id);
+      if (!clip || others.length || !openHost(projectId, clip))
+        showToast("Select one composition clip to open it.", null, {
+          tone: "info",
+          transient: true,
+        });
+    },
     // Pressed during a drag, it turns snapping off or on for the rest of it, as in Resolve.
     editSnapping: () =>
       useTimeline.setState((state) => ({ snapping: !state.snapping })),
@@ -581,6 +603,7 @@ export function ProjectTimeline({
         }}
         onOpenPin={onOpenNote}
         onOpenMarker={(marker, anchor) => setEditingMarker({ marker, anchor })}
+        onOpenClip={(clip) => openHost(projectId, clip)}
       />
       {editingMarker &&
         view.timeline.markers.some(

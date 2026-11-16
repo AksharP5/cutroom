@@ -370,7 +370,13 @@ export const InsertClipSchema = z.object({
       "Element id, never used before in this project; when omitted, the file name and a random suffix",
     ),
   kind: z.enum(["video", "audio", "voiceover", "image"]),
-  src: z.string().min(1).max(2_000).describe("Project-relative media path"),
+  src: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .describe(
+      "Media path as the composition writes it, from the composition file's folder: media/talk.mp4 in index.html, ../media/talk.mp4 in compositions/scene.html",
+    ),
   duration: frames.describe("Length on the timeline in frames"),
   mediaStart: z
     .number()

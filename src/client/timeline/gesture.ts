@@ -12,6 +12,7 @@ import {
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades } from "../../shared/timeline/mix";
 import type { MediaDrag } from "./mediaDrag";
+import { sourcePath } from "../../shared/media";
 import type {
   Clip,
   CommandInput,
@@ -638,7 +639,7 @@ export function bladePreview(
 /** Media dragged onto the timeline: a project file and the part of it that plays there. */
 export interface DraggedMedia {
   kind: InsertClip["kind"];
-  /** The project-relative path, which is also its `src` in the root composition. */
+  /** The file as the composition it lands in writes it, from that composition's folder. */
   src: string;
   frames: number;
   /** Seconds into the file where the clip begins. */
@@ -653,9 +654,10 @@ export interface DraggedMedia {
 export const placedMedia = (
   media: MediaDrag,
   { num, den }: Timeline["fps"],
+  composition: string,
 ): DraggedMedia => ({
   kind: media.kind,
-  src: media.path,
+  src: sourcePath(composition, media.path),
   frames: Math.max(1, Math.floor((media.seconds * num) / den + 1e-6)),
   mediaStart: media.start,
   hasAudio: media.hasAudio,

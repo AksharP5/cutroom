@@ -255,6 +255,11 @@ export const keymap = {
     keys: ["Ctrl+9"],
     fields: true,
   },
+  cutroomOpenComposition: {
+    area: "View",
+    label: "Open the selected composition clip",
+    keys: ["Enter"],
+  },
   viewToggleSourceTimeline: {
     area: "View",
     label: "Show the source or the timeline",
@@ -314,7 +319,7 @@ export const keymap = {
   },
   editDeselectAll: {
     area: "Select",
-    label: "Deselect all",
+    label: "Deselect all; Esc again leaves a composition",
     keys: ["Shift+A", "Esc"],
   },
   trimRippleStartToPlayhead: {
@@ -468,6 +473,8 @@ const named: Record<string, string> = {
   Equal: "=",
   Minus: "-",
   Escape: "Esc",
+  Enter: "Enter",
+  NumpadEnter: "Enter",
   Backspace: "Backspace",
   Delete: "Delete",
   Backslash: "\\",
@@ -645,7 +652,7 @@ export function actionFor(event: KeyboardEvent): Action | null {
   const typing = isTyping(event.target);
   if (typing && !inPageField(event.target)) return null;
   if (
-    event.code === "Space" &&
+    (event.code === "Space" || event.key === "Enter") &&
     event.target instanceof Element &&
     event.target.closest(
       "button:focus-visible, [role=button]:focus-visible, [role=checkbox]:focus-visible, [role=switch]:focus-visible, [role=menuitem]:focus-visible, [role=menuitemcheckbox]:focus-visible, [role=menuitemradio]:focus-visible, [role=dialog], [role=menu]",

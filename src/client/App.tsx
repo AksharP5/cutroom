@@ -430,9 +430,24 @@ export function App() {
   const seek = useCallback(async (time: number, compositionPath?: string) => {
     const expectedProject = activeProjectId.current;
     if (useWorkspace.getState().newEditor) {
-      const { transport, useTransport } = await import("./edit/transport");
-      if (activeProjectId.current === expectedProject)
-        transport.seek(toFrames(time, useTransport.getState().fps));
+      const [
+        { transport, useTransport },
+        { openComposition },
+        { useTimeline },
+      ] = await Promise.all([
+        import("./edit/transport"),
+        import("./edit/compositions"),
+        import("./edit/timeline"),
+      ]);
+      if (!expectedProject || activeProjectId.current !== expectedProject)
+        return;
+      // A note opens its composition before seeking to its frame.
+      if (
+        compositionPath &&
+        compositionPath !== useTimeline.getState().composition
+      )
+        openComposition(expectedProject, compositionPath, time);
+      else transport.seek(toFrames(time, useTransport.getState().fps));
       return;
     }
     const { seekEditor } = await import("./editor/CutroomEditor");

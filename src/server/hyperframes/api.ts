@@ -15,7 +15,7 @@ import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
@@ -669,7 +669,18 @@ export function createHyperframesApi(
     const id = c.req.param("id");
     if (!(await resolveProject(id))) return c.notFound();
     const url = new URL(c.req.url);
-    url.pathname = `/api/projects/${encodeURIComponent(id)}/preview`;
+    // A sub-composition previews as its own document, as Studio's drill-in does.
+    const requested = url.searchParams.get("composition");
+    url.searchParams.delete("composition");
+    const composition =
+      requested && posix.normalize(requested).replace(/^\/+/, "");
+    if (composition && (composition === ".." || composition.startsWith("../")))
+      throw new HttpError(400, "The composition must be inside the project.");
+    url.pathname = `/api/projects/${encodeURIComponent(id)}/preview${
+      composition && composition !== "index.html"
+        ? `/comp/${composition.split("/").map(encodeURIComponent).join("/")}`
+        : ""
+    }`;
     return c.redirect(isolatedPreview(id, url.href));
   });
   api.get("/isolated/:key/*", async (c) => {

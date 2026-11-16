@@ -883,6 +883,7 @@ test("a range marked in the source viewer lands with its start and every one of 
             hasAudio: true,
           },
           fps,
+          "index.html",
         ),
       ).toMatchObject({ frames, mediaStart: frameTime(60, fps) });
 

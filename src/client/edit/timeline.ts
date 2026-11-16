@@ -44,6 +44,9 @@ import {
 import { noteNumbers } from "../review";
 import { dispatchNote, queueNoteChange } from "./noteStore";
 
+/** The project's entry composition, which the editor opens first. */
+export const ROOT_COMPOSITION = "index.html";
+
 const clipboards = new Map<string, readonly Clip[]>();
 const clipboardIds = new Map<string, string>();
 let clipboardTask = Promise.resolve();
@@ -58,6 +61,10 @@ const HistorySchema = z.object({
 export const useTimeline = create(() => ({
   /** The project the views belong to; a read for another project is dropped. */
   projectId: null as string | null,
+  /** The composition being edited; a read of another composition is dropped. */
+  composition: ROOT_COMPOSITION,
+  /** The compositions it was opened from, the root first. */
+  parents: [] as readonly string[],
   /** The engine's last answer with the edits it has not answered yet applied on top. */
   view: null as TimelineView | null,
   history: { canUndo: false, canRedo: false },
@@ -70,6 +77,7 @@ export const useTimeline = create(() => ({
 /** An edit as the user made it: commands built once, from the view they saw. */
 interface Edit {
   projectId: string;
+  composition: string;
   label: string;
   /** Sent as they are, with every new piece named, so the server makes exactly what was shown. */
   commands: Command[];
@@ -92,8 +100,10 @@ const project = (projectId: string) =>
   `/projects/${encodeURIComponent(projectId)}`;
 
 let queue = Promise.resolve();
-/** The engine's last answer, which the shown view starts from. */
+/** The engine's last answer for the open composition, which the shown view starts from. */
 let confirmed: { projectId: string; view: TimelineView } | null = null;
+/** Each composition's last answer in the open project, so returning to one shows it at once. */
+const answers = new Map<string, TimelineView>();
 /** Edits shown already and not yet answered, oldest first. */
 let pending: Edit[] = [];
 /** The header toast this queue last showed, cleared by the next edit that lands. */
@@ -140,12 +150,19 @@ function noticeOutside(before: TimelineView, after: TimelineView) {
 export function openTimeline(projectId: string, signal?: AbortSignal) {
   dismissAnimationFeedback();
   confirmed = null;
+  answers.clear();
   pending = [];
   clearOutsideNotice();
   dismissRipple();
   dismissOutside();
   rippleRevision = null;
-  useTimeline.setState({ projectId, view: null, selection: emptySelection });
+  useTimeline.setState({
+    projectId,
+    composition: ROOT_COMPOSITION,
+    parents: [],
+    view: null,
+    selection: emptySelection,
+  });
   signal?.addEventListener(
     "abort",
     () => {
@@ -254,7 +271,10 @@ function shown(projectId: string): TimelineView | null {
   if (confirmed?.projectId !== projectId) return null;
   const { view } = confirmed;
   const timeline = pending
-    .filter((edit) => edit.projectId === projectId)
+    .filter(
+      (edit) =>
+        edit.projectId === projectId && edit.composition === view.composition,
+    )
     .reduce((current, edit) => {
       if (anchorsChanged(edit.anchors, current)) return current;
       try {
@@ -265,6 +285,12 @@ function shown(projectId: string): TimelineView | null {
       }
     }, view.timeline);
   return timeline === view.timeline ? view : { ...view, timeline };
+}
+
+/** Whether the editor shows this project and composition, so an answer for them may be shown. */
+function isOpen(projectId: string, composition: string) {
+  const state = useTimeline.getState();
+  return state.projectId === projectId && state.composition === composition;
 }
 
 const readHistory = (projectId: string, signal?: AbortSignal) =>
@@ -289,14 +315,25 @@ function settle(
   reportEditorError("timeline", null);
 }
 
-async function read(projectId: string, signal?: AbortSignal, notify = true) {
+async function read(
+  projectId: string,
+  signal?: AbortSignal,
+  notify = true,
+  composition = useTimeline.getState().composition,
+) {
   const [view, history] = await Promise.all([
-    api(`${project(projectId)}/timeline`, TimelineViewSchema, { signal }),
+    api(
+      `${project(projectId)}/timeline?composition=${encodeURIComponent(composition)}`,
+      TimelineViewSchema,
+      { signal },
+    ),
     readHistory(projectId, signal),
   ]);
   if (useTimeline.getState().projectId !== projectId) return view;
+  answers.set(view.composition, view);
+  if (!isOpen(projectId, view.composition)) return view;
   if (
-    confirmed?.projectId === projectId &&
+    confirmed?.view.composition === view.composition &&
     confirmed.view.revision !== view.revision &&
     notify
   )
@@ -304,6 +341,37 @@ async function read(projectId: string, signal?: AbortSignal, notify = true) {
   confirmed = { projectId, view };
   settle(projectId, view, history);
   return view;
+}
+
+/**
+ * Edits another composition of the open project. One seen before shows at once from its last
+ * answer while a read catches up; one not seen yet shows once it is read, so the editor never
+ * shows an empty or mismatched timeline. Edits still saving to the composition left land first.
+ */
+export function showComposition(
+  projectId: string,
+  composition: string,
+  parents: readonly string[],
+  selection: Selection,
+) {
+  const show = (view: TimelineView) => {
+    if (useTimeline.getState().projectId !== projectId) return;
+    confirmed = { projectId, view };
+    dismissRipple();
+    rippleRevision = null;
+    useTimeline.setState({
+      composition,
+      parents,
+      selection,
+      view: shown(projectId),
+    });
+  };
+  const known = answers.get(composition);
+  if (known) show(known);
+  return enqueue(async () => {
+    const view = await read(projectId, undefined, false, composition);
+    if (!known) show(answers.get(composition) ?? view);
+  });
 }
 
 export const loadTimeline = (projectId: string, signal: AbortSignal) =>
@@ -350,9 +418,11 @@ async function send(edit: Edit) {
   );
   for (const retry of [false, true]) {
     const base =
-      !retry && confirmed?.projectId === edit.projectId
+      !retry &&
+      confirmed?.projectId === edit.projectId &&
+      confirmed.view.composition === edit.composition
         ? confirmed.view
-        : await read(edit.projectId);
+        : await read(edit.projectId, undefined, true, edit.composition);
     // A cut at absolute frames only means the same cut while the clips it names are where the
     // user saw them; an agent may have moved them since, whether or not the revision is stale.
     if (anchorsChanged(edit.anchors, base.timeline)) throw changed;
@@ -371,6 +441,8 @@ async function send(edit: Edit) {
         },
       );
       if (useTimeline.getState().projectId === edit.projectId)
+        answers.set(result.composition, result);
+      if (isOpen(edit.projectId, result.composition))
         confirmed = { projectId: edit.projectId, view: result };
       return result;
     } catch (error) {
@@ -509,6 +581,7 @@ export async function editTimeline(
         : applyAll(view.timeline, commands, { clipboards });
     edit = {
       projectId,
+      composition: view.composition,
       label: editLabel(commands, from, label),
       commands,
       uses: new Set(

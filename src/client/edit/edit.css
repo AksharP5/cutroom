@@ -697,7 +697,54 @@ input.edit-now {
 .edit-timeline {
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-panel);
+}
+.edit-timeline > .tl {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Inside a sub-composition: the way back, one line above the ruler. */
+.edit-path {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--size-tool-button);
+  padding: 0 var(--space-1);
+  border-bottom: var(--stroke-hair) solid var(--line-subtle);
+  font-size: var(--type-xs);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.edit-path-step,
+.edit-path-open {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  line-height: calc(var(--size-tool-button) - 6px);
+  border-radius: var(--radius-control);
+}
+.edit-path-step {
+  color: var(--text-secondary);
+  cursor: default;
+}
+@media (hover: hover) and (pointer: fine) {
+  .edit-path-step:hover {
+    background: var(--overlay-hover);
+    color: var(--text-primary);
+  }
+}
+.edit-path-open {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.edit-path-caret {
+  flex: none;
+  color: var(--text-tertiary);
 }
 /*
   A panel key gives a whole panel the keyboard, and a line along its top edge says which one has
