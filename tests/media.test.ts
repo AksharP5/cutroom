@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  mkdir,
   readFile,
   readdir,
   symlink,
@@ -604,3 +605,49 @@ test.skipIf(!Bun.which("ffmpeg") || !Bun.which("ffprobe"))(
   },
   30000,
 );
+
+test("the footage pipeline reads a project's videos in byte ranges, and nothing else", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route("/api/cutroom", createMediaRoutes(fixture.store));
+  const server = Bun.serve({ port: 0, fetch: fixture.app.fetch });
+  try {
+    const project = await fixture.store.create({ name: "Pipeline reads" });
+    const bytes = crypto.getRandomValues(new Uint8Array(4096));
+    await writeFile(join(project.path, "clip.mp4"), bytes);
+    await mkdir(join(project.path, "folder.mov"));
+    await writeFile(join(project.path, "notes.txt"), "private");
+    await writeFile(join(project.path, ".env"), "private");
+    await symlink(join(project.path, ".env"), join(project.path, "env.mp4"));
+    await writeFile(join(fixture.directory, "outside.mp4"), "private");
+    await symlink(
+      join(fixture.directory, "outside.mp4"),
+      join(project.path, "link.mp4"),
+    );
+    const url = (path: string) =>
+      `http://127.0.0.1:${server.port}/api/cutroom/projects/${project.id}/media/source?path=${encodeURIComponent(path)}`;
+    const ranged = await fetch(url("clip.mp4"), {
+      headers: { range: "bytes=100-199" },
+    });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-range")).toBe("bytes 100-199/4096");
+    expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(
+      bytes.subarray(100, 200),
+    );
+    for (const path of [
+      "notes.txt",
+      ".env",
+      "env.mp4",
+      "link.mp4",
+      "../../outside.mp4",
+      "folder.mov",
+      "missing.mp4",
+    ]) {
+      const response = await fetch(url(path));
+      expect(response.ok, path).toBe(false);
+      expect(await response.text()).not.toContain("private");
+    }
+  } finally {
+    await server.stop(true);
+    await fixture.close();
+  }
+});

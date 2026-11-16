@@ -40,7 +40,7 @@ const LOOKAHEAD = 45;
 const OPENING = 12;
 
 const mediaUrl = (projectId: string, path: string) =>
-  `/api/projects/${encodeURIComponent(projectId)}/preview/${path.split("/").map(encodeURIComponent).join("/")}`;
+  `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/source?path=${encodeURIComponent(path)}`;
 
 /** The colours Chrome draws a `<video>` with: its tags, and its guess for those it lacks. */
 function colourOf(
