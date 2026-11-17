@@ -830,11 +830,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "track_kind",
           "Only video can have linked audio.",
         );
+      const sourceName =
+        input.kind === "title"
+          ? null
+          : (localMediaPath("index.html", input.src) ?? input.src);
       // A file name is quoted so it reads as written, never as a clip id.
       assertTrackKind(
         input.kind === "title" ? "element" : input.kind,
         trackAt(track),
-        input.id ?? (input.kind === "title" ? "title" : `"${input.src}"`),
+        input.id ?? (sourceName === null ? "title" : `"${sourceName}"`),
       );
       const id =
         input.id === undefined
@@ -851,7 +855,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       // A named sound track is edited as the picture's is; left out, the sound is routed to room.
       const soundTrack = separate ? command.linkedAudio?.track : undefined;
       if (soundTrack !== undefined && input.kind === "video")
-        assertTrackKind("audio", trackAt(soundTrack), `"${input.src}" sound`);
+        assertTrackKind("audio", trackAt(soundTrack), `"${sourceName}" sound`);
       let next = clips;
       if (mode === "overwrite")
         next = clearRange(next, track, at, end, fps, mint);
