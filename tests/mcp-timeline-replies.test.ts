@@ -148,29 +148,45 @@ test("timeline_edit holds VFR predecessors and the final picture across a longer
       expect(child.exitCode).toBe(0);
       return child.stdout;
     };
-    for (const lead of [0, 0.2]) {
-      ffmpeg(
-        "-f",
-        "lavfi",
-        "-i",
-        "color=red:s=32x32:r=50:d=0.1",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=d=1",
-        "-vf",
-        `drawbox=c=blue:t=fill:enable=gte(n\\,3),select=eq(n\\,0)+eq(n\\,3),setpts=PTS+${lead}/TB`,
-        "-fps_mode",
-        "vfr",
-        "-c:v",
-        "libx264",
-        "-g",
-        "1",
-        "-c:a",
-        "aac",
-        join(project, `vfr-${lead}.mp4`),
-      );
-    }
+    const unshifted = join(project, "vfr-0.mp4");
+    ffmpeg(
+      "-f",
+      "lavfi",
+      "-i",
+      "color=red:s=32x32:r=50:d=0.1",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=d=1",
+      "-vf",
+      "drawbox=c=blue:t=fill:enable=gte(n\\,3),select=eq(n\\,0)+eq(n\\,3)",
+      "-fps_mode",
+      "vfr",
+      "-c:v",
+      "libx264",
+      "-g",
+      "1",
+      "-c:a",
+      "aac",
+      unshifted,
+    );
+    const shifted = join(project, "vfr-0.2.mp4");
+    // Older MP4 muxers truncate the final frame when the raw input is retimed on encode.
+    ffmpeg(
+      "-itsoffset",
+      "0.2",
+      "-i",
+      unshifted,
+      "-i",
+      unshifted,
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-c",
+      "copy",
+      shifted,
+    );
     const cases = [
       { media: 0, offset: 0.03998, colour: "red" },
       { media: 0.2, offset: 0.23998, colour: "red" },

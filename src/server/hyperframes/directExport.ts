@@ -132,6 +132,14 @@ export async function prepareDirectExport(
 /** Pixels of transparent margin around a placed picture, so resampling at its edges blends to nothing. */
 const MARGIN = 2;
 
+// Normalize every input before concat. Older FFmpeg versions use the first input's
+// matrix for a scale after concat, even when later inputs carry different tags.
+const deliveryColour = [
+  "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
+  "format=yuv420p",
+  "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+];
+
 /**
  * The filter graph that draws a placed picture as the browser composites it: cropped in its box,
  * scaled, rotated and moved about the frame's centre, faded by its opacity, over the page colour
@@ -220,9 +228,7 @@ function placed(
     `color=c=${beneath}:s=${frame.width}x${frame.height}:r=${rate},format=gbrp[b${index}]`,
     `[b${index}][q${index}]${[
       "overlay=format=gbrp:shortest=1",
-      "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
-      "format=yuv420p",
-      "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+      ...deliveryColour,
       ...after,
     ].join(",")}[p${index}]`,
   ].join(";");
@@ -359,13 +365,12 @@ async function encodePart(input: {
             trim,
             layer.filters,
           )
-        : `[${index}:v]${[...layer.filters, ...trim].join(",")}[p${index}]`,
+        : `[${index}:v]${[...layer.filters, ...deliveryColour, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);
-  // Frames leave the layer filters in their source matrix and range, tagged as the sRGB the
-  // preview draws. The capture path writes the same tagged BT.709 limited-range 4:2:0.
-  const graph = `${chains.join(";")};${pieces.map((_, index) => `[p${index}]`).join("")}concat=n=${pieces.length}:v=1:a=0,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv[v]`;
+  // Each piece is tagged BT.709 limited-range 4:2:0, as the capture path writes.
+  const graph = `${chains.join(";")};${pieces.map((_, index) => `[p${index}]`).join("")}concat=n=${pieces.length}:v=1:a=0[v]`;
   const args = partEncoderArgs(
     input.encoder,
     total,

@@ -66,13 +66,14 @@ async function extractFrame(
   colour: string[],
   signal: AbortSignal,
 ) {
-  // Collapse every predecessor to slot zero and put every later picture in slot one.
-  // The fps filter keeps the last picture in slot zero. Padding supplies a positive
-  // end time even when the last decoded picture was at or before the requested time.
+  // The one-frame-per-second filter keeps the last picture in slot zero.
+  // Give its candidates positive timestamps so EOF in an audio tail can emit that slot
+  // even if the demuxer provides no packet durations. Pictures after the seek are slot one.
   const filters = [
-    `setpts=if(lte(PTS*TB\\,${timestamp}+${presentationTimeTolerance})\\,0\\,ceil(1/TB))`,
-    "tpad=stop_mode=clone:stop=1",
-    "fps=1:start_time=0:round=up:eof_action=pass",
+    "settb=AVTB",
+    `setpts=if(lte(PTS*TB\\,${timestamp}+${presentationTimeTolerance})\\,min(N+1\\,999999)\\,1000000)`,
+    "fps=1:round=down:eof_action=pass",
+    "trim=end=1",
     ...(metadata.sampleAspectRatio
       ? ["scale=trunc(iw*sar/2)*2:ih", "setsar=1"]
       : []),
