@@ -1804,12 +1804,12 @@ function installPreviewBridge(
         const frame = new VideoFrame(video);
         frames.set(video, frame);
         // seeked/currentTime can settle before Chromium supplies the new decoded picture.
-        // Use the frame's own interval: HLS may offset its timestamps by half a frame.
-        const at =
-          Math.min(nativeTime.get!.call(video), video.duration - 1e-6) * 1e6;
+        // A frame's nominal duration does not include VFR gaps or a held final picture.
+        const decoded = decodedSeeks.get(video);
         if (
-          frame.duration !== null &&
-          (at + 1 < frame.timestamp || at >= frame.timestamp + frame.duration)
+          decoded &&
+          (decoded.timestamp === undefined ||
+            Math.abs(frame.timestamp - decoded.timestamp) > 1)
         ) {
           for (const frame of frames.values()) frame.close();
           return null;
@@ -2272,6 +2272,41 @@ function installPreviewBridge(
     HTMLMediaElement.prototype,
     "currentTime",
   )!;
+  // The runtime later wraps these APIs to report its cached paused pictures too.
+  const requestVideoFrame =
+    HTMLVideoElement.prototype.requestVideoFrameCallback;
+  const cancelVideoFrame = HTMLVideoElement.prototype.cancelVideoFrameCallback;
+  const decodedSeeks = new Map<
+    HTMLVideoElement,
+    { callback?: number; timestamp?: number }
+  >();
+  const forgetDecodedSeek = (video: HTMLVideoElement) => {
+    const previous = decodedSeeks.get(video);
+    if (previous?.callback !== undefined)
+      cancelVideoFrame.call(video, previous.callback);
+    decodedSeeks.delete(video);
+  };
+  const expectDecodedSeek = (video: HTMLVideoElement) => {
+    forgetDecodedSeek(video);
+    const decoded: { callback?: number; timestamp?: number } = {};
+    decodedSeeks.set(video, decoded);
+    const presented: VideoFrameRequestCallback = (_now, frame) => {
+      if (decodedSeeks.get(video) !== decoded) return;
+      delete decoded.callback;
+      // Presentation can precede seeked. The capture loop waits for seek completion itself.
+      decoded.timestamp = frame.mediaTime * 1e6;
+    };
+    // Register before setting currentTime so even a cached frame's presentation is observed.
+    decoded.callback = requestVideoFrame.call(video, presented);
+  };
+  document.addEventListener(
+    "emptied",
+    (event) => {
+      if (event.target instanceof HTMLVideoElement)
+        forgetDecodedSeek(event.target);
+    },
+    true,
+  );
   /** The time a paused video was asked for, while it rests where that time's frame shows. */
   const asked = new WeakMap<HTMLMediaElement, { time: number; at: number }>();
   /**
@@ -2290,6 +2325,12 @@ function installPreviewBridge(
       const at = this.paused ? framePosition(this, time) : time;
       if (at === time) asked.delete(this);
       else asked.set(this, { time, at });
+      if (
+        this instanceof HTMLVideoElement &&
+        this.paused &&
+        Math.abs(nativeTime.get!.call(this) - at) > 1e-6
+      )
+        expectDecodedSeek(this);
       nativeTime.set!.call(this, at);
     },
   };
@@ -2416,6 +2457,7 @@ function installPreviewBridge(
     "play",
     (event) => {
       if (!retired && event.target instanceof HTMLVideoElement) {
+        if (!event.target.paused) forgetDecodedSeek(event.target);
         if (pendingVideos.delete(event.target) && !holds.has(event.target))
           event.target.removeAttribute("data-cutroom-held");
         releasePlaying(event.target);
@@ -2445,6 +2487,7 @@ function installPreviewBridge(
       hold.frame.close();
     }
     holds.clear();
+    for (const video of decodedSeeks.keys()) forgetDecodedSeek(video);
     for (const media of document.querySelectorAll<HTMLMediaElement>(
       "video, audio",
     )) {
@@ -3004,8 +3047,10 @@ function installPreviewBridge(
               sourceTexts.delete(id);
               titleAnimations.delete(id);
               animatedTitles.delete(id);
-              if (element instanceof HTMLVideoElement)
+              if (element instanceof HTMLVideoElement) {
                 deferredSeeks.delete(element);
+                forgetDecodedSeek(element);
+              }
               if (
                 element instanceof HTMLElement ||
                 element instanceof SVGElement
@@ -3411,15 +3456,16 @@ function installPreviewBridge(
           }
           seekRuntime(data.time);
           residentAudio(false);
-          if (!win.__player?.isPlaying()) {
+          const paused = !win.__player?.isPlaying();
+          if (paused) {
             const restored = refreshPicture();
             const version = pictureVersion;
             await restored;
             if (version === pictureVersion) clearEditPicture();
-            await paint();
           }
           scheduleObservation();
           scheduleBox();
+          if (paused) await paint();
           break;
         case "mute":
           if (!("muted" in data) || typeof data.muted !== "boolean") return;

@@ -94,6 +94,69 @@ const holdDecodedFrame = () => {
   );
 };
 
+for (const held of ["VFR gap", "audio tail"] as const)
+  test(`a paused seek accepts the decoded picture held across its ${held}`, async ({
+    page,
+    request,
+  }, info) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: `Held frame ${held}`, width: WIDTH, height: HEIGHT },
+        })
+      ).json(),
+    );
+    const vfr = held === "VFR gap";
+    const file = vfr ? "held.mkv" : "held.mp4";
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `testsrc2=size=${WIDTH}x${HEIGHT}:rate=30:duration=${vfr ? 2.1 : 1}`,
+      ...(!vfr ? ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=2"] : []),
+      "-vf",
+      `drawbox=x=0:y=0:w=${WIDTH}:h=36:color=black:t=fill,${BITS.join(",")}${vfr ? ",select='eq(n,0)+eq(n,15)+eq(n,30)+eq(n,60)'" : ""}`,
+      "-fps_mode",
+      vfr ? "vfr" : "cfr",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      ...(!vfr ? ["-c:a", "aac"] : []),
+      join(project.path, file),
+    ]);
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><body style="margin:0"><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="2" data-fps="30"><video src="${file}" muted data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`,
+    );
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "false");
+    });
+    await page.goto(`/#project/${project.id}`);
+    const stage = page.locator(".edit-stage");
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    // The same source picture remains correct at all three distinct seek destinations.
+    for (const time of ["00000115", "00000118", "00000115"]) {
+      await page
+        .getByRole("button", { name: "Current time. Click to type a time." })
+        .click();
+      const input = page.getByRole("textbox", { name: "Go to time" });
+      await input.pressSequentially(time);
+      await input.press("Enter");
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(vfr ? 30 : 29);
+    }
+    await expect(page.locator(".status-error")).toHaveCount(0);
+    await info.attach("held-picture", {
+      body: await page.locator(".edit-picture").screenshot(),
+      contentType: "image/png",
+    });
+  });
+
 /**
  * OBS records 60 fps on Matroska's millisecond clock, so frame k starts at round(k * 1000 / 60) ms:
  * frame 1 at 17 ms, a third of a millisecond after its slot. Export snaps frames back to their

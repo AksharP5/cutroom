@@ -35,5 +35,11 @@ until the editing proxy finishes, the enabled pipeline falls back to HyperFrames
 
 The intermittent CI failures were not reproduced naturally in the bounded local
 runs. These tests reproduce two concrete gaps: a seek could retain the old ready
-flag, and a successful decoded snapshot was accepted without checking its frame
-interval. They do not prove that both CI failures followed the same sequence.
+flag, and a successful decoded snapshot was accepted without checking its decoded
+identity. They do not prove that both CI failures followed the same sequence.
+
+A sparse VFR recording and a one-second video with a two-second audio track
+exercise valid held pictures. At 1.5 seconds they display source frames 30 and
+29 respectively, even though each decoded frame reports a nominal duration of
+about 33 ms. Both timed out with the interval check; both now become ready with
+the correct burned-in picture, including repeated seeks within the held frame.
