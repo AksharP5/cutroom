@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { encodeUrlPath } from "@hyperframes/parsers/asset-paths";
 import {
   inMediaTrash,
   localMediaPath,
@@ -31,7 +30,10 @@ export function ImageVariableMenu({
         mediaKind(path)?.kind === "image"
           ? [
               {
-                value: encodeUrlPath(sourcePath(composition, path)),
+                value: sourcePath(composition, path)
+                  .split("/")
+                  .map(encodeURIComponent)
+                  .join("/"),
                 label: path,
               },
             ]

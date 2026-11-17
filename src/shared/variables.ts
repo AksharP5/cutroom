@@ -4,7 +4,7 @@ import type {
   CompositionVariable,
   ImageValue,
 } from "@hyperframes/core/variables";
-import { inMediaTrash, localMediaPath, mediaKind } from "./media";
+import { inMediaTrash, localMediaPath, mediaKind } from "./media.ts";
 
 export type { CompositionVariable };
 
