@@ -9,7 +9,7 @@ import type {
 import type { ReviewItem } from "../../shared/review";
 import { toFrames, toSeconds } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
-import { actionFor, comboOf, keymap } from "../keymap";
+import { actionFor, comboOf, isTyping, keymap } from "../keymap";
 import { noteNumbers } from "../review";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
@@ -183,10 +183,11 @@ export function NoteLayer({
         field.current?.focus({ preventScroll: true });
     };
     const key = (event: KeyboardEvent) => {
+      const inside = event.target === field.current;
       if (event.target instanceof Element && event.target.closest("dialog"))
         return;
+      if (!inside && isTyping(event.target)) return;
       const combo = comboOf(event);
-      const inside = event.target === field.current;
       if (combo === "Esc") dispatchNote(projectId, { type: "cancel" });
       else if (
         combo === keymap.editUndo.keys[0] ||
