@@ -1,12 +1,16 @@
+import { useMemo, useState } from "react";
 import { ClosedCaptioning } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
   CAPTION_STYLES,
+  CAPTION_WORD_TRANSFORM_DEFAULTS,
+  CaptionWordTransformSchema,
   CAPTION_STYLE_LABELS,
   CaptionsViewSchema,
   SubtitleFormatSchema,
 } from "../../shared/captions";
 import type {
+  CaptionWordTransform,
   CaptionsEdit,
   CaptionsView,
   SubtitleFormat,
@@ -132,5 +136,145 @@ export function CaptionControls({
         </p>
       )}
     </div>
+  );
+}
+
+const wordFields = [
+  {
+    key: "x",
+    label: "X",
+    description: "Caption X position",
+    unit: "px",
+    factor: 1,
+  },
+  {
+    key: "y",
+    label: "Y",
+    description: "Caption Y position",
+    unit: "px",
+    factor: 1,
+  },
+  {
+    key: "scale",
+    label: "Scale",
+    description: "Caption scale",
+    unit: "%",
+    factor: 100,
+  },
+  {
+    key: "rotation",
+    label: "Angle",
+    description: "Caption rotation",
+    unit: "°",
+    factor: 1,
+  },
+] as const;
+
+export function CaptionTransformFields({
+  captions,
+  wordIds,
+  busy,
+  onApply,
+  onCancel,
+}: {
+  captions: CaptionsView;
+  wordIds: readonly string[];
+  busy: boolean;
+  onApply: (transform: CaptionWordTransform | null) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState<
+    Partial<Record<keyof CaptionWordTransform, string>>
+  >({});
+  const fields = useMemo(
+    () =>
+      wordFields.map((field) => {
+        const valueOf = (id: string) =>
+          captions.wordTransforms[id]?.[field.key] ??
+          CAPTION_WORD_TRANSFORM_DEFAULTS[field.key];
+        const first = wordIds[0] ? valueOf(wordIds[0]) : 0;
+        const mixed = wordIds.some((id) => valueOf(id) !== first);
+        return {
+          ...field,
+          initial: mixed
+            ? ""
+            : String(Number((first * field.factor).toFixed(6))),
+          mixed,
+        };
+      }),
+    [captions.wordTransforms, wordIds],
+  );
+  const canReset = wordIds.some((id) =>
+    Object.hasOwn(captions.wordTransforms, id),
+  );
+  const entries = fields.flatMap(({ key, factor }) => {
+    const value = draft[key];
+    return value ? [[key, Number(value) / factor] as const] : [];
+  });
+  const transform = CaptionWordTransformSchema.safeParse(
+    Object.fromEntries(entries),
+  );
+  return (
+    <form
+      className="script-caption-transform"
+      aria-label="Caption word transform"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!busy && transform.success && entries.length)
+          onApply(transform.data);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      {fields.map(({ key, label, description, unit, initial, mixed }) => (
+        <label key={key}>
+          <span>{label}</span>
+          <input
+            type="number"
+            autoFocus={key === "x"}
+            step="any"
+            aria-label={description}
+            aria-invalid={
+              !transform.success &&
+              transform.error.issues.some((issue) => issue.path[0] === key)
+                ? true
+                : undefined
+            }
+            placeholder={mixed ? "Mixed" : undefined}
+            value={draft[key] ?? initial}
+            onChange={(event) =>
+              setDraft({ ...draft, [key]: event.currentTarget.value })
+            }
+            disabled={busy}
+          />
+          <span>{unit}</span>
+        </label>
+      ))}
+      {!transform.success && (
+        <p className="script-caption-transform-error" role="alert">
+          {transform.error.issues[0]?.message}
+        </p>
+      )}
+      <div className="script-caption-transform-actions">
+        <button
+          className="text-button"
+          type="button"
+          disabled={!canReset || busy}
+          onClick={() => onApply(null)}
+        >
+          Reset
+        </button>
+        <button
+          className="text-button"
+          type="submit"
+          disabled={busy || !transform.success || !entries.length}
+        >
+          Apply
+        </button>
+      </div>
+    </form>
   );
 }

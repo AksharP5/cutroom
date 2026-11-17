@@ -1,4 +1,27 @@
 import { z } from "zod";
+import { KeyframeValueSchemas } from "./timeline/schema";
+
+export const CaptionWordTransformSchema = z.strictObject({
+  x: KeyframeValueSchemas.position.shape.x
+    .optional()
+    .describe("Horizontal offset in composition pixels"),
+  y: KeyframeValueSchemas.position.shape.y
+    .optional()
+    .describe("Vertical offset in composition pixels"),
+  scale: KeyframeValueSchemas.scale.shape.x
+    .optional()
+    .describe("Uniform scale, where 1 is the word's original size"),
+  rotation: KeyframeValueSchemas.rotation
+    .optional()
+    .describe("Clockwise rotation in degrees"),
+});
+export type CaptionWordTransform = z.infer<typeof CaptionWordTransformSchema>;
+export const CAPTION_WORD_TRANSFORM_DEFAULTS = {
+  x: 0,
+  y: 0,
+  scale: 1,
+  rotation: 0,
+} as const;
 
 /** Looks a caption composition can take. Each is one stylesheet in the captions file. */
 export const CAPTION_STYLES = ["karaoke", "highlight", "plain"] as const;
@@ -21,6 +44,7 @@ export const captionText = (text: string) => text.replace(/\s+/g, " ").trim();
 const seconds = z.number().finite().nonnegative();
 const wordId = z.string().min(1).max(200);
 const wordText = z.string().min(1).max(2_000);
+const wordTransforms = z.record(wordId, CaptionWordTransformSchema);
 /** A caption word: the transcript word it came from, its shown text, and when it is spoken. */
 export const CaptionWordSchema = z.object({
   id: wordId,
@@ -45,6 +69,7 @@ export const CaptionsSchema = z.object({
   groups: z.array(CaptionGroupSchema).max(50_000),
   /** Corrections also belong to words which are temporarily cut from these lines. */
   edits: z.record(wordId, wordText).default({}),
+  wordTransforms: wordTransforms.default({}),
 });
 
 /** What the editor and agents read about one transcript's captions. */
@@ -64,6 +89,8 @@ export const CaptionsViewSchema = z.object({
   ),
   /** Corrections by transcript word id, including words currently cut from the captions. */
   edits: z.record(z.string(), z.string()),
+  /** Geometry overrides by transcript word ID. */
+  wordTransforms: wordTransforms.default({}),
 });
 
 const noteId = z
@@ -114,6 +141,19 @@ export const CaptionsEditSchema = z.discriminatedUnion("action", [
       noteId,
     })
     .describe("Change one caption word's text."),
+  z
+    .object({
+      action: z.literal("transform"),
+      transcriptId,
+      wordIds: z.array(wordId).min(1).max(200_000),
+      transform: CaptionWordTransformSchema.nullable().describe(
+        "Set the specified properties on each word. Pass null to reset every property on selected words.",
+      ),
+      noteId,
+    })
+    .describe(
+      "Move, scale or rotate selected caption words without changing their text or timing.",
+    ),
 ]);
 
 /** Limits that keep an imported subtitle file within what an editor session can hold. */

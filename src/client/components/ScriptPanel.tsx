@@ -22,6 +22,7 @@ import type { CaptionsView } from "../../shared/captions";
 import { SelectMenu } from "./SelectMenu";
 import {
   CaptionControls,
+  CaptionTransformFields,
   CaptionsListSchema,
   editCaptions,
 } from "./CaptionControls";
@@ -106,10 +107,11 @@ export const ScriptPanel = memo(function ScriptPanel({
   const [media, setMedia] = useState<MediaClip[]>([]);
   const [views, setViews] = useState<TranscriptView[]>([]);
   const [captions, setCaptions] = useState<CaptionsView[]>([]);
-  const [captionEdit, setCaptionEdit] = useState<{
-    wordId: string;
-    text: string;
-  } | null>(null);
+  const [captionEdit, setCaptionEdit] = useState<
+    | { kind: "text"; wordId: string; text: string }
+    | { kind: "transform" }
+    | null
+  >(null);
   const [selectedClipKey, setSelectedClipKey] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [job, setJob] = useState<TranscriptJob | null>(() =>
@@ -119,6 +121,7 @@ export const ScriptPanel = memo(function ScriptPanel({
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const captionTransformTrigger = useRef<HTMLButtonElement>(null);
   const anchor = useRef<string | null>(null);
   const pendingTranscript = useRef<string | null>(null);
 
@@ -596,6 +599,7 @@ export const ScriptPanel = memo(function ScriptPanel({
                 disabled={busy}
                 onClick={() =>
                   setCaptionEdit({
+                    kind: "text",
                     wordId: selectedWords[0]!.id,
                     text:
                       activeCaptions.edits[selectedWords[0]!.id] ??
@@ -606,13 +610,23 @@ export const ScriptPanel = memo(function ScriptPanel({
                 Edit caption
               </button>
             )}
+          {activeCaptions && (
+            <button
+              ref={captionTransformTrigger}
+              className="text-button"
+              disabled={busy}
+              onClick={() => setCaptionEdit({ kind: "transform" })}
+            >
+              Transform words
+            </button>
+          )}
           <button className="text-button" onClick={askAboutSelection}>
             Ask agent
           </button>
           <button className="text-button" onClick={() => setSelected([])}>
             Clear
           </button>
-          {captionEdit && active && (
+          {captionEdit?.kind === "text" && active && (
             <form
               className="script-caption-edit"
               onSubmit={(event) => {
@@ -650,6 +664,27 @@ export const ScriptPanel = memo(function ScriptPanel({
                 Save
               </button>
             </form>
+          )}
+          {captionEdit?.kind === "transform" && active && activeCaptions && (
+            <CaptionTransformFields
+              captions={activeCaptions}
+              wordIds={selected}
+              busy={busy}
+              onCancel={() => {
+                setCaptionEdit(null);
+                captionTransformTrigger.current?.focus();
+              }}
+              onApply={(transform) =>
+                run(() =>
+                  editCaptions(projectId, {
+                    action: "transform",
+                    transcriptId: active.id,
+                    wordIds: selected,
+                    transform,
+                  }).then(() => setCaptionEdit(null)),
+                )
+              }
+            />
           )}
         </div>
       )}
