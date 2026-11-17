@@ -152,6 +152,11 @@ export function MotionSection({
   };
   const blocked = disabled || codeBusy || !!snapshot?.reason;
   const readOnly = saving || loaded?.revision !== revision;
+  if (
+    !error &&
+    (!snapshot || (!snapshot.animations.length && !snapshot.reason))
+  )
+    return null;
   return (
     <details
       className="inspector-section inspector-motion"
@@ -183,9 +188,7 @@ export function MotionSection({
             Retry
           </button>
         </p>
-      ) : !snapshot ? (
-        <p className="inspector-field-hint">Reading motion…</p>
-      ) : (
+      ) : snapshot ? (
         <>
           {snapshot.reason && (
             <p className="inspector-warning" role="note">
@@ -199,11 +202,6 @@ export function MotionSection({
                 {notice}
               </p>
             ))}
-          {!snapshot.animations.length && !snapshot.reason && (
-            <p className="inspector-field-hint">
-              No directly inspectable tween targets this clip.
-            </p>
-          )}
           {snapshot.animations.map((animation, index) => (
             <div
               key={`${loaded?.renderVersion}:${index}`}
@@ -320,7 +318,7 @@ export function MotionSection({
             </div>
           ))}
         </>
-      )}
+      ) : null}
     </details>
   );
 }

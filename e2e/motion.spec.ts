@@ -4,7 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { expect, test } from "./fixtures";
-import { createPositionProject, seekFrame } from "./position-helpers";
+import {
+  createPositionProject,
+  seekFrame,
+  waitFrames,
+} from "./position-helpers";
 import { MotionSnapshotSchema } from "../src/shared/motion";
 
 const exec = promisify(execFile);
@@ -292,11 +296,18 @@ test("motion follows external edits and selection; dirty code blocks writes and 
   });
   await writeFile(path, changed.replace("x: 250", "x: 275"));
   await expect.poll(() => intercepted).toBe(true);
+  const otherRead = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname.endsWith("/motion") &&
+      url.searchParams.get("clipId") === "other"
+    );
+  });
   await page.locator('[data-clip="other"]').click();
   release!();
-  await expect(
-    page.getByText("No directly inspectable tween targets this clip."),
-  ).toBeVisible();
+  await (await otherRead).finished();
+  await waitFrames(page);
+  await expect(page.locator(".inspector-motion")).toHaveCount(0);
   await expect(x).toHaveCount(0);
   await page.locator('[data-clip="card"]').click();
   await expect(x).toHaveValue("275");
