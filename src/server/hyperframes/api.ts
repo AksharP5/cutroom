@@ -1,6 +1,7 @@
 import { fileFingerprint, inMediaTrash } from "../../shared/media";
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import {
   defaultExportRange,
   compositionExportName,
@@ -134,10 +135,21 @@ export function createHyperframesApi(
   const api = new Hono();
   api.use("/projects/:id/thumbnail/*", async (c, next) => {
     const url = new URL(c.req.url);
-    url.searchParams.set(
-      "v",
-      `${thumbnailRendererVersion}-${url.searchParams.get("v") ?? ""}`,
-    );
+    const time = Number.parseFloat(url.searchParams.get("t") ?? "");
+    // Studio rounds time in its disk cache key. Include the exact seek in its version key so
+    // nearby captures cannot reuse the wrong side of a cut, even with the cache already warm.
+    // Keep the previous minimum key length for Studio's atomic cache filenames.
+    const version = createHash("sha256")
+      .update(
+        JSON.stringify([
+          thumbnailRendererVersion,
+          url.searchParams.get("v") ?? "",
+          Number.isFinite(time) ? time : 0.5,
+        ]),
+      )
+      .digest("base64url")
+      .slice(0, 22);
+    url.searchParams.set("v", version);
     c.req.raw = new Request(url, c.req.raw);
     await next();
   });
@@ -379,7 +391,7 @@ export function createHyperframesApi(
     const project = await store.get(c.req.param("id"));
     const frame = await api.request(
       new URL(
-        `/projects/${encodeURIComponent(project.id)}/thumbnail/${encodeURIComponent(input.composition)}?${new URLSearchParams({ t: input.time.toFixed(3), format: "png", output: "source" })}`,
+        `/projects/${encodeURIComponent(project.id)}/thumbnail/${encodeURIComponent(input.composition)}?${new URLSearchParams({ t: String(input.time), format: "png", output: "source" })}`,
         c.req.url,
       ),
       { headers: c.req.raw.headers },

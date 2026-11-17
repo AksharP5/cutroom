@@ -22,7 +22,7 @@ export function frameCaptureUrl(
   }: Pick<EditorReviewDraft, "time" | "compositionPath">,
 ) {
   const params = new URLSearchParams({
-    t: time.toFixed(3),
+    t: String(time),
     format: "png",
     output: "source",
   });

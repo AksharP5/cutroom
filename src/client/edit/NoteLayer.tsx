@@ -7,7 +7,7 @@ import type {
   EditorReviewDraft,
 } from "../../shared/editor";
 import type { ReviewItem } from "../../shared/review";
-import { toFrames, toSeconds } from "../../shared/timeline/apply";
+import { frameTime, toFrames } from "../../shared/timeline/apply";
 import type { Fps } from "../../shared/timeline/schema";
 import { actionFor, comboOf, keymap } from "../keymap";
 import { noteNumbers } from "../review";
@@ -549,8 +549,8 @@ function pointIn(
 function reviewDraft(draft: Draft, fps: Fps): EditorReviewDraft {
   return {
     id: draft.id,
-    time: toSeconds(draft.frame, fps),
-    ...(draft.end !== null && { endTime: toSeconds(draft.end, fps) }),
+    time: frameTime(draft.frame, fps),
+    ...(draft.end !== null && { endTime: frameTime(draft.end, fps) }),
     // Notes belong to the composition the viewer shows.
     compositionPath: useTimeline.getState().composition,
     point: draft.at,
