@@ -989,7 +989,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("setAudioGroup"),
       clipId,
-      expectedGroupId: z.string().min(1).max(200).optional(),
+      expectedGroupId: z.string().optional(),
       volume,
     })
     .describe(
