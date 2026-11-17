@@ -1,14 +1,114 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Page } from "@playwright/test";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
+import { StillSchema } from "../src/shared/export";
 import { ReviewItemSchema } from "../src/shared/review";
 import { seekFrame } from "./position-helpers";
 
 const pngSize = (png: Buffer) => ({
   width: png.readUInt32BE(16),
   height: png.readUInt32BE(20),
+});
+
+const centerPixel = (page: Page, bytes: Buffer) =>
+  page.evaluate(async (encoded) => {
+    const png = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
+    const bitmap = await createImageBitmap(
+      new Blob([png], { type: "image/png" }),
+    );
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d")!;
+    context.drawImage(bitmap, 0, 0);
+    return [
+      ...context.getImageData(bitmap.width / 2, bitmap.height / 2, 1, 1).data,
+    ];
+  }, bytes.toString("base64"));
+
+test("MCP saves the exact named-scene frame as a PNG without replacing earlier stills", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Frame proof", duration: 1, width: 320, height: 240 },
+      })
+    ).json(),
+  );
+  await mkdir(join(project.path, "compositions"));
+  const composition = "compositions/frames.html";
+  await writeFile(
+    join(project.path, composition),
+    `<template><main data-composition-id="frames" data-width="320" data-height="240" data-fps="24" data-duration="1"><div id="red" class="clip" data-start="0" data-duration="0.04" data-track-index="0" style="position:absolute;inset:0;background:red"></div><div id="green" class="clip" data-start="0.04" data-duration="0.96" data-track-index="0" style="position:absolute;inset:0;background:lime"></div></main></template>`,
+  );
+  const index = join(project.path, "index.html");
+  const source = (await readFile(index, "utf8")).replace(
+    /(<main[^>]*>)[\s\S]*<\/main>/,
+    `$1<div id="frames" class="clip" data-composition-id="frames" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0"></div></main>`,
+  );
+  await writeFile(index, source);
+  const http = new Client({ name: "HTTP frame proof", version: "1" });
+  const stdio = new Client({ name: "Stdio frame proof", version: "1" });
+  try {
+    await http.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", baseURL), {
+        requestInit: { headers: { origin: baseURL! } },
+      }),
+    );
+    await stdio.connect(
+      new StdioClientTransport({
+        command: "bun",
+        args: [
+          fileURLToPath(new URL("../src/server/mcp/stdio.ts", import.meta.url)),
+        ],
+        env: { PATH: process.env.PATH ?? "", CUTROOM_URL: baseURL! },
+      }),
+    );
+    const save = (client: Client, frame: number) =>
+      client.callTool({
+        name: "export_frame",
+        arguments: { projectId: project.id, composition, frame },
+      });
+    const readStill = async (client: Client) => {
+      const reply = await save(client, 1);
+      expect(reply.isError, JSON.stringify(reply.content)).not.toBe(true);
+      return z.object({ result: StillSchema }).parse(reply.structuredContent)
+        .result;
+    };
+    const first = await readStill(http);
+    const second = await readStill(stdio);
+    expect(first).toEqual({
+      path: join(project.path, ".cutroom/renders/Frame proof 00-00-00-01.png"),
+      filename: "Frame proof 00-00-00-01.png",
+    });
+    expect(second.filename).toBe("Frame proof 00-00-00-01 2.png");
+    const png = await readFile(first.path);
+    expect(pngSize(png)).toEqual({ width: 320, height: 240 });
+    expect(await readFile(second.path)).toEqual(png);
+    expect(await centerPixel(page, png)).toEqual([0, 255, 0, 255]);
+    await writeFile(info.outputPath("mcp-frame.png"), png);
+    const outside = await save(http, 24);
+    expect(outside.isError).toBe(true);
+    expect(outside.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("Choose a frame inside the composition."),
+      }),
+    ]);
+    expect(await readdir(join(project.path, ".cutroom/renders"))).toHaveLength(
+      2,
+    );
+    expect(await readFile(index, "utf8")).toBe(source);
+  } finally {
+    await Promise.all([http.close(), stdio.close()]);
+  }
 });
 
 test("stills and notes capture the incoming picture even after a nearby thumbnail is cached", async ({
@@ -28,19 +128,7 @@ test("stills and notes capture the incoming picture even after a nearby thumbnai
   );
   await page.goto(`/#project/${project.id}`);
   await seekFrame(page, 1);
-  const pixel = (bytes: Buffer) =>
-    page.evaluate(async (encoded) => {
-      const png = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0));
-      const bitmap = await createImageBitmap(
-        new Blob([png], { type: "image/png" }),
-      );
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const context = canvas.getContext("2d")!;
-      context.drawImage(bitmap, 0, 0);
-      return [
-        ...context.getImageData(bitmap.width / 2, bitmap.height / 2, 1, 1).data,
-      ];
-    }, bytes.toString("base64"));
+  const pixel = (bytes: Buffer) => centerPixel(page, bytes);
   const picture = page.locator(".edit-picture");
   expect(await pixel(await picture.screenshot())).toEqual([0, 255, 0, 255]);
   const nearby = await request.get(

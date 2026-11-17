@@ -13,6 +13,7 @@ import {
   ExportOptionsSchema,
   ExportStartSchema,
   retimeFrames,
+  StillFrameRequestSchema,
   StillRequestSchema,
 } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
@@ -97,6 +98,8 @@ import {
   isAudioKind,
 } from "../../shared/timeline/schema";
 import { trackGainPreview } from "./trackGainPreview";
+import { frameTime } from "../../shared/timeline/apply";
+import { formatTimecode } from "../../shared/timeline/timecode";
 import { parseFps } from "@hyperframes/core";
 import {
   PROXY_PIECE_PARAM,
@@ -388,11 +391,25 @@ export function createHyperframesApi(
   });
   // A still is the review-note frame capture, kept beside the project's exports.
   api.post("/projects/:id/still", async (c) => {
-    const input = StillRequestSchema.parse(await c.req.json());
+    const input = z
+      .union([StillFrameRequestSchema, StillRequestSchema])
+      .parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
+    const composition = exportedComposition(input.composition);
+    let time: number;
+    let timecode: string;
+    if ("frame" in input) {
+      const { timeline } = await readComposition(project.id, composition);
+      if (input.frame >= timeline.duration)
+        throw new HttpError(400, "Choose a frame inside the composition.");
+      time = frameTime(input.frame, timeline.fps);
+      timecode = formatTimecode(input.frame, timeline.fps);
+    } else {
+      ({ time, timecode } = input);
+    }
     const frame = await api.request(
       new URL(
-        `/projects/${encodeURIComponent(project.id)}/thumbnail/${encodeURIComponent(input.composition)}?${new URLSearchParams({ t: String(input.time), format: "png", output: "source" })}`,
+        `/projects/${encodeURIComponent(project.id)}/thumbnail/${encodeURIComponent(composition)}?${new URLSearchParams({ t: String(time), format: "png", output: "source" })}`,
         c.req.url,
       ),
       { headers: c.req.raw.headers },
@@ -408,7 +425,7 @@ export function createHyperframesApi(
       directory,
       exportFilename(project.name).replace(
         /\.mp4$/,
-        ` ${input.timecode.replaceAll(":", "-")}.png`,
+        ` ${timecode.replaceAll(":", "-")}.png`,
       ),
     );
     const path = join(directory, filename);
