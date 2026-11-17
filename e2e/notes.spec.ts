@@ -206,6 +206,44 @@ test("a comment pins where you click, takes every key while you type, and stays 
   await expect(page.locator(`#review-note-${saved?.id}`)).toBeVisible();
 });
 
+test("chat typing and shortcuts leave an unfinished drawing alone", async ({
+  page,
+  request,
+}, info) => {
+  const project = await openProject(page, request, "Note and chat drafts");
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await page.getByRole("button", { name: /^Draw/ }).click();
+  const start = await project.at(0.15, 0.5);
+  const end = await project.at(0.3, 0.5);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await page.mouse.up();
+  const note = page.getByLabel("What should change?");
+  await note.fill("Make this red");
+  const pencil = page.locator(".edit-note-pencil path[d]:not([data-live])");
+  await expect(pencil).toHaveCount(1);
+  const stroke = await pencil.getAttribute("d");
+  if (!stroke) throw new Error("The pending drawing has no stroke path.");
+  const chat = page.getByLabel("Message your agent");
+  await chat.click();
+  await page.keyboard.type("Please keep the title");
+  await expect(chat).toHaveValue("Please keep the title");
+  await expect(chat).toBeFocused();
+  await expect(note).toHaveValue("Make this red");
+  await page.screenshot({ path: info.outputPath("chat-and-note-drafts.png") });
+  await page.keyboard.press("Control+z");
+  await expect(note).toHaveValue("Make this red");
+  await expect(pencil).toHaveCount(1);
+  await expect(pencil).toHaveAttribute("d", stroke);
+  await chat.focus();
+  await page.keyboard.press("Escape");
+  await expect(note).toBeVisible();
+  await expect(note).toHaveValue("Make this red");
+  await expect(pencil).toHaveAttribute("d", stroke);
+  expect(await project.notes()).toEqual([]);
+});
+
 test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved notes show only at their time", async ({
   page,
   request,
