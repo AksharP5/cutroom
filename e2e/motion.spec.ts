@@ -19,6 +19,71 @@ window.__timelines ??= {};
 window.__timelines['main'] = tl;
 </script></body></html>`;
 
+test("motion fields keep native Tab focus while a save and fresh source read settle", async ({
+  page,
+  request,
+}) => {
+  const project = await createPositionProject(
+    request,
+    { name: "Motion keyboard editing", width: 640, height: 360, duration: 3 },
+    authored,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="card"]').click();
+  const x = page.getByRole("textbox", { name: "Motion 1 to x", exact: true });
+  const start = page.getByRole("textbox", {
+    name: "Motion 1 position",
+    exact: true,
+  });
+  const duration = page.getByRole("textbox", {
+    name: "Motion 1 duration",
+    exact: true,
+  });
+  const ease = page.getByRole("combobox", {
+    name: "Motion 1 ease",
+    exact: true,
+  });
+  await expect(x).toHaveValue("200");
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/projects/${project.id}/motion`, async (route) => {
+    if (route.request().method() === "POST") await held;
+    await route.continue();
+  });
+  try {
+    await x.fill("400");
+    await x.press("Tab");
+    await expect(start).toBeFocused();
+    await expect(start).not.toBeEditable();
+    await page.keyboard.press("Tab");
+    await expect(duration).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(start).toBeFocused();
+  } finally {
+    release!();
+  }
+  await expect(start).toBeEditable();
+  await expect(start).toBeFocused();
+  await start.fill("0.5");
+  await start.press("Tab");
+  await expect(duration).toBeEditable();
+  await expect(duration).toBeFocused();
+  await duration.fill("3");
+  await duration.press("Tab");
+  await expect(ease).toBeFocused();
+  await expect(duration).toBeEditable();
+  await expect(ease).toBeFocused();
+  await expect(x).toHaveValue("400");
+  expect(await readFile(join(project.path, "index.html"), "utf8")).toBe(
+    authored
+      .replace("x: 200", "x: 400")
+      .replace("duration: 2", "duration: 3")
+      .replace("}, 0);", "}, 0.5);"),
+  );
+});
+
 function greenBox(rgb: Buffer) {
   let left = 640,
     top = 360,
@@ -165,6 +230,7 @@ test("authored motion edits the picture, uses shared Undo/Redo and matches actua
   await exec("ffmpeg", [
     "-v",
     "error",
+    "-y",
     "-i",
     job.outputPath,
     "-vf",

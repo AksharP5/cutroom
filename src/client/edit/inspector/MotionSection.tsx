@@ -48,13 +48,16 @@ export function MotionSection({
 }) {
   const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState<{
+    projectId: string;
     revision: string;
+    renderVersion: string;
     snapshot: MotionSnapshot;
   } | null>(null);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [saving, setSaving] = useState(false);
   const writing = useRef(false);
+  const editedVersion = useRef<string | null>(null);
   const codeBusy = useCode(
     (state) =>
       state.projectId === projectId &&
@@ -75,7 +78,20 @@ export function MotionSection({
       );
     })
       .then((snapshot) => {
-        if (!closing.signal.aborted) setLoaded({ revision, snapshot });
+        if (closing.signal.aborted) return;
+        const ownEdit = snapshot.version === editedVersion.current;
+        editedVersion.current = null;
+        // Literal edits keep source order. External source changes start fresh field identities.
+        setLoaded((current) => ({
+          projectId,
+          revision,
+          snapshot,
+          renderVersion:
+            current &&
+            (ownEdit || current.snapshot.version === snapshot.version)
+              ? current.renderVersion
+              : snapshot.version,
+        }));
       })
       .catch((error: unknown) => {
         if (!closing.signal.aborted)
@@ -84,7 +100,7 @@ export function MotionSection({
     return () => closing.abort();
   }, [projectId, composition, clipId, revision, reload, open, path]);
   const snapshot =
-    loaded?.revision === revision &&
+    loaded?.projectId === projectId &&
     loaded.snapshot.clipId === clipId &&
     loaded.snapshot.composition === composition
       ? loaded.snapshot
@@ -93,7 +109,7 @@ export function MotionSection({
     if (await openFile(composition)) useWorkspace.setState({ code: true });
   };
   const commit = async (animationId: string, change: MotionChange) => {
-    if (!snapshot || writing.current) return;
+    if (!snapshot || loaded?.revision !== revision || writing.current) return;
     writing.current = true;
     setSaving(true);
     try {
@@ -110,7 +126,7 @@ export function MotionSection({
           throw new Error(
             `Save or discard changes in ${composition} before editing motion.`,
           );
-        return api(
+        const next = await api(
           path,
           MotionSnapshotSchema,
           json("POST", {
@@ -121,8 +137,11 @@ export function MotionSection({
             change,
           }),
         );
+        editedVersion.current = next.version;
+        return next;
       });
     } catch (error) {
+      editedVersion.current = null;
       showToast(error instanceof Error ? error.message : String(error));
       setLoaded(null);
       setReload((value) => value + 1);
@@ -131,7 +150,8 @@ export function MotionSection({
       setSaving(false);
     }
   };
-  const blocked = disabled || codeBusy || saving || !!snapshot?.reason;
+  const blocked = disabled || codeBusy || !!snapshot?.reason;
+  const readOnly = saving || loaded?.revision !== revision;
   return (
     <details
       className="inspector-section inspector-motion"
@@ -186,7 +206,7 @@ export function MotionSection({
           )}
           {snapshot.animations.map((animation, index) => (
             <div
-              key={`${snapshot.version}:${animation.id}`}
+              key={`${loaded?.renderVersion}:${index}`}
               className="inspector-motion-tween"
             >
               <h4>
@@ -218,6 +238,7 @@ export function MotionSection({
                       fps={fps}
                       min={-Infinity}
                       disabled={blocked || !!animation.reason}
+                      readOnly={readOnly}
                       onCommit={(value) => {
                         if (value !== null)
                           void commit(animation.id, {
@@ -254,6 +275,7 @@ export function MotionSection({
                       unit="seconds"
                       fps={fps}
                       disabled={blocked || !!animation.reason}
+                      readOnly={readOnly}
                       onCommit={(value) => {
                         if (value !== null)
                           void commit(animation.id, { kind, value });
@@ -283,6 +305,7 @@ export function MotionSection({
                       (value) => ({ value, label: value }),
                     )}
                     disabled={blocked || !!animation.reason}
+                    readOnly={readOnly}
                     onChange={(value) =>
                       void commit(animation.id, { kind: "ease", value })
                     }

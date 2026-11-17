@@ -15,6 +15,8 @@ type FieldProps = {
   unit: FieldUnit;
   fps: Fps;
   disabled?: boolean;
+  /** Awaiting a saved value without removing the field from keyboard navigation. */
+  readOnly?: boolean;
   allowAuto?: boolean;
   /** Several clips with different values share the field: `value` is null and typing sets them all. */
   mixed?: boolean;
@@ -39,6 +41,7 @@ function useValue({
   unit,
   fps,
   disabled = false,
+  readOnly = false,
   allowAuto = false,
   mixed = false,
   min = 0,
@@ -85,6 +88,12 @@ function useValue({
     bare && next !== null ? String(next) : formatField(next, unit, fps);
   const commit = () => {
     if (draft === null) return;
+    if (readOnly) {
+      onCancel?.();
+      stepping.current = false;
+      setDraft(null);
+      return;
+    }
     try {
       const next =
         allowAuto && draft.trim().toLowerCase() === "auto"
@@ -107,7 +116,7 @@ function useValue({
     htmlFor: id,
     "aria-disabled": disabled,
     onPointerDown(event: PointerEvent<HTMLLabelElement>) {
-      if (disabled || event.button !== 0) return;
+      if (disabled || readOnly || event.button !== 0) return;
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
       const start = value ?? 1;
@@ -132,7 +141,7 @@ function useValue({
     },
     onPointerMove(event: PointerEvent<HTMLLabelElement>) {
       const current = drag.current;
-      if (!current) return;
+      if (!current || readOnly) return;
       const delta = event.clientX - current.x;
       // A click that wobbles a pixel is still a click.
       if (!current.moved && Math.abs(delta) < 3) return;
@@ -154,7 +163,8 @@ function useValue({
     },
     onPointerUp() {
       const current = drag.current;
-      endDrag(false);
+      endDrag(readOnly);
+      if (readOnly) return;
       if (!current) return;
       if (!current.moved) input.current?.focus();
       else if (current.next !== current.value) onCommit(current.next);
@@ -187,13 +197,16 @@ function useValue({
       type="text"
       spellCheck={false}
       disabled={disabled}
+      readOnly={readOnly}
       data-timecode={unit === "timecode" ? "" : undefined}
       data-default={
         initial !== undefined && !mixed && value === initial ? "" : undefined
       }
       value={draft ?? (mixed ? "Mixed" : format(value))}
       onFocus={(event) => event.currentTarget.select()}
-      onChange={(event) => setDraft(event.target.value)}
+      onChange={(event) => {
+        if (!readOnly) setDraft(event.target.value);
+      }}
       onBlur={() => {
         if (cancelled.current) {
           onCancel?.();
@@ -204,7 +217,10 @@ function useValue({
       }}
       onKeyDown={(event) => {
         if (event.key !== "Escape") event.stopPropagation();
-        if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        if (
+          !readOnly &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
           event.preventDefault();
           try {
             const current =
