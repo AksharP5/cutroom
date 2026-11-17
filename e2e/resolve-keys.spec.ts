@@ -72,6 +72,9 @@ test(", and . nudge the selected clip a frame, overwriting its neighbour, each o
   await page.keyboard.press("Control+z");
   await expect.poll(() => clip("shot-3")).toEqual([0, 180, 90]);
   await expect.poll(() => clip("shot-2")).toEqual([0, 90, 90]);
+  await expect(
+    page.getByRole("textbox", { name: "Start", exact: true }),
+  ).toHaveValue("00:00:03:00");
   await page.keyboard.press("Shift+Comma");
   await expect.poll(() => clip("shot-2")).toEqual([0, 85, 90]);
   await expect.poll(() => clip("shot-1")).toEqual([0, 0, 85]);
