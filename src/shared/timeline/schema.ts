@@ -973,20 +973,17 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .union([
           z.string().min(1).max(200),
           z.strictObject({
-            id: z
-              .string()
-              .max(120)
-              .regex(/^[A-Za-z0-9_-]+$/),
             label: z.string().trim().min(1).max(120),
+            volume: volume.optional(),
           }),
           z.null(),
         ])
         .describe(
-          "Pass an existing group ID, an object with a new ID and label, or null to return the clips to track mixing",
+          "Pass an existing group ID, a new group with a label and optional linear gain, or null to return the clips to track mixing",
         ),
     })
     .describe(
-      "Route the named clips with sound in one edit. A new group starts at unity gain. This changes their audio bus, without moving clips or changing their clip gain, fades, or effects",
+      "Route the named clips with sound in one edit. A new group gets a generated ID and defaults to unity gain. This changes their audio bus, without moving clips or changing their clip gain, fades, or effects",
     ),
   z
     .object({

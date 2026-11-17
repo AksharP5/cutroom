@@ -15,6 +15,7 @@ import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
 import { TimelineError } from "./errors";
 import {
   clipFades,
+  CUTROOM_AUDIO_GROUP_PREFIX,
   trackGainWarning,
   windowMix,
   withVolumePoints,
@@ -1354,20 +1355,18 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       }
       let groups = timeline.authoredAudioGroups ?? [];
       const target = command.group;
-      const id = typeof target === "object" ? target?.id : target;
+      let id = typeof target === "string" ? target : null;
       if (target && typeof target !== "string") {
-        if (
-          taken.has(target.id) ||
-          clips.some(
-            ({ authoredAudioGroupId }) => authoredAudioGroupId === target.id,
-          )
-        )
-          throw new TimelineError(
-            "duplicate_id",
-            `Audio group ID ${target.id} is already in use.`,
-          );
-        taken.add(target.id);
-        groups = [...groups, { ...target, volume: 1 }];
+        // The renderer falls back to matching bare IDs across scenes. Keep bus
+        // IDs independent of labels and use UUIDs even across unrelated projects.
+        do {
+          id = CUTROOM_AUDIO_GROUP_PREFIX + crypto.randomUUID();
+        } while (taken.has(id));
+        taken.add(id);
+        groups = [
+          ...groups,
+          { id, label: target.label, volume: target.volume ?? 1 },
+        ];
       } else if (target) {
         const group = groups.find(({ id }) => id === target);
         if (!group)

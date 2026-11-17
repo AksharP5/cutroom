@@ -13,6 +13,8 @@ import { clampFadesToDuration } from "@hyperframes/core/audio-fade";
 import { TimelineError } from "./errors";
 import type { Clip, Fps } from "./schema";
 
+export const CUTROOM_AUDIO_GROUP_PREFIX = "cutroom-bus-";
+
 export const trackGainWarning = (group: string) =>
   `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`;
 

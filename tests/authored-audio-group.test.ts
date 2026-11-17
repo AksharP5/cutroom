@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
-import { assignMediaRenderIds } from "@hyperframes/core";
+import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { parseAudioElements } from "@hyperframes/engine";
-import { parseHTML } from "linkedom";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { editReply } from "../src/server/mcp/timelineReply";
 import { applyAll } from "../src/shared/timeline/apply";
@@ -27,160 +26,224 @@ const routedSource = `<main data-composition-id="main" data-width="320" data-hei
 const createGroup = {
   type: "routeAudioGroup",
   clipIds: ["one"],
-  group: { id: "dialogue", label: "Dialogue" },
+  group: { label: "Dialogue", volume: 0.25 },
 } satisfies CommandInput;
 const groupGain = {
   type: "setAudioGroup",
   clipId: "one",
-  volume: 0.25,
+  volume: 0.5,
 } satisfies CommandInput;
+const offTimeline =
+  '<audio id="unselected" src="voice.wav" data-duration="4" data-audio-group="dialogue"></audio>';
+const scene = (id: string, body: string) =>
+  `<template><main data-composition-id="${id}" data-duration="4">${body}</main></template>`;
+const host = (id: string, src: string, start = 0) =>
+  `<div id="${id}" data-composition-id="${id}" data-composition-src="${src}" data-start="${start}" data-duration="4" data-track-index="0"></div>`;
+const entry = (body: string) =>
+  `<main data-composition-id="main" data-duration="8" data-width="320" data-height="240">${body}</main>`;
+const lead = `<template>${routedSource.replace('data-composition-id="main"', 'data-composition-id="lead"')}</template>`;
 
-test("creating a bus cannot capture an off-timeline reference, even in a gain batch", async () => {
+async function groupFixture() {
   const fixture = await projectFixture();
-  try {
-    fixture.app.route(
-      "/api/cutroom",
-      createTimelineRoutes(fixture.store, fixture.review),
-    );
-    const project = await fixture.store.create({ name: "Unselected media" });
-    const path = join(project.path, "index.html");
-    const api = `/projects/${project.id}`;
-    const offTimeline =
-      '<audio id="unselected" src="voice.wav" data-duration="4" data-audio-group="dialogue"></audio>';
-    const unselectedGain = (html: string) => {
-      const { document } = parseHTML(html);
-      assignMediaRenderIds(document);
-      return parseAudioElements(document.toString()).find(
-        ({ id }) => id === "unselected",
-      )?.groupVolume;
-    };
-    for (const extra of [
-      offTimeline,
-      `<div id="inline" data-composition-id="inline" data-start="0" data-duration="4">${offTimeline}</div>`,
-    ]) {
-      const html = routedSource.replace("</main>", `${extra}</main>`);
-      await writeFile(path, html);
-      expect(unselectedGain(html)).toBe(1);
-      const before = TimelineViewSchema.parse(
-        await (await fixture.request(`${api}/timeline`)).json(),
-      );
-      expect(before.timeline.clips.map(({ id }) => id)).not.toContain(
-        "unselected",
-      );
-      for (const commands of [[createGroup], [createGroup, groupGain]]) {
-        const response = await fixture.request(`${api}/commands`, "POST", {
-          expectedRevision: before.revision,
-          commands,
-        });
-        const body = await response.text();
-        expect(response.status, body).toBe(422);
-        expect(body).toContain("has members outside this timeline");
-        const written = await readFile(path, "utf8");
-        expect(written).toBe(html);
-        expect(unselectedGain(written)).toBe(1);
-      }
-    }
-
-    const insert = {
-      type: "insert",
-      track: 0,
-      at: 0,
-      clip: { kind: "composition", src: "scene.html", duration: 120 },
-    } satisfies CommandInput;
-    await writeFile(path, routedSource);
-    await writeFile(
-      join(project.path, "scene.html"),
-      `<template><main data-composition-id="scene">${offTimeline}</main></template>`,
-    );
-    const before = TimelineViewSchema.parse(
-      await (await fixture.request(`${api}/timeline`)).json(),
-    );
-    for (const commands of [
-      [insert, createGroup, groupGain],
-      [createGroup, groupGain, insert],
-    ]) {
-      const response = await fixture.request(`${api}/commands`, "POST", {
-        expectedRevision: before.revision,
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Audio group identity" });
+  const api = `/projects/${project.id}`;
+  const get = (composition = "index.html") =>
+    fixture.request(`${api}/timeline?composition=${composition}`);
+  const read = async (composition: string) =>
+    TimelineViewSchema.parse(await (await get(composition)).json());
+  return {
+    ...fixture,
+    project,
+    get,
+    read,
+    write: (path: string, html: string) =>
+      writeFile(join(project.path, path), html),
+    source: (path: string) => readFile(join(project.path, path), "utf8"),
+    undo: () => fixture.request(`${api}/history/undo`, "POST", {}),
+    async edit(
+      composition: string,
+      commands: CommandInput[],
+      revision?: string,
+    ) {
+      return fixture.request(`${api}/commands`, "POST", {
+        composition,
+        expectedRevision: revision ?? (await read(composition)).revision,
         commands,
       });
-      const body = await response.text();
-      expect(response.status, body).toBe(422);
-      expect(body).toContain("also used in another composition");
-      expect(await readFile(path, "utf8")).toBe(routedSource);
+    },
+    async mix() {
+      const compiled = await bundleToSingleHtml(project.path, {
+        runtime: "placeholder",
+        staticGuard: false,
+        inlineAssets: false,
+      });
+      return parseAudioElements(compiled);
+    },
+  };
+}
+
+test("creating a named group leaves standalone and nested authored references at unity", async () => {
+  const fixture = await groupFixture();
+  try {
+    const html = routedSource.replace(
+      "</main>",
+      `${offTimeline}<div id="inline" data-composition-id="inline" data-start="0" data-duration="4">${offTimeline.replace("unselected", "inline-audio")}</div></main>`,
+    );
+    await fixture.write("index.html", html);
+    expect(
+      CommandSchema.safeParse({
+        ...createGroup,
+        group: { id: "dialogue", label: "Dialogue" },
+      }).success,
+    ).toBe(false);
+    const response = await fixture.edit("index.html", [createGroup]);
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const view = TimelineViewSchema.parse(body);
+    const group = view.timeline.authoredAudioGroups?.[0];
+    expect(group).toEqual({
+      id: expect.stringMatching(/^cutroom-bus-/),
+      label: "Dialogue",
+      volume: 0.25,
+    });
+    expect(
+      view.timeline.clips.find(({ id }) => id === "one")?.authoredAudioGroupId,
+    ).toBe(group?.id);
+    const mix = await fixture.mix();
+    for (const id of ["unselected", "inline-audio"]) {
+      expect(mix.find((track) => track.id === id)).toMatchObject({
+        groupId: "dialogue",
+        groupVolume: 1,
+      });
     }
+    expect((await fixture.undo()).status).toBe(200);
+    expect(await fixture.source("index.html")).toBe(html);
   } finally {
     await fixture.close();
   }
 });
 
-test("a routed group in a child scene can be adjusted and joined while its scope is unique", async () => {
-  const fixture = await projectFixture();
+test("inserting a pickup cannot capture its authored reference in the parent mix", async () => {
+  const fixture = await groupFixture();
   try {
-    fixture.app.route(
-      "/api/cutroom",
-      createTimelineRoutes(fixture.store, fixture.review),
-    );
-    const project = await fixture.store.create({ name: "Child bus" });
-    const indexPath = join(project.path, "index.html");
-    const path = join(project.path, "scene.html");
-    const api = `/projects/${project.id}`;
-    const document = (instances: number, other = "") =>
-      `<main data-composition-id="main" data-duration="4">${Array.from({ length: instances }, (_, index) => `<div id="scene-${index}" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="4"></div>`).join("")}${other}</main>`;
-    const otherMember =
-      '<audio src="elsewhere.wav" data-audio-group="dialogue"></audio>';
-    const html = `<template>${routedSource.replace('data-composition-id="main"', 'data-composition-id="scene"')}</template>`;
-    await writeFile(path, html);
-    await writeFile(indexPath, document(0, otherMember));
-    const read = async () =>
-      TimelineViewSchema.parse(
-        await (
-          await fixture.request(`${api}/timeline?composition=scene.html`)
-        ).json(),
-      );
-    const edit = async (commands: CommandInput[]) =>
-      fixture.request(`${api}/commands`, "POST", {
-        composition: "scene.html",
-        expectedRevision: (await read()).revision,
-        commands,
-      });
-    const created = await edit([createGroup]);
-    expect(created.status).toBe(200);
-    const group = { id: "dialogue", label: "Dialogue", volume: 1 };
-    expect((await read()).timeline.authoredAudioGroups).toEqual([group]);
-    await writeFile(indexPath, document(1));
-    const adjusted = await edit([groupGain]);
-    expect(adjusted.status).toBe(200);
-    const joined = await edit([
-      { type: "routeAudioGroup", clipIds: ["two"], group: "dialogue" },
-    ]);
-    expect(joined.status).toBe(200);
-    expect((await read()).timeline.authoredAudioGroups).toEqual([
-      { ...group, volume: 0.25 },
-    ]);
-    const written = await readFile(path, "utf8");
+    const parent = entry(host("lead", "lead.html"));
+    const pickup = scene("pickup", offTimeline);
+    await fixture.write("index.html", parent);
+    await fixture.write("lead.html", lead);
+    await fixture.write("pickup.html", pickup);
+    expect((await fixture.edit("lead.html", [createGroup])).status).toBe(200);
     expect(
-      parseAudioElements(written).map(({ id, groupVolume }) => [
-        id,
-        groupVolume,
-      ]),
-    ).toEqual([
-      ["one", 0.25],
-      ["two", 0.25],
-    ]);
+      (
+        await fixture.edit("index.html", [
+          {
+            type: "insert",
+            track: 0,
+            at: 120,
+            clip: { kind: "composition", src: "pickup.html", duration: 120 },
+          },
+        ])
+      ).status,
+    ).toBe(200);
+    const mix = await fixture.mix();
+    expect(mix.find(({ id }) => id === "one")?.groupVolume).toBe(0.25);
+    expect(mix.find(({ id }) => id === "unselected")).toMatchObject({
+      groupId: "dialogue",
+      groupVolume: 1,
+    });
+    expect((await fixture.undo()).status).toBe(200);
+    expect(await fixture.source("index.html")).toBe(parent);
+    expect((await fixture.undo()).status).toBe(200);
+    expect(await fixture.source("lead.html")).toBe(lead);
+    expect(await fixture.source("pickup.html")).toBe(pickup);
+  } finally {
+    await fixture.close();
+  }
+});
 
-    for (const [entry, reason] of [
-      [document(2), "mounted more than once"],
-      [document(1, otherMember), "also used in another composition"],
-    ] as const) {
-      await writeFile(indexPath, entry);
-      expect(
-        (await read()).timeline.authoredAudioGroups?.[0]?.sourceRestriction,
-      ).toContain(reason);
-      const refused = await edit([{ ...groupGain, volume: 0.5 }]);
-      expect(refused.status).toBe(422);
-      expect(await refused.text()).toContain(reason);
-      expect(await readFile(path, "utf8")).toBe(written);
-    }
+test("a broken sibling mount does not block reading or editing a grouped scene", async () => {
+  const fixture = await groupFixture();
+  try {
+    await fixture.write("index.html", entry(host("lead", "lead.html")));
+    await fixture.write("lead.html", lead);
+    await fixture.write(
+      "broken",
+      "This is a file, so reading below it fails with ENOTDIR.",
+    );
+    expect((await fixture.edit("lead.html", [createGroup])).status).toBe(200);
+    const { revision } = await fixture.read("lead.html");
+    await fixture.write(
+      "index.html",
+      entry(host("lead", "lead.html") + host("broken", "broken/scene.html")),
+    );
+    expect((await fixture.get("lead.html")).status).toBe(200);
+    const response = await fixture.edit(
+      "lead.html",
+      [{ type: "setClip", clipId: "one", volume: 0.8 }],
+      revision,
+    );
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const { timeline } = TimelineViewSchema.parse(body);
+    expect(timeline.clips.find(({ id }) => id === "one")?.volume).toBe(0.8);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a reused template shares source edits and loads the compiler's nested scene", async () => {
+  const fixture = await groupFixture();
+  try {
+    await mkdir(join(fixture.project.path, "scenes"));
+    await fixture.write(
+      "index.html",
+      entry(
+        host("lead", "scenes/lead.html") +
+          host("lead-copy", "scenes/lead.html", 4),
+      ),
+    );
+    await fixture.write(
+      "scenes/lead.html",
+      lead.replace("</main>", host("nested", "nested.html") + "</main>"),
+    );
+    await fixture.write(
+      "nested.html",
+      scene("nested", offTimeline.replace("voice.wav", "root.wav")),
+    );
+    await fixture.write(
+      "scenes/nested.html",
+      scene("nested", offTimeline.replace("voice.wav", "unused.wav")),
+    );
+    const response = await fixture.edit("scenes/lead.html", [createGroup]);
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const { timeline } = TimelineViewSchema.parse(body);
+    const id = timeline.authoredAudioGroups![0]!.id;
+    expect(
+      (
+        await fixture.edit("scenes/lead.html", [
+          { type: "routeAudioGroup", clipIds: ["two"], group: id },
+          groupGain,
+        ])
+      ).status,
+    ).toBe(200);
+    const mix = await fixture.mix();
+    const routed = mix.filter(
+      ({ src }) => src.endsWith("one.wav") || src.endsWith("two.wav"),
+    );
+    expect(routed.map(({ groupVolume }) => groupVolume)).toEqual([
+      0.5, 0.5, 0.5, 0.5,
+    ]);
+    expect(new Set(routed.map(({ groupId }) => groupId)).size).toBe(2);
+    expect(
+      mix
+        .filter(({ src }) => src.endsWith("root.wav"))
+        .map(({ groupVolume }) => groupVolume),
+    ).toEqual([1, 1]);
+    expect(mix.some(({ src }) => src.endsWith("unused.wav"))).toBe(false);
   } finally {
     await fixture.close();
   }
@@ -192,21 +255,25 @@ test("creating an audio group and moving members writes the same bus the rendere
     {
       type: "routeAudioGroup",
       clipIds: ["one", "outside"],
-      group: { id: "new-bus", label: 'Lead "Vox"' },
+      group: { label: 'Lead "Vox"' },
     },
     { type: "setAudioGroup", clipId: "one", volume: 0.25 },
   ]);
   const output = patchComposition(parsed, after, new Map());
   const written = parseComposition(output, settingsOf(after));
   expect(timelineContent(written.timeline)).toEqual(timelineContent(after));
+  const { id } = after.authoredAudioGroups!.find(
+    ({ label }) => label === 'Lead "Vox"',
+  )!;
+  expect(id).toMatch(/^cutroom-bus-/);
   expect(written.timeline.authoredAudioGroups).toContainEqual({
-    id: "new-bus",
+    id,
     label: 'Lead "Vox"',
     volume: 0.25,
   });
   expect(
     parseAudioElements(output)
-      .filter(({ groupId }) => groupId === "new-bus")
+      .filter(({ groupId }) => groupId === id)
       .map(({ groupVolume }) => groupVolume),
   ).toEqual([0.25, 0.25]);
   expect(output).toContain(

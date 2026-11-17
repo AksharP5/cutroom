@@ -788,7 +788,7 @@ export function Inspector({
                 )}
                 {audio.trackGainWarning && (
                   <p className="inspector-warning" role="note">
-                    {audio.trackGainWarning}
+                    Track gain does not apply to this clip's audio group.
                   </p>
                 )}
                 <ValueField

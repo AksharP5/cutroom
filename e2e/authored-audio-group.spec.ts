@@ -2,10 +2,12 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { seekFrame } from "./position-helpers";
 
 test("Inspector changes an authored group's live and exported gain, and Undo restores it", async ({
   page,
@@ -59,26 +61,7 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
     await page
       .getByRole("button", { name: "First frame", exact: true })
       .click();
-    await page
-      .getByRole("button", { name: "Play forward", exact: true })
-      .click();
-    let peak = 0;
-    await expect
-      .poll(async () => {
-        peak = await page
-          .frameLocator("iframe[data-live]")
-          .locator("main")
-          .evaluate(() => {
-            const runtime = window as Window & {
-              __hf?: { audioMeter?: { read(): { master: { r: number } } } };
-            };
-            return runtime.__hf?.audioMeter?.read().master.r ?? 0;
-          });
-        return peak;
-      })
-      .toBeCloseTo(amplitude * volume, 2);
-    await page.getByRole("button", { name: "Stop", exact: true }).click();
-    return peak;
+    return previewPeak(page, amplitude * volume);
   };
   const before = await play(0.8);
   await inspector.screenshot({ path: info.outputPath("bus-before.png") });
@@ -101,47 +84,12 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
   const after = await play(volume);
   await inspector.screenshot({ path: info.outputPath("bus-after.png") });
 
-  await page.getByRole("button", { name: "Export", exact: true }).click();
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/render"),
-  );
-  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
-  const { outputPath } = z
-    .object({ outputPath: z.string() })
-    .parse(await (await started).json());
-  const dialog = page.getByRole("dialog", { name: "Export" });
-  await expect(dialog).toContainText("Export complete.", { timeout: 40_000 });
+  const outputPath = await exportMp4(page);
   // Check both non-overlapping members in the produced file. Stereo panning and AAC make peak
   // amplitude differ slightly, so compare within 1 dB rather than by raw PCM bytes.
   const exported = [];
   for (const time of [0.5, 4.5]) {
-    const { stdout } = await promisify(execFile)(
-      "ffmpeg",
-      [
-        "-v",
-        "error",
-        "-ss",
-        String(time),
-        "-i",
-        outputPath,
-        "-t",
-        "0.5",
-        "-map",
-        "0:a:0",
-        "-ac",
-        "2",
-        "-f",
-        "f32le",
-        "-",
-      ],
-      { encoding: "buffer" },
-    );
-    expect(stdout.byteLength).toBeGreaterThan(0);
-    let peak = 0;
-    for (let i = 0; i < stdout.byteLength; i += 8)
-      peak = Math.max(peak, Math.abs(stdout.readFloatLE(i)));
+    const peak = await encodedPeak(outputPath, time);
     expect(Math.abs(20 * Math.log10(peak / (amplitude * volume)))).toBeLessThan(
       1,
     );
@@ -241,47 +189,11 @@ test("selected clips can make a named group, return to track mixing, and export 
     )
     .toBeUndefined();
 
-  await page.getByRole("button", { name: "Export", exact: true }).click();
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/render"),
-  );
-  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
-  const { outputPath } = z
-    .object({ outputPath: z.string() })
-    .parse(await (await started).json());
-  await expect(page.getByRole("dialog", { name: "Export" })).toContainText(
-    "Export complete.",
-    { timeout: 40_000 },
-  );
-  const amplitudes: number[] = [];
-  for (const time of ["0.5", "2.5"]) {
-    const { stdout } = await promisify(execFile)(
-      "ffmpeg",
-      [
-        "-v",
-        "error",
-        "-ss",
-        time,
-        "-i",
-        outputPath,
-        "-t",
-        "0.5",
-        "-ac",
-        "2",
-        "-f",
-        "f32le",
-        "-",
-      ],
-      { encoding: "buffer" },
-    );
-    expect(stdout.byteLength).toBeGreaterThan(0);
-    let peak = 0;
-    for (let i = 0; i < stdout.byteLength; i += 8)
-      peak = Math.max(peak, Math.abs(stdout.readFloatLE(i)));
-    amplitudes.push(peak);
-  }
+  const outputPath = await exportMp4(page);
+  const amplitudes = [
+    await encodedPeak(outputPath, 0.5),
+    await encodedPeak(outputPath, 2.5),
+  ];
   expect(
     Math.abs(20 * Math.log10(amplitudes[0]! / amplitudes[1]!) - 12),
   ).toBeLessThan(1);
@@ -294,32 +206,30 @@ test("selected clips can make a named group, return to track mixing, and export 
   await expect(group).toHaveText("Dialogue");
 });
 
-test("one group control routes linked audio partners and adjusts their gain in a child scene", async ({
+test("one group control routes linked partners without changing a later pickup in the parent mix", async ({
   page,
   request,
-}) => {
+}, info) => {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
-        data: { name: "Linked audio partners", duration: 2 },
+        data: { name: "Linked audio partners", duration: 4 },
       })
     ).json(),
   );
-  await writeFile(
-    join(project.path, "index.html"),
-    `<main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="2"><div id="scene-host" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="2" data-track-index="0" data-width="320" data-height="240"></div></main>`,
-  );
-  await writeFile(
-    join(project.path, "scene.html"),
-    `<template><main data-composition-id="scene" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main></template>`,
-  );
+  const parent = `<main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="4"><div id="scene-host" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="2" data-track-index="0" data-width="320" data-height="240"></div></main>`;
+  const lead = `<template><main data-composition-id="scene" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main></template>`;
+  const pickup = `<template><main data-composition-id="pickup" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="pickup" src="voice.wav" data-start="0" data-duration="2" data-track-index="1" data-audio-group="dialogue"></audio></main></template>`;
+  await writeFile(join(project.path, "index.html"), parent);
+  await writeFile(join(project.path, "scene.html"), lead);
+  await writeFile(join(project.path, "pickup.html"), pickup);
   await promisify(execFile)("ffmpeg", [
     "-v",
     "error",
     "-f",
     "lavfi",
     "-i",
-    "anullsrc=d=2",
+    "aevalsrc=0.125*sin(2*PI*440*t):s=48000:d=2",
     join(project.path, "voice.wav"),
   ]);
   await page.goto(`/#project/${project.id}`);
@@ -364,4 +274,139 @@ test("one group control routes linked audio partners and adjusts their gain in a
   await expect
     .poll(async () => (await read()).authoredAudioGroups?.[0]?.volume)
     .toBeCloseTo(10 ** (-12 / 20));
+  await inspector.screenshot({ path: info.outputPath("linked-group.png") });
+
+  const api = `/api/cutroom/projects/${project.id}`;
+  const root = TimelineViewSchema.parse(
+    await (await request.get(`${api}/timeline`)).json(),
+  );
+  const placed = await request.post(`${api}/commands`, {
+    data: {
+      expectedRevision: root.revision,
+      commands: [
+        {
+          type: "insert",
+          track: 0,
+          at: 60,
+          clip: { kind: "composition", src: "pickup.html", duration: 60 },
+        },
+      ],
+    },
+  });
+  expect(placed.ok(), await placed.text()).toBe(true);
+  await page
+    .getByRole("navigation", { name: "Composition" })
+    .getByRole("button", { name: "Linked audio partners" })
+    .click();
+  const stage = page.locator(".edit-stage");
+  const level = 10 ** (-12 / 20);
+  await seekFrame(page, 15);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const previewLead = await previewPeak(page, 2 * 0.125 * level);
+  await seekFrame(page, 75);
+  await expect(stage).toHaveAttribute("data-preview-ready");
+  const previewPickup = await previewPeak(page, 0.125);
+
+  const outputPath = await exportMp4(page);
+  const encodedLead = await encodedPeak(outputPath, 0.5);
+  const encodedPickup = await encodedPeak(outputPath, 2.5);
+  expect(
+    Math.abs(20 * Math.log10(encodedLead / (2 * 0.125 * level))),
+  ).toBeLessThan(1);
+  expect(Math.abs(20 * Math.log10(encodedPickup / 0.125))).toBeLessThan(1);
+  await writeFile(
+    info.outputPath("parent-mix.json"),
+    JSON.stringify(
+      {
+        preview: { lead: previewLead, pickup: previewPickup },
+        mp4: { lead: encodedLead, pickup: encodedPickup, outputPath },
+      },
+      null,
+      2,
+    ),
+  );
+
+  await page.keyboard.press("Escape");
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await undo.click();
+  await expect
+    .poll(() => readFile(join(project.path, "index.html"), "utf8"))
+    .toBe(parent);
+  await undo.click();
+  await expect
+    .poll(async () => (await read()).authoredAudioGroups?.[0]?.volume)
+    .toBe(1);
+  await undo.click();
+  await expect
+    .poll(() => readFile(join(project.path, "scene.html"), "utf8"))
+    .toBe(lead);
 });
+
+async function previewPeak(page: Page, expected: number) {
+  await page.getByRole("button", { name: "Play forward", exact: true }).click();
+  let peak = 0;
+  await expect
+    .poll(async () => {
+      peak = await page
+        .frameLocator("iframe[data-live]")
+        .locator("main")
+        .first()
+        .evaluate(() => {
+          const runtime = window as Window & {
+            __hf?: { audioMeter?: { read(): { master: { r: number } } } };
+          };
+          return runtime.__hf?.audioMeter?.read().master.r ?? 0;
+        });
+      return peak;
+    })
+    .toBeCloseTo(expected, 2);
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  return peak;
+}
+
+async function exportMp4(page: Page) {
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await page.getByRole("button", { name: "Export MP4", exact: true }).click();
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await (await started).json());
+  await expect(page.getByRole("dialog", { name: "Export" })).toContainText(
+    "Export complete.",
+    { timeout: 40_000 },
+  );
+  return outputPath;
+}
+
+async function encodedPeak(path: string, time: number) {
+  const { stdout } = await promisify(execFile)(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-ss",
+      String(time),
+      "-i",
+      path,
+      "-t",
+      "0.5",
+      "-map",
+      "0:a:0",
+      "-ac",
+      "2",
+      "-f",
+      "f32le",
+      "-",
+    ],
+    { encoding: "buffer" },
+  );
+  expect(stdout.byteLength).toBeGreaterThan(0);
+  let peak = 0;
+  for (let at = 0; at < stdout.byteLength; at += 8)
+    peak = Math.max(peak, Math.abs(stdout.readFloatLE(at)));
+  return peak;
+}

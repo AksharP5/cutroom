@@ -66,19 +66,30 @@ test("timeline_edit creates a named audio group and reports its routed clips", a
         {
           type: "routeAudioGroup",
           clipIds: ["lead", "pickup"],
-          group: { id: "voices", label: "Voices" },
+          group: { label: "Voices", volume: 0.25 },
         },
       ],
     });
+    const id = z
+      .object({
+        changes: z.object({
+          authoredAudioGroups: z.object({
+            added: z.tuple([
+              z.object({ id: z.string().regex(/^cutroom-bus-/) }),
+            ]),
+          }),
+        }),
+      })
+      .parse(reply).changes.authoredAudioGroups.added[0].id;
     expect(reply).toMatchObject({
       changes: {
         authoredAudioGroups: {
-          added: [{ id: "voices", label: "Voices", volume: 1 }],
+          added: [{ id, label: "Voices", volume: 0.25 }],
         },
         clips: {
           changed: [
-            { id: "lead", authoredAudioGroupId: "voices" },
-            { id: "pickup", authoredAudioGroupId: "voices" },
+            { id: "lead", authoredAudioGroupId: id },
+            { id: "pickup", authoredAudioGroupId: id },
           ],
         },
       },
@@ -87,7 +98,7 @@ test("timeline_edit creates a named audio group and reports its routed clips", a
       (await mcp.read()).timeline.clips.map(
         ({ authoredAudioGroupId }) => authoredAudioGroupId,
       ),
-    ).toEqual(["voices", "voices"]);
+    ).toEqual([id, id]);
     await mcp.result("history_undo", {});
     expect(await readFile(path, "utf8")).toBe(source);
   } finally {

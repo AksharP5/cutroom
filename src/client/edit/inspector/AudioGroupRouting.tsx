@@ -79,10 +79,7 @@ export function AudioGroupRouting({
           onSubmit={(event) => {
             event.preventDefault();
             if (!disabled && !saving && name.trim())
-              void route({
-                id: `bus-${crypto.randomUUID()}`,
-                label: name.trim(),
-              });
+              void route({ label: name });
           }}
           onKeyDown={(event) => {
             if (event.key === "Escape" && !saving) {

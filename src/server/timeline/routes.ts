@@ -83,7 +83,6 @@ import {
   loudnessPlan,
 } from "./audio";
 import { declaredFonts, undeclaredFontReason } from "./titles";
-import { scopedAudioGroups } from "./audioGroupScope";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -143,18 +142,16 @@ export function createTimelineRoutes(
         ? []
         : declaredFonts((await readSource(project, "index.html")).content)),
     ]);
-    const parsed = parseComposition(source.content, settings, {
-      scope,
-      mediaLengths: lengths,
-      fonts,
-    });
-    parsed.timeline = await scopedAudioGroups(project, composition, parsed);
     return {
       source,
       document,
       scope,
       lengths,
-      parsed,
+      parsed: parseComposition(source.content, settings, {
+        scope,
+        mediaLengths: lengths,
+        fonts,
+      }),
       revision: revisionOf(source.version, settings),
     };
   };
@@ -392,12 +389,8 @@ export function createTimelineRoutes(
       mediaLengths: lengths,
       fonts: current.parsed.fonts,
     });
-    if (
-      !Bun.deepEquals(
-        timelineContent(writtenSource.timeline),
-        timelineContent(timeline),
-      )
-    )
+    const { timeline: written } = writtenSource;
+    if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
@@ -410,15 +403,23 @@ export function createTimelineRoutes(
     );
     const routedGroups = new Set(
       batch.commands.flatMap((command) =>
-        command.type === "routeAudioGroup" && command.group
-          ? [
-              typeof command.group === "string"
-                ? command.group
-                : command.group.id,
-            ]
+        command.type === "routeAudioGroup" && typeof command.group === "string"
+          ? [command.group]
           : [],
       ),
     );
+    // Placing a scene or pasting a member can affect the source scope of an edited bus.
+    for (const {
+      id,
+      volume,
+      sourceRestriction,
+    } of written.authoredAudioGroups ?? []) {
+      if (
+        sourceRestriction &&
+        (routedGroups.has(id) || priorGroupVolumes.get(id) !== volume)
+      )
+        throw new TimelineError("unsupported", sourceRestriction);
+    }
     const detectAnimation = () =>
       animationFeedback(
         current.parsed,
@@ -469,24 +470,6 @@ export function createTimelineRoutes(
             409,
             "The timeline changed since it was read. Read it again before editing.",
           );
-        // A batch can mount a scene or paste a member after it changes or creates a bus.
-        // Check the written graph inside the project queue, before recording ids or history.
-        const written = await scopedAudioGroups(
-          project,
-          composition,
-          writtenSource,
-        );
-        for (const {
-          id,
-          volume,
-          sourceRestriction,
-        } of written.authoredAudioGroups ?? []) {
-          if (
-            sourceRestriction &&
-            (routedGroups.has(id) || priorGroupVolumes.get(id) !== volume)
-          )
-            throw new TimelineError("unsupported", sourceRestriction);
-        }
         // Recorded before the write, so an id is spent even if the write fails.
         await recordClipIds(
           project,

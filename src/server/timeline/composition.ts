@@ -44,7 +44,11 @@ import {
   readKeyframes,
 } from "./keyframes";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
-import { offsetAutomation, trackGainWarning } from "../../shared/timeline/mix";
+import {
+  CUTROOM_AUDIO_GROUP_PREFIX,
+  offsetAutomation,
+  trackGainWarning,
+} from "../../shared/timeline/mix";
 import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
 import { posix } from "node:path";
 import {
@@ -135,7 +139,6 @@ export interface ParsedComposition {
   /** Clips without an id attribute, which carry a positional stand-in id. */
   anonymous: Set<string>;
   ids: Set<string>;
-  routedAudioGroupIds: ReadonlySet<string>;
   scripts: string[];
   scriptsAndStyles: string[];
   fonts: ReadonlySet<string>;
@@ -849,11 +852,6 @@ export function parseComposition(
     elements: new Map(rows.map(({ id, element }) => [id, element])),
     anonymous,
     ids: new Set(byId.keys()),
-    routedAudioGroupIds: new Set(
-      groupDeclarations.flatMap(({ attrs }) =>
-        attrs.id && attrs[ROUTED_AUDIO_GROUP] !== undefined ? [attrs.id] : [],
-      ),
-    ),
     nodes,
     owned,
     scripts: all
@@ -1084,26 +1082,6 @@ function audioGroupElements(elements: SourceElement[]) {
 const audioGroupMember = ({ tag, attrs }: SourceElement) =>
   tag === "audio" || tag === "video" ? attrs["data-audio-group"] : undefined;
 
-/** Audio reference names and external mounts, including elements Cutroom cannot edit. */
-export function audioGroupReferences(
-  scope: CompositionScope,
-  source: string | ParsedComposition,
-) {
-  const roots =
-    typeof source === "string" ? parseElements(source).roots : source.roots;
-  const groups = new Set<string>();
-  const scenes: string[] = [];
-  for (const element of audioGroupElements(scopeElements(roots, scope))) {
-    const member = audioGroupMember(element);
-    if (member) groups.add(member);
-    if (element.tag === "hf-audio-group" && element.attrs.id)
-      groups.add(element.attrs.id);
-    const scene = element.attrs["data-composition-src"];
-    if (scene) scenes.push(scene);
-  }
-  return { groups, scenes };
-}
-
 function managedAudioGroups(root: SourceElement): SourceElement[] {
   return root.children.flatMap((element) => {
     if (element.tag === "hf-audio-group" && isManagedAudioGroup(element))
@@ -1159,12 +1137,14 @@ function readAuthoredAudioGroups(
   return [...buses].map(([id, element]) => {
     // Match HyperFrames readAudioGroupVolume, including its parseFloat semantics.
     const gain = Number.parseFloat(element.attrs["data-volume"] ?? "");
+    const cutroomGroup =
+      id.startsWith(CUTROOM_AUDIO_GROUP_PREFIX) &&
+      element.attrs[ROUTED_AUDIO_GROUP] !== undefined;
     const sourceRestriction = duplicates.has(id)
       ? `Audio group ${id} does not have a unique element id. Edit it in the source.`
       : externalMembers.has(id)
         ? `Audio group ${id} has members outside this timeline. Edit it in the source.`
-        : element.attrs[ROUTED_AUDIO_GROUP] === undefined &&
-            (scope === "sub-composition" || hasExternalScene)
+        : !cutroomGroup && (scope === "sub-composition" || hasExternalScene)
           ? `External scenes can share audio group ${id}. Edit its gain in the source.`
           : undefined;
     return {
