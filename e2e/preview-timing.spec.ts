@@ -239,7 +239,7 @@ async function matchesFresh(
   projectId: string,
   frames: number[],
   label: string,
-  { lateSeeks = false } = {},
+  { lateSeeks = false, priorCorrections = 0 } = {},
 ) {
   const control = await page.context().newPage();
   try {
@@ -301,7 +301,8 @@ async function matchesFresh(
         );
       }
       expect(patched.equals(fresh), `${label}, frame ${frame}`).toBe(true);
-      if (!lateSeeks) expect(await corrections(page), label).toBe(0);
+      if (!lateSeeks)
+        expect(await corrections(page), label).toBe(priorCorrections);
       expect(await corrections(control), label).toBe(0);
     }
   } finally {
@@ -620,11 +621,14 @@ test("ripple delete, lift, razor, turning clips off and every undo keep the docu
     label: string,
   ) => {
     const previous = await token(page);
+    // A stop during the earlier meter run can legitimately correct its last
+    // playback picture. Count new corrections from this edit onward.
+    const priorCorrections = await corrections(page);
     await change();
     await waitForPreview(page, { after: previous });
     await waitForPreview(page);
     expect(await live(page), label).toBe(original);
-    await matchesFresh(page, project.id, frames, label);
+    await matchesFresh(page, project.id, frames, label, { priorCorrections });
   };
   const undo = () => {
     return page
