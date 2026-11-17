@@ -989,10 +989,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("setAudioGroup"),
       clipId,
+      expectedGroupId: z.string().min(1).max(200).optional(),
       volume,
     })
     .describe(
-      "Set the gain of a clip's existing authored audio group. Changes every member together; refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
+      "Set the gain of a clip's existing authored audio group. Pass expectedGroupId to refuse if the clip was rerouted. Changes every member together and refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
     ),
   z
     .object({

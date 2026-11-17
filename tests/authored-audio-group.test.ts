@@ -194,6 +194,84 @@ test("a broken sibling mount does not block reading or editing a grouped scene",
   }
 });
 
+test("a stale gain edit cannot change the group a clip just joined", async () => {
+  const fixture = await groupFixture();
+  try {
+    await fixture.write("index.html", routedSource);
+    expect((await fixture.edit("index.html", [createGroup])).status).toBe(200);
+    const before = await fixture.read("index.html");
+    const expectedGroupId = before.timeline.authoredAudioGroups![0]!.id;
+    const reroute = await fixture.edit("index.html", [
+      { ...createGroup, group: { label: "Pickup" } },
+    ]);
+    expect(reroute.status).toBe(200);
+    const html = await fixture.source("index.html");
+
+    const stale = await fixture.edit("index.html", [
+      { ...groupGain, expectedGroupId },
+    ]);
+    expect(stale.status).toBe(422);
+    expect(await stale.text()).toContain("changed audio groups");
+    expect(await fixture.source("index.html")).toBe(html);
+    expect(
+      (await fixture.mix()).find(({ id }) => id === "one")?.groupVolume,
+    ).toBe(1);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("pasting into another scene does not inherit a generated bus it cannot edit", async () => {
+  const fixture = await groupFixture();
+  try {
+    await fixture.write(
+      "index.html",
+      entry(host("lead", "lead.html") + host("pickup", "pickup.html", 4)),
+    );
+    await fixture.write("lead.html", lead);
+    await fixture.write("pickup.html", scene("pickup", ""));
+    expect((await fixture.edit("lead.html", [createGroup])).status).toBe(200);
+    const before = await fixture.read("lead.html");
+    const copy = await fixture.request(
+      `/projects/${fixture.project.id}/timeline/copy`,
+      "POST",
+      {
+        composition: "lead.html",
+        clipIds: ["one"],
+        expectedRevision: before.revision,
+      },
+    );
+    expect(copy.status).toBe(200);
+    const clipboard = await copy.json();
+    const command = {
+      type: "paste",
+      clipboardId: clipboard.id,
+      at: 0,
+    } as const;
+    const pasted = await fixture.edit("pickup.html", [command]);
+    const body = await pasted.json();
+    expect(pasted.status, JSON.stringify(body)).toBe(200);
+    const [clip] = TimelineViewSchema.parse(body).timeline.clips;
+    expect(clip!.authoredAudioGroupId).toBeUndefined();
+    expect((await fixture.edit("lead.html", [groupGain])).status).toBe(200);
+    const mix = await fixture.mix();
+    expect(mix.find(({ id }) => id === "one")?.groupVolume).toBe(0.5);
+    const pickup = mix.find(({ id }) => id === clip!.id);
+    expect(pickup).toMatchObject({ volume: 1 });
+    expect(pickup?.groupVolume ?? 1).toBe(1);
+
+    const local = await fixture.edit("lead.html", [{ ...command, at: 120 }]);
+    expect(local.status).toBe(200);
+    expect(
+      TimelineViewSchema.parse(await local.json()).timeline.clips.find(
+        ({ start }) => start === 120,
+      )?.authoredAudioGroupId,
+    ).toBe(before.timeline.authoredAudioGroups![0]!.id);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("a reused template shares source edits and loads the compiler's nested scene", async () => {
   const fixture = await groupFixture();
   try {

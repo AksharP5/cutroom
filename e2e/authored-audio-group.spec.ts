@@ -204,6 +204,31 @@ test("selected clips can make a named group, return to track mixing, and export 
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(group).toHaveText("Dialogue");
+
+  const intercepted = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  await page.route(
+    `/api/cutroom/projects/${project.id}/commands`,
+    async (route) => {
+      intercepted.resolve();
+      await resume.promise;
+      await route.continue();
+    },
+    { times: 1 },
+  );
+  await group.click();
+  await page.getByRole("option", { name: "New group…" }).click();
+  await form.getByRole("textbox", { name: "Audio group name" }).fill("Pickup");
+  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await intercepted.promise;
+  try {
+    await expect(group).toHaveText("Dialogue");
+    await expect(gain).toBeDisabled();
+  } finally {
+    resume.resolve();
+  }
+  await expect(group).toHaveText("Pickup");
+  await expect(gain).toBeEnabled();
 });
 
 test("one group control routes linked partners without changing a later pickup in the parent mix", async ({

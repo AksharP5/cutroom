@@ -926,8 +926,14 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         if (clip.link && !links.has(clip.link))
           links.set(clip.link, uniqueName(taken, "lk", 1));
         onCreate(id, { clipboardId: command.clipboardId, clipId: clip.id });
+        const { authoredAudioGroupId, trackGainWarning, ...copy } = clip;
+        const dropGroup =
+          authoredAudioGroupId?.startsWith(CUTROOM_AUDIO_GROUP_PREFIX) &&
+          !timeline.authoredAudioGroups?.some(
+            (group) => group.id === authoredAudioGroupId,
+          );
         return {
-          ...clip,
+          ...(dropGroup ? copy : clip),
           id,
           start: command.at + clip.start - start,
           link: clip.link ? links.get(clip.link)! : null,
@@ -1403,6 +1409,14 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     }
     case "setAudioGroup": {
       const target = find(command.clipId);
+      if (
+        command.expectedGroupId !== undefined &&
+        target.authoredAudioGroupId !== command.expectedGroupId
+      )
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} changed audio groups. Check its group before editing gain.`,
+        );
       const groups = timeline.authoredAudioGroups;
       const group = groups?.find(
         ({ id }) => id === target.authoredAudioGroupId,

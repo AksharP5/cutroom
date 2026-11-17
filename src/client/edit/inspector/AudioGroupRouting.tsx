@@ -123,6 +123,7 @@ export function AudioGroupRouting({
           max={MAX_AUDIO_GAIN}
           fps={timeline.fps}
           disabled={
+            saving ||
             !!group.sourceRestriction ||
             timeline.clips.some(
               (member) =>
@@ -139,7 +140,12 @@ export function AudioGroupRouting({
           onCommit={(volume) => {
             if (volume !== null)
               void editTimeline(projectId, "Edit audio group gain", () => [
-                { type: "setAudioGroup", clipId: firstClip.id, volume },
+                {
+                  type: "setAudioGroup",
+                  clipId: firstClip.id,
+                  expectedGroupId: group.id,
+                  volume,
+                },
               ]);
           }}
         />
