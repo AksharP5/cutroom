@@ -260,6 +260,14 @@ function clipKind(element: SourceElement): ClipKind {
   return isSubCompositionHost(element) ? "composition" : "element";
 }
 
+function hasVideoAudio({ tag, attrs }: SourceElement) {
+  return (
+    tag === "video" &&
+    (attrs.muted === undefined || attrs["data-cutroom-muted"] !== undefined) &&
+    (attrs["data-has-audio"] ?? "true") === "true"
+  );
+}
+
 /** A title must have both valid settings and words that can be edited as plain text. */
 function readElementTitle(
   element: SourceElement,
@@ -701,12 +709,7 @@ export function parseComposition(
     const group = element.attrs["data-audio-group"];
     const authoredGroup = group && !managedGroups.has(group);
     const playbackRate = readPlaybackRate(attribute);
-    const hasAudio =
-      isAudioKind(kind) ||
-      (kind === "video" &&
-        (element.attrs.muted === undefined ||
-          element.attrs["data-cutroom-muted"] !== undefined) &&
-        (element.attrs["data-has-audio"] ?? "true") === "true");
+    const hasAudio = isAudioKind(kind) || hasVideoAudio(element);
     if (authoredGroup && hasAudio) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
     const clip: Clip = {
@@ -1079,8 +1082,10 @@ function audioGroupElements(elements: SourceElement[]) {
   ];
 }
 
-const audioGroupMember = ({ tag, attrs }: SourceElement) =>
-  tag === "audio" || tag === "video" ? attrs["data-audio-group"] : undefined;
+const audioGroupMember = (element: SourceElement) =>
+  element.tag === "audio" || hasVideoAudio(element)
+    ? element.attrs["data-audio-group"]
+    : undefined;
 
 function managedAudioGroups(root: SourceElement): SourceElement[] {
   return root.children.flatMap((element) => {

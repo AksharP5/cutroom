@@ -242,6 +242,28 @@ test("routing and gain accept the existing authored group ID", async () => {
   }
 });
 
+test("silent picture references do not block gain on a local authored bus", async () => {
+  const fixture = await groupFixture();
+  try {
+    const silent = ["muted", 'data-has-audio="false"'].map(
+      (attrs, index) =>
+        `<video id="picture-${index}" src="picture.mp4" ${attrs} data-audio-group="dialogue" data-start="0" data-duration="4" data-track-index="${4 + index}"></video>`,
+    );
+    await fixture.write(
+      "index.html",
+      source.replace("</main>", `${silent.join("")}</main>`),
+    );
+    const response = await fixture.edit("index.html", [groupGain]);
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(TimelineViewSchema.parse(body).timeline.authoredAudioGroups).toEqual(
+      [{ id: "dialogue", volume: 0.5 }],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("pasting into another scene does not inherit a generated bus it cannot edit", async () => {
   const fixture = await groupFixture();
   try {
