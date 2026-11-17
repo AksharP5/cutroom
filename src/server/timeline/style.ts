@@ -294,6 +294,28 @@ function declarations(style: string) {
   return [...parts, part].map((item) => item.trim()).filter(Boolean);
 }
 
+/** The effective inline colour binding, including authored !important precedence. */
+export function readColourVariable(
+  style: string | undefined,
+): string | undefined {
+  if (!style?.includes("var(")) return;
+  let color: { value: string; important: boolean } | undefined;
+  for (const declaration of declarations(style)) {
+    const colon = declaration.indexOf(":");
+    if (declaration.slice(0, colon).trim().toLowerCase() !== "color") continue;
+    const raw = declaration.slice(colon + 1).trim();
+    const important = /!\s*important\s*$/i.test(raw);
+    if (!color?.important || important)
+      color = {
+        value: raw.replace(/!\s*important\s*$/i, "").trim(),
+        important,
+      };
+  }
+  return /^var\(\s*--([A-Za-z_][A-Za-z0-9_-]*)\s*\)$/.exec(
+    color?.value ?? "",
+  )?.[1];
+}
+
 /**
  * Rewrites only the owned declarations that changed and keeps every other declaration as
  * written. Re-serializing through a CSS parser would fold `rotate` into `transform`, which

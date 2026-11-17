@@ -613,7 +613,9 @@ export function Inspector({
                 <p className="inspector-warning" role="status">
                   <Warning size={14} aria-hidden />
                   <span>
-                    This clip's script replaces its text at{" "}
+                    {clip.variableBindings?.text
+                      ? "The preview shows different words at "
+                      : "This clip's script replaces its text at "}
                     {formatTimecode(textWarningFrame, timeline.fps)}.
                   </span>
                 </p>

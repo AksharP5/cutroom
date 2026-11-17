@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   VariableDeclareSchema,
+  VariableBindSchema,
   VariableDefaultSchema,
   VariablesPreviewSchema,
 } from "../../shared/variables";
@@ -60,6 +61,17 @@ export function registerVariableTools(
     },
     ({ projectId, ...input }) =>
       request(`${variables(projectId)}/default`, "POST", input),
+  );
+  server.registerTool(
+    "variables_bind",
+    {
+      description:
+        "Bind an existing string variable to an ordinary text clip's words, or a color variable to its explicit inline text colour, in one undo step. Requires a unique authored element id on an unlocked track, one plain line of text, and no title. Existing word bindings are refused. composition scopes external template files.",
+      inputSchema: VariableBindSchema.extend({ projectId }),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`${variables(projectId)}/bind`, "POST", input),
   );
   server.registerTool(
     "variables_declare",

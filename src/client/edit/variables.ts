@@ -104,7 +104,12 @@ const send = async (
       VariablesStateSchema,
       json(method, body),
     );
-    useVariables.setState({ state });
+    const current = useVariables.getState();
+    if (
+      current.projectId === projectId &&
+      current.state?.composition === state.composition
+    )
+      useVariables.setState({ state });
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error));
   }
@@ -151,6 +156,21 @@ export function declareVariable(
   return send(projectId, "/declare", "POST", {
     composition: state.composition,
     variable,
+    bind,
+  });
+}
+
+/** Binds a declared variable to a clip in one source/history edit. */
+export function bindVariable(
+  projectId: string,
+  id: string,
+  bind: VariableBinding,
+) {
+  const { state } = useVariables.getState();
+  if (!state) return;
+  return send(projectId, "/bind", "POST", {
+    composition: state.composition,
+    id,
     bind,
   });
 }

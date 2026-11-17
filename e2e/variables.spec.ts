@@ -199,3 +199,62 @@ test("variables preview live from the inspector and an agent, become defaults in
   const [, , outside] = await pixel(outputPath, 340, 50);
   expect(outside).toBeLessThan(40);
 });
+
+test("bind existing variables from the inspector and preview their words and colour", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Variable binding",
+          width: 640,
+          height: 360,
+          duration: 2,
+        },
+      })
+    ).json(),
+  );
+  const index = join(project.path, "index.html");
+  const source = `<!doctype html><html data-composition-variables='${JSON.stringify(DECLARATIONS)}'><body><main data-composition-id="main" data-width="640" data-height="360" data-duration="2"><p id="caption" class="clip" data-start="0" data-duration="2" data-track-index="0" style="color:#00ff00;font-size:40px">Plain words</p></main></body></html>`;
+  await writeFile(index, source);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await page.locator('.tl-lanes [data-clip="caption"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.screenshot({ path: info.outputPath("variables-before.png") });
+  await inspector
+    .getByRole("combobox", { name: "Words variable", exact: true })
+    .click();
+  await page
+    .getByRole("option", { name: "Title (title)", exact: true })
+    .click();
+  await expect(shown(page, "caption")).toHaveText("Quarterly");
+  await expect(
+    inspector.getByRole("combobox", { name: "Words variable", exact: true }),
+  ).toContainText("Title (title)");
+  await inspector
+    .getByRole("combobox", { name: "Colour variable", exact: true })
+    .click();
+  await page
+    .getByRole("option", { name: "Accent (accent)", exact: true })
+    .click();
+  await expect(shown(page, "caption")).toHaveCSS("color", "rgb(58, 109, 240)");
+  await expect
+    .poll(async () => readFile(index, "utf8"))
+    .toContain("color: var(--accent)");
+  await inspector.screenshot({ path: info.outputPath("variables-after.png") });
+  await page.keyboard.press("Control+z");
+  await expect(shown(page, "caption")).toHaveCSS("color", "rgb(0, 255, 0)");
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => readFile(index, "utf8")).toBe(source);
+  await expect(shown(page, "caption")).toHaveText("Plain words");
+
+  await inspector.getByRole("combobox", { name: "Words variable" }).click();
+  await page.getByRole("option", { name: "New variable…" }).click();
+  await expect(
+    inspector.getByRole("combobox", { name: "Words variable" }),
+  ).toContainText("caption-text");
+  await expect(shown(page, "caption")).toHaveText("Plain words");
+});

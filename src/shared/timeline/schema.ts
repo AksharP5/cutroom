@@ -338,6 +338,15 @@ export const ClipSchema = z.object({
     .describe(
       "The words of a text element, with line breaks at <br> and preserved source newlines; null for media and elements without text. setClip.text replaces them unless sourceRestrictions.text says why it cannot.",
     ),
+  variableBindings: z
+    .object({
+      text: z.string().optional(),
+      color: z.string().optional(),
+    })
+    .optional()
+    .describe(
+      "Authored text and inline colour variable ids, read from the source",
+    ),
   title: TitleSchema.nullable()
     .default(null)
     .describe(

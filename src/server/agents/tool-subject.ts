@@ -201,6 +201,7 @@ export async function toolSubject(
     }
     case "timeline_edit":
       return editedClips(args, names);
+    case "variables_bind":
     case "variables_set_default":
       return text("id");
     case "motion_update":
