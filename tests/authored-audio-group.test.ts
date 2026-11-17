@@ -126,9 +126,11 @@ test("a routed group in a child scene can be adjusted and joined while its scope
     const api = `/projects/${project.id}`;
     const document = (instances: number, other = "") =>
       `<main data-composition-id="main" data-duration="4">${Array.from({ length: instances }, (_, index) => `<div id="scene-${index}" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="4"></div>`).join("")}${other}</main>`;
+    const otherMember =
+      '<audio src="elsewhere.wav" data-audio-group="dialogue"></audio>';
     const html = `<template>${routedSource.replace('data-composition-id="main"', 'data-composition-id="scene"')}</template>`;
     await writeFile(path, html);
-    await writeFile(indexPath, document(1));
+    await writeFile(indexPath, document(0, otherMember));
     const read = async () =>
       TimelineViewSchema.parse(
         await (
@@ -145,6 +147,7 @@ test("a routed group in a child scene can be adjusted and joined while its scope
     expect(created.status).toBe(200);
     const group = { id: "dialogue", label: "Dialogue", volume: 1 };
     expect((await read()).timeline.authoredAudioGroups).toEqual([group]);
+    await writeFile(indexPath, document(1));
     const adjusted = await edit([groupGain]);
     expect(adjusted.status).toBe(200);
     const joined = await edit([
@@ -167,13 +170,7 @@ test("a routed group in a child scene can be adjusted and joined while its scope
 
     for (const [entry, reason] of [
       [document(2), "mounted more than once"],
-      [
-        document(
-          1,
-          '<audio src="elsewhere.wav" data-audio-group="dialogue"></audio>',
-        ),
-        "also used in another composition",
-      ],
+      [document(1, otherMember), "also used in another composition"],
     ] as const) {
       await writeFile(indexPath, entry);
       expect(

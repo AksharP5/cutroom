@@ -86,7 +86,13 @@ export async function scopedAudioGroups(
   };
   const entry = await references("index.html");
   if (entry) await visit("index.html", entry);
-  if (!mounts) await visit(composition, current);
+  if (!mounts) {
+    // An unmounted composition previews and exports as its own entry document.
+    visits.clear();
+    elsewhere.clear();
+    unavailable = false;
+    await visit(composition, current);
+  }
 
   return {
     ...timeline,

@@ -294,7 +294,7 @@ test("selected clips can make a named group, return to track mixing, and export 
   await expect(group).toHaveText("Dialogue");
 });
 
-test("one group control routes every linked audio partner", async ({
+test("one group control routes linked audio partners and adjusts their gain in a child scene", async ({
   page,
   request,
 }) => {
@@ -307,7 +307,11 @@ test("one group control routes every linked audio partner", async ({
   );
   await writeFile(
     join(project.path, "index.html"),
-    `<main data-composition-id="main" data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main>`,
+    `<main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="2"><div id="scene-host" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="2" data-track-index="0" data-width="320" data-height="240"></div></main>`,
+  );
+  await writeFile(
+    join(project.path, "scene.html"),
+    `<template><main data-composition-id="scene" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main></template>`,
   );
   await promisify(execFile)("ffmpeg", [
     "-v",
@@ -319,6 +323,7 @@ test("one group control routes every linked audio partner", async ({
     join(project.path, "voice.wav"),
   ]);
   await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="scene-host"]').dblclick();
   await page.locator('[data-clip="one"]').click({ position: { x: 25, y: 5 } });
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   await expect(
@@ -334,11 +339,15 @@ test("one group control routes every linked audio partner", async ({
     .fill("Dialogue");
   await form.getByRole("button", { name: "Create", exact: true }).click();
   await expect(group).toHaveText("Dialogue");
-  const timeline = TimelineViewSchema.parse(
-    await (
-      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
-    ).json(),
-  ).timeline;
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(
+          `/api/cutroom/projects/${project.id}/timeline?composition=scene.html`,
+        )
+      ).json(),
+    ).timeline;
+  const timeline = await read();
   const groupId = timeline.authoredAudioGroups?.find(
     ({ label }) => label === "Dialogue",
   )?.id;
@@ -346,4 +355,13 @@ test("one group control routes every linked audio partner", async ({
   expect(
     timeline.clips.map(({ authoredAudioGroupId }) => authoredAudioGroupId),
   ).toEqual([groupId, groupId]);
+  const gain = inspector.getByRole("textbox", {
+    name: "Group gain",
+    exact: true,
+  });
+  await gain.fill("-12 dB");
+  await gain.press("Enter");
+  await expect
+    .poll(async () => (await read()).authoredAudioGroups?.[0]?.volume)
+    .toBeCloseTo(10 ** (-12 / 20));
 });
