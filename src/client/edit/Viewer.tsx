@@ -134,6 +134,47 @@ export function Viewer({
   const live =
     handoff.kind === "promoting" ? handoff.candidate : handoff.confirmed;
 
+  // Readiness follows acknowledgments and painted pixels without rendering React per frame.
+  useLayoutEffect(() => {
+    const element = stage.current;
+    if (!element) return;
+    const update = () => {
+      const { frame, state } = useTransport.getState();
+      const preview = element.querySelector("iframe[data-live]");
+      const canvas = pipelineCanvas.current;
+      const ready =
+        handoff.kind === "showing" &&
+        (handoff.confirmed?.revision === revision ||
+          mixedRevision === revision) &&
+        preview !== null &&
+        !preview.hasAttribute("data-seek-pending") &&
+        (!pipelineActive ||
+          state.kind !== "stopped" ||
+          (canvas?.dataset.frame === String(frame) &&
+            canvas.dataset.standin === "false"));
+      if (!ready) element.removeAttribute("data-preview-ready");
+      else if (element.getAttribute("data-preview-ready") !== String(revision))
+        element.setAttribute("data-preview-ready", String(revision));
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(element, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        "data-seek-pending",
+        "data-frame",
+        "data-standin",
+        "data-live",
+      ],
+    });
+    const unsubscribe = useTransport.subscribe(update);
+    update();
+    return () => {
+      observer.disconnect();
+      unsubscribe();
+    };
+  }, [handoff, revision, mixedRevision, pipelineActive]);
+
   useLayoutEffect(() => {
     const element = stage.current;
     if (!element) return;
@@ -702,12 +743,6 @@ export function Viewer({
       data-preview-timing-ready={timingReady === live?.gen || undefined}
       data-pipeline={
         pipelineEnabled ? (pipelineActive ? "on" : "off") : undefined
-      }
-      data-preview-ready={
-        handoff.kind === "showing" &&
-        (handoff.confirmed?.revision === revision || mixedRevision === revision)
-          ? revision
-          : undefined
       }
     >
       <div

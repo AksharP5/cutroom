@@ -57,17 +57,55 @@ async function shownFrame(page: Page) {
   }, png);
 }
 
+/** Holds a real previous picture at the browser capture boundary until the test releases it. */
+const holdDecodedFrame = () => {
+  const video = document.querySelector("video")!;
+  const NativeFrame = VideoFrame;
+  const prior = new NativeFrame(video);
+  const time = video.currentTime;
+  let blocked = true;
+  let attempts = 0;
+  // Model Chromium supplying the previous decoded picture after the seek clock settles.
+  window.VideoFrame = new Proxy(NativeFrame, {
+    construct(Frame, args: unknown[], target) {
+      if (
+        args[0] === video &&
+        blocked &&
+        Math.abs(video.currentTime - time) > 0.001
+      ) {
+        attempts++;
+        return prior.clone();
+      }
+      return Reflect.construct(Frame, args, target);
+    },
+  });
+  Object.defineProperty(window, "staleCaptures", {
+    get: () => attempts,
+    configurable: true,
+  });
+  addEventListener(
+    "release-decoded-frame",
+    () => {
+      blocked = false;
+      window.VideoFrame = NativeFrame;
+      prior.close();
+    },
+    { once: true },
+  );
+};
+
 /**
  * OBS records 60 fps on Matroska's millisecond clock, so frame k starts at round(k * 1000 / 60) ms:
  * frame 1 at 17 ms, a third of a millisecond after its slot. Export snaps frames back to their
  * slots. The preview stepped one frame at a time used to show the frame before at many of them.
  */
-for (const { codec, pipeline } of [
-  { codec: "hevc", pipeline: false },
-  { codec: "hevc", pipeline: true },
-  { codec: "h264", pipeline: false },
+for (const { codec, pipeline, delayed } of [
+  { codec: "hevc", pipeline: false, delayed: false },
+  { codec: "hevc", pipeline: false, delayed: true },
+  { codec: "hevc", pipeline: true, delayed: false },
+  { codec: "h264", pipeline: false, delayed: false },
 ] as const)
-  test(`a 60 fps ${codec === "hevc" ? "HEVC" : "H.264"} recording on a millisecond clock shows every frame export writes on a 60 fps timeline, with the footage pipeline ${pipeline ? "on" : "off"}`, async ({
+  test(`a 60 fps ${codec === "hevc" ? "HEVC" : "H.264"} recording on a millisecond clock shows every frame export writes on a 60 fps timeline, with the footage pipeline ${pipeline ? "on" : "off"}${delayed ? " while decoded pixels lag behind the media clock" : ""}`, async ({
     page,
     request,
   }, testInfo) => {
@@ -155,16 +193,67 @@ for (const { codec, pipeline } of [
     await page.keyboard.press("Home");
     const shown: number[] = [];
     for (let frame = 0; frame < frames; frame++) {
+      const body = page.frameLocator("iframe[data-live]").locator("body");
+      if (delayed && frame === 6) await body.evaluate(holdDecodedFrame);
       if (frame) await page.keyboard.press("ArrowRight");
+      if (delayed && frame === 6) {
+        await expect
+          .poll(() => body.evaluate(() => Reflect.get(window, "staleCaptures")))
+          .toBeGreaterThan(0);
+        await page
+          .locator(".edit-picture")
+          .screenshot({ path: testInfo.outputPath("delayed-frame.png") });
+        expect(await shownFrame(page)).toBe(125);
+        // A settled media clock is insufficient. The old picture stays, without claiming ready.
+        await expect(stage).not.toHaveAttribute("data-preview-ready", {
+          timeout: 1000,
+        });
+        // A newer seek must supersede the stalled capture without acknowledging its old frame.
+        const attempts = await body.evaluate(() =>
+          Reflect.get(window, "staleCaptures"),
+        );
+        await page.keyboard.press("ArrowRight");
+        await expect
+          .poll(() => body.evaluate(() => Reflect.get(window, "staleCaptures")))
+          .toBeGreaterThan(attempts);
+        await expect(stage).not.toHaveAttribute("data-preview-ready");
+        await body.evaluate(() =>
+          dispatchEvent(new Event("release-decoded-frame")),
+        );
+        await expect(stage).toHaveAttribute("data-preview-ready");
+        expect(await shownFrame(page)).toBe(127);
+        await page.keyboard.press("ArrowLeft");
+      }
       if (pipeline)
         await expect(page.locator(".edit-pipeline")).toHaveAttribute(
           "data-frame",
           String(frame),
         );
       await expect(stage).toHaveAttribute("data-preview-ready");
-      await expect.poll(() => shownFrame(page)).toBe(exported[frame]);
       shown.push(await shownFrame(page));
+      expect(shown.at(-1)).toBe(exported[frame]);
+      if (delayed && frame === 6)
+        await page
+          .locator(".edit-picture")
+          .screenshot({ path: testInfo.outputPath("settled-frame.png") });
     }
     expect(shown).toEqual(exported);
     await expect(page.getByText("did not draw")).toHaveCount(0);
+    if (delayed) {
+      const body = page.frameLocator("iframe[data-live]").locator("body");
+      await body.evaluate(holdDecodedFrame);
+      await page.keyboard.press("Home");
+      await expect(page.locator(".status-error")).toContainText(
+        "did not draw the frame in time",
+        { timeout: 12_000 },
+      );
+      await expect(stage).not.toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(149);
+      await body.evaluate(() =>
+        dispatchEvent(new Event("release-decoded-frame")),
+      );
+      await page.keyboard.press("ArrowRight");
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(121);
+    }
   });

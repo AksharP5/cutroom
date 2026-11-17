@@ -1800,7 +1800,21 @@ function installPreviewBridge(
   const captureFrames = (videos: HTMLVideoElement[]) => {
     const frames = new Map<HTMLVideoElement, VideoFrame>();
     try {
-      for (const video of videos) frames.set(video, new VideoFrame(video));
+      for (const video of videos) {
+        const frame = new VideoFrame(video);
+        frames.set(video, frame);
+        // seeked/currentTime can settle before Chromium supplies the new decoded picture.
+        // Use the frame's own interval: HLS may offset its timestamps by half a frame.
+        const at =
+          Math.min(nativeTime.get!.call(video), video.duration - 1e-6) * 1e6;
+        if (
+          frame.duration !== null &&
+          (at + 1 < frame.timestamp || at >= frame.timestamp + frame.duration)
+        ) {
+          for (const frame of frames.values()) frame.close();
+          return null;
+        }
+      }
       return frames;
     } catch (error) {
       for (const frame of frames.values()) frame.close();
@@ -3266,13 +3280,19 @@ function installPreviewBridge(
             data.active === pipelineActive &&
             drawn.size === pipelineDrawn.size &&
             [...drawn].every((id) => pipelineDrawn.has(id))
-          )
+          ) {
+            await picture;
+            await paint();
             break;
+          }
           // The runtime took the parked videos as seeked; seek again so they load and draw.
           if (setPipeline(data.active, drawn) && !win.__player?.isPlaying()) {
             seekRuntime(win.__player?.getTime() ?? 0);
             await refreshPicture();
           }
+          // Parking does not replace a seek already drawing the remaining native videos.
+          await picture;
+          await paint();
           break;
         }
         case "cancel-edit":
@@ -3396,6 +3416,7 @@ function installPreviewBridge(
             const version = pictureVersion;
             await restored;
             if (version === pictureVersion) clearEditPicture();
+            await paint();
           }
           scheduleObservation();
           scheduleBox();
