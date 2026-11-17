@@ -225,16 +225,36 @@ export function createHyperframesApi(
       !/\.html?$/i.test(composition)
     )
       return next();
+    // Studio's raw .htm validator only tracks the source file. An image next
+    // to that file can change how its declaration resolves without editing it.
+    const ifNoneMatch = c.req.header("Range")
+      ? undefined
+      : c.req.header("If-None-Match");
+    if (ifNoneMatch) {
+      const headers = new Headers(c.req.raw.headers);
+      headers.delete("If-None-Match");
+      c.req.raw = new Request(c.req.url, { headers, signal: c.req.raw.signal });
+    }
     await next();
     if (c.res.status !== 200) return;
-    const { path } = await store.get(c.req.param("id"));
-    const html = await c.res.text();
-    const rebased = rebaseSceneImageDeclarations(html, path, composition);
-    c.res = new Response(rebased, c.res);
-    if (rebased !== html) {
-      c.header("Content-Length", undefined);
-      c.header("Accept-Ranges", undefined);
+    let rewritten: string | undefined;
+    if (!c.res.headers.has("Content-Encoding")) {
+      const html = await c.res.clone().text();
+      const { path } = await store.get(c.req.param("id"));
+      const rebased = rebaseSceneImageDeclarations(html, path, composition);
+      if (rebased !== html) rewritten = rebased;
     }
+    if (rewritten === undefined) {
+      if (!ifNoneMatch || ifNoneMatch !== c.res.headers.get("ETag")) return;
+      c.res = new Response(null, { status: 304 });
+    } else {
+      c.res = new Response(rewritten, c.res);
+      c.res.headers.delete("ETag");
+      c.res.headers.delete("Last-Modified");
+      c.res.headers.set("Cache-Control", "no-store");
+    }
+    c.res.headers.delete("Content-Length");
+    c.res.headers.delete("Accept-Ranges");
   });
   api.use("/projects/:id/preview/comp/*", async (c, next) => {
     const raw = c.req.query("variables");
