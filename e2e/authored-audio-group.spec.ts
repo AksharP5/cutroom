@@ -293,3 +293,57 @@ test("selected clips can make a named group, return to track mixing, and export 
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(group).toHaveText("Dialogue");
 });
+
+test("one group control routes every linked audio partner", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Linked audio partners", duration: 2 },
+      })
+    ).json(),
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<main data-composition-id="main" data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main>`,
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=d=2",
+    join(project.path, "voice.wav"),
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await page.locator('[data-clip="one"]').click({ position: { x: 25, y: 5 } });
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await expect(
+    inspector.getByRole("textbox", { name: "Gain", exact: true }),
+  ).toHaveCount(2);
+  const group = inspector.getByRole("combobox", { name: "Audio group" });
+  await expect(group).toHaveCount(1);
+  await group.click();
+  await page.getByRole("option", { name: "New group…" }).click();
+  const form = inspector.getByRole("form", { name: "New audio group" });
+  await form
+    .getByRole("textbox", { name: "Audio group name" })
+    .fill("Dialogue");
+  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(group).toHaveText("Dialogue");
+  const timeline = TimelineViewSchema.parse(
+    await (
+      await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+    ).json(),
+  ).timeline;
+  const groupId = timeline.authoredAudioGroups?.find(
+    ({ label }) => label === "Dialogue",
+  )?.id;
+  expect(groupId).toBeDefined();
+  expect(
+    timeline.clips.map(({ authoredAudioGroupId }) => authoredAudioGroupId),
+  ).toEqual([groupId, groupId]);
+});

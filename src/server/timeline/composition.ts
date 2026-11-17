@@ -135,6 +135,7 @@ export interface ParsedComposition {
   /** Clips without an id attribute, which carry a positional stand-in id. */
   anonymous: Set<string>;
   ids: Set<string>;
+  routedAudioGroupIds: ReadonlySet<string>;
   scripts: string[];
   scriptsAndStyles: string[];
   fonts: ReadonlySet<string>;
@@ -669,15 +670,10 @@ export function parseComposition(
     });
   }
   const groupDeclarations = compositionAudioGroups(root);
-  const authoredAudioGroups = readAuthoredAudioGroups(
-    groupDeclarations,
-    all,
-    clipIds,
-    scope,
-  );
   const managedGroups = new Set(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
   );
+  const authoredMembers = new Set<SourceElement>();
   const clips = rows.map(({ id, element, read, start, end, edges }): Clip => {
     const kind = clipKind(element);
     const title =
@@ -708,6 +704,7 @@ export function parseComposition(
         (element.attrs.muted === undefined ||
           element.attrs["data-cutroom-muted"] !== undefined) &&
         (element.attrs["data-has-audio"] ?? "true") === "true");
+    if (authoredGroup && hasAudio) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
     const clip: Clip = {
       id,
@@ -812,6 +809,12 @@ export function parseComposition(
   const rootDuration = parseNumeric(root.attrs["data-duration"]);
   const rootDurationAuthored = rootDuration !== null && rootDuration > 0;
   const masterFx = readableFx(root.attrs["data-fx-chain"]);
+  const authoredAudioGroups = readAuthoredAudioGroups(
+    groupDeclarations,
+    all,
+    authoredMembers,
+    scope,
+  );
   const timeline = normalizeTimeline({
     fps,
     duration: rootDurationAuthored
@@ -846,6 +849,11 @@ export function parseComposition(
     elements: new Map(rows.map(({ id, element }) => [id, element])),
     anonymous,
     ids: new Set(byId.keys()),
+    routedAudioGroupIds: new Set(
+      groupDeclarations.flatMap(({ attrs }) =>
+        attrs.id && attrs[ROUTED_AUDIO_GROUP] !== undefined ? [attrs.id] : [],
+      ),
+    ),
     nodes,
     owned,
     scripts: all
@@ -1050,6 +1058,51 @@ function applyEdits(source: string, edits: Edit[]): string {
 
 const isManagedAudioGroup = (element: SourceElement) =>
   element.attrs["data-cutroom-track"] !== undefined;
+const ROUTED_AUDIO_GROUP = "data-cutroom-audio-group";
+
+function audioGroupElements(elements: SourceElement[]) {
+  const mountedTemplates = new Set<string>();
+  for (const { attrs, children } of elements) {
+    if (attrs["data-composition-src"] !== undefined || children.length)
+      continue;
+    const id = (
+      attrs["data-hf-original-composition-id"] ?? attrs["data-composition-id"]
+    )?.trim();
+    if (id) mountedTemplates.add(`${id}-template`);
+  }
+  if (!mountedTemplates.size) return elements;
+  return [
+    ...elements,
+    ...elements.flatMap(({ tag, attrs, content }) =>
+      tag === "template" && attrs.id && mountedTemplates.has(attrs.id)
+        ? [...descendants(content)]
+        : [],
+    ),
+  ];
+}
+
+const audioGroupMember = ({ tag, attrs }: SourceElement) =>
+  tag === "audio" || tag === "video" ? attrs["data-audio-group"] : undefined;
+
+/** Audio reference names and external mounts, including elements Cutroom cannot edit. */
+export function audioGroupReferences(
+  scope: CompositionScope,
+  source: string | ParsedComposition,
+) {
+  const roots =
+    typeof source === "string" ? parseElements(source).roots : source.roots;
+  const groups = new Set<string>();
+  const scenes: string[] = [];
+  for (const element of audioGroupElements(scopeElements(roots, scope))) {
+    const member = audioGroupMember(element);
+    if (member) groups.add(member);
+    if (element.tag === "hf-audio-group" && element.attrs.id)
+      groups.add(element.attrs.id);
+    const scene = element.attrs["data-composition-src"];
+    if (scene) scenes.push(scene);
+  }
+  return { groups, scenes };
+}
 
 function managedAudioGroups(root: SourceElement): SourceElement[] {
   return root.children.flatMap((element) => {
@@ -1081,8 +1134,8 @@ function compositionAudioGroups(root: SourceElement): SourceElement[] {
 
 function readAuthoredAudioGroups(
   declarations: readonly SourceElement[],
-  all: readonly SourceElement[],
-  clipIds: ReadonlyMap<SourceElement, string>,
+  all: SourceElement[],
+  authoredMembers: ReadonlySet<SourceElement>,
   scope: CompositionScope,
 ): NonNullable<Timeline["authoredAudioGroups"]> {
   const buses = new Map<string, SourceElement>();
@@ -1095,17 +1148,13 @@ function readAuthoredAudioGroups(
   const duplicates = new Set<string>();
   const externalMembers = new Set<string>();
   let hasExternalScene = false;
-  for (const element of all) {
-    const { id, "data-audio-group": group } = element.attrs;
+  for (const element of audioGroupElements(all)) {
+    const { id } = element.attrs;
+    const group = audioGroupMember(element);
     if (id && buses.has(id) && buses.get(id) !== element) duplicates.add(id);
     if (element.attrs["data-composition-src"]) hasExternalScene = true;
     // The runtime can resolve a member outside this timeline to a bus inside it.
-    if (
-      group &&
-      (element.tag === "audio" || element.tag === "video") &&
-      !clipIds.has(element)
-    )
-      externalMembers.add(group);
+    if (group && !authoredMembers.has(element)) externalMembers.add(group);
   }
   return [...buses].map(([id, element]) => {
     // Match HyperFrames readAudioGroupVolume, including its parseFloat semantics.
@@ -1114,7 +1163,8 @@ function readAuthoredAudioGroups(
       ? `Audio group ${id} does not have a unique element id. Edit it in the source.`
       : externalMembers.has(id)
         ? `Audio group ${id} has members outside this timeline. Edit it in the source.`
-        : scope === "sub-composition" || hasExternalScene
+        : element.attrs[ROUTED_AUDIO_GROUP] === undefined &&
+            (scope === "sub-composition" || hasExternalScene)
           ? `External scenes can share audio group ${id}. Edit its gain in the source.`
           : undefined;
     return {
@@ -2333,7 +2383,7 @@ export function patchComposition(
           `Audio group ID ${id} is already in use.`,
         );
       const name = label ? ` data-label="${escapeAttribute(label)}"` : "";
-      return `\n${indent}<hf-audio-group id="${escapeAttribute(id)}"${name} data-volume="${volume}"></hf-audio-group>`;
+      return `\n${indent}<hf-audio-group id="${escapeAttribute(id)}"${name} ${ROUTED_AUDIO_GROUP} data-volume="${volume}"></hf-audio-group>`;
     });
     edits.push({
       start: at,

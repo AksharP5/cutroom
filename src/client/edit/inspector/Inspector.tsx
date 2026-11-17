@@ -345,14 +345,16 @@ export function Inspector({
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  const selectedSound =
+    timeline?.clips.filter(
+      (item) => selection.ids.has(item.id) && item.hasAudio,
+    ) ?? [];
   // Several clips that are not one linked subject still share a gain field, as in Resolve.
   const sound =
-    timeline && !subject && selection.ids.size > 1
-      ? timeline.clips.filter(
+    !subject && selection.ids.size > 1
+      ? selectedSound.filter(
           (item) =>
-            selection.ids.has(item.id) &&
-            item.hasAudio &&
-            !timeline.tracks.find((track) => track.index === item.track)
+            !timeline?.tracks.find((track) => track.index === item.track)
               ?.locked,
         )
       : [];
@@ -502,9 +504,9 @@ export function Inspector({
                 Audio · {sound.length} {sound.length === 1 ? "clip" : "clips"}
               </summary>
               <AudioGroupRouting
-                key={sound.map(({ id }) => id).join("|")}
+                key={selectedSound.map(({ id }) => id).join("|")}
                 projectId={projectId}
-                clips={sound}
+                clips={selectedSound}
                 timeline={timeline}
               />
               {sound.some((clip) => clip.trackGainWarning) && (
@@ -759,7 +761,7 @@ export function Inspector({
               onToggle={setStyleOpen}
             />
           )}
-          {subject?.audio.map((audio) => {
+          {subject?.audio.map((audio, index) => {
             const fades = clipFades(audio);
             const locked = timeline.tracks.find(
               (track) => track.index === audio.track,
@@ -776,12 +778,14 @@ export function Inspector({
                   Audio
                   {subject.audio.length > 1 && ` · ${audio.label || audio.id}`}
                 </summary>
-                <AudioGroupRouting
-                  projectId={projectId}
-                  clips={[audio]}
-                  timeline={timeline}
-                  disabled={locked}
-                />
+                {index === 0 && (
+                  <AudioGroupRouting
+                    key={selectedSound.map(({ id }) => id).join("|")}
+                    projectId={projectId}
+                    clips={selectedSound}
+                    timeline={timeline}
+                  />
+                )}
                 {audio.trackGainWarning && (
                   <p className="inspector-warning" role="note">
                     {audio.trackGainWarning}

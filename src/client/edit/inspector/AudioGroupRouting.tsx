@@ -15,17 +15,18 @@ export function AudioGroupRouting({
   projectId,
   clips,
   timeline,
-  disabled,
 }: {
   projectId: string;
   clips: readonly Clip[];
   timeline: Timeline;
-  disabled?: boolean;
 }) {
   const [name, setName] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const firstClip = clips[0];
   const first = firstClip?.authoredAudioGroupId;
+  const disabled = clips.some((clip) =>
+    timeline.tracks.some(({ index, locked }) => index === clip.track && locked),
+  );
   const mixed = clips.some(
     ({ authoredAudioGroupId }) => authoredAudioGroupId !== first,
   );
