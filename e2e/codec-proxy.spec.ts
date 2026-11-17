@@ -259,6 +259,100 @@ for (const pipeline of [false, true])
     }
   });
 
+test("PCM audio before the first picture keeps the same proxy frames in HLS and MP4", async ({
+  page,
+  request,
+}) => {
+  const duration = 48;
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Leading PCM", width: 640, height: 360, duration },
+      })
+    ).json(),
+  );
+  const bits = Array.from(
+    { length: 12 },
+    (_, bit) =>
+      `drawbox=x=${bit * 48}:y=0:w=48:h=36:color=white:t=fill:enable='eq(mod(floor(n/${2 ** bit})\\,2)\\,1)'`,
+  );
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-y", "-f", "lavfi", "-i"],
+    `testsrc2=size=576x324:rate=30:duration=${duration}`,
+    ...["-f", "lavfi", "-i", `anullsrc=r=48000:cl=mono:d=${duration}`],
+    "-vf",
+    `drawbox=x=0:y=0:w=576:h=36:color=black:t=fill,${bits.join(",")},settb=1/15360,setpts=PTS+1782`,
+    ...["-fps_mode", "passthrough", "-enc_time_base:v", "1:15360"],
+    ...["-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1"],
+    ...["-x265-params", "log-level=error:pools=2:frame-threads=2"],
+    ...["-c:a", "pcm_s16le", join(project.path, "recording.mov")],
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111111}</style></head><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="${duration}" data-fps="30">
+<video id="recording" src="recording.mov" muted data-start="0" data-duration="${duration}" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>
+</main></body></html>`,
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+
+  const stage = page.locator(".edit-stage");
+  const checkFrames = async () => {
+    await expect(page.locator(".edit-preparing")).toBeHidden();
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    // The first picture starts at 116.016 ms. Check before it, around the first
+    // piece boundary, and beyond Chromium's initial buffer before going back.
+    for (const [destination, expected] of [
+      [0, 0],
+      [1, 0],
+      [5, 1],
+      [123, 119],
+      [124, 120],
+      [780, 776],
+      [124, 120],
+    ] as const) {
+      await seekFrame(page, destination);
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page, bits.length)).toBe(expected);
+    }
+  };
+
+  const firstPiece = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("cutroom-piece") === "0" &&
+      response.ok(),
+  );
+  await page.goto(`/#project/${project.id}`);
+  await firstPiece;
+  await checkFrames();
+
+  const asset = `/api/cutroom/projects/${project.id}/media/proxy?path=recording.mov`;
+  await expect
+    .poll(async () => {
+      const response = await request.get(asset, {
+        headers: { range: "bytes=0-0" },
+      });
+      const type = response.headers()["content-type"];
+      await response.dispose();
+      return type;
+    })
+    .toContain("video/mp4");
+  const mp4 = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.searchParams.get("hf-proxy") === "h264" &&
+      !url.searchParams.has("cutroom-piece") &&
+      response.headers()["content-type"] === "video/mp4" &&
+      response.ok()
+    );
+  });
+  await page.reload();
+  await mp4;
+  await checkFrames();
+});
+
 /** Four minutes of HEVC, each frame's number in sixteen blocks; made once for both settings. */
 let longRecording: Promise<string> | undefined;
 const makeLongRecording = () =>

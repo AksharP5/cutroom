@@ -93,7 +93,7 @@ const recipe = {
   frame: "media-v6",
   scrub: "media-v7",
   proxy: "media-v8",
-  pieces: "media-v11",
+  pieces: "media-v12",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**

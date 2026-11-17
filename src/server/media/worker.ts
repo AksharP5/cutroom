@@ -382,6 +382,26 @@ try {
         const { first, end } = step;
         const from = first ? pieces.cuts[first - 1] : undefined;
         const to = pieces.cuts[end - 1];
+        const filters = [
+          await colourTags(video),
+          proxyFilter(video),
+          "format=yuv420p",
+        ];
+        if (
+          first === 0 &&
+          pieces.cuts.length &&
+          !sound &&
+          pieces.videoStart > 0
+        ) {
+          // Chromium rebases a video-only HLS stream to its first picture. Hold that
+          // picture at zero. On the first original frame, save the delay tpad added
+          // so every original keeps its presentation time, including on VFR input.
+          const padTicks = `st(0,PTS-round(${pieces.videoStart}/TB))`;
+          filters.push(
+            "tpad=start=1:start_mode=clone",
+            `setpts='if(eq(N,0),0,PTS-if(eq(N,1),${padTicks},ld(0)))'`,
+          );
+        }
         const encoders = {
           nvenc: [
             ...["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq"],
@@ -424,9 +444,8 @@ try {
             "-sn",
             "-dn",
             "-vf",
-            `${await colourTags(video)},${proxyFilter(video)},format=yuv420p`,
-            // Every source frame at its own timestamp, so the preview's frame N is the source's
-            // frame N and export, which reads the source, shows what the preview did.
+            filters.join(","),
+            // Keep every source frame at its own timestamp so the preview and export agree.
             "-fps_mode",
             "passthrough",
             // The source's own clock, so a Matroska file's millisecond times stay as they are.

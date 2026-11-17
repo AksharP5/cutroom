@@ -15,7 +15,8 @@ export function cutPieces(times: number[], frameDuration: number) {
   const cuts: number[] = [];
   const starts: number[] = [];
   const sampleOffsets = [0];
-  let start = times[0]!;
+  const videoStart = times[0]!;
+  let start = videoStart;
   for (const [index, time] of times.entries()) {
     if (time - start < pieceSeconds) continue;
     cuts.push((times[index - 1]! + time) / 2);
@@ -26,7 +27,7 @@ export function cutPieces(times: number[], frameDuration: number) {
   const last = times.at(-1)!;
   const end = last + (times.length > 1 ? last - times.at(-2)! : frameDuration);
   sampleOffsets.push(times.length);
-  return { cuts, starts, end, sampleOffsets };
+  return { cuts, starts, videoStart, end, sampleOffsets };
 }
 
 /** Where each piece starts and how long it lasts. */
