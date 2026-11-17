@@ -118,15 +118,19 @@ export function captionEdits(
   const original = new Map(
     transcript.words.map((word) => [word.id, captionText(word.text)]),
   );
-  return new Map(
-    captions.groups.flatMap((group) =>
-      group.words.flatMap((word) =>
-        original.has(word.id) && original.get(word.id) !== word.text
-          ? [[word.id, word.text] as const]
-          : [],
-      ),
+  const edits = new Map(
+    Object.entries(captions.edits).filter(
+      ([id, text]) => original.has(id) && original.get(id) !== text,
     ),
   );
+  for (const { words } of captions.groups)
+    for (const { id, text } of words) {
+      if (!original.has(id)) continue;
+      // The displayed text is authoritative for words still present in the file.
+      if (original.get(id) === text) edits.delete(id);
+      else edits.set(id, text);
+    }
+  return edits;
 }
 
 /**
@@ -162,33 +166,34 @@ export function layoutCaptions(
     ...group,
     end: Math.min(group.end, composition.duration),
   }));
-  if (!groups.length)
-    throw new HttpError(
-      422,
-      "None of this transcript's words are on the timeline.",
-    );
+  const captions: Captions = {
+    style,
+    transcriptId: view.id,
+    edits: Object.fromEntries(edits),
+    groups: [],
+  };
+  if (!groups.length) return { captions, placement: null };
   const { fps } = composition;
   // The clip starts on the frame showing the first word and ends after the last line.
   const startFrame = Math.floor((groups[0]!.start * fps.num) / fps.den + 1e-6);
   const endFrame = Math.max(startFrame + 1, toFrames(groups.at(-1)!.end, fps));
   const offset = toSeconds(startFrame, fps);
   const at = (time: number) => canonicalSeconds(Math.max(0, time - offset));
-  const captions: Captions = {
-    style,
-    transcriptId: view.id,
-    groups: groups
-      .map((group) => ({
-        start: at(group.start),
-        end: at(group.end),
-        words: group.words.map((word) => ({
-          id: word.id,
-          text: word.text,
-          start: at(word.start),
-        })),
-      }))
-      .filter((group) => group.end > group.start),
+  captions.groups = groups
+    .map((group) => ({
+      start: at(group.start),
+      end: at(group.end),
+      words: group.words.map((word) => ({
+        id: word.id,
+        text: word.text,
+        start: at(word.start),
+      })),
+    }))
+    .filter((group) => group.end > group.start);
+  return {
+    captions,
+    placement: { startFrame, durationFrames: endFrame - startFrame },
   };
-  return { captions, startFrame, durationFrames: endFrame - startFrame };
 }
 
 /** Whether two layouts show the same words over the same frames. */
@@ -228,14 +233,18 @@ export function captionsView(
       edits,
       composition,
     );
-    stale =
-      !sameCaptions(layout.captions, placed.captions) ||
-      Math.abs(placed.start - toSeconds(layout.startFrame, composition.fps)) >
-        0.0005 ||
-      Math.abs(
-        placed.duration - toSeconds(layout.durationFrames, composition.fps),
-      ) > 0.0005 ||
-      placed.offset !== 0;
+    const placement = layout.placement;
+    stale = !sameCaptions(layout.captions, placed.captions);
+    if (placement)
+      stale ||=
+        Math.abs(
+          placed.start - toSeconds(placement.startFrame, composition.fps),
+        ) > 0.0005 ||
+        Math.abs(
+          placed.duration -
+            toSeconds(placement.durationFrames, composition.fps),
+        ) > 0.0005 ||
+        placed.offset !== 0;
   } catch (error) {
     // A transcript whose clip left the timeline has nothing to follow; its captions stay as written.
     if (!(error instanceof HttpError)) throw error;
@@ -311,9 +320,15 @@ export async function followTranscript(
     captionEdits(placed.captions, transcript),
     composition,
   );
-  const duration = toSeconds(layout.durationFrames, composition.fps);
+  const placement = layout.placement;
+  if (!placement)
+    return {
+      html,
+      files: [await captionsWrite(project, placed, layout.captions)],
+    };
+  const duration = toSeconds(placement.durationFrames, composition.fps);
   const patched = setElementAttributes(html, placed.clipId, [
-    ["data-start", String(toSeconds(layout.startFrame, composition.fps))],
+    ["data-start", String(toSeconds(placement.startFrame, composition.fps))],
     ["data-duration", String(duration)],
     ["data-playback-start", null],
     ["data-media-start", null],

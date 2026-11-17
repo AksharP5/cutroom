@@ -472,7 +472,7 @@ Lines break at sentence ends, at pauses of half a second, and at the end of each
 
 Captions stay in step with edits this way:
 
-- Script cuts and restores (`transcript_edit`, or Cut in the Script panel) rewrite the transcript's captions in the same undo step.
+- Script cuts and restores (`transcript_edit`, or Cut in the Script panel) rewrite the transcript's captions in the same Undo step. Corrections stay with their word IDs. Cutting every word returns an empty cue list until words are restored.
 - Other timeline edits to the footage, such as a razor, ripple delete, move or trim, leave the captions as they were, and `captions_list` reports `stale: true`. Call `generate` again. The Script panel shows **Update captions**.
 - Regenerating moves the captions clip to hold the lines and rewrites the file, so hand edits to the captions file are replaced. Word corrections, the style, and the clip's look in the inspector stay. A captions file Cutroom cannot read back is refused rather than overwritten; undo the hand edit, or remove the captions clip and generate again.
 

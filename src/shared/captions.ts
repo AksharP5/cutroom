@@ -19,10 +19,12 @@ export const SubtitleFormatSchema = z.enum(["srt", "vtt"]);
 export const captionText = (text: string) => text.replace(/\s+/g, " ").trim();
 
 const seconds = z.number().finite().nonnegative();
+const wordId = z.string().min(1).max(200);
+const wordText = z.string().min(1).max(2_000);
 /** A caption word: the transcript word it came from, its shown text, and when it is spoken. */
 export const CaptionWordSchema = z.object({
-  id: z.string().min(1).max(200),
-  text: z.string().min(1).max(2_000),
+  id: wordId,
+  text: wordText,
   /** Seconds from the start of the captions clip. */
   start: seconds,
 });
@@ -41,6 +43,8 @@ export const CaptionsSchema = z.object({
   style: CaptionStyleSchema,
   transcriptId: z.string().min(1).max(200),
   groups: z.array(CaptionGroupSchema).max(50_000),
+  /** Corrections also belong to words which are temporarily cut from these lines. */
+  edits: z.record(wordId, wordText).default({}),
 });
 
 /** What the editor and agents read about one transcript's captions. */
@@ -58,7 +62,7 @@ export const CaptionsViewSchema = z.object({
   cues: z.array(
     z.object({ start: z.number(), end: z.number(), text: z.string() }),
   ),
-  /** Caption words whose text differs from the transcript, by word id. Regeneration keeps them. */
+  /** Corrections by transcript word id, including words currently cut from the captions. */
   edits: z.record(z.string(), z.string()),
 });
 

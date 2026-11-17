@@ -150,6 +150,8 @@ Direct script edits currently require a local, independently timed media element
 
 Captions follow where the words play now, not the raw recording. A script cut or restore rewrites them in the same undo step. A razor, ripple delete, move or trim of the footage on the timeline leaves them as they were and shows **Update captions**, which rewrites them and keeps word corrections and the style. Updating replaces hand edits to the captions file.
 
+Caption corrections return when you restore cut words. Cutting every word clears the captions until you restore some.
+
 The preview and export run the same captions file through the same runtime, with no script, so a frame looks the same in both.
 
 ## Timeline commands

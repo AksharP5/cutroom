@@ -133,7 +133,7 @@ const shownAt = async (
 test("a person imports subtitles, adds captions, restyles and corrects them, and they follow a script cut", async ({
   page,
   request,
-}) => {
+}, info) => {
   const project = await footageProject(request, "Captions by hand");
   await page.goto(`/#project/${project.id}`);
   await page.getByRole("button", { name: "Script", exact: true }).click();
@@ -164,8 +164,20 @@ test("a person imports subtitles, adds captions, restyles and corrects them, and
   await page.getByRole("button", { name: "Save" }).click();
   await shownAt(page, preview, 30, "Make [<b>ROOM</b>] for this");
 
+  const secondCue = page.locator(".transcript-words button", {
+    hasText: /^Cut/,
+  });
+  await secondCue.click();
+  await page.getByRole("button", { name: "Edit caption" }).click();
+  await page.getByRole("textbox", { name: "Caption text" }).fill("Remove");
+  await page.getByRole("button", { name: "Save" }).click();
+  await shownAt(page, preview, 110, "Remove these [words]");
+  await page
+    .locator(".edit-picture")
+    .screenshot({ path: info.outputPath("before-cut.png") });
+
   // Cutting the second cue's words ripples the footage 1.5 s earlier; its captions follow.
-  await page.locator(".transcript-words button", { hasText: /^Cut/ }).click();
+  await secondCue.click();
   await page
     .locator(".transcript-words button", { hasText: /^words/ })
     .click({ modifiers: ["Shift"] });
@@ -195,6 +207,27 @@ test("a person imports subtitles, adds captions, restyles and corrects them, and
       "",
     ].join("\n"),
   );
+
+  await secondCue.click();
+  await page
+    .locator(".transcript-words button", { hasText: /^words/ })
+    .click({ modifiers: ["Shift"] });
+  const actions = page.locator(".script-selection-bar");
+  await actions.getByRole("button", { name: "Restore", exact: true }).click();
+  await shownAt(page, preview, 110, "Remove these [words]");
+  await page
+    .locator(".edit-picture")
+    .screenshot({ path: info.outputPath("after-restore.png") });
+
+  const spoken = page.locator(".transcript-words button");
+  await spoken.first().click();
+  await spoken.last().click({ modifiers: ["Shift"] });
+  await actions.getByRole("button", { name: "Cut", exact: true }).click();
+  await expect(preview.locator(".caption-stage")).toHaveCount(1);
+  await expect(preview.locator(".caption-group")).toHaveCount(0);
+  await page
+    .locator(".edit-picture")
+    .screenshot({ path: info.outputPath("all-cut.png") });
 });
 
 const result = <T>(schema: z.ZodType<T>, value: unknown) => {
