@@ -2859,8 +2859,8 @@ function installPreviewBridge(
             return { id, element: element!, space };
           });
           const removed = new Set(change.remove);
-          // Added clips come from the saved document's markup, parsed inertly. The runtime's
-          // CSS adapter finds animated clips only when it loads, so those reload instead.
+          // Added clips come from saved markup, parsed inertly. Animation and Position state
+          // are initialized through a fresh document instead of this live insertion path.
           const added = new Map<string, Element>();
           const inserts = change.insert.map(({ id, after, before }) => {
             const html = markup.get(id);
@@ -2886,6 +2886,8 @@ function installPreviewBridge(
               )
             )
               throw new Error("The added clip cannot be placed.");
+            if (["data-x", "data-y"].some((name) => element.hasAttribute(name)))
+              throw new Error("A positioned clip needs a fresh document.");
             if (
               [...element.attributes].some(
                 ({ name, value }) =>
