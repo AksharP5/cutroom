@@ -75,7 +75,7 @@ const WIDE = new Set<string | null>(["bt2020", "smpte432", "pq", "hlg"]);
 /**
  * One WebCodecs decoder for one file, however many clips play it. Frames are found by their
  * presentation index; a request decodes forward from where the decoder is when the frame lies
- * ahead in the same GOP, and otherwise from the GOP's keyframe.
+ * ahead in the same GOP, and otherwise from the keyframe that supplies its references.
  */
 export class SourceDecoder {
   readonly #track: VideoTrack;
@@ -86,6 +86,8 @@ export class SourceDecoder {
   #next = -1;
   /** The keyframe the current run of samples started from. */
   #runStart = -1;
+  /** Leading pictures can lack references only in the first GOP of a discontinuous run. */
+  #openingGop = false;
   /** Where the decoder is wanted: the last frame drawn, or the start of its latest prefetch. */
   #asked = 0;
   /** The last frame drawn, which eviction keeps: an undo or a step back shows it again. */
@@ -271,22 +273,33 @@ export class SourceDecoder {
     return this.#frames.has(index);
   }
 
-  /** Whether this decoder reaches the frame without starting again from a keyframe. */
-  reaches(index: number) {
-    const { samples, shown } = this.#track;
-    const target = shown[index];
-    if (target === undefined || this.#runStart < 0) return false;
+  #keyFor(target: number, preroll = false) {
+    const { samples } = this.#track;
     let key = target;
     while (key > 0 && !samples[key]!.key) key--;
+    // An open GOP can store a B-frame after its keyframe that presents before it.
+    // That leading picture can reference the previous GOP.
+    if (key > 0 && (preroll || samples[target]!.time < samples[key]!.time)) {
+      do key--;
+      while (key > 0 && !samples[key]!.key);
+    }
+    return key;
+  }
+
+  /** Whether this decoder reaches the frame without starting again from a keyframe. */
+  reaches(index: number) {
+    const target = this.#track.shown[index];
+    if (target === undefined || this.#runStart < 0) return false;
+    const key = this.#keyFor(target);
     // Sent and still in flight, or ahead in a run that has reached its GOP.
-    return target < this.#next
-      ? this.#runStart <= target && !this.#produced.has(index)
-      : key <= this.#next;
+    if (this.#runStart > key) return false;
+    return target < this.#next ? !this.#produced.has(index) : key <= this.#next;
   }
 
   #restart(key: number) {
     this.#next = key;
     this.#runStart = key;
+    this.#openingGop = key > 0;
     this.#heading = -1;
     this.#produced.clear();
   }
@@ -318,14 +331,8 @@ export class SourceDecoder {
     }
     const { samples, shown } = this.#track;
     const target = shown[index]!;
-    let key = target;
-    while (key > 0 && !samples[key]!.key) key--;
-    // In an open GOP, the B-frames shown just after a keyframe may refer to the GOP before it, as
-    // DaVinci Resolve's renders do, so one a decode from its own keyframe never put out is decoded
-    // again from the keyframe before.
-    if (retried && key > 0)
-      do key--;
-      while (key > 0 && !samples[key]!.key);
+    // A file can still require preroll for a picture that presents after its keyframe.
+    const key = this.#keyFor(target, retried);
     let gopEnd = target + 1;
     while (gopEnd < samples.length && !samples[gopEnd]!.key) gopEnd++;
     if (sequential) this.#heading = Math.max(this.#heading, index);
@@ -348,6 +355,17 @@ export class SourceDecoder {
     const send = async (until: number) => {
       while (this.#next < until) {
         const sample = samples[this.#next]!;
+        if (sample.key && this.#next > this.#runStart) this.#openingGop = false;
+        // A discontinuous run lacks references for its opening GOP's leading pictures.
+        // Submitting them can return pixels from the old GOP under the new timestamp.
+        if (
+          this.#openingGop &&
+          !sample.key &&
+          sample.time < samples[this.#runStart]!.time
+        ) {
+          this.#next++;
+          continue;
+        }
         const data = await this.#sample(sample.offset, sample.size);
         if (this.#closed) throw new Error("The decoder was closed.");
         this.#decoder.decode(
@@ -362,8 +380,10 @@ export class SourceDecoder {
     };
     const flush = async () => {
       await this.#decoder.flush();
-      // After a flush the decoder takes only a keyframe, which a GOP's end already is.
-      if (this.#next !== gopEnd || gopEnd >= samples.length) this.#restart(-1);
+      // A flush ends the run even if the next sample is already a keyframe.
+      this.#restart(
+        this.#next === gopEnd && gopEnd < samples.length ? gopEnd : -1,
+      );
     };
     if (sequential) {
       // Playback: frame threading holds a few frames, so keep feeding until it lands, on into
