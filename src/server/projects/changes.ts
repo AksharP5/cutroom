@@ -5,9 +5,8 @@ import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import { isMissing, readSource } from "./store";
-import { resolveProjectPath } from "./path";
-import { HttpError } from "../../shared/errors";
+import { readSource } from "./store";
+import { resolveProjectPath, unavailableProjectFile } from "./path";
 import { freezeExportSource } from "../hyperframes/freezeSources";
 
 export type ClipVersions = Map<string | null, string>;
@@ -128,10 +127,13 @@ export function sourceClipVersions(
 export async function compositionVersions(
   project: Pick<Project, "path">,
   composition: string,
-  readChanged?: (path: string) => Promise<string | null | undefined>,
+  replay?: {
+    content: string;
+    readChanged: (path: string) => Promise<string | null | undefined>;
+  },
 ) {
-  const changed = await readChanged?.(composition);
-  const content = changed ?? (await readSource(project, composition)).content;
+  const content =
+    replay?.content ?? (await readSource(project, composition)).content;
   const parsed = sourceVersions(
     content,
     composition,
@@ -151,6 +153,11 @@ export async function compositionVersions(
     let pending = files.get(path);
     if (!pending) {
       pending = (async () => {
+        const isSource = /\.(?:css|[cm]?[jt]sx?)$/i.test(path);
+        const unavailable = { fingerprint: JSON.stringify([path, "missing"]) };
+        const changed = isSource ? await replay?.readChanged(path) : undefined;
+        if (changed !== undefined)
+          return { ...unavailable, content: changed ?? undefined };
         try {
           const { absolute, path: owned } = await resolveProjectPath(
             project,
@@ -158,25 +165,18 @@ export async function compositionVersions(
           );
           const info = await stat(absolute);
           if (info.isFile()) canonicalMedia.set(path, owned);
-          return {
-            fingerprint: fileFingerprint(owned, info),
-            ...(/\.(?:css|[cm]?[jt]sx?)$/i.test(path) &&
-            info.isFile() &&
-            info.size <= 10 * 1024 * 1024
-              ? {
-                  content:
-                    (await readChanged?.(owned).then((changed) =>
-                      changed === null ? "" : changed,
-                    )) ?? (await readFile(absolute, "utf8")),
-                }
-              : {}),
-          };
+          const fingerprint = fileFingerprint(owned, info);
+          if (!isSource || !info.isFile() || info.size > 10 * 1024 * 1024)
+            return { fingerprint };
+          const replacement =
+            owned !== path ? await replay?.readChanged(owned) : undefined;
+          const content =
+            replacement === undefined
+              ? await readFile(absolute, "utf8")
+              : (replacement ?? undefined);
+          return { fingerprint, content };
         } catch (error) {
-          if (
-            isMissing(error) ||
-            (error instanceof HttpError && [403, 404].includes(error.status))
-          )
-            return { fingerprint: JSON.stringify([path, "missing"]) };
+          if (unavailableProjectFile(error)) return unavailable;
           throw error;
         }
       })();

@@ -674,7 +674,7 @@ async function insertImages(composition: string, sources: string[]) {
   return readFile(at(composition), "utf8");
 }
 
-test("selective history refuses to remove a freeze still used by another composition", async () => {
+test("selective history protects a freeze used by another composition, including mounted build scenes", async () => {
   const editor = createHyperframesApi(fixture.store, fixture.review);
   fixture.app.route("/api/editor", editor);
   fixture.app.route(
@@ -684,10 +684,25 @@ test("selective history refuses to remove a freeze still used by another composi
   const preview = "assets/freeze/still.png";
   const exported = "assets/freeze/export/still.png";
   const scene = "compositions/intro.html";
+  const built = "build/intro.html";
+  const builtSource =
+    '<div data-composition-id="intro-build" data-width="1920" data-height="1080" data-duration="2"></div>';
   const ledger = await fixture.store.history(project);
-  const indexBefore = (await readFile(at("index.html"), "utf8")).replace(
-    "<head>",
-    "<head><style data-cutroom-track-layer>@layer cutroom-tracks;</style>\n",
+  const indexBefore = (await readFile(at("index.html"), "utf8"))
+    .replace(
+      "<head>",
+      "<head><style data-cutroom-track-layer>@layer cutroom-tracks;</style>\n",
+    )
+    .replace(
+      "</main>",
+      `<div id="nested-scene" data-composition-src="${scene}" data-start="0" data-duration="2" data-track-index="3"></div></main>`,
+    );
+  await mkdir(at("build"));
+  await writeFile(at(built), builtSource);
+  // The broken image URL must not block replay when the freeze has no uses.
+  await writeFile(
+    at(scene),
+    `<div data-composition-id="intro" data-width="1920" data-height="1080" data-duration="2"><div data-composition-src="${built}" data-start="0" data-duration="2" data-track-index="0"></div><img src="../assets/unused.mp3/missing.png"></div>`,
   );
   await writeFile(at("index.html"), indexBefore);
   await ledger.checkpoint();
@@ -703,10 +718,10 @@ test("selective history refuses to remove a freeze still used by another composi
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ entryId, mode }),
     });
-  const refuse = async (response: Response) => {
+  const refuse = async (response: Response, usedBy = scene) => {
     expect(response.status, await response.clone().text()).toBe(409);
     expect(await response.json()).toMatchObject({
-      error: expect.stringContaining(`still used by ${scene}`),
+      error: expect.stringContaining(`still used by ${usedBy}`),
     });
   };
   try {
@@ -721,6 +736,15 @@ test("selective history refuses to remove a freeze still used by another composi
     await ledger.checkpoint();
     const freeze = ledger.list().at(-1)!;
     expect(freeze.targets).toEqual(targets);
+    const builtReuse = await insertImages(built, ["../alias/still.png"]);
+    const buildHistory = ledger.list();
+    await refuse(await selected(freeze.id, "keep-later-edits"), built);
+    expect(ledger.list()).toEqual(buildHistory);
+    expect(await readFile(at(built), "utf8")).toBe(builtReuse);
+    expect(await present(preview)).toBe(true);
+    expect(await present(exported)).toBe(true);
+    await writeFile(at(built), builtSource);
+
     const reused = await insertImages(scene, ["../alias/still.png"]);
     const history = ledger.list();
     for (const mode of [undefined, "keep-later-edits", "just-this"] as const)

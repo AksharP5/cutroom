@@ -192,6 +192,86 @@ async function expectParity(
 }
 
 test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "direct upscale keeps source chroma detail until the delivery frame is sized",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-chroma-"));
+    const scratchDir = `${root}-scratch`;
+    const workers = createRenderWorkers({ scratchDir });
+    const filename = "export.mp4";
+    try {
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        `nullsrc=s=${WIDTH / 2}x${HEIGHT / 2}:r=30:d=1,format=yuv444p,geq=lum=128:cb='if(mod(X,2),80,176)':cr=128`,
+        "-c:v",
+        "libx264",
+        "-crf",
+        "0",
+        "-colorspace",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        "-color_range",
+        "tv",
+        join(root, "stripes.mp4"),
+      ]);
+      await writeFile(
+        join(root, "index.html"),
+        `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}main{position:relative;width:100%;height:100%;overflow:hidden}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="1"><video id="video" src="stripes.mp4" muted data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></video></main></body></html>`,
+      );
+      const outputPath = join(root, filename);
+      const state = workers.start(
+        {
+          project: { id: "direct", dir: root },
+          outputPath,
+          format: "mp4",
+          fps: { num: 30, den: 1 },
+          quality: "high",
+          jobId: filename,
+        },
+        { filename, directory: root, range: null },
+      );
+      const deadline = Date.now() + 15_000;
+      while (state.status === "rendering" && Date.now() < deadline)
+        await Bun.sleep(50);
+      expect(state.error).toBeUndefined();
+      expect(state.renderer).toBe("direct");
+      const frame = await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        outputPath,
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "yuv420p",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+      ]);
+      // Each source stripe is a full chroma sample wide in the delivery frame.
+      const chroma = WIDTH * HEIGHT + (WIDTH / 2) * 50;
+      for (let x = 40; x < 48; x += 2)
+        expect(
+          Math.abs(frame[chroma + x]! - frame[chroma + x + 1]!),
+        ).toBeGreaterThan(30);
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
   "plain footage exports straight from the source with the frames, colours and sound frame capture gives",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "export-direct-"));

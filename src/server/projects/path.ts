@@ -108,3 +108,12 @@ export async function projectStatePath(
 export function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
+
+/** An optional dependency that cannot name a file inside the project. */
+export function unavailableProjectFile(error: unknown): boolean {
+  return (
+    isMissing(error) ||
+    (error instanceof Error && "code" in error && error.code === "ENOTDIR") ||
+    (error instanceof HttpError && [403, 404].includes(error.status))
+  );
+}
