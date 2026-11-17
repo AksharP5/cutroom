@@ -136,6 +136,10 @@ for (const { name, duration, videoDuration, gap, mp4, frames } of [
             "lavfi",
             "-i",
             `anullsrc=r=48000:cl=mono:d=${duration}`,
+            // Start the first AAC packet at zero. FFprobe versions disagree on whether
+            // negative encoder priming belongs to the Matroska media timeline.
+            "-af",
+            "asetpts=PTS+1024/SR/TB",
             "-c:a",
             "aac",
           ]),
