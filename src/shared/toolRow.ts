@@ -196,6 +196,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `${target} motion` : "authored motion"),
   },
+  variables_bind: {
+    verb: ["Bound", "Binding", "Bind"],
+    kind: "edit",
+    object: (target) => (target ? `the variable ${target}` : "a variable"),
+  },
   variables_declare: {
     verb: ["Declared", "Declaring", "Declare"],
     kind: "edit",

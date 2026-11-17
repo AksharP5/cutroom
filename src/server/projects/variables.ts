@@ -8,6 +8,7 @@ import { TimelineError } from "../../shared/timeline/errors";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import {
   VariableDeclareSchema,
+  VariableBindSchema,
   VariableDefaultSchema,
   VariableError,
   VariablesPreviewSchema,
@@ -18,17 +19,17 @@ import type {
   CompositionVariable,
   VariableValues,
   VariablesState,
+  VariableBinding,
 } from "../../shared/variables";
+import type { TimelineSettings } from "../../shared/timeline/schema";
 import type { Project } from "../../shared/project";
 import {
   compositionScope,
+  bindCompositionVariable,
   declareVariables,
   declaredVariables,
-  elementAttributes,
   parseComposition,
-  setElementAttributes,
 } from "../timeline/composition";
-import { writeClipStyle } from "../timeline/style";
 import { projectMutationGuard } from "./authorization";
 import { projectWritePath } from "./path";
 import type { ReviewService } from "./review";
@@ -65,6 +66,40 @@ const refusal = (error: unknown): never => {
     throw new HttpError(422, error.message);
   throw error;
 };
+
+function bindSource(
+  html: string,
+  bind: VariableBinding,
+  variable: CompositionVariable,
+  settings: TimelineSettings,
+  composition: string,
+  existing = true,
+) {
+  if (bind.to === "text" && variable.type !== "string")
+    throw new HttpError(422, "Bind words to a string variable.");
+  if (bind.to === "color" && variable.type !== "color")
+    throw new HttpError(422, "Bind a text colour to a color variable.");
+  const parsed = parseComposition(html, settings, {
+    scope: compositionScope(composition),
+  });
+  if (!parsed.timeline.clips.some((clip) => clip.id === bind.clipId))
+    throw new HttpError(
+      404,
+      `No clip in ${composition} has the element id ${bind.clipId}.`,
+    );
+  if (
+    bind.to === "text" &&
+    parsed.elements.get(bind.clipId)?.attrs["data-var-text"]
+  )
+    throw new HttpError(409, `${bind.clipId}'s words are already bound.`);
+  return bindCompositionVariable(
+    parsed,
+    bind.clipId,
+    bind.to,
+    variable.id,
+    existing,
+  );
+}
 
 /**
  * Composition variables: declarations live in the source, preview overrides live here, in memory,
@@ -130,7 +165,7 @@ export function createVariableRoutes(
     project: Project,
     composition: string,
     label: string,
-    change: (html: string) => string,
+    change: (html: string) => string | Promise<string>,
   ) =>
     reviews.editComposition(
       project,
@@ -144,7 +179,7 @@ export function createVariableRoutes(
             const source = await readSource(project, composition);
             let after: string;
             try {
-              after = change(source.content);
+              after = await change(source.content);
             } catch (error) {
               return refusal(error);
             }
@@ -230,84 +265,60 @@ export function createVariableRoutes(
     return c.json(await read(project, composition));
   });
 
+  api.post("/projects/:id/variables/bind", async (c) => {
+    const input = parseInput(VariableBindSchema, await c.req.json());
+    const project = await store.get(c.req.param("id"));
+    const composition = compositionPath(input.composition);
+    await edit(c, project, composition, `Bind ${input.id}`, async (html) => {
+      const matches = parseDeclarations(declaredVariables(html)).filter(
+        (item) => item.id === input.id,
+      );
+      if (matches.length !== 1)
+        throw new HttpError(
+          422,
+          `${input.id} must name one declared variable.`,
+        );
+      return bindSource(
+        html,
+        input.bind,
+        matches[0]!,
+        (await store.document(project)).timelines[composition] ??
+          emptyTimelineSettings(),
+        composition,
+      );
+    });
+    return c.json(await read(project, composition));
+  });
+
   api.post("/projects/:id/variables/declare", async (c) => {
     const input = parseInput(VariableDeclareSchema, await c.req.json());
     const project = await store.get(c.req.param("id"));
     const composition = compositionPath(input.composition);
     const { variable, bind } = input;
-    const source = await readSource(project, composition);
-    if (
-      parseDeclarations(declaredVariables(source.content)).some(
-        (item) => item.id === variable.id,
-      )
-    )
-      throw new HttpError(409, `${variable.id} is already declared.`);
-    if (bind) {
-      if (bind.to === "text" && variable.type !== "string")
-        throw new HttpError(422, "Bind words to a string variable.");
-      if (bind.to === "color" && variable.type !== "color")
-        throw new HttpError(422, "Bind a text colour to a color variable.");
-      const clip = parseComposition(
-        source.content,
-        (await store.document(project)).timelines[composition] ??
-          emptyTimelineSettings(),
-        { scope: compositionScope(composition) },
-      ).timeline.clips.find((item) => item.id === bind.clipId);
-      if (!clip || !elementAttributes(source.content, bind.clipId))
-        throw new HttpError(
-          404,
-          `No clip in ${composition} has the element id ${bind.clipId}.`,
-        );
-      if (clip.kind !== "element" || clip.title)
-        throw new HttpError(
-          422,
-          "Variables bind to text elements. A title keeps its words and colour in its own settings.",
-        );
-      if (
-        bind.to === "text" &&
-        (clip.text === null ||
-          clip.text.includes("\n") ||
-          clip.sourceRestrictions?.text)
-      )
-        // HyperFrames replaces only an element's own text, so line breaks would stay behind.
-        throw new HttpError(
-          422,
-          clip.sourceRestrictions?.text ??
-            "Only an element with one line of plain words can take a text variable.",
-        );
-      const bound = elementAttributes(source.content, bind.clipId)?.[
-        "data-var-text"
-      ];
-      if (bind.to === "text" && bound)
-        throw new HttpError(
-          409,
-          `${bind.clipId}'s words are already ${bound}.`,
-        );
-    }
     await edit(
       c,
       project,
       composition,
       bind ? `Bind ${variable.label}` : `Declare ${variable.label}`,
-      (html) => {
-        let next = declareVariables(
-          html,
+      async (html) => {
+        const declarations = parseDeclarations(declaredVariables(html));
+        if (declarations.some((item) => item.id === variable.id))
+          throw new HttpError(409, `${variable.id} is already declared.`);
+        let next = html;
+        if (bind)
+          next = bindSource(
+            html,
+            bind,
+            variable,
+            (await store.document(project)).timelines[composition] ??
+              emptyTimelineSettings(),
+            composition,
+            false,
+          );
+        return declareVariables(
+          next,
           JSON.stringify([...writtenDeclarations(html), variable]),
         );
-        if (!bind) return next;
-        const changes: [string, string][] =
-          bind.to === "text"
-            ? [["data-var-text", variable.id]]
-            : [
-                [
-                  "style",
-                  writeClipStyle(elementAttributes(next, bind.clipId)?.style, {
-                    color: `var(--${variable.id})`,
-                  })!,
-                ],
-              ];
-        next = setElementAttributes(next, bind.clipId, changes) ?? next;
-        return next;
       },
     );
     return c.json(await read(project, composition), 201);

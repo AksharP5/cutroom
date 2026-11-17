@@ -9,6 +9,7 @@ import { createMcpServer } from "../src/server/mcp/server";
 import { createVariableRoutes } from "../src/server/projects/variables";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { VariablesStateSchema } from "../src/shared/variables";
+import { readColourVariable } from "../src/server/timeline/style";
 import { projectFixture } from "./project-fixture";
 
 const DECLARATIONS = [
@@ -293,6 +294,12 @@ test("agents list, preview, default and declare variables through typed tools, a
     expect(
       VariablesStateSchema.parse(listed.structuredContent?.result).declarations,
     ).toHaveLength(3);
+    const bound = await call("variables_bind", {
+      id: "accent",
+      bind: { clipId: "caption", to: "color" },
+    });
+    expect(bound.isError).not.toBe(true);
+    expect(await f.source()).toContain("color: var(--accent)");
     const previewed = await call("variables_preview", {
       values: { title: "From an agent" },
     });
@@ -320,6 +327,196 @@ test("agents list, preview, default and declare variables through typed tools, a
   } finally {
     await client.close();
     await server.close();
+    await f.close();
+  }
+});
+
+test("existing variables bind without new declarations and undo restores the exact source", async () => {
+  const f = await fixture();
+  try {
+    const response = await f.request(
+      `/projects/${f.project.id}/variables/bind`,
+      "POST",
+      {
+        id: "title",
+        bind: { clipId: "caption", to: "text" },
+      },
+    );
+    expect(response.ok).toBe(true);
+    expect(
+      (await f.json(response)).declarations.map((variable) => variable.id),
+    ).toEqual(DECLARATIONS.map((variable) => variable.id));
+    expect(await f.source()).toContain('data-var-text="title">Plain words');
+    await f.undo();
+    expect(await f.source()).toBe(SOURCE);
+    expect(
+      (
+        await f.request(`/projects/${f.project.id}/variables/bind`, "POST", {
+          id: "accent",
+          bind: { clipId: "caption", to: "color" },
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await f.source()).toContain("color: var(--accent)");
+    await f.undo();
+    expect(await f.source()).toBe(SOURCE);
+  } finally {
+    await f.close();
+  }
+});
+
+test("binding rejects incompatible, duplicate-id, multiline and nontext targets without editing", async () => {
+  const f = await fixture();
+  try {
+    for (const [source, id, to] of [
+      [SOURCE, "size", "text"],
+      [SOURCE, "missing", "text"],
+      [
+        SOURCE.replace("</body>", '<p id="caption">Duplicate</p></body>'),
+        "title",
+        "text",
+      ],
+      [SOURCE.replace("Plain words", "Plain<br>words"), "title", "text"],
+      [SOURCE.replace("Plain words", ""), "accent", "color"],
+      [SOURCE.replace('style="color: #00ff00"', ""), "accent", "color"],
+    ] as const) {
+      await writeFile(join(f.project.path, "index.html"), source);
+      expect(
+        (
+          await f.request(`/projects/${f.project.id}/variables/bind`, "POST", {
+            id,
+            bind: { clipId: "caption", to },
+          })
+        ).status,
+      ).toBeGreaterThanOrEqual(400);
+      expect(await f.source()).toBe(source);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test("queued declarations cannot race to duplicate a variable", async () => {
+  const f = await fixture();
+  try {
+    const body = {
+      variable: { id: "new", type: "string", label: "New", default: "Hello" },
+    };
+    const responses = await Promise.all([f.declare(body), f.declare(body)]);
+    expect(responses.map((response) => response.status).sort()).toEqual([
+      201, 409,
+    ]);
+    expect(
+      (await f.read()).declarations.filter((variable) => variable.id === "new"),
+    ).toHaveLength(1);
+    await f.undo();
+    expect(await f.source()).toBe(SOURCE);
+  } finally {
+    await f.close();
+  }
+});
+
+test("binding uses the external template scope and refuses locked tracks", async () => {
+  const f = await fixture();
+  try {
+    const file = join(f.project.path, "scene.html");
+    const source = `<template><div data-composition-id="scene" data-width="320" data-height="240" data-duration="2" data-composition-variables='${JSON.stringify(DECLARATIONS)}'><p id="caption" class="clip" data-start="0" data-duration="2" data-track-index="1" style="color:#00ff00">Scene words</p></div></template>`;
+    await writeFile(file, source);
+    expect(
+      (
+        await f.request(`/projects/${f.project.id}/variables/bind`, "POST", {
+          composition: "scene.html",
+          id: "title",
+          bind: { clipId: "caption", to: "text" },
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await readFile(file, "utf8")).toContain(
+      'data-var-text="title">Scene words',
+    );
+    expect(await f.source()).toBe(SOURCE);
+    await f.undo();
+    expect(await readFile(file, "utf8")).toBe(source);
+    const document = await f.store.document(f.project);
+    document.timelines = {
+      ...document.timelines,
+      "index.html": {
+        tracks: [
+          {
+            index: 1,
+            kind: "video",
+            name: null,
+            locked: true,
+            autoSelect: true,
+            enabled: true,
+            muted: false,
+            solo: false,
+            volume: 1,
+            fx: [],
+          },
+        ],
+        markers: [],
+        range: { in: null, out: null },
+      },
+    };
+    await f.store.writeDocument(f.project, document);
+    const response = await f.request(
+      `/projects/${f.project.id}/variables/bind`,
+      "POST",
+      {
+        id: "title",
+        bind: { clipId: "caption", to: "text" },
+      },
+    );
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain("locked");
+    expect(await f.source()).toBe(SOURCE);
+  } finally {
+    await f.close();
+  }
+});
+
+test("current colour binding follows real declarations and important precedence", () => {
+  expect(
+    readColourVariable(
+      'font-family: "x; color: var(--fake)"; color: var(--real)',
+    ),
+  ).toBe("real");
+  expect(
+    readColourVariable("color:var(--first);color:#00ff00"),
+  ).toBeUndefined();
+  expect(
+    readColourVariable("color:var(--first)!important;color:var(--last)"),
+  ).toBe("first");
+  expect(
+    readColourVariable(
+      "color:var(--first)!important;color:var(--last)!important",
+    ),
+  ).toBe("last");
+});
+
+test("declare keeps colour binding available on ordinary shapes without inline colour", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(
+      join(f.project.path, "index.html"),
+      SOURCE.replace('style="color: #00ff00"', "").replace("Plain words", ""),
+    );
+    expect(
+      (
+        await f.declare({
+          variable: {
+            id: "shape-color",
+            type: "color",
+            label: "Shape colour",
+            default: "#ffffff",
+          },
+          bind: { clipId: "caption", to: "color" },
+        })
+      ).status,
+    ).toBe(201);
+    expect(await f.source()).toContain("color: var(--shape-color)");
+  } finally {
     await f.close();
   }
 });

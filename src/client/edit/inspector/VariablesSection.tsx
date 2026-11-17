@@ -9,6 +9,7 @@ import type {
 import { SelectMenu } from "../../components/SelectMenu";
 import {
   declareVariable,
+  bindVariable,
   makeDefault,
   previewVariable,
   useVariables,
@@ -182,10 +183,7 @@ function freeId(base: string, taken: readonly CompositionVariable[]) {
   return id;
 }
 
-/**
- * Turns a text clip's words or colour into a variable whose default is what the clip shows now,
- * so the picture does not change until a value is set.
- */
+/** Binds words or colour to a declared variable, or creates one with the clip's value. */
 export function BindVariable({
   projectId,
   clip,
@@ -198,56 +196,71 @@ export function BindVariable({
   const state = useVariables((store) => store.state);
   if (!state || clip.kind !== "element" || clip.title) return null;
   // One line of plain words: HyperFrames replaces only an element's own text, not its line breaks.
-  // Once bound from here, its variable carries the clip's id; the server refuses a second binding.
-  const words =
+  const plain =
     clip.text !== null &&
     !clip.text.includes("\n") &&
-    !clip.sourceRestrictions?.text &&
-    !state.declarations.some(
-      (item) => item.id === freeId(`${clip.id}-text`, []),
-    );
+    !clip.sourceRestrictions?.text;
+  const words = plain && !clip.variableBindings?.text;
   const colour = clip.style.color;
-  if (!words && !colour) return null;
-  const bind = (variable: VariableDeclaration, to: "text" | "color") =>
-    void declareVariable(projectId, variable, { clipId: clip.id, to });
-  return (
-    <Row label="Variable">
-      {words && (
-        <button
-          type="button"
-          onClick={() =>
-            bind(
-              {
-                id: freeId(`${clip.id}-text`, state.declarations),
-                type: "string",
-                label: `${name} text`,
-                default: clip.text ?? "",
-              },
-              "text",
-            )
-          }
-        >
-          From words
-        </button>
-      )}
-      {colour && (
-        <button
-          type="button"
-          onClick={() =>
-            bind(
-              {
-                id: freeId(`${clip.id}-color`, state.declarations),
-                type: "color",
-                label: `${name} colour`,
-                default: colour,
-              },
-              "color",
-            )
-          }
-        >
-          From colour
-        </button>
-      )}
-    </Row>
-  );
+  if (
+    !words &&
+    !colour &&
+    !clip.variableBindings?.text &&
+    !clip.variableBindings?.color
+  )
+    return null;
+  return (["text", "color"] as const).map((to) => {
+    const text = to === "text";
+    const label = text ? "Words variable" : "Colour variable";
+    const current = clip.variableBindings?.[to];
+    const available = state.declarations.filter(
+      (variable) => variable.type === (text ? "string" : "color"),
+    );
+    const allowed = text ? words : plain && (!!colour || !!current);
+    const create = text ? words : !!colour && !current;
+    if (!current && !create && (!allowed || !available.length)) return null;
+    const binding = { clipId: clip.id, to };
+    return (
+      <Row key={to} label={text ? "Words" : "Colour"}>
+        <SelectMenu
+          label={label}
+          value={current ?? ""}
+          readOnly={!allowed && !create}
+          options={[
+            ...(!current ? [{ value: "", label: "Choose variable" }] : []),
+            ...(current &&
+            !available.some((variable) => variable.id === current)
+              ? [{ value: current, label: current }]
+              : []),
+            ...(allowed
+              ? available
+              : available.filter(({ id }) => id === current)
+            ).map((variable) => ({
+              value: variable.id,
+              label: `${variable.label} (${variable.id})`,
+            })),
+            ...(create ? [{ value: "@new", label: "New variable…" }] : []),
+          ]}
+          onChange={(id) => {
+            if (id === "@new") {
+              const variable: VariableDeclaration = text
+                ? {
+                    id: freeId(`${clip.id}-text`, state.declarations),
+                    type: "string",
+                    label: `${name} text`,
+                    default: clip.text ?? "",
+                  }
+                : {
+                    id: freeId(`${clip.id}-color`, state.declarations),
+                    type: "color",
+                    label: `${name} colour`,
+                    default: colour!,
+                  };
+              void declareVariable(projectId, variable, binding);
+            } else if (id) void bindVariable(projectId, id, binding);
+          }}
+        />
+      </Row>
+    );
+  });
 }

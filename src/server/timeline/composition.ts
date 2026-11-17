@@ -31,6 +31,7 @@ import { parseFpsWithDefault } from "@hyperframes/core";
 import {
   clipStyle,
   readClipStyle,
+  readColourVariable,
   readElementStyle,
   writeClipStyle,
 } from "./style";
@@ -699,6 +700,7 @@ export function parseComposition(
         (element.attrs.muted === undefined ||
           element.attrs["data-cutroom-muted"] !== undefined) &&
         (element.attrs["data-has-audio"] ?? "true") === "true");
+    const colorVariable = readColourVariable(element.attrs.style);
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -753,6 +755,14 @@ export function parseComposition(
           ? (elementText(element, textLayout.get(element)?.preserveLines)
               ?.text ?? null)
           : null,
+      ...((element.attrs["data-var-text"] || colorVariable) && {
+        variableBindings: {
+          ...(element.attrs["data-var-text"] && {
+            text: element.attrs["data-var-text"],
+          }),
+          ...(colorVariable && { color: colorVariable }),
+        },
+      }),
       title: title && "title" in title ? title.title : null,
       style: isAudioKind(kind) ? {} : readElementStyle(element.attrs.style),
       // A transition's crossfade is its own, not the clip's fade.
@@ -861,7 +871,9 @@ export function parseComposition(
 export function timelineContent(timeline: Timeline) {
   return {
     ...timeline,
-    clips: timeline.clips.map(({ sourceRestrictions, ...clip }) => clip),
+    clips: timeline.clips.map(
+      ({ sourceRestrictions, variableBindings, ...clip }) => clip,
+    ),
   };
 }
 
@@ -1197,6 +1209,73 @@ export function setElementAttributes(
   );
   if (!element) return null;
   return rewriteAttributes(html, element, id, changes);
+}
+
+/** Bind only a unique authored id in the currently projected composition. */
+export function bindCompositionVariable(
+  parsed: ParsedComposition,
+  clipId: string,
+  to: "text" | "color",
+  variableId: string,
+  existing = true,
+): string {
+  const clip = parsed.timeline.clips.find((item) => item.id === clipId);
+  const element = parsed.elements.get(clipId);
+  if (!clip || !element || element.attrs.id !== clipId)
+    throw new TimelineError(
+      "unsupported",
+      `No text clip with authored id ${clipId}.`,
+    );
+  if (
+    scopeElements(parsed.roots, parsed.scope).filter(
+      (item) => item.attrs.id === clipId,
+    ).length !== 1
+  )
+    throw new TimelineError(
+      "unsupported",
+      `${clipId} is not a unique element id.`,
+    );
+  if (
+    parsed.timeline.tracks.find((track) => track.index === clip.track)?.locked
+  )
+    throw new TimelineError("unsupported", `${clipId}'s track is locked.`);
+  if (
+    clip.kind !== "element" ||
+    clip.title ||
+    ((existing || to === "text") &&
+      (clip.text === null ||
+        clip.text.includes("\n") ||
+        clip.sourceRestrictions?.text))
+  )
+    throw new TimelineError(
+      "unsupported",
+      "Bind only ordinary text elements with one line of plain words. Titles keep their own settings.",
+    );
+  if (
+    existing &&
+    to === "color" &&
+    !clip.style.color &&
+    !clip.variableBindings?.color
+  )
+    throw new TimelineError(
+      "unsupported",
+      "Bind a text colour only when the element has an explicit inline colour.",
+    );
+  return rewriteAttributes(
+    parsed.html,
+    element,
+    clipId,
+    to === "text"
+      ? [["data-var-text", variableId]]
+      : [
+          [
+            "style",
+            writeClipStyle(element.attrs.style, {
+              color: `var(--${variableId})`,
+            })!,
+          ],
+        ],
+  );
 }
 
 function rewriteAttributes(

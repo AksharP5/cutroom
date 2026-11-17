@@ -234,6 +234,12 @@ export const VariableDeclareSchema = z.object({
   bind: VariableBindingSchema.optional(),
 });
 
+export const VariableBindSchema = z.object({
+  composition,
+  id: VariableIdSchema,
+  bind: VariableBindingSchema,
+});
+
 /** One composition's declarations and the overrides the preview shows. */
 export const VariablesStateSchema = z.object({
   composition: z.string(),
