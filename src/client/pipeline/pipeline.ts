@@ -221,11 +221,15 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     try {
       while (wanted && !closing.signal.aborted) {
         wanted = false;
-        await drawFrame();
+        const drawingPlan = plan;
+        if (!drawingPlan) continue;
+        try {
+          await drawFrame(drawingPlan);
+        } catch (error) {
+          if (plan === drawingPlan && !closing.signal.aborted)
+            stop(error instanceof Error ? error.message : String(error));
+        }
       }
-    } catch (error) {
-      if (!closing.signal.aborted)
-        stop(error instanceof Error ? error.message : String(error));
     } finally {
       drawing = false;
     }
@@ -254,11 +258,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     };
   };
 
-  const drawFrame = async () => {
+  const drawFrame = async (drawingPlan: Plan) => {
     const view = useTimeline.getState().view;
     const { frame, state } = useTransport.getState();
-    if (!plan || !view || view.composition !== "index.html") return;
-    const shown = visibleAt(view.timeline, plan, frame);
+    if (!view || view.composition !== "index.html") return;
+    const shown = visibleAt(view.timeline, drawingPlan, frame);
     if (!shown) return stop("a clip at the playhead is not one it can draw");
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
@@ -293,16 +297,19 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       standIn: boolean,
     ) => {
       // A page that paints nothing shows the browser's white canvas, as frame capture does.
-      if (compositor.lost()) return;
+      if (plan !== drawingPlan || closing.signal.aborted || compositor.lost())
+        return;
       await compositor.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
           placed(layer, frames[at]!, from[at]!.rotation, found.intrinsic),
         ),
-        plan!.background ?? "#ffffff",
-        plan!.width,
-        plan!.height,
+        drawingPlan.background ?? "#ffffff",
+        drawingPlan.width,
+        drawingPlan.height,
       );
+      // A refusal or detachment during GPU upload must not make this canvas visible again.
+      if (plan !== drawingPlan || closing.signal.aborted) return;
       canvas.dataset.standin = String(standIn);
       canvas.dataset.frame = String(frame);
       stopped = null;
@@ -355,6 +362,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     } finally {
       for (const picture of frames) picture.close();
     }
+    if (plan !== drawingPlan || closing.signal.aborted) return;
     for (const { found, lane, index } of pictures) {
       if (moving) continue;
       found.playing = lane;
@@ -416,7 +424,10 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     }
   };
 
-  const readPlan = async () => {
+  let planRequest = 0;
+  const refresh = async () => {
+    const request = ++planRequest;
+    const isCurrent = () => request === planRequest && !closing.signal.aborted;
     const view = useTimeline.getState().view;
     // The timeline's first read starts the plan's.
     if (!view) return;
@@ -424,11 +435,19 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       plan = null;
       return stop("only the entry composition plays through it");
     }
-    const response = await fetch(
-      `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline`,
-      { signal: closing.signal },
-    );
-    const { plan: next } = PipelineResponseSchema.parse(await response.json());
+    let next: PipelinePlan;
+    try {
+      const response = await fetch(
+        `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline`,
+        { signal: closing.signal },
+      );
+      next = PipelineResponseSchema.parse(await response.json()).plan;
+    } catch (error) {
+      if (!isCurrent()) return;
+      plan = null;
+      return stop(error instanceof Error ? error.message : String(error));
+    }
+    if (!isCurrent()) return;
     if ("reason" in next) {
       plan = null;
       return stop(next.reason);
@@ -450,11 +469,6 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         void source(clip.src).catch(() => {});
     void draw();
   };
-  const refresh = () =>
-    readPlan().catch((error: unknown) => {
-      if (!closing.signal.aborted)
-        stop(error instanceof Error ? error.message : String(error));
-    });
   void refresh();
 
   const unsubscribe = [
@@ -466,7 +480,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       if (state.view === previous.view) return;
       // The shown view already holds the edit: draw it now, and let the server's plan follow.
       void draw();
-      if (state.view?.revision !== previous.view?.revision) void refresh();
+      if (
+        state.view?.revision !== previous.view?.revision ||
+        state.view?.composition !== previous.view?.composition
+      )
+        void refresh();
     }),
   ];
   return () => {

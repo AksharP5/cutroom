@@ -3,7 +3,12 @@ import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { APIRequestContext, Browser, Page } from "@playwright/test";
-import { ProjectSchema, type Project } from "../src/shared/project";
+import {
+  ProjectSchema,
+  SourceSchema,
+  type Project,
+} from "../src/shared/project";
+import { PipelineResponseSchema } from "../src/shared/pipeline";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import type { CommandInput } from "../src/shared/timeline/schema";
 import { titleAttributes, titleStyle } from "../src/server/timeline/titles";
@@ -500,6 +505,92 @@ test("a clip the pipeline cannot draw plays in HyperFrames on top while the pipe
   );
   await numbered(join(created.path, "a.mp4"), "30");
   await parity(browser, created, 30, [10, 30, 40, 59, 60, 70]);
+});
+
+test("an older drawable plan cannot turn the footage pipeline back on", async ({
+  page,
+  request,
+}, info) => {
+  const created = await project(
+    request,
+    { num: 30, den: 1 },
+    (seconds) =>
+      `<video id="v0" src="a.mp4" muted data-start="0" data-duration="${seconds(110)}" data-track-index="0" style="${fill}"></video>`,
+  );
+  await numbered(join(created.path, "a.mp4"), "30");
+  const base = `/api/cutroom/projects/${created.id}`;
+  const old = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let first = true;
+  await page.route(`**${base}/pipeline`, async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    try {
+      const response = await route.fetch();
+      const { plan } = PipelineResponseSchema.parse(await response.json());
+      expect("drawable" in plan && Object.keys(plan.drawable)).toEqual(["v0"]);
+      old.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+    } catch (error) {
+      old.reject(error);
+      throw error;
+    }
+  });
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "true");
+  });
+  try {
+    await page.goto(`/#project/${created.id}`);
+    await old.promise;
+    const refused = page.waitForEvent("console", {
+      predicate: (message) => message.text().startsWith("[pipeline] off:"),
+    });
+    const source = SourceSchema.parse(
+      await (await request.get(`${base}/source`)).json(),
+    );
+    const saved = await request.put(`${base}/source`, {
+      data: {
+        path: "index.html",
+        expectedVersion: source.version,
+        content: source.content.replace(
+          "</body>",
+          '<script>document.getElementById("v0").style.opacity = "0";</script></body>',
+        ),
+      },
+    });
+    expect(saved.ok(), await saved.text()).toBe(true);
+    await refused;
+    const stage = page.locator(".edit-stage");
+    const picture = page.locator(".edit-picture");
+    const preview = page.frameLocator("iframe[data-live]");
+    await expect(stage).toHaveAttribute("data-pipeline", "off");
+    await expect(preview.locator("#v0")).toHaveCSS("opacity", "0");
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    const expected = await picture.screenshot();
+    const reply = page.waitForResponse((response) =>
+      response.url().endsWith(`${base}/pipeline`),
+    );
+    release.resolve();
+    await (await reply).finished();
+    for (const frame of [10, 20, 30]) {
+      await typeFrame(page, frame, 30);
+      await expect(stage).toHaveAttribute("data-preview-ready");
+    }
+    const actual = await picture.screenshot({
+      path: info.outputPath("after-late-plan.png"),
+    });
+    const [result] = await compare(
+      page,
+      [expected.toString("base64")],
+      [actual.toString("base64")],
+    );
+    expect(result?.difference).toBe(0);
+    await expect(stage).toHaveAttribute("data-pipeline", "off");
+  } finally {
+    release.resolve();
+  }
 });
 
 test("the footage pipeline draws phone and camera footage as HyperFrames does: turned portrait, Android's full-range colour and open GOPs", async ({
