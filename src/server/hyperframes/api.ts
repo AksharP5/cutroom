@@ -357,6 +357,7 @@ export function createHyperframesApi(
         headers: c.req.raw.headers,
         body: JSON.stringify({
           format: input.format,
+          gifLoop: input.format === "gif" ? input.gifLoop : undefined,
           quality: input.quality,
           fps: `${fps.num}/${fps.den}`,
           ...(output.resolution && { resolution: output.resolution }),

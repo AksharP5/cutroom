@@ -6,6 +6,7 @@ import { VariableValuesSchema } from "./variables.ts";
 export const exportFormats = ["mp4", "mov", "webm", "gif"] as const;
 export const ExportFormatSchema = z.enum(exportFormats);
 export type ExportFormat = z.infer<typeof ExportFormatSchema>;
+export const GifLoopSchema = z.number().int().min(0).max(65535);
 /** What each format carries. MOV and WebM keep transparency, for overlays in another editor. */
 export const exportFormatDetails: Record<ExportFormat, string> = {
   mp4: "H.264 / AAC",
@@ -128,6 +129,9 @@ export const ExportStartSchema = ExportDestinationSchema.partial().extend({
   range: z.union([z.enum(["timeline", "marks"]), ExportRangeSchema]).optional(),
   quality: ExportQualitySchema.default("standard"),
   format: ExportFormatSchema.default("mp4"),
+  gifLoop: GifLoopSchema.optional().describe(
+    "GIF loop count. Zero or omitted repeats forever.",
+  ),
   size: ExportSizeSchema.default("project").describe(
     "project renders at the composition's size; 1080p and 4K draw the page at that size in its orientation, so a 4K export of a 1080p project is sharp",
   ),

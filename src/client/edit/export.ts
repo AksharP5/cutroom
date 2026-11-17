@@ -205,6 +205,7 @@ export async function exportProject(
   output: {
     quality: ExportQuality;
     format: ExportFormat;
+    gifLoop?: number;
     fps: Fps;
     size: { width: number; height: number } | null;
     /** HyperFrames' size preset when the export draws at another size than the composition's. */
@@ -290,6 +291,7 @@ export async function exportProject(
             format: output.format,
             quality: output.quality,
             fps: `${output.fps.num}/${output.fps.den}`,
+            gifLoop: output.gifLoop,
             ...(output.resolution && { resolution: output.resolution }),
             ...(composition !== ROOT_COMPOSITION && { composition }),
             ...(Object.keys(output.variables).length && {
