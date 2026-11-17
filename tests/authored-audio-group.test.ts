@@ -221,6 +221,27 @@ test("a stale gain edit cannot change the group a clip just joined", async () =>
   }
 });
 
+test("routing and gain accept the existing authored group ID", async () => {
+  const fixture = await groupFixture();
+  try {
+    const id = "dialogue-" + "a".repeat(201);
+    await fixture.write("index.html", source.replaceAll("dialogue", id));
+    const response = await fixture.edit("index.html", [
+      { type: "routeAudioGroup", clipIds: ["outside"], group: id },
+      { ...groupGain, clipId: "outside", expectedGroupId: id },
+    ]);
+    const body = await response.json();
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    const { timeline } = TimelineViewSchema.parse(body);
+    expect(timeline.authoredAudioGroups).toEqual([{ id, volume: 0.5 }]);
+    expect(
+      timeline.clips.find(({ id }) => id === "outside")?.authoredAudioGroupId,
+    ).toBe(id);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("pasting into another scene does not inherit a generated bus it cannot edit", async () => {
   const fixture = await groupFixture();
   try {

@@ -971,7 +971,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       clipIds,
       group: z
         .union([
-          z.string().min(1).max(200),
+          z.string().min(1),
           z.strictObject({
             label: z.string().trim().min(1).max(120),
             volume: volume.optional(),
