@@ -142,6 +142,7 @@ async function pictures(
   fps: number,
   frames: number[],
   pipeline: boolean,
+  exact = false,
 ) {
   await page.addInitScript((on) => {
     // The sandboxed preview has no storage; only the editor reads the setting.
@@ -159,10 +160,11 @@ async function pictures(
     // holding a clip's transition animation several times over, which composes its opacity.
     await typeFrame(page, frame, fps);
     if (pipeline)
-      await expect(page.locator(".edit-pipeline")).toHaveAttribute(
-        "data-frame",
-        String(frame),
-      );
+      await expect(
+        page.locator(
+          exact ? '.edit-pipeline[data-standin="false"]' : ".edit-pipeline",
+        ),
+      ).toHaveAttribute("data-frame", String(frame));
     await expect(stage).toHaveAttribute("data-preview-ready");
     const shot = await settledShot(page);
     // The reference itself must draw each transition once.
@@ -640,6 +642,53 @@ test("the footage pipeline draws phone and camera footage as HyperFrames does: t
   } finally {
     await context.close();
   }
+});
+
+test("a paused seek shows the leading picture of a 4K open GOP after preparing a later cut", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const created = await project(request, { num: 30, den: 1 }, (seconds) =>
+    [
+      `<video id="first" src="camera.mp4" muted data-start="0" data-duration="${seconds(60)}" data-media-start="0" data-track-index="0" style="${fill}"></video>`,
+      `<video id="later" src="camera.mp4" muted data-start="${seconds(60)}" data-duration="${seconds(18)}" data-media-start="${seconds(100)}" data-track-index="0" style="${fill}"></video>`,
+    ].join("\n"),
+  );
+  await numbered(
+    join(created.path, "camera.mp4"),
+    "30",
+    "3840x2160",
+    undefined,
+    [
+      "-threads",
+      "6",
+      "-preset",
+      "ultrafast",
+      "-g",
+      "30",
+      "-sc_threshold",
+      "0",
+      "-bf",
+      "3",
+      "-x264-params",
+      "open-gop=1:b-pyramid=none:b-adapt=0",
+    ],
+  );
+  // Source frame 29 decodes after keyframe 30, but needs a picture from the preceding GOP.
+  // Frame 57 is the last packet before keyframe 60. Frame 59 needs preroll after that flush.
+  const shots = await pictures(
+    page,
+    created,
+    30,
+    [65, 28, 29, 30, 29, 57, 59],
+    true,
+    true,
+  );
+  const results = await compare(page, shots, shots);
+  expect(results.map(({ numbers }) => numbers[1])).toEqual([
+    105, 28, 29, 30, 29, 57, 59,
+  ]);
 });
 
 test("HDR named only in the bitstream stays with HyperFrames", async ({
