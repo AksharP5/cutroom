@@ -83,6 +83,7 @@ function Timecode({
         aria-label="Current time. Click to type a time."
         title="Type a time"
         hidden={digits !== null}
+        disabled={duration === 0}
         onClick={() => setDigits("")}
       >
         <span ref={quiet} className="timecode-quiet" />
@@ -95,6 +96,7 @@ function Timecode({
           aria-label="Go to time"
           autoFocus
           readOnly
+          disabled={duration === 0}
           value={(timecodeDigits(digits).match(/\d\d/g) ?? []).join(":")}
           onBlur={() => finish(false)}
           onKeyDown={(event) => {
