@@ -16,6 +16,7 @@ import {
   fragmentStart,
   pieceAt,
   pieceSpans,
+  proxySamplesFile,
   streamBoxes,
 } from "./pieces";
 import { mediaSettings } from "../../shared/media";
@@ -321,6 +322,7 @@ try {
       const tick = rational(timeBase, "/");
       // Export, and FFmpeg by default, start the clock at the file's first timestamp.
       const start = Number(probe.format.start_time ?? 0) || 0;
+      const startTicks = Math.sign(start) * Math.round(Math.abs(start) / tick);
       const packets = z
         .string()
         .parse(
@@ -349,9 +351,14 @@ try {
               ([pts, flags]) =>
                 /^-?\d+$/.test(pts ?? "") && !flags?.includes("D"),
             )
-            .map(([pts]) => Number(pts) * tick - start),
+            .map(([pts]) => (Number(pts) - startTicks) * tick),
         ),
       ].sort((a, b) => a - b);
+      const { sampleOffsets, ...plan } = cutPieces(times, 1 / video.fps);
+      const samples = new Float64Array(sampleOffsets.length + times.length);
+      samples.set(sampleOffsets);
+      samples.set(times, sampleOffsets.length);
+      await Bun.write(join(task.directory, proxySamplesFile), samples);
       await Bun.write(
         join(task.directory, "pieces.json"),
         JSON.stringify(
@@ -361,7 +368,7 @@ try {
             audio:
               probe.streams.find((stream) => stream.codec_type === "audio")
                 ?.codec_name ?? null,
-            ...cutPieces(times, 1 / video.fps),
+            ...plan,
           }),
         ),
       );
@@ -375,6 +382,26 @@ try {
         const { first, end } = step;
         const from = first ? pieces.cuts[first - 1] : undefined;
         const to = pieces.cuts[end - 1];
+        const filters = [
+          await colourTags(video),
+          proxyFilter(video),
+          "format=yuv420p",
+        ];
+        if (
+          first === 0 &&
+          pieces.cuts.length &&
+          !sound &&
+          pieces.videoStart > 0
+        ) {
+          // Chromium rebases a video-only HLS stream to its first picture. Hold that
+          // picture at zero. On the first original frame, save the delay tpad added
+          // so every original keeps its presentation time, including on VFR input.
+          const padTicks = `st(0,PTS-round(${pieces.videoStart}/TB))`;
+          filters.push(
+            "tpad=start=1:start_mode=clone",
+            `setpts='if(eq(N,0),0,PTS-if(eq(N,1),${padTicks},ld(0)))'`,
+          );
+        }
         const encoders = {
           nvenc: [
             ...["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq"],
@@ -417,9 +444,8 @@ try {
             "-sn",
             "-dn",
             "-vf",
-            `${await colourTags(video)},${proxyFilter(video)},format=yuv420p`,
-            // Every source frame at its own timestamp, so the preview's frame N is the source's
-            // frame N and export, which reads the source, shows what the preview did.
+            filters.join(","),
+            // Keep every source frame at its own timestamp so the preview and export agree.
             "-fps_mode",
             "passthrough",
             // The source's own clock, so a Matroska file's millisecond times stay as they are.
