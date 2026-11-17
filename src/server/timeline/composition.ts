@@ -50,6 +50,7 @@ import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
   isSubCompositionHost,
+  isTimedElement,
   parseNumeric,
   readClipTiming,
   readMediaOffsetSeconds,
@@ -667,6 +668,13 @@ export function parseComposition(
         }),
     });
   }
+  const groupDeclarations = compositionAudioGroups(root);
+  const authoredAudioGroups = readAuthoredAudioGroups(
+    groupDeclarations,
+    all,
+    clipIds,
+    scope,
+  );
   const managedGroups = new Set(
     managedAudioGroups(root).map((bus) => bus.attrs.id),
   );
@@ -732,6 +740,7 @@ export function parseComposition(
       ...(kind === "element" && { textPreview: firstTextLine(element.text) }),
       ...(authoredGroup &&
         hasAudio && {
+          authoredAudioGroupId: group,
           trackGainWarning: `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`,
         }),
       volume: volume !== null && volume >= 0 ? volume : null,
@@ -823,6 +832,7 @@ export function parseComposition(
       out:
         settings.range.out === null ? null : toFrames(settings.range.out, fps),
     },
+    ...(authoredAudioGroups.length && { authoredAudioGroups }),
     ...(masterFx.length && { masterFx }),
   });
   const parsed: ParsedComposition = {
@@ -871,6 +881,11 @@ export function parseComposition(
 export function timelineContent(timeline: Timeline) {
   return {
     ...timeline,
+    ...(timeline.authoredAudioGroups && {
+      authoredAudioGroups: timeline.authoredAudioGroups.map(
+        ({ sourceRestriction, ...group }) => group,
+      ),
+    }),
     clips: timeline.clips.map(
       ({ sourceRestrictions, variableBindings, ...clip }) => clip,
     ),
@@ -1033,13 +1048,12 @@ function applyEdits(source: string, edits: Edit[]): string {
   return output + source.slice(cursor);
 }
 
-/** Only buses in this composition belong to its tracks, never those inside a scene or clip. */
+const isManagedAudioGroup = (element: SourceElement) =>
+  element.attrs["data-cutroom-track"] !== undefined;
+
 function managedAudioGroups(root: SourceElement): SourceElement[] {
   return root.children.flatMap((element) => {
-    if (
-      element.tag === "hf-audio-group" &&
-      element.attrs["data-cutroom-track"] !== undefined
-    )
+    if (element.tag === "hf-audio-group" && isManagedAudioGroup(element))
       return [element];
     if (
       isSubCompositionHost(element) ||
@@ -1048,6 +1062,66 @@ function managedAudioGroups(root: SourceElement): SourceElement[] {
     )
       return [];
     return managedAudioGroups(element);
+  });
+}
+
+/** Only buses in this composition belong to its timeline. */
+function compositionAudioGroups(root: SourceElement): SourceElement[] {
+  return root.children.flatMap((element) => {
+    if (
+      isSubCompositionHost(element) ||
+      isTimedElement(element) ||
+      element.tag === "template"
+    )
+      return [];
+    if (element.tag === "hf-audio-group") return [element];
+    return compositionAudioGroups(element);
+  });
+}
+
+function readAuthoredAudioGroups(
+  declarations: readonly SourceElement[],
+  all: readonly SourceElement[],
+  clipIds: ReadonlyMap<SourceElement, string>,
+  scope: CompositionScope,
+): NonNullable<Timeline["authoredAudioGroups"]> {
+  const buses = new Map<string, SourceElement>();
+  for (const element of declarations) {
+    const id = element.attrs.id;
+    if (id && !isManagedAudioGroup(element) && !buses.has(id))
+      buses.set(id, element);
+  }
+  if (!buses.size) return [];
+  const duplicates = new Set<string>();
+  const externalMembers = new Set<string>();
+  let hasExternalScene = false;
+  for (const element of all) {
+    const { id, "data-audio-group": group } = element.attrs;
+    if (id && buses.has(id) && buses.get(id) !== element) duplicates.add(id);
+    if (element.attrs["data-composition-src"]) hasExternalScene = true;
+    // The runtime can resolve a member outside this timeline to a bus inside it.
+    if (
+      group &&
+      (element.tag === "audio" || element.tag === "video") &&
+      !clipIds.has(element)
+    )
+      externalMembers.add(group);
+  }
+  return [...buses].map(([id, element]) => {
+    // Match HyperFrames readAudioGroupVolume, including its parseFloat semantics.
+    const gain = Number.parseFloat(element.attrs["data-volume"] ?? "");
+    const sourceRestriction = duplicates.has(id)
+      ? `Audio group ${id} does not have a unique element id. Edit it in the source.`
+      : externalMembers.has(id)
+        ? `Audio group ${id} has members outside this timeline. Edit it in the source.`
+        : scope === "sub-composition" || hasExternalScene
+          ? `External scenes can share audio group ${id}. Edit its gain in the source.`
+          : undefined;
+    return {
+      id,
+      volume: Number.isFinite(gain) ? gain : 1,
+      ...(sourceRestriction && { sourceRestriction }),
+    };
   });
 }
 
@@ -1362,6 +1436,9 @@ export function applyTrackMix(parsed: ParsedComposition): string {
   const used = new Set([
     ...parsed.ids,
     ...timeline.clips.map((clip) => clip.id),
+    ...timeline.clips.flatMap((clip) =>
+      clip.authoredAudioGroupId ? [clip.authoredAudioGroupId] : [],
+    ),
   ]);
   const memberships = new Map<number, string>();
   const inserted: string[] = [];
@@ -1412,7 +1489,7 @@ export function applyTrackMix(parsed: ParsedComposition): string {
     const attrs = parsed.elements.get(clip.id)!.attrs;
     return (
       clip.hasAudio &&
-      !clip.trackGainWarning &&
+      !clip.authoredAudioGroupId &&
       attrs.id &&
       !attrs["data-hf-id"] &&
       attrs["data-audio-group"] !== memberships.get(clip.track)
@@ -1433,7 +1510,7 @@ export function applyTrackMix(parsed: ParsedComposition): string {
   for (const clip of timeline.clips) {
     const element = parsed.elements.get(clip.id)!;
     const changes = clipChanges(clip, clip, element, timeline.fps, false, mix);
-    if (clip.hasAudio && !clip.trackGainWarning) {
+    if (clip.hasAudio && !clip.authoredAudioGroupId) {
       changes.push(["data-audio-group", memberships.get(clip.track)!]);
       if (!element.attrs["data-hf-id"] && identities.has(clip.id))
         changes.push(["data-hf-id", identities.get(clip.id)!]);
@@ -1632,7 +1709,7 @@ function copyMarkup(
     ...attributeEdits(first!, source, [
       ["id", clip.id],
       ["data-hf-id", null],
-      ...(!template.trackGainWarning && template.hasAudio
+      ...(!template.authoredAudioGroupId && template.hasAudio
         ? [["data-audio-group", null] as const]
         : []),
       ...clipChanges(
@@ -2217,6 +2294,31 @@ export function patchComposition(
   }
   for (const [at, texts] of inserts)
     edits.push({ start: at, end: at, text: texts.join("") });
+
+  const groupVolumes = new Map(
+    after.authoredAudioGroups?.map(({ id, volume }) => [id, volume]),
+  );
+  const changedGroups = new Map(
+    before.authoredAudioGroups?.flatMap(({ id, volume, sourceRestriction }) => {
+      const next = groupVolumes.get(id);
+      return !sourceRestriction && next !== undefined && volume !== next
+        ? [[id, next] as const]
+        : [];
+    }),
+  );
+  if (changedGroups.size) {
+    for (const element of compositionAudioGroups(parsed.root)) {
+      const id = element.attrs.id;
+      if (!id || isManagedAudioGroup(element)) continue;
+      const volume = changedGroups.get(id);
+      if (volume === undefined) continue;
+      edits.push(
+        ...attributeEdits(openingTag(spans, element, id), html, [
+          ["data-volume", String(volume)],
+        ]),
+      );
+    }
+  }
 
   const rootChanges: AttributeChange[] = [
     ...(parsed.rootDurationAuthored && after.duration !== before.duration

@@ -112,6 +112,11 @@ export function editReply(
     clips: diff(old.clips, timeline.clips, "id"),
     tracks,
     markers: diff(old.markers, timeline.markers, "id"),
+    authoredAudioGroups: diff(
+      old.authoredAudioGroups ?? [],
+      timeline.authoredAudioGroups ?? [],
+      "id",
+    ),
     ...(JSON.stringify(old.range) !== JSON.stringify(timeline.range) && {
       range: timeline.range,
     }),
