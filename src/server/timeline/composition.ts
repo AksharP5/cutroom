@@ -2169,6 +2169,7 @@ export function patchComposition(
   clipboards: ReadonlyMap<string, ParsedComposition> = new Map(),
   /** The compositions new hosts play, by `src`. */
   hosted: ReadonlyMap<string, HostedComposition> = new Map(),
+  /** Export-colour stills by their authored preview `src`. */
   freezeExports: ReadonlyMap<string, string> = new Map(),
 ): string {
   const { html, timeline: before } = parsed;
@@ -2319,7 +2320,7 @@ export function patchComposition(
           mix,
           transitionChanges({}, clip, under(clip.id), fps),
           attrs,
-          freezeExports.get(origin.freeze.path),
+          freezeExports.get(clip.src!),
         )}`,
       ]);
       continue;
@@ -2342,6 +2343,8 @@ export function patchComposition(
                   fps,
                   mix,
                   transitionChanges({}, clip, under(clip.id), fps),
+                  undefined,
+                  freezeExports.get(origin.insert.src),
                 )
         }`,
       ]);

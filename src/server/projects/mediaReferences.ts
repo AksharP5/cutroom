@@ -7,12 +7,11 @@ import {
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
 
-/** Rewrite only paths that resolve to the renamed file, retaining their relative prefix. */
+/** Rewrite paths that resolve to renamed files, retaining their relative prefixes. */
 export function renameReferences(
   source: string,
   file: string,
-  from: string,
-  to: string,
+  names: ReadonlyMap<string, string>,
   files: Set<string>,
 ) {
   const path = (value: string, url: boolean) => {
@@ -23,7 +22,8 @@ export function renameReferences(
       files.has(local) || /^[./]/.test(value)
         ? local
         : localMediaPath("index.html", value);
-    if (resolved !== from) return value;
+    const to = resolved === null ? undefined : names.get(resolved);
+    if (to === undefined) return value;
     const pathname = value.split(/[?#]/, 1)[0]!;
     const name = posix.basename(to);
     const replacement =

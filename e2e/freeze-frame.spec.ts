@@ -318,7 +318,7 @@ async function exportedSwatches(path: string, time: number) {
   });
 }
 
-test("a frozen swatch matches ordinary video in direct and captured MP4 exports", async ({
+test("original and reused frozen swatches match video in preview and both export paths", async ({
   page,
   request,
   baseURL,
@@ -437,12 +437,40 @@ test("a frozen swatch matches ordinary video in direct and captured MP4 exports"
   await expect(page.locator(".edit-stage")).toHaveAttribute(
     "data-preview-ready",
   );
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  const untaggedStill = media
+    .getByRole("listitem")
+    .filter({ hasText: "still0.png" });
+  await expect(untaggedStill).toHaveCount(1);
+  await seek(page, "00000108");
+  await untaggedStill.dblclick();
+  await page.keyboard.press("i");
+  await page.keyboard.press("Shift+ArrowRight");
+  await page.keyboard.press("o");
+  await page.keyboard.press("F10");
+  const read = async () =>
+    TimelineViewSchema.parse(
+      await (
+        await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+      ).json(),
+    ).timeline;
+  // The 1.5 s swatch below falls inside the Media copy, between pieces of the original freeze.
+  await expect
+    .poll(async () => (await read()).clips.find(({ start }) => start === 38))
+    .toMatchObject({
+      src: "assets/freeze/still0.png",
+      duration: 31,
+    });
+  await seek(page, "00000115");
+  await page.getByRole("button", { name: "Script", exact: true }).click();
+  await page.screenshot({ path: info.outputPath("reused-still-editor.png") });
   const preview = [];
   for (const [i, [source]] of sources.entries()) {
     const expected = previewReference[i]!.swatches;
     const samples = [];
     for (const timecode of [
       `00000${3 * i}07`,
+      `00000${3 * i + 1}00`,
       `00000${3 * i + 1}15`,
       `00000${3 * i + 2}23`,
     ]) {
@@ -476,7 +504,7 @@ test("a frozen swatch matches ordinary video in direct and captured MP4 exports"
     for (const [i, [source]] of sources.entries()) {
       const expected = await exportedSwatches(reference, i + 0.5);
       const samples = [];
-      for (const offset of [0.25, 1.5, 2.75]) {
+      for (const offset of [0.25, 1, 1.5, 2.75]) {
         const pixels = await exportedSwatches(path, i * 3 + offset);
         samples.push(pixels);
         expect(

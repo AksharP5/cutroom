@@ -211,24 +211,29 @@ export function createProjectRoutes(
   api.post("/projects/:id/media/remove", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(MediaRemoveSchema, await c.req.json());
-    const uses = await mediaUses(project, input.path);
-    if (uses && !input.confirmUsed)
-      return c.json(
-        {
-          error: `${input.path} has ${uses} ${uses === 1 ? "use" : "uses"} in the project. Removing it leaves existing clips and references offline until the file is back. Send confirmUsed: true to remove it anyway.`,
-          uses,
-        },
-        409,
-      );
-    return c.json({
-      ...(await reviews.editAssets(
-        project,
-        c.req.header(AGENT_HEADER),
-        () => removeMedia(store, project, input, agentWho(c, project)),
-        { sources: true },
-      )),
-      uses,
-    });
+    return reviews.editAssets(
+      project,
+      c.req.header(AGENT_HEADER),
+      async () => {
+        const uses = await mediaUses(project, input.path);
+        if (uses && !input.confirmUsed)
+          return c.json(
+            {
+              error: `${input.path} has ${uses} ${uses === 1 ? "use" : "uses"} in the project. Removing it leaves existing clips and references offline until the file is back. Send confirmUsed: true to remove it anyway.`,
+              uses,
+            },
+            409,
+          );
+        const removed = await removeMedia(
+          store,
+          project,
+          input,
+          agentWho(c, project),
+        );
+        return c.json({ ...removed, uses });
+      },
+      { sources: true },
+    );
   });
   api.get("/projects/:id/source", async (c) =>
     c.json(

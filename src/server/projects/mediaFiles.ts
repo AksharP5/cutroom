@@ -1,35 +1,58 @@
-import { lstat, mkdir, readFile, readdir, rename } from "node:fs/promises";
-import { dirname, extname, join, posix } from "node:path";
+import { renameSync } from "node:fs";
+import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
+import { dirname, extname, join, posix, relative } from "node:path";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
-import { MEDIA_TRASH, inMediaTrash, mediaKind } from "../../shared/media";
+import {
+  FREEZE_DIR,
+  FREEZE_EXPORT_DIR,
+  MEDIA_TRASH,
+  freezeExportPath,
+  inFreezeAssets,
+  inMediaTrash,
+  isFreezeExport,
+  mediaKind,
+} from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { compositionFiles } from "./media";
-import { isMissing, projectWritePath } from "./path";
+import { isMissing, projectStatePath, projectWritePath } from "./path";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
 import { renameReferences } from "./mediaReferences";
 import { moveSourceMarks } from "./view";
+import { freezeCompanion } from "./freezeAssets";
 
 const SOURCE_BYTES = 10 * 1024 * 1024;
 
-/** A media file the panel lists: a regular file of a known kind, outside the trash. */
+/** Resolve a still's export path to the same Media item as its preview path. */
 async function mediaFile(project: Project, raw: string) {
-  const path = posix.normalize(raw.replaceAll("\\", "/"));
+  const requested = posix.normalize(raw.replaceAll("\\", "/"));
+  const path = isFreezeExport(requested)
+    ? `${FREEZE_DIR}/${requested.slice(FREEZE_EXPORT_DIR.length + 1)}`
+    : requested;
+  const companion = await freezeCompanion(project, path);
+  if (requested !== path && companion?.path !== requested)
+    throw new HttpError(404, "Freeze frame not found.");
   if (!mediaKind(path) || inMediaTrash(path))
     throw new HttpError(400, "Choose a video, audio, or image file.");
   const absolute = await projectWritePath(project, path, { sourceOnly: false });
+  const canonical = relative(await realpath(project.path), absolute).replaceAll(
+    "\\",
+    "/",
+  );
+  if (canonical !== path && (inFreezeAssets(path) || inFreezeAssets(canonical)))
+    throw new HttpError(403, "Use the freeze frame's Media path.");
   // The file itself moves, never the target of a link.
   if (!(await lstat(join(project.path, path))).isFile())
     throw new HttpError(400, "Choose a video, audio, or image file.");
-  return { path, absolute, name: posix.basename(path) };
+  return { path, absolute, name: posix.basename(path), companion };
 }
 
 const exists = (path: string) =>
@@ -43,7 +66,9 @@ const exists = (path: string) =>
 
 /** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
-  const { path } = await mediaFile(project, raw);
+  const { path, companion } = await mediaFile(project, raw);
+  const usesFile = (paths: Set<string> | undefined) =>
+    paths?.has(path) || (companion && paths?.has(companion.path));
   let uses = 0;
   for (const composition of await compositionFiles(project)) {
     const { references } = await compositionVersions(project, composition);
@@ -56,19 +81,18 @@ export async function mediaUses(project: Project, raw: string) {
         { scope: compositionScope(composition) },
       );
       for (const clip of timeline.clips) {
-        if (references.get(clip.id)?.has(path))
-          owners.add(clip.link ?? clip.id);
+        if (usesFile(references.get(clip.id))) owners.add(clip.link ?? clip.id);
       }
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
     }
-    uses += Math.max(owners.size, references.get(null)?.has(path) ? 1 : 0);
+    uses += Math.max(owners.size, usesFile(references.get(null)) ? 1 : 0);
   }
   return uses;
 }
 
 /** Read only editable sources, resolving references against each source's directory. */
-async function referenceEdits(project: Project, from: string, to: string) {
+async function referenceEdits(project: Project, names: Map<string, string>) {
   const sources: { path: string; absolute: string; before: string }[] = [];
   const files = new Set<string>();
   const directories = [""];
@@ -99,14 +123,14 @@ async function referenceEdits(project: Project, from: string, to: string) {
   }
   const edits: FileMutationInput[] = [];
   for (const { path, absolute, before } of sources) {
-    const after = renameReferences(before, path, from, to, files);
+    const after = renameReferences(before, path, names, files);
     if (after === before) continue;
-    const sourceFile = path === from ? to : path;
+    const sourceFile = names.get(path) ?? path;
     edits.push({
       sourceFile,
       absPath:
-        path === from
-          ? await projectWritePath(project, to, { allowMissing: true })
+        sourceFile !== path
+          ? await projectWritePath(project, sourceFile, { allowMissing: true })
           : absolute,
       before,
       after,
@@ -114,6 +138,35 @@ async function referenceEdits(project: Project, from: string, to: string) {
     });
   }
   return edits;
+}
+
+function moveFiles(
+  moves: { absolute: string; destination: string }[],
+  writeSources?: () => void,
+) {
+  const moved: typeof moves = [];
+  try {
+    for (const move of moves) {
+      renameSync(move.absolute, move.destination);
+      moved.push(move);
+    }
+    writeSources?.();
+  } catch (error) {
+    const failures: unknown[] = [];
+    for (const { absolute, destination } of moved.reverse()) {
+      try {
+        renameSync(destination, absolute);
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(
+        [error, ...failures],
+        "Could not roll back the media move.",
+      );
+    throw error;
+  }
 }
 
 /** Renames a media file in its folder and points every source reference at the new name. */
@@ -135,7 +188,14 @@ export async function renameMedia(
     allowMissing: true,
     sourceOnly: false,
   });
-  if (await exists(absolute))
+  const exportPath = freezeExportPath(path);
+  const exportAbsolute = exportPath
+    ? await projectStatePath(project, exportPath, true)
+    : undefined;
+  if (
+    (await exists(absolute)) ||
+    (exportAbsolute && (await exists(exportAbsolute)))
+  )
     throw new HttpError(
       409,
       `${input.name} already exists in this folder. Choose another name.`,
@@ -144,15 +204,17 @@ export async function renameMedia(
     project,
     `Rename ${file.name} to ${input.name}`,
     async () => {
-      const edits = await referenceEdits(project, file.path, path);
-      await rename(file.absolute, absolute);
-      try {
-        store.writeFiles(project, edits);
-      } catch (error) {
-        // A source changed under the rewrite: leave the project as it was.
-        await rename(absolute, file.absolute);
-        throw error;
+      const names = new Map([[file.path, path]]);
+      const moves = [{ absolute: file.absolute, destination: absolute }];
+      if (file.companion && exportPath && exportAbsolute) {
+        names.set(file.companion.path, exportPath);
+        moves.push({
+          absolute: file.companion.absolute,
+          destination: exportAbsolute,
+        });
       }
+      const edits = await referenceEdits(project, names);
+      moveFiles(moves, () => store.writeFiles(project, edits));
       await moveSourceMarks(project, file.path, path);
       return { path, sources: edits.map((edit) => edit.sourceFile) };
     },
@@ -161,8 +223,7 @@ export async function renameMedia(
 }
 
 /**
- * Moves a media file into the project's trash folder. History sees one move between two tracked
- * paths, so undo moves the file back, including video and audio it never keeps a copy of.
+ * Moves a Media item into the project's trash in one history step, including its export PNG.
  */
 export async function removeMedia(
   store: ProjectStore,
@@ -178,14 +239,29 @@ export async function removeMedia(
       const extension = extname(file.name);
       const stem = file.name.slice(0, file.name.length - extension.length);
       for (let copy = 1; ; copy++) {
-        const trash = `${MEDIA_TRASH}/${stem}${copy === 1 ? "" : ` ${copy}`}${extension}`;
+        const name = `${stem}${copy === 1 ? "" : ` ${copy}`}${extension}`;
+        const trash = `${MEDIA_TRASH}/${name}`;
         const absolute = await projectWritePath(project, trash, {
           allowMissing: true,
           sourceOnly: false,
         });
         if (await exists(absolute)) continue;
-        await mkdir(dirname(absolute), { recursive: true });
-        await rename(file.absolute, absolute);
+        const moves = [{ absolute: file.absolute, destination: absolute }];
+        if (file.companion) {
+          const destination = await projectWritePath(
+            project,
+            `${MEDIA_TRASH}/${FREEZE_EXPORT_DIR}/${name}`,
+            {
+              allowMissing: true,
+              sourceOnly: false,
+            },
+          );
+          if (await exists(destination)) continue;
+          moves.push({ absolute: file.companion.absolute, destination });
+        }
+        for (const { destination } of moves)
+          await mkdir(dirname(destination), { recursive: true });
+        moveFiles(moves);
         return { path: file.path, trash };
       }
     },

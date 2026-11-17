@@ -8,6 +8,7 @@ import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { isMissing, projectPath, readSource } from "./store";
 import { HttpError } from "../../shared/errors";
+import { freezeExportSource } from "../hyperframes/freezeSources";
 
 export type ClipVersions = Map<string | null, string>;
 export const missingSignature = "v3:missing";
@@ -62,6 +63,8 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
           : id;
         for (const name of ["src", "poster"])
           if (element.attrs[name]) add(target, element.attrs[name]);
+        if (element.tag === "img" && element.attrs[freezeExportSource])
+          add(target, element.attrs[freezeExportSource]);
         for (const candidate of (element.attrs.srcset ?? "").split(",")) {
           const url = candidate.trim().split(/\s+/)[0];
           if (url) add(target, url);

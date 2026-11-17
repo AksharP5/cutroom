@@ -22,6 +22,7 @@ import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
+import { encodeUrlPath } from "@hyperframes/parsers";
 import { HttpError } from "../../shared/errors";
 import type { Project, ProjectSummary } from "../../shared/project";
 import {
@@ -57,6 +58,7 @@ import { parseInput } from "../projects/routes";
 import { isMissing, readSource } from "../projects/store";
 import {
   STILL_SECONDS,
+  isFreezeExport,
   stillMediaExtensions,
   localMediaPath,
   sourcePath,
@@ -78,6 +80,7 @@ import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
+import { freezeCompanion } from "../projects/freezeAssets";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -391,19 +394,46 @@ export function createTimelineRoutes(
       [...freezes.values()],
       lengths,
     );
+    const generated = new Map(
+      frozen.map(({ frame, exportPath }) => [frame.path, exportPath]),
+    );
+    const exportSrc = (path: string) =>
+      encodeUrlPath(sourcePath(composition, path));
+    const freezeExports = new Map<string, string>();
+    for (const { frame, exportPath } of frozen) {
+      if (exportPath)
+        freezeExports.set(
+          sourcePath(composition, frame.path),
+          exportSrc(exportPath),
+        );
+    }
+    const imageSources = new Set(
+      batch.commands.flatMap((command) =>
+        command.type === "insert" && command.clip.kind === "image"
+          ? [command.clip.src]
+          : [],
+      ),
+    );
+    for (const src of imageSources) {
+      const path = localMediaPath(composition, src);
+      if (path === null) continue;
+      if (isFreezeExport(path))
+        throw new TimelineError(
+          "unsupported",
+          "Insert the freeze frame from Media to keep its preview and export together.",
+        );
+      const exported = generated.has(path)
+        ? generated.get(path)
+        : (await freezeCompanion(project, path))?.path;
+      if (exported) freezeExports.set(src, exportSrc(exported));
+    }
     const html = patchComposition(
       current.parsed,
       timeline,
       origins,
       snapshots,
       hosted,
-      new Map(
-        frozen.flatMap(({ frame, exportPath }) =>
-          exportPath
-            ? [[frame.path, sourcePath(composition, exportPath)] as const]
-            : [],
-        ),
-      ),
+      freezeExports,
     );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.

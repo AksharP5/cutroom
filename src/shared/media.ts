@@ -44,6 +44,21 @@ export const MEDIA_TRASH = "trash";
 export const inMediaTrash = (path: string) =>
   path === MEDIA_TRASH || path.startsWith(`${MEDIA_TRASH}/`);
 
+export const FREEZE_DIR = "assets/freeze";
+export const FREEZE_EXPORT_DIR = `${FREEZE_DIR}/export`;
+export const inFreezeAssets = (path: string) =>
+  path === FREEZE_DIR || path.startsWith(`${FREEZE_DIR}/`);
+export const isFreezeExport = (path: string) =>
+  path.startsWith(`${FREEZE_EXPORT_DIR}/`);
+
+/** A generated still may have a second PNG with the same name for export. */
+export function freezeExportPath(path: string) {
+  if (!path.startsWith(`${FREEZE_DIR}/`)) return;
+  const name = path.slice(FREEZE_DIR.length + 1);
+  if (!name.includes("/") && /\.png$/i.test(name))
+    return `${FREEZE_EXPORT_DIR}/${name}`;
+}
+
 const mediaPath = z
   .string()
   .min(1)

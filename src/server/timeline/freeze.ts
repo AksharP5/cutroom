@@ -8,10 +8,10 @@ import {
 import type { VideoMetadata } from "@hyperframes/engine";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { mkdir, stat, unlink } from "node:fs/promises";
-import { basename, dirname, posix } from "node:path";
+import { dirname } from "node:path";
 import { HttpError } from "../../shared/errors";
 import { frameSeek, presentationTimeTolerance } from "../../shared/frames";
-import { fileFingerprint } from "../../shared/media";
+import { fileFingerprint, freezeExportPath } from "../../shared/media";
 import { TimelineError } from "../../shared/timeline/errors";
 import type { ClipOrigin } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
@@ -49,7 +49,7 @@ export async function prepareFrozenFrames(
       const exported = chromeSdrColourFilters(metadata);
       const exportPath = Bun.deepEquals(preview, exported)
         ? undefined
-        : posix.join(posix.dirname(frame.path), "export", basename(frame.path));
+        : freezeExportPath(frame.path);
       return { frame, path, version, metadata, preview, exported, exportPath };
     }),
   );

@@ -33,7 +33,7 @@ import {
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
-import { localMediaPath, sourcePath } from "../media";
+import { FREEZE_DIR, localMediaPath, sourcePath } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import {
   moveKeyframe,
@@ -604,7 +604,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       const tracks = new Set(linked.map((clip) => clip.track));
       const duration = Math.max(1, Math.round((2 * fps.num) / fps.den));
       const id = command.id ? claim(command.id) : mint.name("freeze", null);
-      const path = `assets/freeze/${id}.png`;
+      const path = `${FREEZE_DIR}/${id}.png`;
       onCreate(id, {
         freeze: {
           clipId: video.id,
