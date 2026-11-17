@@ -7,6 +7,7 @@ import {
   rewriteSrcsetUrls,
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
+import { freezeExportSource } from "../hyperframes/freezeSources";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import {
@@ -1820,77 +1821,58 @@ function hostMarkup(
 const fittedMedia =
   "position:absolute;inset:0;width:100%;height:100%;object-fit:contain";
 
-function frozenMarkup(
+function insertMarkup(
   clip: Clip,
-  attrs: SourceElement["attrs"],
+  input: Pick<InsertClip, "src" | "muted">,
   fps: Fps,
   mix: TrackMix,
   transitions: AttributeChange[],
-) {
+  template?: SourceElement["attrs"],
+  exportSrc?: string,
+): string {
+  const authoredStyle = template
+    ? template.style
+    : clip.kind === "video" || clip.kind === "image"
+      ? fittedMedia
+      : undefined;
   const before = clipStyle({
-    ...readClipStyle(attrs.style),
-    style: readElementStyle(attrs.style),
+    ...readClipStyle(authoredStyle),
+    style: readElementStyle(authoredStyle),
   });
-  const after = clipStyle(clip);
   const styleChanges = Object.fromEntries(
-    Object.entries(after).filter(
+    Object.entries(clipStyle(clip)).filter(
       ([key, value]) => before[key as keyof typeof before] !== value,
     ),
   );
   const style = Object.keys(styleChanges).length
-    ? writeClipStyle(attrs.style, styleChanges)
-    : attrs.style;
-  const styleClass = new Set((attrs.class ?? "").split(/\s+/).filter(Boolean));
-  styleClass.add("clip");
-  const hidden = mix.hidden.has(clip.track);
+    ? writeClipStyle(authoredStyle, styleChanges)
+    : authoredStyle;
+  const classes = new Set((template?.class ?? "").split(/\s+/).filter(Boolean));
+  if (clip.kind === "image") classes.add("clip");
   const inherited = [
     "width",
     "height",
     "data-color-grading",
     "data-color-group",
   ];
-  return `<img${attributeMarkup([
-    ["id", clip.id],
-    ["class", [...styleClass].join(" ")],
-    ["src", clip.src!],
-    ["alt", ""],
-    ["data-start", String(toSeconds(clip.start, fps))],
-    ["data-duration", String(toSeconds(clip.duration, fps))],
-    ["data-track-index", String(clip.track)],
-    ...(clip.label === null
-      ? []
-      : [["data-timeline-label", clip.label] as const]),
-    ...(clip.link ? [["data-link", clip.link] as const] : []),
-    ...(!clip.enabled || hidden ? [["data-hidden", ""] as const] : []),
-    ...(clip.enabled && hidden
-      ? [["data-cutroom-track-hidden", ""] as const]
-      : []),
-    ...(style ? [["style", style] as const] : []),
-    ...inherited.flatMap((name) =>
-      attrs[name] === undefined ? [] : [[name, attrs[name]] as const],
-    ),
-    ...positionAttributes(attrs, clip).filter(([, value]) => value !== null),
-    ...transitions.filter(([, value]) => value !== null),
-  ])}>`;
-}
-
-function insertMarkup(
-  clip: Clip,
-  input: InsertClip,
-  fps: Fps,
-  mix: TrackMix,
-  transitions: AttributeChange[],
-): string {
+  const keyframes = keyframesAttribute(clip.keyframes, fps);
   const attributes: AttributeChange[] = [
     ["id", clip.id],
-    ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
+    ...(classes.size ? [["class", [...classes].join(" ")] as const] : []),
     ["src", input.src],
+    ...(exportSrc ? [[freezeExportSource, exportSrc] as const] : []),
     ...(clip.kind === "voiceover"
       ? [["data-cutroom-kind", "voiceover"] as const]
       : []),
-    ...(clip.kind === "video" || clip.kind === "image"
-      ? [["style", fittedMedia] as const]
-      : []),
+    ...(style ? [["style", style] as const] : []),
+    ...inherited.flatMap((name) => {
+      const value = template?.[name];
+      return value === undefined ? [] : [[name, value] as const];
+    }),
+    ...positionAttributes(template ?? {}, clip).filter(
+      ([, value]) => value !== null,
+    ),
+    ...(keyframes ? [[KEYFRAMES_ATTRIBUTE, keyframes] as const] : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
@@ -2115,6 +2097,17 @@ function managedStyleEdits(
   return [{ start, end: start, text: `${style}\n` }];
 }
 
+/** The authored clip after which a new piece or still is inserted. */
+function sourceAnchor(
+  origin: ClipOrigin,
+  origins: ReadonlyMap<string, ClipOrigin>,
+) {
+  if ("copyOf" in origin) return origin.copyOf;
+  if (!("freeze" in origin)) return;
+  const video = origins.get(origin.freeze.clipId);
+  return video && "copyOf" in video ? video.copyOf : origin.freeze.clipId;
+}
+
 /**
  * Which edges of a dissolve draw under their partner. The clip later in the document is drawn on
  * top and fades; new clips go after every existing one, and a piece right after its source clip.
@@ -2128,9 +2121,8 @@ function dissolveLayers(
   const position = (id: string): number => {
     const origin = origins.get(id);
     if (existing.has(id)) return parsed.elements.get(id)!.start;
-    return origin && "copyOf" in origin
-      ? position(origin.copyOf) + 0.5
-      : Infinity;
+    const anchor = origin && sourceAnchor(origin, origins);
+    return anchor && existing.has(anchor) ? position(anchor) + 0.5 : Infinity;
   };
   const above = (a: Clip, b: Clip) =>
     position(a.id) - position(b.id) || a.start - b.start;
@@ -2177,6 +2169,7 @@ export function patchComposition(
   clipboards: ReadonlyMap<string, ParsedComposition> = new Map(),
   /** The compositions new hosts play, by `src`. */
   hosted: ReadonlyMap<string, HostedComposition> = new Map(),
+  freezeExports: ReadonlyMap<string, string> = new Map(),
 ): string {
   const { html, timeline: before } = parsed;
   const { fps } = before;
@@ -2302,8 +2295,7 @@ export function patchComposition(
     if ("freeze" in origin) {
       const { clipId } = origin.freeze;
       const videoOrigin = origins.get(clipId);
-      const sourceId =
-        videoOrigin && "copyOf" in videoOrigin ? videoOrigin.copyOf : clipId;
+      const sourceId = sourceAnchor(origin, origins)!;
       const template = parsed.elements.get(sourceId);
       const snapshot =
         videoOrigin && "clipboardId" in videoOrigin
@@ -2320,7 +2312,15 @@ export function patchComposition(
         snapshot?.attrs ?? { style: fittedMedia };
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${indent}${frozenMarkup(clip, attrs, fps, mix, transitionChanges({}, clip, under(clip.id), fps))}`,
+        `\n${indent}${insertMarkup(
+          elementClip(clip, fps),
+          { src: clip.src!, muted: false },
+          fps,
+          mix,
+          transitionChanges({}, clip, under(clip.id), fps),
+          attrs,
+          freezeExports.get(origin.freeze.path),
+        )}`,
       ]);
       continue;
     }
@@ -2472,9 +2472,13 @@ export function rebaseClipboard(
   for (const element of descendants(parsed.roots, true)) {
     const changes: AttributeChange[] = [];
     for (const [name, value] of Object.entries(element.attrs)) {
-      const next = ["src", "poster", "href", "data-composition-src"].includes(
-        name,
-      )
+      const next = [
+        "src",
+        "poster",
+        "href",
+        "data-composition-src",
+        freezeExportSource,
+      ].includes(name)
         ? rewrite(value)
         : name === "srcset"
           ? rewriteSrcsetUrls(value, rewrite)

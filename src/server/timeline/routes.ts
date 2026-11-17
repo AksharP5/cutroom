@@ -59,6 +59,7 @@ import {
   STILL_SECONDS,
   stillMediaExtensions,
   localMediaPath,
+  sourcePath,
 } from "../../shared/media";
 import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
 import { projectPath, projectWritePath } from "../projects/path";
@@ -76,7 +77,7 @@ import {
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
-import { saveFrozenFrames } from "./freeze";
+import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -385,12 +386,24 @@ export function createTimelineRoutes(
           : [];
       }),
     );
+    const frozen = await prepareFrozenFrames(
+      project,
+      [...freezes.values()],
+      lengths,
+    );
     const html = patchComposition(
       current.parsed,
       timeline,
       origins,
       snapshots,
       hosted,
+      new Map(
+        frozen.flatMap(({ frame, exportPath }) =>
+          exportPath
+            ? [[frame.path, sourcePath(composition, exportPath)] as const]
+            : [],
+        ),
+      ),
     );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
@@ -501,24 +514,19 @@ export function createTimelineRoutes(
             });
         }
         // Persist inferred tracks too, before their last source clip can disappear on the next read.
-        await saveFrozenFrames(
-          project,
-          [...freezes.values()],
-          lengths,
-          async () => {
-            if (
-              !Bun.deepEquals(
-                settings,
-                timelines[composition] ?? emptyTimelineSettings(),
-              )
-            ) {
-              if (Bun.deepEquals(settings, emptyTimelineSettings()))
-                delete timelines[composition];
-              else timelines[composition] = settings;
-              await store.writeDocument(project, document, files);
-            } else if (files.length) store.writeFiles(project, files);
-          },
-        );
+        await saveFrozenFrames(project, frozen, async () => {
+          if (
+            !Bun.deepEquals(
+              settings,
+              timelines[composition] ?? emptyTimelineSettings(),
+            )
+          ) {
+            if (Bun.deepEquals(settings, emptyTimelineSettings()))
+              delete timelines[composition];
+            else timelines[composition] = settings;
+            await store.writeDocument(project, document, files);
+          } else if (files.length) store.writeFiles(project, files);
+        });
         return {
           composition,
           revision: revisionOf(

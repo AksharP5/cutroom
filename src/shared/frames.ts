@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Seconds of floating-point slack when comparing a seek to a presentation timestamp. */
+export const presentationTimeTolerance = 1e-6;
+
 /**
  * Where export puts a video's frames: each frame's time is snapped to `start + k / rate`, which
  * undoes a container's rounding (Matroska and OBS's MP4s keep whole milliseconds, so a 60 fps

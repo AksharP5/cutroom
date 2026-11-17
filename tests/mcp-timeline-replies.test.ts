@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -42,6 +42,7 @@ async function connect() {
   const read = async (args: Record<string, unknown> = {}) =>
     TimelineViewSchema.parse(await result("timeline_read", args));
   return {
+    client,
     result,
     read,
     project,
@@ -78,6 +79,28 @@ test("timeline_edit adds a freeze clip with its PNG through the typed MCP comman
       `<main data-composition-id="main" data-width="96" data-height="54" data-fps="30" data-duration="2"><video id="picture" src="source.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="object-fit:cover"></video></main>`,
     );
     const before = await mcp.read();
+    // The export variant is written second. A collision must leave the HTML and
+    // the preview asset untouched, and keep the file the edit did not create.
+    const freezeDir = join(mcp.project.path, "assets/freeze");
+    await mkdir(join(freezeDir, "export"), { recursive: true });
+    const taken = join(freezeDir, "export/taken.png");
+    await writeFile(taken, "existing file");
+    const collision = await mcp.client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: mcp.project.id,
+        expectedRevision: before.revision,
+        commands: [{ type: "freeze", clipId: "picture", at: 24, id: "taken" }],
+      },
+    });
+    expect(collision.isError).toBe(true);
+    expect(JSON.stringify(collision.content)).toContain(
+      "already exists at the freeze frame",
+    );
+    expect(await mcp.read()).toEqual(before);
+    expect(await Bun.file(join(freezeDir, "taken.png")).exists()).toBe(false);
+    expect(await Bun.file(taken).text()).toBe("existing file");
+
     const edited = TimelineViewSchema.parse(
       await mcp.result("timeline_edit", {
         expectedRevision: before.revision,
@@ -110,6 +133,91 @@ test("timeline_edit adds a freeze clip with its PNG through the typed MCP comman
         join(mcp.project.path, "assets/freeze/still.png"),
       ).exists(),
     ).toBe(true);
+  } finally {
+    await mcp.close();
+  }
+});
+
+test("timeline_edit holds VFR predecessors and the final picture across a longer audio stream", async () => {
+  const mcp = await connect();
+  try {
+    const project = mcp.project.path;
+    const ffmpeg = (...args: string[]) => {
+      const child = Bun.spawnSync(["ffmpeg", "-v", "error", ...args]);
+      expect(child.stderr.toString()).toBe("");
+      expect(child.exitCode).toBe(0);
+      return child.stdout;
+    };
+    for (const lead of [0, 0.2]) {
+      ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "color=red:s=32x32:r=50:d=0.1",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=d=1",
+        "-vf",
+        `drawbox=c=blue:t=fill:enable=gte(n\\,3),select=eq(n\\,0)+eq(n\\,3),setpts=PTS+${lead}/TB`,
+        "-fps_mode",
+        "vfr",
+        "-c:v",
+        "libx264",
+        "-g",
+        "1",
+        "-c:a",
+        "aac",
+        join(project, `vfr-${lead}.mp4`),
+      );
+    }
+    const cases = [
+      { media: 0, offset: 0.03998, colour: "red" },
+      { media: 0.2, offset: 0.23998, colour: "red" },
+      { media: 0.2, offset: 0.24, colour: "blue" },
+      { media: 0.2, offset: 0.68, colour: "blue" },
+    ];
+    await writeFile(
+      join(project, "index.html"),
+      `<main data-composition-id="main" data-width="32" data-height="32" data-fps="50" data-duration="1">
+        ${cases
+          .map(
+            ({ media, offset }, index) =>
+              `<video id="v${index}" src="vfr-${media}.mp4" muted data-start="0" data-duration="0.24" data-media-start="${offset}" data-track-index="${index}"></video>`,
+          )
+          .join("")}
+      </main>`,
+    );
+    const before = await mcp.read();
+    await mcp.result("timeline_edit", {
+      expectedRevision: before.revision,
+      commands: cases.map((_, index) => ({
+        type: "freeze",
+        clipId: `v${index}`,
+        at: 1,
+        id: `still${index}`,
+      })),
+    });
+    expect(
+      (await mcp.read()).timeline.clips.filter(({ kind }) => kind === "image"),
+    ).toHaveLength(cases.length);
+    for (const [{ colour }, index] of cases.map(
+      (item, index) => [item, index] as const,
+    )) {
+      const [red, , blue] = ffmpeg(
+        "-i",
+        join(project, `assets/freeze/still${index}.png`),
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "rgb24",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+      );
+      expect(colour === "red" ? red : blue).toBeGreaterThan(240);
+      expect(colour === "red" ? blue : red).toBeLessThan(15);
+    }
   } finally {
     await mcp.close();
   }

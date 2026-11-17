@@ -19,6 +19,7 @@ import type { RenderRequestOptions } from "@hyperframes/producer";
 import { browserExecutable } from "./render";
 import { planCaptureBrowsers } from "./exportMemory";
 import { planDirectExport } from "./directPlan";
+import { useFreezeExportSources } from "./freezeSources";
 import { placeStills } from "./directStill";
 import {
   browserTempRoot,
@@ -163,14 +164,15 @@ async function directPlan(
   }
   const path = join(options.project.dir, entry);
   // Without the file there is nothing to plan; frame capture reports the missing entry itself.
-  const html =
+  const source =
     sources?.[path] ??
     (await readFile(path, "utf8").catch((error: unknown) => {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
         return undefined;
       throw error;
     }));
-  if (html === undefined) return undefined;
+  if (source === undefined) return undefined;
+  const html = useFreezeExportSources(source);
   const planned = planDirectExport(html, options.fps, output?.range ?? null);
   const plan =
     "reason" in planned

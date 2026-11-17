@@ -1,3 +1,4 @@
+import { presentationTimeTolerance } from "../../shared/frames";
 import { LIMITS } from "./mp4";
 import type { ReadRange, VideoTrack } from "./mp4";
 
@@ -217,7 +218,8 @@ export class SourceDecoder {
     if (time < samples[shown[0]!]!.time) return 0;
     while (low < high) {
       const middle = (low + high + 1) >> 1;
-      if (samples[shown[middle]!]!.time <= time + 1e-6) low = middle;
+      if (samples[shown[middle]!]!.time <= time + presentationTimeTolerance)
+        low = middle;
       else high = middle - 1;
     }
     return low;
