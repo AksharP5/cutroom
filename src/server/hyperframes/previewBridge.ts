@@ -22,6 +22,8 @@ import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
 interface PreviewWindow extends DiagnosticWindow {
+  /** Seconds the patched runtime adds to its clock to show and hide clips while playing. */
+  __cutroomCutLead?: (clock: number) => number;
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
   __HF_MEDIA_CODEC_MAP__?: Record<string, { browserHostile?: boolean }>;
   CSSNumericValue: {
@@ -262,6 +264,7 @@ function installPreviewBridge(
       check();
     });
   const seekRuntime = (time: number) => {
+    presented.clear();
     const generation = recordRuntime();
     try {
       win.__player?.seek(time);
@@ -1930,12 +1933,11 @@ function installPreviewBridge(
     return videos;
   };
   /**
-   * Where the runtime places a constant-rate video's media at the playhead, from its own
+   * How the runtime maps a constant-rate root video's media to composition time, from its own
    * resolved clip window. Null when it cannot be known here, such as for speed ramps.
    */
-  const expectedMediaTime = (video: HTMLMediaElement) => {
+  const mediaMapping = (video: HTMLMediaElement) => {
     const clip = win.__hf?.clipWindow?.(video);
-    const time = win.__player?.getTime();
     const automation = video.getAttribute("data-automation");
     // The runtime's root: the composition marked as root, or else the first one.
     const marked = document.querySelector(
@@ -1948,7 +1950,6 @@ function installPreviewBridge(
     // Only the root composition's clips are timed against the player's clock.
     if (
       !clip ||
-      time === undefined ||
       video.closest("[data-composition-id]") !== root ||
       video.loop ||
       (automation !== null && /"target"\s*:\s*"(?!volume")/.test(automation))
@@ -1975,11 +1976,98 @@ function installPreviewBridge(
       Number.isFinite(given) && given > 0
         ? Math.max(minRate, Math.min(maxRate, given))
         : 1;
+    return { clip, start, rate };
+  };
+  /** Where the runtime places a constant-rate root video's media at the playhead. */
+  const expectedMediaTime = (video: HTMLMediaElement) => {
+    const mapping = mediaMapping(video);
+    const time = win.__player?.getTime();
+    if (!mapping || time === undefined) return null;
+    const { clip, start, rate } = mapping;
     const media =
       start + rate * Math.max(0, Math.min(time, clip.end) - clip.start);
     return Number.isFinite(video.duration)
       ? Math.min(media, video.duration)
       : media;
+  };
+  // Native video and the audio clock can differ by the runtime's 40 ms drift allowance.
+  // Switch clips when the outgoing picture reaches its out point on screen. The runtime's
+  // existing preseek and cue-ahead prepare the incoming video independently.
+  const presented = new Map<
+    HTMLVideoElement,
+    { media: number; at: number; rate: number }
+  >();
+  /** Each playing root video's pending frame callback; none is left waiting once it pauses. */
+  const following = new Map<HTMLVideoElement, number>();
+  document.addEventListener(
+    "playing",
+    (event) => {
+      const video = event.target;
+      if (!(video instanceof HTMLVideoElement) || following.has(video)) return;
+      if (!mediaMapping(video)) return;
+      const next = (_: number, frame: VideoFrameCallbackMetadata) => {
+        if (retired) return;
+        presented.set(video, {
+          media: frame.mediaTime,
+          at: frame.expectedDisplayTime,
+          rate: video.playbackRate,
+        });
+        following.set(video, video.requestVideoFrameCallback(next));
+      };
+      following.set(video, video.requestVideoFrameCallback(next));
+    },
+    true,
+  );
+  document.addEventListener(
+    "pause",
+    (event) => {
+      const video = event.target;
+      if (!(video instanceof HTMLVideoElement)) return;
+      const pending = following.get(video);
+      if (pending === undefined) return;
+      video.cancelVideoFrameCallback(pending);
+      following.delete(video);
+    },
+    true,
+  );
+  const frameGaps: number[] = [];
+  let lastFrame = 0;
+  win.__cutroomCutLead = (clock) => {
+    if (pipelineActive) return 0;
+    const frame = Number(document.timeline.currentTime ?? performance.now());
+    if (frame > lastFrame && frame - lastFrame < 100) {
+      frameGaps.push(frame - lastFrame);
+      if (frameGaps.length > 9) frameGaps.shift();
+    }
+    lastFrame = frame;
+    const sorted = frameGaps.toSorted((a, b) => a - b);
+    const interval = sorted[sorted.length >> 1] ?? 1000 / 60;
+    let newest:
+      | {
+          picture: { media: number; at: number; rate: number };
+          mapping: NonNullable<ReturnType<typeof mediaMapping>>;
+        }
+      | undefined;
+    for (const [video, picture] of presented) {
+      if (!video.isConnected || performance.now() - picture.at > 250) {
+        presented.delete(video);
+        continue;
+      }
+      const mapping = mediaMapping(video);
+      // A hidden incoming video may already be playing. Its opening frame must not move the
+      // outgoing shot's cut; only a clip at the clock's current position can supply the lead.
+      if (!mapping || clock < mapping.clip.start || clock >= mapping.clip.end)
+        continue;
+      if (!newest || picture.at > newest.picture.at)
+        newest = { picture, mapping };
+    }
+    if (!newest) return 0;
+    const { picture, mapping } = newest;
+    // This frame is on screen a display frame after it starts; half a frame rounds to the nearer.
+    const shown = frame + 1.5 * interval;
+    const media = picture.media + ((shown - picture.at) / 1000) * picture.rate;
+    const time = mapping.clip.start + (media - mapping.start) / mapping.rate;
+    return Math.max(0, Math.min(0.1, time - clock));
   };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
@@ -2411,6 +2499,11 @@ function installPreviewBridge(
   );
   addEventListener("pagehide", () => {
     retired = true;
+    for (const [video, callback] of following)
+      video.cancelVideoFrameCallback(callback);
+    following.clear();
+    presented.clear();
+    delete win.__cutroomCutLead;
     seekMutations.disconnect();
     seekAttributes.clear();
     parent.postMessage({ source: "cutroom-preview", type: "unloaded" }, "*");
@@ -3289,6 +3382,7 @@ function installPreviewBridge(
           else win.__hf?.audioMeter?.stop();
           break;
         case "play":
+          presented.clear();
           clearEditPicture();
           pictureVersion += 1;
           for (const video of holds.keys()) releasePlaying(video);
@@ -3304,6 +3398,7 @@ function installPreviewBridge(
           if (metering && !animation) levels();
           break;
         case "pause":
+          presented.clear();
           win.__player?.pause();
           clearInterval(residency);
           cancelAnimationFrame(animation);

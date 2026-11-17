@@ -271,11 +271,14 @@ async function decode(
           ).data;
           return { r: r!, g: g!, b: b!, l: (r! + g! + b!) / 3 };
         };
-        // testsrc2's left bar is red on every frame; titles and scenes never cover it.
-        const anchor = luma(0.05, 0.5);
-        let number: number | null = 0;
-        if (!(anchor.r > 150 && anchor.g < 100 && anchor.b < 100))
-          number = null;
+        // testsrc2's left bar is red on every frame; titles and scenes never cover it. Its moving
+        // diagonal line crosses any one point of the bar now and then, so three points are read.
+        let number: number | null = [0.3, 0.5, 0.7].some((y) => {
+          const { r, g, b } = luma(0.05, y);
+          return r > 150 && g < 100 && b < 100;
+        })
+          ? 0
+          : null;
         for (let bit = 0; number !== null && bit < 16; bit++) {
           const { l } = luma((bit + 0.5) / 16, 27 / 1080);
           if (l > 60 && l < 190) number = null;
@@ -603,7 +606,8 @@ async function playback(
   cdp: CDPSession,
   decoder: Page,
 ) {
-  await seekToShot(page, ui, cdp, decoder, 22, 0.1);
+  const firstShot = 22;
+  await seekToShot(page, ui, cdp, decoder, firstShot, 0.1);
   const editorFrames = page.evaluate(async () => {
     const times: number[] = [];
     const end = performance.now() + 10_500;
@@ -636,9 +640,39 @@ async function playback(
   const held = gaps(changes.map((p) => p.time)).map(
     (gap) => Math.max(1, Math.round(gap / display)) * display,
   );
+  // These five source ranges do not overlap. A skipped source frame stays
+  // within its shot; treating any jump over four frames as a cut mislabeled decoder stalls.
+  const shots = Array.from({ length: 5 }, (_, index) => {
+    const shot = firstShot + index;
+    return {
+      shot,
+      first: mediaStart(shot) * fps,
+      end: (mediaStart(shot) + clipSeconds) * fps,
+    };
+  });
+  const shotNumbers = changes.map(({ number }) => {
+    const shot = shots.find(
+      ({ first, end }) => number! >= first && number! < end,
+    );
+    if (!shot)
+      throw new Error(
+        `Playback read source frame ${number} outside the benchmark's shot ranges.`,
+      );
+    return shot.shot;
+  });
+  const steps = changes.slice(1).map((_, i) => ({
+    held: held[i]!,
+    cut: shotNumbers[i] !== shotNumbers[i + 1],
+  }));
+  // How long the outgoing shot's last picture and the incoming shot's first stayed up.
+  const atCuts = steps.flatMap((step, i) =>
+    step.cut && steps[i + 1] ? [step.held, steps[i + 1]!.held] : [],
+  );
   return {
     composited: composited.length,
     displayFrame: display,
+    cuts: steps.filter((step) => step.cut).length,
+    cutHoldMax: atCuts.length ? Math.max(...atCuts) : null,
     pictures: changes.length,
     picturesPerSecond: changes.length / ((end - start) / 1000),
     dropped: Math.max(
@@ -1047,6 +1081,7 @@ function summaryOf(output: Output) {
     playDropped: stat(pick((x) => [x.playback.dropped])),
     playGapP95: stat(pick((x) => [x.playback.gapP95])),
     playLateGaps: stat(pick((x) => [x.playback.lateGaps])),
+    playCutHoldMax: stat(pick((x) => [x.playback.cutHoldMax])),
     playEditorFrameP95: stat(pick((x) => [x.playback.editorFrameP95])),
     zoomFrameP95: stat(pick((x) => [x.zoom.frameP95])),
     zoomLateFrames: stat(pick((x) => [x.zoom.lateFrames])),
