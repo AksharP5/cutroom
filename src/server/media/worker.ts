@@ -16,6 +16,7 @@ import {
   fragmentStart,
   pieceAt,
   pieceSpans,
+  proxySamplesFile,
   streamBoxes,
 } from "./pieces";
 import { mediaSettings } from "../../shared/media";
@@ -321,6 +322,7 @@ try {
       const tick = rational(timeBase, "/");
       // Export, and FFmpeg by default, start the clock at the file's first timestamp.
       const start = Number(probe.format.start_time ?? 0) || 0;
+      const startTicks = Math.sign(start) * Math.round(Math.abs(start) / tick);
       const packets = z
         .string()
         .parse(
@@ -349,9 +351,14 @@ try {
               ([pts, flags]) =>
                 /^-?\d+$/.test(pts ?? "") && !flags?.includes("D"),
             )
-            .map(([pts]) => Number(pts) * tick - start),
+            .map(([pts]) => (Number(pts) - startTicks) * tick),
         ),
       ].sort((a, b) => a - b);
+      const { sampleOffsets, ...plan } = cutPieces(times, 1 / video.fps);
+      const samples = new Float64Array(sampleOffsets.length + times.length);
+      samples.set(sampleOffsets);
+      samples.set(times, sampleOffsets.length);
+      await Bun.write(join(task.directory, proxySamplesFile), samples);
       await Bun.write(
         join(task.directory, "pieces.json"),
         JSON.stringify(
@@ -361,7 +368,7 @@ try {
             audio:
               probe.streams.find((stream) => stream.codec_type === "audio")
                 ?.codec_name ?? null,
-            ...cutPieces(times, 1 / video.fps),
+            ...plan,
           }),
         ),
       );

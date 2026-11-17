@@ -103,6 +103,7 @@ import {
   framesOf,
   proxyExposedHeaders,
   proxyPreview,
+  proxySamplesPreview,
   scrubPreview,
 } from "../media/routes";
 import type { MediaService } from "../media/service";
@@ -889,6 +890,15 @@ export function createHyperframesApi(
             );
           throw error;
         },
+      );
+      isolate(response.headers);
+      return response;
+    }
+    if (media && path === "proxy-samples") {
+      const response = await proxySamplesPreview(
+        media,
+        await store.get(projectId),
+        url.searchParams,
       );
       isolate(response.headers);
       return response;

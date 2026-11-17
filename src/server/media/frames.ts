@@ -62,8 +62,7 @@ export async function frameGrid(path: string): Promise<FrameGrid | null> {
       frameRate(ffprobe, path),
     ]);
     if (metadata.isVFR || !(metadata.fps > 0) || !rate) return null;
-    const start = videoStartOnMediaTimeline(metadata);
-    return { start, end: start + metadata.videoStreamDurationSeconds, rate };
+    return { start: videoStartOnMediaTimeline(metadata), rate };
   })();
   grids.delete(path);
   grids.set(path, { version, grid });

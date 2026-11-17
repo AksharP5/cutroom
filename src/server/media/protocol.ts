@@ -39,6 +39,8 @@ export const PiecesSchema = z.object({
   audio: z.string().nullable(),
   /** Where each piece after the first starts: midway between two frames. */
   cuts: z.array(z.number().nonnegative()),
+  /** The first sample in each piece after the first, for the playlist clock. */
+  starts: z.array(z.number().nonnegative()),
   /** Where the last frame ends. */
   end: z.number().positive(),
 });

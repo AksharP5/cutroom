@@ -3,6 +3,9 @@ import type { Pieces } from "./protocol";
 /** About this much video per piece: one is made in well under a second at 1080p60. */
 const pieceSeconds = 4;
 
+/** One Float64 index per piece plus a terminal index, then the presentation times. */
+export const proxySamplesFile = "samples.f64";
+
 /**
  * Cuts a video's frame times, sorted, into pieces of about four seconds. Each cut lies midway
  * between two frames, so a seek or a trim to it can never round onto the wrong one.
@@ -10,20 +13,25 @@ const pieceSeconds = 4;
 export function cutPieces(times: number[], frameDuration: number) {
   if (!times.length) throw new Error("The media has no video frames.");
   const cuts: number[] = [];
+  const starts: number[] = [];
+  const sampleOffsets = [0];
   let start = times[0]!;
   for (const [index, time] of times.entries()) {
     if (time - start < pieceSeconds) continue;
     cuts.push((times[index - 1]! + time) / 2);
+    starts.push(time);
+    sampleOffsets.push(index);
     start = time;
   }
   const last = times.at(-1)!;
   const end = last + (times.length > 1 ? last - times.at(-2)! : frameDuration);
-  return { cuts, end };
+  sampleOffsets.push(times.length);
+  return { cuts, starts, end, sampleOffsets };
 }
 
 /** Where each piece starts and how long it lasts. */
 export function pieceSpans(pieces: Pieces) {
-  const starts = [0, ...pieces.cuts];
+  const starts = [0, ...pieces.starts];
   return starts.map((start, index) => ({
     start,
     length: (starts[index + 1] ?? pieces.end) - start,
@@ -157,10 +165,13 @@ export function piecePlaylist(
     "#EXT-X-PLAYLIST-TYPE:VOD",
     "#EXT-X-INDEPENDENT-SEGMENTS",
     `#EXT-X-MAP:URI="${uri("init")}"`,
-    ...spans.flatMap(({ length }, index) => [
-      `#EXTINF:${length.toFixed(6)},`,
-      uri(index),
-    ]),
+    ...spans.flatMap(({ start, length }, index) => {
+      // Chromium can align the fragment's first PTS to the playlist's segment start.
+      // Round the endpoints so rounding the lengths never accumulates clock drift.
+      const micros =
+        Math.round((start + length) * 1e6) - Math.round(start * 1e6);
+      return [`#EXTINF:${(micros / 1e6).toFixed(6)},`, uri(index)];
+    }),
     "#EXT-X-ENDLIST",
     "",
   ].join("\n");

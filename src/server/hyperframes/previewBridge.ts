@@ -1797,19 +1797,31 @@ function installPreviewBridge(
     video.removeAttribute("data-cutroom-held");
     video.removeAttribute("data-cutroom-flow");
   };
-  const captureFrames = (videos: HTMLVideoElement[]) => {
+  const captureFrames = (
+    videos: HTMLVideoElement[],
+    samples: Map<HTMLVideoElement, ProxySample>,
+  ) => {
     const frames = new Map<HTMLVideoElement, VideoFrame>();
     try {
       for (const video of videos) {
         const frame = new VideoFrame(video);
         frames.set(video, frame);
-        // seeked/currentTime can settle before Chromium supplies the new decoded picture.
-        // A frame's nominal duration does not include VFR gaps or a held final picture.
+        // Chromium can settle its seek clock while both APIs still carry the old picture.
+        const sample = samples.get(video);
         const decoded = decodedSeeks.get(video);
+        const presented = decoded?.timestamp;
+        const confirmed = sample ? decoded?.confirmed : undefined;
         if (
-          decoded &&
-          (decoded.timestamp === undefined ||
-            Math.abs(frame.timestamp - decoded.timestamp) > 1)
+          (sample && Math.abs(frame.timestamp - sample.start * 1e6) > 2) ||
+          (decoded &&
+            !(
+              presented !== undefined &&
+              Math.abs(frame.timestamp - presented) <= 1
+            ) &&
+            !(
+              confirmed !== undefined &&
+              Math.abs(frame.timestamp - confirmed) <= 1
+            ))
         ) {
           for (const frame of frames.values()) frame.close();
           return null;
@@ -1817,6 +1829,7 @@ function installPreviewBridge(
       }
       for (const video of videos) {
         const decoded = decodedSeeks.get(video);
+        if (decoded) decoded.confirmed = frames.get(video)!.timestamp;
         if (decoded?.callback !== undefined) {
           cancelVideoFrame.call(video, decoded.callback);
           delete decoded.callback;
@@ -2042,7 +2055,7 @@ function installPreviewBridge(
                 !corrected.has(video) &&
                 Math.abs(
                   nativeTime.get!.call(video) -
-                    framePosition(video, time + 1e-5),
+                    pausedPosition(video, time + 1e-5),
                 ) > 1e-4
                 ? [{ video, time }]
                 : [];
@@ -2067,7 +2080,19 @@ function installPreviewBridge(
             }
             // A native element can paint nothing despite reporting HAVE_CURRENT_DATA.
             // Acquire every decoded frame before replacing any displayed picture.
-            const frames = captureFrames(videos);
+            const samples = new Map<HTMLVideoElement, ProxySample>();
+            await Promise.all(
+              videos.map(async (video) => {
+                const sample = await proxySampleAt(
+                  video,
+                  framePosition(video, mediaTime.get.call(video)),
+                );
+                if (sample) samples.set(video, sample);
+              }),
+            );
+            if (version !== pictureVersion) return;
+            if (videos.some((video) => video.seeking)) continue;
+            const frames = captureFrames(videos, samples);
             if (!frames) {
               // An editing proxy playing from its pieces has no frame to give after it loads
               // until it is sought, even to where it is. Seek each such video once.
@@ -2239,14 +2264,11 @@ function installPreviewBridge(
           "start" in body &&
           typeof body.start === "number" &&
           Number.isFinite(body.start) &&
-          "end" in body &&
-          typeof body.end === "number" &&
-          Number.isFinite(body.end) &&
           "rate" in body &&
           typeof body.rate === "number" &&
           Number.isFinite(body.rate) &&
           body.rate > 0
-            ? { start: body.start, end: body.end, rate: body.rate }
+            ? { start: body.start, rate: body.rate }
             : null,
         )
         .catch(() => null)
@@ -2278,6 +2300,127 @@ function installPreviewBridge(
     const grid = path ? known.get(path) : null;
     return grid ? seekInFrame(grid, time) : time;
   };
+  type ProxySample = { start: number; next?: number };
+  type SamplePage = {
+    path: string;
+    from: number | null;
+    to: number | null;
+    times: number[];
+  };
+  const samplePages: SamplePage[] = [];
+  const otherProxies = new Set<string>();
+  const sampleRequests = new Map<string, Promise<SamplePage | null>>();
+  const editingProxyPath = (video: HTMLVideoElement) => {
+    const url = new URL(video.currentSrc || video.src, location.href);
+    if (
+      url.searchParams.get("hf-proxy") !== "h264" ||
+      [...url.searchParams.keys()].some(
+        (key) => key !== "hf-proxy" && key !== "hf-proxy-retry",
+      )
+    )
+      return null;
+    const path = scrubPath(video);
+    return path && !otherProxies.has(path) ? path : null;
+  };
+  const cachedSamples = (path: string, at: number) =>
+    samplePages.find(
+      (page) =>
+        page.path === path &&
+        (page.from === null || at >= page.from) &&
+        (page.to === null || at < page.to),
+    );
+  const loadSamples = (path: string, at: number) => {
+    const query = new URLSearchParams({ path, at: String(at) }).toString();
+    let request = sampleRequests.get(query);
+    if (request) return request;
+    request = (async () => {
+      const response = await fetch(`${capability}proxy-samples?${query}`);
+      if (response.status === 204) {
+        otherProxies.add(path);
+        return null;
+      }
+      if (!response.ok)
+        throw new Error(
+          "The preview could not read the editing proxy's frame times.",
+        );
+      const body: unknown = await response.json();
+      if (
+        !body ||
+        typeof body !== "object" ||
+        !("from" in body) ||
+        !("to" in body) ||
+        !(
+          body.from === null ||
+          (typeof body.from === "number" && Number.isFinite(body.from))
+        ) ||
+        !(
+          body.to === null ||
+          (typeof body.to === "number" && Number.isFinite(body.to))
+        ) ||
+        !("times" in body) ||
+        !Array.isArray(body.times) ||
+        !body.times.length ||
+        !body.times.every(
+          (time: unknown) => typeof time === "number" && Number.isFinite(time),
+        )
+      )
+        throw new Error("The editing proxy has invalid frame times.");
+      const page = { path, from: body.from, to: body.to, times: body.times };
+      samplePages.push(page);
+      if (samplePages.length > 8) samplePages.shift();
+      return page;
+    })().finally(() => sampleRequests.delete(query));
+    sampleRequests.set(query, request);
+    return request;
+  };
+  const sampleAt = (page: SamplePage, at: number): ProxySample => {
+    // Every sample holds until its successor, including the last sample in a video with
+    // a longer audio track. Allow for the conversion between packet ticks and microseconds.
+    const index = Math.max(
+      0,
+      page.times.findLastIndex((time) => time <= at + 1e-6),
+    );
+    return { start: page.times[index]!, next: page.times[index + 1] };
+  };
+  const proxySampleAt = async (video: HTMLVideoElement, at: number) => {
+    const path = editingProxyPath(video);
+    if (!path) return null;
+    const page = cachedSamples(path, at) ?? (await loadSamples(path, at));
+    return page && sampleAt(page, at);
+  };
+  const samplePosition = (
+    sample: ProxySample,
+    target: number,
+    duration: number,
+  ) => {
+    // Stay in the first half of the interval for HLS players that seek to the nearest
+    // sample. For the last sample, seek within the picture even if audio extends past it.
+    const lead = Math.min(
+      0.002,
+      ((sample.next ?? Infinity) - sample.start) / 4,
+    );
+    const firstHalf =
+      sample.next === undefined
+        ? sample.start + lead
+        : (sample.start + sample.next) / 2 - lead;
+    return Math.max(sample.start + lead, Math.min(target, firstHalf));
+  };
+  const clampMediaTime = (media: HTMLMediaElement, target: number) =>
+    Math.min(
+      target,
+      Number.isFinite(media.duration) ? media.duration : Infinity,
+    );
+  const pausedPosition = (video: HTMLVideoElement, time: number) => {
+    const target = framePosition(video, time);
+    const path = editingProxyPath(video);
+    const page = path ? cachedSamples(path, target) : undefined;
+    return clampMediaTime(
+      video,
+      page
+        ? samplePosition(sampleAt(page, target), target, video.duration)
+        : target,
+    );
+  };
   const nativeTime = Object.getOwnPropertyDescriptor(
     HTMLMediaElement.prototype,
     "currentTime",
@@ -2288,7 +2431,7 @@ function installPreviewBridge(
   const cancelVideoFrame = HTMLVideoElement.prototype.cancelVideoFrameCallback;
   const decodedSeeks = new Map<
     HTMLVideoElement,
-    { callback?: number; timestamp?: number }
+    { callback?: number; timestamp?: number; confirmed?: number }
   >();
   const forgetDecodedSeek = (video: HTMLVideoElement) => {
     const previous = decodedSeeks.get(video);
@@ -2296,31 +2439,18 @@ function installPreviewBridge(
       cancelVideoFrame.call(video, previous.callback);
     decodedSeeks.delete(video);
   };
-  const expectDecodedSeek = (video: HTMLVideoElement, at: number) => {
+  const expectDecodedSeek = (video: HTMLVideoElement) => {
+    const confirmed = decodedSeeks.get(video)?.confirmed;
     forgetDecodedSeek(video);
-    const path = scrubPath(video);
-    const grid = path ? known.get(path) : null;
-    // A seek past the video stream can legitimately hold its last frame.
-    const inProxyFrame =
-      grid &&
-      at < grid.end &&
-      new URL(video.currentSrc || video.src, location.href).searchParams.get(
-        "hf-proxy",
-      ) === "h264";
-    const decoded: { callback?: number; timestamp?: number } = {};
+    const decoded: {
+      callback?: number;
+      timestamp?: number;
+      confirmed?: number;
+    } = { confirmed };
     decodedSeeks.set(video, decoded);
     const presented: VideoFrameRequestCallback = (_now, frame) => {
       if (decodedSeeks.get(video) !== decoded) return;
-      delete decoded.callback;
-      // Even a native callback can carry the previous picture after an HLS seek settles.
-      // Both timestamps must belong to the seek destination, allowing for the half-frame
-      // lead of HLS pieces and millisecond rounding in source timestamps.
-      if (
-        !inProxyFrame ||
-        (frame.mediaTime >= at - 1 / grid.rate - 0.001 &&
-          frame.mediaTime <= at + 0.001)
-      )
-        decoded.timestamp = frame.mediaTime * 1e6;
+      decoded.timestamp = frame.mediaTime * 1e6;
       // Presentation can precede seeked. Keep observing until capture confirms the frame.
       decoded.callback = requestVideoFrame.call(video, presented);
     };
@@ -2330,13 +2460,27 @@ function installPreviewBridge(
   document.addEventListener(
     "emptied",
     (event) => {
-      if (event.target instanceof HTMLVideoElement)
+      if (event.target instanceof HTMLVideoElement) {
         forgetDecodedSeek(event.target);
+        asked.delete(event.target);
+      }
     },
     true,
   );
   /** The time a paused video was asked for, while it rests where that time's frame shows. */
   const asked = new WeakMap<HTMLMediaElement, { time: number; at: number }>();
+  const seekMedia = (media: HTMLMediaElement, time: number, at: number) => {
+    const entry = { time, at };
+    asked.set(media, entry);
+    if (
+      media instanceof HTMLVideoElement &&
+      media.paused &&
+      Math.abs(nativeTime.get!.call(media) - at) > 1e-6
+    )
+      expectDecodedSeek(media);
+    nativeTime.set!.call(media, at);
+    return entry;
+  };
   /**
    * Every video's `currentTime`: a paused seek goes to where export's frame shows, and reads
    * back as the time asked for until the video moves, so the runtime sees its own time.
@@ -2350,19 +2494,43 @@ function installPreviewBridge(
     },
     set(this: HTMLMediaElement, time: number) {
       if (this instanceof HTMLVideoElement) void loadGrid(this);
-      const target = this.paused ? framePosition(this, time) : time;
-      const at = Number.isFinite(this.duration)
-        ? Math.min(target, this.duration)
+      if (!(this instanceof HTMLVideoElement) || !this.paused) {
+        const entry = seekMedia(this, time, clampMediaTime(this, time));
+        if (entry.at === time) asked.delete(this);
+        return;
+      }
+      const target = framePosition(this, time);
+      const path = editingProxyPath(this);
+      const page = path ? cachedSamples(path, target) : undefined;
+      const position = page
+        ? samplePosition(sampleAt(page, target), target, this.duration)
         : target;
-      if (at === time) asked.delete(this);
-      else asked.set(this, { time, at });
-      if (
-        this instanceof HTMLVideoElement &&
-        this.paused &&
-        Math.abs(nativeTime.get!.call(this) - at) > 1e-6
-      )
-        expectDecodedSeek(this, at);
-      nativeTime.set!.call(this, at);
+      const entry = seekMedia(this, time, clampMediaTime(this, position));
+      if (entry.at === time && !path) asked.delete(this);
+      if (!path || page) return;
+      const source = this.currentSrc || this.src;
+      // While an uncached piece starts loading, read its timestamps in parallel. If the
+      // target is in the audio tail, reposition even if the native seek never completes.
+      void loadSamples(path, target)
+        .then((page) => {
+          if (
+            !page ||
+            retired ||
+            deferredSeeks.has(this) ||
+            asked.get(this) !== entry ||
+            (this.currentSrc || this.src) !== source ||
+            !this.paused
+          )
+            return;
+          const at = clampMediaTime(
+            this,
+            samplePosition(sampleAt(page, target), target, this.duration),
+          );
+          if (Math.abs(at - entry.at) > 1e-6) seekMedia(this, time, at);
+        })
+        .catch(() => {
+          // The paused picture request reports a failed sample lookup.
+        });
     },
   };
   Object.defineProperty(HTMLVideoElement.prototype, "currentTime", {
