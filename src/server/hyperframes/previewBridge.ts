@@ -2388,11 +2388,7 @@ function installPreviewBridge(
     const page = cachedSamples(path, at) ?? (await loadSamples(path, at));
     return page && sampleAt(page, at);
   };
-  const samplePosition = (
-    sample: ProxySample,
-    target: number,
-    duration: number,
-  ) => {
+  const samplePosition = (sample: ProxySample, target: number) => {
     // Stay in the first half of the interval for HLS players that seek to the nearest
     // sample. For the last sample, seek within the picture even if audio extends past it.
     const lead = Math.min(
@@ -2416,9 +2412,7 @@ function installPreviewBridge(
     const page = path ? cachedSamples(path, target) : undefined;
     return clampMediaTime(
       video,
-      page
-        ? samplePosition(sampleAt(page, target), target, video.duration)
-        : target,
+      page ? samplePosition(sampleAt(page, target), target) : target,
     );
   };
   const nativeTime = Object.getOwnPropertyDescriptor(
@@ -2503,7 +2497,7 @@ function installPreviewBridge(
       const path = editingProxyPath(this);
       const page = path ? cachedSamples(path, target) : undefined;
       const position = page
-        ? samplePosition(sampleAt(page, target), target, this.duration)
+        ? samplePosition(sampleAt(page, target), target)
         : target;
       const entry = seekMedia(this, time, clampMediaTime(this, position));
       if (entry.at === time && !path) asked.delete(this);
@@ -2524,7 +2518,7 @@ function installPreviewBridge(
             return;
           const at = clampMediaTime(
             this,
-            samplePosition(sampleAt(page, target), target, this.duration),
+            samplePosition(sampleAt(page, target), target),
           );
           if (Math.abs(at - entry.at) > 1e-6) seekMedia(this, time, at);
         })
