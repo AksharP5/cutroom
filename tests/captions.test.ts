@@ -269,3 +269,92 @@ test("imported subtitles keep their cues as caption lines, timed as written, in 
     await fixture.close();
   }
 });
+
+test("restoring script words brings back their caption corrections", async () => {
+  const { fixture, project, json } = await captionsFixture();
+  try {
+    const transcript = TranscriptSchema.parse(
+      await json("/transcripts/import", "POST", {
+        mediaPath: "talk.mp4",
+        elementId: "talk",
+        words,
+      }),
+    );
+    await json("/captions", "POST", {
+      action: "generate",
+      transcriptId: transcript.id,
+    });
+    await json("/captions", "POST", {
+      action: "word",
+      transcriptId: transcript.id,
+      wordId: "w4",
+      text: "Remove",
+    });
+    // Older caption files stored the correction only in the rendered word.
+    const file = join(project.path, "compositions/captions.html");
+    const current = await readFile(file, "utf8");
+    const legacy = current.replace(/ data-caption-word-edits="[^"]*"/, "");
+    expect(legacy).not.toBe(current);
+    await writeFile(file, legacy);
+    const cuts = `/transcripts/${transcript.id}/cuts`;
+    const edit = async (action: "cut" | "restore") =>
+      json(cuts, "POST", { action, wordIds: ["w4", "w5"] });
+    const read = async () =>
+      CaptionsViewSchema.parse(
+        ((await json("/captions")) as { captions: unknown[] }).captions[0],
+      );
+    await edit("cut");
+    expect((await read()).cues.map(({ text }) => text)).toEqual([
+      "Make room now.",
+      "Keep going",
+    ]);
+    await edit("restore");
+    const restored = await read();
+    expect(restored.edits).toEqual({ w4: "Remove" });
+    expect(restored.cues.map(({ text }) => text)).toEqual([
+      "Make room now.",
+      "Remove this",
+      "Keep going",
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("cutting every script word clears the captions and can be undone", async () => {
+  const { fixture, project, json } = await captionsFixture();
+  try {
+    const transcript = TranscriptSchema.parse(
+      await json("/transcripts/import", "POST", {
+        mediaPath: "talk.mp4",
+        elementId: "talk",
+        words,
+      }),
+    );
+    const before = CaptionsViewSchema.parse(
+      await json("/captions", "POST", {
+        action: "generate",
+        transcriptId: transcript.id,
+      }),
+    );
+    await json(`/transcripts/${transcript.id}/cuts`, "POST", {
+      action: "cut",
+      wordIds: words.map(({ id }) => id),
+    });
+    const read = async () =>
+      CaptionsViewSchema.parse(
+        ((await json("/captions")) as { captions: unknown[] }).captions[0],
+      );
+    await expect(read()).resolves.toMatchObject({ stale: false, cues: [] });
+    expect(
+      lines(await readFile(join(project.path, before.file), "utf8")),
+    ).toEqual([]);
+    expect(
+      (await fixture.request(`/projects/${project.id}/history/undo`, "POST"))
+        .status,
+    ).toBe(200);
+    await expect(read()).resolves.toEqual(before);
+  } finally {
+    await fixture.close();
+  }
+});

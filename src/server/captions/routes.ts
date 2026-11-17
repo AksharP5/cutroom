@@ -32,6 +32,7 @@ import { setElementAttributes } from "../timeline/composition";
 import { renderCaptions } from "./captions";
 import {
   CAPTIONS_TRACK_KIND,
+  captionEdits,
   captionsView,
   captionsWrite,
   compositionFrame,
@@ -122,7 +123,13 @@ export function createCaptionRoutes(
       new Map(),
       composition,
     );
-    const duration = layout.durationFrames;
+    const placement = layout.placement;
+    if (!placement)
+      throw new HttpError(
+        422,
+        "None of this transcript's words are on the timeline.",
+      );
+    const duration = placement.durationFrames;
     const { file } = await createFile(project, sourceFile, (id) =>
       renderCaptions(
         layout.captions,
@@ -146,7 +153,7 @@ export function createCaptionRoutes(
           {
             type: "insert",
             track,
-            at: layout.startFrame,
+            at: placement.startFrame,
             clip: { kind: "composition", src, duration, label: "Captions" },
           },
         ];
@@ -243,8 +250,12 @@ export function createCaptionRoutes(
           404,
           "That word is not in the captions. It may be cut.",
         );
+      const captions = { ...placed.captions, groups };
       files = [
-        await captionsWrite(project, placed, { ...placed.captions, groups }),
+        await captionsWrite(project, placed, {
+          ...captions,
+          edits: Object.fromEntries(captionEdits(captions, transcript)),
+        }),
       ];
     }
     store.writeFiles(

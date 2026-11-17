@@ -180,13 +180,16 @@ export function renderCaptions(
     // Lint and Studio address timed elements by id; the composition id keeps them unique.
     return `<div id="${frame.id}-line-${line + 1}" class="caption-group clip" data-start="${seconds(group.start)}" data-duration="${seconds(group.end - group.start)}">${words.join(" ")}</div>`;
   });
+  const edits = Object.keys(captions.edits).length
+    ? ` data-caption-word-edits="${escapeHtml(JSON.stringify(captions.edits))}"`
+    : "";
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>Captions</title></head>
 <body><template>
 <style>
 ${stylesheet(captions.style, frame)}
 </style>
-<div data-composition-id="${frame.id}" data-width="${frame.width}" data-height="${frame.height}" data-duration="${seconds(duration)}" ${CAPTIONS_ATTRIBUTE}="${CAPTIONS_VERSION}" data-caption-style="${captions.style}" data-caption-transcript="${escapeHtml(captions.transcriptId)}">
+<div data-composition-id="${frame.id}" data-width="${frame.width}" data-height="${frame.height}" data-duration="${seconds(duration)}" ${CAPTIONS_ATTRIBUTE}="${CAPTIONS_VERSION}" data-caption-style="${captions.style}" data-caption-transcript="${escapeHtml(captions.transcriptId)}"${edits}>
 <div class="caption-stage">
 ${groups.join("\n")}
 </div>
@@ -222,7 +225,17 @@ export function readCaptions(
     !(width > 0 && height > 0)
   )
     throw unreadable();
+  const writtenEdits = root.getAttribute("data-caption-word-edits");
+  let edits: unknown;
+  if (writtenEdits !== null) {
+    try {
+      edits = JSON.parse(writtenEdits);
+    } catch {
+      throw unreadable();
+    }
+  }
   const parsed = CaptionsSchema.safeParse({
+    edits,
     style: root.getAttribute("data-caption-style"),
     transcriptId: root.getAttribute("data-caption-transcript"),
     groups: [...root.querySelectorAll(".caption-group")].map((group) => {
