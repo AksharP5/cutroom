@@ -21,6 +21,48 @@ import { projectFixture } from "./project-fixture";
 
 const source = `<main data-composition-id="main" data-duration="4"><hf-audio-group id="dialogue" data-volume='0.8' data-hidden data-fx-chain='{"version":1,"nodes":[]}' data-automation='{"version":1,"lanes":[]}'></hf-audio-group><audio id="one" src="one.wav" data-audio-group="dialogue" data-start="0" data-duration="4" data-track-index="1" data-volume="0.4"></audio><audio id="two" src="two.wav" data-audio-group="dialogue" data-start="0" data-duration="4" data-track-index="2"></audio><audio id="outside" src="three.wav" data-start="0" data-duration="4" data-track-index="3"></audio></main>`;
 
+test("creating an audio group and moving members writes the same bus the renderer hears", () => {
+  const parsed = parseComposition(source, emptyTimelineSettings());
+  const after = applyAll(parsed.timeline, [
+    {
+      type: "routeAudioGroup",
+      clipIds: ["one", "outside"],
+      group: { id: "new-bus", label: 'Lead "Vox"' },
+    },
+    { type: "setAudioGroup", clipId: "one", volume: 0.25 },
+  ]);
+  const output = patchComposition(parsed, after, new Map());
+  const written = parseComposition(output, settingsOf(after));
+  expect(timelineContent(written.timeline)).toEqual(timelineContent(after));
+  expect(written.timeline.authoredAudioGroups).toContainEqual({
+    id: "new-bus",
+    label: 'Lead "Vox"',
+    volume: 0.25,
+  });
+  expect(
+    parseAudioElements(output)
+      .filter(({ groupId }) => groupId === "new-bus")
+      .map(({ groupVolume }) => groupVolume),
+  ).toEqual([0.25, 0.25]);
+  expect(output).toContain(
+    source.slice(source.indexOf("<hf-audio-group"), source.indexOf("<audio")),
+  );
+  const returned = applyAll(written.timeline, [
+    { type: "routeAudioGroup", clipIds: ["outside"], group: null },
+    { type: "setTrack", index: 3, volume: 0.5 },
+  ]);
+  const restoredMix = patchComposition(written, returned, new Map());
+  expect(
+    timelineContent(
+      parseComposition(restoredMix, settingsOf(returned)).timeline,
+    ),
+  ).toEqual(timelineContent(returned));
+  expect(
+    parseAudioElements(restoredMix).find(({ src }) => src === "three.wav")
+      ?.groupVolume,
+  ).toBe(0.5);
+});
+
 test("authored group gain writes only its fader and updates every member together", () => {
   const parsed = parseComposition(source, emptyTimelineSettings());
   const command = CommandSchema.parse({

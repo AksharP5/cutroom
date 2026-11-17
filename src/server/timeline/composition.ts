@@ -44,7 +44,7 @@ import {
   readKeyframes,
 } from "./keyframes";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
-import { offsetAutomation } from "../../shared/timeline/mix";
+import { offsetAutomation, trackGainWarning } from "../../shared/timeline/mix";
 import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
 import { posix } from "node:path";
 import {
@@ -741,7 +741,7 @@ export function parseComposition(
       ...(authoredGroup &&
         hasAudio && {
           authoredAudioGroupId: group,
-          trackGainWarning: `Track gain does not apply to this clip because it belongs to authored audio group "${group}".`,
+          trackGainWarning: trackGainWarning(group),
         }),
       volume: volume !== null && volume >= 0 ? volume : null,
       // A keyframed property has no static value: its animation draws over any.
@@ -1120,6 +1120,9 @@ function readAuthoredAudioGroups(
     return {
       id,
       volume: Number.isFinite(gain) ? gain : 1,
+      ...(element.attrs["data-label"] && {
+        label: element.attrs["data-label"],
+      }),
       ...(sourceRestriction && { sourceRestriction }),
     };
   });
@@ -1141,6 +1144,8 @@ function clipChanges(
     (before.start !== after.start || before.startRef !== null);
   if (writeStart)
     changes.push(["data-start", String(toSeconds(after.start, fps))]);
+  if (after.authoredAudioGroupId !== before.authoredAudioGroupId)
+    changes.push(["data-audio-group", after.authoredAudioGroupId ?? null]);
   // Start and duration are written together so both land on the frame grid.
   if (writeStart || before.duration !== after.duration) {
     changes.push(["data-duration", String(toSeconds(after.duration, fps))]);
@@ -1709,7 +1714,9 @@ function copyMarkup(
     ...attributeEdits(first!, source, [
       ["id", clip.id],
       ["data-hf-id", null],
-      ...(!template.authoredAudioGroupId && template.hasAudio
+      ...(!template.authoredAudioGroupId &&
+      !clip.authoredAudioGroupId &&
+      template.hasAudio
         ? [["data-audio-group", null] as const]
         : []),
       ...clipChanges(
@@ -1864,6 +1871,9 @@ function insertMarkup(
       : []),
     ...(clip.volume !== null
       ? [["data-volume", String(clip.volume)] as const]
+      : []),
+    ...(clip.authoredAudioGroupId
+      ? [["data-audio-group", clip.authoredAudioGroupId] as const]
       : []),
     ...(
       [
@@ -2298,6 +2308,39 @@ export function patchComposition(
   const groupVolumes = new Map(
     after.authoredAudioGroups?.map(({ id, volume }) => [id, volume]),
   );
+  const previousGroups = new Set(
+    before.authoredAudioGroups?.map(({ id }) => id),
+  );
+  const addedGroups = (after.authoredAudioGroups ?? []).filter(
+    ({ id }) => !previousGroups.has(id),
+  );
+  const declarations =
+    addedGroups.length || previousGroups.size
+      ? compositionAudioGroups(parsed.root).filter(
+          (element) => !isManagedAudioGroup(element),
+        )
+      : [];
+  if (addedGroups.length) {
+    const last = declarations.at(-1);
+    const at = last ? last.end : parsed.root.openEnd;
+    const indent = last
+      ? indentOf(html, last.start)
+      : indentOf(html, parsed.root.start) + "  ";
+    const tags = addedGroups.map(({ id, label, volume }) => {
+      if (parsed.ids.has(id))
+        throw new TimelineError(
+          "duplicate_id",
+          `Audio group ID ${id} is already in use.`,
+        );
+      const name = label ? ` data-label="${escapeAttribute(label)}"` : "";
+      return `\n${indent}<hf-audio-group id="${escapeAttribute(id)}"${name} data-volume="${volume}"></hf-audio-group>`;
+    });
+    edits.push({
+      start: at,
+      end: at,
+      text: tags.join("") + "\n",
+    });
+  }
   const changedGroups = new Map(
     before.authoredAudioGroups?.flatMap(({ id, volume, sourceRestriction }) => {
       const next = groupVolumes.get(id);
@@ -2307,9 +2350,9 @@ export function patchComposition(
     }),
   );
   if (changedGroups.size) {
-    for (const element of compositionAudioGroups(parsed.root)) {
+    for (const element of declarations) {
       const id = element.attrs.id;
-      if (!id || isManagedAudioGroup(element)) continue;
+      if (!id) continue;
       const volume = changedGroups.get(id);
       if (volume === undefined) continue;
       edits.push(

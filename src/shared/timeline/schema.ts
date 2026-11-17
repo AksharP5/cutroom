@@ -474,6 +474,7 @@ export const TimelineSchema = z.object({
       z.object({
         id: z.string(),
         volume: z.number(),
+        label: z.string().optional(),
         sourceRestriction: z.string().optional(),
       }),
     )
@@ -963,6 +964,29 @@ export const CommandSchema = z.discriminatedUnion("type", [
     })
     .describe(
       "Create a track or change its name, lock, auto-select, enable, mute, solo or gain. Mute covers all sound on the track, including embedded video audio. Gain excludes clips with trackGainWarning. Solo selects audio tracks and affects preview and export.",
+    ),
+  z
+    .object({
+      type: z.literal("routeAudioGroup"),
+      clipIds,
+      group: z
+        .union([
+          z.string().min(1).max(200),
+          z.strictObject({
+            id: z
+              .string()
+              .max(120)
+              .regex(/^[A-Za-z0-9_-]+$/),
+            label: z.string().trim().min(1).max(120),
+          }),
+          z.null(),
+        ])
+        .describe(
+          "Pass an existing group ID, an object with a new ID and label, or null to return the clips to track mixing",
+        ),
+    })
+    .describe(
+      "Route the named clips with sound in one edit. A new group starts at unity gain. This changes their audio bus, without moving clips or changing their clip gain, fades, or effects",
     ),
   z
     .object({

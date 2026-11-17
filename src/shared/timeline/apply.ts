@@ -13,7 +13,12 @@ import type {
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
 import { TimelineError } from "./errors";
-import { clipFades, windowMix, withVolumePoints } from "./mix";
+import {
+  clipFades,
+  trackGainWarning,
+  windowMix,
+  withVolumePoints,
+} from "./mix";
 import { MAX_FX_NODES, asHfChain } from "./fx";
 import type { FxInput, FxNode } from "./fx";
 import {
@@ -237,6 +242,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
 const usedNames = (timeline: Timeline, retired: ReadonlySet<string>) =>
   new Set([
     ...retired,
+    ...(timeline.authoredAudioGroups ?? []).map(({ id }) => id),
     ...timeline.clips.flatMap((clip) =>
       clip.link ? [clip.id, clip.link] : [clip.id],
     ),
@@ -1333,6 +1339,67 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
             }),
           },
         ],
+      };
+    }
+    case "routeAudioGroup": {
+      const selected = new Set(command.clipIds.map(find));
+      for (const clip of selected) {
+        if (trackAt(clip.track)?.locked)
+          throw new TimelineError("locked", `Track ${clip.track} is locked.`);
+        if (!clip.hasAudio)
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(clip)} has no sound.`,
+          );
+      }
+      let groups = timeline.authoredAudioGroups ?? [];
+      const target = command.group;
+      const id = typeof target === "object" ? target?.id : target;
+      if (target && typeof target !== "string") {
+        if (
+          taken.has(target.id) ||
+          clips.some(
+            ({ authoredAudioGroupId }) => authoredAudioGroupId === target.id,
+          )
+        )
+          throw new TimelineError(
+            "duplicate_id",
+            `Audio group ID ${target.id} is already in use.`,
+          );
+        taken.add(target.id);
+        groups = [...groups, { ...target, volume: 1 }];
+      } else if (target) {
+        const group = groups.find(({ id }) => id === target);
+        if (!group)
+          throw new TimelineError(
+            "not_found",
+            `No audio group has ID ${target}.`,
+          );
+        if (group.sourceRestriction)
+          throw new TimelineError("unsupported", group.sourceRestriction);
+      }
+      return {
+        ...timeline,
+        ...(groups.length && { authoredAudioGroups: groups }),
+        clips: clips.map((clip) => {
+          if (
+            !selected.has(clip) ||
+            clip.authoredAudioGroupId === (id ?? undefined)
+          )
+            return clip;
+          const {
+            authoredAudioGroupId: _group,
+            trackGainWarning: _warning,
+            ...rest
+          } = clip;
+          return id
+            ? {
+                ...rest,
+                authoredAudioGroupId: id,
+                trackGainWarning: trackGainWarning(id),
+              }
+            : rest;
+        }),
       };
     }
     case "setAudioGroup": {

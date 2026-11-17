@@ -112,6 +112,8 @@ Resolve's gap, slip, slide and link edits are commands too, each one undo step w
 
 ### Authored audio group gain
 
+A `timeline_edit` command such as `{ "type": "routeAudioGroup", "clipIds": ["dialogue-1", "dialogue-2"], "group": { "id": "voices", "label": "Voices" } }` creates a unity-gain bus and routes both clips to it in one undo step. Pass an existing group ID as `group` to join it, or `null` to return to track mixing. The clips must have sound and be on unlocked tracks.
+
 A clip's `authoredAudioGroupId` is its bus membership. Find the matching declaration and its linear gain in `timeline.authoredAudioGroups`, which includes buses with no current members. The Inspector's Group gain field and `{ "type": "setAudioGroup", "clipId": "dialogue-1", "volume": 0.5 }` both change the declared bus in one undo step. Clip gain, routing, FX, mute and automation are preserved. A clip that references an undeclared bus keeps its membership and has no bus gain to edit. Edits are refused when a member is on a locked track or the declaration carries a `sourceRestriction`, such as a duplicate ID, members outside this timeline, or external scenes that can inherit the parent bus.
 
 ### Volume automation
