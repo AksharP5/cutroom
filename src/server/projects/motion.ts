@@ -17,6 +17,7 @@ import type { MotionSnapshot, MotionUpdate } from "../../shared/motion";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import type { TimelineSettings } from "../../shared/timeline/schema";
 import { posix } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   compositionScope,
   parseComposition,
@@ -327,7 +328,29 @@ function inspect(
   if (!element)
     throw new HttpError(404, `No clip ${clipId} in ${composition}.`);
   const all = scopeElements(projection.roots, projection.scope);
-  const { document } = parseHTML(content);
+  const lockedTracks = new Set(
+    projection.timeline.tracks
+      .filter((track) => track.locked)
+      .map((track) => track.index),
+  );
+  const lockedElements = projection.timeline.clips
+    .filter((clip) => lockedTracks.has(clip.track))
+    .map((clip) => projection.elements.get(clip.id)!)
+    .toSorted((a, b) => a.openEnd - b.openEnd);
+  // Tag parser-located owners only in the query copy. This maps even generated clip IDs to
+  // their real DOM nodes, without writing IDs or markers into the composition source.
+  const lockAttribute = `data-cutroom-motion-lock-${randomUUID()}`;
+  let cursor = 0;
+  const queryContent =
+    lockedElements
+      .map((owner) => {
+        const at = owner.openEnd - (content[owner.openEnd - 2] === "/" ? 2 : 1);
+        const before = content.slice(cursor, at);
+        cursor = at;
+        return `${before} ${lockAttribute}`;
+      })
+      .join("") + content.slice(cursor);
+  const { document } = parseHTML(queryContent);
   const queryRoot =
     projection.scope === "sub-composition"
       ? (document.querySelector("template")?.content ?? document)
@@ -408,6 +431,8 @@ function inspect(
       }
       const unresolved = string(entry.node.arguments?.[0]) === null;
       if (!targets.includes(selected[0]!) && !unresolved) continue;
+      if (targets.some((target) => target.closest(`[${lockAttribute}]`)))
+        reason ??= "This motion targets a locked track.";
       const id = `${script.start}:${entry.id}`;
       const props = tweenFields(entry);
       const sourceOnly: string[] = [];
@@ -472,18 +497,6 @@ function changeSource(
   if (!shown || !found)
     throw new HttpError(404, "That motion no longer exists. Inspect it again.");
   const { script, entry } = found;
-  // A shared selector really edits all its targets, including clips other than the selected one.
-  for (const clip of inspected.projection.timeline.clips) {
-    if (
-      shown.targets.includes(
-        `#${inspected.projection.elements.get(clip.id)?.attrs.id}`,
-      ) &&
-      inspected.projection.timeline.tracks.find(
-        (track) => track.index === clip.track,
-      )?.locked
-    )
-      throw new HttpError(422, "This motion targets a locked track.");
-  }
   const props = tweenFields(entry);
   const change = input.change;
   let original: Syntax | undefined;

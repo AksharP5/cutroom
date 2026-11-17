@@ -163,8 +163,20 @@ test("stale IDs after an external insertion or concurrent edits never change a d
     expect(replies.map((response) => response.status).sort()).toEqual([
       200, 409,
     ]);
-    expect(await f.source()).toContain("x:101");
-    expect(await f.source()).toContain("x: 200");
+    const winner = replies[0]!.status === 200 ? 101 : 102;
+    expect(await f.source()).toBe(changed.replace("x:777", `x:${winner}`));
+    const accepted = replies.find((response) => response.status === 200)!;
+    const refused = replies.find((response) => response.status === 409)!;
+    expect(await refused.text()).toContain("The source changed");
+    const saved = MotionSnapshotSchema.parse(await accepted.json());
+    expect(saved.animations[0]!.to.x).toBe(winner);
+    expect((await f.read()).version).toBe(saved.version);
+    const history = z
+      .object({ entries: z.array(z.object({ label: z.string() })) })
+      .parse(await (await f.request(`${f.base}/history`)).json());
+    expect(
+      history.entries.filter((entry) => entry.label === "Edit card motion"),
+    ).toHaveLength(1);
   } finally {
     await f.close();
   }
@@ -500,5 +512,135 @@ test("duplicate live ids, cross-script timeline uses and script-closing ease inp
     expect(await f.source()).toBe(crossScript);
   } finally {
     await f.close();
+  }
+});
+
+test("locked motion ownership includes descendant targets and anonymous clips in each composition scope", async () => {
+  for (const lockedContent of [
+    `<div id="other" class="clip" data-start="0" data-duration="4" data-track-index="1"><span id="child" class="shape">Locked clip content</span></div>`,
+    `<div class="clip shape" data-start="0" data-duration="4" data-track-index="1"></div>`,
+  ]) {
+    for (const composition of ["index.html", "compositions/scene.html"]) {
+      const f = await fixture();
+      const server = createMcpServer({
+        fetch: (url, init) => f.app.request(url, init),
+      });
+      const client = new Client({ name: "motion-lock-test", version: "1" });
+      const [local, remote] = InMemoryTransport.createLinkedPair();
+      await server.connect(remote);
+      await client.connect(local);
+      try {
+        const scene = `<main data-composition-id="main" data-duration="4"><div id="card" class="clip shape" data-start="0" data-duration="4" data-track-index="0"></div>${lockedContent}</main><script>const tl=gsap.timeline(); tl.to('.shape',{x:100 /* preserve */,duration:1,onComplete:()=>{}},0);</script>`;
+        // Duplicate ids in an inactive template must not become targets or owners.
+        const inactive = `<template><div id="card" class="shape"></div><span id="child" class="shape"></span></template>`;
+        const source =
+          composition === "index.html"
+            ? `${scene}${inactive}`
+            : `<template>${scene}</template>${inactive}`;
+        const path = join(f.project.path, composition);
+        await mkdir(join(f.project.path, "compositions"), { recursive: true });
+        await writeFile(path, source);
+        const timeline = async () =>
+          TimelineViewSchema.parse(
+            await (
+              await f.request(
+                `${f.base}/timeline?${new URLSearchParams({ composition })}`,
+              )
+            ).json(),
+          );
+        const setLock = async (locked: boolean) => {
+          const view = await timeline();
+          expect(
+            (
+              await f.request(`${f.base}/commands`, "POST", {
+                composition,
+                expectedRevision: view.revision,
+                commands: [{ type: "setTrack", index: 1, locked }],
+              })
+            ).status,
+          ).toBe(200);
+        };
+        const unlocked = await f.read(composition);
+        expect(unlocked.animations[0]!.targets).toEqual([
+          "#card",
+          lockedContent.includes('id="other"') ? "#child" : "div (no id)",
+        ]);
+        expect(unlocked.animations[0]!.reason).toBeNull();
+        const owner = (await timeline()).timeline.clips.find(
+          (clip) => clip.track === 1,
+        )!;
+        expect(owner.id.length).toBeGreaterThan(0);
+        if (!lockedContent.includes('id="other"'))
+          expect(source).not.toContain(`id="${owner.id}"`);
+        await setLock(true);
+        const before = await readFile(path, "utf8");
+        expect(before).toBe(source);
+        // A previously unlocked snapshot must also respect the current lock.
+        const refused = await f.update(unlocked, {
+          kind: "property",
+          side: "to",
+          name: "x",
+          value: 200,
+        });
+        expect(refused.status).toBe(422);
+        expect(await refused.text()).toContain("locked track");
+        expect(await readFile(path, "utf8")).toBe(before);
+        const read = z
+          .object({
+            structuredContent: z.object({ result: MotionSnapshotSchema }),
+          })
+          .parse(
+            await client.callTool({
+              name: "motion_read",
+              arguments: {
+                projectId: f.project.id,
+                clipId: "card",
+                composition,
+              },
+            }),
+          ).structuredContent.result;
+        expect(read.animations[0]!.reason).toContain("locked track");
+        const args = {
+          projectId: f.project.id,
+          composition,
+          clipId: "card",
+          expectedVersion: read.version,
+          animationId: read.animations[0]!.id,
+          change: { kind: "property", side: "to", name: "x", value: 200 },
+        };
+        expect(
+          (await client.callTool({ name: "motion_update", arguments: args }))
+            .isError,
+        ).toBe(true);
+        expect(await readFile(path, "utf8")).toBe(before);
+        await setLock(false);
+        const beforeAllowed = await readFile(path, "utf8");
+        const state = await f.read(composition);
+        expect(state.animations[0]!.reason).toBeNull();
+        expect(
+          (
+            await client.callTool({
+              name: "motion_update",
+              arguments: {
+                ...args,
+                expectedVersion: state.version,
+                animationId: state.animations[0]!.id,
+              },
+            })
+          ).isError,
+        ).not.toBe(true);
+        expect(await readFile(path, "utf8")).toBe(
+          beforeAllowed.replace("x:100", "x:200"),
+        );
+        expect((await f.request(`${f.base}/history/undo`, "POST")).ok).toBe(
+          true,
+        );
+        expect(await readFile(path, "utf8")).toBe(beforeAllowed);
+      } finally {
+        await client.close();
+        await server.close();
+        await f.close();
+      }
+    }
   }
 });

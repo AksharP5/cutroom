@@ -44,7 +44,7 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
   if (unit === "number" || unit === "seconds") {
     const literal = unit === "seconds" ? input.replace(/\s*s$/, "") : input;
     if (
-      !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(literal) ||
+      !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i.test(literal) ||
       !Number.isFinite(Number(literal))
     )
       throw new Error(

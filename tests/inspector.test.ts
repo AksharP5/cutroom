@@ -117,6 +117,15 @@ test("a percentage shows every digit the engine keeps", () => {
   expect(formatField(opacity, "percent", fps)).toBe("12.3456%");
 });
 
+test("motion number fields accept the finite exponent notation their formatter displays", () => {
+  expect(formatField(1e-7, "number", fps)).toBe("1e-7");
+  for (const unit of ["number", "seconds"] as const)
+    for (const value of [1e-7, -1e-7, 1e21, 0.5])
+      expect(parseField(formatField(value, unit, fps), unit, fps)).toBe(value);
+  for (const input of ["1e", "1e309", "1e-7junk", "Infinity", "NaN"])
+    expect(() => parseField(input, "number", fps)).toThrow();
+});
+
 test("inspector timing uses normal move and trim, changes linked source timing, and refuses overlaps and exhausted media", () => {
   const html = `<main data-composition-id="main" data-fps="30" data-duration="6">
     <video id="picture" data-start="0" data-duration="2" data-track-index="0" data-link="pair"></video>
