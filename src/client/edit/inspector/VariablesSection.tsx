@@ -1,5 +1,5 @@
 import type { Clip } from "../../../shared/timeline/schema";
-import { isEditable } from "../../../shared/variables";
+import { isEditable, variableDefaultValue } from "../../../shared/variables";
 import type {
   CompositionVariable,
   EditableVariable,
@@ -68,7 +68,7 @@ function VariableRow({
         {isEditable(variable) ? (
           <VariableControl
             variable={variable}
-            value={preview ?? variable.default}
+            value={preview ?? variableDefaultValue(variable)}
             onChange={(value) =>
               void previewVariable(projectId, variable.id, value)
             }
@@ -80,9 +80,7 @@ function VariableRow({
             value={
               typeof variable.default === "string"
                 ? variable.default
-                : "name" in variable.default
-                  ? variable.default.name
-                  : variable.default.url
+                : variable.default.name
             }
             disabled
             parse={(text) => text}
@@ -113,6 +111,7 @@ function VariableControl({
 }) {
   switch (variable.type) {
     case "string":
+    case "image":
       return (
         <DraftField
           label={variable.label}

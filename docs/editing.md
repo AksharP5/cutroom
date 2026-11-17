@@ -54,11 +54,13 @@ Once a project has a sub-composition, the Media panel's header also offers Compo
 
 ### Variables
 
-A composition that declares HyperFrames variables lists them in the inspector when nothing is selected: each one's label and the value the viewer shows, edited as words, a number, a colour, a switch or a menu. Changing a value previews it at once without touching the source, as `hyperframes render --variables` would render it; double-click the label to go back to the default. **Set default** writes the shown value into the declaration as one undo step. A newer preview from another client stays visible while the default saves. Agents see and set the same values ([details](mcp.md#variables)), and their changes appear in your viewer.
+A composition that declares HyperFrames variables lists them in the inspector when nothing is selected: each one's label and the value the viewer shows, edited as words, a number, a colour, a switch, a menu or an image path. Changing a value previews it at once without touching the source, as `hyperframes render --variables` would render it; double-click the label to go back to the default. **Set default** writes the shown value into the declaration as one undo step. A newer preview from another client stays visible while the default saves. Agents see and set the same values ([details](mcp.md#variables)), and their changes appear in your viewer.
 
 Select a text clip and open the **Words** or **Colour** picker in its Text section. Pick a declared variable, or choose **New variable…** to start with the clip's current value. Words accept string variables and colour accepts colour variables. Colour needs an explicit inline colour or a direct `color: var(--id)` binding. Each selection saves in one undo step.
 
 Binding an existing variable requires an unlocked clip with a unique authored element ID and one plain line of text. Existing word bindings are shown read-only. Use Source for titles and multiline or nested text. External template compositions use their own declarations.
+
+For an authored image variable, enter a project image path relative to the composition. Import the image in Media first if it is outside the project. Use Source to declare the variable and bind it with `data-var-src`.
 
 The Export dialog lists the variables too, starting from the viewer's values, so an export matches what you previewed.
 

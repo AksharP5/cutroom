@@ -1,13 +1,16 @@
 import { z } from "zod";
 import { isCompositionVariable } from "@hyperframes/core/variables";
-import type { CompositionVariable } from "@hyperframes/core/variables";
+import type {
+  CompositionVariable,
+  ImageValue,
+} from "@hyperframes/core/variables";
+import { inMediaTrash, localMediaPath, mediaKind } from "./media";
 
 export type { CompositionVariable };
 
 /**
  * HyperFrames composition variables, as `data-composition-variables` declares them and
- * `hyperframes render --variables` overrides them. Cutroom edits the scalar kinds; font and image
- * values stay with the source.
+ * `hyperframes render --variables` overrides them. Cutroom edits scalars and local image paths.
  */
 export const EDITABLE_VARIABLE_TYPES = [
   "string",
@@ -15,6 +18,7 @@ export const EDITABLE_VARIABLE_TYPES = [
   "color",
   "boolean",
   "enum",
+  "image",
 ] as const;
 export type EditableVariable = Extract<
   CompositionVariable,
@@ -46,6 +50,40 @@ export const HexColourSchema = z
     "Colours are hex, such as #ff6600.",
   );
 
+const ImagePathSchema = z
+  .string()
+  .max(MAX_VARIABLE_TEXT)
+  .refine(
+    (value) =>
+      value === value.trim() &&
+      !/^\/|[\\?#:\u0000-\u001f]/.test(value) &&
+      !/%(?:2f|5c)/i.test(value) &&
+      localMediaPath("index.html", value) !== null,
+    "Use a relative project image path, with # and ? percent-encoded.",
+  );
+
+/** Image URLs are relative to the file declaring the variable. */
+export function imageVariablePath(composition: string, value: string) {
+  const path = localMediaPath(composition, value);
+  if (
+    path === null ||
+    path.split("/").some((part) => part.startsWith(".")) ||
+    inMediaTrash(path) ||
+    mediaKind(path)?.kind !== "image"
+  )
+    throw new VariableError("Choose an image inside the project.");
+  return path;
+}
+
+const imageUrl = (value: string | ImageValue) =>
+  typeof value === "string" ? value : value.url;
+
+export function variableDefaultValue(variable: EditableVariable) {
+  return variable.type === "image"
+    ? imageUrl(variable.default)
+    : variable.default;
+}
+
 /** The declarations HyperFrames' runtime reads from one composition's attribute value. */
 export function parseDeclarations(
   raw: string | undefined,
@@ -58,6 +96,43 @@ export function parseDeclarations(
     return [];
   }
   return Array.isArray(parsed) ? parsed.filter(isCompositionVariable) : [];
+}
+
+export function imageDeclarationUrls(raw: string | undefined) {
+  return parseDeclarations(raw).flatMap((variable) =>
+    variable.type === "image" ? [imageUrl(variable.default)] : [],
+  );
+}
+
+/** Rewrite only image URLs, preserving unrecognized declarations. */
+export function rewriteImageDeclarationUrls(
+  raw: string,
+  replace: (url: string) => string,
+) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!Array.isArray(parsed)) return raw;
+  let changed = false;
+  const result = parsed.map((variable: unknown) => {
+    if (!isCompositionVariable(variable) || variable.type !== "image")
+      return variable;
+    const previous = imageUrl(variable.default);
+    const url = replace(previous);
+    if (url === previous) return variable;
+    changed = true;
+    return {
+      ...variable,
+      default:
+        typeof variable.default === "string"
+          ? url
+          : { ...variable.default, url },
+    };
+  });
+  return changed ? JSON.stringify(result) : raw;
 }
 
 /** What a value for this declaration must be. */
@@ -85,6 +160,8 @@ export function variableValueSchema(variable: EditableVariable) {
         message: `Choose one of ${values.join(", ")}.`,
       });
     }
+    case "image":
+      return ImagePathSchema;
   }
 }
 
@@ -129,7 +206,8 @@ export function checkVariableValues(
       );
       continue;
     }
-    if (parsed.data !== variable.default) checked[id] = parsed.data;
+    if (parsed.data !== variableDefaultValue(variable))
+      checked[id] = parsed.data;
   }
   if (problems.length) throw new VariableError(problems.join(" "));
   return checked;

@@ -4,6 +4,7 @@ import { relative } from "node:path";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
+import { imageDeclarationUrls } from "../../shared/variables";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { isMissing, projectPath, readSource } from "./store";
@@ -62,6 +63,11 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
           : id;
         for (const name of ["src", "poster"])
           if (element.attrs[name]) add(target, element.attrs[name]);
+        if (element.attrs["data-composition-variables"])
+          for (const url of imageDeclarationUrls(
+            element.attrs["data-composition-variables"],
+          ))
+            add(null, url);
         for (const candidate of (element.attrs.srcset ?? "").split(",")) {
           const url = candidate.trim().split(/\s+/)[0];
           if (url) add(target, url);

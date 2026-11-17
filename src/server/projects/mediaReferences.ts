@@ -6,6 +6,7 @@ import {
 } from "@hyperframes/parsers";
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
+import { rewriteImageDeclarationUrls } from "../../shared/variables";
 
 /** Rewrite only paths that resolve to the renamed file, retaining their relative prefix. */
 export function renameReferences(
@@ -96,13 +97,15 @@ export function renameReferences(
       const next =
         attr.name === "style"
           ? css(value)
-          : attr.name === "srcset"
-            ? value.replace(
-                /(^|,)\s*([^,\s]+)/g,
-                (whole: string, _lead: string, url: string) =>
-                  whole.replace(url, path(url, true)),
-              )
-            : path(value, !attr.quote);
+          : attr.name === "data-composition-variables"
+            ? rewriteImageDeclarationUrls(value, (url) => path(url, true))
+            : attr.name === "srcset"
+              ? value.replace(
+                  /(^|,)\s*([^,\s]+)/g,
+                  (whole: string, _lead: string, url: string) =>
+                    whole.replace(url, path(url, true)),
+                )
+              : path(value, !attr.quote);
       if (next === value) continue;
       const escaped = next
         .replaceAll("&", "&amp;")

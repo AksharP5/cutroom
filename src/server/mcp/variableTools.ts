@@ -44,7 +44,7 @@ export function registerVariableTools(
     "variables_preview",
     {
       description:
-        "Replace the overrides the editor's viewer previews for a composition, as hyperframes render --variables would apply them, without writing the source or history. Strings, numbers, hex colours, booleans and enum options are checked against each declaration; font and image variables are set in the source. timeline_view still shows the defaults.",
+        "Replace the overrides the editor's viewer previews for a composition, as hyperframes render --variables would apply them, without writing the source or history. Scalars are checked against each declaration. For an image variable, pass the path of a project image relative to the composition file. Font variables are set in the source. timeline_view still shows the defaults.",
       inputSchema: VariablesPreviewSchema.extend({ projectId }),
       annotations: edit,
     },

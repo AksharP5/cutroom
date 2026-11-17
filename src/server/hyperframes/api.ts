@@ -18,6 +18,7 @@ import {
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
+import { checkProjectVariableValues } from "../projects/variables";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
@@ -88,7 +89,6 @@ import { mediaFacts } from "../timeline/media";
 import {
   VariableError,
   VariableValuesSchema,
-  checkVariableValues,
   parseDeclarations,
 } from "../../shared/variables";
 import type { VariableValues } from "../../shared/variables";
@@ -288,10 +288,12 @@ export function createHyperframesApi(
       return Number.isFinite(value) && value > 0 ? value : fallback;
     };
     /** Overrides for this composition's declarations, without those that equal a default. */
-    const variables = (values: VariableValues | undefined) => {
+    const variables = async (values: VariableValues | undefined) => {
       if (!values) return undefined;
       try {
-        return checkVariableValues(
+        return await checkProjectVariableValues(
+          project,
+          composition,
           values,
           parseDeclarations(declaredVariables(source.content)),
         );
@@ -327,7 +329,7 @@ export function createHyperframesApi(
       project.id,
       composition,
     );
-    const overrides = variables(input.variables);
+    const overrides = await variables(input.variables);
     const output = exportSize(input.size, size);
     if ("problem" in output) throw new HttpError(400, output.problem);
     const fps = exportFps(
@@ -463,7 +465,7 @@ export function createHyperframesApi(
           .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
           .join("; "),
       );
-    variables(overrides.data.variables);
+    await variables(overrides.data.variables);
     const rate = parseFps(request.data.fps);
     if (!rate.ok) throw new HttpError(400, "Choose a valid frame rate.");
     // The render route plays GIF at 30 fps at most; the range follows the rate it renders.
