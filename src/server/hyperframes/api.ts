@@ -421,18 +421,27 @@ export function createHyperframesApi(
       );
     const directory = await projectStatePath(project, ".cutroom/renders", true);
     await mkdir(directory, { recursive: true });
-    const filename = await nextExportName(
-      directory,
-      exportFilename(project.name).replace(
-        /\.mp4$/,
-        ` ${timecode.replaceAll(":", "-")}.png`,
-      ),
+    const name = exportFilename(project.name).replace(
+      /\.mp4$/,
+      ` ${timecode.replaceAll(":", "-")}.png`,
     );
-    const path = join(directory, filename);
-    await writeFile(path, new Uint8Array(await frame.arrayBuffer()), {
-      flag: "wx",
-    });
-    return c.json({ path, filename });
+    const png = new Uint8Array(await frame.arrayBuffer());
+    for (;;) {
+      const filename = await nextExportName(directory, name);
+      const path = join(directory, filename);
+      try {
+        await writeFile(path, png, { flag: "wx" });
+        return c.json({ path, filename });
+      } catch (error) {
+        // Two clients can capture the same frame together. Retry the name, not the render.
+        if (!(
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EEXIST"
+        ))
+          throw error;
+      }
+    }
   });
   // Extend Studio's one job registry, progress stream and cancel route with Cutroom's output intent.
   api.use("/projects/:id/render", async (c, next) => {

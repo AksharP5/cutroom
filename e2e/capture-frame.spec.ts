@@ -83,13 +83,13 @@ test("MCP saves the exact named-scene frame as a PNG without replacing earlier s
       return z.object({ result: StillSchema }).parse(reply.structuredContent)
         .result;
     };
-    const first = await readStill(http);
-    const second = await readStill(stdio);
-    expect(first).toEqual({
-      path: join(project.path, ".cutroom/renders/Frame proof 00-00-00-01.png"),
-      filename: "Frame proof 00-00-00-01.png",
-    });
-    expect(second.filename).toBe("Frame proof 00-00-00-01 2.png");
+    const stills = await Promise.all([readStill(http), readStill(stdio)]);
+    expect(new Set(stills.map(({ filename }) => filename))).toEqual(
+      new Set(["Frame proof 00-00-00-01.png", "Frame proof 00-00-00-01 2.png"]),
+    );
+    for (const { filename, path } of stills)
+      expect(path).toBe(join(project.path, ".cutroom/renders", filename));
+    const [first, second] = stills;
     const png = await readFile(first.path);
     expect(pngSize(png)).toEqual({ width: 320, height: 240 });
     expect(await readFile(second.path)).toEqual(png);
