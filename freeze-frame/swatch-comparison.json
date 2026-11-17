@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "preview",
+    "source": "untagged",
+    "videoToOriginal": 2,
+    "videoToMidpoint": 2,
+    "originalToMidpoint": 0,
+    "midpoint": "reused via Media"
+  },
+  {
+    "mode": "preview",
+    "source": "bt601",
+    "videoToOriginal": 2,
+    "videoToMidpoint": 2,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  },
+  {
+    "mode": "preview",
+    "source": "bt709",
+    "videoToOriginal": 3,
+    "videoToMidpoint": 3,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  },
+  {
+    "mode": "direct",
+    "source": "untagged",
+    "videoToOriginal": 3,
+    "videoToMidpoint": 3,
+    "originalToMidpoint": 0,
+    "midpoint": "reused via Media"
+  },
+  {
+    "mode": "direct",
+    "source": "bt601",
+    "videoToOriginal": 3,
+    "videoToMidpoint": 3,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  },
+  {
+    "mode": "direct",
+    "source": "bt709",
+    "videoToOriginal": 4,
+    "videoToMidpoint": 4,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  },
+  {
+    "mode": "capture",
+    "source": "untagged",
+    "videoToOriginal": 3,
+    "videoToMidpoint": 3,
+    "originalToMidpoint": 0,
+    "midpoint": "reused via Media"
+  },
+  {
+    "mode": "capture",
+    "source": "bt601",
+    "videoToOriginal": 3,
+    "videoToMidpoint": 3,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  },
+  {
+    "mode": "capture",
+    "source": "bt709",
+    "videoToOriginal": 4,
+    "videoToMidpoint": 4,
+    "originalToMidpoint": 0,
+    "midpoint": "original freeze"
+  }
+]
