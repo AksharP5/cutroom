@@ -31,7 +31,7 @@ export function registerCaptionTools(
     "captions_list",
     {
       description:
-        "List each transcript's captions: the captions clip and file, style, lines in composition seconds, words whose caption text differs from the transcript, and stale, which is true when the transcript's clip changed since the captions were written.",
+        "List each transcript's captions: the captions clip and file, style, lines in composition seconds, word text corrections, word transforms by transcript word ID, and stale, which is true when the transcript's clip changed since the captions were written.",
       inputSchema: { projectId },
       annotations: readOnly,
     },
@@ -41,7 +41,7 @@ export function registerCaptionTools(
     "captions_edit",
     {
       description:
-        "Add, regenerate, restyle or correct a transcript's captions, as one undo step. generate writes compositions/captions.html, a HyperFrames sub-composition of timed lines in the caption safe area, and places it as one clip on a new Captions track; on captions that exist it rewrites them to follow the transcript's words where they now play, after timeline edits such as razors, ripple deletes or moves of the footage. Script cuts with transcript_edit update captions by themselves. Restyling and word edits keep timing. Regenerating replaces hand edits to the captions file and resets the captions clip's start and length on the timeline, but keeps word corrections and its look in the inspector.",
+        "Add, regenerate, restyle or correct a transcript's captions, as one undo step. generate writes compositions/captions.html, a HyperFrames sub-composition of timed lines in the caption safe area, and places it as one clip on a new Captions track; on captions that exist it rewrites them to follow the transcript's words where they now play, after timeline edits such as razors, ripple deletes or moves of the footage. Script cuts with transcript_edit update captions by themselves. Restyling, word edits and word transforms keep timing. The transform action sets position, scale and rotation for selected word IDs. Null resets their transforms. Regenerating replaces hand edits to the captions file and resets the captions clip's start and length on the timeline, but keeps word corrections and its look in the inspector.",
       inputSchema: { projectId, edit: CaptionsEditSchema },
       annotations: edit,
     },

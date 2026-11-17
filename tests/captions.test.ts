@@ -358,3 +358,58 @@ test("cutting every script word clears the captions and can be undone", async ()
     await fixture.close();
   }
 });
+
+test("caption word transforms merge by property and follow words through Cut, Restore and Undo", async () => {
+  const { fixture, project, json } = await captionsFixture();
+  try {
+    const transcript = TranscriptSchema.parse(
+      await json("/transcripts/import", "POST", {
+        mediaPath: "talk.mp4",
+        elementId: "talk",
+        words,
+      }),
+    );
+    const before = CaptionsViewSchema.parse(
+      await json("/captions", "POST", {
+        action: "generate",
+        transcriptId: transcript.id,
+      }),
+    );
+    const edit = async (wordIds: string[], transform: unknown) =>
+      CaptionsViewSchema.parse(
+        await json("/captions", "POST", {
+          action: "transform",
+          transcriptId: transcript.id,
+          wordIds,
+          transform,
+        }),
+      );
+    await edit(["w4", "w5"], { x: 24, scale: 1.25 });
+    const changed = await edit(["w4"], { y: -18, rotation: 12 });
+    expect(changed.cues).toEqual(before.cues);
+    expect(changed.wordTransforms).toEqual({
+      w4: { x: 24, y: -18, scale: 1.25, rotation: 12 },
+      w5: { x: 24, scale: 1.25 },
+    });
+    const saved = join(project.path, before.file);
+    const html = await readFile(saved, "utf8");
+    expect(html).toContain("translate:24px -18px;scale:1.25;rotate:12deg");
+    for (const action of ["cut", "restore"])
+      await json(`/transcripts/${transcript.id}/cuts`, "POST", {
+        action,
+        wordIds: ["w4", "w5"],
+      });
+    expect(await readFile(saved, "utf8")).toContain(
+      "translate:24px -18px;scale:1.25;rotate:12deg",
+    );
+    expect((await edit(["w4", "w5"], null)).wordTransforms).toEqual({});
+    expect(await readFile(saved, "utf8")).not.toContain("translate:24px");
+    expect(
+      (await fixture.request(`/projects/${project.id}/history/undo`, "POST"))
+        .status,
+    ).toBe(200);
+    expect(await readFile(saved, "utf8")).toContain("translate:24px -18px");
+  } finally {
+    await fixture.close();
+  }
+});

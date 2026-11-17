@@ -142,6 +142,7 @@ export function layoutCaptions(
   style: CaptionStyle,
   edits: ReadonlyMap<string, string>,
   composition: { fps: Fps; width: number; height: number; duration: number },
+  wordTransforms: Captions["wordTransforms"] = {},
 ) {
   const words = view.words
     .flatMap((word) =>
@@ -170,6 +171,7 @@ export function layoutCaptions(
     style,
     transcriptId: view.id,
     edits: Object.fromEntries(edits),
+    wordTransforms,
     groups: [],
   };
   if (!groups.length) return { captions, placement: null };
@@ -232,6 +234,7 @@ export function captionsView(
       placed.captions.style,
       edits,
       composition,
+      placed.captions.wordTransforms,
     );
     const placement = layout.placement;
     stale = !sameCaptions(layout.captions, placed.captions);
@@ -274,6 +277,7 @@ export function captionsView(
         : [];
     }),
     edits: Object.fromEntries(edits),
+    wordTransforms: placed.captions.wordTransforms,
   };
 }
 
@@ -319,6 +323,7 @@ export async function followTranscript(
     style ?? placed.captions.style,
     captionEdits(placed.captions, transcript),
     composition,
+    placed.captions.wordTransforms,
   );
   const placement = layout.placement;
   if (!placement)
