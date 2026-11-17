@@ -93,3 +93,111 @@ test("A message carries the selected clip and open composition, and the selectio
   await page.keyboard.press("Escape");
   await expect.poll(published).toBeNull();
 });
+
+test("choosing a native skill sends the selected installation when names match", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Native skill selection" },
+      })
+    ).json(),
+  );
+  const name = "trim-audio";
+  const globalPath = "/example/user/skills/trim-audio/SKILL.md";
+  const projectPath = "/example/project/.agents/skills/trim-audio/SKILL.md";
+  await page.route("**/api/cutroom/agents/capabilities?**", (route) =>
+    route.fulfill({
+      json: {
+        provider: "codex",
+        available: true,
+        skills: [
+          {
+            name,
+            description: "Trim an audio clip",
+            enabled: true,
+            path: globalPath,
+          },
+          {
+            name,
+            description: "Trim an audio clip",
+            enabled: true,
+            path: projectPath,
+          },
+        ],
+        mcpServers: [],
+        models: [{ id: "model-a", name: "Model A", isDefault: true }],
+      },
+    }),
+  );
+  const session: AgentSession = {
+    id: crypto.randomUUID(),
+    projectId: project.id,
+    provider: "codex",
+    model: "model-a",
+    title: "Native skill selection",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: "idle",
+    messages: [],
+  };
+  await page.route("**/api/cutroom/agents/sessions?**", (route) =>
+    route.fulfill({ json: { sessions: [session] } }),
+  );
+  await page.route(
+    `**/api/cutroom/agents/sessions/${session.id}/events`,
+    (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ seq: 0, event: { type: "snapshot", session } })}\n\n`,
+      }),
+  );
+  await page.route(
+    `**/api/cutroom/agents/sessions/${session.id}/turns`,
+    (route) => route.fulfill({ status: 202, json: session }),
+  );
+
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Agent", exact: true }).click();
+  const message = page.getByLabel("Message your agent");
+  await message.fill("$trim");
+  const options = page
+    .getByRole("listbox", { name: "Skills" })
+    .getByRole("option");
+  await expect(options).toHaveCount(2);
+  await expect(options.nth(0)).toContainText(globalPath);
+  await expect(options.nth(1)).toContainText(projectPath);
+  await page.getByRole("complementary", { name: "Agent" }).screenshot({
+    path: info.outputPath("duplicate-skills.png"),
+  });
+  await options.nth(1).click();
+  await message.press("End");
+  await message.pressSequentially("shorten the narration");
+  await page.reload();
+  if (!(await message.isVisible()))
+    await page.getByRole("button", { name: "Agent", exact: true }).click();
+  await expect(message).toHaveValue("$trim-audio shorten the narration");
+  const sent = page.waitForRequest(
+    (outgoing) =>
+      outgoing.method() === "POST" && outgoing.url().endsWith("/turns"),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  expect((await sent).postDataJSON()).toMatchObject({
+    text: "$trim-audio shorten the narration",
+    skills: [{ name, path: projectPath }],
+  });
+
+  await expect(message).toHaveValue("");
+  await message.fill("$trim-audio shorten the next clip");
+  const typed = page.waitForRequest(
+    (outgoing) =>
+      outgoing.method() === "POST" && outgoing.url().endsWith("/turns"),
+  );
+  await page.getByRole("button", { name: "Send message" }).click();
+  expect((await typed).postDataJSON()).toMatchObject({
+    text: "$trim-audio shorten the next clip",
+    skills: [{ name, path: globalPath }],
+  });
+});

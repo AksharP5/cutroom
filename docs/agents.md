@@ -11,7 +11,7 @@ Both providers read their own user and project configuration. Cutroom adds a loc
 
 ## Skills and models
 
-Type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool.
+Type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool. If two installed skills share a name, the picker shows both paths and remembers the one you choose with the draft. A name typed without choosing a path uses the first enabled match returned by the native runtime.
 
 The model list comes from the provider. Changing models keeps the conversation and native session. A new conversation starts a separate native session. Conversation and provider controls stay locked while a session opens or accepts a message. Text typed for the next message stays in the composer.
 

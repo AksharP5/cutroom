@@ -23,6 +23,7 @@ import remarkGfm from "remark-gfm";
 import { z } from "zod";
 import {
   agentPermissionsSchema,
+  agentProviderSchema,
   agentCapabilitiesSchema,
   agentEventEnvelopeSchema,
   agentSessionSchema,
@@ -64,7 +65,16 @@ const draftSchema = z.object({
   version: z.literal(1),
   text: z.string(),
   attachments: z.array(z.string()),
+  skillChoices: z
+    .record(
+      z.string(),
+      z.object({ provider: agentProviderSchema, path: z.string() }),
+    )
+    .default({}),
 });
+
+const skillMentions = (text: string) =>
+  new Set(text.match(/\$[\w:/.-]+/g)?.map((mention) => mention.slice(1)));
 
 function readDraft(projectId: string) {
   try {
@@ -592,6 +602,9 @@ export function ChatPanel({
   const [attachments, setAttachments] = useState<string[]>(
     () => readDraft(projectId)?.attachments ?? [],
   );
+  const [skillChoices, setSkillChoices] = useState(
+    () => readDraft(projectId)?.skillChoices ?? {},
+  );
   const [error, setError] = useState("");
   const [operation, setOperation] = useState<ChatOperation | null>(null);
   const submitting = operation !== null;
@@ -604,8 +617,21 @@ export function ChatPanel({
     version: 1 as const,
     text: draft,
     attachments,
+    skillChoices,
   });
-  pendingDraft.current = { version: 1, text: draft, attachments };
+  pendingDraft.current = { version: 1, text: draft, attachments, skillChoices };
+
+  useEffect(() => {
+    setSkillChoices((previous) => {
+      const named = Object.entries(previous);
+      if (!named.length) return previous;
+      const mentions = skillMentions(draft);
+      const remaining = named.filter(([name]) => mentions.has(name));
+      return remaining.length === named.length
+        ? previous
+        : Object.fromEntries(remaining);
+    });
+  }, [draft]);
 
   const saveDraft = useCallback(() => {
     try {
@@ -622,7 +648,7 @@ export function ChatPanel({
   useEffect(() => {
     const timer = setTimeout(saveDraft, 250);
     return () => clearTimeout(timer);
-  }, [draft, attachments, saveDraft]);
+  }, [draft, attachments, skillChoices, saveDraft]);
 
   useEffect(() => {
     window.addEventListener("pagehide", saveDraft);
@@ -853,6 +879,12 @@ export function ChatPanel({
   }
 
   function insertSkill(skill: AgentSkill) {
+    const path = skill.path;
+    if (path)
+      setSkillChoices((previous) => ({
+        ...previous,
+        [skill.name]: { provider, path },
+      }));
     const input = textarea.current;
     const caret = input?.selectionStart ?? draft.length;
     const before = draft
@@ -870,6 +902,14 @@ export function ChatPanel({
     if ((!draft.trim() && !attachments.length) || controlsLocked) return;
     const text = draft;
     const submittedAttachments = attachments;
+    const skills = [...skillMentions(text)].flatMap((name) => {
+      const choice = skillChoices[name];
+      if (choice?.provider === provider) return [{ name, path: choice.path }];
+      const skill = capabilities?.skills.find(
+        (candidate) => candidate.enabled && candidate.name === name,
+      );
+      return skill ? [{ name, path: skill.path }] : [];
+    });
     const context = getContext();
     const submission: TurnSubmission = {
       kind: "turn",
@@ -909,13 +949,6 @@ export function ChatPanel({
         setConversation({ phase: "ready", session: active });
         setModel(active.model ?? "");
       }
-      const mentioned = new Set(
-        [...text.matchAll(/\$([\w:/.-]+)/g)].map((match) => match[1]),
-      );
-      const skills =
-        capabilities?.skills
-          .filter((skill) => skill.enabled && mentioned.has(skill.name))
-          .map(({ name, path }) => ({ name, path })) ?? [];
       await api(
         `/agents/sessions/${active.id}/turns`,
         acceptedSchema,
@@ -1097,6 +1130,15 @@ export function ChatPanel({
               >
                 <span>${skill.name}</span>
                 <small>{skill.description}</small>
+                {skill.path &&
+                  skillResults.some(
+                    (other) =>
+                      other.name === skill.name && other.path !== skill.path,
+                  ) && (
+                    <small className="skill-origin" title={skill.path}>
+                      {skill.path}
+                    </small>
+                  )}
               </button>
             ))}
           </div>
