@@ -12,7 +12,7 @@ import { studioRenderScripts } from "./render";
 import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
-// Prefix caller versions so old renderer output cannot bypass readiness in the cache.
+// Change this when old cached renderer output should be invalidated.
 export const thumbnailRendererVersion = "capture-provenance-v3";
 
 type ThumbnailOptions = Parameters<
