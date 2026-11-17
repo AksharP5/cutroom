@@ -1300,6 +1300,35 @@ option {
   position: relative;
   padding: 0 10px 10px;
 }
+.chat-follow-ups {
+  margin: 0 0 6px;
+  border-top: var(--stroke-hair) solid var(--line-subtle);
+  font-size: var(--type-sm);
+}
+.chat-follow-ups-heading,
+.chat-follow-ups li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 1px 6px 1px 8px;
+}
+.chat-follow-ups-heading {
+  min-height: 26px;
+  color: var(--text-secondary);
+}
+.chat-follow-ups ol {
+  max-height: 84px;
+  overflow: auto;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.chat-follow-ups li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .composer {
   border-radius: var(--radius-float);
   background: var(--surface-raised);

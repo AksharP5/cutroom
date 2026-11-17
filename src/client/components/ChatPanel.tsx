@@ -27,6 +27,7 @@ import {
   agentCapabilitiesSchema,
   agentEventEnvelopeSchema,
   agentSessionSchema,
+  agentSessionSummarySchema,
   type AgentCapabilities,
   type AgentEvent,
   type AgentMessage,
@@ -56,9 +57,7 @@ import { SelectMenu } from "./SelectMenu";
 import { waitForNoteCaptures } from "../edit/noteStore";
 
 const sessionListSchema = z.object({
-  sessions: z.array(
-    agentSessionSchema.omit({ messages: true, pendingRequest: true }),
-  ),
+  sessions: z.array(agentSessionSummarySchema),
 });
 const acceptedSchema = agentSessionSchema;
 const draftSchema = z.object({
@@ -92,8 +91,17 @@ type ConversationState =
   | { phase: "new" }
   | { phase: "loading"; id: string }
   | { phase: "ready"; session: AgentSession };
-type TurnSubmission = { kind: "turn"; stopped: boolean; sessionId?: string };
-type ChatOperation = TurnSubmission | { kind: "model" } | { kind: "stop" };
+type TurnSubmission = {
+  kind: "turn" | "follow-up";
+  stopped: boolean;
+  sessionId?: string;
+};
+type ChatOperation =
+  | TurnSubmission
+  | { kind: "model" }
+  | { kind: "stop" }
+  | { kind: "resume-follow-ups" }
+  | { kind: "remove-follow-up" };
 
 function applyConversationEvents(
   state: ConversationState,
@@ -126,6 +134,12 @@ function applyConversationEvents(
       session = { ...session, messages: items };
     }
     if (event.type === "status") session = { ...session, status: event.status };
+    if (event.type === "turn-queue")
+      session = {
+        ...session,
+        queuedTurns: event.turns,
+        runningFollowUpId: event.runningId,
+      };
     if (event.type === "request")
       session = { ...session, pendingRequest: event.request };
     if (event.type === "request-resolved")
@@ -847,9 +861,21 @@ export function ChatPanel({
     [sessionId, requestId],
   );
   const busy = session?.status === "running" || session?.status === "waiting";
+  const followUps = (session?.queuedTurns ?? []).filter(
+    ({ id }) => id !== session?.runningFollowUpId,
+  );
+  const queuesMessage = busy || followUps.length > 0;
+  const canSend =
+    !submitting &&
+    !opening &&
+    !discovering &&
+    capabilities?.available &&
+    (draft.trim() || attachments.length);
   const controlsLocked = busy || submitting || opening;
-  const active =
+  const canStop =
     busy || operation?.kind === "turn" || operation?.kind === "stop";
+  const resuming = operation?.kind === "resume-follow-ups";
+  const active = canStop || resuming;
   // A turn starts with the owner's latest message.
   const turnStart = session?.messages.findLast(
     (message) => message.role === "user",
@@ -899,7 +925,7 @@ export function ChatPanel({
   }
 
   async function send() {
-    if ((!draft.trim() && !attachments.length) || controlsLocked) return;
+    if (!canSend) return;
     const text = draft;
     const submittedAttachments = attachments;
     const skills = [...skillMentions(text)].flatMap((name) => {
@@ -912,7 +938,7 @@ export function ChatPanel({
     });
     const context = getContext();
     const submission: TurnSubmission = {
-      kind: "turn",
+      kind: queuesMessage ? "follow-up" : "turn",
       stopped: false,
       sessionId: session?.id,
     };
@@ -939,7 +965,7 @@ export function ChatPanel({
         submission.sessionId = active.id;
         setConversation({ phase: "ready", session: active });
       }
-      if (active.model !== (model || undefined)) {
+      if (!queuesMessage && active.model !== (model || undefined)) {
         active = await api(
           `/agents/sessions/${active.id}`,
           agentSessionSchema,
@@ -950,7 +976,7 @@ export function ChatPanel({
         setModel(active.model ?? "");
       }
       await api(
-        `/agents/sessions/${active.id}/turns`,
+        `/agents/sessions/${active.id}/${queuesMessage ? "follow-ups" : "turns"}`,
         acceptedSchema,
         json("POST", {
           text,
@@ -975,6 +1001,26 @@ export function ChatPanel({
     }
   }
 
+  async function changeFollowUps(queuedId?: string) {
+    if (!session || submitting) return;
+    const change: ChatOperation = queuedId
+      ? { kind: "remove-follow-up" }
+      : { kind: "resume-follow-ups" };
+    setOperation(change);
+    setError("");
+    try {
+      await api(
+        `/agents/sessions/${session.id}/follow-ups/${queuedId ?? "resume"}`,
+        acceptedSchema,
+        json(queuedId ? "DELETE" : "POST"),
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOperation((current) => (current === change ? null : current));
+    }
+  }
+
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
       {active ? (
@@ -987,7 +1033,9 @@ export function ChatPanel({
                   ? "Needs you"
                   : busy
                     ? "Working"
-                    : "Sending"}
+                    : resuming
+                      ? "Resuming"
+                      : "Sending"}
             </strong>
             {busy &&
               session?.status === "running" &&
@@ -995,15 +1043,17 @@ export function ChatPanel({
               ` on note ${workingNote}`}
           </span>
           {busy && turnStart && <Elapsed since={turnStart} />}
-          <button
-            className="icon-button"
-            aria-label="Stop agent"
-            title="Stop agent"
-            disabled={operation?.kind === "stop"}
-            onClick={() => void stop()}
-          >
-            <Square weight="fill" />
-          </button>
+          {canStop && (
+            <button
+              className="icon-button"
+              aria-label="Stop agent"
+              title="Stop agent"
+              disabled={operation?.kind === "stop"}
+              onClick={() => void stop()}
+            >
+              <Square weight="fill" />
+            </button>
+          )}
         </div>
       ) : (
         <div className="chat-toolbar">
@@ -1142,6 +1192,40 @@ export function ChatPanel({
               </button>
             ))}
           </div>
+        )}
+        {followUps.length > 0 && (
+          <section className="chat-follow-ups" aria-label="Queued follow-ups">
+            <div className="chat-follow-ups-heading">
+              <span>{followUps.length} queued</span>
+              {!active && (
+                <button
+                  className="text-button"
+                  disabled={submitting}
+                  onClick={() => void changeFollowUps()}
+                >
+                  Resume queue
+                </button>
+              )}
+            </div>
+            <ol>
+              {followUps.map(({ id, turn }) => (
+                <li key={id}>
+                  <span title={turn.text}>
+                    {turn.text.trim() || "Attached media"}
+                  </span>
+                  <button
+                    className="icon-button"
+                    aria-label="Remove queued follow-up"
+                    title="Remove follow-up"
+                    disabled={submitting}
+                    onClick={() => void changeFollowUps(id)}
+                  >
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </section>
         )}
         <div className="composer">
           {attachments.length > 0 && (
@@ -1301,13 +1385,9 @@ export function ChatPanel({
             </div>
             <button
               className="send-button"
-              aria-label="Send message"
-              disabled={
-                controlsLocked ||
-                discovering ||
-                !capabilities?.available ||
-                (!draft.trim() && !attachments.length)
-              }
+              aria-label={queuesMessage ? "Queue follow-up" : "Send message"}
+              title={queuesMessage ? "Queue follow-up" : "Send message"}
+              disabled={!canSend}
               onClick={() => void send()}
             >
               <ArrowUp weight="bold" />
