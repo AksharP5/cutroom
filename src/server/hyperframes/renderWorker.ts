@@ -7,7 +7,11 @@ import {
 } from "./renderIsolation.ts";
 import { DirectPlanSchema } from "./directSchema.ts";
 import type { VideoEncoder } from "./directExport.ts";
-import { ExportFormatSchema, ExportRangeSchema } from "../../shared/export.ts";
+import {
+  ExportFormatSchema,
+  ExportRangeSchema,
+  GifLoopSchema,
+} from "../../shared/export.ts";
 import type { RenderJob } from "@hyperframes/producer";
 import { FpsSchema } from "../../shared/timeline/schema.ts";
 
@@ -195,7 +199,7 @@ try {
       videoPath: request.outputPath,
       outputPath: input.outputPath,
       fps: request.options.fps,
-      loop: z.number().int().min(0).max(65535).default(0).parse(gifLoop),
+      loop: GifLoopSchema.default(0).parse(gifLoop),
       signal: abort.signal,
     });
   }

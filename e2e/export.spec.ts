@@ -3,11 +3,14 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Download, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { embeddedEditor } from "./embedded";
+import { ExportJobSchema } from "../src/shared/export";
 
 /** A one-second 320x240 composition with one picture clip, and the page's uncaught errors. */
 async function exportable(page: Page, request: APIRequestContext) {
@@ -91,6 +94,80 @@ async function expectEncoded(path: string, duration = 1) {
   ).toMatchObject({ width: 320, height: 240 });
   expect(Number(encoded.format.duration)).toBeCloseTo(duration, 1);
 }
+
+test("the dialog and MCP set the loop count in the exported GIF", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const { project } = await exportable(page, request);
+  const fileLoop = async (path: string) => {
+    const gif = await readFile(path);
+    const app = gif.indexOf(Buffer.from("\x21\xff\x0bNETSCAPE2.0", "latin1"));
+    expect(app).toBeGreaterThan(0);
+    return gif.readUInt16LE(app + 16);
+  };
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export" });
+  const count = dialog.getByRole("spinbutton", { name: "Loop count" });
+  await expect(count).toHaveCount(0);
+  await dialog.getByRole("combobox", { name: "Format" }).click();
+  await page.getByRole("option", { name: /^GIF/ }).click();
+  await expect(count).toHaveValue("0");
+  const submit = dialog.getByRole("button", { name: "Export GIF" });
+  await count.fill("65536");
+  await expect(submit).toBeDisabled();
+  await count.fill("3");
+  await expect(submit).toBeEnabled();
+  await dialog.screenshot({ path: info.outputPath("gif-loop.png") });
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await submit.click();
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 40_000 });
+  expect(await fileLoop(outputPath)).toBe(3);
+
+  const origin = z.url().parse(baseURL);
+  const client = new Client({ name: "gif-loop-test", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("/mcp", origin), {
+      requestInit: { headers: { origin: new URL(origin).origin } },
+    }),
+  );
+  try {
+    const call = (gifLoop: number) =>
+      client.callTool({
+        name: "export_start",
+        arguments: { projectId: project.id, format: "gif", gifLoop },
+      });
+    expect((await call(1.5)).isError).toBe(true);
+    const job = z
+      .object({
+        structuredContent: z.object({
+          result: z.object({ jobId: z.string(), outputPath: z.string() }),
+        }),
+      })
+      .parse(await call(7)).structuredContent.result;
+    await expect
+      .poll(
+        async () =>
+          ExportJobSchema.parse(
+            await (await request.get(`/api/render/${job.jobId}`)).json(),
+          ).status,
+        { timeout: 40_000 },
+      )
+      .toBe("complete");
+    expect(await fileLoop(job.outputPath)).toBe(7);
+  } finally {
+    await client.close();
+  }
+});
 
 test("Export waits for edits, continues when hidden and opens the completed MP4", async ({
   page,

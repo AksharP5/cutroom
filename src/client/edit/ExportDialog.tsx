@@ -12,6 +12,7 @@ import {
   exportSizes,
   ExportOptionsSchema,
   ExportDestinationSchema,
+  GifLoopSchema,
   exportRange,
   exportFilename,
 } from "../../shared/export";
@@ -212,6 +213,7 @@ function ExportDialog({
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
   const [format, setFormat] = useState<ExportFormat>("mp4");
+  const [gifLoop, setGifLoop] = useState("0");
   const [sizeChoice, setSizeChoice] = useState<ExportSize>("project");
   const [rate, setRate] = useState<RateChoice>("project");
   const [gpu, setGpu] = useState(true);
@@ -333,7 +335,13 @@ function ExportDialog({
   // A job's range is in its own frames; the dialog's is in the composition's.
   const framesFps = job ? job.fps : (timeline?.fps ?? { num: 30, den: 1 });
   const exportButton = useRef<HTMLButtonElement>(null);
-  const cannotExport = loading || !!destinationError || !timeline || !frames;
+  const loop =
+    format === "gif"
+      ? GifLoopSchema.safeParse(gifLoop.trim() ? Number(gifLoop) : NaN)
+      : null;
+  const invalidLoop = loop?.success === false;
+  const cannotExport =
+    loading || !!destinationError || !timeline || !frames || invalidLoop;
   const submit = () => {
     if (cannotExport) return;
     const parsed = ExportOptionsSchema.safeParse({
@@ -359,6 +367,7 @@ function ExportDialog({
       variables,
       quality,
       format,
+      gifLoop: loop?.data,
       fps: outputFps,
       size: outputSize,
       resolution: sizeOptions.find((option) => option.value === sizeChoice)
@@ -511,6 +520,28 @@ function ExportDialog({
                 options={rateOptions}
               />
             </label>
+            {format === "gif" && (
+              <>
+                <label className="export-field">
+                  Loop count
+                  <input
+                    type="number"
+                    min={0}
+                    max={65535}
+                    step={1}
+                    value={gifLoop}
+                    aria-invalid={invalidLoop || undefined}
+                    aria-describedby="export-gif-loop-hint"
+                    onChange={(event) => setGifLoop(event.target.value)}
+                  />
+                </label>
+                <p className="export-hint" id="export-gif-loop-hint">
+                  {invalidLoop
+                    ? "Enter a whole number from 0 to 65535."
+                    : "0 repeats forever."}
+                </p>
+              </>
+            )}
             {gpuAvailable && format === "mp4" && (
               <label className="export-check">
                 <input
