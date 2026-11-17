@@ -2859,8 +2859,8 @@ function installPreviewBridge(
             return { id, element: element!, space };
           });
           const removed = new Set(change.remove);
-          // Added clips come from the saved document's markup, parsed inertly. The runtime's
-          // animation and Position discovery run only when it loads, so those reload instead.
+          // Added clips come from saved markup, parsed inertly. Animation and Position state
+          // are initialized through a fresh document instead of this live insertion path.
           const added = new Map<string, Element>();
           const inserts = change.insert.map(({ id, after, before }) => {
             const html = markup.get(id);
