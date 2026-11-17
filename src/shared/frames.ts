@@ -7,7 +7,11 @@ import { z } from "zod";
  * own times: variable frame rate, or no video stream.
  */
 export const FrameGridSchema = z
-  .object({ start: z.number().finite(), rate: z.number().finite().positive() })
+  .object({
+    start: z.number().finite(),
+    end: z.number().finite(),
+    rate: z.number().finite().positive(),
+  })
   .nullable();
 export type FrameGrid = z.infer<typeof FrameGridSchema>;
 

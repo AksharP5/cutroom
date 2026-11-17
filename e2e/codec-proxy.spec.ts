@@ -135,11 +135,72 @@ test.afterAll(async () => {
   if (longRecording) await rm(await longRecording, { force: true });
 });
 
-for (const pipeline of [false, true])
-  test(`a long HEVC recording shows the frame under the playhead from its proxy's pieces before the proxy is finished, with the footage pipeline ${pipeline ? "on" : "off"}`, async ({
-    page,
-    request,
-  }) => {
+/** Model Chromium presenting and returning the same stale frame after a seek settles. */
+function delayProxyPicture() {
+  if (window === window.top) return;
+  const nativeRequest = HTMLVideoElement.prototype.requestVideoFrameCallback;
+  const NativeFrame = VideoFrame;
+  let held: { video: HTMLVideoElement; frame: VideoFrame } | null = null;
+  let stalePresented = false;
+  addEventListener(
+    "hold-proxy-picture",
+    () => {
+      const video = document.querySelector<HTMLVideoElement>("#recording")!;
+      held = { video, frame: new NativeFrame(video) };
+    },
+    { once: true },
+  );
+  HTMLVideoElement.prototype.requestVideoFrameCallback = function (callback) {
+    return nativeRequest.call(this, (now, metadata) => {
+      if (
+        held?.video === this &&
+        Math.abs(this.currentTime - 1234 / 30) < 0.02
+      ) {
+        stalePresented = true;
+        callback(now, { ...metadata, mediaTime: held.frame.timestamp / 1e6 });
+        addEventListener(
+          "release-proxy-picture",
+          () => callback(now, metadata),
+          {
+            once: true,
+          },
+        );
+      } else {
+        callback(now, metadata);
+      }
+    });
+  };
+  window.VideoFrame = new Proxy(NativeFrame, {
+    construct(Frame, args, target) {
+      if (held && args[0] === held.video && stalePresented) {
+        held.video.toggleAttribute("data-stale-capture", true);
+        return held.frame.clone();
+      }
+      return Reflect.construct(Frame, args, target);
+    },
+  });
+  addEventListener(
+    "release-proxy-picture",
+    () => {
+      if (!held) return;
+      held.frame.close();
+      held = null;
+      window.VideoFrame = NativeFrame;
+      HTMLVideoElement.prototype.requestVideoFrameCallback = nativeRequest;
+    },
+    { once: true },
+  );
+}
+
+for (const { pipeline, supersede } of [
+  { pipeline: false, supersede: false },
+  { pipeline: true, supersede: false },
+  { pipeline: false, supersede: true },
+]) {
+  const title = supersede
+    ? "a superseded HLS seek holds the previous picture until the latest decoded frame arrives"
+    : `a long HEVC recording shows the frame under the playhead from its proxy's pieces before the proxy is finished, with the footage pipeline ${pipeline ? "on" : "off"}`;
+  test(title, async ({ page, request }) => {
     test.setTimeout(150_000);
     const project = ProjectSchema.parse(
       await (
@@ -182,11 +243,11 @@ for (const pipeline of [false, true])
       if (window === window.top)
         localStorage.setItem("cutroom.footagePipeline", String(on));
     }, pipeline);
+    if (supersede) await page.addInitScript(delayProxyPicture);
     await page.goto(`/#project/${project.id}`);
     const stage = page.locator(".edit-stage");
     await expect(stage).toHaveAttribute("data-preview-ready");
-    // Three minutes in, past where the proxy has got to, then a frame on either side.
-    for (const frame of [5400, 5401, 1234]) {
+    const seek = async (frame: number) => {
       await page
         .getByRole("button", { name: "Current time. Click to type a time." })
         .click();
@@ -199,6 +260,47 @@ for (const pipeline of [false, true])
           .padStart(8, "0"),
       );
       await time.press("Enter");
+    };
+    // Three minutes in, past where the proxy has got to, then a frame on either side.
+    for (const frame of [5400, 5401, 1234]) {
+      if (supersede && frame === 1234) {
+        const releasePiece = Promise.withResolvers<void>();
+        let waitingForSupersededPiece = false;
+        await page.route(
+          (url) => url.searchParams.get("cutroom-piece") === "25",
+          async (route) => {
+            waitingForSupersededPiece = true;
+            await releasePiece.promise;
+            await route.continue();
+          },
+        );
+        const video = page
+          .frameLocator("iframe[data-live]")
+          .locator("#recording");
+        await video.evaluate(() =>
+          dispatchEvent(new Event("hold-proxy-picture")),
+        );
+        try {
+          await seek(3000);
+          await expect.poll(() => waitingForSupersededPiece).toBe(true);
+          await expect(stage).not.toHaveAttribute("data-preview-ready");
+          expect(await shownFrame(page, 16)).toBe(5401);
+          await seek(frame);
+        } finally {
+          releasePiece.resolve();
+        }
+        try {
+          await expect(video).toHaveAttribute("data-stale-capture");
+          expect(await shownFrame(page, 16)).toBe(5401);
+          expect(await stage.getAttribute("data-preview-ready")).toBeNull();
+        } finally {
+          await video.evaluate(() =>
+            dispatchEvent(new Event("release-proxy-picture")),
+          );
+        }
+      } else {
+        await seek(frame);
+      }
       if (frame === 5400) {
         try {
           await expect.poll(() => waitingForPiece).toBe(true);
@@ -215,3 +317,4 @@ for (const pipeline of [false, true])
     expect(pieces).toContain("45");
     await expect(page.getByText("did not draw")).toHaveCount(0);
   });
+}

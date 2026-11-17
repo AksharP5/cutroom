@@ -2239,11 +2239,14 @@ function installPreviewBridge(
           "start" in body &&
           typeof body.start === "number" &&
           Number.isFinite(body.start) &&
+          "end" in body &&
+          typeof body.end === "number" &&
+          Number.isFinite(body.end) &&
           "rate" in body &&
           typeof body.rate === "number" &&
           Number.isFinite(body.rate) &&
           body.rate > 0
-            ? { start: body.start, rate: body.rate }
+            ? { start: body.start, end: body.end, rate: body.rate }
             : null,
         )
         .catch(() => null)
@@ -2293,17 +2296,32 @@ function installPreviewBridge(
       cancelVideoFrame.call(video, previous.callback);
     decodedSeeks.delete(video);
   };
-  const expectDecodedSeek = (video: HTMLVideoElement) => {
+  const expectDecodedSeek = (video: HTMLVideoElement, at: number) => {
     forgetDecodedSeek(video);
+    const path = scrubPath(video);
+    const grid = path ? known.get(path) : null;
+    // A seek past the video stream can legitimately hold its last frame.
+    const inProxyFrame =
+      grid &&
+      at < grid.end &&
+      new URL(video.currentSrc || video.src, location.href).searchParams.get(
+        "hf-proxy",
+      ) === "h264";
     const decoded: { callback?: number; timestamp?: number } = {};
     decodedSeeks.set(video, decoded);
     const presented: VideoFrameRequestCallback = (_now, frame) => {
       if (decodedSeeks.get(video) !== decoded) return;
       delete decoded.callback;
-      // Presentation can precede seeked. The capture loop waits for seek completion itself.
-      decoded.timestamp = frame.mediaTime * 1e6;
-      // A newly loaded video can present its initial picture before the seek's picture.
-      // Keep observing until capture confirms the matching decoded frame.
+      // Even a native callback can carry the previous picture after an HLS seek settles.
+      // Both timestamps must belong to the seek destination, allowing for the half-frame
+      // lead of HLS pieces and millisecond rounding in source timestamps.
+      if (
+        !inProxyFrame ||
+        (frame.mediaTime >= at - 1 / grid.rate - 0.001 &&
+          frame.mediaTime <= at + 0.001)
+      )
+        decoded.timestamp = frame.mediaTime * 1e6;
+      // Presentation can precede seeked. Keep observing until capture confirms the frame.
       decoded.callback = requestVideoFrame.call(video, presented);
     };
     // Register before setting currentTime so even a cached frame's presentation is observed.
@@ -2343,7 +2361,7 @@ function installPreviewBridge(
         this.paused &&
         Math.abs(nativeTime.get!.call(this) - at) > 1e-6
       )
-        expectDecodedSeek(this);
+        expectDecodedSeek(this, at);
       nativeTime.set!.call(this, at);
     },
   };
