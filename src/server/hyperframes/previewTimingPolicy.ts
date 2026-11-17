@@ -12,15 +12,13 @@ const gsap = readFileSync(
 export const APP_STATE_DIR = ".cutroom";
 
 /**
- * How an ordinary script could read something a live update changes: clip timing and title
- * data, markup, which elements surround a clip, media time, the runtime's state, the bridge's
- * messages, or code this scan cannot see. A script with none of these builds the same state
- * from the edited source as it built from the loaded one, so moving and trimming clips cannot
- * change what it made. Which clips it found by selector is checked in the page.
+ * Known script reads that depend on live edits. Matching scripts keep the full reload path;
+ * selector dependencies are checked in the page. This scan is not general JavaScript
+ * dependency analysis.
  */
 const liveInputs = [
   /\bgetAttribute/,
-  /\b(?:attributes|dataset|outerHTML|getHTML|innerText|outerText|XMLSerializer)\b/,
+  /\b(?:attributes|dataset|outerHTML|getHTML|textContent|innerText|outerText|XMLSerializer)\b/,
   // Assigning markup writes it; reading or appending to it reads it.
   /\binnerHTML\b(?!\s*=[^=])/,
   /data-(?:start|duration|end|media-start|playback|volume|title|cutroom|hf-)/,
@@ -34,15 +32,14 @@ const liveInputs = [
   /\b__(?:player|hf\w*|clipManifest)\b/,
 ];
 
-/** Whether a script could read what a live timing update changes. */
+/** Whether a script uses a known read of data changed by live edits. */
 export function readsLiveInputs(script: string) {
   return liveInputs.some((pattern) => pattern.test(script));
 }
 
 /** The sole policy for live attribute updates, including script-free Cutroom titles.
- * Inline scripts qualify when they cannot read what an update changes; script files only
- * when they are the pinned GSAP library. Run on the compiler's source reads, before it adds
- * its runtime and bootstrap scripts.
+ * Inline scripts with known live reads reload; script files qualify only when they are the
+ * pinned GSAP library. Run on the compiler's source reads, before it adds runtime scripts.
  */
 export function previewTimingPolicy(dir: string) {
   let allowed = true;

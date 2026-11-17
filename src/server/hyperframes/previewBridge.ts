@@ -160,8 +160,8 @@ function installPreviewBridge(
   // found, or changes a title's words under it, loads a fresh document instead. Only the
   // runtime's and this bridge's own lookups are left out, by the source of their frames.
   const sought = new Map<Node, Set<string>>();
-  // A selector that tests an element's siblings matches others when a clip comes or goes.
-  let siblingSelectors = false;
+  // Sibling matches can change after an edit; :scope cannot be retested with matches().
+  let structuralSelectors = false;
   const runtimeScript = Document.prototype.querySelector;
   let runtimeUrl: string | undefined;
   // A script cannot make its own lookups look like the runtime's.
@@ -199,8 +199,10 @@ function installPreviewBridge(
     if (selectors.has(selector) || !fromScript()) return;
     selectors.add(selector);
     sought.set(root, selectors);
-    if (/[+~]|:(?:nth|first|last|only)-|:has\(|:empty\b/.test(selector))
-      siblingSelectors = true;
+    if (
+      /[+~]|:(?:nth|first|last|only)-|:has\(|:(?:empty|scope)\b/i.test(selector)
+    )
+      structuralSelectors = true;
   };
   const lookups: [object, string, (args: unknown[]) => string | null][] = [
     ...[Document.prototype, Element.prototype].flatMap(
@@ -286,7 +288,7 @@ function installPreviewBridge(
   }
   /** Whether a script could have found this connected element, or one inside or around it. */
   const found = (element: Element) => {
-    if (siblingSelectors) return true;
+    if (structuralSelectors) return true;
     const related = [element, ...element.querySelectorAll("*")];
     for (let node = element.parentElement; node; node = node.parentElement)
       related.push(node);

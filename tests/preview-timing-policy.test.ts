@@ -34,6 +34,11 @@ for (const [name, extra, allowed] of [
     false,
   ],
   [
+    "read document text",
+    "<script>window.count=(document.body.textContent.match(/^Card$/gm)||[]).length</script>",
+    false,
+  ],
+  [
     "neighbouring elements",
     "<script>window.next=document.querySelector('#title').nextElementSibling</script>",
     false,
@@ -82,7 +87,7 @@ for (const [name, extra, allowed] of [
   ],
   ["changed library", '<script src="changed.js"></script>', false],
 ] as const)
-  test(`only scripts that cannot read what an update changes qualify: ${name}`, async () => {
+  test(`known script dependencies decide live timing eligibility: ${name}`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "timing-policy-"));
     try {
       await mkdir(join(dir, ".cutroom"));

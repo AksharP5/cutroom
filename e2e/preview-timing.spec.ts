@@ -857,6 +857,73 @@ test("a clip a script found by class comes and goes through a fresh document, wh
   await matchesFresh(page, project.id, [40, 150, 160], "lift note");
 });
 
+for (const scenario of ["scoped selector", "document text"] as const)
+  test(`a script reading ${scenario} reloads after a lift and matches a fresh picture`, async ({
+    page,
+    request,
+  }) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: {
+            name: "Scripted cards",
+            width: 640,
+            height: 360,
+            duration: 6,
+          },
+        })
+      ).json(),
+    );
+    const script =
+      scenario === "scoped selector"
+        ? `window.__timelines={main:gsap.timeline({paused:true}).fromTo(document.querySelectorAll(":scope main .clip"),{opacity:0},{opacity:1,duration:1,stagger:0.5,ease:"none"},0)}`
+        : `const count=(document.body.textContent.match(/^Card$/gm)||[]).length;window.__timelines={main:gsap.timeline({paused:true}).to("#marker",{x:count*80,duration:0.1,ease:"none"},0)}`;
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><head><style>html,body{margin:0;background:#111}main{position:relative;width:640px;height:360px}.clip{position:absolute;left:40px;top:40px;width:160px;height:100px;background:#f00;color:white}#b{top:180px;background:#06f}#marker{position:absolute;top:310px;width:30px;height:30px;background:#0f0}</style></head><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="6" data-fps="30"><div id="a" class="clip" data-start="0" data-duration="3" data-track-index="0">\nCard\n</div><div id="b" class="clip" data-start="0" data-duration="6" data-track-index="1">\nCard\n</div><div id="keep" data-start="4" data-duration="2" data-track-index="0" style="display:none">Keep</div><div id="marker"></div></main><script src="assets/vendor/gsap.min.js"></script><script>${script}</script></body></html>`,
+    );
+    const edit = async (commands: CommandInput[]) => {
+      const view = TimelineViewSchema.parse(
+        await (
+          await request.get(`/api/cutroom/projects/${project.id}/timeline`)
+        ).json(),
+      );
+      const response = await request.post(
+        `/api/cutroom/projects/${project.id}/commands`,
+        {
+          data: {
+            composition: "index.html",
+            expectedRevision: view.revision,
+            label: "Edit cards",
+            commands,
+          },
+        },
+      );
+      expect(response.ok(), await response.text()).toBe(true);
+    };
+    // Keep the track stylesheet unchanged so it cannot mask script invalidation.
+    for (const by of [1, -1])
+      await edit([{ type: "move", clipIds: ["a"], by, mode: "overwrite" }]);
+    await page.goto(`/#project/${project.id}`);
+    await waitForPreview(page);
+    const original = await live(page);
+    const previous = await token(page);
+    await edit([{ type: "remove", clipIds: ["a"], ripple: false }]);
+    await waitForPreview(page, { after: previous });
+    await expect.poll(() => live(page)).not.toBe(original);
+    await matchesFresh(page, project.id, [15], `lift with ${scenario}`);
+    const picture = page.locator("iframe[data-live]").contentFrame();
+    if (scenario === "scoped selector")
+      await expect(picture.locator("#b")).toHaveCSS("opacity", "0.5");
+    else
+      expect(
+        await picture.locator("#marker").evaluate((element) => {
+          const transform = getComputedStyle(element).transform;
+          return new DOMMatrixReadOnly(transform).m41;
+        }),
+      ).toBe(80);
+  });
+
 test("the edit after a burst of W, undo, D and lift at 7 keys a second keeps the document and matches a fresh picture", async ({
   page,
   request,
