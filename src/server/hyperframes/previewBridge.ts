@@ -22,8 +22,10 @@ import { frameSeek } from "../../shared/frames";
 import type { FrameGrid } from "../../shared/frames";
 
 interface PreviewWindow extends DiagnosticWindow {
-  /** Seconds the patched runtime adds to its clock to show and hide clips while playing. */
-  __cutroomCutLead?: (clock: number) => number;
+  /** Presented-picture times for native video cutovers. Other timing stays on the transport. */
+  __cutroomCutTimes?: (
+    clock: number,
+  ) => Map<HTMLVideoElement, number> | undefined;
   /** HyperFrames' codec facts for the project's media, by root-relative path. */
   __HF_MEDIA_CODEC_MAP__?: Record<string, { browserHostile?: boolean }>;
   CSSNumericValue: {
@@ -2032,8 +2034,8 @@ function installPreviewBridge(
   );
   const frameGaps: number[] = [];
   let lastFrame = 0;
-  win.__cutroomCutLead = (clock) => {
-    if (pipelineActive) return 0;
+  win.__cutroomCutTimes = (clock) => {
+    if (pipelineActive) return;
     const frame = Number(document.timeline.currentTime ?? performance.now());
     if (frame > lastFrame && frame - lastFrame < 100) {
       frameGaps.push(frame - lastFrame);
@@ -2061,13 +2063,31 @@ function installPreviewBridge(
       if (!newest || picture.at > newest.picture.at)
         newest = { picture, mapping };
     }
-    if (!newest) return 0;
+    if (!newest) return;
     const { picture, mapping } = newest;
     // This frame is on screen a display frame after it starts; half a frame rounds to the nearer.
     const shown = frame + 1.5 * interval;
     const media = picture.media + ((shown - picture.at) / 1000) * picture.rate;
     const time = mapping.clip.start + (media - mapping.start) / mapping.rate;
-    return Math.max(0, Math.min(0.1, time - clock));
+    const lead = Math.max(0, Math.min(0.1, time - clock));
+    if (!lead) return;
+    const times = new Map<HTMLVideoElement, number>();
+    for (const video of document.querySelectorAll("video")) {
+      const mapping = mediaMapping(video);
+      if (!mapping) continue;
+      const { start, end } = mapping.clip;
+      const ahead = clock + lead;
+      if (!(clock < start && ahead >= start) && !(clock < end && ahead >= end))
+        continue;
+      // A timed parent owns its children's visibility. Do not anticipate its start or end.
+      const root = video.closest("[data-composition-id]");
+      let parent = video.parentElement;
+      while (parent && parent !== root && !parent.hasAttribute("data-start"))
+        parent = parent.parentElement;
+      if (parent !== root) continue;
+      times.set(video, ahead);
+    }
+    return times;
   };
   const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
@@ -2503,7 +2523,7 @@ function installPreviewBridge(
       video.cancelVideoFrameCallback(callback);
     following.clear();
     presented.clear();
-    delete win.__cutroomCutLead;
+    delete win.__cutroomCutTimes;
     seekMutations.disconnect();
     seekAttributes.clear();
     parent.postMessage({ source: "cutroom-preview", type: "unloaded" }, "*");
