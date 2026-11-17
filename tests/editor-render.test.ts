@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -124,5 +124,42 @@ test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
     }
   },
   // Captures Chromium frames, encodes an MP4, and decodes both outputs for pixel checks.
+  90_000,
+);
+
+test.skipIf(
+  process.platform !== "linux" || !browserExecutable() || !Bun.which("ffmpeg"),
+)(
+  "still capture and export start Chromium under a long Linux TMPDIR",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cutroom-"));
+    try {
+      const temporaryRoot = join(directory, "temporary-".repeat(8));
+      await mkdir(temporaryRoot);
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "test",
+          import.meta.path,
+          "-t",
+          "^a saved canvas edit",
+        ],
+        {
+          env: { ...process.env, TMPDIR: temporaryRoot },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [code, output, errors] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      if (code !== 0) throw new Error(output + errors);
+      expect(errors).toContain("1 pass");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
   90_000,
 );

@@ -1,10 +1,9 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import puppeteer from "puppeteer-core";
 import type { Browser } from "puppeteer-core";
 import { z } from "zod";
-import { createOwnedDirectory } from "./ownedDirectories";
+import { browserTempRoot, createOwnedDirectory } from "./ownedDirectories";
 import { browserExecutable } from "./render";
 
 async function webSocketEndpoint(profile: string) {
@@ -51,12 +50,14 @@ try {
     throw new Error(
       "Chromium is required for frame captures. Install Chromium or set HYPERFRAMES_BROWSER_PATH.",
     );
-  profile = await createOwnedDirectory(tmpdir(), "cutroom-capture");
+  const temporaryRoot = browserTempRoot();
+  profile = await createOwnedDirectory(temporaryRoot, "cutroom-capture");
   browser = await puppeteer.launch({
     headless: true,
     pipe: true,
     executablePath,
     userDataDir: profile,
+    env: { ...process.env, TMPDIR: temporaryRoot },
     handleSIGINT: false,
     handleSIGTERM: false,
     handleSIGHUP: false,

@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -45,4 +46,19 @@ export async function createOwnedDirectory(directory: string, prefix: string) {
   await mkdir(directory, { recursive: true });
   await sweepOwnedDirectories(directory, prefix);
   return mkdtemp(join(directory, `${prefix}-${process.pid}-`));
+}
+
+/** Leave room for Chromium's Linux process singleton socket, including its terminating NUL. */
+export function browserTempRoot(ownedPrefix?: string) {
+  const root = tmpdir();
+  if (process.platform !== "linux") return root;
+  const directory = ownedPrefix
+    ? join(root, `${ownedPrefix}-${process.pid}-XXXXXX`)
+    : root;
+  const socket = join(
+    directory,
+    "org.chromium.Chromium.XXXXXX",
+    "SingletonSocket",
+  );
+  return Buffer.byteLength(socket) < 108 ? root : "/tmp";
 }

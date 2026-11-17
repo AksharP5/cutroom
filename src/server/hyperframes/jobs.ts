@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { freemem, tmpdir } from "node:os";
+import { freemem } from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { encoderJobOptions } from "@hyperframes/studio-server/encoder-options";
@@ -21,6 +21,7 @@ import { planCaptureBrowsers } from "./exportMemory";
 import { planDirectExport } from "./directPlan";
 import { placeStills } from "./directStill";
 import {
+  browserTempRoot,
   createOwnedDirectory,
   sweepOwnedDirectories,
 } from "./ownedDirectories";
@@ -95,7 +96,6 @@ async function diagnostics(stream: ReadableStream<Uint8Array>) {
 
 /** Each export writes into a folder with this prefix beside its destination. */
 export const STAGING_PREFIX = ".cutroom-render-";
-/** Chromium's process-singleton socket must fit a short path, so its temporary folder stays in the system's. */
 const BROWSER_TEMP_PREFIX = "cutroom-render";
 /** Extracted frames and range work, which reach gigabytes, go in the configured scratch folder on disk. */
 const SCRATCH_PREFIX = "render";
@@ -212,11 +212,12 @@ export function createRenderWorkers(configuration: {
   const jobs = new Map<string, RenderState>();
   let gpu: Promise<boolean> | undefined;
   const remove = configuration.removeScratch ?? removeRenderScratch;
+  const temporaryRoot = browserTempRoot(BROWSER_TEMP_PREFIX);
   /** Scratch whose browsers outlived the cleanup wait. The next export removes it. */
   const leftovers = new Set<string>();
   // A crashed or killed server leaves its scratch behind; reclaim it when the next one starts.
   void Promise.all([
-    sweepOwnedDirectories(tmpdir(), BROWSER_TEMP_PREFIX),
+    sweepOwnedDirectories(temporaryRoot, BROWSER_TEMP_PREFIX),
     sweepOwnedDirectories(configuration.scratchDir, SCRATCH_PREFIX),
   ]).catch((error: unknown) =>
     console.warn(
@@ -433,7 +434,10 @@ export function createRenderWorkers(configuration: {
               ),
           );
         // The worker's temporary files stay outside the project, which the producer copies.
-        temporary = await createOwnedDirectory(tmpdir(), BROWSER_TEMP_PREFIX);
+        temporary = await createOwnedDirectory(
+          temporaryRoot,
+          BROWSER_TEMP_PREFIX,
+        );
         scratch = await createOwnedDirectory(
           configuration.scratchDir,
           SCRATCH_PREFIX,
