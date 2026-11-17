@@ -1335,6 +1335,39 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ],
       };
     }
+    case "setAudioGroup": {
+      const target = find(command.clipId);
+      const groups = timeline.authoredAudioGroups;
+      const group = groups?.find(
+        ({ id }) => id === target.authoredAudioGroupId,
+      );
+      if (!groups || !group)
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} has no editable authored audio group.`,
+        );
+      if (group.sourceRestriction)
+        throw new TimelineError("unsupported", group.sourceRestriction);
+      const lockedTracks = new Set(
+        timeline.tracks
+          .filter(({ locked }) => locked)
+          .map(({ index }) => index),
+      );
+      const locked = clips.find(
+        (clip) =>
+          clip.authoredAudioGroupId === group.id &&
+          lockedTracks.has(clip.track),
+      );
+      if (locked)
+        throw new TimelineError("locked", `Track ${locked.track} is locked.`);
+      if (group.volume === command.volume) return timeline;
+      return {
+        ...timeline,
+        authoredAudioGroups: groups.map((entry) =>
+          entry === group ? { ...entry, volume: command.volume } : entry,
+        ),
+      };
+    }
     case "setMaster": {
       const masterFx = buildFxChain(timeline.masterFx ?? [], command.fx);
       const { masterFx: _, ...rest } = timeline;

@@ -291,6 +291,12 @@ export const ClipSchema = z.object({
   sourceDuration: z.number().positive().nullable(),
   /** Whether the clip plays sound: audio, and video that is neither muted nor declared silent. */
   hasAudio: z.boolean(),
+  authoredAudioGroupId: z
+    .string()
+    .optional()
+    .describe(
+      "Authored audio bus referenced by the clip, even without a matching declaration in timeline.authoredAudioGroups",
+    ),
   trackGainWarning: z
     .string()
     .optional()
@@ -463,6 +469,18 @@ export const TimelineSchema = z.object({
   clips: z.array(ClipSchema),
   markers: z.array(MarkerSchema),
   range: RangeSchema,
+  authoredAudioGroups: z
+    .array(
+      z.object({
+        id: z.string(),
+        volume: z.number(),
+        sourceRestriction: z.string().optional(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Authored audio bus declarations in this composition, including empty groups. Each volume is linear gain. sourceRestriction explains why its gain cannot be edited with setAudioGroup",
+    ),
   masterFx: z
     .array(FxNodeSchema)
     .max(MAX_FX_NODES)
@@ -945,6 +963,15 @@ export const CommandSchema = z.discriminatedUnion("type", [
     })
     .describe(
       "Create a track or change its name, lock, auto-select, enable, mute, solo or gain. Mute covers all sound on the track, including embedded video audio. Gain excludes clips with trackGainWarning. Solo selects audio tracks and affects preview and export.",
+    ),
+  z
+    .object({
+      type: z.literal("setAudioGroup"),
+      clipId,
+      volume,
+    })
+    .describe(
+      "Set the gain of a clip's existing authored audio group. Changes every member together; refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
     ),
   z
     .object({

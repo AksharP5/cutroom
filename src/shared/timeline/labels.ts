@@ -467,6 +467,8 @@ export function editLabel(
             : "")
         );
       }
+      case "setAudioGroup":
+        return "Set audio group gain";
       case "setMaster":
         return "Set mix effects";
       case "removeTrack":

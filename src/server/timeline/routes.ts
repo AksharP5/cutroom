@@ -390,6 +390,16 @@ export function createTimelineRoutes(
       fonts: current.parsed.fonts,
     });
     const written = writtenSource.timeline;
+    // A batch can mount a scene or paste an off-timeline member after it changes a bus.
+    for (const group of written.authoredAudioGroups ?? []) {
+      if (
+        group.sourceRestriction &&
+        current.parsed.timeline.authoredAudioGroups?.some(
+          (before) => before.id === group.id && before.volume !== group.volume,
+        )
+      )
+        throw new TimelineError("unsupported", group.sourceRestriction);
+    }
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
