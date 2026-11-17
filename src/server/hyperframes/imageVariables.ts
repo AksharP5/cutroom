@@ -48,6 +48,37 @@ function rebaseImageUrl(dir: string, composition: string, value: string) {
   );
 }
 
+/** Nested scenes load their original HTML at runtime when a scene is previewed alone. */
+export function rebaseSceneImageDeclarations(
+  html: string,
+  dir: string,
+  composition: string,
+) {
+  if (!html.includes(declarationAttribute)) return html;
+  const parts: string[] = [];
+  let end = 0;
+  for (const { attributes } of scanHtmlOpeningTags(html)) {
+    for (const attr of attributes) {
+      if (attr.kind !== "value" || attr.name !== declarationAttribute) continue;
+      const value = decodeAuthoredAttribute(attr.value);
+      const next = rewriteImageDeclarationUrls(value, (url) =>
+        rebaseImageUrl(dir, composition, url),
+      );
+      if (next === value) continue;
+      const quote = attr.quote ?? '"';
+      const encoded = next
+        .replaceAll("&", "&amp;")
+        .replaceAll(quote, quote === '"' ? "&quot;" : "&#39;");
+      parts.push(
+        html.slice(end, attr.valueStart),
+        attr.quote ? encoded : `${quote}${encoded}${quote}`,
+      );
+      end = attr.valueEnd;
+    }
+  }
+  return end ? parts.join("") + html.slice(end) : html;
+}
+
 function sceneImageIds(dir: string, composition: string) {
   const file = resolveWithinProject(dir, composition);
   if (!file) return [];

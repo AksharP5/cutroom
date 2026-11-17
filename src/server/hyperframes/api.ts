@@ -41,6 +41,7 @@ import { previewRuntimeScript } from "./previewRuntime";
 import {
   rebaseCompiledImageVariables,
   rebaseImageOverrides,
+  rebaseSceneImageDeclarations,
 } from "./imageVariables";
 import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
 import {
@@ -215,6 +216,26 @@ export function createHyperframesApi(
   };
   api.use("/projects/:id/preview", unstampStaleCompile);
   api.use("/projects/:id/preview/comp/*", unstampStaleCompile);
+  api.use("/projects/:id/preview/*", async (c, next) => {
+    if (c.req.method !== "GET") return next();
+    const composition = requestSubPath(c.req.url, "projects/:id/preview");
+    if (
+      composition.startsWith("comp/") ||
+      !composition.includes("/") ||
+      !/\.html?$/i.test(composition)
+    )
+      return next();
+    await next();
+    if (c.res.status !== 200) return;
+    const { path } = await store.get(c.req.param("id"));
+    const html = await c.res.text();
+    const rebased = rebaseSceneImageDeclarations(html, path, composition);
+    c.res = new Response(rebased, c.res);
+    if (rebased !== html) {
+      c.header("Content-Length", undefined);
+      c.header("Accept-Ranges", undefined);
+    }
+  });
   api.use("/projects/:id/preview/comp/*", async (c, next) => {
     const raw = c.req.query("variables");
     if (!raw) return next();

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
@@ -232,6 +233,79 @@ test("a mounted scene resolves its image default and exports its own override", 
   await checkPicture("scene-override.png", 2);
   await exportPicture([2], "art/blue#2.svg");
   expect(await readFile(join(project.path, composition), "utf8")).toBe(scene);
+});
+
+test("a scene opened on its own previews and exports its nested image default", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Nested artwork", width: 320, height: 240, duration: 1 },
+      })
+    ).json(),
+  );
+  const host = (id: string) =>
+    `<div id="${id}-host" class="clip" data-composition-id="${id}" data-composition-src="compositions/${id}.html" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div>`;
+  const main = (id: string, contents: string) =>
+    `<main data-composition-id="${id}" data-width="320" data-height="240" data-duration="1">${contents}</main>`;
+  await mkdir(join(project.path, "art"), { recursive: true });
+  await mkdir(join(project.path, "compositions/art"), { recursive: true });
+  for (const [path, color] of [
+    ["art/image.svg", "blue"],
+    ["compositions/art/image.svg", "red"],
+  ] as const) {
+    await writeFile(
+      join(project.path, path),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="${color}"/></svg>`,
+    );
+  }
+  const child = `<template><main data-composition-id="child" data-width="320" data-height="240" data-duration="1" data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"art/image.svg","alt":"Red artwork"}}]'><img id="artwork" class="clip" src="art/image.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" width="320" height="240"></main></template>`;
+  const childPath = join(project.path, "compositions/child.html");
+  await writeFile(childPath, child);
+  await writeFile(
+    join(project.path, "compositions/parent.html"),
+    `<template>${main("parent", host("child"))}</template>`,
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body style="margin:0">${main("main", host("parent"))}</body></html>`,
+  );
+
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await page.locator('[data-clip="parent-host"]').dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toHaveText(/parent/);
+  await waitForPreview(page);
+  const artwork = shown(page, "artwork");
+  await expect(artwork).toHaveAttribute("src", "compositions/art/image.svg");
+  await expect(artwork).toHaveJSProperty("naturalWidth", 320);
+  const preview = info.outputPath("nested-scene-preview.png");
+  const picture = page.locator(".edit-picture");
+  await picture.screenshot({ path: preview });
+  const { width, height } = (await picture.boundingBox())!;
+  expect(
+    await pixel(preview, Math.floor(width / 2), Math.floor(height / 2)),
+  ).toEqual([255, 0, 0]);
+
+  const exported = await request.post(`/api/projects/${project.id}/export`, {
+    data: { composition: "compositions/parent.html", range: "timeline" },
+  });
+  expect(exported.ok(), await exported.text()).toBe(true);
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await exported.json());
+  await expect
+    .poll(() => existsSync(outputPath), { timeout: 45_000 })
+    .toBe(true);
+  const [red, green, blue] = await pixel(outputPath, 160, 120);
+  expect(red).toBeGreaterThan(230);
+  expect(green).toBeLessThan(20);
+  expect(blue).toBeLessThan(20);
+  expect(await readFile(childPath, "utf8")).toBe(child);
 });
 
 test("variables preview live from the inspector and an agent, become defaults in one step, and export as previewed", async ({
