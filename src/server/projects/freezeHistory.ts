@@ -1,13 +1,10 @@
 import type { HistoryFileChange } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
-import {
-  freezeExportPath,
-  inMediaTrash,
-  isFreezeExport,
-} from "../../shared/media";
+import { freezeExportPath, isFreezeExport } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { compositionVersions } from "./changes";
 import { compositionSources } from "./media";
+import { freezeTrashSources } from "./mediaTrash";
 
 /** Check the composition sources that will survive replay while the old aliases still resolve. */
 export async function guardFreezeHistory(
@@ -15,22 +12,25 @@ export async function guardFreezeHistory(
   changes: readonly HistoryFileChange[],
   readBlob: (hash: string) => Promise<Buffer>,
 ) {
-  // Media Remove intentionally leaves its uses offline and keeps the bytes in trash.
-  const trashed = new Set(
-    changes
-      .filter(({ path, before }) => before === null && inMediaTrash(path))
-      .map(({ after }) => after),
-  );
-  const deleted = new Set(
+  const deleted = new Map(
     changes
       .filter(
-        ({ path, before, after }) =>
-          after === null &&
-          !trashed.has(before) &&
-          (freezeExportPath(path) || isFreezeExport(path)),
+        ({ path, after }) =>
+          after === null && (freezeExportPath(path) || isFreezeExport(path)),
       )
-      .map(({ path }) => path),
+      .map(({ path, before }) => [path, before]),
   );
+  if (!deleted.size) return;
+  // Exempt the intended Media Remove. Equal bytes at another path are a different still.
+  const trashed = new Set<string>();
+  for (const { path, before, after } of changes) {
+    if (before !== null || after === null) continue;
+    const sources = freezeTrashSources(path).filter(
+      (source) => deleted.get(source) === after,
+    );
+    if (sources.length === 1) trashed.add(sources[0]!);
+  }
+  for (const path of trashed) deleted.delete(path);
   if (!deleted.size) return;
 
   const next = new Map(changes.map(({ path, after }) => [path, after]));

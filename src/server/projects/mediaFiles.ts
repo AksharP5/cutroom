@@ -12,7 +12,6 @@ import { HttpError } from "../../shared/errors";
 import {
   FREEZE_DIR,
   FREEZE_EXPORT_DIR,
-  MEDIA_TRASH,
   freezeExportPath,
   inFreezeAssets,
   inMediaTrash,
@@ -25,6 +24,7 @@ import { TimelineError } from "../../shared/timeline/errors";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { compositionSources } from "./media";
+import { mediaTrashPath } from "./mediaTrash";
 import { isMissing, projectStatePath, projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
@@ -319,11 +319,8 @@ export async function removeMedia(
     project,
     `Remove ${file.name}`,
     async () => {
-      const extension = extname(file.name);
-      const stem = file.name.slice(0, file.name.length - extension.length);
       for (let copy = 1; ; copy++) {
-        const name = `${stem}${copy === 1 ? "" : ` ${copy}`}${extension}`;
-        const trash = `${MEDIA_TRASH}/${name}`;
+        const trash = mediaTrashPath(file.path, copy);
         const absolute = await projectWritePath(project, trash, {
           allowMissing: true,
           sourceOnly: false,
@@ -333,7 +330,7 @@ export async function removeMedia(
         if (file.companion) {
           const destination = await projectWritePath(
             project,
-            `${MEDIA_TRASH}/${FREEZE_EXPORT_DIR}/${name}`,
+            mediaTrashPath(file.companion.path, copy),
             {
               allowMissing: true,
               sourceOnly: false,
