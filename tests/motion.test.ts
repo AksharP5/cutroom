@@ -125,6 +125,32 @@ test("literal fromTo edits change only the requested bytes and share Undo/Redo",
   }
 });
 
+test("dot timeline registration edits the requested literal without rewriting the source", async () => {
+  for (const timelineVar of ["tl", "main"]) {
+    const f = await fixture(
+      script
+        .replace("window.__timelines['main']", "window.__timelines.main")
+        .replace(/\btl\b/g, timelineVar),
+    );
+    try {
+      const before = await f.source();
+      const snapshot = await f.read();
+      expect(snapshot.reason).toBeNull();
+      expect(snapshot.animations[0]!.reason).toBeNull();
+      const response = await f.update(snapshot, {
+        kind: "property",
+        side: "to",
+        name: "x",
+        value: 320,
+      });
+      expect(response.status).toBe(200);
+      expect(await f.source()).toBe(before.replace("x: 200", "x: 320"));
+    } finally {
+      await f.close();
+    }
+  }
+});
+
 test("stale IDs after an external insertion or concurrent edits never change a different tween", async () => {
   const f = await fixture();
   try {
@@ -237,6 +263,7 @@ test("computed, helper, loop and multiple timeline forms preserve source with an
     `const tl=gsap.timeline(); tl.to('#card',{x:20,x:30},0);`,
     `const tl=gsap.timeline(); tl.to('#card',{keyframes:{'0%':{x:0},'100%':{x:20}}},0);`,
     `const tl=gsap.timeline(); const alias=tl; tl.to('#card',{x:20},0);`,
+    `const key='main'; const tl=gsap.timeline(); tl.to('#card',{x:20},0); window.__timelines[key]=tl;`,
     `gsap.to('#card',{x:20});`,
   ];
   for (const code of cases) {

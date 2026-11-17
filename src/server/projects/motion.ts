@@ -185,7 +185,9 @@ function timelineReason(
       identifier(call.right, raw.timelineVar) &&
       call.left?.type === "MemberExpression" &&
       member(call.left.object, "window", "__timelines") &&
-      string(call.left.property) === rootId
+      (call.left.computed
+        ? string(call.left.property) === rootId
+        : identifier(call.left.property, rootId))
     ) {
       allowed.add(call.right!.start);
       continue;
