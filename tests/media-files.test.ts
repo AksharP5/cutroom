@@ -781,6 +781,67 @@ test("selective history protects a freeze used by another composition, including
   }
 });
 
+test.each([
+  ["build", "image"],
+  ["node_modules", "image"],
+  ["node_modules", "stylesheet"],
+])(
+  "Media protects a freeze referenced by a mounted %s scene's %s",
+  async (directory, reference) => {
+    const preview = "assets/freeze/still.png";
+    const exported = "assets/freeze/export/still.png";
+    const scene = `${directory}/scene.html`;
+    await mkdir(at(`${directory}/missing.html`), { recursive: true });
+    await mkdir(at("assets/freeze/export"), { recursive: true });
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    const source = `<div data-composition-id="mounted" data-width="1920" data-height="1080" data-duration="2">${
+      reference === "image"
+        ? `<img id="still" class="clip" src="../${preview}" data-cutroom-freeze-export="../${exported}" data-start="0" data-duration="2" data-track-index="0">`
+        : '<link rel="stylesheet" href="./scene.css">'
+    } </div>`;
+    const stylesheet = `${directory}/scene.css`;
+    const css = `[data-composition-id="mounted"]{background-image:url("../${preview}")}`;
+    if (reference === "stylesheet") await writeFile(at(stylesheet), css);
+    await writeFile(at(scene), source);
+    await writeFile(
+      at("index.html"),
+      (await readFile(at("index.html"), "utf8")).replace(
+        "</main>",
+        `<div id="mounted" data-composition-src="${scene}" data-start="0" data-duration="2" data-track-index="3"></div><div data-composition-src="${directory}/missing.html"></div></main>`,
+      ),
+    );
+    await (await fixture.store.history(project)).checkpoint();
+
+    const removed = await post("remove", { path: preview });
+    expect(removed.status).toBe(409);
+    expect(await removed.json()).toMatchObject({ uses: 1 });
+    const renamed = await post("rename", {
+      path: preview,
+      name: "renamed.png",
+    });
+    expect(renamed.status).toBe(409);
+    expect(await renamed.json()).toMatchObject({
+      error: expect.stringContaining(scene),
+    });
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await readFile(at(scene), "utf8")).toBe(source);
+    if (reference === "stylesheet")
+      expect(await readFile(at(stylesheet), "utf8")).toBe(css);
+
+    expect(
+      (await post("remove", { path: preview, confirmUsed: true })).status,
+    ).toBe(200);
+    expect(await present(preview)).toBe(false);
+    expect(await present(exported)).toBe(false);
+    expect((await step("undo")).status).toBe(200);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await readFile(at(scene), "utf8")).toBe(source);
+  },
+);
+
 test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
   "history rolls back a failed freeze replay and retries the same entry",
   async () => {

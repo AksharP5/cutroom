@@ -1,7 +1,11 @@
 import { renameSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, extname, join, posix, relative } from "node:path";
-import { fileContentVersion } from "@hyperframes/studio-server";
+import { isProjectIgnoredDir } from "@hyperframes/core/project-folders";
+import {
+  affectsProjectSignature,
+  fileContentVersion,
+} from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
@@ -20,9 +24,8 @@ import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
-import { compositionFiles } from "./media";
+import { compositionSources } from "./media";
 import { isMissing, projectStatePath, projectWritePath } from "./path";
-import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
 import { mediaReferenceRenamer } from "./mediaReferences";
@@ -68,11 +71,16 @@ const exists = (path: string) =>
 /** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
   const { canonical, companion } = await mediaFile(project, raw);
-  let uses = 0;
-  for (const composition of await compositionFiles(project)) {
+  const counts = new Map<string, number>();
+  for await (const {
+    path: composition,
+    canonical: sourceFile,
+    content,
+  } of compositionSources(project)) {
     const { references, canonicalMedia } = await compositionVersions(
       project,
       composition,
+      { content },
     );
     const usesFile = (paths: Set<string> | undefined) =>
       paths &&
@@ -83,27 +91,35 @@ export async function mediaUses(project: Project, raw: string) {
           (companion !== undefined && resolved === companion.path)
         );
       });
-    const source = await readSource(project, composition);
     const owners = new Set<string>();
     try {
-      const { timeline } = parseComposition(
-        source.content,
-        emptyTimelineSettings(),
-        { scope: compositionScope(composition) },
-      );
+      const { timeline } = parseComposition(content, emptyTimelineSettings(), {
+        scope: compositionScope(composition),
+      });
       for (const clip of timeline.clips) {
         if (usesFile(references.get(clip.id))) owners.add(clip.link ?? clip.id);
       }
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
     }
-    uses += Math.max(owners.size, usesFile(references.get(null)) ? 1 : 0);
+    counts.set(
+      sourceFile,
+      Math.max(
+        counts.get(sourceFile) ?? 0,
+        owners.size,
+        usesFile(references.get(null)) ? 1 : 0,
+      ),
+    );
   }
-  return uses;
+  return [...counts.values()].reduce((total, count) => total + count, 0);
 }
 
 /** Read only editable sources, resolving references against each source's directory. */
-async function referenceEdits(project: Project, names: Map<string, string>) {
+async function referenceEdits(
+  project: Project,
+  names: Map<string, string>,
+  freeze: boolean,
+) {
   const sources: { path: string; absolute: string; before: string }[] = [];
   const entries = new Map<string, ProjectEntry>([[".", "directory"]]);
   const directories = [""];
@@ -147,6 +163,11 @@ async function referenceEdits(project: Project, names: Map<string, string>) {
   for (const { path, absolute, before } of sources) {
     const after = await renameReferences(before, path);
     if (after === before) continue;
+    if (freeze && !affectsProjectSignature(project.path, absolute))
+      throw new HttpError(
+        409,
+        `Renaming this freeze frame would change ${path} outside project history.`,
+      );
     const sourceFile = names.get(path) ?? path;
     edits.push({
       sourceFile,
@@ -158,6 +179,40 @@ async function referenceEdits(project: Project, names: Map<string, string>) {
       after,
       expectedVersion: fileContentVersion(before),
     });
+  }
+  if (freeze) {
+    const html = new Map(
+      sources
+        .filter(({ path }) => /\.html?$/i.test(path))
+        .map(({ path, before }) => [path, before]),
+    );
+    const drafted = new Map(
+      edits.map(({ sourceFile, after }) => [sourceFile, after]),
+    );
+    const readChanged = async (path: string) => drafted.get(path);
+    for await (const { path, canonical, content } of compositionSources(
+      project,
+      {
+        files: html.keys(),
+        readOverride: async (path) => html.get(path),
+      },
+    )) {
+      if (html.has(path) && !path.split("/").some(isProjectIgnoredDir))
+        continue;
+      const after = drafted.get(canonical) ?? content;
+      if ((await renameReferences(content, path)) === after) {
+        const { canonicalMedia } = await compositionVersions(project, path, {
+          content: after,
+          readChanged,
+        });
+        if (![...canonicalMedia.values()].some((asset) => names.has(asset)))
+          continue;
+      }
+      throw new HttpError(
+        409,
+        `Renaming this freeze frame would leave a broken reference in ${path}.`,
+      );
+    }
   }
   return edits;
 }
@@ -237,7 +292,11 @@ export async function renameMedia(
           destination: exportAbsolute,
         });
       }
-      const edits = await referenceEdits(project, names);
+      const edits = await referenceEdits(
+        project,
+        names,
+        exportPath !== undefined,
+      );
       moveFiles(moves, () => store.writeFiles(project, edits));
       await moveSourceMarks(project, file.path, path);
       return { path, sources: edits.map((edit) => edit.sourceFile) };

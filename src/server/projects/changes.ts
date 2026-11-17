@@ -127,13 +127,13 @@ export function sourceClipVersions(
 export async function compositionVersions(
   project: Pick<Project, "path">,
   composition: string,
-  replay?: {
+  options?: {
     content: string;
-    readChanged: (path: string) => Promise<string | null | undefined>;
+    readChanged?: (path: string) => Promise<string | null | undefined>;
   },
 ) {
   const content =
-    replay?.content ?? (await readSource(project, composition)).content;
+    options?.content ?? (await readSource(project, composition)).content;
   const parsed = sourceVersions(
     content,
     composition,
@@ -155,7 +155,9 @@ export async function compositionVersions(
       pending = (async () => {
         const isSource = /\.(?:css|[cm]?[jt]sx?)$/i.test(path);
         const unavailable = { fingerprint: JSON.stringify([path, "missing"]) };
-        const changed = isSource ? await replay?.readChanged(path) : undefined;
+        const changed = isSource
+          ? await options?.readChanged?.(path)
+          : undefined;
         if (changed !== undefined)
           return { ...unavailable, content: changed ?? undefined };
         try {
@@ -169,7 +171,7 @@ export async function compositionVersions(
           if (!isSource || !info.isFile() || info.size > 10 * 1024 * 1024)
             return { fingerprint };
           const replacement =
-            owned !== path ? await replay?.readChanged(owned) : undefined;
+            owned !== path ? await options?.readChanged?.(owned) : undefined;
           const content =
             replacement === undefined
               ? await readFile(absolute, "utf8")
