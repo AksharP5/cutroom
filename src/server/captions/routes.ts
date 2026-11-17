@@ -5,6 +5,7 @@ import { parseSourceDocument } from "@hyperframes/studio-server";
 import type { FileMutationInput } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import {
+  CAPTION_WORD_TRANSFORM_DEFAULTS,
   CaptionsEditSchema,
   SubtitleFormatSchema,
   SubtitleImportSchema,
@@ -46,6 +47,7 @@ const LABELS: Record<CaptionsEdit["action"], string> = {
   generate: "Add captions",
   style: "Restyle captions",
   word: "Edit a caption word",
+  transform: "Transform caption words",
 };
 
 export function createCaptionRoutes(
@@ -232,6 +234,33 @@ export function createCaptionRoutes(
         await captionsWrite(project, placed, {
           ...placed.captions,
           style: input.style,
+        }),
+      ];
+    } else if (input.action === "transform") {
+      const known = new Set(transcript.words.map(({ id }) => id));
+      const unknown = input.wordIds.find((id) => !known.has(id));
+      if (unknown !== undefined)
+        throw new HttpError(404, `No transcript word has ID ${unknown}.`);
+      const transforms = new Map(
+        Object.entries(placed.captions.wordTransforms),
+      );
+      for (const id of input.wordIds) {
+        const value = input.transform && {
+          ...transforms.get(id),
+          ...input.transform,
+        };
+        if (value) {
+          for (const key of ["x", "y", "scale", "rotation"] as const)
+            if (value[key] === CAPTION_WORD_TRANSFORM_DEFAULTS[key])
+              delete value[key];
+        }
+        if (value && Object.keys(value).length) transforms.set(id, value);
+        else transforms.delete(id);
+      }
+      files = [
+        await captionsWrite(project, placed, {
+          ...placed.captions,
+          wordTransforms: Object.fromEntries(transforms),
         }),
       ];
     } else {

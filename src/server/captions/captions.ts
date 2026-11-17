@@ -1,7 +1,11 @@
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { CaptionsSchema } from "../../shared/captions";
-import type { CaptionStyle, Captions } from "../../shared/captions";
+import type {
+  CaptionStyle,
+  Captions,
+  CaptionWordTransform,
+} from "../../shared/captions";
 import { canonicalSeconds } from "../../shared/timeline/apply";
 import { captionInset } from "../../shared/safeZones";
 import { cueOf } from "./subtitles";
@@ -164,6 +168,19 @@ function stylesheet(style: CaptionStyle, frame: CaptionsFrame) {
 
 const seconds = (value: number) => String(canonicalSeconds(value));
 
+function wordTransformStyle({
+  x = 0,
+  y = 0,
+  scale,
+  rotation,
+}: CaptionWordTransform) {
+  return [
+    x || y ? `;translate:${x}px ${y}px` : "",
+    scale === undefined ? "" : `;scale:${scale}`,
+    rotation === undefined ? "" : `;rotate:${rotation}deg`,
+  ].join("");
+}
+
 /** A HyperFrames sub-composition that shows the captions, one timed line after another. */
 export function renderCaptions(
   captions: Captions,
@@ -175,21 +192,32 @@ export function renderCaptions(
       const next = group.words[index + 1]?.start ?? group.end;
       const at = Math.max(0, word.start - group.start);
       const length = Math.max(0, next - word.start);
-      return `<span class="caption-word" data-word-id="${escapeHtml(word.id)}" style="--a:${seconds(at)}s;--d:${seconds(length)}s">${escapeHtml(word.text)}</span>`;
+      const transform = captions.wordTransforms[word.id];
+      const style = transform ? wordTransformStyle(transform) : "";
+      return `<span class="caption-word" data-word-id="${escapeHtml(word.id)}" style="--a:${seconds(at)}s;--d:${seconds(length)}s${style}">${escapeHtml(word.text)}</span>`;
     });
     // Lint and Studio address timed elements by id; the composition id keeps them unique.
     return `<div id="${frame.id}-line-${line + 1}" class="caption-group clip" data-start="${seconds(group.start)}" data-duration="${seconds(group.end - group.start)}">${words.join(" ")}</div>`;
   });
-  const edits = Object.keys(captions.edits).length
-    ? ` data-caption-word-edits="${escapeHtml(JSON.stringify(captions.edits))}"`
-    : "";
+  const overrides = (
+    [
+      ["data-caption-word-edits", captions.edits],
+      ["data-caption-word-transforms", captions.wordTransforms],
+    ] as const
+  )
+    .map(([name, values]) =>
+      Object.keys(values).length
+        ? ` ${name}="${escapeHtml(JSON.stringify(values))}"`
+        : "",
+    )
+    .join("");
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><title>Captions</title></head>
 <body><template>
 <style>
 ${stylesheet(captions.style, frame)}
 </style>
-<div data-composition-id="${frame.id}" data-width="${frame.width}" data-height="${frame.height}" data-duration="${seconds(duration)}" ${CAPTIONS_ATTRIBUTE}="${CAPTIONS_VERSION}" data-caption-style="${captions.style}" data-caption-transcript="${escapeHtml(captions.transcriptId)}"${edits}>
+<div data-composition-id="${frame.id}" data-width="${frame.width}" data-height="${frame.height}" data-duration="${seconds(duration)}" ${CAPTIONS_ATTRIBUTE}="${CAPTIONS_VERSION}" data-caption-style="${captions.style}" data-caption-transcript="${escapeHtml(captions.transcriptId)}"${overrides}>
 <div class="caption-stage">
 ${groups.join("\n")}
 </div>
@@ -225,17 +253,18 @@ export function readCaptions(
     !(width > 0 && height > 0)
   )
     throw unreadable();
-  const writtenEdits = root.getAttribute("data-caption-word-edits");
-  let edits: unknown;
-  if (writtenEdits !== null) {
+  const readOverrides = (name: string): unknown => {
+    const raw = root.getAttribute(name);
+    if (raw === null) return undefined;
     try {
-      edits = JSON.parse(writtenEdits);
+      return JSON.parse(raw);
     } catch {
       throw unreadable();
     }
-  }
+  };
   const parsed = CaptionsSchema.safeParse({
-    edits,
+    edits: readOverrides("data-caption-word-edits"),
+    wordTransforms: readOverrides("data-caption-word-transforms"),
     style: root.getAttribute("data-caption-style"),
     transcriptId: root.getAttribute("data-caption-transcript"),
     groups: [...root.querySelectorAll(".caption-group")].map((group) => {

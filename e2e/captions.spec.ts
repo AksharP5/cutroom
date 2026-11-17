@@ -159,10 +159,45 @@ test("a person imports subtitles, adds captions, restyles and corrects them, and
   await shownAt(page, preview, 30, "Make [room] for this");
 
   await page.locator(".transcript-words button", { hasText: /^room/ }).click();
+  await page
+    .locator(".edit-picture")
+    .screenshot({ path: info.outputPath("caption-transform-before.png") });
+
+  await page.getByRole("button", { name: "Transform words" }).click();
+  const wordTransform = page.getByRole("form", {
+    name: "Caption word transform",
+  });
+  await wordTransform
+    .getByRole("spinbutton", { name: "Caption X position" })
+    .fill("12");
+  await wordTransform
+    .getByRole("spinbutton", { name: "Caption Y position" })
+    .fill("-48");
+  await wordTransform
+    .getByRole("spinbutton", { name: "Caption scale" })
+    .fill("125");
+  await wordTransform
+    .getByRole("spinbutton", { name: "Caption rotation" })
+    .fill("12");
+  await wordTransform.screenshot({
+    path: info.outputPath("caption-transform-form.png"),
+  });
+  await wordTransform.getByRole("button", { name: "Apply" }).click();
+  const transformed = preview.locator(".caption-word", { hasText: /^room$/ });
+  await expect(transformed).toHaveCSS("translate", "12px -48px");
+  await expect(transformed).toHaveCSS("scale", "1.25");
+  await expect(transformed).toHaveCSS("rotate", "12deg");
+  await page
+    .locator(".edit-picture")
+    .screenshot({ path: info.outputPath("caption-transform-result.png") });
+
   await page.getByRole("button", { name: "Edit caption" }).click();
   await page.getByRole("textbox", { name: "Caption text" }).fill("<b>ROOM</b>");
   await page.getByRole("button", { name: "Save" }).click();
   await shownAt(page, preview, 30, "Make [<b>ROOM</b>] for this");
+  await expect(
+    preview.locator(".caption-word", { hasText: "<b>ROOM</b>" }),
+  ).toHaveCSS("translate", "12px -48px");
 
   const secondCue = page.locator(".transcript-words button", {
     hasText: /^Cut/,
@@ -262,6 +297,39 @@ const warmth = async (path: string, frames: number[] = [0]) => {
   return frames.map((_, index) => stdout[index * 3]! - stdout[index * 3 + 2]!);
 };
 
+async function highlightCentre(path: string, frame = 0) {
+  const { stdout } = await promisify(execFile)(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      path,
+      "-vf",
+      `select=eq(n\\,${frame}),scale=480:270:flags=area,format=rgb24`,
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-",
+    ],
+    { encoding: "buffer" },
+  );
+  let x = 0;
+  let y = 0;
+  let count = 0;
+  for (let i = 0; i < stdout.length; i += 3) {
+    const [r, g, b] = [stdout[i]!, stdout[i + 1]!, stdout[i + 2]!];
+    if (r < 220 || g < 170 || g > 245 || b > 110) continue;
+    const pixel = i / 3;
+    x += pixel % 480;
+    y += Math.floor(pixel / 480);
+    count++;
+  }
+  expect(count).toBeGreaterThan(10);
+  return { x: (x * 4) / count, y: (y * 4) / count };
+}
+
 test("an agent's captions render the same in the export as in the preview, and export as SRT", async ({
   baseURL,
   request,
@@ -307,6 +375,41 @@ test("an agent's captions render the same in the export as in the preview, and e
       "Cut these words",
       "Keep the ending",
     ]);
+    const capture = async (
+      frame: number,
+      filename = `preview-${frame}.png`,
+    ) => {
+      const response = await request.get(
+        `/api/projects/${project.id}/thumbnail/index.html?t=${frame / FPS}&format=png&output=source`,
+      );
+      expect(response.status(), await response.text()).toBe(200);
+      const path = testInfo.outputPath(filename);
+      await writeFile(path, await response.body());
+      return path;
+    };
+    const originalCentre = await highlightCentre(
+      await capture(30, "before-word-transform.png"),
+    );
+    const room = transcript.words.find((word) => word.text === "room")!;
+    const transformed = result(
+      CaptionsViewSchema,
+      await client.callTool({
+        name: "captions_edit",
+        arguments: {
+          projectId: project.id,
+          edit: {
+            action: "transform",
+            transcriptId: transcript.id,
+            wordIds: [room.id],
+            transform: { x: 90, y: -24 },
+          },
+        },
+      }),
+    );
+    expect(transformed.wordTransforms).toEqual({
+      [room.id]: { x: 90, y: -24 },
+    });
+    expect(transformed.cues).toEqual(captions.cues);
     const srt = result(
       z.object({ text: z.string() }),
       await client.callTool({
@@ -345,15 +448,20 @@ test("an agent's captions render the same in the export as in the preview, and e
       .toBe("complete");
     const exported = await warmth((await status()).outputPath, frames);
     const shown: number[] = [];
-    for (const frame of frames) {
-      const response = await request.get(
-        `/api/projects/${project.id}/thumbnail/index.html?t=${frame / FPS}&format=png&output=source`,
-      );
-      expect(response.status(), await response.text()).toBe(200);
-      const path = testInfo.outputPath(`preview-${frame}.png`);
-      await writeFile(path, await response.body());
-      shown.push((await warmth(path))[0]!);
-    }
+    for (const frame of frames)
+      shown.push((await warmth(await capture(frame)))[0]!);
+    const previewCentre = await highlightCentre(
+      testInfo.outputPath("preview-30.png"),
+    );
+    const exportCentre = await highlightCentre((await status()).outputPath, 30);
+    expect(
+      Math.abs(previewCentre.x - originalCentre.x - 90),
+    ).toBeLessThanOrEqual(5);
+    expect(
+      Math.abs(previewCentre.y - originalCentre.y + 24),
+    ).toBeLessThanOrEqual(5);
+    expect(Math.abs(exportCentre.x - previewCentre.x)).toBeLessThanOrEqual(4);
+    expect(Math.abs(exportCentre.y - previewCentre.y)).toBeLessThanOrEqual(4);
     await testInfo.attach("Caption band warmth by frame", {
       body: JSON.stringify({ frames, shown, exported }),
       contentType: "application/json",

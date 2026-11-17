@@ -29,6 +29,7 @@ await mkdir(release, { recursive: true });
 const stage = await mkdtemp(join(release, ".package-"));
 const app = join(stage, "resources", "app");
 const runtime = join(stage, "resources", "runtime");
+const electron = join(root, "node_modules", "electron");
 
 async function run(args: string[], cwd = root) {
   const child = Bun.spawn(args, {
@@ -42,9 +43,11 @@ async function run(args: string[], cwd = root) {
 }
 
 try {
+  // The Electron package can be present before its platform binary is fetched.
+  await run(["node", join(electron, "install.js")]);
   await run([process.execPath, "run", "build"]);
   await run([process.execPath, "scripts/desktop.ts", "--build-only"]);
-  await cp(join(root, "node_modules", "electron", "dist"), stage, {
+  await cp(join(electron, "dist"), stage, {
     recursive: true,
   });
   await rm(join(stage, "resources", "default_app.asar"), { force: true });

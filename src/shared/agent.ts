@@ -117,39 +117,6 @@ export const agentStatusSchema = z.enum([
 ]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
-export const agentSessionSchema = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  provider: agentProviderSchema,
-  title: z.string(),
-  model: z.string().optional(),
-  nativeSessionId: z.string().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  status: agentStatusSchema,
-  messages: z.array(agentMessageSchema),
-  pendingRequest: agentRequestSchema.optional(),
-});
-export type AgentSession = z.infer<typeof agentSessionSchema>;
-export const agentSessionSummarySchema = agentSessionSchema.omit({
-  messages: true,
-  pendingRequest: true,
-});
-export type AgentSessionSummary = z.infer<typeof agentSessionSummarySchema>;
-
-export const createAgentSessionSchema = z.object({
-  projectId: z.string().min(1),
-  provider: agentProviderSchema,
-  model: z.string().min(1).optional(),
-  title: z.string().trim().min(1).max(160).optional(),
-});
-export type CreateAgentSession = z.infer<typeof createAgentSessionSchema>;
-
-export const configureAgentSessionSchema = z.object({
-  model: z.string().trim().min(1).nullable().optional(),
-});
-export type ConfigureAgentSession = z.infer<typeof configureAgentSessionSchema>;
-
 export const agentTurnSchema = z
   .object({
     text: z.string().max(200_000),
@@ -170,6 +137,47 @@ export const agentTurnSchema = z
     "Write a message or attach a file.",
   );
 export type AgentTurn = z.infer<typeof agentTurnSchema>;
+
+const queuedTurnsSchema = z.array(
+  z.object({ id: z.string(), turn: agentTurnSchema }),
+);
+
+export const agentSessionSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  provider: agentProviderSchema,
+  title: z.string(),
+  model: z.string().optional(),
+  nativeSessionId: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  status: agentStatusSchema,
+  messages: z.array(agentMessageSchema),
+  pendingRequest: agentRequestSchema.optional(),
+  queuedTurns: queuedTurnsSchema.optional(),
+  runningFollowUpId: z.string().optional(),
+});
+export type AgentSession = z.infer<typeof agentSessionSchema>;
+export const agentSessionSummarySchema = agentSessionSchema.omit({
+  messages: true,
+  pendingRequest: true,
+  queuedTurns: true,
+  runningFollowUpId: true,
+});
+export type AgentSessionSummary = z.infer<typeof agentSessionSummarySchema>;
+
+export const createAgentSessionSchema = z.object({
+  projectId: z.string().min(1),
+  provider: agentProviderSchema,
+  model: z.string().min(1).optional(),
+  title: z.string().trim().min(1).max(160).optional(),
+});
+export type CreateAgentSession = z.infer<typeof createAgentSessionSchema>;
+
+export const configureAgentSessionSchema = z.object({
+  model: z.string().trim().min(1).nullable().optional(),
+});
+export type ConfigureAgentSession = z.infer<typeof configureAgentSessionSchema>;
 
 export const agentPermissionsSchema = z.object({
   alwaysAllowCutroomEdits: z.boolean(),
@@ -194,6 +202,11 @@ export const agentEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   z.object({ type: z.literal("status"), status: agentStatusSchema }),
+  z.object({
+    type: z.literal("turn-queue"),
+    turns: queuedTurnsSchema,
+    runningId: z.string().optional(),
+  }),
   z.object({ type: z.literal("request"), request: agentRequestSchema }),
   z.object({ type: z.literal("request-resolved"), requestId: z.string() }),
   z.object({ type: z.literal("native-session"), nativeSessionId: z.string() }),

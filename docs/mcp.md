@@ -460,11 +460,12 @@ Captions come from a transcript: transcribe a clip with `transcription_start`, i
 
 `edit.action` is one of:
 
-| Action     | Fields                         | Does                                                                                                                                             |
-| ---------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `generate` | `transcriptId`, `style?`       | Without captions, writes them and places one Captions clip on a new track. With captions, rewrites them to follow the words where they now play. |
-| `style`    | `transcriptId`, `style`        | `karaoke` (each word lights up as it is spoken), `highlight` (a colour block behind the spoken word) or `plain`. Timing stays.                   |
-| `word`     | `transcriptId`, `wordId`, text | Changes how captions show one word. The transcript keeps its own text, and regenerating keeps the correction.                                    |
+| Action      | Fields                                 | Does                                                                                                                                                     |
+| ----------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generate`  | `transcriptId`, `style?`               | Without captions, writes them and places one Captions clip on a new track. With captions, rewrites them to follow the words where they now play.         |
+| `style`     | `transcriptId`, `style`                | `karaoke` (each word lights up as it is spoken), `highlight` (a colour block behind the spoken word) or `plain`. Timing stays.                           |
+| `word`      | `transcriptId`, `wordId`, text         | Changes how captions show one word. The transcript keeps its own text, and regenerating keeps the correction.                                            |
+| `transform` | `transcriptId`, `wordIds`, `transform` | Sets the selected words’ X and Y offsets in composition pixels, uniform scale and rotation in degrees. Omitted fields stay as saved. Pass null to reset. |
 
 Each call is one undo step and answers with the same view `captions_list` returns: the captions clip id and file, the style, each line in composition seconds, `edits` (corrected words by id), and `stale`. Invalid input is refused before anything is written.
 

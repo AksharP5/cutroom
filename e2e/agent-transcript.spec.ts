@@ -20,6 +20,71 @@ const rows = (page: Page) => page.locator(".chat-step");
 /** A row's one line: its verb, what it acted on, and whether it failed. */
 const line = (page: Page, index: number) =>
   rows(page).nth(index).locator("summary");
+
+test("the chat composer queues a follow-up during work and lets you resume it after Stop", async ({
+  page,
+  request,
+}, info) => {
+  const project = await createProject(request, "Follow-up queue");
+  const turn = agentTurn(project.id);
+  const running = turn.session([turn.ask, turn.plan], "running");
+  const text = "Keep the shorter intro too.";
+  const queued = {
+    ...running,
+    queuedTurns: [{ id: "next", turn: { text, skills: [], attachments: [] } }],
+  };
+  const paused = { ...queued, status: "idle" as const };
+  const resumed = {
+    ...queued,
+    runningFollowUpId: "next",
+    messages: [...running.messages, { ...turn.ask, id: "next-user", text }],
+  };
+  const stream = await playSession(page, [running, queued, paused, resumed]);
+  const sessionPath = `**/api/cutroom/agents/sessions/${running.id}`;
+  await page.route(`${sessionPath}/follow-ups`, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toMatchObject({ text });
+    await route.fulfill({ status: 202, json: queued });
+  });
+  await page.route(`${sessionPath}/interrupt`, (route) =>
+    route.fulfill({ json: paused }),
+  );
+  const acceptResume = Promise.withResolvers<void>();
+  await page.route(`${sessionPath}/follow-ups/resume`, async (route) => {
+    await acceptResume.promise;
+    await route.fulfill({ status: 202, json: resumed });
+  });
+  await page.goto(`/#project/${project.id}`);
+  const chat = page.getByRole("complementary", { name: "Agent chat" });
+  const composer = chat.getByRole("textbox", { name: "Message your agent" });
+  const stop = chat.getByRole("button", { name: "Stop agent" });
+  const queue = chat.getByRole("region", { name: "Queued follow-ups" });
+  await expect(stop).toBeVisible();
+  await composer.fill(text);
+  const queueButton = chat.getByRole("button", { name: "Queue follow-up" });
+  await expect(queueButton).toBeEnabled();
+  await queueButton.click();
+  await expect(composer).toHaveValue("");
+  await stream.advance();
+  await expect(queue).toContainText(text);
+  await chat.screenshot({ path: info.outputPath("chat-follow-up-queued.png") });
+  await stop.click();
+  await stream.advance();
+  const resume = queue.getByRole("button", { name: "Resume queue" });
+  await expect(resume).toBeEnabled();
+  try {
+    await resume.click();
+    await expect(chat.getByText("Resuming", { exact: true })).toBeVisible();
+    await expect(stop).toHaveCount(0);
+  } finally {
+    acceptResume.resolve();
+  }
+  await stream.advance();
+  await expect(stop).toBeVisible();
+  await expect(queue).toHaveCount(0);
+  await expect(chat.getByText(text)).toBeVisible();
+});
+
 /** Where the summary line sits in the transcript, whatever the panel's entrance transform is doing. */
 const place = (page: Page) =>
   page.locator(".chat-steps").evaluate((element) => {

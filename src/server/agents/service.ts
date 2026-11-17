@@ -39,10 +39,16 @@ type TurnOperation = {
   kind: "turn";
   phase: "preparing" | "running";
   controller: AbortController;
+  queuedId?: string;
   /** Returns this run's claimed review notes to the queue. Safe to call more than once. */
-  endReview?: () => void;
+  endReview?: () => Promise<void>;
 };
 type SessionOperation = TurnOperation | { kind: "configure" };
+type FollowUps = NonNullable<AgentSession["queuedTurns"]>;
+type FollowUpChange = {
+  session: AgentSession;
+  apply: (current: FollowUps) => FollowUps;
+};
 export type AgentServiceOptions = {
   projects: ProjectStore;
   review: ReviewService;
@@ -94,6 +100,7 @@ export class AgentService {
     const stored = storedSessionsSchema.parse(JSON.parse(content));
     this.cutroomEdits = stored.cutroomEdits;
     for (const session of stored.sessions) {
+      session.runningFollowUpId = undefined;
       if (session.status === "running" || session.status === "waiting") {
         session.status = "idle";
         session.pendingRequest = undefined;
@@ -159,7 +166,7 @@ export class AgentService {
         const operation = this.operations.get(session.id);
         if (operation?.kind === "turn") {
           operation.endReview?.();
-          this.operations.delete(session.id);
+          this.releaseTurn(session);
           this.finishStreaming(session.id, "complete");
           this.apply(session.id, { type: "status", status: "idle" });
         }
@@ -196,6 +203,8 @@ export class AgentService {
         ({
           messages: _messages,
           pendingRequest: _pendingRequest,
+          queuedTurns: _queuedTurns,
+          runningFollowUpId: _runningFollowUpId,
           ...summary
         }) => summary,
       );
@@ -270,11 +279,63 @@ export class AgentService {
   async send(id: string, turn: AgentTurn) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.queuedTurns?.length)
+      throw new HttpError(409, "Resume the queued follow-ups first.");
+    return this.runTurn(session, turn);
+  }
+
+  async queueFollowUp(id: string, turn: AgentTurn) {
+    this.requireOpen();
+    const session = this.requireSession(id);
+    const entry = { id: crypto.randomUUID(), turn };
+    return this.changeFollowUps(session, (current) => [...current, entry]);
+  }
+
+  async removeFollowUp(id: string, queuedId: string) {
+    this.requireOpen();
+    const session = this.requireSession(id);
+    return this.changeFollowUps(session, (current) => {
+      const operation = this.operations.get(id);
+      if (operation?.kind === "turn" && operation.queuedId === queuedId)
+        throw new HttpError(409, "This follow-up is already starting.");
+      const remaining = current.filter(({ id }) => id !== queuedId);
+      if (remaining.length === current.length)
+        throw new HttpError(404, "Follow-up not found.");
+      return remaining;
+    });
+  }
+
+  private async changeFollowUps(
+    session: AgentSession,
+    change: (current: FollowUps) => FollowUps,
+  ) {
+    await this.persist({ session, apply: change });
+    return this.get(session.id);
+  }
+
+  private publishFollowUps(session: AgentSession) {
+    this.emit(session.id, {
+      type: "turn-queue",
+      turns: session.queuedTurns ?? [],
+      runningId: session.runningFollowUpId,
+    });
+  }
+
+  async resumeFollowUps(id: string) {
+    this.requireOpen();
+    const session = this.requireSession(id);
+    const next = session.queuedTurns?.[0];
+    return next ? this.runTurn(session, next.turn, next.id) : this.get(id);
+  }
+
+  private async runTurn(
+    session: AgentSession,
+    turn: AgentTurn,
+    queuedId?: string,
+  ) {
+    const { id } = session;
     if (this.operations.has(id))
-      throw new HttpError(
-        409,
-        "This agent is working. Stop it before sending another request.",
-      );
+      throw new HttpError(409, "This agent is working. Wait for it to finish.");
     // Review claims and withdrawals belong to the one run working on the project.
     for (const [other, running] of this.operations)
       if (
@@ -289,20 +350,35 @@ export class AgentService {
       kind: "turn",
       phase: "preparing",
       controller: new AbortController(),
+      queuedId,
     };
     this.operations.set(id, operation);
+    if (queuedId) {
+      session.runningFollowUpId = queuedId;
+      this.publishFollowUps(session);
+      if (session.status !== "running")
+        this.apply(id, { type: "status", status: "running" });
+    }
     try {
       return await this.startTurn(session, turn, operation);
     } catch (error) {
-      operation.endReview?.();
+      await operation.endReview?.();
       if (this.admissionCancelled(id, operation)) return this.get(id);
-      if (this.operations.get(id) === operation) this.operations.delete(id);
+      this.releaseTurn(session);
       if (!this.disposed && this.requireSession(id).status === "running")
         this.apply(id, {
           type: "error",
           message: error instanceof Error ? error.message : String(error),
         });
       throw error;
+    }
+  }
+
+  private releaseTurn(session: AgentSession) {
+    this.operations.delete(session.id);
+    if (session.runningFollowUpId) {
+      session.runningFollowUpId = undefined;
+      this.publishFollowUps(session);
     }
   }
 
@@ -314,8 +390,9 @@ export class AgentService {
     )
       return false;
     if (this.operations.get(id) !== operation) return true;
-    this.operations.delete(id);
-    if (!this.disposed && this.requireSession(id).status === "running")
+    const session = this.requireSession(id);
+    this.releaseTurn(session);
+    if (!this.disposed && session.status === "running")
       this.apply(id, { type: "status", status: "idle" });
     return true;
   }
@@ -398,37 +475,46 @@ export class AgentService {
         }),
       ),
     );
-    if (this.admissionCancelled(id, operation)) return this.get(id);
     const nativeTurn = { ...turn, skills, attachments };
+    if (this.admissionCancelled(id, operation)) return this.get(id);
     if (!session.messages.some((message) => message.role === "user"))
       session.title = turn.text.trim().slice(0, 90) || "Attached media";
-    const message = completeMessage(turn.text || "Attached media", "user");
-    this.apply(id, { type: "message", message });
-    this.apply(id, { type: "status", status: "running" });
+    const message = completeMessage(
+      turn.text || "Attached media",
+      "user",
+      operation.queuedId,
+    );
+    if (!operation.queuedId) {
+      this.apply(id, { type: "message", message });
+      this.apply(id, { type: "status", status: "running" });
+    }
     await this.persist();
     if (this.admissionCancelled(id, operation)) {
       if (!this.disposed) await this.persist();
       return this.get(id);
     }
+    if (
+      operation.queuedId &&
+      !session.queuedTurns?.some(({ id }) => id === operation.queuedId)
+    )
+      throw new HttpError(409, "This follow-up was removed before it started.");
     const review = await this.options.review.beginTurn(project, {
       id: message.id,
       kind: "message",
       token: this.agentToken(id),
       name: session.provider === "codex" ? "Codex" : "Claude",
     });
-    const endReview = (operation.endReview = () => {
-      if (!this.disposed)
-        void review
-          .end()
-          .catch((error: unknown) =>
-            console.error(
-              "Review notes could not be returned to the queue:",
-              error,
-            ),
-          );
+    const endReview = (operation.endReview = async () => {
+      if (this.disposed) return;
+      await review.end().catch((error: unknown) => {
+        console.error(
+          "Review notes could not be returned to the queue:",
+          error,
+        );
+      });
     });
     if (this.admissionCancelled(id, operation)) {
-      endReview();
+      await endReview();
       if (!this.disposed) await this.persist();
       return this.get(id);
     }
@@ -472,6 +558,7 @@ export class AgentService {
       this.runtimes.set(id, runtime);
     }
     const native = runtime;
+    if (operation.queuedId) this.apply(id, { type: "message", message });
     void native
       .send({
         ...nativeTurn,
@@ -479,15 +566,37 @@ export class AgentService {
           [review.digest, turn.context].filter(Boolean).join("\n\n") ||
           undefined,
       })
-      .then(() => {
+      .then(async () => {
+        await endReview();
+        if (this.disposed || this.operations.get(id) !== operation) return;
+        // Keep an interrupted follow-up available for the owner to resume or remove.
+        if (
+          operation.queuedId &&
+          !operation.controller.signal.aborted &&
+          session.status !== "error"
+        )
+          await this.changeFollowUps(session, (current) =>
+            current.filter(({ id }) => id !== operation.queuedId),
+          );
+        await this.writeChain.catch(() => {});
         if (this.disposed || this.operations.get(id) !== operation) return;
         this.finishStreaming(id, "complete");
         this.rejectRequests(id);
-        this.operations.delete(id);
-        this.apply(id, { type: "status", status: "idle" });
+        this.releaseTurn(session);
+        const succeeded = session.status !== "error";
+        const next =
+          succeeded && !operation.controller.signal.aborted
+            ? session.queuedTurns?.[0]
+            : undefined;
+        if (next)
+          await this.runTurn(session, next.turn, next.id).catch(() => {
+            // runTurn has already set the conversation error for this admission.
+          });
+        else if (succeeded) this.apply(id, { type: "status", status: "idle" });
         void this.persist().catch((error) => this.storageFailed(error));
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        await endReview();
         if (this.disposed || this.operations.get(id) !== operation) return;
         this.finishStreaming(id, "failed");
         this.rejectRequests(id);
@@ -495,15 +604,14 @@ export class AgentService {
           this.runtimes.delete(id);
           native.dispose();
         }
-        this.operations.delete(id);
+        this.releaseTurn(session);
         if (session.status !== "error")
           this.apply(id, {
             type: "error",
             message: error instanceof Error ? error.message : String(error),
           });
         void this.persist().catch((failure) => this.storageFailed(failure));
-      })
-      .finally(endReview);
+      });
     return this.get(id);
   }
 
@@ -514,7 +622,7 @@ export class AgentService {
     if (operation?.kind === "turn") {
       operation.controller.abort();
       if (operation.phase === "preparing") {
-        this.admissionCancelled(id, operation);
+        if (!operation.queuedId) this.admissionCancelled(id, operation);
         return this.get(id);
       }
     }
@@ -732,17 +840,26 @@ export class AgentService {
     }
   }
 
-  private persist() {
-    const content = JSON.stringify({
-      version: 1,
-      sessions: [...this.sessions.values()],
-      cutroomEdits: this.cutroomEdits,
-    });
+  private persist(change?: FollowUpChange) {
     const write = async () => {
+      const turns = change?.apply(change.session.queuedTurns ?? []);
+      const content = JSON.stringify({
+        version: 1,
+        sessions: [...this.sessions.values()].map((session) =>
+          change?.session === session
+            ? { ...session, queuedTurns: turns }
+            : session,
+        ),
+        cutroomEdits: this.cutroomEdits,
+      });
       await mkdir(this.options.dataDir, { recursive: true });
       const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
       await writeFile(temporary, content, { mode: 0o600 });
       await rename(temporary, this.path);
+      if (change && turns) {
+        change.session.queuedTurns = turns;
+        this.publishFollowUps(change.session);
+      }
     };
     this.writeChain = this.writeChain.then(write, write);
     return this.writeChain;
