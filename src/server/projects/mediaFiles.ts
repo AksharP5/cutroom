@@ -76,11 +76,12 @@ export async function mediaUses(project: Project, raw: string) {
     path: composition,
     canonical: sourceFile,
     content,
+    mounted,
   } of compositionSources(project)) {
     const { references, canonicalMedia } = await compositionVersions(
       project,
       composition,
-      { content },
+      { content, mounted },
     );
     const usesFile = (paths: Set<string> | undefined) =>
       paths &&
@@ -190,19 +191,22 @@ async function referenceEdits(
       edits.map(({ sourceFile, after }) => [sourceFile, after]),
     );
     const readChanged = async (path: string) => drafted.get(path);
-    for await (const { path, canonical, content } of compositionSources(
-      project,
-      {
-        files: html.keys(),
-        readOverride: async (path) => html.get(path),
-      },
-    )) {
+    for await (const {
+      path,
+      canonical,
+      content,
+      mounted,
+    } of compositionSources(project, {
+      files: html.keys(),
+      readOverride: async (path) => html.get(path),
+    })) {
       if (html.has(path) && !path.split("/").some(isProjectIgnoredDir))
         continue;
       const after = drafted.get(canonical) ?? content;
       if ((await renameReferences(content, path)) === after) {
         const { canonicalMedia } = await compositionVersions(project, path, {
           content: after,
+          mounted,
           readChanged,
         });
         if (![...canonicalMedia.values()].some((asset) => names.has(asset)))

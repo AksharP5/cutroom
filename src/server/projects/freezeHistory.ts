@@ -41,12 +41,13 @@ export async function guardFreezeHistory(
   const changed = changes
     .filter(({ path, after }) => after !== null && /\.html?$/i.test(path))
     .map(({ path }) => path);
-  for await (const { path, content } of compositionSources(project, {
+  for await (const { path, content, mounted } of compositionSources(project, {
     changed,
     readOverride: readChanged,
   })) {
     const { canonicalMedia } = await compositionVersions(project, path, {
       content,
+      mounted,
       readChanged,
     });
     for (const asset of canonicalMedia.values()) {

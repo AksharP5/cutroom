@@ -842,6 +842,54 @@ test.each([
   },
 );
 
+test("mounted freeze URLs prefer existing siblings and keep explicit parent paths", async () => {
+  const preview = "assets/freeze/still.png";
+  const scene = "build/scenes/scene.html";
+  const setImage = (src: string) =>
+    writeFile(
+      at(scene),
+      `<div data-composition-id="scene" data-width="1920" data-height="1080" data-duration="2"><img id="still" class="clip" src="${src}" data-start="0" data-duration="2" data-track-index="0"></div>`,
+    );
+  const uses = async () => {
+    const response = await fixture.request(
+      `/projects/${project.id}/media/uses?path=${encodeURIComponent(preview)}`,
+    );
+    expect(response.status).toBe(200);
+    return await response.json();
+  };
+  await mkdir(at("build/scenes"), { recursive: true });
+  await setImage(preview);
+  await writeFile(
+    at("index.html"),
+    (await readFile(at("index.html"), "utf8")).replace(
+      "</main>",
+      `<div data-composition-src="${scene}" data-start="0" data-duration="2"></div></main>`,
+    ),
+  );
+  const ledger = await fixture.store.history(project);
+  await ledger.checkpoint();
+  const beforeFreeze = ledger.list().at(-1)!;
+  await mkdir(at("assets/freeze"));
+  await writeFile(at(preview), "preview pixels");
+  await ledger.checkpoint();
+
+  const removal = await post("remove", { path: preview });
+  expect(removal.status).toBe(409);
+  expect(await removal.json()).toMatchObject({ uses: 1 });
+  await expect(
+    ledger.restore(beforeFreeze.id, { kind: "person", name: "You" }),
+  ).rejects.toThrow(`still used by ${scene}`);
+  expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+
+  await mkdir(at("build/scenes/assets/freeze"), { recursive: true });
+  await writeFile(at(`build/scenes/${preview}`), "different sibling");
+  expect(await uses()).toMatchObject({ uses: 0 });
+  await setImage(`/${preview}`);
+  expect(await uses()).toMatchObject({ uses: 1 });
+  await setImage(`../${preview}`);
+  expect(await uses()).toMatchObject({ uses: 0 });
+});
+
 test("restoring a trash move preserves a mounted freeze with identical pixels", async () => {
   const first = "assets/freeze/first.png";
   const firstExport = "assets/freeze/export/first.png";

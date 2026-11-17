@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import { rewriteAssetPath } from "@hyperframes/parsers/asset-paths";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
@@ -17,7 +18,7 @@ const signature = (content: string) =>
 type SourceVersions = {
   source: string;
   versions: ClipVersions;
-  references: Map<string | null, Set<string>>;
+  urls: Map<string | null, Set<string>>;
 };
 // Reads dominate edits. Retain only the latest parse for eight compositions.
 const cache = new Map<string, SourceVersions>();
@@ -38,12 +39,11 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
   const versions: ClipVersions = new Map();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
-    if (!value.trim() || value.startsWith("#")) return;
-    const path = localMediaPath(composition, value.trim());
-    if (path === null || path === "." || path.startsWith("..")) return;
-    let paths = media.get(id);
-    if (!paths) media.set(id, (paths = new Set()));
-    paths.add(path);
+    const url = value.trim();
+    if (!url || url.startsWith("#")) return;
+    let urls = media.get(id);
+    if (!urls) media.set(id, (urls = new Set()));
+    urls.add(url);
   };
   try {
     const parsed = parseComposition(source, emptyTimelineSettings(), {
@@ -108,7 +108,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, references: media };
+  const result = { source, versions, urls: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);
@@ -129,6 +129,7 @@ export async function compositionVersions(
   composition: string,
   options?: {
     content: string;
+    mounted?: boolean;
     readChanged?: (path: string) => Promise<string | null | undefined>;
   },
 ) {
@@ -139,27 +140,29 @@ export async function compositionVersions(
     composition,
     `${project.path}/${composition}`,
   );
-  const paths = new Map(
-    [...parsed.references].map(([id, refs]) => [id, new Set(refs)]),
-  );
-  const shared = paths.get(null) ?? new Set<string>();
-  paths.set(null, shared);
   const canonicalMedia = new Map<string, string>();
   const files = new Map<
     string,
-    Promise<{ fingerprint: string; content?: string }>
+    Promise<{ exists: boolean; fingerprint: string; content?: string }>
   >();
   const file = (path: string) => {
     let pending = files.get(path);
     if (!pending) {
       pending = (async () => {
         const isSource = /\.(?:css|[cm]?[jt]sx?)$/i.test(path);
-        const unavailable = { fingerprint: JSON.stringify([path, "missing"]) };
+        const unavailable = {
+          exists: false,
+          fingerprint: JSON.stringify([path, "missing"]),
+        };
         const changed = isSource
           ? await options?.readChanged?.(path)
           : undefined;
         if (changed !== undefined)
-          return { ...unavailable, content: changed ?? undefined };
+          return {
+            ...unavailable,
+            exists: changed !== null,
+            content: changed ?? undefined,
+          };
         try {
           const { absolute, path: owned } = await resolveProjectPath(
             project,
@@ -169,14 +172,12 @@ export async function compositionVersions(
           if (info.isFile()) canonicalMedia.set(path, owned);
           const fingerprint = fileFingerprint(owned, info);
           if (!isSource || !info.isFile() || info.size > 10 * 1024 * 1024)
-            return { fingerprint };
+            return { exists: true, fingerprint };
           const replacement =
             owned !== path ? await options?.readChanged?.(owned) : undefined;
-          const content =
-            replacement === undefined
-              ? await readFile(absolute, "utf8")
-              : (replacement ?? undefined);
-          return { fingerprint, content };
+          if (replacement === null) return unavailable;
+          const content = replacement ?? (await readFile(absolute, "utf8"));
+          return { exists: true, fingerprint, content };
         } catch (error) {
           if (unavailableProjectFile(error)) return unavailable;
           throw error;
@@ -186,6 +187,47 @@ export async function compositionVersions(
     }
     return pending;
   };
+  const localPath = (source: string, url: string) => {
+    const path = localMediaPath(source, url);
+    return path &&
+      path !== "." &&
+      !path.startsWith("..") &&
+      !path.includes("\0")
+      ? path
+      : null;
+  };
+  const authoredPath = async (url: string) => {
+    // HyperFrames rebases mounted HTML to the project root, preferring existing siblings.
+    const rooted = localPath("index.html", rewriteAssetPath(composition, url));
+    const sibling = localPath(
+      "index.html",
+      rewriteAssetPath(composition, url, () => true),
+    );
+    return sibling && sibling !== rooted && (await file(sibling)).exists
+      ? sibling
+      : rooted;
+  };
+  const resolvedUrls = new Map<string, string | null>();
+  if (options?.mounted) {
+    const urls = new Set(
+      [...parsed.urls.values()].flatMap((urls) => [...urls]),
+    );
+    await Promise.all(
+      [...urls].map(async (url) =>
+        resolvedUrls.set(url, await authoredPath(url)),
+      ),
+    );
+  }
+  const paths = new Map(
+    [...parsed.urls].map(([id, urls]) => {
+      const paths = [...urls].map((url) =>
+        options?.mounted ? resolvedUrls.get(url) : localPath(composition, url),
+      );
+      return [id, new Set(paths.filter((path) => path != null))];
+    }),
+  );
+  const shared = paths.get(null) ?? new Set<string>();
+  paths.set(null, shared);
   // Follow local styles/scripts for media URLs, relative to the file declaring them.
   const dependencies = [
     ...new Set([...paths.values()].flatMap((refs) => [...refs])),
@@ -202,9 +244,10 @@ export async function compositionVersions(
         ),
       ].map((match) => match[1]!),
     ]) {
-      const resolved = localMediaPath(path, url);
-      if (!resolved || resolved.startsWith("..") || shared.has(resolved))
-        continue;
+      const source =
+        options?.mounted && url.startsWith("/") ? "index.html" : path;
+      const resolved = localPath(source, url);
+      if (!resolved || shared.has(resolved)) continue;
       shared.add(resolved);
       dependencies.push(resolved);
     }
