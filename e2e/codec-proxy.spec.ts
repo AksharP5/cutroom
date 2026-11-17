@@ -40,6 +40,163 @@ async function shownFrame(page: Page, bits = 8) {
   );
 }
 
+async function seekFrame(page: Page, frame: number) {
+  await page
+    .getByRole("button", { name: "Current time. Click to type a time." })
+    .click();
+  const time = page.getByRole("textbox", { name: "Go to time" });
+  const seconds = Math.floor(frame / 30);
+  await time.pressSequentially(
+    [Math.floor(seconds / 60), seconds % 60, frame % 30]
+      .map((part) => String(part).padStart(2, "0"))
+      .join("")
+      .padStart(8, "0"),
+  );
+  await time.press("Enter");
+}
+
+for (const { name, duration, videoDuration, gap, mp4, frames } of [
+  {
+    name: "completed MP4",
+    duration: 3.8,
+    videoDuration: 3.8,
+    gap: [30, 38],
+    mp4: true,
+    frames: [
+      [15, 15],
+      [35, 29],
+      [38, 29],
+      [39, 39],
+    ],
+  },
+  {
+    name: "HLS",
+    duration: 12,
+    videoDuration: 12,
+    gap: [164, 178],
+    mp4: false,
+    frames: [
+      [125, 125],
+      [170, 163],
+      [178, 163],
+      [179, 179],
+      [241, 241],
+      [359, 103],
+    ],
+  },
+  {
+    name: "HEVC with longer audio",
+    duration: 8,
+    videoDuration: 5.3,
+    gap: null,
+    mp4: null,
+    frames: [
+      [125, 125],
+      [184, 158],
+      [162, 158],
+      [152, 152],
+    ],
+  },
+] as const) {
+  test(`a paused ${name} editing proxy holds the right picture through missing video frames`, async ({
+    page,
+    request,
+  }) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: {
+            name: "Proxy presentation times",
+            width: 640,
+            height: 360,
+            duration,
+          },
+        })
+      ).json(),
+    );
+    const bits = Array.from(
+      { length: 8 },
+      (_, bit) =>
+        `drawbox=x=${bit * 40}:y=0:w=40:h=18:color=white:t=fill:enable='eq(mod(floor(n/${2 ** bit})\\,2)\\,1)'`,
+    );
+    const picture = `drawbox=x=0:y=0:w=320:h=18:color=black:t=fill,${bits.join(",")}`;
+    const input = gap ? "recording.mp4" : "recording.mkv";
+    await promisify(execFile)("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `testsrc2=size=320x180:rate=30:duration=${videoDuration}`,
+      ...(gap
+        ? []
+        : [
+            "-f",
+            "lavfi",
+            "-i",
+            `anullsrc=r=48000:cl=mono:d=${duration}`,
+            // Start the first AAC packet at zero. FFprobe versions disagree on whether
+            // negative encoder priming belongs to the Matroska media timeline.
+            "-af",
+            "asetpts=PTS+1024/SR/TB",
+            "-c:a",
+            "aac",
+          ]),
+      "-vf",
+      gap ? `${picture},select='not(between(n,${gap.join(",")}))'` : picture,
+      "-fps_mode",
+      "vfr",
+      "-c:v",
+      "libx265",
+      "-preset",
+      "ultrafast",
+      "-tag:v",
+      "hvc1",
+      "-x265-params",
+      "log-level=error:pools=2:frame-threads=2",
+      join(project.path, input),
+    ]);
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><head><style>html,body{margin:0;background:#111111}</style></head><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="${duration}" data-fps="30">
+<video id="recording" src="${input}" muted data-start="0" data-duration="${duration}" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>
+</main></body></html>`,
+    );
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "false");
+    });
+    const proxy = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        url.searchParams.get("hf-proxy") === "h264" &&
+        !url.searchParams.has("cutroom-piece") &&
+        /^(video\/mp4|application\/vnd\.apple\.mpegurl)/.test(
+          response.headers()["content-type"] ?? "",
+        ) &&
+        [200, 206].includes(response.status())
+      );
+    });
+    await page.goto(`/#project/${project.id}`);
+    const type = (await proxy).headers()["content-type"];
+    if (mp4 !== null)
+      expect(type).toContain(
+        mp4 ? "video/mp4" : "application/vnd.apple.mpegurl",
+      );
+    await expect(page.locator(".edit-preparing")).toBeHidden();
+    const stage = page.locator(".edit-stage");
+    for (const [destination, expected] of frames) {
+      await seekFrame(page, destination);
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(expected);
+    }
+    await expect(
+      page.getByText("The preview did not draw the frame in time."),
+    ).toHaveCount(0);
+  });
+}
+
 for (const pipeline of [false, true])
   test(`a ProRes clip the browser cannot decode plays from its editing proxy, frame for frame, with the footage pipeline ${pipeline ? "on" : "off"}`, async ({
     page,
@@ -91,14 +248,7 @@ for (const pipeline of [false, true])
     await expect(page.getByText("did not draw")).toHaveCount(0);
 
     for (const frame of [45, 46, 101]) {
-      await page
-        .getByRole("button", { name: "Current time. Click to type a time." })
-        .click();
-      const time = page.getByRole("textbox", { name: "Go to time" });
-      await time.pressSequentially(
-        String(Math.floor(frame / 30) * 100 + (frame % 30)).padStart(8, "0"),
-      );
-      await time.press("Enter");
+      await seekFrame(page, frame);
       if (pipeline) {
         const canvas = page.locator(".edit-pipeline");
         await expect(canvas).toHaveAttribute("data-frame", String(frame));
@@ -108,6 +258,100 @@ for (const pipeline of [false, true])
       await expect.poll(() => shownFrame(page)).toBe(frame);
     }
   });
+
+test("PCM audio before the first picture keeps the same proxy frames in HLS and MP4", async ({
+  page,
+  request,
+}) => {
+  const duration = 48;
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Leading PCM", width: 640, height: 360, duration },
+      })
+    ).json(),
+  );
+  const bits = Array.from(
+    { length: 12 },
+    (_, bit) =>
+      `drawbox=x=${bit * 48}:y=0:w=48:h=36:color=white:t=fill:enable='eq(mod(floor(n/${2 ** bit})\\,2)\\,1)'`,
+  );
+  await promisify(execFile)("ffmpeg", [
+    ...["-v", "error", "-y", "-f", "lavfi", "-i"],
+    `testsrc2=size=576x324:rate=30:duration=${duration}`,
+    ...["-f", "lavfi", "-i", `anullsrc=r=48000:cl=mono:d=${duration}`],
+    "-vf",
+    `drawbox=x=0:y=0:w=576:h=36:color=black:t=fill,${bits.join(",")},settb=1/15360,setpts=PTS+1782`,
+    ...["-fps_mode", "passthrough", "-enc_time_base:v", "1:15360"],
+    ...["-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1"],
+    ...["-x265-params", "log-level=error:pools=2:frame-threads=2"],
+    ...["-c:a", "pcm_s16le", join(project.path, "recording.mov")],
+  ]);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111111}</style></head><body><main id="main" data-composition-id="main" data-width="640" data-height="360" data-duration="${duration}" data-fps="30">
+<video id="recording" src="recording.mov" muted data-start="0" data-duration="${duration}" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>
+</main></body></html>`,
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+
+  const stage = page.locator(".edit-stage");
+  const checkFrames = async () => {
+    await expect(page.locator(".edit-preparing")).toBeHidden();
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    // The first picture starts at 116.016 ms. Check before it, around the first
+    // piece boundary, and beyond Chromium's initial buffer before going back.
+    for (const [destination, expected] of [
+      [0, 0],
+      [1, 0],
+      [5, 1],
+      [123, 119],
+      [124, 120],
+      [780, 776],
+      [124, 120],
+    ] as const) {
+      await seekFrame(page, destination);
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page, bits.length)).toBe(expected);
+    }
+  };
+
+  const firstPiece = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("cutroom-piece") === "0" &&
+      response.ok(),
+  );
+  await page.goto(`/#project/${project.id}`);
+  await firstPiece;
+  await checkFrames();
+
+  const asset = `/api/cutroom/projects/${project.id}/media/proxy?path=recording.mov`;
+  await expect
+    .poll(async () => {
+      const response = await request.get(asset, {
+        headers: { range: "bytes=0-0" },
+      });
+      const type = response.headers()["content-type"];
+      await response.dispose();
+      return type;
+    })
+    .toContain("video/mp4");
+  const mp4 = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.searchParams.get("hf-proxy") === "h264" &&
+      !url.searchParams.has("cutroom-piece") &&
+      response.headers()["content-type"] === "video/mp4" &&
+      response.ok()
+    );
+  });
+  await page.reload();
+  await mp4;
+  await checkFrames();
+});
 
 /** Four minutes of HEVC, each frame's number in sixteen blocks; made once for both settings. */
 let longRecording: Promise<string> | undefined;
@@ -135,11 +379,72 @@ test.afterAll(async () => {
   if (longRecording) await rm(await longRecording, { force: true });
 });
 
-for (const pipeline of [false, true])
-  test(`a long HEVC recording shows the frame under the playhead from its proxy's pieces before the proxy is finished, with the footage pipeline ${pipeline ? "on" : "off"}`, async ({
-    page,
-    request,
-  }) => {
+/** Model Chromium presenting and returning the same stale frame after a seek settles. */
+function delayProxyPicture() {
+  if (window === window.top) return;
+  const nativeRequest = HTMLVideoElement.prototype.requestVideoFrameCallback;
+  const NativeFrame = VideoFrame;
+  let held: { video: HTMLVideoElement; frame: VideoFrame } | null = null;
+  let stalePresented = false;
+  addEventListener(
+    "hold-proxy-picture",
+    () => {
+      const video = document.querySelector<HTMLVideoElement>("#recording")!;
+      held = { video, frame: new NativeFrame(video) };
+    },
+    { once: true },
+  );
+  HTMLVideoElement.prototype.requestVideoFrameCallback = function (callback) {
+    return nativeRequest.call(this, (now, metadata) => {
+      if (
+        held?.video === this &&
+        Math.abs(this.currentTime - 1234 / 30) < 0.02
+      ) {
+        stalePresented = true;
+        callback(now, { ...metadata, mediaTime: held.frame.timestamp / 1e6 });
+        addEventListener(
+          "release-proxy-picture",
+          () => callback(now, metadata),
+          {
+            once: true,
+          },
+        );
+      } else {
+        callback(now, metadata);
+      }
+    });
+  };
+  window.VideoFrame = new Proxy(NativeFrame, {
+    construct(Frame, args, target) {
+      if (held && args[0] === held.video && stalePresented) {
+        held.video.toggleAttribute("data-stale-capture", true);
+        return held.frame.clone();
+      }
+      return Reflect.construct(Frame, args, target);
+    },
+  });
+  addEventListener(
+    "release-proxy-picture",
+    () => {
+      if (!held) return;
+      held.frame.close();
+      held = null;
+      window.VideoFrame = NativeFrame;
+      HTMLVideoElement.prototype.requestVideoFrameCallback = nativeRequest;
+    },
+    { once: true },
+  );
+}
+
+for (const { pipeline, supersede } of [
+  { pipeline: false, supersede: false },
+  { pipeline: true, supersede: false },
+  { pipeline: false, supersede: true },
+]) {
+  const title = supersede
+    ? "a superseded HLS seek holds the previous picture until the latest decoded frame arrives"
+    : `a long HEVC recording shows the frame under the playhead from its proxy's pieces before the proxy is finished, with the footage pipeline ${pipeline ? "on" : "off"}`;
+  test(title, async ({ page, request }) => {
     test.setTimeout(150_000);
     const project = ProjectSchema.parse(
       await (
@@ -182,23 +487,50 @@ for (const pipeline of [false, true])
       if (window === window.top)
         localStorage.setItem("cutroom.footagePipeline", String(on));
     }, pipeline);
+    if (supersede) await page.addInitScript(delayProxyPicture);
     await page.goto(`/#project/${project.id}`);
     const stage = page.locator(".edit-stage");
     await expect(stage).toHaveAttribute("data-preview-ready");
     // Three minutes in, past where the proxy has got to, then a frame on either side.
     for (const frame of [5400, 5401, 1234]) {
-      await page
-        .getByRole("button", { name: "Current time. Click to type a time." })
-        .click();
-      const time = page.getByRole("textbox", { name: "Go to time" });
-      const seconds = Math.floor(frame / 30);
-      await time.pressSequentially(
-        [Math.floor(seconds / 60), seconds % 60, frame % 30]
-          .map((part) => String(part).padStart(2, "0"))
-          .join("")
-          .padStart(8, "0"),
-      );
-      await time.press("Enter");
+      if (supersede && frame === 1234) {
+        const releasePiece = Promise.withResolvers<void>();
+        let waitingForSupersededPiece = false;
+        await page.route(
+          (url) => url.searchParams.get("cutroom-piece") === "25",
+          async (route) => {
+            waitingForSupersededPiece = true;
+            await releasePiece.promise;
+            await route.continue();
+          },
+        );
+        const video = page
+          .frameLocator("iframe[data-live]")
+          .locator("#recording");
+        await video.evaluate(() =>
+          dispatchEvent(new Event("hold-proxy-picture")),
+        );
+        try {
+          await seekFrame(page, 3000);
+          await expect.poll(() => waitingForSupersededPiece).toBe(true);
+          await expect(stage).not.toHaveAttribute("data-preview-ready");
+          expect(await shownFrame(page, 16)).toBe(5401);
+          await seekFrame(page, frame);
+        } finally {
+          releasePiece.resolve();
+        }
+        try {
+          await expect(video).toHaveAttribute("data-stale-capture");
+          expect(await shownFrame(page, 16)).toBe(5401);
+          expect(await stage.getAttribute("data-preview-ready")).toBeNull();
+        } finally {
+          await video.evaluate(() =>
+            dispatchEvent(new Event("release-proxy-picture")),
+          );
+        }
+      } else {
+        await seekFrame(page, frame);
+      }
       if (frame === 5400) {
         try {
           await expect.poll(() => waitingForPiece).toBe(true);
@@ -215,3 +547,4 @@ for (const pipeline of [false, true])
     expect(pieces).toContain("45");
     await expect(page.getByText("did not draw")).toHaveCount(0);
   });
+}

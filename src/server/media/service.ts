@@ -9,7 +9,12 @@ import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
 import type { MediaKind, MediaTask, Pieces } from "./protocol";
-import { fragmentsStart, pieceSpans } from "./pieces";
+import {
+  fragmentsStart,
+  pieceAt,
+  pieceSpans,
+  proxySamplesFile,
+} from "./pieces";
 import { startMediaWorker } from "./process";
 import { makesProxy } from "./settings";
 import { probeNvenc } from "../hyperframes/nvenc";
@@ -88,7 +93,7 @@ const recipe = {
   frame: "media-v6",
   scrub: "media-v7",
   proxy: "media-v8",
-  pieces: "media-v8",
+  pieces: "media-v12",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**
@@ -466,7 +471,7 @@ export function createMediaService(
         !info.video
       )
         throw new HttpError(422, "The media has no video stream.");
-      if (kind === "proxy" && !makesProxy(info.video!))
+      if ((kind === "proxy" || kind === "pieces") && !makesProxy(info.video!))
         throw new HttpError(422, "This video needs no editing proxy.");
       if (kind === "frame") {
         if (!info.video)
@@ -641,6 +646,39 @@ export function createMediaService(
   };
   return {
     request,
+    /** The requested piece's presentation times, with its neighbours at either boundary. */
+    async proxySamples(project: Project, path: string, time: number) {
+      const plan = await request(project, path, "pieces").catch(
+        (error: unknown) => {
+          if (error instanceof HttpError && error.status === 422) return null;
+          throw error;
+        },
+      );
+      if (!plan) return null;
+      if (!plan.artifact)
+        throw new HttpError(409, "The editing proxy is not planned yet.");
+      const pieces = PiecesSchema.parse(await Bun.file(plan.artifact).json());
+      const index = pieceAt(pieces, time);
+      const file = Bun.file(
+        await projectPath(
+          project,
+          `.cutroom/cache/${plan.key}/${proxySamplesFile}`,
+        ),
+      );
+      const width = Float64Array.BYTES_PER_ELEMENT;
+      const offsets = new Float64Array(
+        await file.slice(index * width, (index + 2) * width).arrayBuffer(),
+      );
+      const header = pieces.cuts.length + 2;
+      const first = header + Math.max(0, offsets[0]! - 1);
+      const last = header + offsets[1]! + (index < pieces.cuts.length ? 1 : 0);
+      const bytes = await file.slice(first * width, last * width).arrayBuffer();
+      return {
+        from: pieces.cuts[index - 1] ?? null,
+        to: pieces.cuts[index] ?? null,
+        times: Array.from(new Float64Array(bytes)),
+      };
+    },
     sprite(project: Project, key: string, sheet = 0) {
       return projectPath(project, `.cutroom/cache/${key}/sprite-${sheet}.jpg`);
     },

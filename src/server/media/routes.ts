@@ -220,6 +220,38 @@ export async function scrubPreview(
   }
 }
 
+const ProxySamplesQuery = z.object({
+  path: PathSchema,
+  at: z.coerce.number().finite(),
+});
+
+export async function proxySamplesPreview(
+  media: MediaService,
+  project: Project,
+  query: URLSearchParams,
+) {
+  const parsed = ProxySamplesQuery.safeParse(Object.fromEntries(query));
+  const headers = { "cache-control": "no-store" };
+  if (!parsed.success)
+    return new Response("Choose a media path and time.", {
+      status: 400,
+      headers,
+    });
+  try {
+    const page = await media.proxySamples(
+      project,
+      parsed.data.path,
+      parsed.data.at,
+    );
+    return page
+      ? Response.json(page, { headers })
+      : new Response(null, { status: 204, headers });
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return new Response(error.message, { status: error.status, headers });
+  }
+}
+
 /** Response headers the sandboxed preview's runtime reads from an editing proxy request. */
 export const proxyExposedHeaders = "retry-after, x-hf-proxy-progress";
 /** The query naming one piece of an editing proxy, or `init` for their shared header. */
