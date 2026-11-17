@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
@@ -42,6 +44,7 @@ async function connect() {
   return {
     result,
     read,
+    project,
     async close() {
       await client.close();
       server.stop(true);
@@ -49,6 +52,68 @@ async function connect() {
     },
   };
 }
+
+test("timeline_edit adds a freeze clip with its PNG through the typed MCP command", async () => {
+  const mcp = await connect();
+  try {
+    const video = join(mcp.project.path, "source.mp4");
+    const ffmpeg = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=96x54:r=30:d=3",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      video,
+    ]);
+    expect(ffmpeg.stderr.toString()).toBe("");
+    expect(ffmpeg.exitCode).toBe(0);
+    await writeFile(
+      join(mcp.project.path, "index.html"),
+      `<main data-composition-id="main" data-width="96" data-height="54" data-fps="30" data-duration="2"><video id="picture" src="source.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="object-fit:cover"></video></main>`,
+    );
+    const before = await mcp.read();
+    const edited = TimelineViewSchema.parse(
+      await mcp.result("timeline_edit", {
+        expectedRevision: before.revision,
+        fullTimeline: true,
+        commands: [
+          {
+            type: "freeze",
+            clipId: "picture",
+            at: 24,
+            id: "still",
+            ids: { picture: ["tail"] },
+          },
+        ],
+      }),
+    );
+    expect(edited.timeline.clips).toMatchObject([
+      { id: "picture", start: 0, duration: 24 },
+      {
+        id: "still",
+        start: 24,
+        duration: 60,
+        kind: "image",
+        src: "assets/freeze/still.png",
+        style: { objectFit: "cover" },
+      },
+      { id: "tail", start: 84, duration: 36, mediaStart: 0.8 },
+    ]);
+    expect(
+      await Bun.file(
+        join(mcp.project.path, "assets/freeze/still.png"),
+      ).exists(),
+    ).toBe(true);
+  } finally {
+    await mcp.close();
+  }
+});
 
 test("timeline_edit answers with the next revision and only what changed", async () => {
   const mcp = await connect();

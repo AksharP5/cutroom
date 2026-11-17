@@ -229,7 +229,7 @@ export function editCompositionSource<T>(
  * Applies commands to the view the user sees, naming every piece they cut with an id no clip has
  * had, in the commands' own `ids` lists. Commands apply one at a time, so each is named by itself.
  */
-function name(commands: Command[], timeline: Timeline) {
+function name(commands: Command[], timeline: Timeline, composition: string) {
   let current = timeline;
   const creates = new Set<string>();
   const origins = new Map<string, ClipOrigin>();
@@ -237,6 +237,7 @@ function name(commands: Command[], timeline: Timeline) {
     // Positional edits can cut new pieces, including moves that overwrite a spanning clip.
     if (
       command.type !== "paste" &&
+      command.type !== "freeze" &&
       command.type !== "split" &&
       command.type !== "insert" &&
       command.type !== "trim" &&
@@ -247,14 +248,17 @@ function name(commands: Command[], timeline: Timeline) {
       return command;
     }
     const ids: Record<string, string[]> = { ...command.ids };
+    let stillId = command.type === "freeze" ? command.id : undefined;
     let clipId = command.type === "insert" ? command.clip.id : undefined;
     let audioId =
       command.type === "insert" ? command.linkedAudio?.id : undefined;
     current = apply(current, command, {
+      composition,
       clipboards,
       onCreate: (id, origin) => {
         creates.add(id);
         origins.set(id, origin);
+        if (command.type === "freeze" && "freeze" in origin) stillId = id;
         if (command.type !== "insert" || !("insert" in origin)) return;
         if (origin.insert.kind === command.clip.kind) clipId = id;
         else audioId = id;
@@ -275,7 +279,9 @@ function name(commands: Command[], timeline: Timeline) {
             linkedAudio: { ...command.linkedAudio, id: audioId },
           }),
         }
-      : { ...command, ids };
+      : command.type === "freeze"
+        ? { ...command, id: stillId, ids }
+        : { ...command, ids };
   });
   return { commands: named, creates, origins, timeline: current };
 }
@@ -295,7 +301,10 @@ function shown(projectId: string): TimelineView | null {
     .reduce((current, edit) => {
       if (anchorsChanged(edit.anchors, current)) return current;
       try {
-        return applyAll(current, edit.commands, { clipboards });
+        return applyAll(current, edit.commands, {
+          clipboards,
+          composition: edit.composition,
+        });
       } catch (error) {
         if (error instanceof TimelineError) return current;
         throw error;
@@ -591,7 +600,7 @@ export async function editTimeline(
     const from = basis ?? view.timeline;
     const input = z.array(CommandSchema).parse(build(from));
     if (!input.length) return false;
-    const named = name(input, from);
+    const named = name(input, from, view.composition);
     const { commands, creates } = named;
     const anchors = editAnchors(from, named.timeline, commands);
     if (anchorsChanged(anchors, view.timeline))
@@ -599,7 +608,10 @@ export async function editTimeline(
     const timeline =
       from === view.timeline
         ? named.timeline
-        : applyAll(view.timeline, commands, { clipboards });
+        : applyAll(view.timeline, commands, {
+            clipboards,
+            composition: view.composition,
+          });
     edit = {
       projectId,
       composition: view.composition,

@@ -146,6 +146,8 @@ export function editLabel(
         return pending
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
+      case "freeze":
+        return `${pending ? "Freeze" : "Froze"} ${named ? target([command.clipId]) : "frame"} at ${time(command.at)}`;
       case "closeGap": {
         const gap = timeline && gapAt(timeline, command.track, command.at);
         return `${pending ? "Close" : "Closed"} ${gap ? `the ${span(gap.to - gap.from)} gap` : "the gap"} on ${trackName(command.track)}${gap ? ` at ${time(gap.from)}` : ""}`;

@@ -83,6 +83,10 @@ export function openClipMenu(
           clips.map((clip) => clip.id),
         ),
       clicked,
+      onFreeze: (clip, at) =>
+        void editTimeline(projectId, "Freeze frame", () => [
+          { type: "freeze", clipId: clip.id, at },
+        ]),
       onDuck: (bed, voices) =>
         void applyPlan(projectId, view.composition, "duck", {
           bed: bed.id,

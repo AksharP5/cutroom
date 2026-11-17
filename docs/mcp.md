@@ -421,6 +421,8 @@ A composition's own animation can override Position, Scale, Rotation and Crop. C
 
 `label` is the past-tense summary the owner sees in history and in the inspector's Changes list. Omit it and the edit is named from its commands, the same way the editor names its own edits (for example "Moved 15 frames right" or "Set gain to -6.0 dB").
 
+Use `{ "type": "freeze", "clipId": "shot", "at": 90 }` to insert a two-second still of the local SDR video's source frame. `at` must fall strictly inside the clip. Linked partners that span the cut need a constant playback speed. Sound pauses during the still, and the right halves and later cuts on the participating tracks move with the hold. The edit returns the still and the split pieces in `changes.clips.added`. Undo and redo include the generated PNG.
+
 For example, this razors every unlocked auto-select track at frame 90 and ripple deletes the first half of a linked clip:
 
 ```json

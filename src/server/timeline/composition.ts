@@ -1817,6 +1817,63 @@ function hostMarkup(
   ])}></div>`;
 }
 
+const fittedMedia =
+  "position:absolute;inset:0;width:100%;height:100%;object-fit:contain";
+
+function frozenMarkup(
+  clip: Clip,
+  attrs: SourceElement["attrs"],
+  fps: Fps,
+  mix: TrackMix,
+  transitions: AttributeChange[],
+) {
+  const before = clipStyle({
+    ...readClipStyle(attrs.style),
+    style: readElementStyle(attrs.style),
+  });
+  const after = clipStyle(clip);
+  const styleChanges = Object.fromEntries(
+    Object.entries(after).filter(
+      ([key, value]) => before[key as keyof typeof before] !== value,
+    ),
+  );
+  const style = Object.keys(styleChanges).length
+    ? writeClipStyle(attrs.style, styleChanges)
+    : attrs.style;
+  const styleClass = new Set((attrs.class ?? "").split(/\s+/).filter(Boolean));
+  styleClass.add("clip");
+  const hidden = mix.hidden.has(clip.track);
+  const inherited = [
+    "width",
+    "height",
+    "data-color-grading",
+    "data-color-group",
+  ];
+  return `<img${attributeMarkup([
+    ["id", clip.id],
+    ["class", [...styleClass].join(" ")],
+    ["src", clip.src!],
+    ["alt", ""],
+    ["data-start", String(toSeconds(clip.start, fps))],
+    ["data-duration", String(toSeconds(clip.duration, fps))],
+    ["data-track-index", String(clip.track)],
+    ...(clip.label === null
+      ? []
+      : [["data-timeline-label", clip.label] as const]),
+    ...(clip.link ? [["data-link", clip.link] as const] : []),
+    ...(!clip.enabled || hidden ? [["data-hidden", ""] as const] : []),
+    ...(clip.enabled && hidden
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...(style ? [["style", style] as const] : []),
+    ...inherited.flatMap((name) =>
+      attrs[name] === undefined ? [] : [[name, attrs[name]] as const],
+    ),
+    ...positionAttributes(attrs, clip).filter(([, value]) => value !== null),
+    ...transitions.filter(([, value]) => value !== null),
+  ])}>`;
+}
+
 function insertMarkup(
   clip: Clip,
   input: InsertClip,
@@ -1832,12 +1889,7 @@ function insertMarkup(
       ? [["data-cutroom-kind", "voiceover"] as const]
       : []),
     ...(clip.kind === "video" || clip.kind === "image"
-      ? [
-          [
-            "style",
-            "position:absolute;inset:0;width:100%;height:100%;object-fit:contain",
-          ] as const,
-        ]
+      ? [["style", fittedMedia] as const]
       : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
@@ -2247,6 +2299,31 @@ export function patchComposition(
       );
     const origin = origins.get(clip.id);
     if (!origin) throw new Error(`Clip ${clip.id} has no origin.`);
+    if ("freeze" in origin) {
+      const { clipId } = origin.freeze;
+      const videoOrigin = origins.get(clipId);
+      const sourceId =
+        videoOrigin && "copyOf" in videoOrigin ? videoOrigin.copyOf : clipId;
+      const template = parsed.elements.get(sourceId);
+      const snapshot =
+        videoOrigin && "clipboardId" in videoOrigin
+          ? clipboards
+              .get(videoOrigin.clipboardId)
+              ?.elements.get(videoOrigin.clipId)
+          : undefined;
+      const last = template ? ([sourceId, template] as const) : lastClip;
+      const at = last
+        ? elementEnd(parsed, last[1], last[0])
+        : parsed.root.openEnd;
+      const indent = last ? indentOf(html, last[1].start) : "";
+      const attrs = template?.attrs ??
+        snapshot?.attrs ?? { style: fittedMedia };
+      inserts.set(at, [
+        ...(inserts.get(at) ?? []),
+        `\n${indent}${frozenMarkup(clip, attrs, fps, mix, transitionChanges({}, clip, under(clip.id), fps))}`,
+      ]);
+      continue;
+    }
     if ("insert" in origin) {
       const at = lastClip
         ? elementEnd(parsed, lastClip[1], lastClip[0])

@@ -76,6 +76,7 @@ import {
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { mediaFacts } from "./media";
+import { saveFrozenFrames } from "./freeze";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -338,6 +339,7 @@ export function createTimelineRoutes(
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
+        composition,
         onCreate: (id, origin) => origins.set(id, origin),
         onApply: (before, after, command) => {
           labels.push(editLabel([command], before, "Edited timeline"));
@@ -373,6 +375,14 @@ export function createTimelineRoutes(
         silentMedia: inserted.silent,
         // No new clip takes an id the project used before, even one undone since.
         retired: await usedClipIds(project),
+      }),
+    );
+    const freezes = new Map(
+      timeline.clips.flatMap(({ id }) => {
+        const origin = origins.get(id);
+        return origin && "freeze" in origin
+          ? [[origin.freeze.path, origin.freeze] as const]
+          : [];
       }),
     );
     const html = patchComposition(
@@ -491,17 +501,24 @@ export function createTimelineRoutes(
             });
         }
         // Persist inferred tracks too, before their last source clip can disappear on the next read.
-        if (
-          !Bun.deepEquals(
-            settings,
-            timelines[composition] ?? emptyTimelineSettings(),
-          )
-        ) {
-          if (Bun.deepEquals(settings, emptyTimelineSettings()))
-            delete timelines[composition];
-          else timelines[composition] = settings;
-          await store.writeDocument(project, document, files);
-        } else if (files.length) store.writeFiles(project, files);
+        await saveFrozenFrames(
+          project,
+          [...freezes.values()],
+          lengths,
+          async () => {
+            if (
+              !Bun.deepEquals(
+                settings,
+                timelines[composition] ?? emptyTimelineSettings(),
+              )
+            ) {
+              if (Bun.deepEquals(settings, emptyTimelineSettings()))
+                delete timelines[composition];
+              else timelines[composition] = settings;
+              await store.writeDocument(project, document, files);
+            } else if (files.length) store.writeFiles(project, files);
+          },
+        );
         return {
           composition,
           revision: revisionOf(

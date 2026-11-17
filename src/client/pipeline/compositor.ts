@@ -1,3 +1,5 @@
+import { usesPreviewColourMatrix } from "../../shared/videoColour";
+
 /** One picture as Cutroom places it: the clip's box fills the composition, then CSS moves it. */
 export interface Layer {
   frame: VideoFrame;
@@ -87,13 +89,6 @@ const ORIENT: Record<Layer["turn"], number[]> = {
   270: [0, 1, 0, -1, 0, 0, 1, 0, 1],
 };
 
-/**
- * Primaries and transfers whose YCbCr Chrome draws as plain matrix arithmetic. It converts any
- * other gamut, such as EBU's (bt470bg, common in Android phones' full-range footage), so the
- * browser's own conversion draws those.
- */
-const PLAIN = new Set<string | null>(["bt709", "smpte170m"]);
-
 /** Luma weights of the YCbCr matrices Cutroom's footage uses. */
 const WEIGHTS: Partial<Record<VideoMatrixCoefficients, [number, number]>> = {
   bt709: [0.2126, 0.0722],
@@ -107,7 +102,8 @@ const WEIGHTS: Partial<Record<VideoMatrixCoefficients, [number, number]>> = {
  * browser's own conversion.
  */
 function conversion(space: VideoColorSpace) {
-  if (!PLAIN.has(space.primaries) || !PLAIN.has(space.transfer)) return null;
+  if (!usesPreviewColourMatrix(space.primaries ?? "", space.transfer ?? ""))
+    return null;
   const weights = WEIGHTS[space.matrix ?? "bt709"];
   if (!weights) return null;
   const [kr, kb] = weights;

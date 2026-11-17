@@ -92,6 +92,7 @@ const clipsOf = (command: Command) => {
     case "split":
       return command.clipIds ?? [];
     case "trim":
+    case "freeze":
     case "slip":
     case "setClip":
     case "setTiming":
