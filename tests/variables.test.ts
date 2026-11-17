@@ -36,9 +36,16 @@ const SOURCE = `<!doctype html>
 </html>
 `;
 
-async function fixture() {
+async function fixture(beforeVariableEdit?: () => Promise<void>) {
   const f = await projectFixture();
-  const variables = createVariableRoutes(f.store, f.review);
+  const variables = createVariableRoutes(f.store, {
+    ...f.review,
+    editComposition: (project, composition, token, work) =>
+      f.review.editComposition(project, composition, token, async () => {
+        await beforeVariableEdit?.();
+        return work();
+      }),
+  });
   f.app.route("/api/cutroom", variables);
   const editor = createHyperframesApi(f.store, f.review);
   f.app.route("/api", editor);
@@ -175,6 +182,64 @@ test("Set default rewrites only the declaration, as one undo step, and keeps hos
     expect(scripts(written)).toBe(0);
     expect((await f.undo()).ok).toBe(true);
     expect(await f.source()).toBe(SOURCE);
+  } finally {
+    await f.close();
+  }
+});
+
+test("saving a variable default keeps a newer preview from another client", async () => {
+  const editing = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const f = await fixture(() => {
+    editing.resolve();
+    return resume.promise;
+  });
+  try {
+    await f.json(await f.preview({ title: "Draft", accent: "#0066ff" }));
+    const heard: unknown[] = [];
+    f.variables.subscribe(f.project.id, (change) => heard.push(change.preview));
+    const saved = f.setDefault("title", "Draft");
+    await editing.promise;
+    try {
+      const latest = { title: "Follow-up", accent: "#116622" };
+      await f.json(await f.preview(latest));
+      resume.resolve();
+      const state = await f.json(await saved);
+      expect(state.preview).toEqual(latest);
+      expect((await f.read()).preview).toEqual(latest);
+      expect(state.declarations[0]?.default).toBe("Draft");
+      expect(heard).toEqual([latest]);
+    } finally {
+      resume.resolve();
+      await saved;
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test("saving a variable default validates against source that changed while waiting", async () => {
+  const editing = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const f = await fixture(() => {
+    editing.resolve();
+    return resume.promise;
+  });
+  try {
+    const saved = f.setDefault("size", 120);
+    await editing.promise;
+    try {
+      const newer = SOURCE.replace('"max":200', '"max":100');
+      await writeFile(join(f.project.path, "index.html"), newer);
+      resume.resolve();
+      const response = await saved;
+      expect(response.status).toBe(422);
+      expect(await response.text()).toContain("100");
+      expect(await f.source()).toBe(newer);
+    } finally {
+      resume.resolve();
+      await saved;
+    }
   } finally {
     await f.close();
   }

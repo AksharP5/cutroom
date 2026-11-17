@@ -54,7 +54,7 @@ Once a project has a sub-composition, the Media panel's header also offers Compo
 
 ### Variables
 
-A composition that declares HyperFrames variables lists them in the inspector when nothing is selected: each one's label and the value the viewer shows, edited as words, a number, a colour, a switch or a menu. Changing a value previews it at once without touching the source, as `hyperframes render --variables` would render it; double-click the label to go back to the default. **Set default** writes the shown value into the declaration as one undo step. Agents see and set the same values ([details](mcp.md#variables)), and their changes appear in your viewer.
+A composition that declares HyperFrames variables lists them in the inspector when nothing is selected: each one's label and the value the viewer shows, edited as words, a number, a colour, a switch or a menu. Changing a value previews it at once without touching the source, as `hyperframes render --variables` would render it; double-click the label to go back to the default. **Set default** writes the shown value into the declaration as one undo step. A newer preview from another client stays visible while the default saves. Agents see and set the same values ([details](mcp.md#variables)), and their changes appear in your viewer.
 
 Select a text clip and open the **Words** or **Colour** picker in its Text section. Pick a declared variable, or choose **New variable…** to start with the clip's current value. Words accept string variables and colour accepts colour variables. Colour needs an explicit inline colour or a direct `color: var(--id)` binding. Each selection saves in one undo step.
 

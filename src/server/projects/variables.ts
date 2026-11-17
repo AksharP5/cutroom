@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { posix } from "node:path";
 import { applyFileMutations } from "@hyperframes/studio-server";
+import { isCompositionVariable } from "@hyperframes/core/variables";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -183,6 +184,7 @@ export function createVariableRoutes(
             } catch (error) {
               return refusal(error);
             }
+            if (after === source.content) return;
             applyFileMutations(project.path, [
               {
                 sourceFile: composition,
@@ -224,44 +226,51 @@ export function createVariableRoutes(
     const project = await store.get(c.req.param("id"));
     const composition = compositionPath(input.composition);
     const before = await read(project, composition);
-    const variable = before.declarations.find((item) => item.id === input.id);
-    if (!variable)
-      throw new HttpError(
-        404,
-        `${composition} declares no variable ${input.id}.`,
-      );
-    try {
-      // An empty result means the value is already the default.
-      checkVariableValues({ [input.id]: input.value }, before.declarations);
-    } catch (error) {
-      return refusal(error);
-    }
-    if (input.value !== variable.default)
-      await edit(
-        c,
-        project,
-        composition,
-        `Set ${variable.label} default`,
-        (html) => {
-          // Only the default changes; every other key and declaration stays as written.
-          return declareVariables(
-            html,
-            JSON.stringify(
-              writtenDeclarations(html).map((entry) =>
-                entry &&
-                typeof entry === "object" &&
-                "id" in entry &&
-                entry.id === input.id
-                  ? { ...entry, default: input.value }
-                  : entry,
-              ),
-            ),
+    const label = before.declarations.find(
+      (item) => item.id === input.id,
+    )?.label;
+    await edit(
+      c,
+      project,
+      composition,
+      `Set ${label ?? input.id} default`,
+      (html) => {
+        const declarations = writtenDeclarations(html);
+        const matches = declarations
+          .filter(isCompositionVariable)
+          .filter((item) => item.id === input.id);
+        const [variable] = matches;
+        if (!variable)
+          throw new HttpError(
+            404,
+            `${composition} declares no variable ${input.id}.`,
           );
-        },
-      );
-    // The preview now shows the default, so the override has done its job.
-    const { [input.id]: _, ...rest } = before.preview;
-    if (input.id in before.preview) setPreview(project, composition, rest);
+        if (matches.length > 1)
+          throw new HttpError(
+            422,
+            `${input.id} must name one declared variable.`,
+          );
+        checkVariableValues({ [input.id]: input.value }, matches);
+        if (input.value === variable.default) return html;
+        return declareVariables(
+          html,
+          JSON.stringify(
+            declarations.map((entry) =>
+              entry === variable
+                ? { ...variable, default: input.value }
+                : entry,
+            ),
+          ),
+        );
+      },
+    );
+    const latest = previews.get(project.id)?.get(composition);
+    // Clear the promoted override without replacing a preview another client just set.
+    if (latest && Object.hasOwn(latest, input.id)) {
+      const { [input.id]: current, ...rest } = latest;
+      if (current === before.preview[input.id] || current === input.value)
+        setPreview(project, composition, rest);
+    }
     return c.json(await read(project, composition));
   });
 
