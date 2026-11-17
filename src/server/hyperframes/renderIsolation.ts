@@ -288,9 +288,9 @@ export function registerRenderIsolation(
             String(loaded.source),
             "    replaceBodyWithRenderClone(body, renderClone);",
             `    for (const name of ["data-width", "data-height"]) {
-        const size = sceneRoot?.getAttribute(name);
-        if (Number.isFinite(Number(size)) && Number(size) > 0)
-            renderClone.setAttribute(name, size);
+        const pixels = Math.floor(Number(sceneRoot?.getAttribute(name)));
+        if (Number.isSafeInteger(pixels) && pixels > 0)
+            renderClone.setAttribute(name, String(pixels));
     }
     replaceBodyWithRenderClone(body, renderClone);`,
             url,

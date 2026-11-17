@@ -536,7 +536,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       await writeFile(
         join(p.path, "compositions", "red.html"),
         `<template>
-  <div id="red-root" data-composition-id="red" data-width="320" data-height="240" data-duration="1" style="position:absolute;inset:0;background:#ff0000">
+  <div id="red-root" data-composition-id="red" data-width="3.2e2" data-height="240" data-duration="1" style="position:absolute;inset:0;background:#ff0000">
     <div id="red-card" class="clip" data-start="0" data-duration="1" data-track-index="0"></div>
   </div>
 </template>
