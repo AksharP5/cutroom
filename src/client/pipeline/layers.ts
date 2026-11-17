@@ -26,11 +26,7 @@ export interface Shown {
  * `framesAfter` its last. Cutroom's transitions sheet animates it in element-local seconds. A cross
  * dissolve fades only the clip later in the document; a dip takes the picture to black and back.
  */
-export function shownAt(
-  timeline: Timeline,
-  plan: Plan,
-  frame: number,
-): Shown[] | null {
+function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
   const { fps } = timeline;
   const seconds = (frames: number) => (frames * fps.den) / fps.num;
   const order = new Map(plan.order.map((id, index) => [id, index]));
@@ -59,99 +55,117 @@ export function shownAt(
     const owners = new Set(known.map((other) => named(other.id)!));
     return owners.size === 1 ? [...owners][0]! : null;
   };
-  const shown: (Shown & { level: number; index: number })[] = [];
-  const hyperframes: { level: number; index: number }[] = [];
+  // The lookahead visits every frame in the window. Prepare its metadata and candidate
+  // intervals once; ownership still sees the whole timeline, including clips outside it.
+  const candidates: { clip: Clip; first: number; end: number }[] = [];
   for (const clip of timeline.clips) {
     if (clip.kind !== "video" || !clip.enabled || off.has(clip.track)) continue;
-    const before = clip.transitionIn ? framesBefore(clip.transitionIn) : 0;
-    const after = clip.transitionOut ? framesAfter(clip.transitionOut) : 0;
-    const first = clip.start - before;
-    const end = clip.start + clip.duration + after;
-    if (frame < first || frame >= end) continue;
-    const fit = ownerOf(clip);
-    if (!fit) return null;
-    const level = plan.trackZ[String(clip.track)] ?? 0;
-    const index = order.get(clip.id) ?? Infinity;
-    if (fit === "hyperframes") {
-      hyperframes.push({ level, index });
-      continue;
-    }
-    if (clip.mediaStart === null) return null;
-    const partner = (edge: "in" | "out") =>
-      timeline.clips.find(
-        (other) =>
-          other.track === clip.track &&
-          other.kind === "video" &&
-          (edge === "in"
-            ? other.start + other.duration === clip.start && other.transitionOut
-            : other.start === clip.start + clip.duration && other.transitionIn),
-      );
-    // The earlier of a dissolving pair in the document holds; the later one fades.
-    const under = (edge: "in" | "out") => {
-      const other = partner(edge);
-      return (
-        !!other &&
-        (order.get(clip.id) ?? Infinity) < (order.get(other.id) ?? Infinity)
-      );
-    };
-    // Animations run on the attributes as written, in seconds rounded to six decimals, so a
-    // frame exactly halfway through a dip falls on the same side of it as in HyperFrames.
-    const local = frameTime(frame, fps) - toSeconds(first, fps);
-    const length = toSeconds(end - first, fps);
-    const still = clip.opacity ?? 1;
-    let opacity = still;
-    let brightness = 1;
-    const transitionIn = clip.transitionIn;
-    if (transitionIn) {
-      const duration = toSeconds(transitionIn.duration, fps);
-      const progress = local / duration;
-      if (progress < 1)
-        if (transitionIn.kind === "dip") {
-          opacity = progress < 0.5 ? 0 : 1;
-          brightness = progress < 0.5 ? 0 : (progress - 0.5) * 2;
-        } else if (!under("in")) opacity = still * progress;
-    }
-    const transitionOut = clip.transitionOut;
-    if (transitionOut) {
-      const duration = toSeconds(transitionOut.duration, fps);
-      const progress = Math.min(1, (local - (length - duration)) / duration);
-      if (progress >= 0)
-        if (transitionOut.kind === "dip") {
-          opacity = progress < 0.5 ? still + (1 - still) * progress * 2 : 0;
-          brightness = progress < 0.5 ? 1 - progress * 2 : 0;
-        } else if (!under("out")) opacity = still * (1 - progress);
-    }
-    shown.push({
-      clip,
-      fit,
-      time:
-        clip.mediaStart +
-        seconds(frame - clip.start) * clip.playbackRate +
-        // The runtime seeks just past the frame's start, as HyperFrames does.
-        1e-5,
-      opacity,
-      brightness,
-      level,
-      index,
-    });
+    const first =
+      clip.start - (clip.transitionIn ? framesBefore(clip.transitionIn) : 0);
+    const end =
+      clip.start +
+      clip.duration +
+      (clip.transitionOut ? framesAfter(clip.transitionOut) : 0);
+    if (end <= from || first > to) continue;
+    candidates.push({ clip, first, end });
   }
-  const below = (
-    a: { level: number; index: number },
-    b: { level: number; index: number },
-  ) => a.level < b.level || (a.level === b.level && a.index < b.index);
-  if (shown.some((layer) => hyperframes.some((other) => !below(layer, other))))
-    return null;
-  return shown
-    .sort((a, b) => a.level - b.level || a.index - b.index)
-    .map(({ level: _level, index: _index, ...rest }) => rest);
+  return (frame: number): Shown[] | null => {
+    const shown: (Shown & { level: number; index: number })[] = [];
+    const hyperframes: { level: number; index: number }[] = [];
+    for (const { clip, first, end } of candidates) {
+      if (frame < first || frame >= end) continue;
+      const fit = ownerOf(clip);
+      if (!fit) return null;
+      const level = plan.trackZ[String(clip.track)] ?? 0;
+      const index = order.get(clip.id) ?? Infinity;
+      if (fit === "hyperframes") {
+        hyperframes.push({ level, index });
+        continue;
+      }
+      if (clip.mediaStart === null) return null;
+      const partner = (edge: "in" | "out") =>
+        timeline.clips.find(
+          (other) =>
+            other.track === clip.track &&
+            other.kind === "video" &&
+            (edge === "in"
+              ? other.start + other.duration === clip.start &&
+                other.transitionOut
+              : other.start === clip.start + clip.duration &&
+                other.transitionIn),
+        );
+      // The earlier of a dissolving pair in the document holds; the later one fades.
+      const under = (edge: "in" | "out") => {
+        const other = partner(edge);
+        return (
+          !!other &&
+          (order.get(clip.id) ?? Infinity) < (order.get(other.id) ?? Infinity)
+        );
+      };
+      // Animations run on the attributes as written, in seconds rounded to six decimals, so a
+      // frame exactly halfway through a dip falls on the same side of it as in HyperFrames.
+      const local = frameTime(frame, fps) - toSeconds(first, fps);
+      const length = toSeconds(end - first, fps);
+      const still = clip.opacity ?? 1;
+      let opacity = still;
+      let brightness = 1;
+      const transitionIn = clip.transitionIn;
+      if (transitionIn) {
+        const duration = toSeconds(transitionIn.duration, fps);
+        const progress = local / duration;
+        if (progress < 1)
+          if (transitionIn.kind === "dip") {
+            opacity = progress < 0.5 ? 0 : 1;
+            brightness = progress < 0.5 ? 0 : (progress - 0.5) * 2;
+          } else if (!under("in")) opacity = still * progress;
+      }
+      const transitionOut = clip.transitionOut;
+      if (transitionOut) {
+        const duration = toSeconds(transitionOut.duration, fps);
+        const progress = Math.min(1, (local - (length - duration)) / duration);
+        if (progress >= 0)
+          if (transitionOut.kind === "dip") {
+            opacity = progress < 0.5 ? still + (1 - still) * progress * 2 : 0;
+            brightness = progress < 0.5 ? 1 - progress * 2 : 0;
+          } else if (!under("out")) opacity = still * (1 - progress);
+      }
+      shown.push({
+        clip,
+        fit,
+        time:
+          clip.mediaStart +
+          seconds(frame - clip.start) * clip.playbackRate +
+          // The runtime seeks just past the frame's start, as HyperFrames does.
+          1e-5,
+        opacity,
+        brightness,
+        level,
+        index,
+      });
+    }
+    const below = (
+      a: { level: number; index: number },
+      b: { level: number; index: number },
+    ) => a.level < b.level || (a.level === b.level && a.index < b.index);
+    if (
+      shown.some((layer) => hyperframes.some((other) => !below(layer, other)))
+    )
+      return null;
+    return shown
+      .sort((a, b) => a.level - b.level || a.index - b.index)
+      .map(({ level: _level, index: _index, ...rest }) => rest);
+  };
+}
+
+export function shownAt(timeline: Timeline, plan: Plan, frame: number) {
+  return layerQuery(timeline, plan, frame, frame)(frame);
 }
 
 /**
  * The layers a frame draws: nothing shows beneath an opaque clip that fills the frame untouched.
  * Null when the frame needs HyperFrames.
  */
-export function visibleAt(timeline: Timeline, plan: Plan, frame: number) {
-  const all = shownAt(timeline, plan, frame);
+function visible(all: Shown[] | null) {
   if (!all) return null;
   const covering = all.findLastIndex(
     ({ clip, fit, opacity, brightness }) =>
@@ -166,6 +180,10 @@ export function visibleAt(timeline: Timeline, plan: Plan, frame: number) {
       !Object.values(clip.crop ?? {}).some(Boolean),
   );
   return all.slice(Math.max(0, covering));
+}
+
+export function visibleAt(timeline: Timeline, plan: Plan, frame: number) {
+  return visible(shownAt(timeline, plan, frame));
 }
 
 /** A clip that comes into view at `frame`: it starts there, or what covered it ends. */
@@ -185,12 +203,11 @@ export function appearances(
   from: number,
   to: number,
 ): Appearance[] {
+  const at = layerQuery(timeline, plan, from, to);
   const found: Appearance[] = [];
-  let before = new Set(
-    visibleAt(timeline, plan, from)?.map(({ clip }) => clip.id),
-  );
+  let before = new Set(visible(at(from))?.map(({ clip }) => clip.id));
   for (let frame = from + 1; frame <= to; frame++) {
-    const layers = visibleAt(timeline, plan, frame);
+    const layers = visible(at(frame));
     if (!layers) break;
     for (const layer of layers)
       if (!before.has(layer.clip.id)) found.push({ frame, layer });

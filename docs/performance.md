@@ -796,3 +796,22 @@ On November 16, 2026, a 60 fps timeline over 60 fps recordings on Matroska's mil
 | H.264 in Matroska, pipeline off |     15 |    30 |
 
 Before, a step left the previous picture up at every other frame (HyperFrames' runtime does not move a paused video for less than 20 ms, and a 60 fps frame is 16.7 ms), and the pipeline and the finished proxy showed the frame before wherever the millisecond clock rounded a frame's start up. A wider matrix through the viewer, against direct exports, matched at every frame after the change: 30 and 29.97 fps sources on 60 and 30 fps timelines, 59.94 fps on 60 (where the two grids drift apart) and on 59.94, 60 fps on 30, a clip starting at 7.123 s, MP4 sources on a millisecond clock through the pipeline, and frames 24,000 to 24,011 of a seven-minute HEVC recording while its proxy was still in pieces, with the pipeline off and on.
+
+## Footage lookahead during frame steps
+
+Measured November 17, 2026 against `fba38c8b`, production builds in headless Chromium 155 on Linux, footage pipeline explicitly enabled. Each 400/500-clip workload uses `scripts/timeline-performance.ts`: linked cuts from one 60-second 640 × 360 H.264/AAC source and 20 titles in a 1080p30 composition. The source carries a binary frame number along its top. The viewer was ready and its media warmed before 16 forward and 16 reverse arrow-key steps, 125 ms apart, from timeline frame 3000. Three runs of each build and size were interleaved, with the final pair reversed. Browser and media workloads ran one at a time.
+
+| Median across three runs                                |   Before |    After |
+| ------------------------------------------------------- | -------: | -------: |
+| 400 clips, one lookahead query                          |   2.7 ms |   0.2 ms |
+| 500 clips, one lookahead query                          |   3.7 ms |   0.2 ms |
+| 400 clips, all 32 queries                               |  90.6 ms |   6.0 ms |
+| 500 clips, all 32 queries                               | 128.2 ms |   6.4 ms |
+| 400 clips, main-thread task time during the interaction | 797.7 ms | 720.1 ms |
+| 500 clips, main-thread task time during the interaction | 863.6 ms | 744.0 ms |
+
+Temporary `performance.measure` calls included query setup and result construction; they were removed after measurement. Main-thread time is CDP `TaskDuration`, sampled around the complete interaction and its 700 ms settling period. Lookahead prepares one document-order map, disabled-track set and list of video intervals for its inclusive window instead of rebuilding them at every frame. Ownership and transition partners still inspect the whole timeline, and transition/covering calculations still run frame by frame. There is no retained query cache.
+
+The CPU reduction did not establish a general picture-latency improvement. Median first-picture latency in the three 400-clip runs ranged 37.7 to 42.7 ms before and 36.5 to 42.4 ms after; at 500 clips it ranged 40.2 to 43.9 ms before and 41.0 to 42.6 ms after. Pictures were read from composited screencasts after measurement, using the burned-in frame numbers rather than the canvas's requested-frame attribute. Every one of the 384 steps showed the expected source picture before the next input. Two additional matched 500-clip runs in each build crossed a cut in both directions from timeline frame 3070; all 128 pictures also matched. No long tasks occurred in these runs. Cold project opening was 1.4 to 2.0 seconds across both builds; that fixture warms filmstrips and peaks first, so it is not a cold-media benchmark.
+
+This improves synchronous lookahead work when the experimental footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.

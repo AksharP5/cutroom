@@ -293,6 +293,74 @@ test("playback prepares clips that come back into view, not only clips that star
   ]);
 });
 
+test("lookahead includes transition handles and keeps ownership outside its window", () => {
+  const html = edit(page(), [
+    {
+      type: "setTransition",
+      from: "a",
+      to: "b",
+      transition: { kind: "dissolve", duration: 10, alignment: "center" },
+    },
+  ]);
+  const plan = drawable(html);
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  // b starts at 90, but its opening at 85 still needs preparing by this window's end.
+  expect(
+    appearances(timeline, plan, 80, 85).map(({ frame, layer }) => ({
+      frame,
+      id: layer.clip.id,
+    })),
+  ).toEqual([{ frame: 85, id: "b" }]);
+
+  const b = timeline.clips.find((clip) => clip.id === "b")!;
+  const cut = {
+    ...timeline,
+    clips: [
+      ...timeline.clips
+        .filter((clip) => clip.id !== "b")
+        .map((clip) =>
+          clip.id === "broll" ? { ...clip, start: 135, duration: 10 } : clip,
+        ),
+      { ...b, duration: 30, transitionOut: null },
+      {
+        ...b,
+        id: "b-rest",
+        start: 120,
+        duration: 60,
+        mediaStart: 11,
+        transitionIn: null,
+      },
+    ],
+  };
+  // The surviving named neighbour ends at 120, outside this window. It still establishes
+  // that the new piece is cover, even though another named clip of the file uses fill.
+  expect(
+    appearances(cut, { ...plan, trackZ: { "0": 0, "1": 1 } }, 135, 145).map(
+      ({ frame, layer }) => ({
+        frame,
+        id: layer.clip.id,
+        fit: layer.fit,
+      }),
+    ),
+  ).toEqual([{ frame: 145, id: "b-rest", fit: "cover" }]);
+});
+
+test("lookahead stops before an unclassified video rather than preparing past it", () => {
+  const html = page();
+  const plan = drawable(html);
+  const { timeline } = parseComposition(html, emptyTimelineSettings());
+  const b = timeline.clips.find((clip) => clip.id === "b")!;
+  const changed = {
+    ...timeline,
+    clips: [
+      ...timeline.clips,
+      { ...b, id: "new", src: "new.mp4", start: 50, duration: 5, track: 9 },
+    ],
+  };
+  // The unknown clip intervenes before a's reveal at 60 and b's opening at 90.
+  expect(appearances(changed, plan, 45, 100)).toEqual([]);
+});
+
 test("a frame showing one of HyperFrames' videos still draws the pipeline's beneath it", () => {
   const html = page(
     `<video id="loud" src="talk.mp4" data-start="0" data-duration="1" data-track-index="5" style="${fill}"></video>`,
