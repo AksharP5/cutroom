@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AgentRequest,
   AgentStatus,
+  AgentTurn,
 } from "../src/shared/agent";
 import { z } from "zod";
 import {
@@ -41,14 +42,15 @@ async function setup(runtimeFactory: RuntimeFactory) {
   cleanup.push(() => projects.close());
   const project = await projects.create({ name: "Agent editing" });
   const dataDir = join(directory, "chat");
+  const review = createReviewService(projects);
   const service = await createAgentService({
     projects,
-    review: createReviewService(projects),
+    review,
     dataDir,
     runtimeFactory,
   });
   cleanup.push(() => service.dispose());
-  return { directory, projects, project, service, dataDir };
+  return { directory, projects, project, service, dataDir, review };
 }
 
 function idle(service: AgentService, id: string, target: AgentStatus = "idle") {
@@ -92,6 +94,188 @@ function factory(
 }
 
 describe("agent conversations", () => {
+  test("runs queued follow-ups in order with the latest unfinished notes", async () => {
+    const observed: AgentTurn[] = [];
+    const first = Promise.withResolvers<void>();
+    const last = Promise.withResolvers<void>();
+    let token = "";
+    const runtime: RuntimeFactory = {
+      ...factory(async () => {}),
+      create(_provider, options) {
+        token = options.agentToken;
+        return {
+          async send(turn) {
+            observed.push(turn);
+            if (turn.text === "First") await first.promise;
+            if (turn.text === "Third") last.resolve();
+          },
+          interrupt: async () => first.resolve(),
+          dispose: () => first.resolve(),
+        };
+      },
+    };
+    const { project, service, review } = await setup(runtime);
+    const note = await review.add(
+      project,
+      { body: "Keep the blue card", time: 1, compositionPath: "index.html" },
+      undefined,
+    );
+    const { id } = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const turn = (text: string): AgentTurn => ({
+      text,
+      attachments: [],
+      skills: [],
+    });
+    await service.send(id, turn("First"));
+    await review.act(
+      project,
+      note.id,
+      { type: "claim" },
+      review.agent(project, token),
+    );
+    const attachment = join(project.path, "index.html");
+    await service.queueFollowUp(id, {
+      ...turn("Second"),
+      attachments: [{ path: attachment }],
+      context: "Selected at frame 25",
+    });
+    const withRemoved = await service.queueFollowUp(id, turn("Remove this"));
+    const deleted = withRemoved.queuedTurns?.find(
+      ({ turn }) => turn.text === "Remove this",
+    );
+    if (!deleted) throw new Error("The follow-up was not queued.");
+    await service.removeFollowUp(id, deleted.id);
+    await service.queueFollowUp(id, turn("Third"));
+    expect(service.get(id).messages.map(({ text }) => text)).toEqual(["First"]);
+    await review.add(
+      project,
+      {
+        body: "New note after sending",
+        time: 2,
+        compositionPath: "index.html",
+      },
+      undefined,
+    );
+    first.resolve();
+    await last.promise;
+    await idle(service, id);
+    expect(observed.map(({ text }) => text)).toEqual([
+      "First",
+      "Second",
+      "Third",
+    ]);
+    expect(observed[1]?.context).toContain(`[queued] ${note.id}`);
+    expect(observed[1]?.context).toContain("New note after sending");
+    expect(observed[1]?.context).toContain("Selected at frame 25");
+    expect(observed[1]?.attachments).toEqual([{ path: attachment }]);
+    expect(service.get(id).queuedTurns).toEqual([]);
+  });
+
+  test("Stop during preparation preserves an unsent follow-up for explicit resume", async () => {
+    const observed: string[] = [];
+    const first = Promise.withResolvers<void>();
+    const preparing = Promise.withResolvers<void>();
+    const releaseProject = Promise.withResolvers<void>();
+    const runtime: RuntimeFactory = {
+      ...factory(async () => {}),
+      create: () => ({
+        async send(turn) {
+          observed.push(turn.text);
+          if (turn.text === "First") await first.promise;
+        },
+        interrupt: async () => first.resolve(),
+        dispose: () => first.resolve(),
+      }),
+    };
+    const { project, projects, service, dataDir } = await setup(runtime);
+    const { id } = await service.create({
+      projectId: project.id,
+      provider: "claude",
+    });
+    await service.send(id, { text: "First", attachments: [], skills: [] });
+    await service.queueFollowUp(id, {
+      text: "Next",
+      attachments: [],
+      skills: [],
+    });
+    const getProject = projects.get.bind(projects);
+    projects.get = async (projectId) => {
+      preparing.resolve();
+      await releaseProject.promise;
+      return getProject(projectId);
+    };
+    first.resolve();
+    await preparing.promise;
+    expect(service.get(id).status).toBe("running");
+    expect(service.get(id).runningFollowUpId).toBeDefined();
+    expect(service.get(id).messages.map(({ text }) => text)).toEqual(["First"]);
+    await service.interrupt(id);
+    releaseProject.resolve();
+    await idle(service, id);
+    await service.dispose();
+    const reopened = await createAgentService({
+      projects,
+      review: createReviewService(projects),
+      dataDir,
+      runtimeFactory: runtime,
+    });
+    cleanup.push(() => reopened.dispose());
+    expect(reopened.get(id).queuedTurns?.map(({ turn }) => turn.text)).toEqual([
+      "Next",
+    ]);
+    expect(observed).toEqual(["First"]);
+    await reopened.resumeFollowUps(id);
+    await idle(reopened, id);
+    expect(observed).toEqual(["First", "Next"]);
+  });
+
+  test.each(["Stop", "Failure"] as const)(
+    "a follow-up arriving after %s stays queued until the owner resumes it",
+    async (reason) => {
+      const observed: string[] = [];
+      const running = Promise.withResolvers<void>();
+      const runtime: RuntimeFactory = {
+        ...factory(async () => {}),
+        create: () => ({
+          async send(turn) {
+            observed.push(turn.text);
+            if (turn.text === "First") await running.promise;
+          },
+          interrupt: async () => running.resolve(),
+          dispose: () => running.resolve(),
+        }),
+      };
+      const { project, service } = await setup(runtime);
+      const { id } = await service.create({
+        projectId: project.id,
+        provider: "claude",
+      });
+      await service.send(id, { text: "First", skills: [], attachments: [] });
+      if (reason === "Stop") {
+        await service.interrupt(id);
+        await idle(service, id);
+      } else {
+        running.reject(new Error("Native turn failed."));
+        await idle(service, id, "error");
+      }
+      const queued = await service.queueFollowUp(id, {
+        text: "Arrived late",
+        skills: [],
+        attachments: [],
+      });
+      expect(queued.queuedTurns?.map(({ turn }) => turn.text)).toEqual([
+        "Arrived late",
+      ]);
+      expect(observed).toEqual(["First"]);
+      await service.resumeFollowUps(id);
+      await idle(service, id);
+      expect(observed).toEqual(["First", "Arrived late"]);
+    },
+  );
+
   test("streams a native reply, persists it, and resumes the recorded native session", async () => {
     const observed: AgentEvent[] = [];
     const runtime = factory(async (options) => {

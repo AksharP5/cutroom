@@ -95,6 +95,26 @@ export function createAgentRoutes(service: AgentService) {
   app.post("/agents/sessions/:id/interrupt", async (c) =>
     c.json(await service.interrupt(c.req.param("id"))),
   );
+  app.post("/agents/sessions/:id/follow-ups", async (c) =>
+    c.json(
+      await service.queueFollowUp(
+        c.req.param("id"),
+        agentTurnSchema.parse(await c.req.json()),
+      ),
+      202,
+    ),
+  );
+  app.post("/agents/sessions/:id/follow-ups/resume", async (c) =>
+    c.json(await service.resumeFollowUps(c.req.param("id")), 202),
+  );
+  app.delete("/agents/sessions/:id/follow-ups/:followUpId", async (c) =>
+    c.json(
+      await service.removeFollowUp(
+        c.req.param("id"),
+        c.req.param("followUpId"),
+      ),
+    ),
+  );
   app.post("/agents/sessions/:id/responses", async (c) =>
     c.json(
       await service.respond(
