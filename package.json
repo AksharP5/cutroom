@@ -78,5 +78,8 @@
   },
   "trustedDependencies": [
     "electron"
-  ]
+  ],
+  "patchedDependencies": {
+    "@hyperframes/studio-server@0.9.26": "patches/@hyperframes%2Fstudio-server@0.9.26.patch"
+  }
 }

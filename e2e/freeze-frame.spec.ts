@@ -442,8 +442,18 @@ test("original and reused frozen swatches match video in preview and both export
     .getByRole("listitem")
     .filter({ hasText: "still0.png" });
   await expect(untaggedStill).toHaveCount(1);
+  await untaggedStill.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  await media
+    .getByRole("textbox", { name: "Rename still0.png" })
+    .fill("hold#2 %23");
+  await page.keyboard.press("Enter");
+  const renamedStill = media
+    .getByRole("listitem")
+    .filter({ hasText: "hold#2 %23.png" });
+  await expect(renamedStill).toBeVisible();
   await seek(page, "00000108");
-  await untaggedStill.dblclick();
+  await renamedStill.dblclick();
   await page.keyboard.press("i");
   await page.keyboard.press("Shift+ArrowRight");
   await page.keyboard.press("o");
@@ -458,9 +468,13 @@ test("original and reused frozen swatches match video in preview and both export
   await expect
     .poll(async () => (await read()).clips.find(({ start }) => start === 38))
     .toMatchObject({
-      src: "assets/freeze/still0.png",
+      src: "assets/freeze/hold%232%20%2523.png",
       duration: 31,
     });
+  const reused = (await read()).clips.find(({ start }) => start === 38)!;
+  await expect(
+    page.locator(`[data-clip-label="${reused.id}"] .tl-name`),
+  ).toHaveText("hold#2 %23.png");
   await seek(page, "00000115");
   await page.getByRole("button", { name: "Script", exact: true }).click();
   await page.screenshot({ path: info.outputPath("reused-still-editor.png") });

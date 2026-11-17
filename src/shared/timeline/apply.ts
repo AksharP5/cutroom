@@ -33,7 +33,7 @@ import {
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
-import { FREEZE_DIR, localMediaPath, sourcePath } from "../media";
+import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import {
   moveKeyframe,
@@ -625,7 +625,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         duration,
         mediaStart: null,
         playbackRate: 1,
-        src: sourcePath(batch.composition, path),
+        src: sourceUrl(batch.composition, path),
         sourceDuration: null,
         hasAudio: false,
         link: null,

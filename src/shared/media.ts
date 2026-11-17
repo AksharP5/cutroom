@@ -51,6 +51,9 @@ export const inFreezeAssets = (path: string) =>
 export const isFreezeExport = (path: string) =>
   path.startsWith(`${FREEZE_EXPORT_DIR}/`);
 
+export const isMediaItem = (path: string) =>
+  !!mediaKind(path) && !inMediaTrash(path) && !isFreezeExport(path);
+
 /** A generated still may have a second PNG with the same name for export. */
 export function freezeExportPath(path: string) {
   if (!path.startsWith(`${FREEZE_DIR}/`)) return;
@@ -127,7 +130,7 @@ export function localMediaPath(sourceFile: string, src: string): string | null {
 }
 
 /** How `sourceFile` writes the project file `path` as a `src`: from its own folder. */
-export function sourcePath(sourceFile: string, path: string) {
+export function sourceUrl(sourceFile: string, path: string) {
   const from = sourceFile.split("/").slice(0, -1);
   const to = path.split("/");
   let shared = 0;
@@ -137,7 +140,9 @@ export function sourcePath(sourceFile: string, path: string) {
     from[shared] === to[shared]
   )
     shared++;
-  return [...from.slice(shared).map(() => ".."), ...to.slice(shared)].join("/");
+  return [...from.slice(shared).map(() => ".."), ...to.slice(shared)]
+    .map(encodeURIComponent)
+    .join("/");
 }
 
 export const mediaSettings = {

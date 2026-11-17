@@ -41,7 +41,7 @@ import { clipVersions, compositionVersions, missingSignature } from "./changes";
 import type { ClipVersions } from "./changes";
 import { projectStatePath, projectWritePath } from "./path";
 import { posix, relative, sep } from "node:path";
-import { inMediaTrash, mediaKind } from "../../shared/media";
+import { inMediaTrash, isMediaItem } from "../../shared/media";
 import { moveSourceMarks } from "./view";
 import { STUDIO_SIGNATURE_MANIFEST_PATHS } from "@hyperframes/studio-server";
 
@@ -1002,8 +1002,7 @@ export function createReviewService(store: ProjectStore) {
             // History records file moves as a deletion and an addition with the same content hash.
             for (const file of entry.files) {
               if (
-                !mediaKind(file.path) ||
-                inMediaTrash(file.path) ||
+                !isMediaItem(file.path) ||
                 file.before === null ||
                 file.after !== null
               )
@@ -1012,8 +1011,7 @@ export function createReviewService(store: ProjectStore) {
                 (next) =>
                   next.before === null &&
                   next.after === file.before &&
-                  mediaKind(next.path) &&
-                  !inMediaTrash(next.path),
+                  isMediaItem(next.path),
               );
               if (moved) await moveSourceMarks(project, file.path, moved.path);
             }

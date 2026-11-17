@@ -34,7 +34,7 @@ async function connect() {
       name,
       arguments: { projectId: project.id, ...args },
     });
-    expect(answer.isError).not.toBe(true);
+    expect(answer.isError, JSON.stringify(answer.content)).not.toBe(true);
     return z
       .object({ structuredContent: z.object({ result: z.unknown() }) })
       .parse(answer).structuredContent.result;

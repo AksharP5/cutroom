@@ -12,11 +12,11 @@ import type { Project } from "../../shared/project.ts";
 import { HttpError } from "../../shared/errors.ts";
 import { protectedPath } from "../../shared/sourcePaths.ts";
 
-export async function projectPath(
+export async function resolveProjectPath(
   project: Pick<Project, "path">,
   path: string,
   allowMissing = false,
-): Promise<string> {
+): Promise<{ absolute: string; path: string }> {
   if (!path || isAbsolute(path) || path.includes("\0"))
     throw new HttpError(400, "Use a project-relative file path.");
   const target = resolve(project.path, path);
@@ -42,7 +42,26 @@ export async function projectPath(
   ) {
     throw new HttpError(403, "Links outside the project cannot be accessed.");
   }
-  return canonical;
+  return { absolute: canonical, path: canonicalRelative.split(sep).join("/") };
+}
+
+export async function projectPath(
+  project: Pick<Project, "path">,
+  path: string,
+  allowMissing = false,
+) {
+  return (await resolveProjectPath(project, path, allowMissing)).absolute;
+}
+
+/** Find a local asset's owned path without changing the authored URL that references it. */
+export async function canonicalAssetPath(project: Project, path: string) {
+  try {
+    return (await resolveProjectPath(project, path)).path;
+  } catch (error) {
+    if (error instanceof HttpError && [403, 404].includes(error.status))
+      return null;
+    throw error;
+  }
 }
 
 /** User-controlled writes can change composition content, never native tooling or permissions. */
@@ -59,9 +78,13 @@ export async function projectWritePath(
       );
   };
   check(path);
-  const absolute = await projectPath(project, path, options.allowMissing);
-  check(relative(await realpath(project.path), absolute));
-  return absolute;
+  const resolved = await resolveProjectPath(
+    project,
+    path,
+    options.allowMissing,
+  );
+  check(resolved.path);
+  return resolved.absolute;
 }
 
 /** App-owned sidecars must stay at their reserved paths, without redirected write targets. */

@@ -13,7 +13,7 @@ import {
   inFreezeAssets,
   inMediaTrash,
   isFreezeExport,
-  mediaKind,
+  isMediaItem,
 } from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
@@ -40,7 +40,7 @@ async function mediaFile(project: Project, raw: string) {
   const companion = await freezeCompanion(project, path);
   if (requested !== path && companion?.path !== requested)
     throw new HttpError(404, "Freeze frame not found.");
-  if (!mediaKind(path) || inMediaTrash(path))
+  if (!isMediaItem(path))
     throw new HttpError(400, "Choose a video, audio, or image file.");
   const absolute = await projectWritePath(project, path, { sourceOnly: false });
   const canonical = relative(await realpath(project.path), absolute).replaceAll(
@@ -52,7 +52,7 @@ async function mediaFile(project: Project, raw: string) {
   // The file itself moves, never the target of a link.
   if (!(await lstat(join(project.path, path))).isFile())
     throw new HttpError(400, "Choose a video, audio, or image file.");
-  return { path, absolute, name: posix.basename(path), companion };
+  return { path, absolute, canonical, name: posix.basename(path), companion };
 }
 
 const exists = (path: string) =>
@@ -66,12 +66,22 @@ const exists = (path: string) =>
 
 /** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
-  const { path, companion } = await mediaFile(project, raw);
-  const usesFile = (paths: Set<string> | undefined) =>
-    paths?.has(path) || (companion && paths?.has(companion.path));
+  const { canonical, companion } = await mediaFile(project, raw);
   let uses = 0;
   for (const composition of await compositionFiles(project)) {
-    const { references } = await compositionVersions(project, composition);
+    const { references, canonicalMedia } = await compositionVersions(
+      project,
+      composition,
+    );
+    const usesFile = (paths: Set<string> | undefined) =>
+      paths &&
+      [...paths].some((reference) => {
+        const resolved = canonicalMedia.get(reference);
+        return (
+          resolved === canonical ||
+          (companion !== undefined && resolved === companion.path)
+        );
+      });
     const source = await readSource(project, composition);
     const owners = new Set<string>();
     try {

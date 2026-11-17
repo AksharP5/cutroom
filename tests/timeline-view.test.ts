@@ -25,7 +25,7 @@ import {
   trackRows,
   zoomToSlider,
 } from "../src/client/timeline/math";
-import { localMediaPath, sourcePath } from "../src/shared/media";
+import { localMediaPath, sourceUrl } from "../src/shared/media";
 import {
   clickSelection,
   emptySelection,
@@ -636,8 +636,13 @@ test("media placed in a composition is written from its folder and reads back as
     ["compositions/intro.html", "media/talk.mp4", "../media/talk.mp4"],
     ["compositions/intro.html", "compositions/bed.wav", "bed.wav"],
     ["scenes/a/b.html", "scenes/c/d.png", "../c/d.png"],
+    [
+      "scenes/a/b.html",
+      "media/hold#2 %23.png",
+      "../../media/hold%232%20%2523.png",
+    ],
   ] as const) {
-    expect(sourcePath(composition, path)).toBe(src);
+    expect(sourceUrl(composition, path)).toBe(src);
     expect(localMediaPath(composition, src)).toBe(path);
   }
 });

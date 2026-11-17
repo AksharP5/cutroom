@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { relative } from "node:path";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import { isMissing, projectPath, readSource } from "./store";
+import { isMissing, readSource } from "./store";
+import { resolveProjectPath } from "./path";
 import { HttpError } from "../../shared/errors";
 import { freezeExportSource } from "../hyperframes/freezeSources";
 
@@ -140,6 +140,7 @@ export async function compositionVersions(
   );
   const shared = paths.get(null) ?? new Set<string>();
   paths.set(null, shared);
+  const canonicalMedia = new Map<string, string>();
   const files = new Map<
     string,
     Promise<{ fingerprint: string; content?: string }>
@@ -149,13 +150,14 @@ export async function compositionVersions(
     if (!pending) {
       pending = (async () => {
         try {
-          const absolute = await projectPath(project, path);
+          const { absolute, path: owned } = await resolveProjectPath(
+            project,
+            path,
+          );
           const info = await stat(absolute);
+          if (info.isFile()) canonicalMedia.set(path, owned);
           return {
-            fingerprint: fileFingerprint(
-              relative(project.path, absolute).replaceAll("\\", "/"),
-              info,
-            ),
+            fingerprint: fileFingerprint(owned, info),
             ...(/\.(?:css|[cm]?[jt]sx?)$/i.test(path) &&
             info.isFile() &&
             info.size <= 10 * 1024 * 1024
@@ -218,7 +220,7 @@ export async function compositionVersions(
       versions.set(id, signature(JSON.stringify([versions.get(id), media])));
     }),
   );
-  return { versions, mediaFiles, references: paths };
+  return { versions, mediaFiles, canonicalMedia, references: paths };
 }
 
 /** A null id covers every authored byte outside addressable clip elements. */

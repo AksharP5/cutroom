@@ -22,7 +22,6 @@ import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
-import { encodeUrlPath } from "@hyperframes/parsers";
 import { HttpError } from "../../shared/errors";
 import type { Project, ProjectSummary } from "../../shared/project";
 import {
@@ -61,10 +60,14 @@ import {
   isFreezeExport,
   stillMediaExtensions,
   localMediaPath,
-  sourcePath,
+  sourceUrl,
 } from "../../shared/media";
 import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
-import { projectPath, projectWritePath } from "../projects/path";
+import {
+  canonicalAssetPath,
+  projectPath,
+  projectWritePath,
+} from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
@@ -397,14 +400,12 @@ export function createTimelineRoutes(
     const generated = new Map(
       frozen.map(({ frame, exportPath }) => [frame.path, exportPath]),
     );
-    const exportSrc = (path: string) =>
-      encodeUrlPath(sourcePath(composition, path));
     const freezeExports = new Map<string, string>();
     for (const { frame, exportPath } of frozen) {
       if (exportPath)
         freezeExports.set(
-          sourcePath(composition, frame.path),
-          exportSrc(exportPath),
+          sourceUrl(composition, frame.path),
+          sourceUrl(composition, exportPath),
         );
     }
     const imageSources = new Set(
@@ -415,17 +416,22 @@ export function createTimelineRoutes(
       ),
     );
     for (const src of imageSources) {
-      const path = localMediaPath(composition, src);
-      if (path === null) continue;
-      if (isFreezeExport(path))
+      const local = localMediaPath(composition, src);
+      if (local === null) continue;
+      // Generated files are published by this batch. Existing aliases resolve to the same pair.
+      const path = generated.has(local)
+        ? local
+        : await canonicalAssetPath(project, local);
+      if (isFreezeExport(local) || (path !== null && isFreezeExport(path)))
         throw new TimelineError(
           "unsupported",
           "Insert the freeze frame from Media to keep its preview and export together.",
         );
+      if (path === null) continue;
       const exported = generated.has(path)
         ? generated.get(path)
         : (await freezeCompanion(project, path))?.path;
-      if (exported) freezeExports.set(src, exportSrc(exported));
+      if (exported) freezeExports.set(src, sourceUrl(composition, exported));
     }
     const html = patchComposition(
       current.parsed,

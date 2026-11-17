@@ -1,0 +1,36 @@
+diff --git a/dist/chunk-LVEVVTIB.js b/dist/chunk-LVEVVTIB.js
+index 9975d9e29049763ff9b752f3fa00f4a12db79541..22afef5e9ed255a4e1c678b5ba0423fb8d93784c 100644
+--- a/dist/chunk-LVEVVTIB.js
++++ b/dist/chunk-LVEVVTIB.js
+@@ -2628,7 +2628,30 @@ var Engine = class {
+     const group = this.newGroup(who, label);
+     this.windows.push(group);
+     try {
+-      for (const [path, hash] of changes) await this.writeProjectFile(path, hash);
++      const attempted = [];
++      try {
++        for (const [path, hash] of changes) {
++          const before = this.tracked.get(path)?.hash ?? null;
++          attempted.push([path, before]);
++          await this.writeProjectFile(path, hash);
++        }
++      } catch (error) {
++        // The history queue excludes its watcher while we restore the original files.
++        const failures = [];
++        for (const [path, before] of attempted.reverse()) {
++          try {
++            const standing = this.standingAt(path);
++            const present = standing?.at === path && standing.stat.isFile();
++            const current = present ? await hashFile(join8(this.dir, path)) : null;
++            if (current !== before) await this.writeProjectFile(path, before);
++          } catch (failure) {
++            failures.push(failure);
++          }
++        }
++        if (failures.length)
++          throw new AggregateError([error, ...failures], "Could not roll back the history write.");
++        throw error;
++      }
+       await this.blobs.release(
+         changes.flatMap(([path, hash]) => hash ? [[hash, path]] : [])
+       );

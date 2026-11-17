@@ -14,7 +14,7 @@ import {
 import { CommandSchema } from "../../shared/timeline/schema";
 import { clipFades, volumePoints } from "../../shared/timeline/mix";
 import type { MediaDrag } from "./mediaDrag";
-import { sourcePath } from "../../shared/media";
+import { sourceUrl } from "../../shared/media";
 import type {
   Clip,
   CommandInput,
@@ -773,7 +773,7 @@ export const placedMedia = (
   composition: string,
 ): DraggedMedia => ({
   kind: media.kind,
-  src: sourcePath(composition, media.path),
+  src: sourceUrl(composition, media.path),
   frames: Math.max(1, Math.floor((media.seconds * num) / den + 1e-6)),
   mediaStart: media.start,
   hasAudio: media.hasAudio,
