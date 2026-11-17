@@ -168,6 +168,16 @@ for (const pipeline of [false, true])
       const piece = new URL(sent.url()).searchParams.get("cutroom-piece");
       if (piece !== null) pieces.push(piece);
     });
+    const piece = Promise.withResolvers<void>();
+    let waitingForPiece = false;
+    await page.route(
+      (url) => url.searchParams.get("cutroom-piece") === "45",
+      async (route) => {
+        waitingForPiece = true;
+        await piece.promise;
+        await route.continue();
+      },
+    );
     await page.addInitScript((on) => {
       if (window === window.top)
         localStorage.setItem("cutroom.footagePipeline", String(on));
@@ -189,8 +199,17 @@ for (const pipeline of [false, true])
           .padStart(8, "0"),
       );
       await time.press("Enter");
+      if (frame === 5400) {
+        try {
+          await expect.poll(() => waitingForPiece).toBe(true);
+          await expect(stage).not.toHaveAttribute("data-preview-ready");
+          expect(await shownFrame(page, 16)).toBe(0);
+        } finally {
+          piece.resolve();
+        }
+      }
       await expect(stage).toHaveAttribute("data-preview-ready");
-      await expect.poll(() => shownFrame(page, 16)).toBe(frame);
+      expect(await shownFrame(page, 16)).toBe(frame);
     }
     // The playhead's piece, 3:00 to 3:04, was asked for: the frames came from the pieces.
     expect(pieces).toContain("45");

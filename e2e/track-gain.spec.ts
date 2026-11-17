@@ -1079,6 +1079,7 @@ test("script-free timing edits and track gain keep the preview's sound in sync",
   await expect.poll(() => matches(0.25)).toBe(true);
   expect(await document()).toBe(origin);
   await page.keyboard.press("k");
+  await expect(stage).toHaveAttribute("data-preview-ready");
   token = await stage.getAttribute("data-preview-ready");
   await edit([{ type: "setTiming", clipId: "bed-1", mediaStart: 0.5 }]);
   await expect(live.locator("#bed-1")).toHaveAttribute(

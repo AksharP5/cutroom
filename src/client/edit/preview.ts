@@ -354,6 +354,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     timingRevision = reply.timingRevision;
     if (playbackRequest === null || reply.id === playbackRequest) {
       state = reply.state;
+      if (playbackRequest !== null)
+        frame.toggleAttribute("data-seek-pending", Boolean(reply.error));
       playbackRequest = null;
     }
     if (reply.diagnostics) {
@@ -427,6 +429,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const moving = seekQueue<number>(
     async (time) => {
       await request("seek", { time, scrub: true }, closing.signal, (id) => {
+        frame.setAttribute("data-seek-pending", "");
         playbackRequest = id;
       });
     },
@@ -449,11 +452,13 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     pause: () => {
       moving.clear();
       state.playing = false;
+      frame.setAttribute("data-seek-pending", "");
       playbackRequest = send("pause");
     },
     seek: (time, scrub) => {
       clock = null;
       state.time = time;
+      frame.setAttribute("data-seek-pending", "");
       if (scrub) return moving.push(time);
       moving.clear();
       playbackRequest = send("seek", { time });
@@ -560,8 +565,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     player,
     mix,
     /** Whether the footage pipeline draws root videos beneath this document, and which. */
-    pipeline: (active: boolean, drawn: readonly string[]) =>
-      send("pipeline", { active, drawn }),
+    pipeline: (active: boolean, drawn: readonly string[]) => {
+      frame.setAttribute("data-seek-pending", "");
+      playbackRequest = send("pipeline", { active, drawn });
+    },
     signal: closing.signal,
     async activate() {
       positionTargets.add(position);

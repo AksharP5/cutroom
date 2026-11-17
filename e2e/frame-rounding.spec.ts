@@ -57,17 +57,127 @@ async function shownFrame(page: Page) {
   }, png);
 }
 
+/** Holds a real previous picture at the browser capture boundary until the test releases it. */
+const holdDecodedFrame = () => {
+  const video = document.querySelector("video")!;
+  const NativeFrame = VideoFrame;
+  const prior = new NativeFrame(video);
+  const time = video.currentTime;
+  let blocked = true;
+  let attempts = 0;
+  // Model Chromium supplying the previous decoded picture after the seek clock settles.
+  window.VideoFrame = new Proxy(NativeFrame, {
+    construct(Frame, args: unknown[], target) {
+      if (
+        args[0] === video &&
+        blocked &&
+        Math.abs(video.currentTime - time) > 0.001
+      ) {
+        attempts++;
+        return prior.clone();
+      }
+      return Reflect.construct(Frame, args, target);
+    },
+  });
+  Object.defineProperty(window, "staleCaptures", {
+    get: () => attempts,
+    configurable: true,
+  });
+  addEventListener(
+    "release-decoded-frame",
+    () => {
+      blocked = false;
+      window.VideoFrame = NativeFrame;
+      prior.close();
+    },
+    { once: true },
+  );
+};
+
+for (const held of ["VFR gap", "audio tail"] as const)
+  test(`a paused seek accepts the decoded picture held across its ${held}`, async ({
+    page,
+    request,
+  }, info) => {
+    const project = ProjectSchema.parse(
+      await (
+        await request.post("/api/cutroom/projects", {
+          data: { name: `Held frame ${held}`, width: WIDTH, height: HEIGHT },
+        })
+      ).json(),
+    );
+    const vfr = held === "VFR gap";
+    const file = vfr ? "held.mkv" : "held.mp4";
+    await run("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `testsrc2=size=${WIDTH}x${HEIGHT}:rate=30:duration=${vfr ? 2.1 : 1}`,
+      ...(!vfr ? ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono:d=2"] : []),
+      "-vf",
+      `drawbox=x=0:y=0:w=${WIDTH}:h=36:color=black:t=fill,${BITS.join(",")}${vfr ? ",select='eq(n,0)+eq(n,15)+eq(n,30)+eq(n,60)'" : ""}`,
+      "-fps_mode",
+      vfr ? "vfr" : "cfr",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      ...(!vfr ? ["-c:a", "aac"] : []),
+      join(project.path, file),
+    ]);
+    await writeFile(
+      join(project.path, "index.html"),
+      `<!doctype html><html><body style="margin:0"><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="3" data-fps="30"><video src="${file}" muted data-start="0" data-duration="3" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`,
+    );
+    await page.addInitScript(() => {
+      if (window === window.top)
+        localStorage.setItem("cutroom.footagePipeline", "false");
+    });
+    await page.goto(`/#project/${project.id}`);
+    const stage = page.locator(".edit-stage");
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    // The same source picture remains correct at all three distinct seek destinations.
+    for (const time of [
+      "00000115",
+      "00000118",
+      "00000115",
+      "00000206",
+      "00000212",
+      "00000115",
+    ]) {
+      await page
+        .getByRole("button", { name: "Current time. Click to type a time." })
+        .click();
+      const input = page.getByRole("textbox", { name: "Go to time" });
+      await input.pressSequentially(time);
+      await input.press("Enter");
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(
+        vfr ? (time.startsWith("000002") ? 60 : 30) : 29,
+      );
+    }
+    await expect(page.locator(".status-error")).toHaveCount(0);
+    await info.attach("held-picture", {
+      body: await page.locator(".edit-picture").screenshot(),
+      contentType: "image/png",
+    });
+  });
+
 /**
  * OBS records 60 fps on Matroska's millisecond clock, so frame k starts at round(k * 1000 / 60) ms:
  * frame 1 at 17 ms, a third of a millisecond after its slot. Export snaps frames back to their
  * slots. The preview stepped one frame at a time used to show the frame before at many of them.
  */
-for (const { codec, pipeline } of [
-  { codec: "hevc", pipeline: false },
-  { codec: "hevc", pipeline: true },
-  { codec: "h264", pipeline: false },
+for (const { codec, pipeline, delayed } of [
+  { codec: "hevc", pipeline: false, delayed: false },
+  { codec: "hevc", pipeline: false, delayed: true },
+  { codec: "hevc", pipeline: true, delayed: false },
+  { codec: "h264", pipeline: false, delayed: false },
 ] as const)
-  test(`a 60 fps ${codec === "hevc" ? "HEVC" : "H.264"} recording on a millisecond clock shows every frame export writes on a 60 fps timeline, with the footage pipeline ${pipeline ? "on" : "off"}`, async ({
+  test(`a 60 fps ${codec === "hevc" ? "HEVC" : "H.264"} recording on a millisecond clock shows every frame export writes on a 60 fps timeline, with the footage pipeline ${pipeline ? "on" : "off"}${delayed ? " while decoded pixels lag behind the media clock" : ""}`, async ({
     page,
     request,
   }, testInfo) => {
@@ -155,16 +265,67 @@ for (const { codec, pipeline } of [
     await page.keyboard.press("Home");
     const shown: number[] = [];
     for (let frame = 0; frame < frames; frame++) {
+      const body = page.frameLocator("iframe[data-live]").locator("body");
+      if (delayed && frame === 6) await body.evaluate(holdDecodedFrame);
       if (frame) await page.keyboard.press("ArrowRight");
+      if (delayed && frame === 6) {
+        await expect
+          .poll(() => body.evaluate(() => Reflect.get(window, "staleCaptures")))
+          .toBeGreaterThan(0);
+        await page
+          .locator(".edit-picture")
+          .screenshot({ path: testInfo.outputPath("delayed-frame.png") });
+        expect(await shownFrame(page)).toBe(125);
+        // A settled media clock is insufficient. The old picture stays, without claiming ready.
+        await expect(stage).not.toHaveAttribute("data-preview-ready", {
+          timeout: 1000,
+        });
+        // A newer seek must supersede the stalled capture without acknowledging its old frame.
+        const attempts = await body.evaluate(() =>
+          Reflect.get(window, "staleCaptures"),
+        );
+        await page.keyboard.press("ArrowRight");
+        await expect
+          .poll(() => body.evaluate(() => Reflect.get(window, "staleCaptures")))
+          .toBeGreaterThan(attempts);
+        await expect(stage).not.toHaveAttribute("data-preview-ready");
+        await body.evaluate(() =>
+          dispatchEvent(new Event("release-decoded-frame")),
+        );
+        await expect(stage).toHaveAttribute("data-preview-ready");
+        expect(await shownFrame(page)).toBe(127);
+        await page.keyboard.press("ArrowLeft");
+      }
       if (pipeline)
         await expect(page.locator(".edit-pipeline")).toHaveAttribute(
           "data-frame",
           String(frame),
         );
       await expect(stage).toHaveAttribute("data-preview-ready");
-      await expect.poll(() => shownFrame(page)).toBe(exported[frame]);
       shown.push(await shownFrame(page));
+      expect(shown.at(-1)).toBe(exported[frame]);
+      if (delayed && frame === 6)
+        await page
+          .locator(".edit-picture")
+          .screenshot({ path: testInfo.outputPath("settled-frame.png") });
     }
     expect(shown).toEqual(exported);
     await expect(page.getByText("did not draw")).toHaveCount(0);
+    if (delayed) {
+      const body = page.frameLocator("iframe[data-live]").locator("body");
+      await body.evaluate(holdDecodedFrame);
+      await page.keyboard.press("Home");
+      await expect(page.locator(".status-error")).toContainText(
+        "did not draw the frame in time",
+        { timeout: 12_000 },
+      );
+      await expect(stage).not.toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(149);
+      await body.evaluate(() =>
+        dispatchEvent(new Event("release-decoded-frame")),
+      );
+      await page.keyboard.press("ArrowRight");
+      await expect(stage).toHaveAttribute("data-preview-ready");
+      expect(await shownFrame(page)).toBe(121);
+    }
   });
