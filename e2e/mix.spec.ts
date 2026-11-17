@@ -1476,6 +1476,7 @@ test("Alt-click adds volume points, a drag moves one, Alt-click deletes one, eac
   ]);
   const twoPoints = (await read()).timeline;
   const second = page.locator('[data-clip-mix="music"] [data-point="1"]');
+  const originalLine = await lineAt(page, 0.5);
   await drag(page, '[data-clip-mix="music"] [data-point="1"]', 0, 14);
   await expect.poll(async () => (await points())?.[1]?.gain).toBeLessThan(0.3);
   const lowered = (await points())!;
@@ -1486,8 +1487,11 @@ test("Alt-click adds volume points, a drag moves one, Alt-click deletes one, eac
   expect(Math.abs(drawn.y + drawn.height / 2 - line.y)).toBeLessThan(1.5);
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await read()).timeline).toEqual(twoPoints);
+  // History can settle on disk before the curve used by the next click redraws.
+  await expect.poll(() => lineAt(page, 0.5)).toEqual(originalLine);
   await page.keyboard.press("Control+Shift+z");
   await expect.poll(points).toEqual(lowered);
+  await expect.poll(() => lineAt(page, 0.5)).toEqual(line);
   // A third point, then Alt-click on it takes it away again.
   await at(0.8);
   await expect.poll(async () => (await points())?.length).toBe(3);
