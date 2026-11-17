@@ -6,6 +6,7 @@ import {
   readdir,
   stat,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -923,8 +924,15 @@ test("restoring a trash move preserves a mounted freeze with identical pixels", 
   const point = ledger.list().at(-1)!;
 
   expect((await step("undo")).status).toBe(200);
-  expect(await ledger.restore(point.id, who)).toMatchObject({
-    restoredTo: point.id,
+  expect(await readFile(at(first), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(firstExport), "utf8")).toBe("export pixels");
+  expect((await step("redo")).status).toBe(200);
+  expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
+  const redone = ledger.list().at(-1)!;
+  expect((await step("undo")).status).toBe(200);
+  expect(await ledger.restore(redone.id, who)).toMatchObject({
+    restoredTo: redone.id,
   });
   expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
   expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
@@ -950,6 +958,55 @@ test("restoring a trash move preserves a mounted freeze with identical pixels", 
   expect(await present(trashExport)).toBe(false);
   expect(await readFile(at(scene), "utf8")).toBe(usedScene);
 });
+
+test.each(["still.png", "still 2.png"])(
+  "restoring a numbered trash path preserves a newer used freeze named %s",
+  async (name) => {
+    const original = "assets/freeze/still 2.png";
+    const originalExport = "assets/freeze/export/still 2.png";
+    const trash = "trash/still 2.png";
+    const trashExport = "trash/assets/freeze/export/still 2.png";
+    const preview = `assets/freeze/${name}`;
+    const exported = `assets/freeze/export/${name}`;
+    const scene = "build/scene.html";
+    await mkdir(at("build"));
+    await mkdir(at("assets/freeze/export"), { recursive: true });
+    await writeFile(at(original), "preview pixels");
+    await writeFile(at(originalExport), "export pixels");
+    await writeFile(
+      at("index.html"),
+      (await readFile(at("index.html"), "utf8")).replace(
+        "</main>",
+        `<div data-composition-src="${scene}" data-start="0" data-duration="2"></div></main>`,
+      ),
+    );
+    const ledger = await fixture.store.history(project);
+    await ledger.checkpoint();
+    const removed = await post("remove", { path: original });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ trash });
+    const point = ledger.list().at(-1)!;
+    await unlink(at(trash));
+    await unlink(at(trashExport));
+    await ledger.checkpoint();
+
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    const usedScene = `<div data-composition-id="scene" data-width="1920" data-height="1080" data-duration="2"><img id="still" class="clip" src="../${preview}" data-cutroom-freeze-export="../${exported}" data-start="0" data-duration="2" data-track-index="0"></div>`;
+    await writeFile(at(scene), usedScene);
+    await ledger.checkpoint();
+    const before = ledger.list();
+    await expect(
+      ledger.restore(point.id, { kind: "person", name: "You" }),
+    ).rejects.toThrow(`still used by ${scene}`);
+    expect(ledger.list()).toEqual(before);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await present(trash)).toBe(false);
+    expect(await present(trashExport)).toBe(false);
+    expect(await readFile(at(scene), "utf8")).toBe(usedScene);
+  },
+);
 
 test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
   "history rolls back a failed freeze replay and retries the same entry",

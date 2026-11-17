@@ -1,15 +1,16 @@
 diff --git a/dist/chunk-LVEVVTIB.js b/dist/chunk-LVEVVTIB.js
-index 9975d9e29049763ff9b752f3fa00f4a12db79541..8a2788d1a518084c9a1fa79b65ca66bf5f4800f6 100644
+index 9975d9e29049763ff9b752f3fa00f4a12db79541..82198ba4b7b632cf23a5426e02c9ee270e244bff 100644
 --- a/dist/chunk-LVEVVTIB.js
 +++ b/dist/chunk-LVEVVTIB.js
-@@ -2625,10 +2625,38 @@ var Engine = class {
+@@ -2625,10 +2625,39 @@ var Engine = class {
      const deleted = new Set(changes.filter(([, hash]) => hash === null).map(([path]) => path));
      const blocked = changes.filter(([, hash]) => hash !== null).map(([path]) => this.inTheWay(path, deleted)).find(Boolean);
      if (blocked) throw new Error(`${blocked} is in the way; move or delete it, then try again.`);
 +    if (this.options.beforeReplay)
 +      await this.options.beforeReplay(
 +        changes.map(([path, after]) => ({ path, before: this.tracked.get(path)?.hash ?? null, after })),
-+        (hash) => this.blobs.read(hash)
++        (hash) => this.blobs.read(hash),
++        { ...extra, entries: this.log.entries }
 +      );
      const group = this.newGroup(who, label);
      this.windows.push(group);
@@ -43,15 +44,19 @@ index 9975d9e29049763ff9b752f3fa00f4a12db79541..8a2788d1a518084c9a1fa79b65ca66bf
          changes.flatMap(([path, hash]) => hash ? [[hash, path]] : [])
        );
 diff --git a/dist/projectHistory-C18HDvac.d.ts b/dist/projectHistory-C18HDvac.d.ts
-index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..b5209fd0f834fe9934838ee2178592428f1abe65 100644
+index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..f805de2db0fd6365e1ff6f2f1303ca4004cbd496 100644
 --- a/dist/projectHistory-C18HDvac.d.ts
 +++ b/dist/projectHistory-C18HDvac.d.ts
-@@ -55,6 +55,8 @@ interface ProjectHistoryOptions {
+@@ -55,6 +55,12 @@ interface ProjectHistoryOptions {
      closedWindow?: ClosedWindow;
      closedWindowAfterOwnership?: () => ClosedWindow | undefined;
      undoScope?: "own" | "everyone";
 +    /** Validates the settled changes in an undo, redo or restore before any project file is written. */
-+    beforeReplay?: (changes: readonly HistoryFileChange[], readBlob: (hash: string) => Promise<Buffer>) => Promise<void>;
++    beforeReplay?: (
++        changes: readonly HistoryFileChange[],
++        readBlob: (hash: string) => Promise<Buffer>,
++        context: Pick<HistoryEntry, "undoes" | "restoredTo"> & { entries: readonly HistoryEntry[] }
++    ) => Promise<void>;
      pruneGoneProjectsBudgetMs?: number;
  }
  interface ClaimOptions {

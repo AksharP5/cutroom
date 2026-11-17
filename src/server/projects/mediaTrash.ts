@@ -1,12 +1,17 @@
 import { posix } from "node:path";
+import type { HistoryEntry } from "@hyperframes/studio-server";
 import {
-  FREEZE_DIR,
   FREEZE_EXPORT_DIR,
   MEDIA_TRASH,
+  freezeExportPath,
   isFreezeExport,
 } from "../../shared/media";
 
 const exportTrash = `${MEDIA_TRASH}/${FREEZE_EXPORT_DIR}`;
+
+/** The label already stored for Media Remove entries. */
+export const mediaRemoveLabel = (path: string) =>
+  `Remove ${posix.basename(path)}`;
 
 export function mediaTrashPath(source: string, copy: number) {
   const name = posix.basename(source);
@@ -16,26 +21,35 @@ export function mediaTrashPath(source: string, copy: number) {
   return `${directory}/${stem}${copy === 1 ? "" : ` ${copy}`}${extension}`;
 }
 
-/** A trash name may be the original filename or a numbered copy of a shorter name. */
-export function freezeTrashSources(trash: string) {
+/** Only a recorded Media Remove can match its own source to a trash path. */
+export function removedFreezeSource(
+  entry: HistoryEntry,
+  trash: string,
+  hash: string,
+) {
   const directory = posix.dirname(trash);
-  const sourceDir =
-    directory === MEDIA_TRASH
-      ? FREEZE_DIR
-      : directory === exportTrash
-        ? FREEZE_EXPORT_DIR
-        : null;
-  if (!sourceDir) return [];
-  const name = posix.basename(trash);
-  const extension = posix.extname(name);
-  const stem = name.slice(0, name.length - extension.length);
-  const sources = [`${sourceDir}/${name}`];
-  const numbered = /^(.+) ([1-9]\d*)$/.exec(stem);
-  if (numbered) {
-    const source = `${sourceDir}/${numbered[1]}${extension}`;
-    const copy = Number(numbered[2]);
-    if (copy > 1 && mediaTrashPath(source, copy) === trash)
-      sources.push(source);
-  }
-  return sources;
+  if (directory !== MEDIA_TRASH && directory !== exportTrash) return;
+  if (entry.who.kind === "outside") return;
+  const preview = entry.files.find(
+    ({ path, before, after }) =>
+      before !== null &&
+      after === null &&
+      freezeExportPath(path) &&
+      entry.label === mediaRemoveLabel(path),
+  );
+  if (!preview) return;
+  const source =
+    directory === MEDIA_TRASH ? preview.path : freezeExportPath(preview.path);
+  if (
+    !entry.files.some(
+      ({ path, before, after }) =>
+        path === source && before === hash && after === null,
+    )
+  )
+    return;
+  const additions = entry.files.filter(
+    ({ path, before, after }) =>
+      before === null && after === hash && posix.dirname(path) === directory,
+  );
+  if (additions.length === 1 && additions[0]?.path === trash) return source;
 }

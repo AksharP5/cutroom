@@ -179,8 +179,8 @@ export async function createProjectStore(options: {
       projectDir,
       historyRoot: join(dataDir, "history"),
       undoScope: "everyone",
-      beforeReplay: (changes, readBlob) =>
-        guardFreezeHistory({ path: projectDir }, changes, readBlob),
+      beforeReplay: (changes, readBlob, context) =>
+        guardFreezeHistory({ path: projectDir }, changes, readBlob, context),
     }),
   );
   const documentReads = new WeakMap<ProjectDocument, string | null>();

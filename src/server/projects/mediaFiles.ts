@@ -24,7 +24,7 @@ import { TimelineError } from "../../shared/timeline/errors";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { compositionSources } from "./media";
-import { mediaTrashPath } from "./mediaTrash";
+import { mediaRemoveLabel, mediaTrashPath } from "./mediaTrash";
 import { isMissing, projectStatePath, projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
@@ -321,7 +321,7 @@ export async function removeMedia(
   const file = await mediaFile(project, input.path);
   return store.mutate(
     project,
-    `Remove ${file.name}`,
+    mediaRemoveLabel(file.path),
     async () => {
       for (let copy = 1; ; copy++) {
         const trash = mediaTrashPath(file.path, copy);

@@ -1,16 +1,87 @@
-import type { HistoryFileChange } from "@hyperframes/studio-server";
+import { HISTORY_START } from "@hyperframes/studio-server";
+import type {
+  HistoryEntry,
+  HistoryFileChange,
+  ProjectHistoryOptions,
+} from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
-import { freezeExportPath, isFreezeExport } from "../../shared/media";
+import {
+  freezeExportPath,
+  inMediaTrash,
+  isFreezeExport,
+} from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { compositionVersions } from "./changes";
 import { compositionSources } from "./media";
-import { freezeTrashSources } from "./mediaTrash";
+import { removedFreezeSource } from "./mediaTrash";
+
+type ReplayContext = Parameters<
+  NonNullable<ProjectHistoryOptions["beforeReplay"]>
+>[2];
+
+function exemptRecordedRemovals(
+  deleted: Map<string, string | null>,
+  changes: readonly HistoryFileChange[],
+  context: ReplayContext,
+) {
+  const trashWrites = changes.flatMap(({ path, before, after }) =>
+    before === null && after !== null && inMediaTrash(path)
+      ? [{ path, hash: after }]
+      : [],
+  );
+  if (!trashWrites.length) return;
+
+  const { entries } = context;
+  const offsets = new Map(entries.map(({ id }, index) => [id, index]));
+  const targetOf = ({
+    restoredTo,
+    undoes,
+  }: Pick<HistoryEntry, "undoes" | "restoredTo">) => {
+    if (restoredTo !== undefined)
+      return restoredTo === HISTORY_START ? -1 : offsets.get(restoredTo);
+    const reversed = undoes === undefined ? undefined : offsets.get(undoes);
+    return reversed === undefined ? undefined : reversed - 1;
+  };
+  const target = targetOf(context);
+  if (target === undefined) return;
+
+  // Replay entries repeat a past version. Follow the path back to its original write.
+  const writtenAt = (path: string, point: number) => {
+    while (point >= 0) {
+      const entry = entries[point]!;
+      const change = entry.files.find((change) => change.path === path);
+      if (!change) {
+        point--;
+        continue;
+      }
+      if (change.after === null) return;
+      if (!entry.undoes && !entry.restoredTo) return point;
+      const target = targetOf(entry);
+      if (target === undefined || target >= point) return;
+      point = target;
+    }
+    return -1;
+  };
+  for (const { path, hash } of trashWrites) {
+    const removedAt = writtenAt(path, target);
+    if (removedAt === undefined || removedAt < 0) continue;
+    const source = removedFreezeSource(entries[removedAt]!, path, hash);
+    if (!source || deleted.get(source) !== hash) continue;
+    const original = writtenAt(source, removedAt - 1);
+    if (
+      original !== undefined &&
+      original === writtenAt(source, entries.length - 1)
+    )
+      deleted.delete(source);
+  }
+}
 
 /** Check the composition sources that will survive replay while the old aliases still resolve. */
 export async function guardFreezeHistory(
   project: Pick<Project, "path">,
   changes: readonly HistoryFileChange[],
   readBlob: (hash: string) => Promise<Buffer>,
+  context: ReplayContext,
 ) {
   const deleted = new Map(
     changes
@@ -21,16 +92,7 @@ export async function guardFreezeHistory(
       .map(({ path, before }) => [path, before]),
   );
   if (!deleted.size) return;
-  // Exempt the intended Media Remove. Equal bytes at another path are a different still.
-  const trashed = new Set<string>();
-  for (const { path, before, after } of changes) {
-    if (before !== null || after === null) continue;
-    const sources = freezeTrashSources(path).filter(
-      (source) => deleted.get(source) === after,
-    );
-    if (sources.length === 1) trashed.add(sources[0]!);
-  }
-  for (const path of trashed) deleted.delete(path);
+  exemptRecordedRemovals(deleted, changes, context);
   if (!deleted.size) return;
 
   const next = new Map(changes.map(({ path, after }) => [path, after]));
