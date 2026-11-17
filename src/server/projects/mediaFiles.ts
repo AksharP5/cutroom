@@ -25,7 +25,8 @@ import { isMissing, projectStatePath, projectWritePath } from "./path";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
-import { renameReferences } from "./mediaReferences";
+import { mediaReferenceRenamer } from "./mediaReferences";
+import type { ProjectEntry } from "./mediaReferences";
 import { moveSourceMarks } from "./view";
 import { freezeCompanion } from "./freezeAssets";
 
@@ -104,18 +105,28 @@ export async function mediaUses(project: Project, raw: string) {
 /** Read only editable sources, resolving references against each source's directory. */
 async function referenceEdits(project: Project, names: Map<string, string>) {
   const sources: { path: string; absolute: string; before: string }[] = [];
-  const files = new Set<string>();
+  const entries = new Map<string, ProjectEntry>([[".", "directory"]]);
   const directories = [""];
   for (const directory of directories) {
     for (const entry of await readdir(join(project.path, directory), {
       withFileTypes: true,
     })) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const path = posix.join(directory, entry.name);
-      if (inMediaTrash(path)) continue;
-      if (entry.isDirectory()) directories.push(path);
+      if (
+        entry.name.startsWith(".") ||
+        entry.name === "node_modules" ||
+        entry.isSymbolicLink() ||
+        inMediaTrash(path)
+      ) {
+        entries.set(path, "unscanned");
+        continue;
+      }
+      if (entry.isDirectory()) {
+        entries.set(path, "directory");
+        directories.push(path);
+      }
       if (!entry.isFile()) continue;
-      files.add(path);
+      entries.set(path, "file");
       const absolute = await projectWritePath(project, path).catch(
         (error: unknown) => {
           if (error instanceof HttpError && error.status === 403) return null;
@@ -131,9 +142,10 @@ async function referenceEdits(project: Project, names: Map<string, string>) {
       }
     }
   }
+  const renameReferences = mediaReferenceRenamer(project, names, entries);
   const edits: FileMutationInput[] = [];
   for (const { path, absolute, before } of sources) {
-    const after = renameReferences(before, path, names, files);
+    const after = await renameReferences(before, path);
     if (after === before) continue;
     const sourceFile = names.get(path) ?? path;
     edits.push({
@@ -214,7 +226,9 @@ export async function renameMedia(
     project,
     `Rename ${file.name} to ${input.name}`,
     async () => {
-      const names = new Map([[file.path, path]]);
+      const names = new Map([
+        [file.canonical, posix.join(posix.dirname(file.canonical), input.name)],
+      ]);
       const moves = [{ absolute: file.absolute, destination: absolute }];
       if (file.companion && exportPath && exportAbsolute) {
         names.set(file.companion.path, exportPath);

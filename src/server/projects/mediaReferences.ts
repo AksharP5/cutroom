@@ -5,37 +5,96 @@ import {
   scanHtmlOpeningTags,
 } from "@hyperframes/parsers";
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
-import { localMediaPath } from "../../shared/media";
+import { localMediaPath, sourceUrl } from "../../shared/media";
+import type { Project } from "../../shared/project";
+import { canonicalAssetPath } from "./path";
 
-/** Rewrite paths that resolve to renamed files, retaining their relative prefixes. */
-export function renameReferences(
+export type ProjectEntry = "file" | "directory" | "unscanned";
+
+/** Rewrite URLs while the files and their aliases still resolve to the original targets. */
+export function mediaReferenceRenamer(
+  project: Project,
+  names: ReadonlyMap<string, string>,
+  entries: ReadonlyMap<string, ProjectEntry>,
+) {
+  const paths = new Map<string, Promise<string | null>>();
+  const resolve = (path: string) => {
+    const entry = entries.get(path);
+    if (entry === "file" || entry === "directory") return Promise.resolve(path);
+    if (entry === undefined && entries.get(posix.dirname(path)) === "directory")
+      return Promise.resolve(null);
+    const cached = paths.get(path);
+    if (cached) return cached;
+    const pending = canonicalAssetPath(project, path).catch(
+      (error: unknown) => {
+        // Arbitrary strings in scripts and attributes can look like local paths.
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          ["ENOTDIR", "ENAMETOOLONG", "ELOOP"].includes(String(error.code))
+        )
+          return null;
+        throw error;
+      },
+    );
+    paths.set(path, pending);
+    return pending;
+  };
+
+  return async (source: string, file: string) => {
+    const values = new Set<string>();
+    mapReferences(source, file, (value) => {
+      values.add(value);
+      return value;
+    });
+    const replacements = new Map<
+      string,
+      { path: string; keepPrefix: boolean }
+    >();
+    await Promise.all(
+      [...values].map(async (value) => {
+        let reference = localMediaPath(file, value);
+        if (!reference || reference === "." || reference.includes("\0")) return;
+        let canonical = await resolve(reference);
+        // Registry sources may name a project-root asset when no sibling exists.
+        if (canonical === null && !/^[./]/.test(value)) {
+          reference = localMediaPath("index.html", value);
+          if (reference === null) return;
+          canonical = await resolve(reference);
+        }
+        if (canonical === null) return;
+        const path = names.get(canonical);
+        if (path === undefined) return;
+        replacements.set(value, {
+          path,
+          keepPrefix:
+            reference === canonical ||
+            (await resolve(posix.dirname(reference))) === posix.dirname(path),
+        });
+      }),
+    );
+    if (!replacements.size) return source;
+    return mapReferences(source, file, (value, url) => {
+      const target = replacements.get(value);
+      if (!target) return value;
+      const pathname = value.split(/[?#]/, 1)[0]!;
+      const name = posix.basename(target.path);
+      const replacement = target.keepPrefix
+        ? pathname.slice(0, pathname.lastIndexOf("/") + 1) +
+          (/%[\da-f]{2}/i.test(pathname) || url
+            ? encodeUrlPath(name)
+            : name.replace(/[%?#]/g, encodeURIComponent))
+        : sourceUrl(file, target.path);
+      return replacement + value.slice(pathname.length);
+    });
+  };
+}
+
+function mapReferences(
   source: string,
   file: string,
-  names: ReadonlyMap<string, string>,
-  files: Set<string>,
+  path: (value: string, url: boolean) => string,
 ) {
-  const path = (value: string, url: boolean) => {
-    const local = localMediaPath(file, value);
-    if (local === null) return value;
-    // Registry sources may name a project-root asset when no sibling exists.
-    const resolved =
-      files.has(local) || /^[./]/.test(value)
-        ? local
-        : localMediaPath("index.html", value);
-    const to = resolved === null ? undefined : names.get(resolved);
-    if (to === undefined) return value;
-    const pathname = value.split(/[?#]/, 1)[0]!;
-    const name = posix.basename(to);
-    const replacement =
-      /%[\da-f]{2}/i.test(pathname) || url
-        ? encodeUrlPath(name)
-        : name.replace(/[%?#]/g, encodeURIComponent);
-    return (
-      pathname.slice(0, pathname.lastIndexOf("/") + 1) +
-      replacement +
-      value.slice(pathname.length)
-    );
-  };
   const css = (text: string) =>
     text.replace(CSS_URL_RE, (whole: string, _quote: string, raw: string) => {
       const value = decodeCssEscapes(raw);

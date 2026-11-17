@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -531,6 +531,158 @@ test("original and reused frozen swatches match video in preview and both export
         ).toBeLessThanOrEqual(8);
       }
       evidence.push({ mode, source, expected, samples });
+    }
+  }
+  await writeFile(
+    info.outputPath("swatches.json"),
+    JSON.stringify(evidence, null, 2),
+  );
+});
+
+test("an aliased freeze stays visible through Media rename and history, including both export paths", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(120_000);
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Freeze alias rename" },
+      })
+    ).json(),
+  );
+  await run("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=320x180:r=1:d=1",
+    "-vf",
+    "loop=loop=2:size=1:start=0,fps=30",
+    "-t",
+    "2",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    join(project.path, "source.mp4"),
+  ]);
+  const style =
+    "position:absolute;inset:0;width:100%;height:100%;object-fit:contain";
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}main{position:relative;width:100%;height:100%;overflow:hidden}</style></head><body><main id="main" data-composition-id="main" data-no-timeline data-width="320" data-height="180" data-duration="2" data-fps="30"><video id="v" src="source.mp4" muted data-start="0" data-duration="2" data-track-index="0" style="${style}"></video></main></body></html>`,
+  );
+  const api = `/api/cutroom/projects/${project.id}`;
+  const timeline = async () =>
+    TimelineViewSchema.parse(
+      await (await request.get(`${api}/timeline`)).json(),
+    );
+  const edit = async (commands: CommandInput[]) => {
+    const response = await request.post(`${api}/commands`, {
+      data: { expectedRevision: (await timeline()).revision, commands },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+  };
+  await edit([{ type: "freeze", clipId: "v", at: 24, id: "still" }]);
+  await symlink("assets/freeze", join(project.path, "alias"));
+  await edit([
+    {
+      type: "insert",
+      at: 120,
+      track: 0,
+      clip: {
+        kind: "image",
+        src: "alias/still.png",
+        id: "directory-alias",
+        duration: 30,
+      },
+    },
+    {
+      type: "insert",
+      at: 150,
+      track: 0,
+      clip: {
+        kind: "image",
+        src: "/assets/freeze/still.png",
+        id: "absolute",
+        duration: 30,
+      },
+    },
+  ]);
+
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  await seek(page, "00000007");
+  const reference = (await shownFrame(page, info.outputPath("source.png")))
+    .swatches;
+  const samples = async (phase: string) => {
+    for (const [id, timecode] of [
+      ["directory-alias", "00000415"],
+      ["absolute", "00000515"],
+    ]) {
+      await seek(page, timecode!);
+      await expect
+        .poll(async () => {
+          const { swatches } = await shownFrame(page);
+          return Math.max(
+            ...swatches.map((value, channel) =>
+              Math.abs(value - reference[channel]!),
+            ),
+          );
+        })
+        .toBeLessThanOrEqual(3);
+      await shownFrame(page, info.outputPath(`${phase}-${id}.png`));
+    }
+  };
+  await samples("before");
+
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  await media
+    .getByRole("listitem")
+    .filter({ hasText: "still.png" })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+  await media
+    .getByRole("textbox", { name: "Rename still.png" })
+    .fill("hold#2 %23");
+  await page.keyboard.press("Enter");
+  await expect(
+    media.getByRole("listitem").filter({ hasText: "hold#2 %23.png" }),
+  ).toBeVisible();
+  const aliasSrc = async () =>
+    (await timeline()).timeline.clips.find(
+      (clip) => clip.id === "directory-alias",
+    )?.src;
+  const renamed = "alias/hold%232 %2523.png";
+  await expect.poll(aliasSrc).toBe(renamed);
+  await samples("renamed");
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(aliasSrc).toBe("alias/still.png");
+  await samples("undone");
+  await page.keyboard.press("Control+Shift+z");
+  await expect.poll(aliasSrc).toBe(renamed);
+  await samples("redone");
+
+  const evidence = [];
+  for (const [mode, fps] of [
+    ["direct", undefined],
+    ["capture", 25],
+  ] as const) {
+    const output = info.outputPath(`${mode}.mp4`);
+    await renderMp4(request, project.id, output, fps);
+    const source = await exportedSwatches(output, 0.25);
+    for (const time of [4.5, 5.5]) {
+      const still = await exportedSwatches(output, time);
+      const delta = Math.max(
+        ...still.map((value, channel) => Math.abs(value - source[channel]!)),
+      );
+      expect(delta, `${mode} at ${time}s`).toBeLessThanOrEqual(8);
+      evidence.push({ mode, time, source, still, delta });
     }
   }
   await writeFile(

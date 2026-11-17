@@ -126,12 +126,14 @@ export function sourceClipVersions(
 
 /** Stat each referenced path once per read, shared by every clip using that file. */
 export async function compositionVersions(
-  project: Project,
+  project: Pick<Project, "path">,
   composition: string,
+  readChanged?: (path: string) => Promise<string | null | undefined>,
 ) {
-  const source = await readSource(project, composition);
+  const changed = await readChanged?.(composition);
+  const content = changed ?? (await readSource(project, composition)).content;
   const parsed = sourceVersions(
-    source.content,
+    content,
     composition,
     `${project.path}/${composition}`,
   );
@@ -161,7 +163,12 @@ export async function compositionVersions(
             ...(/\.(?:css|[cm]?[jt]sx?)$/i.test(path) &&
             info.isFile() &&
             info.size <= 10 * 1024 * 1024
-              ? { content: await readFile(absolute, "utf8") }
+              ? {
+                  content:
+                    (await readChanged?.(owned).then((changed) =>
+                      changed === null ? "" : changed,
+                    )) ?? (await readFile(absolute, "utf8")),
+                }
               : {}),
           };
         } catch (error) {
