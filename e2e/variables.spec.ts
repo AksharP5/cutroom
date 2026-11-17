@@ -71,7 +71,7 @@ test("an image variable changes the actual viewer and MP4 picture", async ({
   ]) {
     await writeFile(
       join(project.path, "assets", name!),
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240"><path fill="${color}" d="M0 0h320v240H0z"/></svg>`,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240"><path fill="${color}" d="M0 0h320v240H0z"/></svg>`,
     );
   }
   const source = `<!doctype html><html data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"assets/first.svg","alt":"Artwork"}}]'><body style="margin:0"><main data-composition-id="main" data-width="320" data-height="240" data-duration="1"><img id="artwork" class="clip" src="assets/first.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;inset:0;width:320px;height:240px"></main></body></html>`;
@@ -83,10 +83,10 @@ test("an image variable changes the actual viewer and MP4 picture", async ({
   const picture = page.locator(".edit-picture");
   const before = info.outputPath("authored-image.png");
   await picture.screenshot({ path: before });
-  const field = page.getByRole("textbox", { name: "Artwork", exact: true });
-  await expect(field).toHaveValue("assets/first.svg");
-  await field.fill("assets/second%232.svg");
-  await field.press("Enter");
+  const field = page.getByRole("combobox", { name: "Artwork", exact: true });
+  await expect(field).toHaveText("assets/first.svg");
+  await field.click();
+  await page.getByRole("option", { name: "assets/second#2.svg" }).click();
   await expect(image).toHaveAttribute("src", "assets/second%232.svg");
   await expect(image).toHaveJSProperty("naturalWidth", 320);
   const after = info.outputPath("preview-image.png");
@@ -102,8 +102,8 @@ test("an image variable changes the actual viewer and MP4 picture", async ({
 
   await page.getByRole("button", { name: "Export", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Export", exact: true });
-  await expect(dialog.getByRole("textbox", { name: "Artwork" })).toHaveValue(
-    "assets/second%232.svg",
+  await expect(dialog.getByRole("combobox", { name: "Artwork" })).toHaveText(
+    "assets/second#2.svg",
   );
   const answered = page.waitForResponse(
     (response) =>

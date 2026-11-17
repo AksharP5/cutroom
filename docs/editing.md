@@ -60,7 +60,7 @@ Select a text clip and open the **Words** or **Colour** picker in its Text secti
 
 Binding an existing variable requires an unlocked clip with a unique authored element ID and one plain line of text. Existing word bindings are shown read-only. Use Source for titles and multiline or nested text. External template compositions use their own declarations.
 
-For an authored image variable, enter a project image path relative to the composition. Import the image in Media first if it is outside the project. Use Source to declare the variable and bind it with `data-var-src`.
+For an authored image variable, choose an image from the project. Import it in Media first if it is outside the project. Use Source to declare the variable and bind it with `data-var-src`.
 
 The Export dialog lists the variables too, starting from the viewer's values, so an export matches what you previewed.
 

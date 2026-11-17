@@ -7,6 +7,7 @@ import type {
   VariableValue,
 } from "../../../shared/variables";
 import { SelectMenu } from "../../components/SelectMenu";
+import { ImageVariableMenu } from "../ImageVariableMenu";
 import {
   declareVariable,
   bindVariable,
@@ -110,8 +111,15 @@ function VariableControl({
   onChange(value: VariableValue): void;
 }) {
   switch (variable.type) {
-    case "string":
     case "image":
+      return (
+        <ImageVariableMenu
+          label={variable.label}
+          value={String(value)}
+          onChange={onChange}
+        />
+      );
+    case "string":
       return (
         <DraftField
           label={variable.label}
