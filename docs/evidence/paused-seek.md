@@ -43,3 +43,10 @@ exercise valid held pictures. At 1.5 seconds they display source frames 30 and
 29 respectively, even though each decoded frame reports a nominal duration of
 about 33 ms. Both timed out with the interval check; both now become ready with
 the correct burned-in picture, including repeated seeks within the held frame.
+
+The same fixtures have three-second authored clips, longer than their source
+media. Seeks to 2.2 and 2.4 seconds keep the final source frame and become
+ready, then a backward seek recovers the earlier held picture. The native
+endpoint is unchanged between those late seeks, so no new presentation is
+required. Existing snapshot-loss and overlapping-preview-swap workflows also
+cover initial source pictures arriving before the seek target.

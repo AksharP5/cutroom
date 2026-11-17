@@ -1815,6 +1815,13 @@ function installPreviewBridge(
           return null;
         }
       }
+      for (const video of videos) {
+        const decoded = decodedSeeks.get(video);
+        if (decoded?.callback !== undefined) {
+          cancelVideoFrame.call(video, decoded.callback);
+          delete decoded.callback;
+        }
+      }
       return frames;
     } catch (error) {
       for (const frame of frames.values()) frame.close();
@@ -2295,6 +2302,9 @@ function installPreviewBridge(
       delete decoded.callback;
       // Presentation can precede seeked. The capture loop waits for seek completion itself.
       decoded.timestamp = frame.mediaTime * 1e6;
+      // A newly loaded video can present its initial picture before the seek's picture.
+      // Keep observing until capture confirms the matching decoded frame.
+      decoded.callback = requestVideoFrame.call(video, presented);
     };
     // Register before setting currentTime so even a cached frame's presentation is observed.
     decoded.callback = requestVideoFrame.call(video, presented);
@@ -2322,7 +2332,10 @@ function installPreviewBridge(
     },
     set(this: HTMLMediaElement, time: number) {
       if (this instanceof HTMLVideoElement) void loadGrid(this);
-      const at = this.paused ? framePosition(this, time) : time;
+      const target = this.paused ? framePosition(this, time) : time;
+      const at = Number.isFinite(this.duration)
+        ? Math.min(target, this.duration)
+        : target;
       if (at === time) asked.delete(this);
       else asked.set(this, { time, at });
       if (

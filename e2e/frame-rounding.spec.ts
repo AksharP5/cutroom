@@ -130,7 +130,7 @@ for (const held of ["VFR gap", "audio tail"] as const)
     ]);
     await writeFile(
       join(project.path, "index.html"),
-      `<!doctype html><html><body style="margin:0"><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="2" data-fps="30"><video src="${file}" muted data-start="0" data-duration="2" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`,
+      `<!doctype html><html><body style="margin:0"><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="3" data-fps="30"><video src="${file}" muted data-start="0" data-duration="3" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video></main></body></html>`,
     );
     await page.addInitScript(() => {
       if (window === window.top)
@@ -140,7 +140,14 @@ for (const held of ["VFR gap", "audio tail"] as const)
     const stage = page.locator(".edit-stage");
     await expect(stage).toHaveAttribute("data-preview-ready");
     // The same source picture remains correct at all three distinct seek destinations.
-    for (const time of ["00000115", "00000118", "00000115"]) {
+    for (const time of [
+      "00000115",
+      "00000118",
+      "00000115",
+      "00000206",
+      "00000212",
+      "00000115",
+    ]) {
       await page
         .getByRole("button", { name: "Current time. Click to type a time." })
         .click();
@@ -148,7 +155,9 @@ for (const held of ["VFR gap", "audio tail"] as const)
       await input.pressSequentially(time);
       await input.press("Enter");
       await expect(stage).toHaveAttribute("data-preview-ready");
-      expect(await shownFrame(page)).toBe(vfr ? 30 : 29);
+      expect(await shownFrame(page)).toBe(
+        vfr ? (time.startsWith("000002") ? 60 : 30) : 29,
+      );
     }
     await expect(page.locator(".status-error")).toHaveCount(0);
     await info.attach("held-picture", {
