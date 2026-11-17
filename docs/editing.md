@@ -258,3 +258,9 @@ A batch writes only the attributes it changes, removed elements, and new clips; 
 Editor writes, script changes, annotations, and MCP commands share a history. A save based on an older source version returns a conflict instead of overwriting a newer edit. External agents can also edit files directly; the watcher refreshes the preview and the history observes those changes. Accepted outside changes update a clean source buffer even while it has focus. Pending typing keeps the normal save and conflict handling.
 
 Undo can conflict with a newer outside edit. Resolve that conflict before applying another change. Original video and audio files remain intact.
+
+### Authored motion
+
+Select a visual clip to inspect its existing inline GSAP animation in **Motion**. Numeric From and To properties edit the authored values. Start and Duration are seconds; Ease changes an existing literal ease. Tab and Shift+Tab save a field and move between controls. Each committed field is one Undo step, and the viewer reloads at the current frame. Motion shares source, history, and permissions with agents' [motion tools](mcp.md#authored-gsap-motion).
+
+A shared selector lists every affected element. Source-only fields and unsupported constructions show their reason; **Source** opens the composition's code. Save or discard an edited code buffer before changing motion. A source conflict refreshes the inspector instead of overwriting another edit. External HTML scenes are supported in their own scope, with nested templates kept separate. External JavaScript and standalone `gsap.to/from/fromTo` calls remain source-only. Motion does not add or remove tweens, convert computed motion, or expose paths and curves.

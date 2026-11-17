@@ -12,6 +12,7 @@ export function SelectMenu<const Value extends string>({
   options,
   onChange,
   disabled = false,
+  readOnly = false,
   className = "",
   title,
 }: {
@@ -21,6 +22,8 @@ export function SelectMenu<const Value extends string>({
   options: readonly { value: Value; label: string }[];
   onChange(value: Value): void;
   disabled?: boolean;
+  /** Keep the trigger in keyboard navigation while a saved value is pending. */
+  readOnly?: boolean;
   className?: string;
   title?: string;
 }) {
@@ -34,7 +37,7 @@ export function SelectMenu<const Value extends string>({
   const returnFocus = useRef(false);
   const restore = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (disabled) {
+    if (disabled || readOnly) {
       menu.current?.hidePopover();
       return;
     }
@@ -42,7 +45,7 @@ export function SelectMenu<const Value extends string>({
     if (returnFocus.current && document.activeElement === document.body)
       restoreMenuFocus(restore.current);
     returnFocus.current = false;
-  }, [disabled, open]);
+  }, [disabled, open, readOnly]);
   const focus = (index: number) => {
     const items =
       menu.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
@@ -55,6 +58,7 @@ export function SelectMenu<const Value extends string>({
     restoreMenuFocus(restore.current);
   };
   const show = () => {
+    if (readOnly) return;
     menu.current?.showPopover();
     focus(
       Math.max(
@@ -74,6 +78,7 @@ export function SelectMenu<const Value extends string>({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-readonly={readOnly || undefined}
         aria-controls={menuId}
         className={`select-trigger ${className}`}
         style={{ anchorName: anchor }}
@@ -86,6 +91,7 @@ export function SelectMenu<const Value extends string>({
         }}
         onClick={(event) => {
           event.preventDefault();
+          if (readOnly) return;
           if (menu.current?.matches(":popover-open")) close();
           else {
             if (!event.detail) restore.current = trigger.current;
@@ -153,7 +159,7 @@ export function SelectMenu<const Value extends string>({
             aria-selected={value === option.value}
             tabIndex={-1}
             onClick={() => {
-              if (option.value !== value) onChange(option.value);
+              if (!readOnly && option.value !== value) onChange(option.value);
               close();
             }}
           >

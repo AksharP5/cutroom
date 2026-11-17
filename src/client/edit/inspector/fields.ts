@@ -17,7 +17,8 @@ import {
   parseTimecode,
 } from "../../../shared/timeline/timecode";
 
-export type FieldUnit = "timecode" | "percent" | "gain" | "pixels" | "degrees";
+export type FieldUnit =
+  "timecode" | "percent" | "gain" | "pixels" | "degrees" | "number" | "seconds";
 
 /** The gain floor shared with the timeline line: at or below it a clip is silent. */
 const SILENCE_DB = -60;
@@ -40,6 +41,19 @@ export function parseGain(text: string) {
 
 export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
   const input = text.trim();
+  if (unit === "number" || unit === "seconds") {
+    const literal = unit === "seconds" ? input.replace(/\s*s$/, "") : input;
+    if (
+      !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i.test(literal) ||
+      !Number.isFinite(Number(literal))
+    )
+      throw new Error(
+        unit === "seconds"
+          ? "Enter seconds, such as 0.5 s."
+          : "Enter a number, such as 0.5.",
+      );
+    return Number(literal);
+  }
   if (unit === "pixels") {
     if (
       !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:px)?$/.test(input) ||
@@ -75,15 +89,19 @@ export function parseField(text: string, unit: FieldUnit, fps: Fps): number {
 export const formatField = (value: number | null, unit: FieldUnit, fps: Fps) =>
   value === null
     ? "Auto"
-    : unit === "pixels"
-      ? `${value} px`
-      : unit === "degrees"
-        ? `${value}°`
-        : unit === "gain"
-          ? audioGainToText(value)
-          : unit === "timecode"
-            ? formatTimecode(value, fps)
-            : formatPercent(value);
+    : unit === "number"
+      ? String(value)
+      : unit === "seconds"
+        ? `${value} s`
+        : unit === "pixels"
+          ? `${value} px`
+          : unit === "degrees"
+            ? `${value}°`
+            : unit === "gain"
+              ? audioGainToText(value)
+              : unit === "timecode"
+                ? formatTimecode(value, fps)
+                : formatPercent(value);
 
 /** Clip × track gain as shown, uncapped by HyperFrames' +12 dB clip formatter. Products
  * that read the same are the same; null when there is nothing to combine.
@@ -146,7 +164,7 @@ export function stepField(value: number, delta: number, unit: FieldUnit) {
     );
     return db <= SILENCE_DB ? 0 : audioDbToGain(Math.round(db * 10) / 10);
   }
-  if (unit === "pixels" || unit === "degrees")
+  if (unit === "pixels" || unit === "degrees" || unit === "number")
     return Number((value + delta).toFixed(6));
   return unit === "timecode" ? Math.round(value + delta) : value + delta * 0.01;
 }

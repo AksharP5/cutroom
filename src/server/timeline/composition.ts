@@ -373,7 +373,7 @@ export const compositionScope = (path: string): CompositionScope =>
   path === "index.html" ? "document" : "sub-composition";
 
 /** The elements a composition renders in its scope; projection, readback, and media all use it. */
-function scopeElements(
+export function scopeElements(
   roots: SourceElement[],
   scope: CompositionScope,
 ): SourceElement[] {

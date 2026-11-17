@@ -186,6 +186,16 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the default of ${target}` : "a default"),
   },
+  motion_read: {
+    verb: read,
+    kind: "project",
+    object: () => "authored motion",
+  },
+  motion_update: {
+    verb: ["Edited", "Editing", "Edit"],
+    kind: "edit",
+    object: (target) => (target ? `${target} motion` : "authored motion"),
+  },
   variables_declare: {
     verb: ["Declared", "Declaring", "Declare"],
     kind: "edit",
