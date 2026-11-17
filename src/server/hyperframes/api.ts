@@ -38,6 +38,10 @@ import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
 import { previewRuntimeScript } from "./previewRuntime";
+import {
+  rebaseCompiledImageVariables,
+  rebaseImageOverrides,
+} from "./imageVariables";
 import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
 import {
   DELETED_VERSION,
@@ -211,6 +215,30 @@ export function createHyperframesApi(
   };
   api.use("/projects/:id/preview", unstampStaleCompile);
   api.use("/projects/:id/preview/comp/*", unstampStaleCompile);
+  api.use("/projects/:id/preview/comp/*", async (c, next) => {
+    const raw = c.req.query("variables");
+    if (!raw) return next();
+    let values: unknown;
+    try {
+      values = JSON.parse(raw);
+    } catch {
+      return next(); // Studio reports malformed JSON.
+    }
+    const overrides = z.record(z.string(), z.unknown()).safeParse(values);
+    if (!overrides.success) return next();
+    const project = await store.get(c.req.param("id"));
+    const composition = requestSubPath(c.req.url, "projects/:id/preview/comp");
+    const rebased = rebaseImageOverrides(
+      project.path,
+      composition,
+      overrides.data,
+    );
+    if (rebased === overrides.data) return next();
+    const url = new URL(c.req.url);
+    url.searchParams.set("variables", JSON.stringify(rebased));
+    c.req.raw = new Request(url, c.req.raw);
+    return next();
+  });
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<
     string,
@@ -781,7 +809,16 @@ export function createHyperframesApi(
         lengths,
       );
       return injectDeterministicFontFaces(
-        withPreviewClipIdentities(html, source.content, scope, lengths),
+        withPreviewClipIdentities(
+          rebaseCompiledImageVariables(
+            html,
+            project.dir,
+            activeCompositionPath,
+          ),
+          source.content,
+          scope,
+          lengths,
+        ),
       );
     },
     async getProjectSignature(dir) {
