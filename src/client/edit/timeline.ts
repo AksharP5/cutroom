@@ -196,7 +196,7 @@ function enqueue<T>(step: () => Promise<T>) {
   return run;
 }
 
-/** Starts an export in queue order, only after the edits shown before it have landed. */
+/** Runs a source operation or export only after the edits shown before it have landed. */
 export function afterTimelineEdits<T>(
   projectId: string,
   start: () => Promise<T>,
@@ -204,9 +204,24 @@ export function afterTimelineEdits<T>(
   const edits = pending.filter((edit) => edit.projectId === projectId);
   return enqueue(async () => {
     if (useTimeline.getState().projectId !== projectId)
-      throw new Error("The open project changed. Export it again.");
+      throw new Error("The open project changed. Try again.");
     for (const edit of edits) if (edit.failure) throw new Error(edit.failure);
     return start();
+  });
+}
+
+/** A source inspector edit shares queue order and history refresh with timeline edits and Undo. */
+export function editCompositionSource<T>(
+  projectId: string,
+  composition: string,
+  edit: () => Promise<T>,
+) {
+  return afterTimelineEdits(projectId, async () => {
+    if (!isOpen(projectId, composition))
+      throw new Error("The open composition changed. Inspect motion again.");
+    const result = await edit();
+    await read(projectId, undefined, false, composition);
+    return result;
   });
 }
 

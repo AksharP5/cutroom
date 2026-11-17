@@ -16,6 +16,7 @@ import { createTimelineRoutes } from "./timeline/routes";
 import { createCaptionRoutes } from "./captions/routes";
 import { createWorkspaceRoutes } from "./workspace";
 import { createVariableRoutes } from "./projects/variables";
+import { createMotionRoutes } from "./projects/motion";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
 import { createFontRoutes } from "./fonts/routes";
@@ -125,6 +126,7 @@ export async function createApp(
   );
   app.route("/api/cutroom", timeline);
   app.route("/api/cutroom", variables);
+  app.route("/api/cutroom", createMotionRoutes(projects, review));
   app.route(
     "/api/cutroom",
     createCaptionRoutes(projects, review, transcripts, timeline.editInWindow),

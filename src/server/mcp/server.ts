@@ -28,6 +28,7 @@ import { registerTimelineTools } from "./timelineTools";
 import { registerExportTools } from "./exportTools";
 import { registerCaptionTools } from "./captionTools";
 import { registerVariableTools } from "./variableTools";
+import { registerMotionTools } from "./motionTools";
 import { registerFontTools } from "./fontTools";
 import { compactLint } from "../../shared/lint";
 
@@ -409,6 +410,7 @@ export function createMcpServer(options: McpOptions = {}) {
   );
   registerCaptionTools(registry, request);
   registerVariableTools(registry, request);
+  registerMotionTools(registry, request);
   registerFontTools(registry, request);
   registry.registerTool(
     "history_list",

@@ -71,6 +71,25 @@
   min-height: 0;
   overflow: auto;
 }
+
+.inspector-motion-tween h4 {
+  margin: var(--space-2) var(--space-3);
+  font-size: var(--type-xs);
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+.inspector-motion .inspector-field-hint {
+  margin-inline: var(--space-3);
+  overflow-wrap: anywhere;
+}
+.inspector-motion .inspector-value .select-trigger {
+  width: 100%;
+}
+.clip-inspector .inspector-motion .inspector-motion-source {
+  width: auto;
+  padding-inline: var(--space-1);
+  opacity: 1;
+}
 .inspector-clip {
   display: grid;
   grid-template-columns: var(--space-3) minmax(0, 1fr);

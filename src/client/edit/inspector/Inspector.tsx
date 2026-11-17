@@ -41,6 +41,7 @@ import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
 import { BindVariable } from "./VariablesSection";
 import { TransformFields } from "./TransformFields";
+import { MotionSection } from "./MotionSection";
 import { valueAt } from "../../../shared/timeline/keyframes";
 import {
   KeyframeButton,
@@ -576,6 +577,17 @@ export function Inspector({
             times={false}
             hold={holdChanges}
           />
+          {!isAudioKind(clip.kind) && (
+            <MotionSection
+              key={`${projectId}:${view!.composition}:${clip.id}`}
+              projectId={projectId}
+              composition={view!.composition}
+              clipId={clip.id}
+              revision={view!.revision}
+              fps={timeline.fps}
+              disabled={track?.track.locked ?? false}
+            />
+          )}
           {clip.text !== null && (
             <details
               open={textOpen}

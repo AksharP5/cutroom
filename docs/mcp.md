@@ -11,6 +11,7 @@ The stdio bridge connects to a running local Cutroom server. It accepts only loo
 | `media_list`                                                    | Inspect local media elements and their timing.                              |
 | `media_rename`, `media_remove`                                  | Rename a media file with its references, or move it to the trash.           |
 | `source_read`, `source_write`                                   | Read source and save with its exact expected version.                       |
+| `motion_read`, `motion_update`                                  | Inspect existing inline GSAP motion and edit one authored literal.          |
 | `annotation_add`, `annotation_update`, `annotation_remove`      | Add a new timed note, edit its content, or remove an unsent note.           |
 | `review_list`, `review_add`                                     | Read the review queue or add a queued request.                              |
 | `review_claim`, `review_complete`, `review_block`               | Start, finish, or ask a question about a queued note.                       |
@@ -558,3 +559,17 @@ To stop an active job and await cleanup:
 ```
 
 Media rename integration: after the filesystem rename succeeds, call `moveSourceMarks(project, from, to)` from `src/server/projects/view.ts`, with project-relative paths. It moves the path's entry through the shared view-state write queue, including already queued saves, and removes the old key. If the source has no entry, it clears the destination entry so an unmarked replacement cannot inherit stale marks. It does not rename media or add an undo step. The media-rename operation owns the filesystem change and its history.
+
+## Authored GSAP motion
+
+`motion_read` takes `projectId`, `clipId`, and an HTML `composition` path, defaulting to `index.html`. One source read supplies both `version` and `animations[].id`. Retain both for `motion_update`; IDs include source positions and must never be reused with a different version. After any conflict, read again. External HTML subcompositions use the same template scope as the timeline.
+
+`motion_update` takes those same fields, `expectedVersion`, `animationId`, and one `change`:
+
+```json
+{ "kind": "property", "side": "to", "name": "x", "value": 320 }
+```
+
+Use `side: "from"` for a `from` tween's properties or a `fromTo` tween's starting properties. Timing changes are `{"kind":"position","value":0.5}` and `{"kind":"duration","value":2}` in seconds. Easing is `{"kind":"ease","value":"power2.out"}`. Only fields already authored as literals are writable. The response is a fresh snapshot. Every other source byte stays unchanged, and each update is one shared Undo step with normal actor attribution and project permission checks.
+
+`targets` lists every element affected by the selector, so a shared selector edits all of them. Locked target tracks refuse the edit. `reason`, `notices`, and `sourceOnly` explain limits. This slice accepts direct `to`, `from`, `fromTo`, and `set` calls on one top-level named timeline, plus literal standalone `gsap.set`. Computed fields, helper/loop construction, indirect vars, aliases, ambiguous timelines, keyframes, motion paths, standalone `gsap.to/from/fromTo`, and external JavaScript stay in source. There is no add, delete, unroll, or conversion operation. Inherited or implicit timing and easing are not materialized.

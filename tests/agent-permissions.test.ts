@@ -30,6 +30,7 @@ const reads = [
   "captions_list",
   "captions_export",
   "variables_list",
+  "motion_read",
   "fonts_list",
   "history_list",
   "review_list",
@@ -64,6 +65,7 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
   for (const name of [
     "timeline_edit",
     "source_write",
+    "motion_update",
     "transcript_edit",
     "history_undo",
     "review_add",

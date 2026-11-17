@@ -203,6 +203,8 @@ export async function toolSubject(
       return editedClips(args, names);
     case "variables_set_default":
       return text("id");
+    case "motion_update":
+      return text("clipId");
     case "variables_declare":
       return z.object({ id: z.string().trim().min(1) }).safeParse(args.variable)
         .data?.id;

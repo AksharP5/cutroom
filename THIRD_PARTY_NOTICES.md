@@ -10,6 +10,8 @@ The public `@hyperframes/*` packages and `hyperframes` CLI are pinned to version
 
 Cutroom does not include code or assets extracted from the proprietary HyperFrames desktop application. HyperFrames and HeyGen names describe dependency provenance, not affiliation or endorsement.
 
+The authored Motion inspector uses the public `parseGsapScript`, `parseGsapScriptAcornForWrite` and `updateAnimationInScript` APIs from `@hyperframes/parsers` 0.9.26 on the server. Cutroom supplies its own inspector and literal-edit boundary; no Studio interface was copied. Only the requested literal from the writer's output is applied, preserving the surrounding source.
+
 Cutroom also applies version-checked loading transforms to HyperFrames producer 0.9.26 in `src/server/hyperframes/renderIsolation.ts`. Browser discovery excludes media under `data-hidden`, preserving static parsing's visibility and audio exclusions. Entry and sub-composition compilation accept effective source supplied by Cutroom's render worker, so persisted track mixing also covers outside HTML edits without rewriting project files. Dependency files remain unchanged.
 
 The same transforms let `renderSpan` render MOV and WebM ranges with the producer's own chunk encoders. `src/server/hyperframes/gif.ts` follows the producer's GIF encode stage (`palettegen`/`paletteuse` settings and its frame-clearing pass through `@hyperframes/core`), building the palette from every pixel instead of changed pixels.
