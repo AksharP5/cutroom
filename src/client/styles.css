@@ -719,6 +719,8 @@ option {
 .media-thumb :is(img, video) {
   width: 100%;
   height: 100%;
+}
+.media-thumb > video {
   object-fit: cover;
 }
 .media-thumb:has(> img) {
