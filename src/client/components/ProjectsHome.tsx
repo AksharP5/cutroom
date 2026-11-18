@@ -11,6 +11,7 @@ import {
   posterUrl,
 } from "../home";
 import { openContextMenu, revealRows } from "./ContextMenu";
+import { Logo } from "./Logo";
 import "./home.css";
 
 /** A capture still rendering must not hold a connection the editor needs once its tile is gone. */
@@ -72,6 +73,7 @@ function ProjectTile({
     return () => closing.abort();
   }, [seen, project.id, project.updatedAt]);
 
+  const empty = summary?.duration === 0;
   return (
     <button
       ref={tile}
@@ -80,7 +82,9 @@ function ProjectTile({
       aria-labelledby={name}
       aria-describedby={meta}
       tabIndex={tabbable ? 0 : -1}
-      data-poster={unreadable ? "missing" : seen ? poster : undefined}
+      data-poster={
+        unreadable ? "missing" : empty ? "empty" : seen ? poster : undefined
+      }
       onFocus={onFocus}
       onClick={onOpen}
       onContextMenu={(event) =>
@@ -105,15 +109,19 @@ function ProjectTile({
               : undefined
           }
         >
-          {summary && (
-            <img
-              ref={cancelWhenRemoved}
-              src={posterUrl(project, summary)}
-              alt=""
-              draggable={false}
-              onLoad={() => setPoster("ready")}
-              onError={() => setPoster("missing")}
-            />
+          {empty ? (
+            <Logo markOnly />
+          ) : (
+            summary && (
+              <img
+                ref={cancelWhenRemoved}
+                src={posterUrl(project, summary)}
+                alt=""
+                draggable={false}
+                onLoad={() => setPoster("ready")}
+                onError={() => setPoster("missing")}
+              />
+            )
           )}
         </span>
         <span className="home-selection" />

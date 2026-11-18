@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
 const create = async (request: APIRequestContext, data: object) =>
   ProjectSchema.parse(
@@ -167,4 +168,30 @@ test("home dates direct composition and document edits", async ({
   await utimes(document, new Date(), new Date());
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(date).toHaveText("Just now");
+});
+
+test("an empty project has a poster mark", async ({ page, request }) => {
+  const project = await create(request, { name: "Empty rushes" });
+  const path = `/api/cutroom/projects/${project.id}`;
+  const { revision, timeline } = TimelineViewSchema.parse(
+    await (await request.get(`${path}/timeline`)).json(),
+  );
+  const cleared = await request.post(`${path}/commands`, {
+    data: {
+      expectedRevision: revision,
+      commands: [
+        {
+          type: "remove",
+          clipIds: timeline.clips.map((clip) => clip.id),
+          ripple: false,
+        },
+      ],
+    },
+  });
+  expect(cleared.ok()).toBe(true);
+  await page.goto("/");
+  const poster = tile(page, project.name);
+  await expect(
+    poster.locator('.home-frame svg[aria-hidden="true"]'),
+  ).toBeVisible();
 });
