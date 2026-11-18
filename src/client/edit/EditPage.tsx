@@ -32,6 +32,7 @@ import {
   showToast,
   useWorkspace,
 } from "../workspace";
+import { useGradeBypass } from "./preview";
 import "./edit.css";
 import {
   Inspector,
@@ -529,6 +530,11 @@ export function EditPage({
     cutroomToggleCode: () => useWorkspace.setState({ code: !codeOpen }),
     viewSafeAreaToggle: () => useWorkspace.setState({ safeZones: !safeZones }),
     cutroomToggleGrid: () => useWorkspace.setState({ grid: !grid }),
+    viewBypassColorGrades: () => {
+      const bypass = !useGradeBypass.getState().bypass;
+      useGradeBypass.setState({ bypass });
+      notice(bypass ? "Grades bypassed" : "Grades on");
+    },
   };
   useKeymap(handlers);
 

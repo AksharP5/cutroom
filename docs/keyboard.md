@@ -111,6 +111,7 @@ Projects → New project focuses Project name, so typing and Enter create the pr
 | Snapping                                     | `Alt+C`                                                                                                        | `editSnapping`                                         |
 | Safe zones                                   | `Alt+Shift+S`                                                                                                  | `viewSafeAreaToggle`                                   |
 | Grid                                         | `Shift+G`                                                                                                      | `cutroomToggleGrid`                                    |
+| Bypass grades                                | `Shift+D`                                                                                                      | `viewBypassColorGrades`                                |
 | Save frame as PNG                            | `Ctrl+Alt+G`                                                                                                   | `viewStillsStillGrab`                                  |
 | Keyboard shortcuts                           | `Ctrl+Alt+K`                                                                                                   | `resolveCustomizedActions`                             |
 
@@ -121,6 +122,8 @@ These preset keys say Cutroom has no such editing yet: edit point selection (`V`
 Ctrl+Alt+K opens a sheet of every shortcut by area, generated from this table. Type to search names and keys; Esc closes it. Settings has a button for it too. The key is the one the owner's Resolve preset gives Keyboard Customization, `resolveCustomizedActions`, which is also Resolve's default. The sheet lists the keys and does not change them.
 
 Alt+Shift+S shows or hides the viewer's safe zones and Shift+G its thirds grid. Resolve's Safe Area toggle, `viewSafeAreaToggle`, has no key in the owner's preset and Resolve has no grid action, so both keys are Cutroom's choice: neither is bound in that preset or in Cutroom.
+
+Shift+D shows every graded clip in the viewer as its source until it is pressed again, as Resolve's Bypass Color Grades does with the same key; the Colour section says Bypassed meanwhile. It changes only the viewer: `timeline_view` and exports keep the grade.
 
 Ctrl+Alt+Shift+V is unused in the owner's Resolve preset and avoids the older KDE Klipper shortcut Ctrl+Alt+V. Its only recording-related action, `viewTimelineModeRecord`, has no assigned key. Shift+R remains reserved for Resolve's Freeze Frame.
 
