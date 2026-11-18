@@ -1616,8 +1616,8 @@ option {
 .chat-review-notes {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: var(--space-2) 3px 0;
+  gap: 6px;
+  padding: var(--space-2) 6px 0 10px;
   color: var(--text-secondary);
   font-size: var(--type-sm);
   white-space: nowrap;
@@ -1626,11 +1626,12 @@ option {
   flex: none;
   width: var(--size-chat-mark);
   height: var(--size-chat-mark);
+  border-radius: 1px;
   background: var(--human);
 }
 .chat-review-frames {
   display: flex;
-  gap: 3px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .chat-review-thumb {
