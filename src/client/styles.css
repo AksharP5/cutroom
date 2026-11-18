@@ -2184,6 +2184,11 @@ option {
 .script-panel {
   padding-top: 12px;
 }
+.script-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: var(--leading-body);
+}
 .script-controls {
   display: flex;
   flex-direction: column;

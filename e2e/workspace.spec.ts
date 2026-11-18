@@ -172,9 +172,6 @@ test("visual review, native skill selection, and script edits survive real works
   await expect(frame.locator("#footage")).toBeAttached();
   await expect(frame.locator("#second")).toBeAttached();
   await page.getByRole("button", { name: "Script", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Refresh media clips", exact: true })
-    .click();
   await page.getByLabel("Footage", { exact: true }).click();
   await expect(
     page
@@ -306,4 +303,52 @@ test("media panel follows project media and imports files into assets", async ({
   ).toHaveCount(0);
   await rm(moved, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
+});
+
+test("Script explains what to do only until there is footage on the timeline", async ({
+  page,
+  request,
+}) => {
+  const created = await request.post("/api/cutroom/projects", {
+    data: { name: "Script guidance" },
+  });
+  const project = ProjectSchema.parse(await created.json());
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Script", exact: true }).click();
+  const script = page.getByRole("region", { name: "Script editor" });
+  const guidance = script.getByText(
+    "Add a clip to the timeline to transcribe it.",
+    { exact: true },
+  );
+  await expect(guidance).toBeVisible();
+
+  await promisify(execFile)("ffmpeg", [
+    "-loglevel",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=300:sample_rate=16000",
+    "-t",
+    "1",
+    "-y",
+    join(project.path, "assets", "room.wav"),
+  ]);
+  const path = `/api/cutroom/projects/${project.id}/source`;
+  const source = SourceSchema.parse(await (await request.get(path)).json());
+  const saved = await request.put(path, {
+    data: {
+      path: "index.html",
+      content: source.content.replace(
+        "</main>",
+        '<audio id="room" class="clip" src="assets/room.wav" data-start="0" data-duration="1" data-track-index="3"></audio></main>',
+      ),
+      expectedVersion: source.version,
+    },
+  });
+  expect(saved.ok()).toBe(true);
+  await expect(
+    script.getByRole("button", { name: "Transcribe locally" }),
+  ).toBeEnabled();
+  await expect(guidance).toHaveCount(0);
 });
