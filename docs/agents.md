@@ -69,7 +69,7 @@ Hover a Review row to move it up or down in the queue, or withdraw it. The order
 
 ## Shared chats
 
-Select the chat title, then **Link a T3 Code thread** to pick up a chat you already started there. Use **Open in T3 Code** in the chat header to open its thread link. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
+Select the chat title, then **Link a T3 Code thread** to pick up a chat you already started there. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
 
 Use **Find a thread** to search all thread titles or **Show 20 more** to keep browsing, with threads already linked to this project listed first.
 
@@ -77,8 +77,8 @@ Cutroom mirrors the thread's recent messages and status while the chat is open. 
 
 All paths below are under `/api/cutroom`.
 
-- `GET /projects/:id/t3-threads` returns `{ available, threads, reason? }`. Each thread has `threadId`, `title`, `link`, `status`, `providerInstanceId`, `model`, `createdAt`, and `updatedAt`. A folder missing from T3 Code returns an empty list. When the CLI or app is unavailable, `available` is false and `reason` explains why.
-- `POST /projects/:id/t3-threads/link` takes `{ threadId }` and returns the linked session with HTTP 201, including on repeat requests. Session summaries and snapshots include `t3Thread: { threadId, link }` for linked chats. The existing `provider` field identifies the underlying provider.
+- `GET /projects/:id/t3-threads` returns `{ available, threads, reason? }`. Each thread has `threadId`, `title`, `status`, `providerInstanceId`, `model`, `createdAt`, and `updatedAt`. A folder missing from T3 Code returns an empty list. When the CLI or app is unavailable, `available` is false and `reason` explains why.
+- `POST /projects/:id/t3-threads/link` takes `{ threadId }` and returns the linked session with HTTP 201, including on repeat requests. Session summaries and snapshots include `t3Thread: { threadId }` for linked chats. The existing `provider` field identifies the underlying provider.
 - Use the existing session `/events` stream for snapshots, messages and status. Send through `/turns` or `/follow-ups`. Both return the session plus `queued: boolean` for T3 Code's delivery. Use `/turns` and the same `text`, `context`, and `attachments` fields for Send notes. T3 Code manages the queue and skills, so Cutroom's queue and model controls do not apply. `/interrupt` returns 409 with “Stop this run in T3 Code.” A chat awaiting approval or an answer reports `waiting` and shows “Answer in T3 Code.”
 
 Select **Continue a session** from the chat list, then choose a Codex or Claude Code terminal chat for this project. To branch instead, hover or focus the session and choose **Branch**, or press B on its row. Cutroom shows the latest 200 messages and tool rows, and reports how many older rows it left out. The provider keeps the full context. **Branch** starts a separate chat with a copy of that context and leaves the original chat alone. Turns you run in Cutroom use its usual approval rules.

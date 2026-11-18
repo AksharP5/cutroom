@@ -1000,9 +1000,6 @@ option {
   flex: none;
   margin-left: auto;
 }
-.chat-toolbar > .chat-thread-link + .icon-button {
-  margin-left: 0;
-}
 .chat-toolbar > .icon-button svg {
   width: var(--icon-md);
   height: var(--icon-md);
