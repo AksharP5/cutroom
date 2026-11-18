@@ -60,6 +60,7 @@ export interface LaneGestureOptions {
   newRows: RowLayout["newRows"];
   /** The timeline's clips by track, as the canvas draws them outside a drag. */
   tracks: ReadonlyMap<number, TrackClips>;
+  imageSources: ReadonlyMap<string, string>;
   selection: Selection;
   tool: Tool;
   snapping: boolean;
@@ -417,6 +418,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
       rows: shownRows,
       tracks: shown === timeline ? tracks : clipsByTrack(shown.clips),
       fps: shown.fps,
+      imageSources: latest.current.imageSources,
     });
   }
 

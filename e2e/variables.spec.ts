@@ -215,7 +215,25 @@ test("turn a timeline image into a variable and bind the same source to another 
     .locator('[data-hf-id="second"]');
   const field = page.getByRole("combobox", { name: "Image variable" });
   const picture = page.locator(".edit-picture");
+  const lane = page.locator('.tl-lanes [data-clip="second"]');
+  const filmstrip = (channel: number) =>
+    lane.evaluate((clip, channel) => {
+      const canvas = clip.closest(".tl-lanes")?.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) return 0;
+      const bounds = canvas.getBoundingClientRect();
+      const row = clip.getBoundingClientRect();
+      const x = Math.floor(
+        ((row.left + 8 - bounds.left) * canvas.width) / bounds.width,
+      );
+      const y = Math.floor(
+        ((row.bottom - 8 - bounds.top) * canvas.height) / bounds.height,
+      );
+      return canvas.getContext("2d")!.getImageData(x, y, 1, 1).data[channel];
+    }, channel);
   await expect(second).toHaveJSProperty("naturalWidth", 160);
+  await expect(lane.getByText("Media offline")).toHaveCount(0);
+  await expect.poll(() => filmstrip(2)).toBeGreaterThan(230);
+  await lane.screenshot({ path: info.outputPath("filmstrip-before.png") });
   await page.locator('.tl-lanes [data-clip="first"]').click();
   await field.click();
   await page.screenshot({
@@ -230,11 +248,14 @@ test("turn a timeline image into a variable and bind the same source to another 
   await expect
     .poll(() => readFile(scene, "utf8"))
     .toContain("../assets/red.svg");
-  await page.locator('.tl-lanes [data-clip="second"]').click();
+  await lane.click();
   await field.click();
   await page.getByRole("option", { name: /\(first-image\)/ }).click();
   await expect(second).toHaveAttribute("src", "assets/red.svg");
   await expect(second).toHaveJSProperty("naturalWidth", 160);
+  await expect(lane.getByText("Media offline")).toHaveCount(0);
+  await expect.poll(() => filmstrip(0)).toBeGreaterThan(230);
+  await lane.screenshot({ path: info.outputPath("filmstrip-after.png") });
   const after = info.outputPath("image-binding-result.png");
   await picture.screenshot({ path: after });
   const { width, height } = (await picture.boundingBox())!;
@@ -260,8 +281,23 @@ test("turn a timeline image into a variable and bind the same source to another 
   expect(blue).toBeLessThan(20);
   await dialog.getByRole("button", { name: "Close dialog" }).click();
 
+  const preview = async (values: Record<string, string>) => {
+    const response = await request.put(
+      `/api/cutroom/projects/${project.id}/variables/preview`,
+      { data: { composition, values } },
+    );
+    expect(response.ok()).toBe(true);
+  };
+  await preview({ "first-image": "../assets/blue.svg" });
+  await expect(second).toHaveAttribute("src", "assets/blue.svg");
+  await expect.poll(() => filmstrip(2)).toBeGreaterThan(230);
+  await preview({});
+  await expect(second).toHaveAttribute("src", "assets/red.svg");
+  await expect.poll(() => filmstrip(0)).toBeGreaterThan(230);
+
   await page.keyboard.press("Control+z");
   await expect(second).toHaveAttribute("src", "assets/blue.svg");
+  await expect.poll(() => filmstrip(2)).toBeGreaterThan(230);
   await page.keyboard.press("Control+z");
   await expect.poll(() => readFile(scene, "utf8")).toBe(source);
 });

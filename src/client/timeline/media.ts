@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { localMediaPath, mediaSettings, peakLevels } from "../../shared/media";
+import {
+  mediaSettings,
+  peakLevels,
+  previewMediaPath,
+} from "../../shared/media";
 import { waveformPeak } from "./math";
 
 /** Waveform buckets fetched per request: 16 seconds at the finest level, 18 hours at the coarsest. */
@@ -66,7 +70,7 @@ export function createTimelineMedia(
   const pathOf = (src: string) => {
     let path = paths.get(src);
     if (path === undefined) {
-      const resolved = localMediaPath(composition, src);
+      const resolved = previewMediaPath(composition, src, versions);
       // Null is the watcher's word that the file is gone: renamed or removed while a clip
       // still names it. There is nothing to ask the server for.
       path =
@@ -184,7 +188,20 @@ export function createTimelineMedia(
     options?: ImageBitmapOptions,
   ) => {
     const response = await fetchReady(url, pollMs);
-    return response && createImageBitmap(await response.blob(), options);
+    if (!response) return null;
+    const blob = await response.blob();
+    if (blob.type !== "image/svg+xml") return createImageBitmap(blob, options);
+    // Chromium decodes SVG through an image element, even when it rejects the same blob.
+    const source = URL.createObjectURL(blob);
+    const image = new Image();
+    try {
+      image.src = source;
+      await image.decode();
+      closing.signal.throwIfAborted();
+      return await createImageBitmap(image, options);
+    } finally {
+      URL.revokeObjectURL(source);
+    }
   };
   const pictures = cache((url) => loadPicture(url, POLL_MS), SHEET_BYTES);
   const stills = cache(
@@ -239,10 +256,12 @@ export function createTimelineMedia(
     /** Only a source already used by this canvas needs its decoded media replaced. */
     updateVersions(next: Readonly<Record<string, string | null>>) {
       const changed = [...paths.entries()].some(([src, path]) => {
-        const file = path?.path ?? localMediaPath(composition, src);
+        const file = path?.path ?? previewMediaPath(composition, src, versions);
+        const nextFile = previewMediaPath(composition, src, next);
         // A file reported gone and a file the listing no longer has are the same state.
         return (
-          file !== null && (versions[file] ?? null) !== (next[file] ?? null)
+          file !== nextFile ||
+          (file !== null && (versions[file] ?? null) !== (next[file] ?? null))
         );
       });
       versions = next;
