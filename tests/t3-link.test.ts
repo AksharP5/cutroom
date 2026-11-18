@@ -238,7 +238,10 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
             attachments: [{ path: join(project.path, "index.html") }],
           });
           expect(response).toHaveProperty("queued", true);
-          expect(sent).toContain("new message\n\nVideo review context:");
+          // The owner's words come first, then the project T3 Code is asked to work on.
+          expect(sent).toStartWith(
+            `new message\n\n<cutroom-context>\nFrom Cutroom, project ${project.name} at ${project.path}.`,
+          );
           expect(sent).toContain(`[queued] ${note.id}`);
           expect(sent).toContain("Move the synthetic slate");
           expect(sent).toContain("Playhead: 1");

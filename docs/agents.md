@@ -59,7 +59,7 @@ Hover a Review row to move it up or down in the queue, or withdraw it. The order
 
 Link a T3 Code thread to pick up a conversation you already started there. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
 
-Cutroom mirrors the thread's recent messages and status while the chat is open. It sends your message, the current video context, and a digest of unfinished review notes. Attachments and note frames go as absolute local file paths. A busy T3 Code thread queues the message for its next turn. The attached paths and context also appear in T3 Code's transcript.
+Cutroom mirrors the thread's recent messages and status while the chat is open. It sends your message, one line naming the project, the current video context, and a digest of unfinished review notes. Attachments and note frames go as absolute local file paths. A busy T3 Code thread queues the message for its next turn. The attached paths and context also appear in T3 Code's transcript.
 
 All paths below are under `/api/cutroom`.
 
