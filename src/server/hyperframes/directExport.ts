@@ -1,3 +1,4 @@
+import { offsetSourceTime } from "../../shared/timeline/time.ts";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -88,8 +89,11 @@ function partition(pieces: Piece[], fps: Fps) {
         ...piece,
         start,
         end,
-        mediaStart:
-          piece.mediaStart + ((start - piece.start) * fps.den) / fps.num,
+        mediaStart: offsetSourceTime(
+          piece.mediaStart,
+          start - piece.start,
+          fps,
+        ),
       });
       frames += end - start;
       start = end;

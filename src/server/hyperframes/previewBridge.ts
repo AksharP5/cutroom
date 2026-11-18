@@ -30,6 +30,7 @@ interface PreviewWindow extends DiagnosticWindow {
     };
   };
   gsap?: {
+    ticker?: { tick?: () => void };
     getProperty(element: Element, property: string): unknown;
     getTweensOf?(target: Element): {
       progress(): number;
@@ -67,6 +68,7 @@ interface PreviewWindow extends DiagnosticWindow {
     getTime(): number;
     isPlaying(): boolean;
   };
+  __cutroomSeekFrame?: (time: number) => Promise<void>;
   /** Replaced each time the runtime lays out the composition's clips again. */
   __clipManifest?: unknown;
   /** Without `videoFrames`, it settles everything except native video decodes. */
@@ -2732,6 +2734,17 @@ function installPreviewBridge(
     for (const video of holds.keys()) cancelRelease(video);
     picture = holdPaused(version);
     return picture;
+  };
+  // The thumbnail browser has no parent player. It still needs the editor's exact paused seek.
+  win.__cutroomSeekFrame = async (time) => {
+    win.__player?.pause();
+    seekRuntime(time);
+    win.gsap?.ticker?.tick?.();
+    await refreshPicture();
+    // Repaint the native video after the exact frame is held. Screenshots use its
+    // colour conversion, which can differ from canvas for untagged sources.
+    await paint();
+    for (const video of holds.keys()) removeHold(video);
   };
   const releasePlaying = (video: HTMLVideoElement) => {
     const hold = holds.get(video);

@@ -324,3 +324,25 @@ test("a clip's own volume points play on the frames they are drawn at when a tra
     }),
   );
 });
+
+test.each([
+  { num: 30_000, den: 1001, source: 80, handle: 1 },
+  { num: 60_000, den: 1001, source: 82, handle: 2 },
+])(
+  "a transition handle at $num/$den starts on its source frame",
+  ({ num, den, source, handle }) => {
+    const seconds = (frame: number) => ((frame * den) / num).toFixed(6);
+    const input = shots
+      .replace('data-fps="30"', `data-fps="${num}/${den}"`)
+      .replaceAll('data-start="3"', `data-start="${seconds(90)}"`)
+      .replaceAll('data-duration="3"', `data-duration="${seconds(90)}"`)
+      .replaceAll(
+        'data-media-start="4"',
+        `data-media-start="${seconds(source)}"`,
+      );
+    const output = edit(input, [dissolve(handle * 2)]);
+    expect(
+      Number(/data-media-start="([^"]+)"/.exec(tag(output, "b"))![1]),
+    ).toBe(Number(seconds(source - handle)));
+  },
+);

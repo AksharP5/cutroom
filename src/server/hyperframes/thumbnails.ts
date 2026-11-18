@@ -13,20 +13,18 @@ import { isolateCapturePage } from "./isolation";
 import { launchCaptureBrowser } from "./captureBrowser";
 
 // Change this when old cached renderer output should be invalidated.
-export const thumbnailRendererVersion = "capture-provenance-v3";
+export const thumbnailRendererVersion = "capture-provenance-v4";
 
 type ThumbnailOptions = Parameters<
   NonNullable<StudioApiAdapter["generateThumbnail"]>
 >[0];
 
 interface PreviewWindow extends DiagnosticWindow {
-  __player?: { seek: (time: number) => void | Promise<void> };
+  __cutroomSeekFrame?: (time: number) => Promise<void>;
   __renderReady?: boolean;
   __hfStartupError?: string;
-  __hfWaitForSeekCompletion?: () => Promise<void>;
   __hfStudioManualEditsApply?: () => number;
   __hfStudioMotionApply?: () => number;
-  gsap?: { ticker?: { tick?: () => void } };
 }
 
 /** Long enough to cover an agent's burst of frame checks, short enough to free the page's decoders. */
@@ -154,7 +152,7 @@ export function createThumbnailRenderer() {
               Boolean(preview.__cutroomReadDiagnostics?.().length) ||
               typeof preview.__hfStartupError === "string" ||
               (preview.__renderReady === true &&
-                typeof preview.__player?.seek === "function");
+                typeof preview.__cutroomSeekFrame === "function");
             if (!ready()) {
               await new Promise<void>((resolve, reject) => {
                 let frame = 0;
@@ -191,9 +189,7 @@ export function createThumbnailRenderer() {
             document.querySelectorAll("audio,video").forEach((media) => {
               if (media instanceof HTMLMediaElement) media.muted = true;
             });
-            await preview.__player?.seek(time);
-            preview.gsap?.ticker?.tick?.();
-            await preview.__hfWaitForSeekCompletion?.();
+            await preview.__cutroomSeekFrame?.(time);
             await document.fonts.ready;
             // The preview route stamps the signature it compiled this document from.
             return document
