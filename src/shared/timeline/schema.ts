@@ -474,6 +474,7 @@ export const TimelineSchema = z.object({
       z.object({
         id: z.string(),
         volume: z.number(),
+        label: z.string().optional(),
         sourceRestriction: z.string().optional(),
       }),
     )
@@ -966,12 +967,33 @@ export const CommandSchema = z.discriminatedUnion("type", [
     ),
   z
     .object({
+      type: z.literal("routeAudioGroup"),
+      clipIds,
+      group: z
+        .union([
+          z.string().min(1),
+          z.strictObject({
+            label: z.string().trim().min(1).max(120),
+            volume: volume.optional(),
+          }),
+          z.null(),
+        ])
+        .describe(
+          "Pass an existing group ID, a new group with a label and optional linear gain, or null to return the clips to track mixing",
+        ),
+    })
+    .describe(
+      "Route the named clips with sound in one edit. A new group gets a generated ID and defaults to unity gain. This changes their audio bus, without moving clips or changing their clip gain, fades, or effects",
+    ),
+  z
+    .object({
       type: z.literal("setAudioGroup"),
       clipId,
+      expectedGroupId: z.string().optional(),
       volume,
     })
     .describe(
-      "Set the gain of a clip's existing authored audio group. Changes every member together; refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
+      "Set the gain of a clip's existing authored audio group. Pass expectedGroupId to refuse if the clip was rerouted. Changes every member together and refuses missing or source-restricted groups and any locked member track. Preserves routing, FX, mute and automation",
     ),
   z
     .object({
