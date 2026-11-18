@@ -28,8 +28,13 @@ export function createAgentRoutes(service: AgentService) {
     await next();
   });
   app.onError((error, c) => {
-    if (error instanceof HttpError)
-      return c.json({ error: error.message }, error.status);
+    if (error instanceof HttpError) {
+      const message = error.message.replace(
+        "A conversation in this project is already working.",
+        "Another chat in this project is already working.",
+      );
+      return c.json({ error: message }, error.status);
+    }
     if (error instanceof z.ZodError)
       return c.json(
         { error: error.issues.map((issue) => issue.message).join(" ") },
@@ -93,6 +98,10 @@ export function createAgentRoutes(service: AgentService) {
       ),
     ),
   );
+  app.delete("/agents/sessions/:id", async (c) => {
+    await service.delete(c.req.param("id"));
+    return c.json({ deleted: true });
+  });
   app.post("/agents/sessions/:id/turns", async (c) =>
     c.json(
       await service.send(
@@ -142,14 +151,18 @@ export function createAgentRoutes(service: AgentService) {
       const ended = new Promise<void>((resolve) => {
         stop = resolve;
       });
-      const unsubscribe = service.subscribe(id, (envelope) => {
-        const data = JSON.stringify(envelope);
-        writing = writing
-          .then(() => stream.writeSSE({ id: String(envelope.seq), data }))
-          .catch(() => {
-            stop?.();
-          });
-      });
+      const unsubscribe = service.subscribe(
+        id,
+        (envelope) => {
+          const data = JSON.stringify(envelope);
+          writing = writing
+            .then(() => stream.writeSSE({ id: String(envelope.seq), data }))
+            .catch(() => {
+              stop?.();
+            });
+        },
+        () => stop?.(),
+      );
       const ping = setInterval(() => {
         writing = writing
           .then(() => stream.writeSSE({ event: "ping", data: "" }))
@@ -161,6 +174,7 @@ export function createAgentRoutes(service: AgentService) {
       await ended;
       clearInterval(ping);
       unsubscribe();
+      await writing;
     });
   });
   return app;

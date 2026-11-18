@@ -122,7 +122,7 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
       })
     ).json(),
   );
-  for (const title of ["First conversation", "Second conversation"]) {
+  for (const title of ["First chat", "Second chat"]) {
     const response = await request.post("/api/cutroom/agents/sessions", {
       data: { projectId: project.id, provider: "codex", title },
     });
@@ -161,33 +161,26 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
   );
   expect(response.ok()).toBe(true);
   await page.goto(`/#project/${project.id}`);
-  const conversation = page.getByLabel("Conversation", { exact: true });
+  const chatTitle = page.getByRole("button", { name: /^Chats,/ });
+  const chats = page.getByRole("menu", { name: "Chats" });
   const timeline = page.getByRole("region", { name: "Timeline", exact: true });
   await page.keyboard.press("Control+4");
-  await conversation.click();
-  await page
-    .getByRole("option", { name: "Second conversation", exact: true })
+  await chatTitle.click();
+  await chats
+    .getByRole("menuitemradio", { name: "First chat", exact: true })
     .click();
-  await expect(conversation).toBeEnabled();
-  await expect(timeline).toBeFocused();
-  await conversation.click();
-  await page
-    .getByRole("option", { name: "First conversation", exact: true })
-    .click();
-  await expect(conversation).toHaveText("First conversation");
-  // Choosing a conversation loads it; the trigger is disabled until it has.
-  await expect(conversation).toBeEnabled();
-  await expect(timeline).toBeFocused();
-  await conversation.press("Enter");
-  await expect(page.getByRole("listbox")).toBeVisible();
+  await expect(chatTitle).toHaveText("First chat");
+  await expect(chatTitle).toBeFocused();
+  await chatTitle.press("Enter");
+  await expect(chats).toBeVisible();
   await page.keyboard.press("s");
   await expect(
-    page.getByRole("option", { name: "Second conversation", exact: true }),
+    chats.getByRole("menuitemradio", { name: "Second chat", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(conversation).toHaveText("Second conversation");
+  await expect(chatTitle).toHaveText("Second chat");
+  await expect(chatTitle).toBeFocused();
 
-  await expect(conversation).toBeFocused();
   const provider = page.getByLabel("Agent provider", { exact: true });
   await expect(provider).toBeEnabled();
   await provider.press("ArrowDown");
@@ -197,6 +190,7 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
   await provider.click();
   await page.getByRole("option", { name: "Codex", exact: true }).click();
   await expect(provider).toHaveText("Codex");
+  await expect(timeline).toBeFocused();
   const model = page.getByLabel("Model", { exact: true });
   await model.click();
   await page.getByRole("option", { name: "Model B", exact: true }).click();

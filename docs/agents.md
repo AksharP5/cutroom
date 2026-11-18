@@ -13,9 +13,13 @@ Both providers read their own user and project configuration. Cutroom adds a loc
 
 Ask for an edit in your own words. The agent loads relevant installed HyperFrames skills on its own. You can also type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool. If two installed skills share a name, the picker shows both paths and remembers the one you choose with the draft. A name typed without choosing a path uses the first enabled match returned by the native runtime.
 
-The model list comes from the provider. Changing models keeps the conversation and native session. A new conversation starts a separate native session. Conversation and provider controls stay locked while a session opens or accepts a message. Text typed for the next message stays in the composer.
+The model list comes from the provider. Changing models keeps the chat and native session. A new chat starts a separate native session when you send the first message. The provider and model controls lock while the open chat is working or opening. Text typed for the next message stays in the composer.
 
-Use **Refresh agent configuration** after installing a skill or signing in. The provider must be idle to refresh or change models.
+Each project has its own chats. Select the chat title to switch, rename, or delete a chat. The list marks chats that are working or waiting for you. You can switch while a run continues and return to it to respond or stop it. A working chat must be stopped before you can delete it. Deleting a chat removes Cutroom's history for that chat. The provider keeps its native session.
+
+The plus button opens a new chat and shows up to five recent chats. Cutroom remembers the last saved chat you opened in each project. If it is gone, Cutroom opens the most recent remaining chat.
+
+Use **Refresh agents** at the bottom of the chat list after installing a skill or signing in. The open chat must be idle to refresh or change models.
 
 ## Local context
 
@@ -23,9 +27,9 @@ When Cutroom starts or resumes a native session, it tells the agent where the Hy
 
 The MCP instructions ask agents to create each animated title as its own sub-composition file with `source_write` and `expectedVersion: null`, so timeline edits carry its animation with it. New projects load their local `assets/vendor/gsap.min.js`; keep that script tag in the root HTML. [Animated titles](mcp.md#animated-titles) has the pattern. Asked for several versions of one thing, an agent writes each as such a file and puts them all on one clip with `clip_versions_set`, so you can compare them there and keep one; [Versions](mcp.md#versions) has the steps.
 
-Conversation presentation is stored in Cutroom's data folder. Native session IDs allow a resumed conversation to use the provider's existing context. Unsent composer text and attachments are saved in browser storage for each project.
+Chat history is stored in Cutroom's data folder. Native session IDs allow a resumed chat to use the provider's existing context. Unsent composer text and attachments are saved in browser storage for each project.
 
-If a native run needs approval or an answer, the chat shows that request. Stopping a run cancels its pending questions. Closing Cutroom ends active runs; reopening retains the conversation and permits another message.
+If a native run needs approval or an answer, the chat shows that request. Stopping a run cancels its pending questions. Closing Cutroom ends active runs; reopening retains the chat and permits another message.
 
 ## Transcript
 
@@ -49,15 +53,15 @@ Sending a message queues every new review note. The server then adds a digest of
 
 The digest asks the agent to reconcile the message with the queue first. Newer intent wins: when the message cancels or replaces a note, the agent withdraws it with a reason instead of doing it, and the server records which message withdrew it. A message can also answer a note the agent blocked on; the agent then claims it with that answer, which is saved on the note as a chat answer, and continues. The agent works through the queue with the [review tools](mcp.md#review-queue). When a run ends, fails, or is stopped, notes it claimed but did not finish return to the queue. Claims left by a closed app return on the next read.
 
-While the agent runs, its status and elapsed time appear above the composer, followed by any approval and queued follow-ups. **Stop agent** sits beside **Queue follow-up**, which saves your message for that conversation. Follow-ups run in order after the current turn finishes, each with the current review queue. Remove a message using the cross next to it. After you stop the agent, close Cutroom, or a turn fails, pending follow-ups stay saved until you choose **Resume queue**. An interrupted follow-up stays queued as well. Check any partial edits before running it again.
+While the agent runs, its status and elapsed time appear above the composer, followed by any approval and queued follow-ups. **Stop agent** sits beside **Queue follow-up**, which saves your message for that chat. Follow-ups run in order after the current turn finishes, each with the current review queue. Remove a message using the cross next to it. After you stop the agent, close Cutroom, or a turn fails, pending follow-ups stay saved until you choose **Resume queue**. An interrupted follow-up stays queued as well. Check any partial edits before running it again.
 
-One Cutroom-run conversation per project works at a time. Sending from a second conversation while another is working returns an error until it finishes or is stopped. Each conversation's native agent gets a private token on its MCP connection, so its review actions are credited to the running message, and the token is refused on other projects or once the run ends. Any other MCP client, even one active during that run, is recorded as an outside agent.
+Cutroom runs one chat at a time per project. Sending from a second chat while another is working returns an error until it finishes or is stopped. Each chat's native agent gets a private token on its MCP connection, so its review actions are credited to the running message, and the token is refused on other projects or once the run ends. Any other MCP client, even one active during that run, is recorded as an outside agent.
 
 Hover a Review row to move it up or down in the queue, or withdraw it. The order and withdrawal reason survive restarting Cutroom.
 
 ## Shared chats
 
-Link a T3 Code thread to pick up a conversation you already started there. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
+Link a T3 Code thread to pick up a chat you already started there. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
 
 Cutroom mirrors the thread's recent messages and status while the chat is open. It sends your message, one line naming the project, the current video context, and a digest of unfinished review notes. Attachments and note frames go as absolute local file paths. A busy T3 Code thread queues the message for its next turn. The attached paths and context also appear in T3 Code's transcript.
 

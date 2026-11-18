@@ -110,7 +110,7 @@ test("Stop cancels turn preparation, keeps the draft, and does not appear for mo
     await expect(
       page.getByRole("button", { name: "Stop agent", exact: true }),
     ).toHaveCount(0);
-    await expect(page.getByText("Saving model", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Model", { exact: true })).toBeDisabled();
     changed();
     const composer = page.getByLabel("Message your agent");
     await composer.fill("Preserve this cancelled request");
@@ -123,7 +123,7 @@ test("Stop cancels turn preparation, keeps the draft, and does not appear for mo
       page.getByRole("button", { name: "Send message", exact: true }),
     ).toBeEnabled();
     await expect(
-      page.getByRole("button", { name: "New conversation", exact: true }),
+      page.getByRole("button", { name: "New chat", exact: true }),
     ).toBeEnabled();
     await expect(composer).toHaveValue("Preserve this cancelled request");
     expect(interrupts).toBe(1);
@@ -133,7 +133,7 @@ test("Stop cancels turn preparation, keeps the draft, and does not appear for mo
   }
 });
 
-test("Stop during conversation creation prevents a late response from starting a turn", async ({
+test("Stop during chat creation prevents a late response from starting a turn", async ({
   page,
   request,
 }) => {

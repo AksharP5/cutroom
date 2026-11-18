@@ -141,8 +141,8 @@ export function RequestCard({
               >
                 Always allow Cutroom edits
               </button>{" "}
-              for this project, in every conversation, until you revoke. Shell
-              and native file changes still ask.
+              for this project, in every chat, until you revoke. Shell and
+              native file changes still ask.
             </p>
           )}
           {/* The exact request stays one click away for anyone who wants to check it. */}
