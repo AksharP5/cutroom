@@ -5,7 +5,6 @@ import {
   registerRenderIsolation,
   spliceSourceParts,
 } from "./renderIsolation.ts";
-import { rebaseImageOverrides } from "./imageVariables.ts";
 import { DirectPlanSchema } from "./directSchema.ts";
 import type { VideoEncoder } from "./directExport.ts";
 import {
@@ -100,12 +99,15 @@ try {
     options: { ...options, ...(gif && { format: "mov" }), engineConfig },
   });
   const entryFile = request.options.entryFile ?? "index.html";
-  if (request.options.variables)
+  if (request.options.variables) {
+    // Its compiler import must see the render isolation hooks registered above.
+    const { rebaseImageOverrides } = await import("./imageVariables.ts");
     request.options.variables = rebaseImageOverrides(
       input.projectDir,
       entryFile,
       request.options.variables,
     );
+  }
   const logger = createConsoleLogger("warn");
   let audioLoweredDb: number | undefined;
   let encoder: VideoEncoder | undefined;
