@@ -39,7 +39,7 @@ import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
-import { BindVariable } from "./VariablesSection";
+import { BindImageVariable, BindVariable } from "./VariablesSection";
 import { TransformFields } from "./TransformFields";
 import { MotionSection } from "./MotionSection";
 import { valueAt } from "../../../shared/timeline/keyframes";
@@ -638,6 +638,14 @@ export function Inspector({
               disabled={track?.track.locked ?? false}
               open={titleOpen}
               onToggle={setTitleOpen}
+            />
+          )}
+          {clip.kind === "image" && (
+            <BindImageVariable
+              projectId={projectId}
+              clip={clip}
+              name={name || clip.id}
+              disabled={track?.track.locked ?? false}
             />
           )}
           {!isAudioKind(clip.kind) && (
