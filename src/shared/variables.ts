@@ -243,6 +243,7 @@ export const VariableDeclarationSchema = z
     }),
     z.object({ ...base, type: z.literal("color"), default: HexColourSchema }),
     z.object({ ...base, type: z.literal("boolean"), default: z.boolean() }),
+    z.object({ ...base, type: z.literal("image"), default: ImagePathSchema }),
     z.object({
       ...base,
       type: z.literal("enum"),
@@ -280,9 +281,9 @@ export type VariableDeclaration = z.infer<typeof VariableDeclarationSchema>;
 export const VariableBindingSchema = z.object({
   clipId: z.string().min(1).describe("The clip whose element takes the value"),
   to: z
-    .enum(["text", "color"])
+    .enum(["text", "color", "image"])
     .describe(
-      "text replaces the element's words (data-var-text); color sets its text colour to var(--id)",
+      "text replaces the element's words, color sets its inline text colour, and image binds an image clip's source",
     ),
 });
 export type VariableBinding = z.infer<typeof VariableBindingSchema>;

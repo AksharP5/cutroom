@@ -42,6 +42,18 @@ import type { ProjectStore } from "./store";
 
 export type VariablesChange = Pick<VariablesState, "composition" | "preview">;
 
+async function checkProjectImage(
+  project: Project,
+  composition: string,
+  id: string,
+  url: string,
+) {
+  const path = imageVariablePath(composition, url);
+  const absolute = await projectWritePath(project, path, { sourceOnly: false });
+  if (!(await stat(absolute)).isFile())
+    throw new VariableError(`${id}: choose a project image file.`);
+}
+
 export async function checkProjectVariableValues(
   project: Project,
   composition: string,
@@ -53,12 +65,7 @@ export async function checkProjectVariableValues(
     declarations.map(async (variable) => {
       const value = checked[variable.id];
       if (variable.type !== "image" || typeof value !== "string") return;
-      const path = imageVariablePath(composition, value);
-      const absolute = await projectWritePath(project, path, {
-        sourceOnly: false,
-      });
-      if (!(await stat(absolute)).isFile())
-        throw new VariableError(`${variable.id}: choose a project image file.`);
+      await checkProjectImage(project, composition, variable.id, value);
     }),
   );
   return checked;
@@ -104,6 +111,8 @@ function bindSource(
     throw new HttpError(422, "Bind words to a string variable.");
   if (bind.to === "color" && variable.type !== "color")
     throw new HttpError(422, "Bind a text colour to a color variable.");
+  if (bind.to === "image" && variable.type !== "image")
+    throw new HttpError(422, "Bind an image source to an image variable.");
   const parsed = parseComposition(html, settings, {
     scope: compositionScope(composition),
   });
@@ -349,6 +358,13 @@ export function createVariableRoutes(
         const declarations = parseDeclarations(declaredVariables(html));
         if (declarations.some((item) => item.id === variable.id))
           throw new HttpError(409, `${variable.id} is already declared.`);
+        if (variable.type === "image")
+          await checkProjectImage(
+            project,
+            composition,
+            variable.id,
+            variable.default,
+          );
         let next = html;
         if (bind)
           next = bindSource(
