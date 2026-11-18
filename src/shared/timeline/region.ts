@@ -132,8 +132,9 @@ export function defaultRegion(effect: RegionEffect, fps: Fps): Region {
     box: zoom
       ? { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
       : { x: 0.35, y: 0.35, width: 0.3, height: 0.3 },
-    in: framesOf(zoom ? 0.5 : 0.2, fps),
-    out: framesOf(zoom ? 0.5 : 0.2, fps),
+    // A blur or highlight shows from the frame it is drawn on; a zoom eases in and out.
+    in: zoom ? framesOf(0.5, fps) : 0,
+    out: zoom ? framesOf(0.5, fps) : 0,
     ease: zoom ? "ease-in-out" : "ease",
     blur: effect === "blur" ? 16 : 0,
     dim: 0.6,

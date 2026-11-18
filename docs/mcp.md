@@ -356,7 +356,7 @@ An adjustment layer is an insert:
 }
 ```
 
-Fields left out of `region` take the effect's defaults: a 0.5 s `ease-in-out` ramp at each end for a zoom, 0.2 s fades for blur and highlight. A zoom on one clip, and any later change, is `setClip.region`, which changes only the fields it names; `null` removes it:
+Fields left out of `region` take the effect's defaults: a 0.5 s `ease-in-out` ramp at each end for a zoom; blur and highlight show at full strength from the first frame to the last. A zoom on one clip, and any later change, is `setClip.region`, which changes only the fields it names; `null` removes it:
 
 ```json
 { "type": "setClip", "clipId": "recording", "region": { "effect": "zoom", "box": { "x": 0.2, "y": 0.3, "width": 0.4, "height": 0.4 }, "in": 20, "out": 0 } }

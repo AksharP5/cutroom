@@ -641,7 +641,7 @@ export const InsertAdjustmentSchema = z.object({
   region: RegionEditSchema.extend({
     effect: RegionSchema.shape.effect,
   }).describe(
-    "The effect and its region. Omitted fields take the effect's defaults: a 0.5 s ease-in-out ramp at each end for a zoom, 0.2 s fades for blur and highlight.",
+    "The effect and its region. Omitted fields take the effect's defaults: a 0.5 s ease-in-out ramp at each end for a zoom; blur and highlight show at full strength from the first frame to the last.",
   ),
   label: label.optional(),
 });
