@@ -196,6 +196,8 @@ export class ClaudeRuntime implements AgentRuntime {
   private readonly input = new InputQueue<SDKUserMessage>();
   private query?: ClaudeQuery;
   private starting?: Promise<ClaudeQuery>;
+  private reading?: Promise<void>;
+  private receivedResult = false;
   private active?: { resolve: () => void; reject: (error: Error) => void };
   private currentMessageId?: string;
   private readonly text = new Map<string, string>();
@@ -246,7 +248,7 @@ export class ClaudeRuntime implements AgentRuntime {
         throw new Error("The conversation was closed.");
       }
       this.query = session;
-      void this.read(session).catch((error) => {
+      this.reading = this.read(session).catch((error) => {
         if (this.disposed) return;
         const failure =
           error instanceof Error ? error : new Error(String(error));
@@ -317,6 +319,7 @@ export class ClaudeRuntime implements AgentRuntime {
 
   async send(turn: AgentTurn) {
     this.stopRequested = false;
+    this.receivedResult = false;
     await this.ensureQuery();
     if (this.stopRequested) return;
     if (this.active)
@@ -487,6 +490,7 @@ export class ClaudeRuntime implements AgentRuntime {
       return;
     }
     if (message.type === "result") {
+      if (this.active) this.receivedResult = true;
       this.naming?.abort();
       if (message.is_error || message.subtype !== "success") {
         this.active?.reject(
@@ -504,6 +508,24 @@ export class ClaudeRuntime implements AgentRuntime {
           message: completeMessage(message.result),
         });
       this.active?.resolve();
+    }
+  }
+
+  async closeAfterTurn() {
+    this.disposed = true;
+    // Ending stdin lets Claude flush its transcript and cost state before EOF.
+    this.input.close();
+    let drained = true;
+    const timeout = setTimeout(() => {
+      drained = false;
+      this.query?.close();
+    }, 5_000);
+    try {
+      await this.reading;
+      return drained && this.receivedResult;
+    } finally {
+      clearTimeout(timeout);
+      this.query?.close();
     }
   }
 

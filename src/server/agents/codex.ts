@@ -15,6 +15,7 @@ import {
   isCutroomEdit,
 } from "./tool-permissions";
 import type { CodexToolConfig } from "./tool-permissions";
+import { NativeSessionConflict } from "./native-session-conflict";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
 import {
@@ -73,7 +74,7 @@ const mcpResultSchema = z.object({
     z.object({ name: z.string(), status: z.string().optional() }).passthrough(),
   ),
 });
-const itemSchema = z
+export const codexItemSchema = z
   .object({
     id: z.string(),
     type: z.string(),
@@ -123,7 +124,7 @@ const nativeQuestionsSchema = z.array(
 );
 
 /** Codex runs every command through a login shell; a row names the command inside it. */
-function shellCommand(command: string) {
+export function shellCommand(command: string) {
   const wrapped = /^\S*sh -lc (['"])([\s\S]*)\1$/.exec(command);
   const inner = wrapped?.[2];
   if (inner === undefined) return command;
@@ -236,9 +237,8 @@ export class CodexRuntime implements AgentRuntime {
           ? [config.mcp_servers.cutroom_studio]
           : [],
       );
-      return this.client.call(
-        this.options.nativeSessionId ? "thread/resume" : "thread/start",
-        {
+      return this.client
+        .call(this.options.nativeSessionId ? "thread/resume" : "thread/start", {
           ...(this.options.nativeSessionId
             ? { threadId: this.options.nativeSessionId, excludeTurns: true }
             : {}),
@@ -255,8 +255,16 @@ export class CodexRuntime implements AgentRuntime {
               this.permissionConfigs,
             ),
           },
-        },
-      );
+        })
+        .catch((error: unknown) => {
+          if (
+            this.options.nativeSessionId &&
+            error instanceof Error &&
+            /already has an active writer/i.test(error.message)
+          )
+            throw new NativeSessionConflict("codex");
+          throw error;
+        });
     })().then((value) => {
       const response = threadResultSchema.parse(value);
       const { id } = response.thread;
@@ -266,6 +274,10 @@ export class CodexRuntime implements AgentRuntime {
       return id;
     });
     return this.starting;
+  }
+
+  async prepare() {
+    await this.ensureThread();
   }
 
   async send(turn: AgentTurn) {
@@ -416,7 +428,7 @@ export class CodexRuntime implements AgentRuntime {
       message.method === "item/started" ||
       message.method === "item/completed"
     ) {
-      const item = itemSchema.parse(params.item);
+      const item = codexItemSchema.parse(params.item);
       if (item.type === "agentMessage") {
         if (message.method === "item/started") this.startMessage(item.id);
         else
