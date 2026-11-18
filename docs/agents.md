@@ -51,7 +51,7 @@ A timeline approval lists each command in plain words, such as "Move Call to act
 
 Source editing is limited to composition HTML, CSS, JavaScript, TypeScript, SVG, and JSON. Hidden paths, agent instructions, and native tooling configuration are protected for everyone, even after a one-time approval. Change those files outside Cutroom through your native editor's permissions. The embedded editor also refuses renames when its automatic reference updates could rewrite protected text files.
 
-Clips changed through Cutroom's timeline, script, or HTML source tools have a blue underline. Accept their completed review note to clear it, or use **Accept agent changes** in Review for edits made directly from chat. Editing a clip yourself also clears its underline. When several notes are claimed, the agent passes `noteId` on each edit so accepting a note clears only its own clips.
+Clips changed through Cutroom's timeline, script, or HTML source tools have a blue underline. Accept their completed review note to clear it, or use **Accept agent changes** in Review's To review heading for edits made directly from chat. Editing a clip yourself also clears its underline. When several notes are claimed, the agent passes `noteId` on each edit so accepting a note clears only its own clips.
 
 ## Review queue
 

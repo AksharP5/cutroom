@@ -64,6 +64,12 @@ test("review notes stay grouped by state until the owner accepts, answers, or re
     .locator(".status-bar")
     .getByRole("button", { name: /^To review \d+$/ });
   await expect(waiting).toHaveText("To review 1");
+  await expect(
+    page.locator(".review-group-head h3 > span:first-child"),
+  ).toHaveText(["To review", "Queued", "New", "Withdrawn"]);
+  await expect(group("Queued").locator(".review-group-head .mono")).toHaveText(
+    "2",
+  );
   await expect(group("New")).toContainText("Not sent yet");
   await expect(group("Queued")).toContainText("Move the title up");
   await expect(group("Queued")).toContainText("Fade the music out");
@@ -156,7 +162,7 @@ test("the owner can return a stuck claim to the queue", async ({
   await page.goto(`/#project/${project.id}`);
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const working = page.getByRole("region", {
-    name: "In progress notes",
+    name: "Working notes",
     exact: true,
   });
   await working.getByRole("button", { name: "Return to queue" }).click();

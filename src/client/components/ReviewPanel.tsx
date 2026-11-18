@@ -5,7 +5,6 @@ import {
   ArrowDown,
   ArrowUpRight,
   ChatTeardropText,
-  Check,
   ImageSquare,
   PencilSimple,
   Queue,
@@ -31,12 +30,11 @@ import { Modal } from "./Modal";
 import { TimecodeText } from "./TimecodeText";
 
 type HumanAction = z.input<typeof HumanReviewActionSchema>;
-/** A question stalls the agent, so blocked notes lead To review. */
 const groups = [
-  ["New", ["open"]],
-  ["In progress", ["working"]],
   ["To review", toReviewStatuses],
   ["Queued", ["queued"]],
+  ["Working", ["working"]],
+  ["New", ["open"]],
   ["Accepted", ["accepted"]],
   ["Withdrawn", ["withdrawn"]],
 ] as const satisfies ReadonlyArray<
@@ -236,7 +234,6 @@ export function ReviewPanel({
   const queued = items.filter((item) =>
     unfinishedStatuses.some((status) => status === item.review.status),
   );
-  const current = items.filter((item) => item.review.status !== "withdrawn");
   const accepted = items.filter((item) => item.review.status === "accepted");
   const number = noteNumbers(items);
   const frameUrl = (path: string) =>
@@ -484,35 +481,6 @@ export function ReviewPanel({
 
   return (
     <section className="review-panel" aria-label="Review notes">
-      {hasChanges && (
-        <div className="review-accept-changes">
-          <button
-            className="secondary-button"
-            onClick={() => void run(onAcceptChanges)}
-          >
-            <Check /> Accept agent changes
-          </button>
-        </div>
-      )}
-      {compositionChanges.length > 0 && (
-        <ol
-          className="review-composition-changes"
-          aria-label="Composition changes"
-        >
-          {compositionChanges.map((edit) => (
-            <li key={edit.id}>
-              {edit.label}
-              {edit.count > 1 && `, ${edit.count} times`}
-            </li>
-          ))}
-        </ol>
-      )}
-      {current.length > 0 && (
-        <div className="review-summary">
-          {current.length} {current.length === 1 ? "note" : "notes"},{" "}
-          {accepted.length} accepted
-        </div>
-      )}
       {draft && (
         <form
           className="review-draft"
@@ -599,14 +567,43 @@ export function ReviewPanel({
         const members = items.filter((item) =>
           statuses.some((status) => status === item.review.status),
         );
-        if (!members.length) return null;
+        const changes = title === "To review" && hasChanges;
+        if (!members.length && !changes) return null;
         return (
           <section
             className="review-group"
             key={title}
             aria-label={`${title} notes`}
           >
-            <h3>{title}</h3>
+            <header className="review-group-head">
+              <h3>
+                <span>{title}</span>
+                {members.length > 0 && (
+                  <span className="mono">{members.length}</span>
+                )}
+              </h3>
+              {changes && (
+                <button
+                  className="text-button"
+                  onClick={() => void run(onAcceptChanges)}
+                >
+                  Accept agent changes
+                </button>
+              )}
+            </header>
+            {title === "To review" && compositionChanges.length > 0 && (
+              <ol
+                className="review-composition-changes"
+                aria-label="Composition changes"
+              >
+                {compositionChanges.map((edit) => (
+                  <li key={edit.id}>
+                    {edit.label}
+                    {edit.count > 1 && `, ${edit.count} times`}
+                  </li>
+                ))}
+              </ol>
+            )}
             {members.map(row)}
             {title === "New" && (
               <div className="review-send">

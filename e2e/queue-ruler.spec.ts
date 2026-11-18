@@ -122,8 +122,11 @@ test("queue names stay whole and agent replies expand while MCP works a note", a
       exact: true,
     });
     const buttonBox = await accept.boundingBox();
-    const headingBox = await page.locator(".review-summary").boundingBox();
-    expect(buttonBox!.x - headingBox!.x).toBe(14);
+    const headingBox = await page
+      .getByRole("region", { name: "To review notes", exact: true })
+      .getByRole("heading")
+      .boundingBox();
+    expect(buttonBox!.x).toBeGreaterThan(headingBox!.x + headingBox!.width);
     await page.reload();
     await page.getByRole("button", { name: "Review", exact: true }).click();
     await expect(row.locator(".note-element")).toHaveText(

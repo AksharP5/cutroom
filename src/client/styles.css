@@ -2167,14 +2167,6 @@ option {
 .review-panel > .inline-error {
   margin: 8px 14px;
 }
-.review-summary {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 14px;
-  border-bottom: var(--stroke-hair) solid var(--line-subtle);
-  color: var(--text-secondary);
-}
 .review-composition-changes {
   margin: 0;
   padding: 8px 14px;
@@ -2184,9 +2176,6 @@ option {
 }
 .review-composition-changes li + li {
   margin-top: 4px;
-}
-.review-accept-changes {
-  padding: 8px 14px;
 }
 .review-draft {
   display: flex;
@@ -2249,16 +2238,26 @@ option {
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
-.review-group > h3 {
+.review-group-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  margin: 0;
-  padding: 6px 14px 0;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--size-row);
+  padding: 0 14px;
   color: var(--text-tertiary);
   font-size: var(--type-xs);
+}
+.review-group-head h3 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font: inherit;
   font-weight: var(--weight-semibold);
+}
+.review-group-head .text-button {
+  font-size: inherit;
 }
 /* Plain notes stay dense. Replies use the full width and grow when expanded. */
 .review-row {
