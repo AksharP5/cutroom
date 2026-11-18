@@ -140,12 +140,18 @@ const ignored = new Set([
   "renders",
 ]);
 
+function scheduleFileSettle(_path: string, read: () => Promise<void>) {
+  const timer = setTimeout(() => void read(), 60);
+  return () => clearTimeout(timer);
+}
+
 /** `reviews` must be the server's one review service, so editor undo shares its per-project queue. */
 export function createHyperframesApi(
   store: ProjectStore,
   reviews: ReviewService,
   /** Serves scrub proxies to the preview; without it the preview always seeks its sources. */
   media?: MediaService,
+  scheduleSettle = scheduleFileSettle,
 ) {
   const api = new Hono();
   api.use("/projects/:id/thumbnail/*", async (c, next) => {
@@ -296,7 +302,7 @@ export function createHyperframesApi(
     { users: number; ready: Promise<ReturnType<typeof watch>> }
   >();
   let disposed = false;
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingSettles = new Map<string, () => void>();
   const announced = new Map<string, string>();
   /** Per file: reads started, the newest read announced, and the announcements in order. */
   const reads = new Map<
@@ -748,13 +754,13 @@ export function createHyperframesApi(
         const failed = (error: unknown) =>
           console.error("Project watch failed:", error);
         // Outside editors can write a file in several steps, so wait for them to settle.
-        clearTimeout(timers.get(key));
-        timers.set(
+        pendingSettles.get(key)?.();
+        pendingSettles.set(
           key,
-          setTimeout(() => {
-            timers.delete(key);
-            void read().then(announce).catch(failed);
-          }, 60),
+          scheduleSettle(path, async () => {
+            pendingSettles.delete(key);
+            await read().then(announce).catch(failed);
+          }),
         );
         // Cutroom's own writes are whole once their receipt exists, so they skip that wait.
         void read()
@@ -1490,10 +1496,10 @@ export function createHyperframesApi(
         if (--shared.users) return;
         watchers.delete(project.path);
         signatures.delete(project.path);
-        for (const [key, timer] of timers) {
+        for (const [key, cancel] of pendingSettles) {
           if (!key.startsWith(`${projectId}\0`)) continue;
-          clearTimeout(timer);
-          timers.delete(key);
+          cancel();
+          pendingSettles.delete(key);
         }
         for (const key of announced.keys())
           if (key.startsWith(`${projectId}\0`)) announced.delete(key);
@@ -1521,9 +1527,9 @@ export function createHyperframesApi(
       );
       for (const result of opened)
         if (result.status === "fulfilled") result.value.close();
-      for (const timer of timers.values()) clearTimeout(timer);
+      for (const cancel of pendingSettles.values()) cancel();
       watchers.clear();
-      timers.clear();
+      pendingSettles.clear();
       await renders.cancelAll();
       await thumbnails.close();
     },
