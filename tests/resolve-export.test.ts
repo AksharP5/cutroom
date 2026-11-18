@@ -104,6 +104,13 @@ test.skipIf(!Bun.which("ffmpeg"))(
           : ["Night-shoot.fcpxml", "Summary.txt"],
       );
       const fcpxml = await readFile(result.timeline, "utf8");
+      if (process.platform === "linux") {
+        // Resolve on Linux can't decode AAC, so the sound that plays comes as a WAV Resolve won't swap back.
+        expect(
+          (await readdir(join(result.outputPath, "Sound"))).sort(),
+        ).toEqual(["blue sound.wav"]);
+        expect(fcpxml).toContain("Sound/blue%20sound.wav");
+      }
       const sources = [...fcpxml.matchAll(/src="file:\/\/([^"]+)"/g)].map(
         ([, path]) => decodeURIComponent(path!),
       );

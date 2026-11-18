@@ -140,10 +140,15 @@ const SILENT_ON_LINUX = new Set(["aac"]);
  * Decodes each file whose sound Resolve can't play into a WAV in `folder`, aligned so a second
  * into the WAV is a second into the file. The pictures keep linking the original files.
  */
-async function decodeSound(folder: string, media: Map<string, ClipMedia>) {
+async function decodeSound(
+  folder: string,
+  media: Map<string, ClipMedia>,
+  heard: ReadonlySet<string>,
+) {
   const files = new Map<string, MediaFacts>();
-  for (const entry of media.values())
+  for (const [id, entry] of media)
     if (
+      heard.has(id) &&
       entry.kind === "file" &&
       entry.facts.audio &&
       SILENT_ON_LINUX.has(entry.facts.audio.codec)
@@ -156,7 +161,8 @@ async function decodeSound(folder: string, media: Map<string, ClipMedia>) {
   const taken = new Set<string>();
   const decoded = new Map<string, MediaFacts>();
   for (const [path, facts] of files) {
-    const stem = safeName(basename(path, extname(path)), "Sound");
+    // Resolve swaps a WAV named like its video (a.wav, a.mp4) back to the video's silent sound.
+    const stem = `${safeName(basename(path, extname(path)), "Media")} sound`;
     let name = `${stem}.wav`;
     for (let number = 2; taken.has(name); number++)
       name = `${stem} ${number}.wav`;
@@ -212,7 +218,15 @@ export async function exportResolve(
   const folder = await claimFolder(directory, `${stem} Resolve`);
   const decoded =
     process.platform === "linux"
-      ? await decodeSound(join(folder, "Sound"), media)
+      ? await decodeSound(
+          join(folder, "Sound"),
+          media,
+          new Set(
+            source.timeline.clips
+              .filter((clip) => clip.hasAudio && clip.enabled)
+              .map((clip) => clip.id),
+          ),
+        )
       : [];
   if (options.copyMedia) await copyMedia(join(folder, "Media"), media);
   const plan = planResolveTimeline({
