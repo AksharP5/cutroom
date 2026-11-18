@@ -142,6 +142,10 @@ const queuedTurnsSchema = z.array(
   z.object({ id: z.string(), turn: agentTurnSchema }),
 );
 
+export const t3ThreadIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/, "Paste a T3 Code thread ID.");
+
 export const agentSessionSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -149,6 +153,9 @@ export const agentSessionSchema = z.object({
   title: z.string(),
   model: z.string().optional(),
   nativeSessionId: z.string().optional(),
+  t3Thread: z
+    .object({ threadId: t3ThreadIdSchema, link: z.string() })
+    .optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   status: agentStatusSchema,
