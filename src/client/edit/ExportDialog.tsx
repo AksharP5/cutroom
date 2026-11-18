@@ -22,6 +22,7 @@ import type {
   ExportFormat,
   ExportQuality,
   ExportSize,
+  ResolveExport,
 } from "../../shared/export";
 import { api } from "../api";
 import { Modal } from "../components/Modal";
@@ -31,6 +32,7 @@ import { useWorkspace } from "../workspace";
 import {
   cancelExport,
   exportActive,
+  exportForResolve,
   exportGpuAvailable,
   exportProject,
   observeExports,
@@ -247,7 +249,18 @@ function ExportDialog({
     timeline ? defaultExportRange(timeline) : "timeline",
   );
   const [quality, setQuality] = useState<ExportQuality>("standard");
-  const [format, setFormat] = useState<ExportFormat>("mp4");
+  const [target, setTarget] = useState<ExportFormat | "resolve">("mp4");
+  const forResolve = target === "resolve";
+  // A Resolve export links the media and renders its layers as MOV, so the file settings rest.
+  const format: ExportFormat = forResolve ? "mov" : target;
+  const [copyMedia, setCopyMedia] = useState(false);
+  const [resolveExport, setResolveExport] = useState<
+    "working" | ResolveExport | null
+  >(null);
+  const resolved =
+    resolveExport !== null && resolveExport !== "working"
+      ? resolveExport
+      : null;
   const [gifLoop, setGifLoop] = useState("0");
   const [sizeChoice, setSizeChoice] = useState<ExportSize>("project");
   const [rate, setRate] = useState<RateChoice>("project");
@@ -366,7 +379,10 @@ function ExportDialog({
     if (job) return { frames: job.frames, problem: "" };
     if (!timeline) return { frames: null, problem: "" };
     try {
-      return { frames: exportRange(timeline, choice), problem: "" };
+      return {
+        frames: exportRange(timeline, forResolve ? "timeline" : choice),
+        problem: "",
+      };
     } catch (problem) {
       return {
         frames: null,
@@ -387,6 +403,28 @@ function ExportDialog({
     loading || !!destinationError || !timeline || !frames || invalidLoop;
   const submit = () => {
     if (cannotExport) return;
+    if (forResolve) {
+      const folder = directory ?? destination?.directory;
+      if (!folder) return;
+      let variables;
+      try {
+        variables = exportVariables(variableDrafts);
+      } catch (problem) {
+        setError(problem instanceof Error ? problem.message : String(problem));
+        return;
+      }
+      setError("");
+      setResolveExport("working");
+      void exportForResolve(projectId, {
+        directory: folder,
+        copyMedia,
+        variables,
+      }).then(setResolveExport, (problem: unknown) => {
+        setResolveExport(null);
+        setError(problem instanceof Error ? problem.message : String(problem));
+      });
+      return;
+    }
     const parsed = ExportOptionsSchema.safeParse({
       filename: filename ?? destination?.filename,
       directory: directory ?? destination?.directory,
@@ -447,15 +485,16 @@ function ExportDialog({
     <Modal title="Export" onClose={onClose} initialFocus={exportButton}>
       <div className="export-body">
         <div className="export-title">
-          {job ? job.name : name}
+          {job && !resolved ? job.name : name}
+          {resolved && <span>DaVinci Resolve</span>}
           {/* Before an export starts, the Format menu says this. */}
-          {job && (
+          {job && !resolved && (
             <span>
               {formatNames[job.format]} · {exportFormatDetails[job.format]}
             </span>
           )}
         </div>
-        {!job && (
+        {!job && !resolveExport && !forResolve && (
           <>
             <fieldset className="export-range">
               <legend>Range</legend>
@@ -483,7 +522,7 @@ function ExportDialog({
             </fieldset>
           </>
         )}
-        {timeline && frames && (
+        {timeline && frames && !resolved && (
           <dl className="export-summary">
             <dt>{job ? "Range" : "Frames"}</dt>
             <dd className="mono">
@@ -517,30 +556,68 @@ function ExportDialog({
             {range.problem}
           </p>
         )}
-        {!job ? (
+        {resolved ? (
+          <>
+            <p className="export-path">{resolved.outputPath}</p>
+            <div role="status" className="export-result">
+              Ready for Resolve. Import{" "}
+              {resolved.timeline.split(/[\\/]/).at(-1)} with File &gt; Import
+              &gt; Timeline
+              {resolved.markers &&
+                `, then its markers with Timeline > Import > Timeline Markers from EDL`}
+              .
+            </div>
+            {resolved.notes.map((note) => (
+              <p key={note} className="export-hint">
+                {note}
+              </p>
+            ))}
+          </>
+        ) : resolveExport === "working" && !job ? (
+          <div role="status" className="export-result">
+            Writing the Resolve folder.
+          </div>
+        ) : !job ? (
           <>
             <label className="export-field">
               Format
-              <SelectMenu<ExportFormat>
+              <SelectMenu<ExportFormat | "resolve">
                 label="Format"
-                value={format}
+                value={target}
                 onChange={(value) => {
-                  setFormat(value);
+                  setTarget(value);
                   // A typed name keeps its words and takes the format's extension.
-                  setFilename(
-                    (typed) =>
-                      typed?.replace(/\.(mp4|mov|webm|gif)$/i, `.${value}`) ??
-                      null,
-                  );
+                  if (value !== "resolve")
+                    setFilename(
+                      (typed) =>
+                        typed?.replace(/\.(mp4|mov|webm|gif)$/i, `.${value}`) ??
+                        null,
+                    );
                 }}
-                options={exportFormats.map((value) => ({
-                  value,
-                  label: `${formatNames[value]} · ${exportFormatDetails[value]}`,
-                }))}
+                options={[
+                  ...exportFormats.map((value) => ({
+                    value,
+                    label: `${formatNames[value]} · ${exportFormatDetails[value]}`,
+                  })),
+                  {
+                    value: "resolve" as const,
+                    label: "DaVinci Resolve · Timeline, layers and media",
+                  },
+                ]}
               />
             </label>
+            {forResolve && (
+              <label className="export-check">
+                <input
+                  type="checkbox"
+                  checked={copyMedia}
+                  onChange={(event) => setCopyMedia(event.target.checked)}
+                />
+                Copy media into the folder
+              </label>
+            )}
             {/* ProRes and GIF have no quality setting. */}
-            {(format === "mp4" || format === "webm") && (
+            {!forResolve && (format === "mp4" || format === "webm") && (
               <label className="export-field">
                 Quality
                 <SelectMenu<ExportQuality>
@@ -554,7 +631,7 @@ function ExportDialog({
                 />
               </label>
             )}
-            {sizeOptions.length > 1 && (
+            {!forResolve && sizeOptions.length > 1 && (
               <label className="export-field">
                 Size
                 <SelectMenu<ExportSize>
@@ -565,20 +642,22 @@ function ExportDialog({
                 />
               </label>
             )}
-            <label className="export-field">
-              Frame rate
-              <SelectMenu<RateChoice>
-                label="Frame rate"
-                value={
-                  rateOptions.some((option) => option.value === rate)
-                    ? rate
-                    : "project"
-                }
-                onChange={setRate}
-                options={rateOptions}
-              />
-            </label>
-            {format === "gif" && (
+            {!forResolve && (
+              <label className="export-field">
+                Frame rate
+                <SelectMenu<RateChoice>
+                  label="Frame rate"
+                  value={
+                    rateOptions.some((option) => option.value === rate)
+                      ? rate
+                      : "project"
+                  }
+                  onChange={setRate}
+                  options={rateOptions}
+                />
+              </label>
+            )}
+            {!forResolve && format === "gif" && (
               <>
                 <label className="export-field">
                   Loop count
@@ -600,7 +679,7 @@ function ExportDialog({
                 </p>
               </>
             )}
-            {gpuAvailable && format === "mp4" && (
+            {!forResolve && gpuAvailable && format === "mp4" && (
               <label className="export-check">
                 <input
                   type="checkbox"
@@ -616,14 +695,16 @@ function ExportDialog({
                 setVariableDrafts((drafts) => ({ ...drafts, [id]: value }))
               }
             />
-            <label className="export-field">
-              File name
-              <input
-                value={filename ?? destination?.filename ?? baseFilename}
-                onChange={(event) => setFilename(event.target.value)}
-                required
-              />
-            </label>
+            {!forResolve && (
+              <label className="export-field">
+                File name
+                <input
+                  value={filename ?? destination?.filename ?? baseFilename}
+                  onChange={(event) => setFilename(event.target.value)}
+                  required
+                />
+              </label>
+            )}
             <label className="export-field">
               Location
               <input
@@ -715,7 +796,44 @@ function ExportDialog({
         )}
       </div>
       <div className="modal-actions">
-        {job ? (
+        {resolved ? (
+          <>
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setResolveExport(null);
+                onSetup();
+              }}
+            >
+              New export
+            </button>
+            {window.cutroomDesktop && (
+              <button
+                className="secondary-button"
+                onClick={() =>
+                  void window.cutroomDesktop
+                    ?.reveal(resolved.timeline)
+                    .catch((problem: unknown) =>
+                      setFileError(
+                        problem instanceof Error
+                          ? problem.message
+                          : String(problem),
+                      ),
+                    )
+                }
+              >
+                Reveal in folder
+              </button>
+            )}
+            <button className="primary-button" onClick={onClose}>
+              Done
+            </button>
+          </>
+        ) : resolveExport === "working" && !job ? (
+          <button className="secondary-button" onClick={onClose}>
+            Hide
+          </button>
+        ) : job ? (
           active ? (
             <>
               <button
@@ -787,7 +905,9 @@ function ExportDialog({
               aria-disabled={cannotExport}
               onClick={submit}
             >
-              Export {formatNames[format]}
+              {forResolve
+                ? "Export for Resolve"
+                : `Export ${formatNames[format]}`}
             </button>
           </>
         )}
