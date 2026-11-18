@@ -24,6 +24,7 @@ import {
   ProjectDocumentSchema,
   ProjectSchema,
   emptyProjectDocument,
+  PROJECT_DOCUMENT_PATH,
 } from "../../shared/project";
 import type {
   CreateProjectInput,
@@ -40,7 +41,6 @@ const RegistrySchema = z.object({
   schemaVersion: z.literal(1),
   projects: z.array(ProjectSchema),
 });
-const DOCUMENT_PATH = "cutroom.json";
 
 /** cutroom.json cannot be read. Project history can still restore it. */
 export class ProjectDocumentError extends HttpError {
@@ -252,7 +252,9 @@ export async function createProjectStore(options: {
     });
   const document = async (project: Project): Promise<ProjectDocument> => {
     const raw = await readFile(
-      await projectWritePath(project, DOCUMENT_PATH, { allowMissing: true }),
+      await projectWritePath(project, PROJECT_DOCUMENT_PATH, {
+        allowMissing: true,
+      }),
       "utf8",
     ).catch((error: unknown) => {
       if (isMissing(error)) return null;
@@ -278,7 +280,7 @@ export async function createProjectStore(options: {
     project: Project,
     value: ProjectDocument,
   ): Promise<FileMutationInput> => {
-    const absolute = await projectWritePath(project, DOCUMENT_PATH, {
+    const absolute = await projectWritePath(project, PROJECT_DOCUMENT_PATH, {
       allowMissing: true,
     });
     let before = documentReads.get(value);
@@ -302,7 +304,7 @@ export async function createProjectStore(options: {
       );
     }
     return {
-      sourceFile: DOCUMENT_PATH,
+      sourceFile: PROJECT_DOCUMENT_PATH,
       absPath: absolute,
       before,
       after: `${JSON.stringify(value, null, 2)}\n`,
@@ -389,7 +391,7 @@ export async function createProjectStore(options: {
         );
         await writeFile(join(path, "index.html"), starter(input));
         await writeFile(
-          join(path, DOCUMENT_PATH),
+          join(path, PROJECT_DOCUMENT_PATH),
           `${JSON.stringify(emptyProjectDocument(), null, 2)}\n`,
         );
         const now = new Date().toISOString();

@@ -1,5 +1,9 @@
 import type { Clip } from "../../../shared/timeline/schema";
-import { localMediaPath, sourceUrl } from "../../../shared/media";
+import {
+  localMediaPath,
+  previewMediaPath,
+  sourceUrl,
+} from "../../../shared/media";
 import {
   isEditable,
   variableDefaultValue,
@@ -216,18 +220,10 @@ export function BindImageVariable({
     .map(({ id, label }) => ({ value: id, label: `${label} (${id})` }));
   const src = clip.src;
   const local = src && localMediaPath(state.composition, src);
-  const root = src && localMediaPath("index.html", src);
-  // A scene can use a bare project-root asset path if no sibling file exists.
+  const resolved = src && previewMediaPath(state.composition, src, files);
   const value =
-    src &&
-    local &&
-    root &&
-    local !== root &&
-    !src.startsWith("../") &&
-    !/[?#]/.test(src) &&
-    !files[local] &&
-    files[root]
-      ? sourceUrl(state.composition, root)
+    src && resolved && resolved !== local && !/[?#]/.test(src)
+      ? sourceUrl(state.composition, resolved)
       : src;
   const declaration = VariableDeclarationSchema.safeParse({
     type: "image",

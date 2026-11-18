@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -625,6 +626,7 @@ export function ChatPanel({
   const [skillIndex, setSkillIndex] = useState(0);
   const [skillDismissed, setSkillDismissed] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const skillCaret = useRef<number | null>(null);
   const messages = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const pendingDraft = useRef({
@@ -904,6 +906,14 @@ export function ChatPanel({
     }
   }
 
+  useLayoutEffect(() => {
+    const caret = skillCaret.current;
+    if (caret === null) return;
+    skillCaret.current = null;
+    textarea.current?.focus();
+    textarea.current?.setSelectionRange(caret, caret);
+  }, [draft]);
+
   function insertSkill(skill: AgentSkill) {
     const path = skill.path;
     if (path)
@@ -916,12 +926,9 @@ export function ChatPanel({
     const before = draft
       .slice(0, caret)
       .replace(/\$[\w:/.-]*$/, `$${skill.name} `);
+    skillCaret.current = before.length;
     setDraft(before + draft.slice(caret));
     setSkillDismissed(true);
-    requestAnimationFrame(() => {
-      input?.focus();
-      input?.setSelectionRange(before.length, before.length);
-    });
   }
 
   async function send() {

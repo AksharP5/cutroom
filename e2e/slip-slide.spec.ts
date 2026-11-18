@@ -169,6 +169,9 @@ test("the Trim tool slides a clip by its name strip, trimming its neighbours and
 }) => {
   test.setTimeout(90_000);
   const project = await openProject(page, request);
+  const beforeDrag = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
   await page.keyboard.press("t");
   const ppf = await settled(page);
   const box = (await page.locator('[data-clip="b"]').boundingBox())!;
@@ -203,7 +206,7 @@ test("the Trim tool slides a clip by its name strip, trimming its neighbours and
   });
   // The first edit that moves a clip adds the track stylesheet and reloads; slides after it
   // update the preview in place. After S, period slides b one frame.
-  await waitForPreview(page);
+  await waitForPreview(page, { after: beforeDrag, timing: true });
   const src = await page.locator("iframe[data-live]").getAttribute("src");
   const revision = await page
     .locator(".edit-stage")

@@ -129,6 +129,25 @@ export function localMediaPath(sourceFile: string, src: string): string | null {
   return parts.join("/") || ".";
 }
 
+/** A bare scene URL can fall back to a project-root file when there is no sibling asset. */
+export function previewMediaPath(
+  sourceFile: string,
+  src: string,
+  files: Readonly<Record<string, string | null>>,
+): string | null {
+  const local = localMediaPath(sourceFile, src);
+  if (
+    local === null ||
+    !sourceFile.includes("/") ||
+    src.startsWith("../") ||
+    src.startsWith("/") ||
+    typeof files[local] === "string"
+  )
+    return local;
+  const root = localMediaPath("index.html", src);
+  return root && typeof files[root] === "string" ? root : local;
+}
+
 /** How `sourceFile` writes the project file `path` as a `src`: from its own folder. */
 export function sourceUrl(sourceFile: string, path: string) {
   const from = sourceFile.split("/").slice(0, -1);
