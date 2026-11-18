@@ -680,11 +680,7 @@ export function App() {
                       );
                       await refreshDocument();
                     }}
-                    onSend={() =>
-                      ask(
-                        `Apply my ${newNotes.length} pending review notes. They are included with this message's project context.`,
-                      )
-                    }
+                    onSend={() => ask("")}
                   />
                 </div>
                 <div hidden={panel !== "script"}>
@@ -725,6 +721,11 @@ export function App() {
               prompt={prompt}
               onPromptConsumed={consumePrompt}
               workingNote={workingIndex < 0 ? null : workingIndex + 1}
+              waitingNotes={newNotes}
+              onOpenNote={(note) => {
+                openReview(note.id);
+                void seek(note.time, note.compositionPath);
+              }}
               pickAttachment={() =>
                 new Promise((resolve) => {
                   attachmentResolve.current = {

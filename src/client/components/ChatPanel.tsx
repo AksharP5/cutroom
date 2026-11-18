@@ -22,6 +22,7 @@ import {
   type AgentSessionSummary,
   type AgentSkill,
 } from "../../shared/agent";
+import type { ReviewItem } from "../../shared/review";
 import { api, json } from "../api";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
@@ -160,6 +161,8 @@ export function ChatPanel({
   onPromptConsumed,
   pickAttachment,
   workingNote,
+  waitingNotes,
+  onOpenNote,
 }: {
   projectId: string;
   visible: boolean;
@@ -171,6 +174,8 @@ export function ChatPanel({
   pickAttachment: () => Promise<string | null>;
   /** The number, as in Review, of the note the agent has claimed. */
   workingNote: number | null;
+  waitingNotes: readonly ReviewItem[];
+  onOpenNote: (note: ReviewItem) => void;
 }) {
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   useEffect(() => {
@@ -447,8 +452,8 @@ export function ChatPanel({
   }, [session?.messages, session?.pendingRequest, session?.status]);
 
   useEffect(() => {
-    if (!prompt) return;
-    setDraft((value) => (value ? `${value}\n\n${prompt}` : prompt));
+    if (prompt === null) return;
+    if (prompt) setDraft((value) => (value ? `${value}\n\n${prompt}` : prompt));
     textarea.current?.focus();
     onPromptConsumed();
   }, [prompt, onPromptConsumed]);
@@ -504,12 +509,12 @@ export function ChatPanel({
     ({ id }) => id !== session?.runningFollowUpId,
   );
   const queuesMessage = busy || followUps.length > 0;
-  const canSend =
+  const linked = Boolean(session?.t3Thread);
+  const sendAvailable =
     !submitting &&
     !opening &&
-    !discovering &&
-    capabilities?.available &&
-    (draft.trim() || attachments.length);
+    (linked || (!discovering && capabilities?.available));
+  const canSend = sendAvailable && Boolean(draft.trim() || attachments.length);
   const controlsLocked = busy || submitting || opening;
   const canStop =
     busy || operation?.kind === "turn" || operation?.kind === "stop";
@@ -570,10 +575,11 @@ export function ChatPanel({
     setSkillDismissed(true);
   }
 
-  async function send() {
-    if (!canSend) return;
+  async function send(sendNotes = false) {
+    if (!sendAvailable || (!sendNotes && !canSend)) return;
     const openedView = view.current;
-    const text = draft;
+    const text =
+      sendNotes && !draft.trim() ? "Work through my review notes." : draft;
     const submittedAttachments = attachments;
     const skills = [...skillMentions(text)].flatMap((name) => {
       const choice = skillChoices[name];
@@ -615,7 +621,11 @@ export function ChatPanel({
         if (view.current === openedView)
           setChat({ phase: "ready", session: active });
       }
-      if (!queuesMessage && active.model !== (model || undefined)) {
+      if (
+        !active.t3Thread &&
+        !queuesMessage &&
+        active.model !== (model || undefined)
+      ) {
         active = await api(
           `/agents/sessions/${active.id}`,
           agentSessionSchema,
@@ -639,7 +649,7 @@ export function ChatPanel({
       );
       createdId = undefined;
       if (submission.stopped) return;
-      setDraft((current) => (current === text ? "" : current));
+      setDraft((current) => (current === draft ? "" : current));
       setAttachments((current) =>
         current.filter((path) => !submittedAttachments.includes(path)),
       );
@@ -793,7 +803,7 @@ export function ChatPanel({
         provider={session?.provider ?? provider}
         busy={busy}
         problem={
-          capabilities && !capabilities.available
+          !linked && capabilities && !capabilities.available
             ? (capabilities.error ?? "Choose an installed agent to begin.")
             : undefined
         }
@@ -902,6 +912,50 @@ export function ChatPanel({
           </div>
         )}
         <div className="composer">
+          {waitingNotes.length > 0 && (
+            <div
+              className="chat-review-notes"
+              title="Sent with your next message"
+            >
+              <span className="chat-review-mark" aria-hidden="true" />
+              <span>
+                {waitingNotes.length}{" "}
+                {waitingNotes.length === 1 ? "note" : "notes"}
+              </span>
+              <div className="chat-review-frames">
+                {waitingNotes.slice(0, 3).map((note) => (
+                  <button
+                    key={note.id}
+                    type="button"
+                    className="chat-review-thumb"
+                    aria-label={`Open review note ${note.body}`}
+                    onClick={() => onOpenNote(note)}
+                  >
+                    {note.framePath && (
+                      <img
+                        src={`/api/cutroom/projects/${projectId}/attachments/${encodeURIComponent(note.framePath.split("/").at(-1) ?? "")}`}
+                        alt=""
+                        decoding="async"
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
+              {waitingNotes.length > 3 && (
+                <span className="chat-review-more mono">
+                  +{waitingNotes.length - 3}
+                </span>
+              )}
+              <button
+                type="button"
+                className="text-button quiet"
+                disabled={!sendAvailable}
+                onClick={() => void send(true)}
+              >
+                Send now
+              </button>
+            </div>
+          )}
           {attachments.length > 0 && (
             <Attachments
               projectId={projectId}

@@ -29,6 +29,8 @@ The MCP instructions ask agents to create each animated title as its own sub-com
 
 Chat history is stored in Cutroom's data folder. Native session IDs allow a resumed chat to use the provider's existing context. Unsent composer text and attachments are saved in browser storage for each project.
 
+The composer shows how many new review notes will go with your next message. Select a frame to open its note in Review.
+
 If a native run needs approval or an answer, the chat shows that request. Stopping a run cancels its pending questions. Closing Cutroom ends active runs; reopening retains the chat and permits another message.
 
 ## Transcript
@@ -50,6 +52,8 @@ Clips changed through Cutroom's timeline, script, or HTML source tools have a bl
 ## Review queue
 
 Sending a message queues every new review note. The server then adds a digest of every unfinished note to that message: its ID, status, time, composition, element, frame path, a one-line summary, your replies and send-back notes, and any question or completion note. An unrelated follow-up still carries earlier notes, so the agent never loses them.
+
+Choose **Send now** in chat to send your draft with the notes. With a blank composer it sends "Work through my review notes." If the chat is working, the message goes into its follow-up queue. **Use notes in chat** in Review opens and focuses the composer.
 
 The digest asks the agent to reconcile the message with the queue first. Newer intent wins: when the message cancels or replaces a note, the agent withdraws it with a reason instead of doing it, and the server records which message withdrew it. A message can also answer a note the agent blocked on; the agent then claims it with that answer, which is saved on the note as a chat answer, and continues. The agent works through the queue with the [review tools](mcp.md#review-queue). When a run ends, fails, or is stopped, notes it claimed but did not finish return to the queue. Claims left by a closed app return on the next read.
 
