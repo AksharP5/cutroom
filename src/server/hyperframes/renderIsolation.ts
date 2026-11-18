@@ -236,6 +236,7 @@ export function registerRenderIsolation(
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
+    ["@hyperframes/core", "0.9.26"],
     ["@hyperframes/producer", "0.9.26"],
     ["@hyperframes/engine", "0.9.26"],
     ["@puppeteer/browsers", "3.2.2"],
@@ -278,6 +279,23 @@ export function registerRenderIsolation(
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
+      // Standalone templates keep the parent shell's styles and scripts. Its
+      // render canvas, like its duration, belongs to the selected scene.
+      if (url.endsWith("/@hyperframes/core/dist/compiler/standaloneEntry.js"))
+        return {
+          ...loaded,
+          source: replaceOnce(
+            String(loaded.source),
+            "    replaceBodyWithRenderClone(body, renderClone);",
+            `    for (const name of ["data-width", "data-height"]) {
+        const pixels = Math.floor(Number(sceneRoot?.getAttribute(name)));
+        if (Number.isSafeInteger(pixels) && pixels > 0)
+            renderClone.setAttribute(name, String(pixels));
+    }
+    replaceBodyWithRenderClone(body, renderClone);`,
+            url,
+          ),
+        };
       // Puppeteer starts each Chromium in its own session. Keeping it in the worker's
       // process group lets a stopped export take its browsers with it, even when the
       // worker is killed before Puppeteer's exit handlers can run.

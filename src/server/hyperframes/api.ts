@@ -285,8 +285,8 @@ export function createHyperframesApi(
     );
     // The preview and frame capture render a composition without a size at 1920 x 1080.
     const size = (name: string, fallback: number) => {
-      const value = Number(root.attrs[name]);
-      return Number.isFinite(value) && value > 0 ? value : fallback;
+      const pixels = Math.floor(Number(root.attrs[name]));
+      return Number.isSafeInteger(pixels) && pixels > 0 ? pixels : fallback;
     };
     /** Overrides for this composition's declarations, without those that equal a default. */
     const variables = (values: VariableValues | undefined) => {
