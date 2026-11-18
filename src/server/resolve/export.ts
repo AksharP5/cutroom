@@ -1,16 +1,26 @@
 import { constants } from "node:fs";
-import { copyFile, mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, extname, isAbsolute, join } from "node:path";
 import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { HttpError } from "../../shared/errors";
 import { localMediaPath, mediaKind } from "../../shared/media";
 import type { ResolveExport } from "../../shared/export";
 import type { Project } from "../../shared/project";
-import type { Timeline } from "../../shared/timeline/schema";
+import { isAudioKind } from "../../shared/timeline/schema";
+import type { Clip, Timeline } from "../../shared/timeline/schema";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { localMediaInputOptions } from "../media/input";
 import { projectPath, unavailableProjectFile } from "../projects/path";
-import { planResolveTimeline } from "./plan";
+import { layerTracks } from "./layers";
+import type { LayerTrack } from "./layers";
+import { label, planResolveTimeline } from "./plan";
 import type { ClipMedia } from "./plan";
 import { probeMedia } from "./probe";
 import type { MediaFacts } from "./probe";
@@ -51,6 +61,8 @@ export interface ResolveSource {
   size: { width: number; height: number };
   /** Image variables' current files, by variable id. */
   images: ReadonlyMap<string, string>;
+  /** Each graded clip's grade as a .cube LUT, by clip id. */
+  grades?: ReadonlyMap<string, string>;
 }
 
 /** Each clip's local media: only files inside the project, which the timeline names. */
@@ -58,6 +70,8 @@ async function clipMedia(source: ResolveSource) {
   const { project, composition, timeline } = source;
   const probes = new Map<string, Promise<MediaFacts | null>>();
   const offline = new Set<string>();
+  /** Clips whose media is missing or outside the project: never rendered, only named. */
+  const unreachable = new Set<string>();
   const media = new Map<string, ClipMedia>();
   await Promise.all(
     timeline.clips.map(async (clip) => {
@@ -75,6 +89,7 @@ async function clipMedia(source: ResolveSource) {
       );
       if (!path || !(await stat(path).catch(() => null))?.isFile()) {
         offline.add(relative);
+        unreachable.add(clip.id);
         return;
       }
       if (clip.kind === "image") {
@@ -94,7 +109,7 @@ async function clipMedia(source: ResolveSource) {
       if (facts) media.set(clip.id, { kind: "file", facts });
     }),
   );
-  return { media, offline: [...offline].sort() };
+  return { media, offline: [...offline].sort(), unreachable };
 }
 
 /** Copies each file once into `folder`, keeping its name unless another file took it. */
@@ -204,7 +219,15 @@ const describeRate = ({ num, den }: { num: number; den: number }) =>
  */
 export async function exportResolve(
   source: ResolveSource,
-  options: { directory: string; copyMedia: boolean },
+  options: {
+    directory: string;
+    copyMedia: boolean;
+    /** Renders one layer as a ProRes 4444 MOV in `directory`, answering its path. */
+    render?: (
+      layer: LayerTrack,
+      output: { directory: string; filename: string },
+    ) => Promise<string>;
+  },
 ): Promise<ResolveExport> {
   if (!isAbsolute(options.directory))
     throw new HttpError(400, "Enter an absolute output folder.");
@@ -214,8 +237,52 @@ export async function exportResolve(
   if (!(await stat(directory)).isDirectory())
     throw new HttpError(400, "The output folder is not a folder.");
   const stem = safeName(source.name, "Cut");
-  const { media, offline } = await clipMedia(source);
+  const found = await clipMedia(source);
   const folder = await claimFolder(directory, `${stem} Resolve`);
+  try {
+    return await writePackage(source, options, stem, folder, found);
+  } catch (error) {
+    // The folder is this export's own, so a failure leaves nothing half-written behind.
+    await rm(folder, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** A clip drawn into a layer render: plain video of that file, every look already in it. */
+const rendered = (clip: Clip, mediaStart: number): Clip => ({
+  ...clip,
+  kind: "video",
+  mediaStart,
+  playbackRate: 1,
+  hasAudio: false,
+  link: null,
+  volume: null,
+  opacity: null,
+  x: null,
+  y: null,
+  scaleX: null,
+  scaleY: null,
+  rotation: null,
+  crop: null,
+  keyframes: null,
+  region: null,
+  adjustment: false,
+  style: {},
+  fadeIn: 0,
+  fadeOut: 0,
+  transitionIn: null,
+  transitionOut: null,
+  automation: null,
+  fx: [],
+});
+
+async function writePackage(
+  source: ResolveSource,
+  options: Parameters<typeof exportResolve>[1],
+  stem: string,
+  folder: string,
+  { media, offline, unreachable }: Awaited<ReturnType<typeof clipMedia>>,
+): Promise<ResolveExport> {
   const decoded =
     process.platform === "linux"
       ? await decodeSound(
@@ -229,11 +296,84 @@ export async function exportResolve(
         )
       : [];
   if (options.copyMedia) await copyMedia(join(folder, "Media"), media);
+
+  // What Resolve can't open renders with transparency, a MOV per track, each clip its own cut of it.
+  const { fps } = source.timeline;
+  const videoTracks = [
+    ...new Set([
+      ...source.timeline.tracks
+        .filter((track) => track.kind === "video")
+        .map((track) => track.index),
+      ...source.timeline.clips
+        .filter((clip) => !isAudioKind(clip.kind))
+        .map((clip) => clip.track),
+    ]),
+  ].sort((a, b) => a - b);
+  const trackName = (index: number) => `V${videoTracks.indexOf(index) + 1}`;
+  const layers = options.render
+    ? layerTracks(source.timeline, new Set([...media.keys(), ...unreachable]))
+    : [];
+  const replaced = new Map<string, Clip>();
+  const layerNotes: string[] = [];
+  if (layers.length) await mkdir(join(folder, "Layers"));
+  for (const layer of layers) {
+    const filename = `${trackName(layer.track)}.mov`;
+    const path = await options.render!(layer, {
+      directory: join(folder, "Layers"),
+      filename,
+    });
+    const facts = await probeMedia(path);
+    if (!facts?.video)
+      throw new Error(`The ${filename} layer could not be read back.`);
+    for (const clip of layer.clips) {
+      media.set(clip.id, { kind: "file", facts });
+      replaced.set(
+        clip.id,
+        rendered(clip, ((clip.start - layer.start) * fps.den) / fps.num),
+      );
+    }
+    layerNotes.push(
+      layer.flatten
+        ? `${trackName(layer.track)}'s blur or highlight is drawn over the tracks beneath it in Layers/${filename}, as they were when exported.`
+        : `${trackName(layer.track)}'s titles, scenes and other clips Resolve can't open are rendered with transparency in Layers/${filename}, one clip each.`,
+    );
+  }
+  const timelineIn = replaced.size
+    ? {
+        ...source.timeline,
+        clips: source.timeline.clips.map(
+          (clip) => replaced.get(clip.id) ?? clip,
+        ),
+      }
+    : source.timeline;
+
+  const grades = [...(source.grades ?? [])].flatMap(([id, cube]) => {
+    const clip = source.timeline.clips.find((entry) => entry.id === id);
+    return clip ? [{ clip, cube }] : [];
+  });
+  const gradeNotes: string[] = [];
+  if (grades.length) {
+    await mkdir(join(folder, "LUTs"));
+    const taken = new Set<string>();
+    for (const { clip, cube } of grades) {
+      const stemOf = safeName(label(clip).replace(/\.[^.]+$/, ""), "Grade");
+      let name = `${stemOf}.cube`;
+      for (let number = 2; taken.has(name); number++)
+        name = `${stemOf} ${number}.cube`;
+      taken.add(name);
+      await writeFile(join(folder, "LUTs", name), cube, { flag: "wx" });
+      gradeNotes.push(
+        `Apply LUTs/${name} to "${label(clip)}" at ${formatTimecode(clip.start, fps)} on ${trackName(clip.track)}, its Cutroom grade.`,
+      );
+    }
+  }
+
   const plan = planResolveTimeline({
     name: stem,
-    timeline: source.timeline,
+    timeline: timelineIn,
     size: source.size,
     media,
+    baked: new Set(replaced.keys()),
   });
   const notes = [
     ...offline.map((path) => `${path} is offline, so its clips are left out.`),
@@ -249,7 +389,6 @@ export async function exportResolve(
   const markers = plan.markers ? join(folder, `${stem} markers.edl`) : null;
   if (markers && plan.markers)
     await writeFile(markers, plan.markers, { flag: "wx" });
-  const { fps } = source.timeline;
   const summary = join(folder, "Summary.txt");
   await writeFile(
     summary,
@@ -267,13 +406,25 @@ export async function exportResolve(
       options.copyMedia
         ? "Media: copied into the Media folder beside the timeline."
         : "Media: linked where it is in the project.",
+      ...(gradeNotes.length
+        ? ["", "Grades:", ...gradeNotes.map((note) => `- ${note}`)]
+        : []),
       "",
+      ...(layerNotes.length
+        ? ["Rendered as layers:", ...layerNotes.map((note) => `- ${note}`), ""]
+        : []),
       ...(notes.length
         ? ["Not carried over:", ...notes.map((note) => `- ${note}`)]
-        : ["Everything on the timeline was carried over."]),
+        : ["Everything else on the timeline was carried over."]),
       "",
     ].join("\n"),
     { flag: "wx" },
   );
-  return { outputPath: folder, timeline, markers, summary, notes };
+  return {
+    outputPath: folder,
+    timeline,
+    markers,
+    summary,
+    notes: [...layerNotes, ...notes],
+  };
 }
