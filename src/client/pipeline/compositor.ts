@@ -1,3 +1,5 @@
+import { GRADE_CACHE_SIZE } from "./grades";
+import type { GradeTexture } from "./grades";
 import { usesPreviewColourMatrix } from "../../shared/videoColour";
 
 /** One picture as Cutroom places it: the clip's box fills the composition, then CSS moves it. */
@@ -18,6 +20,7 @@ export interface Layer {
   opacity: number;
   /** A dip's `brightness()` filter. */
   brightness: number;
+  grade: GradeTexture | null;
 }
 
 const VERTEX = `#version 300 es
@@ -48,6 +51,8 @@ uniform mat3 orient;
 uniform vec4 shown;
 uniform float opacity;
 uniform float brightness;
+uniform highp sampler3D grade;
+uniform vec2 gradeGrid;
 out vec4 colour;
 vec3 rgbAt(ivec2 texel) {
   texel = clamp(texel, ivec2(0), textureSize(luma, 0) - 1);
@@ -75,6 +80,7 @@ void main() {
       f.y
     );
   }
+  if (gradeGrid.x > 0.0) rgb = texture(grade, rgb * gradeGrid.x + gradeGrid.y).rgb;
   colour = vec4(rgb * brightness * opacity, opacity);
 }`;
 
@@ -187,6 +193,60 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     return { texture, unit, shape: "" };
   });
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  const gradeUnit = gl.TEXTURE0 + textures.length;
+  gl.uniform1i(uniform("grade"), textures.length);
+  const gradeGrid = uniform("gradeGrid");
+  const grades = new Map<string, WebGLTexture>();
+  const ungraded = gl.createTexture();
+  gl.activeTexture(gradeUnit);
+  gl.bindTexture(gl.TEXTURE_3D, ungraded);
+  gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA8, 1, 1, 1);
+  let boundGrade: string | null = null;
+  const bindGrade = (lut: GradeTexture | null) => {
+    const key = lut?.key ?? null;
+    if (key === boundGrade) return;
+    boundGrade = key;
+    gl.activeTexture(gradeUnit);
+    if (!lut) {
+      gl.bindTexture(gl.TEXTURE_3D, ungraded);
+      gl.uniform2f(gradeGrid, 0, 0);
+      return;
+    }
+    let texture = grades.get(lut.key);
+    if (texture) {
+      grades.delete(lut.key);
+      gl.bindTexture(gl.TEXTURE_3D, texture);
+    } else {
+      if (grades.size >= GRADE_CACHE_SIZE) {
+        const oldest = grades.keys().next().value!;
+        gl.deleteTexture(grades.get(oldest)!);
+        grades.delete(oldest);
+      }
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_3D, texture);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+      gl.texImage3D(
+        gl.TEXTURE_3D,
+        0,
+        gl.RGBA8,
+        lut.size,
+        lut.size,
+        lut.size,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        lut.data,
+      );
+    }
+    grades.set(lut.key, texture);
+    // The cube's first and last values live at the centres of the edge texels.
+    gl.uniform2f(gradeGrid, (lut.size - 1) / lut.size, 0.5 / lut.size);
+  };
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   /** Each layer's plane bytes, reused from draw to draw. */
@@ -353,12 +413,16 @@ export function createCompositor(canvas: HTMLCanvasElement) {
           const { displayWidth: fw, displayHeight: fh } = layer.frame;
           upload(textures[0]!, fw, fh, gl.RGBA, gl.RGBA, layer.frame);
         }
+        bindGrade(layer.grade);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
     },
     lost: () => gl.isContextLost(),
     dispose() {
       for (const { texture } of textures) gl.deleteTexture(texture);
+      for (const texture of grades.values()) gl.deleteTexture(texture);
+      grades.clear();
+      gl.deleteTexture(ungraded);
       gl.deleteBuffer(corners);
       gl.deleteProgram(program);
       buffers.length = 0;

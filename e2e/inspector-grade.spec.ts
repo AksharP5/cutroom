@@ -27,6 +27,7 @@ const GradesSchema = z.object({
 async function gradeProject(
   request: APIRequestContext,
   filters: string[] = [],
+  pipeline = false,
 ) {
   const project = ProjectSchema.parse(
     await (
@@ -44,14 +45,20 @@ async function gradeProject(
       "-i",
       "color=0x808080:s=640x360:r=30:d=4",
     ],
-    ...[
-      "-vf",
-      [...filters, "format=yuv420p"].join(","),
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-    ],
+    "-vf",
+    [
+      ...filters,
+      "format=yuv420p",
+      ...(pipeline
+        ? [
+            "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+          ]
+        : []),
+    ].join(","),
+    "-c:v",
+    "libx264",
+    "-preset",
+    pipeline ? "medium" : "ultrafast",
     join(project.path, "grey.mp4"),
   ]);
   const index = join(project.path, "index.html");
@@ -60,7 +67,7 @@ async function gradeProject(
     (await readFile(index, "utf8")).replace(
       /<main([^>]*)>[\s\S]*<\/main>/,
       (_match, attributes: string) =>
-        `<main${attributes}>\n<video id="a" class="clip" muted src="grey.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="0" data-duration="2" data-track-index="0" data-label="Shot A"></video>\n<video id="b" class="clip" muted src="grey.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="2" data-duration="2" data-media-start="2" data-track-index="0" data-label="Shot B"></video>\n</main>`,
+        `<main${attributes}>\n<video id="a"${pipeline ? "" : ' class="clip"'} muted src="grey.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="0" data-duration="2" data-track-index="0" data-label="Shot A"></video>\n<video id="b"${pipeline ? "" : ' class="clip"'} muted src="grey.mp4" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain" data-start="2" data-duration="2" data-media-start="2" data-track-index="0" data-label="Shot B"></video>\n</main>`,
     ),
   );
   const steps = async () =>
@@ -79,7 +86,7 @@ async function gradeProject(
 }
 
 async function centrePixel(page: Page) {
-  const png = await page.locator("iframe[data-live]").screenshot();
+  const png = await page.locator(".edit-picture").screenshot();
   return page.evaluate(async (data) => {
     const image = new Image();
     image.src = `data:image/png;base64,${data}`;
@@ -283,6 +290,203 @@ test("Colour drafts a grade into the viewer while a slider moves and saves one u
   expect(await grade("b")).toEqual(await grade("a"));
 });
 
+test("the footage pipeline draws a grade draft and bypass from the same paused frame", async ({
+  page,
+  request,
+}) => {
+  const { project, steps } = await gradeProject(request, [], true);
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "true");
+  });
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  const stage = page.locator(".edit-stage");
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  const neutral = await warmth(page);
+  const before = await steps();
+  const frame = page.locator("iframe[data-live]");
+  const src = await frame.getAttribute("src");
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const slider = inspector.getByRole("slider", { name: "Temperature" });
+  const box = (await slider.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.8, box.y + box.height / 2);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(neutral + 20);
+  await expect(stage).toHaveAttribute("data-pipeline", "on");
+  await expect(frame).toHaveAttribute("src", src!);
+  expect(await steps()).toBe(before);
+  await page.mouse.up();
+  await expect.poll(steps).toBe(before + 1);
+  await expect.poll(() => warmth(page)).toBeGreaterThan(neutral + 20);
+
+  await page.keyboard.press("Shift+D");
+  await expect.poll(() => warmth(page)).toBeLessThan(neutral + 5);
+  await page.keyboard.press("Shift+D");
+  await expect.poll(() => warmth(page)).toBeGreaterThan(neutral + 20);
+
+  await seekFrame(page, 75);
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "75",
+  );
+  await expect.poll(() => warmth(page)).toBeLessThan(neutral + 5);
+  await seekFrame(page, 15);
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "15",
+  );
+  await expect.poll(() => warmth(page)).toBeGreaterThan(neutral + 20);
+
+  await expect(
+    page
+      .locator("iframe[data-live]")
+      .contentFrame()
+      .locator("[data-hf-color-grading-canvas]"),
+  ).toHaveCount(0);
+});
+
+test("the pipeline's 33-point grade matches export on synthetic swatches", async ({
+  page,
+  request,
+}) => {
+  const swatches = [
+    "303030",
+    "c0c0c0",
+    "842c91",
+    "c04048",
+    "be9f53",
+    "489e65",
+    "4387ac",
+    "753969",
+  ];
+  const { project } = await gradeProject(
+    request,
+    swatches.map(
+      (colour, index) =>
+        `drawbox=x=${index * 80}:y=0:w=80:h=360:color=0x${colour}:t=fill`,
+    ),
+    true,
+  );
+  const file = join(project.path, "index.html");
+  const grade = {
+    adjust: { temperature: 0.25, contrast: 0.16, exposure: 0.05 },
+    curves: {
+      master: [
+        [0, 0],
+        [0.25, 0.18],
+        [0.72, 0.8],
+        [1, 1],
+      ],
+    },
+    lut: { src: "look.cube", intensity: 0.8 },
+  };
+  const look = [0, 1].flatMap((b) =>
+    [0, 1].flatMap((g) =>
+      [0, 1].map(
+        (r) => `${r * 0.9 + 0.04} ${g * 0.92} ${b * 0.8 + 0.1 * (1 - r)}`,
+      ),
+    ),
+  );
+  await writeFile(
+    join(project.path, "look.cube"),
+    `LUT_3D_SIZE 2\n${look.join("\n")}\n`,
+  );
+  await writeFile(
+    file,
+    (await readFile(file, "utf8")).replace(
+      '<video id="a"',
+      `<video id="a" data-color-grading='${JSON.stringify(grade)}'`,
+    ),
+  );
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "true");
+  });
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await seekFrame(page, 15);
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-pipeline",
+    "on",
+  );
+  await expect(page.locator(".edit-pipeline")).toHaveAttribute(
+    "data-frame",
+    "15",
+  );
+  const png = await page.locator(".edit-picture").screenshot();
+  const preview = await page.evaluate(
+    async ({ data, count }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return Array.from({ length: count }, (_, i) =>
+        Array.from(
+          context
+            .getImageData(
+              Math.floor(((i + 0.5) * image.width) / count),
+              Math.floor(image.height / 2),
+              1,
+              1,
+            )
+            .data.slice(0, 3),
+        ),
+      );
+    },
+    { data: png.toString("base64"), count: swatches.length },
+  );
+  const response = await request.post(`/api/projects/${project.id}/export`, {
+    data: {
+      range: { start: 0, end: 1 },
+      quality: "high",
+      directory: project.path,
+      filename: "graded.mp4",
+    },
+  });
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await response.json());
+  expect(
+    await (await request.get(`/api/render/${jobId}/progress`)).text(),
+  ).toContain('"status":"complete"');
+  const { stdout } = await promisify(execFile)(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      join(project.path, "graded.mp4"),
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-vf",
+      "scale=in_color_matrix=bt709:flags=accurate_rnd+full_chroma_int,format=rgb24",
+      "pipe:1",
+    ],
+    { encoding: "buffer", maxBuffer: 1024 * 1024 },
+  );
+  const offsets = preview.flatMap((pixel, i) =>
+    pixel.map((value, channel) =>
+      Math.abs(value - stdout[(180 * 640 + i * 80 + 40) * 3 + channel]!),
+    ),
+  );
+  const mean = offsets.reduce((sum, delta) => sum + delta, 0) / offsets.length;
+  const max = Math.max(...offsets);
+  console.log(
+    `Grade swatches differ from export by ${mean.toFixed(2)} levels on average, max ${max}.`,
+  );
+  expect(mean, `mean colour error, max ${max}`).toBeLessThan(1.6);
+  expect(max, `max colour error, mean ${mean.toFixed(2)}`).toBeLessThanOrEqual(
+    6,
+  );
+});
 test("Curves add, move and remove points on each channel, drafting while they move", async ({
   page,
   request,

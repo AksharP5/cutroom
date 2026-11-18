@@ -181,3 +181,54 @@ diff --git a/dist/compiler/htmlBundler.js b/dist/compiler/htmlBundler.js
              return resolved ? safeReadFile(resolved) : null;
          },
          readVariableDefaults: readDeclaredDefaults,
+diff --git a/dist/colorGradingBake.js b/dist/colorGradingBake.js
+--- a/dist/colorGradingBake.js
++++ b/dist/colorGradingBake.js
+@@ -297,3 +297,24 @@
+     }
+     return `${lines.join("\n")}\n`;
+ }
++/** Bakes the preview's filterable RGBA8 3D texture, in the same order as a cube. */
++export function bakeHfColorGradingTexture(grading, size, lut) {
++    const resolved = normalizeHfColorGrading(grading);
++    const grade = resolved ? compileGrade(resolved, lut) : null;
++    const data = new Uint8Array(size ** 3 * 4);
++    const step = size - 1;
++    let index = 0;
++    for (let b = 0; b < size; b += 1) {
++        for (let g = 0; g < size; g += 1) {
++            for (let r = 0; r < size; r += 1) {
++                const input = [r / step, g / step, b / step];
++                const output = grade ? gradeColor(input, grade) : input;
++                data[index++] = Math.round(output[0] * 255);
++                data[index++] = Math.round(output[1] * 255);
++                data[index++] = Math.round(output[2] * 255);
++                data[index++] = 255;
++            }
++        }
++    }
++    return data;
++}
+diff --git a/dist/colorGradingBake.d.ts b/dist/colorGradingBake.d.ts
+--- a/dist/colorGradingBake.d.ts
++++ b/dist/colorGradingBake.d.ts
+@@ -12,3 +12,5 @@
+  * with spatial stages (grain, vignette, blur, halftone and the other effects), which no LUT holds.
+  */
+ export declare function bakeHfColorGradingCube(grading: HfColorGrading | ResolvedHfColorGrading, options?: BakeHfColorGradingCubeOptions): string;
++/** Bakes the preview's filterable RGBA8 3D texture, in the same order as a cube. */
++export declare function bakeHfColorGradingTexture(grading: HfColorGrading | ResolvedHfColorGrading, size: number, lut?: CubeLut3D | null): Uint8Array<ArrayBuffer>;
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -248,6 +248,10 @@
+       "import": "./dist/colorGrading.js",
+       "types": "./dist/colorGrading.d.ts"
+     },
++    "./color-grading-bake": {
++      "import": "./dist/colorGradingBake.js",
++      "types": "./dist/colorGradingBake.d.ts"
++    },
+     "./color-luts": {
+       "import": "./dist/colorLuts.js",
+       "types": "./dist/colorLuts.d.ts"

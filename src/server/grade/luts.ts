@@ -5,9 +5,14 @@ import { CubeLutParseError, parseCubeLut } from "@hyperframes/core/color-luts";
 import type { CubeLut3D } from "@hyperframes/core/color-luts";
 import { HttpError } from "../../shared/errors.ts";
 import type { Project } from "../../shared/project.ts";
-import { LUT_DIRECTORY } from "../../shared/timeline/grade.ts";
+import { LUT_DIRECTORY, LutPathSchema } from "../../shared/timeline/grade.ts";
 import type { Grade, LutInfo } from "../../shared/timeline/grade.ts";
-import { isMissing, projectPath, projectWritePath } from "../projects/path.ts";
+import {
+  isMissing,
+  projectPath,
+  projectWritePath,
+  resolveProjectPath,
+} from "../projects/path.ts";
 
 /** A 65-point cube written out is about 7 MB; anything past this is not a colour LUT. */
 export const LUT_FILE_BYTES = 16 * 1024 * 1024;
@@ -142,22 +147,32 @@ export async function importLutFile(
 }
 
 /** A project LUT, named relative to the composition file as its grade names it. */
-export async function readProjectLut(
+export async function readProjectLutBytes(
   project: Pick<Project, "path">,
   composition: string,
   src: string,
 ) {
   const path = posix.join(posix.dirname(composition), src);
-  const absolute = await projectPath(project, path).catch(() => {
+  const resolved = await resolveProjectPath(project, path).catch(() => {
     throw new HttpError(404, `The LUT ${src} is not in the project.`);
   });
-  const info = await stat(absolute);
+  if (!LutPathSchema.safeParse(resolved.path).success)
+    throw new HttpError(404, `The LUT ${src} is not in the project.`);
+  const info = await stat(resolved.absolute);
   if (!info.isFile() || info.size > LUT_FILE_BYTES)
     throw new HttpError(
       400,
       `The LUT ${src} is not a .cube file Cutroom reads.`,
     );
-  return readCube(await readFile(absolute));
+  return readFile(resolved.absolute);
+}
+
+export async function readProjectLut(
+  project: Pick<Project, "path">,
+  composition: string,
+  src: string,
+) {
+  return readCube(await readProjectLutBytes(project, composition, src));
 }
 
 /** The project's LUTs: every readable `.cube` in its luts folder. */

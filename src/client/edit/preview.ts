@@ -246,33 +246,38 @@ export function previewRegion(css: string | null, seek = false) {
   for (const target of regionTargets) target(regionDraft);
 }
 
-/** A grade while its control is dragged or stepped: the attribute value, or null for none. */
+/** The current adjustment while a grade control is dragged or stepped. */
 type GradeDraft = {
   clipId: string;
-  attribute: string | null;
+  grade: Grade | null;
   restore: boolean;
 };
 const gradeTargets = new Set<(draft: GradeDraft) => void>();
-let gradeDraft: GradeDraft | null = null;
+export const usePreviewGrade = create<{ draft: GradeDraft | null }>(() => ({
+  draft: null,
+}));
+const updateGradeDraft = (draft: GradeDraft | null) =>
+  usePreviewGrade.setState({ draft });
 /** Like Position, a grade draft goes only to preview documents, never through the timeline. */
 export function previewGrade(clipId: string, grade: Grade | null) {
-  gradeDraft = { clipId, attribute: writeGrade(grade), restore: false };
-  for (const target of gradeTargets) target(gradeDraft);
+  const draft = { clipId, grade, restore: false };
+  updateGradeDraft(draft);
+  for (const target of gradeTargets) target(draft);
 }
 
 export function cancelGradePreview(clipId: string) {
-  const draft = { clipId, attribute: null, restore: true };
+  const draft = { clipId, grade: null, restore: true };
   for (const target of gradeTargets) target(draft);
-  gradeDraft = null;
+  updateGradeDraft(null);
 }
 
 export async function commitGradePreview(commit: () => Promise<boolean>) {
-  const draft = gradeDraft;
+  const { draft } = usePreviewGrade.getState();
   const accepted = await commit();
   // The saved document replaces the drafted one; an earlier commit never clears a later draft.
-  if (gradeDraft !== draft) return;
+  if (usePreviewGrade.getState().draft !== draft) return;
   if (!accepted && draft) cancelGradePreview(draft.clipId);
-  gradeDraft = null;
+  updateGradeDraft(null);
 }
 
 /** Shift+D shows every clip ungraded in the viewer, as Resolve's bypass does, until pressed again. */
@@ -562,7 +567,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     send("region", draft);
   };
   const grade = (draft: GradeDraft) => {
-    send("grade", draft);
+    const { grade, ...target } = draft;
+    send("grade", { ...target, attribute: writeGrade(grade) });
   };
   const bypass = ({ bypass }: { bypass: boolean }) => {
     send("grade-bypass", { bypass });
@@ -614,7 +620,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (keyframeTargets.delete(keyframe) && !keyframeTargets.size)
       keyframeDraft = null;
     regionTargets.delete(region);
-    if (gradeTargets.delete(grade) && !gradeTargets.size) gradeDraft = null;
+    if (gradeTargets.delete(grade) && !gradeTargets.size)
+      updateGradeDraft(null);
     unfollowBypass();
     observers.delete(observe);
     if (warningSource === frame) {
@@ -691,7 +698,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         shown = positionDraft;
         shownTransform = transformDraft;
         shownKeyframe = keyframeDraft;
-        shownGrade = gradeDraft;
+        shownGrade = usePreviewGrade.getState().draft;
         if (shown) position(shown);
         if (shownTransform) transform(shownTransform);
         if (shownKeyframe) keyframe(shownKeyframe);
@@ -702,7 +709,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         shown !== positionDraft ||
         shownTransform !== transformDraft ||
         shownKeyframe !== keyframeDraft ||
-        shownGrade !== gradeDraft
+        shownGrade !== usePreviewGrade.getState().draft
       );
       // A candidate follows a drag already under way before it can replace the picture.
       let editing: EditPicture | null;

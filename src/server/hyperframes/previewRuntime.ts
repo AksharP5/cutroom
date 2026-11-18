@@ -40,6 +40,37 @@ export function previewRuntimeScript() {
     throw new Error(
       "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
+  const gradeChanges = [
+    // Video frame callbacks already redraw while playing. timeupdate would upload and shade
+    // the same picture again, including the copy back from WebGL to the clip canvas.
+    [
+      'gr(e,e.element,"timeupdate",t),gr(e,window,"resize",t)',
+      'gr(e,e.element,"timeupdate",()=>{(!ve(e.element)||e.element.paused||typeof e.element.requestVideoFrameCallback!=="function")&&t()}),gr(e,window,"resize",t)',
+    ],
+    // Parked videos retain their attributes for seek, edit and fallback. The runtime must
+    // neither draw them nor keep a pending grading entry for each of them.
+    [
+      "function Bp(e){return cH(e)||GH(e)}",
+      "function Bp(e){return !window.__cutroomParkedMedia?.has(e)&&(cH(e)||GH(e))}",
+    ],
+    [
+      "if(!br(L))return;F.add(L);let V=Ka(L)",
+      "if(!br(L)||window.__cutroomParkedMedia?.has(L))return;F.add(L);let V=Ka(L)",
+    ],
+    [
+      "E=(F,N,L)=>{r.delete(F);let V=t.get(F);",
+      "E=(F,N,L)=>{r.delete(F);if(window.__cutroomParkedMedia?.has(F))return!1;let V=t.get(F);",
+    ],
+    [
+      '(!L.isConnected||V.source==="attribute"&&!F.has(L))',
+      '(!L.isConnected||window.__cutroomParkedMedia?.has(L)||V.source==="attribute"&&!F.has(L))',
+    ],
+  ] as const;
+  for (const [before] of gradeChanges)
+    if (source.split(before).length !== 2)
+      throw new Error(
+        "Cutroom's colour preview adapter no longer matches HyperFrames 0.9.26.",
+      );
   script = source
     // A standalone preview fetches its children. Use the same template and default order as the compiler.
     .replace(fetchedTemplate, 'A.querySelector("template")')
@@ -53,5 +84,7 @@ export function previewRuntimeScript() {
       seed,
       '||o.unshift({kind:"set",time:n.scheduledAt,value:(r??_h)(rn(e,n.elapsed,t))}),i?.kind==="ramp"&&e.points[0].t>n.elapsed&&o.splice(1,0,{kind:"ramp",time:n.scheduledAt+(e.points[0].t-n.elapsed)/n.rate,value:(r??_h)(e.points[0].v)}),o}',
     );
+  for (const [before, after] of gradeChanges)
+    script = script.replace(before, after);
   return script;
 }

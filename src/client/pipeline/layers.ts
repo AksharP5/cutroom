@@ -38,6 +38,8 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
     plan.drawable[id] ?? (plan.hyperframes[id] ? "hyperframes" : undefined);
   const ownerOf = (clip: Clip): Owner | null => {
     const owner = named(clip.id);
+    if (owner === "hyperframes") return owner;
+    if (clip.sourceRestrictions?.grade) return null;
     if (owner) return owner;
     if (order.has(clip.id)) return null;
     // A piece an edit just made, such as the razor's, draws as the clip it came from until the

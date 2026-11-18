@@ -99,7 +99,7 @@ Run it with `bun run build`, then `node scripts/bench-vs-studio.ts --editor cutr
 | Ripple delete, key to picture        |   609 ms |            649 ms |
 | Browser memory after the session     | 1,409 MB |          1,507 MB |
 
-HyperFrames' runtime draws a graded video through one shared WebGL context and copies the result into a canvas beside the clip, every displayed frame while it plays. The footage pipeline hands graded clips to it for now.
+HyperFrames' runtime draws a graded video through one shared WebGL context and copies the result into a canvas beside the clip, every displayed frame while it plays. These figures predate the 3D LUT compositor and the runtime's removal of redundant playback redraws. Use `--footage-only --grade --slider` to measure scrubbing, playback and slider response without running the edit suite. Add `--pipeline --pipeline-compatible` to exercise GPU footage playback. That variant uses the same media, cuts, titles and scenes and removes the root script, video's CSS class, and local GSAP path that prevented the original project from using the pipeline.
 
 ## Timeline engine
 

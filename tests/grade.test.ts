@@ -189,7 +189,7 @@ test("grades are refused on sound, out of range, and on authored grades Cutroom 
   });
 });
 
-test("the direct export draws a graded clip from its source with the grade; the footage pipeline leaves it to HyperFrames", () => {
+test("the direct export draws a graded clip from its source with the grade; the footage pipeline can draw it", () => {
   const graded = edit(page(shot), [
     { type: "setClip", clipId: "shot", grade: look },
   ]);
@@ -197,8 +197,8 @@ test("the direct export draws a graded clip from its source with the grade; the 
   expect(plan).toMatchObject({
     segments: [{ kind: "source", src: "shot.mp4", grade: look }],
   });
-  expect(planPreviewPipeline(graded, { num: 30, den: 1 })).toEqual({
-    reason: "shot is graded, which HyperFrames draws",
+  expect(planPreviewPipeline(graded, { num: 30, den: 1 })).toMatchObject({
+    drawable: { shot: "contain" },
   });
   // A grade with a stage no LUT holds goes to frame capture.
   const grained = page(
@@ -208,6 +208,9 @@ test("the direct export draws a graded clip from its source with the grade; the 
     ),
   );
   expect(planDirectExport(grained, { num: 30, den: 1 }, null)).toEqual({
+    reason: "shot has a grade Cutroom cannot bake",
+  });
+  expect(planPreviewPipeline(grained, { num: 30, den: 1 })).toEqual({
     reason: "shot has a grade Cutroom cannot bake",
   });
 });
