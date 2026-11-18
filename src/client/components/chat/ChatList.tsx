@@ -25,7 +25,7 @@ import { menuStep } from "../menu";
 import "../select-menu.css";
 
 import { chatAge } from "./clock";
-import { SharedChats } from "./SharedChats";
+import { SharedChats, t3ThreadPageSize } from "./SharedChats";
 import type { SharedChatView } from "./SharedChats";
 
 export function chatIsBusy(chat: AgentSessionSummary) {
@@ -136,11 +136,14 @@ export const ChatList = memo(function ChatList({
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const threadFilter = useRef<HTMLInputElement>(null);
   const confirm = useRef<HTMLButtonElement>(null);
   const search = useRef({ text: "", at: 0 });
   const focusRow = useRef<string | null>(null);
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<SharedChatView | null>(null);
+  const [threadQuery, setThreadQuery] = useState("");
+  const [threadLimit, setThreadLimit] = useState(t3ThreadPageSize);
   const [edit, setEdit] = useState<ChatEdit | null>(null);
   const [saving, setSaving] = useState(false);
   const shouldPoll = working || chats.some(chatIsBusy);
@@ -192,12 +195,22 @@ export const ChatList = memo(function ChatList({
       item?.focus();
       focusRow.current = null;
     }
-  }, [editId, editKind, open, mode]);
+  }, [editId, editKind, open, mode, threadLimit]);
+
+  useLayoutEffect(() => {
+    if (open && mode === "t3") threadFilter.current?.focus();
+  }, [open, mode]);
+
+  function filterThreads(query: string) {
+    setThreadQuery(query);
+    setThreadLimit(t3ThreadPageSize);
+  }
 
   function showView(next: SharedChatView | null) {
-    focusRow.current = next ? "back" : mode;
+    focusRow.current = next === "t3" ? null : next ? "back" : mode;
     search.current = { text: "", at: 0 };
     if (popover.current) popover.current.scrollTop = 0;
+    if (next === "t3") filterThreads("");
     setMode(next);
   }
 
@@ -247,11 +260,22 @@ export const ChatList = memo(function ChatList({
 
   function navigate(event: KeyboardEvent<HTMLDivElement>) {
     event.stopPropagation();
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
       if (edit && !saving) endEdit(edit.id);
-      else if (mode) showView(null);
+      else if (mode === "t3" && threadQuery) {
+        filterThreads("");
+        threadFilter.current?.focus();
+      } else if (mode) showView(null);
       else close(true);
+      return;
+    }
+    if (event.target === threadFilter.current && event.key === "ArrowDown") {
+      event.preventDefault();
+      rows()
+        .find((item) => item.dataset.menuRow !== "back")
+        ?.focus();
       return;
     }
     if (edit || event.target instanceof HTMLInputElement) return;
@@ -387,12 +411,28 @@ export const ChatList = memo(function ChatList({
             >
               <CaretLeft /> Chats
             </button>
+            {mode === "t3" && (
+              <input
+                ref={threadFilter}
+                className="chat-thread-filter"
+                aria-label="Find a thread"
+                placeholder="Find a thread"
+                value={threadQuery}
+                onChange={(event) => filterThreads(event.target.value)}
+              />
+            )}
             <SharedChats
               key={mode}
               mode={mode}
               projectId={projectId}
               chats={chats}
               loadChats={loadChats}
+              threadQuery={threadQuery}
+              threadLimit={threadLimit}
+              onShowMore={(firstNewThread) => {
+                focusRow.current = firstNewThread;
+                setThreadLimit((limit) => limit + t3ThreadPageSize);
+              }}
               onSelect={(chat) => {
                 if (chat.id !== selectedId) onSelect(chat);
                 close(true);

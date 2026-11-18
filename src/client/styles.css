@@ -945,6 +945,17 @@ option {
   min-height: 0;
   overflow: auto;
 }
+.chat-toolbar .chat-list[data-shared="t3"] {
+  height: 100%;
+}
+.chat-list[data-shared="t3"] .chat-list-scroll {
+  flex: 1;
+}
+.chat-thread-filter {
+  flex: none;
+  height: var(--size-row);
+  margin: var(--space-1);
+}
 .chat-list-group > .quiet-label,
 .chat-list-message {
   margin: 0;

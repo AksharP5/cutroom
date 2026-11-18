@@ -69,6 +69,8 @@ Hover a Review row to move it up or down in the queue, or withdraw it. The order
 
 Select the chat title, then **Link a T3 Code thread** to pick up a chat you already started there. Use **Open in T3 Code** in the chat header to open its thread link. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
 
+Use **Find a thread** to search all thread titles or **Show 20 more** to keep browsing, with threads already linked to this project listed first.
+
 Cutroom mirrors the thread's recent messages and status while the chat is open. It sends your message, one line naming the project, the current video context, and a digest of unfinished review notes. Attachments and note frames go as absolute local file paths. A busy T3 Code thread queues the message for its next turn. The attached paths and context also appear in T3 Code's transcript.
 
 All paths below are under `/api/cutroom`.
