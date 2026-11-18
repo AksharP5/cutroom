@@ -13,6 +13,8 @@ import {
 } from "../../shared/agent";
 import { HttpError } from "../../shared/errors";
 import type { AgentService } from "./service";
+import { nativeSessionInputSchema } from "./native-sessions";
+import { NativeSessionConflict } from "./native-session-conflict";
 
 export function createAgentRoutes(service: AgentService) {
   const app = new Hono();
@@ -28,6 +30,8 @@ export function createAgentRoutes(service: AgentService) {
     await next();
   });
   app.onError((error, c) => {
+    if (error instanceof NativeSessionConflict)
+      return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof HttpError) {
       const message = error.message.replace(
         "A conversation in this project is already working.",
@@ -67,6 +71,17 @@ export function createAgentRoutes(service: AgentService) {
         projectId,
         c.req.query("refresh") === "true",
       ),
+    );
+  });
+  app.get("/projects/:id/native-sessions", async (c) =>
+    c.json(await service.listNativeSessions(c.req.param("id"))),
+  );
+  app.post("/projects/:id/native-sessions/:mode", async (c) => {
+    const mode = z.enum(["continue", "branch"]).parse(c.req.param("mode"));
+    const input = nativeSessionInputSchema.parse(await c.req.json());
+    return c.json(
+      await service.openNativeSession(c.req.param("id"), input, mode),
+      201,
     );
   });
   app.get("/projects/:id/t3-threads", async (c) =>

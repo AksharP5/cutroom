@@ -34,6 +34,7 @@ export class CodexClient {
   version?: string;
   private readonly process;
   readonly ready: Promise<void>;
+  readonly exited: Promise<void>;
 
   constructor(options: CodexProcessOptions = {}) {
     this.process = spawn(
@@ -44,6 +45,9 @@ export class CodexClient {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },
+    );
+    this.exited = new Promise((resolve) =>
+      this.process.once("close", () => resolve()),
     );
     this.process.stderr.on("data", (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString()).slice(-8_000);

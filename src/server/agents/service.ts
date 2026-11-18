@@ -16,6 +16,7 @@ import type {
   CreateAgentSession,
 } from "../../shared/agent";
 import { HttpError } from "../../shared/errors";
+import type { Project } from "../../shared/project";
 import type { ProjectStore } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { createNativeRuntimeFactory } from "./factory";
@@ -25,6 +26,12 @@ import { completeMessage } from "./runtime";
 import type { AgentRuntime, ModelSelection, RuntimeFactory } from "./runtime";
 import { projectAttachments, T3Chats } from "./t3-chats";
 import type { T3Runner } from "./t3-link";
+import { NativeSessions } from "./native-sessions";
+import type { NativeSessionInput } from "./native-sessions";
+import {
+  guardClaudeSession,
+  NativeSessionConflict,
+} from "./native-session-conflict";
 
 const newChatTitle = "New chat";
 const storedSessionSchema = agentSessionSchema.extend({
@@ -66,6 +73,7 @@ export type AgentServiceOptions = {
   studioUrl?: string;
   runtimeFactory?: RuntimeFactory;
   t3Runner?: T3Runner;
+  nativeSessions?: NativeSessions;
 };
 
 export class AgentService {
@@ -81,6 +89,7 @@ export class AgentService {
   private readonly factory: RuntimeFactory;
   private readonly path: string;
   private readonly t3: T3Chats;
+  private readonly nativeSessions: NativeSessions;
   private readonly sequences = new Map<string, number>();
   /** One per conversation, so review actions are bound to that conversation's project and run. */
   private readonly agentTokens = new Map<string, string>();
@@ -94,6 +103,7 @@ export class AgentService {
   constructor(private readonly options: AgentServiceOptions) {
     this.path = join(options.dataDir, "agents.json");
     this.t3 = new T3Chats(options.review, options.t3Runner);
+    this.nativeSessions = options.nativeSessions ?? new NativeSessions();
     this.factory =
       options.runtimeFactory ?? createNativeRuntimeFactory(options.studioUrl);
   }
@@ -256,6 +266,83 @@ export class AgentService {
     };
     this.sessions.set(session.id, session);
     await this.persist();
+    return this.get(session.id);
+  }
+
+  async listNativeSessions(projectId: string) {
+    this.requireOpen();
+    const project = await this.options.projects.get(projectId);
+    this.requireOpen();
+    const excluded = { claude: new Set<string>(), codex: new Set<string>() };
+    for (const session of this.sessions.values()) {
+      if (session.nativeSessionId)
+        excluded[session.provider].add(session.nativeSessionId);
+      if (session.t3Thread)
+        excluded[session.provider].add(session.t3Thread.threadId);
+    }
+    return this.nativeSessions.list(project.path, excluded);
+  }
+
+  async openNativeSession(
+    projectId: string,
+    input: NativeSessionInput,
+    mode: "continue" | "branch",
+  ) {
+    this.requireOpen();
+    const project = await this.options.projects.get(projectId);
+    this.requireOpen();
+    const findOwner = () =>
+      [...this.sessions.values()].find(
+        (session) =>
+          session.provider === input.provider &&
+          (session.nativeSessionId === input.sessionId ||
+            session.t3Thread?.threadId === input.sessionId),
+      );
+    const existingContinue = async (session: AgentSession | undefined) => {
+      if (session?.t3Thread || (session && session.projectId !== projectId))
+        throw new HttpError(
+          409,
+          "This native chat already belongs to another conversation.",
+        );
+      if (!session || mode !== "continue") return undefined;
+      await this.writeChain;
+      return this.get(session.id);
+    };
+    const owner = findOwner();
+    const existing = await existingContinue(owner);
+    if (existing) return existing;
+    const imported = await this.nativeSessions.open(
+      project.path,
+      input,
+      mode,
+      Boolean(owner),
+    );
+    this.requireOpen();
+    // Recheck synchronously before claiming the ID, so concurrent Continue requests share one chat.
+    const concurrent = findOwner();
+    if (concurrent && concurrent !== owner) {
+      const session = await existingContinue(concurrent);
+      if (session) return session;
+    }
+    const session: AgentSession = {
+      id: crypto.randomUUID(),
+      projectId,
+      provider: input.provider,
+      nativeSessionId: imported.id,
+      nativeImport: { mode, omittedMessages: imported.omittedMessages },
+      title: imported.title,
+      createdAt: new Date().toISOString(),
+      updatedAt: imported.updatedAt,
+      status: "idle",
+      messages: imported.messages,
+    };
+    this.sessions.set(session.id, session);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.sessions.delete(session.id);
+      throw error;
+    }
     return this.get(session.id);
   }
 
@@ -551,6 +638,9 @@ export class AgentService {
         this.apply(id, {
           type: "error",
           message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof NativeSessionConflict
+            ? { code: error.code }
+            : {}),
         });
       throw error;
     }
@@ -644,7 +734,38 @@ export class AgentService {
     );
     const nativeTurn = { ...turn, skills, attachments };
     if (this.admissionCancelled(id, operation)) return this.get(id);
+    const continuedClaudeId =
+      session.provider === "claude" && session.nativeImport?.mode === "continue"
+        ? session.nativeSessionId
+        : undefined;
+    if (continuedClaudeId) {
+      const changedAt = await this.prepare(
+        operation,
+        this.nativeSessions.claudeChangedAt(project.path, continuedClaudeId),
+      );
+      if (this.admissionCancelled(id, operation)) return this.get(id);
+      guardClaudeSession(changedAt, session.nativeImport?.lastOwnWrite);
+    }
+    const preparedRuntime =
+      session.provider === "codex" && session.nativeImport
+        ? this.runtime(session, project)
+        : undefined;
+    if (preparedRuntime?.prepare) {
+      try {
+        await this.prepare(operation, preparedRuntime.prepare());
+      } catch (error) {
+        if (this.runtimes.get(id) === preparedRuntime) {
+          this.runtimes.delete(id);
+          preparedRuntime.dispose();
+        }
+        if (error instanceof HttpError || operation.controller.signal.aborted)
+          throw error;
+        throw new HttpError(503, "Could not open this chat in Codex.");
+      }
+      if (this.admissionCancelled(id, operation)) return this.get(id);
+    }
     if (
+      !session.nativeImport &&
       session.title === newChatTitle &&
       !session.customTitle &&
       !session.messages.some((message) => message.role === "user")
@@ -690,46 +811,7 @@ export class AgentService {
       return this.get(id);
     }
     operation.phase = "running";
-    let runtime = this.runtimes.get(id);
-    const always = this.cutroomEdits[session.projectId] === true;
-    if (runtime && this.runtimePermissions.get(id) !== always) {
-      runtime.dispose();
-      this.runtimes.delete(id);
-      runtime = undefined;
-    }
-    if (!runtime) {
-      this.runtimePermissions.set(id, always);
-      runtime = this.factory.create(session.provider, {
-        cwd: project.path,
-        model: session.model,
-        effort: session.effort,
-        nativeSessionId: session.nativeSessionId,
-        agentToken: this.agentToken(id),
-        allowCutroomEdits: () => this.cutroomEdits[session.projectId] === true,
-        names: projectNames(
-          this.options.projects,
-          this.options.review,
-          project,
-        ),
-        emit: (event) => {
-          if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
-            return;
-          if (event.type === "error") {
-            this.finishStreaming(id, "failed");
-            this.rejectRequests(id);
-            this.runtimes.delete(id);
-            runtime.dispose();
-          }
-          this.apply(id, event);
-        },
-        request: (request, signal) =>
-          runtime && this.runtimes.get(id) === runtime
-            ? this.request(id, request, signal)
-            : Promise.resolve({ requestId: request.id, decision: "deny" }),
-      });
-      this.runtimes.set(id, runtime);
-    }
-    const native = runtime;
+    const native = preparedRuntime ?? this.runtime(session, project);
     if (operation.queuedId) this.apply(id, { type: "message", message });
     void native
       .send({
@@ -737,6 +819,21 @@ export class AgentService {
         context:
           [review.digest, turn.context].filter(Boolean).join("\n\n") ||
           undefined,
+      })
+      .finally(async () => {
+        if (!continuedClaudeId || this.runtimes.get(id) !== native) return;
+        // Reopen on the next turn so Claude sees writes made outside this query.
+        this.runtimes.delete(id);
+        if (!native.closeAfterTurn) {
+          native.dispose();
+          return;
+        }
+        if (!(await native.closeAfterTurn())) return;
+        const saved = await this.nativeSessions
+          .claudeChangedAt(project.path, continuedClaudeId)
+          .catch(() => undefined);
+        if (saved !== undefined && session.nativeImport)
+          session.nativeImport.lastOwnWrite = saved;
       })
       .then(async () => {
         await endReview();
@@ -785,6 +882,50 @@ export class AgentService {
         void this.persist().catch((failure) => this.storageFailed(failure));
       });
     return this.get(id);
+  }
+
+  private runtime(session: AgentSession, project: Project) {
+    const { id } = session;
+    let runtime = this.runtimes.get(id);
+    const always = this.cutroomEdits[session.projectId] === true;
+    if (runtime && this.runtimePermissions.get(id) !== always) {
+      runtime.dispose();
+      this.runtimes.delete(id);
+      runtime = undefined;
+    }
+    if (!runtime) {
+      this.runtimePermissions.set(id, always);
+      runtime = this.factory.create(session.provider, {
+        cwd: project.path,
+        model: session.model,
+        effort: session.effort,
+        nativeSessionId: session.nativeSessionId,
+        agentToken: this.agentToken(id),
+        allowCutroomEdits: () => this.cutroomEdits[session.projectId] === true,
+        names: projectNames(
+          this.options.projects,
+          this.options.review,
+          project,
+        ),
+        emit: (event) => {
+          if (this.disposed || !runtime || this.runtimes.get(id) !== runtime)
+            return;
+          if (event.type === "error") {
+            this.finishStreaming(id, "failed");
+            this.rejectRequests(id);
+            this.runtimes.delete(id);
+            runtime.dispose();
+          }
+          this.apply(id, event);
+        },
+        request: (request, signal) =>
+          runtime && this.runtimes.get(id) === runtime
+            ? this.request(id, request, signal)
+            : Promise.resolve({ requestId: request.id, decision: "deny" }),
+      });
+      this.runtimes.set(id, runtime);
+    }
+    return runtime;
   }
 
   async interrupt(id: string) {

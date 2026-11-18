@@ -156,6 +156,13 @@ export const agentSessionSchema = z.object({
   model: z.string().optional(),
   effort: z.string().optional(),
   nativeSessionId: z.string().optional(),
+  nativeImport: z
+    .object({
+      mode: z.enum(["continue", "branch"]),
+      omittedMessages: z.number().int().nonnegative(),
+      lastOwnWrite: z.number().optional(),
+    })
+    .optional(),
   t3Thread: z
     .object({ threadId: t3ThreadIdSchema, link: z.string() })
     .optional(),
@@ -230,7 +237,11 @@ export const agentEventSchema = z.discriminatedUnion("type", [
     type: z.literal("capabilities"),
     capabilities: agentCapabilitiesSchema,
   }),
-  z.object({ type: z.literal("error"), message: z.string() }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    code: z.literal("native_session_conflict").optional(),
+  }),
 ]);
 export type AgentEvent = z.infer<typeof agentEventSchema>;
 export const agentEventEnvelopeSchema = z.object({

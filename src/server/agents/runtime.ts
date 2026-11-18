@@ -31,6 +31,9 @@ export interface RuntimeOptions extends ModelSelection {
 }
 
 export interface AgentRuntime {
+  prepare?(): Promise<void>;
+  /** Close a resumed query after its final writes. Returns whether it reported a turn result. */
+  closeAfterTurn?(): Promise<boolean>;
   send(turn: AgentTurn): Promise<void>;
   configureModel?(selection: ModelSelection): void;
   interrupt(): Promise<void>;
@@ -137,6 +140,7 @@ export function toolCalls(cwd: string) {
       calls.set(id, message);
       return message;
     },
+    forget: (id: string) => calls.delete(id),
     clear: () => calls.clear(),
   };
 }
