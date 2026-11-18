@@ -110,6 +110,40 @@ test("Escape leaves the composer with its draft and returns editor keys", async 
   await page.screenshot({ path: info.outputPath("composer.png") });
 });
 
+test("Draw and Comment keys type normally in editor fields", async ({
+  page,
+}) => {
+  const tools = page.getByRole("toolbar", { name: "Tools" });
+  const select = tools.getByRole("button", { name: "Select A", exact: true });
+  const name = page.getByRole("textbox", { name: "Name A1", exact: true });
+  const composer = page.getByRole("textbox", { name: "Message your agent" });
+
+  await name.click();
+  await page.keyboard.press("d");
+  await page.keyboard.press("c");
+  await expect(name).toHaveValue("dc");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+
+  await composer.click();
+  await page.keyboard.press("d");
+  await page.keyboard.press("c");
+  await expect(composer).toHaveValue("dc");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+
+  await page.keyboard.press("Control+Alt+c");
+  const source = page
+    .getByRole("region", { name: "Code" })
+    .locator(".cm-content");
+  await expect(source).toContainText("<!doctype html>");
+  await source.press("Control+Home");
+  await page.keyboard.press("d");
+  await page.keyboard.press("c");
+  await expect(source).toContainText("dc<!doctype html>");
+  await expect(select).toHaveAttribute("aria-pressed", "true");
+});
+
 test("a pointer menu restores an interrupted field, while a keyboard picker keeps its opener", async ({
   page,
 }) => {

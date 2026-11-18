@@ -345,7 +345,7 @@ for (const arrival of ["move", "insert"] as const) {
   }
 }
 
-for (const key of ["c", "Control", "Meta"]) {
+for (const key of ["Alt+c", "Control", "Meta"]) {
   test(`${key} changes a stationary drag's snap before release`, async ({
     page,
     request,
@@ -361,7 +361,7 @@ for (const key of ["c", "Control", "Meta"]) {
     await drag(await at(300), await at(422), false);
     const snap = timeline.locator(".tl-snap");
     await expect(snap).toBeVisible();
-    if (key === "c") await page.keyboard.press(key);
+    if (key === "Alt+c") await page.keyboard.press(key);
     else await page.keyboard.down(key);
     await expect(snap).toBeHidden();
     if (key === "Control") {
@@ -371,7 +371,7 @@ for (const key of ["c", "Control", "Meta"]) {
       await expect(snap).toBeHidden();
     }
     await page.mouse.up();
-    if (key !== "c") await page.keyboard.up(key);
+    if (key !== "Alt+c") await page.keyboard.up(key);
     await expect
       .poll(read)
       .toEqual([...shots.slice(0, 3), ["shot-4", 0, 392, 90], title]);
@@ -466,7 +466,7 @@ test("a drag overwrites and splits the covered clip, with one undo step", async 
   page.on("request", (sent) => {
     if (sent.url().endsWith("/commands")) commands++;
   });
-  await page.keyboard.press("c");
+  await page.keyboard.press("Alt+c");
   await drag(await at(285), await at(135), false);
   await expect(timeline.locator(".tl-lanes")).not.toHaveAttribute(
     "data-refused",
