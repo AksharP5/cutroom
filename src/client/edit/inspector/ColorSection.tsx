@@ -188,7 +188,7 @@ function GradeSlider({
   const saved = useRef<number | null>(null);
   // Saves land in order; an earlier one arriving between key presses must not move the slider.
   useEffect(() => {
-    if (latest.current !== null && value !== latest.current) return;
+    if (latest.current === null || value !== latest.current) return;
     setLive(null);
     latest.current = null;
     saved.current = null;
