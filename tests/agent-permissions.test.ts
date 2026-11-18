@@ -72,6 +72,7 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
     "review_withdraw",
     "annotation_remove",
     "export_start",
+    "export_frame",
     "export_cancel",
     "project_create",
     "project_import",
