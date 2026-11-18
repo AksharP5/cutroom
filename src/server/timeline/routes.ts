@@ -83,6 +83,8 @@ import { animationFeedback } from "./animationFeedback";
 import { compositionMediaFacts, mediaFacts } from "./media";
 import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
 import { freezeCompanion } from "../projects/freezeAssets";
+import { versionFiles } from "./versions";
+import { isCompositionFile } from "../../shared/timeline/versions";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -262,15 +264,20 @@ export function createTimelineRoutes(
           : [],
       ),
     );
-    const hosted = await hostedCompositions(
+    const versionSources = await versionFiles(
       project,
       composition,
-      batch.commands.flatMap((command) =>
+      current.parsed.timeline,
+      batch.commands,
+    );
+    const hosted = await hostedCompositions(project, composition, [
+      ...batch.commands.flatMap((command) =>
         command.type === "insert" && command.clip.kind === "composition"
           ? [command.clip.src]
           : [],
       ),
-    );
+      ...versionSources.filter(isCompositionFile),
+    ]);
     const lengths = new Map([...current.lengths, ...inserted.lengths]);
     // A font no rule declares would fall back to a system face that export may not share.
     const fonts = new Set(

@@ -96,6 +96,9 @@ const clipsOf = (command: Command) => {
     case "slip":
     case "setClip":
     case "setTiming":
+    case "setVersions":
+    case "setVersion":
+    case "keepVersion":
       return [command.clipId];
     default:
       return [];
@@ -202,6 +205,21 @@ export async function toolSubject(
     }
     case "timeline_edit":
       return editedClips(args, names);
+    case "clip_versions_set":
+    case "clip_versions_list":
+    case "clip_version_show":
+    case "clip_version_keep": {
+      const clipId = text("clipId");
+      return clipId
+        ? editedClips(
+            {
+              composition: args.composition,
+              commands: [{ type: "setVersion", clipId, version: 0 }],
+            },
+            names,
+          )
+        : undefined;
+    }
     case "variables_bind":
     case "variables_instance_set":
     case "variables_set_default":

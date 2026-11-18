@@ -1,0 +1,193 @@
+import { expect, test } from "bun:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { z } from "zod";
+import { createMcpHttpHandler } from "../src/server/mcp/server";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
+import { SourceSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import { projectFixture } from "./project-fixture";
+
+const scene = (id: string, word: string) => `<template>
+  <div id="${id}-root" data-composition-id="${id}" data-width="1920" data-height="1080" data-duration="4">
+    <div id="${id}-word" class="clip" data-start="0" data-duration="4" data-track-index="0">${word}</div>
+  </div>
+</template>
+`;
+const NAMES = ["Card fan", 'Wall "A" <b>', "Carousel", "Orbit"];
+
+test("an agent gives a title four versions; each edit carries them and only the active one is written", async () => {
+  const fixture = await projectFixture();
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const project = await fixture.store.create({ name: "Versions" });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: createMcpHttpHandler({
+      fetch: (url, init) => fixture.app.request(url, init),
+    }),
+  });
+  const client = new Client({ name: "versions-test", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${server.port}/mcp`),
+    ),
+  );
+  const call = (name: string, args: Record<string, unknown>) =>
+    client.callTool({ name, arguments: { projectId: project.id, ...args } });
+  const result = async (name: string, args: Record<string, unknown>) => {
+    const answer = await call(name, args);
+    expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
+    return z
+      .object({ structuredContent: z.object({ result: z.unknown() }) })
+      .parse(answer).structuredContent.result;
+  };
+  const refusal = async (name: string, args: Record<string, unknown>) => {
+    const answer = await call(name, args);
+    expect(answer.isError).toBe(true);
+    return JSON.stringify(answer.content);
+  };
+  const read = async () =>
+    TimelineViewSchema.parse(await result("timeline_read", {}));
+  const edit = async (commands: unknown[]) =>
+    result("timeline_edit", {
+      expectedRevision: (await read()).revision,
+      commands,
+    });
+  const source = async () =>
+    SourceSchema.parse(await result("source_read", {})).content;
+  const files = NAMES.map((_, index) => `compositions/line-${index}.html`);
+  const versions = NAMES.map((name, index) => ({ name, src: files[index] }));
+  try {
+    for (const [index, path] of files.entries())
+      await result("source_write", {
+        path,
+        expectedVersion: null,
+        content: scene(`line-${index}`, `Take ${index}`),
+      });
+    await edit([
+      {
+        type: "insert",
+        track: 4,
+        at: 30,
+        clip: { kind: "title", id: "line", text: "Welcome back", duration: 90 },
+      },
+    ]);
+
+    // Paths and names are untrusted: each refusal leaves the clip as it was.
+    for (const [src, reason] of [
+      ["../outside.html", "outside hidden folders"],
+      [".cutroom/line.html", "outside hidden folders"],
+      ["compositions/missing.html", "not a file in this project"],
+    ])
+      expect(
+        await refusal("clip_versions_set", {
+          clipId: "line",
+          versions: [versions[0], { name: "Bad", src }],
+        }),
+      ).toContain(reason);
+    expect(
+      await refusal("clip_versions_set", {
+        clipId: "line",
+        versions: [versions[0], { name: "Bell\u0007", src: files[1] }],
+      }),
+    ).toContain("control characters");
+
+    // A title becomes a scene clip in its place, showing the first version.
+    const created = z
+      .object({ clipId: z.string() })
+      .parse(await result("clip_versions_set", { clipId: "line", versions }));
+    const id = created.clipId;
+    const placed = (await read()).timeline.clips.find((clip) => clip.id === id);
+    expect(placed).toMatchObject({
+      kind: "composition",
+      track: 4,
+      start: 30,
+      duration: 90,
+      label: "Welcome back",
+      src: files[0],
+      versions,
+    });
+    const written = await source();
+    // Only the active file is mounted; the list is an escaped attribute HyperFrames ignores.
+    expect(written).toContain(`data-composition-src="${files[0]}"`);
+    expect(written).not.toContain(`data-composition-src="${files[1]}"`);
+    expect(written).toContain("&quot;Wall \\&quot;A\\&quot; <b>&quot;");
+
+    expect(await result("clip_versions_list", { clipId: id })).toEqual({
+      clipId: id,
+      kind: "composition",
+      start: 30,
+      duration: 90,
+      track: 4,
+      active: 0,
+      versions: versions.map((version, index) => ({ index, ...version })),
+    });
+
+    // Switching by name rewrites the host to mount the other scene, as one undo step.
+    await result("clip_version_show", { clipId: id, version: "Orbit" });
+    const shown = await source();
+    expect(shown).toContain(`data-composition-src="${files[3]}"`);
+    expect(shown).toContain('data-composition-id="line-3"');
+    await result("history_undo", {});
+    expect(await source()).toContain(`data-composition-src="${files[0]}"`);
+    await result("history_redo", {});
+
+    // A razor leaves both pieces holding every version, each switchable on its own.
+    await edit([
+      { type: "split", at: 60, clipIds: [id], ids: { [id]: ["tail"] } },
+      { type: "setVersion", clipId: "tail", version: 1 },
+    ]);
+    const pieces = (await read()).timeline.clips.filter(
+      (clip) => clip.kind === "composition",
+    );
+    expect(
+      pieces.map((clip) => [clip.id, clip.start, clip.src, clip.versions]),
+    ).toEqual([
+      [id, 30, files[3], versions],
+      ["tail", 60, files[1], versions],
+    ]);
+
+    // Move, trim and copy and paste keep the list too.
+    await edit([{ type: "move", clipIds: ["tail"], by: 60 }]);
+    await edit([{ type: "trim", clipId: "tail", edge: "end", to: 140 }]);
+    const copied = z.object({ id: z.string() }).parse(
+      await result("timeline_copy", {
+        clipIds: ["tail"],
+        expectedRevision: (await read()).revision,
+      }),
+    );
+    await edit([
+      {
+        type: "paste",
+        clipboardId: copied.id,
+        at: 200,
+        ids: { tail: ["pasted"] },
+      },
+    ]);
+    const pasted = (await read()).timeline.clips.find(
+      (clip) => clip.id === "pasted",
+    );
+    expect(pasted).toMatchObject({ src: files[1], versions, duration: 20 });
+
+    // Keep drops the others, and its undo brings the whole list back.
+    await result("clip_version_keep", { clipId: "pasted" });
+    const kept = (await read()).timeline.clips.find(
+      (clip) => clip.id === "pasted",
+    );
+    expect(kept?.versions).toBeUndefined();
+    expect(kept?.src).toBe(files[1]);
+    await result("history_undo", {});
+    expect(
+      (await read()).timeline.clips.find((clip) => clip.id === "pasted")
+        ?.versions,
+    ).toEqual(versions);
+  } finally {
+    await client.close();
+    server.stop(true);
+    await fixture.close();
+  }
+});
