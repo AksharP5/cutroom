@@ -148,6 +148,9 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
           messages: [
             ...cliShow.messages,
             { role: "assistant", runId: "next", text: "Can I proceed?" },
+            ...(!waiting
+              ? [{ role: "user", runId: "following", text: sent }]
+              : []),
           ],
         });
       }
@@ -295,14 +298,27 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
           )
             await Bun.sleep(5);
           expect(restarted.get(session.id).status).toBe("idle");
-          expect(
-            restarted.get(session.id).messages.map(({ text }) => text.trim()),
-          ).toEqual([
+          const messages = restarted.get(session.id).messages;
+          expect(messages.slice(0, 4).map(({ text }) => text.trim())).toEqual([
             cliThread.title,
             "started",
             "Can I proceed?",
             "Answer in T3 Code.",
           ]);
+          expect(messages.at(-1)).toMatchObject({
+            role: "user",
+            text: sent,
+            attachments: [
+              { path: join(project.path, "index.html") },
+              {
+                path: join(project.path, "synthetic.png"),
+                mimeType: "image/png",
+              },
+            ],
+          });
+          expect(
+            messages.slice(0, 4).every(({ attachments }) => !attachments),
+          ).toBe(true);
         } finally {
           stop();
         }
@@ -367,7 +383,7 @@ test("sending to T3 Code reads at 2, 4 and 8 seconds, then returns to a 12 secon
       emitted.push(event.message.text);
     });
     await advance(0);
-    await t3.send(project, cliThread.threadId, {
+    await t3.send(project, cliThread.threadId, session, {
       text: "Finish the slate.",
       attachments: [],
       skills: [],

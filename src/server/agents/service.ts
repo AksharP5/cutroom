@@ -24,7 +24,11 @@ import { isCutroomEdit } from "./tool-permissions";
 import { projectNames } from "./tool-subject";
 import { completeMessage } from "./runtime";
 import type { AgentRuntime, ModelSelection, RuntimeFactory } from "./runtime";
-import { projectAttachments, T3Chats } from "./t3-chats";
+import {
+  projectAttachments,
+  T3Chats,
+  t3AttachmentReceiptsSchema,
+} from "./t3-chats";
 import type { T3Runner } from "./t3-link";
 import { NativeSessions } from "./native-sessions";
 import type { NativeSessionInput } from "./native-sessions";
@@ -36,6 +40,7 @@ import {
 const newChatTitle = "New chat";
 const storedSessionSchema = agentSessionSchema.extend({
   customTitle: z.boolean().optional(),
+  t3AttachmentReceipts: t3AttachmentReceiptsSchema.optional(),
 });
 type StoredSession = z.infer<typeof storedSessionSchema>;
 type SessionListener = {
@@ -235,13 +240,18 @@ export class AgentService {
           pendingRequest: _pendingRequest,
           queuedTurns: _queuedTurns,
           runningFollowUpId: _runningFollowUpId,
+          t3AttachmentReceipts: _t3AttachmentReceipts,
           ...summary
         }) => summary,
       );
   }
 
   get(id: string) {
-    const { customTitle: _customTitle, ...session } = this.requireSession(id);
+    const {
+      customTitle: _customTitle,
+      t3AttachmentReceipts: _t3AttachmentReceipts,
+      ...session
+    } = this.requireSession(id);
     return structuredClone(session);
   }
 
@@ -540,11 +550,11 @@ export class AgentService {
     if (session.t3Thread) {
       const project = await this.options.projects.get(session.projectId);
       this.requireOpen();
-      const result = await this.t3.send(
-        project,
-        session.t3Thread.threadId,
-        turn,
-      );
+      const result = await this.t3
+        .send(project, session.t3Thread.threadId, session, turn)
+        .finally(() =>
+          this.persist().catch((error) => this.storageFailed(error)),
+        );
       return { ...this.get(id), ...result };
     }
     if (session.queuedTurns?.length)
@@ -771,11 +781,14 @@ export class AgentService {
       !session.messages.some((message) => message.role === "user")
     )
       session.title = turn.text.trim().slice(0, 90) || "Attached media";
-    const message = completeMessage(
-      turn.text || "Attached media",
-      "user",
-      operation.queuedId,
-    );
+    const message = {
+      ...completeMessage(
+        turn.text || "Attached media",
+        "user",
+        operation.queuedId,
+      ),
+      ...(attachments.length > 0 && { attachments }),
+    };
     if (!operation.queuedId) {
       this.apply(id, { type: "message", message });
       this.apply(id, { type: "status", status: "running" });

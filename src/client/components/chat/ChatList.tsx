@@ -9,7 +9,11 @@ import {
 import type { KeyboardEvent } from "react";
 import {
   ArrowClockwise,
+  ArrowSquareOut,
   CaretDown,
+  CaretLeft,
+  LinkSimple,
+  Terminal,
   PencilSimple,
   Plus,
   Trash,
@@ -20,21 +24,9 @@ import { restoreMenuFocus } from "../../keymap";
 import { menuStep } from "../menu";
 import "../select-menu.css";
 
-const shortDate = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-});
-
-function chatAge(updatedAt: string, now: number) {
-  const date = Date.parse(updatedAt);
-  const minutes = Math.floor((now - date) / 60_000);
-  if (!Number.isFinite(minutes)) return "";
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
-  if (minutes < 7 * 1440) return `${Math.floor(minutes / 1440)}d`;
-  return shortDate.format(date);
-}
+import { chatAge } from "./clock";
+import { SharedChats } from "./SharedChats";
+import type { SharedChatView } from "./SharedChats";
 
 export function chatIsBusy(chat: AgentSessionSummary) {
   return chat.status === "running" || chat.status === "waiting";
@@ -59,7 +51,13 @@ function ChatLabel({ chat, now }: { chat: AgentSessionSummary; now: number }) {
         {chat.title}
       </span>
       <span className="chat-list-meta">
-        <span>{chat.provider === "codex" ? "Codex" : "Claude"}</span>
+        <span>
+          {chat.t3Thread
+            ? "T3 Code"
+            : chat.provider === "codex"
+              ? "Codex"
+              : "Claude"}
+        </span>
         <time className="mono" dateTime={chat.updatedAt}>
           {chatAge(chat.updatedAt, now)}
         </time>
@@ -101,6 +99,8 @@ type ChatEdit =
 
 export const ChatList = memo(function ChatList({
   chats,
+  projectId,
+  threadLink,
   selectedId,
   title,
   visible,
@@ -116,6 +116,8 @@ export const ChatList = memo(function ChatList({
   onError,
 }: {
   chats: AgentSessionSummary[];
+  projectId: string;
+  threadLink?: string;
   selectedId: string | null;
   title: string;
   visible: boolean;
@@ -138,6 +140,7 @@ export const ChatList = memo(function ChatList({
   const search = useRef({ text: "", at: 0 });
   const focusRow = useRef<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<SharedChatView | null>(null);
   const [edit, setEdit] = useState<ChatEdit | null>(null);
   const [saving, setSaving] = useState(false);
   const shouldPoll = working || chats.some(chatIsBusy);
@@ -189,11 +192,19 @@ export const ChatList = memo(function ChatList({
       item?.focus();
       focusRow.current = null;
     }
-  }, [editId, editKind, open]);
+  }, [editId, editKind, open, mode]);
+
+  function showView(next: SharedChatView | null) {
+    focusRow.current = next ? "back" : mode;
+    search.current = { text: "", at: 0 };
+    if (popover.current) popover.current.scrollTop = 0;
+    setMode(next);
+  }
 
   function close(restore: boolean) {
     popover.current?.hidePopover();
     setOpen(false);
+    setMode(null);
     setEdit(null);
     focusRow.current = null;
     if (restore) restoreMenuFocus(trigger.current);
@@ -239,17 +250,34 @@ export const ChatList = memo(function ChatList({
     if (event.key === "Escape") {
       event.preventDefault();
       if (edit && !saving) endEdit(edit.id);
+      else if (mode) showView(null);
       else close(true);
       return;
     }
-    if (edit) return;
+    if (edit || event.target instanceof HTMLInputElement) return;
     const items = rows();
     const row = (
       event.target instanceof HTMLElement
         ? event.target.closest(".chat-list-row")
         : null
     )?.querySelector<HTMLButtonElement>("[data-menu-row]");
-    const chat = chats.find((item) => item.id === row?.dataset.menuRow);
+    if (
+      mode === "native" &&
+      event.target === row &&
+      event.key.toLowerCase() === "b" &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      event.preventDefault();
+      row?.parentElement
+        ?.querySelector<HTMLButtonElement>(".chat-list-branch")
+        ?.click();
+      return;
+    }
+    const chat = mode
+      ? undefined
+      : chats.find((item) => item.id === row?.dataset.menuRow);
     if (chat && (event.key === "F2" || event.key === "Delete")) {
       event.preventDefault();
       if (event.key === "F2")
@@ -308,6 +336,18 @@ export const ChatList = memo(function ChatList({
         <span>{title}</span>
         <CaretDown />
       </button>
+      {threadLink && (
+        <a
+          className="icon-button chat-thread-link"
+          href={threadLink}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open in T3 Code"
+          title="Open in T3 Code"
+        >
+          <ArrowSquareOut />
+        </a>
+      )}
       <button
         type="button"
         className="icon-button"
@@ -325,16 +365,42 @@ export const ChatList = memo(function ChatList({
         popover="auto"
         role="menu"
         aria-label="Chats"
+        data-shared={mode ?? undefined}
         onToggle={(event) => {
           if (event.newState === "closed") {
             setOpen(false);
+            setMode(null);
             setEdit(null);
             focusRow.current = null;
           }
         }}
         onKeyDown={navigate}
       >
-        {open && (
+        {open && mode && (
+          <>
+            <button
+              type="button"
+              role="menuitem"
+              data-menu-row="back"
+              data-menu-label="Chats"
+              onClick={() => showView(null)}
+            >
+              <CaretLeft /> Chats
+            </button>
+            <SharedChats
+              key={mode}
+              mode={mode}
+              projectId={projectId}
+              chats={chats}
+              loadChats={loadChats}
+              onSelect={(chat) => {
+                if (chat.id !== selectedId) onSelect(chat);
+                close(true);
+              }}
+            />
+          </>
+        )}
+        {open && !mode && (
           <>
             {chats.map((chat) => {
               const working = chatIsBusy(chat);
@@ -461,6 +527,24 @@ export const ChatList = memo(function ChatList({
               onClick={newChat}
             >
               <Plus /> New chat
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-menu-row="t3"
+              data-menu-label="Link a T3 Code thread"
+              onClick={() => showView("t3")}
+            >
+              <LinkSimple /> Link a T3 Code thread
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-menu-row="native"
+              data-menu-label="Continue a session"
+              onClick={() => showView("native")}
+            >
+              <Terminal /> Continue a session
             </button>
             <button
               type="button"

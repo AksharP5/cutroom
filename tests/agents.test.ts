@@ -96,6 +96,49 @@ function factory(
 }
 
 describe("agent conversations", () => {
+  test("a normal turn keeps its attached files on the saved user message", async () => {
+    const runtimeFactory = factory(async () => {});
+    const { project, projects, review, service, dataDir } =
+      await setup(runtimeFactory);
+    const frame = join(project.path, "marked-frame.png");
+    await writeFile(frame, "synthetic frame");
+    const note = await review.add(
+      project,
+      { body: "Lift the headline", time: 1, compositionPath: "index.html" },
+      undefined,
+    );
+    await review.attachFrame(project, note.id, frame);
+    const { id } = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const files = [
+      { path: join(project.path, "index.html") },
+      { path: frame, mimeType: "image/png" },
+    ];
+    await service.send(id, {
+      text: "Work through my review notes.",
+      skills: [],
+      attachments: files,
+    });
+    await idle(service, id);
+    await service.dispose();
+    const reopened = await createAgentService({
+      projects,
+      review,
+      dataDir,
+      runtimeFactory,
+    });
+    cleanup.push(() => reopened.dispose());
+    expect(reopened.get(id).messages).toMatchObject([
+      {
+        role: "user",
+        text: "Work through my review notes.",
+        attachments: files,
+      },
+    ]);
+  });
+
   test("a renamed chat keeps its title on reopening and after the first message", async () => {
     const runtimeFactory = factory(async () => {});
     const { project, projects, review, service, dataDir } =

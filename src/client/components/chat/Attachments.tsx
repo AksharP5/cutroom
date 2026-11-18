@@ -1,88 +1,126 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import { X } from "@phosphor-icons/react";
-import { ProjectSchema } from "../../../shared/project";
+import type { AgentAttachment } from "../../../shared/agent";
 import { mediaKind } from "../../../shared/media";
-import { api, mediaUrl } from "../../api";
+import type { Project } from "../../../shared/project";
+import { mediaUrl } from "../../api";
+import { Modal } from "../Modal";
 
-const projectPath = ProjectSchema.pick({ path: true });
+type Preview = { name: string; src: string };
 
 function Attachment({
   path,
   src,
   onRemove,
+  onOpen,
 }: {
   path: string;
   src?: string;
-  onRemove: (path: string) => void;
+  onRemove?: (path: string) => void;
+  onOpen: (preview: Preview) => void;
 }) {
   const [failed, setFailed] = useState<string>();
   const name = path.split("/").at(-1) ?? path;
   const thumbnail = src && src !== failed;
+  const image = thumbnail && (
+    <img
+      src={src}
+      alt={name}
+      onError={() => setFailed(src)}
+      {...(!onRemove && {
+        loading: "lazy",
+        decoding: "async",
+        width: 64,
+        height: 36,
+      })}
+    />
+  );
   return (
     <span
       className="chat-attachment"
-      data-thumbnail={thumbnail || undefined}
+      data-thumbnail={(onRemove ? thumbnail : Boolean(src)) || undefined}
       title={name}
     >
-      {thumbnail ? (
-        <img src={src} alt={name} onError={() => setFailed(src)} />
+      {image ? (
+        onRemove ? (
+          image
+        ) : (
+          <button
+            type="button"
+            className="chat-attachment-open"
+            onClick={() => onOpen({ name, src })}
+          >
+            {image}
+          </button>
+        )
       ) : (
         <span>{name}</span>
       )}
-      <button
-        type="button"
-        aria-label={`Remove ${name}`}
-        onClick={() => onRemove(path)}
-      >
-        <X />
-      </button>
+      {onRemove && (
+        <button
+          type="button"
+          className="chat-attachment-remove"
+          aria-label={`Remove ${name}`}
+          onClick={() => onRemove(path)}
+        >
+          <X />
+        </button>
+      )}
     </span>
   );
 }
 
 export const Attachments = memo(function Attachments({
-  projectId,
-  paths,
+  project,
+  files,
   onRemove,
 }: {
-  projectId: string;
-  paths: readonly string[];
-  onRemove: (path: string) => void;
+  project: Pick<Project, "id" | "path">;
+  files: readonly AgentAttachment[];
+  onRemove?: (path: string) => void;
 }) {
-  const [root, setRoot] = useState("");
-  const hasImages = paths.some((path) => mediaKind(path)?.kind === "image");
-
-  useEffect(() => {
-    if (!hasImages || root) return;
-    const request = new AbortController();
-    void api(`/projects/${encodeURIComponent(projectId)}`, projectPath, {
-      signal: request.signal,
-    })
-      .then(({ path }) => {
-        if (!request.signal.aborted) setRoot(path.replace(/\/$/, "") + "/");
-      })
-      .catch((error: unknown) => {
-        if (!request.signal.aborted)
-          console.warn("Could not load attachment previews", error);
-      });
-    return () => request.abort();
-  }, [hasImages, projectId, root]);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const root = project.path.replace(/\/$/, "") + "/";
 
   return (
-    <div className="attachment-list">
-      {paths.map((path) => {
-        const relative =
-          root && path.startsWith(root) ? path.slice(root.length) : "";
-        const file =
-          mediaKind(relative)?.kind === "image" &&
-          relative
-            .split("/")
-            .every((part) => part && part !== "." && part !== "..");
-        const src = file ? mediaUrl(projectId, relative) : undefined;
-        return (
-          <Attachment key={path} path={path} src={src} onRemove={onRemove} />
-        );
-      })}
-    </div>
+    <>
+      <div
+        className={
+          onRemove ? "attachment-list" : "attachment-list sent-attachments"
+        }
+      >
+        {files.map(({ path, mimeType }) => {
+          const relative = path.startsWith(root) ? path.slice(root.length) : "";
+          const image =
+            mimeType?.startsWith("image/") ||
+            mediaKind(relative)?.kind === "image";
+          const src =
+            image &&
+            relative
+              .split("/")
+              .every((part) => part && part !== "." && part !== "..")
+              ? mediaUrl(project.id, relative)
+              : undefined;
+          return (
+            <Attachment
+              key={path}
+              path={path}
+              src={src}
+              onRemove={onRemove}
+              onOpen={setPreview}
+            />
+          );
+        })}
+      </div>
+      {preview && (
+        <Modal title={preview.name} onClose={() => setPreview(null)}>
+          <img
+            className="chat-attachment-full"
+            src={preview.src}
+            alt={preview.name}
+          />
+        </Modal>
+      )}
+    </>
   );
 });
