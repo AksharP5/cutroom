@@ -1,5 +1,6 @@
 import { MixLoudness } from "./MixLoudness";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CaretRight } from "@phosphor-icons/react";
 import {
   compositionExportName,
   defaultExportRange,
@@ -62,6 +63,30 @@ const sizeNames: Record<ExportSize, string> = {
 type RateChoice = "project" | `${(typeof exportRates)[number]}`;
 const rateLabel = (fps: { num: number; den: number }) =>
   `${Number((fps.num / fps.den).toFixed(3))} fps`;
+
+/** Keep the raw filesystem failure available while explaining what to do in the form. */
+function exportFailure(raw: string) {
+  const code =
+    /^([A-Z]+):/.exec(raw)?.[1] ??
+    /This folder can't receive the export \(([A-Z]+)\)/.exec(raw)?.[1];
+  if (code === "ENOSPC" || /no space left on device/i.test(raw))
+    return "The disk is full. Free up space or choose another location.";
+  const folder =
+    /, (?:realpath|mkdir) /.test(raw) ||
+    (raw.includes("mkdtemp ") && raw.includes(".cutroom-render-")) ||
+    raw.startsWith("This folder can't receive the export");
+  if (!folder) return raw;
+  if (code === "ENOENT" || code === "ENOTDIR")
+    return "This folder does not exist. Choose another location.";
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS")
+    return "Cutroom cannot write to this folder. Choose another location.";
+  return raw;
+}
+
+function showLocationEnd(input: HTMLInputElement | null) {
+  if (input?.isConnected && document.activeElement !== input)
+    input.scrollLeft = input.scrollWidth;
+}
 
 const clock = (ms: number) => {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -130,7 +155,7 @@ export function ExportControl({
   projectId: string;
   projectName: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<"closed" | "open" | "hidden">("closed");
   const ready = useTimeline(
     (state) => state.projectId === projectId && state.view !== null,
   );
@@ -141,7 +166,7 @@ export function ExportControl({
   useEffect(() => {
     if (observedProject) return observeExports(observedProject);
   }, [observedProject]);
-  const show = () => setOpen(true);
+  const show = () => setDialog("open");
   const capture = () => void captureFrame(projectId);
   useKeymap({
     workspacePrimaryWorkspaceDeliver: show,
@@ -169,15 +194,21 @@ export function ExportControl({
           />
         )}
       </button>
-      {open && (
+      {dialog !== "closed" && (
         <ExportDialog
+          visible={dialog === "open"}
           projectId={projectId}
           projectName={projectName}
           onCapture={capture}
           onSetup={() => useExport.setState({ job: null, controlError: "" })}
           onClose={() => {
-            setOpen(false);
-            if (useExport.getState().job?.status === "complete")
+            const job = useExport.getState().job;
+            setDialog(
+              exportActive(job) || job?.status === "failed"
+                ? "hidden"
+                : "closed",
+            );
+            if (job?.status === "complete")
               useExport.setState({ job: null, controlError: "" });
           }}
         />
@@ -187,12 +218,14 @@ export function ExportControl({
 }
 
 function ExportDialog({
+  visible,
   projectId,
   projectName,
   onSetup,
   onCapture,
   onClose,
 }: {
+  visible: boolean;
   projectId: string;
   projectName: string;
   onSetup(): void;
@@ -206,7 +239,9 @@ function ExportDialog({
     useTimeline((state) => state.composition),
   );
   const composition = useWorkspace((state) => state.composition);
-  const job = useExport((state) => state.job);
+  const current = useExport((state) => state.job);
+  const failed = current?.status === "failed" ? current.error : "";
+  const job = current?.status === "failed" ? null : current;
   const controlError = useExport((state) => state.controlError);
   const [choice, setChoice] = useState<"timeline" | "marks">(
     timeline ? defaultExportRange(timeline) : "timeline",
@@ -230,6 +265,9 @@ function ExportDialog({
   }, []);
   const baseFilename = exportFilename(name, format);
   const [filename, setFilename] = useState<string | null>(null);
+  const [renamed, setRenamed] = useState<{ from: string; to: string } | null>(
+    null,
+  );
   const [directory, setDirectory] = useState<string | null>(null);
   const [destination, setDestination] = useState<ExportDestination | null>(
     null,
@@ -239,8 +277,13 @@ function ExportDialog({
   const [fileError, setFileError] = useState("");
   const [loading, setLoading] = useState(true);
   const hasJob = job !== null;
+  const location = useRef<HTMLInputElement>(null);
+  const outputFolder = directory ?? destination?.directory ?? "";
+  useLayoutEffect(() => {
+    showLocationEnd(location.current);
+  }, [outputFolder, hasJob, visible]);
   useEffect(() => {
-    if (hasJob) return;
+    if (!visible || hasJob) return;
     let current = true;
     setLoading(true);
     setDestinationError("");
@@ -265,7 +308,7 @@ function ExportDialog({
     return () => {
       current = false;
     };
-  }, [projectId, baseFilename, directory, hasJob]);
+  }, [projectId, baseFilename, directory, hasJob, visible]);
   const active = exportActive(job);
   const projectSize =
     composition?.width && composition.height
@@ -363,6 +406,11 @@ function ExportDialog({
     }
     setError("");
     if (!outputFps) return;
+    setRenamed(
+      filename === null && parsed.data.filename !== baseFilename
+        ? { from: baseFilename, to: parsed.data.filename }
+        : null,
+    );
     void exportProject(projectId, name, parsed.data, choice, {
       variables,
       quality,
@@ -385,6 +433,16 @@ function ExportDialog({
         setFileError(error instanceof Error ? error.message : String(error)),
       );
   };
+  const rawFailure = failed || destinationError;
+  const failure = exportFailure(rawFailure);
+  const destinationFailed = failure !== rawFailure;
+  const savedAs =
+    job?.projectId === projectId &&
+    renamed &&
+    job.outputPath.split(/[\\/]/).at(-1) === renamed.to
+      ? `Saved as ${renamed.to} because ${renamed.from} already exists.`
+      : null;
+  if (!visible) return null;
   return (
     <Modal title="Export" onClose={onClose} initialFocus={exportButton}>
       <div className="export-body">
@@ -569,20 +627,39 @@ function ExportDialog({
             <label className="export-field">
               Location
               <input
-                value={directory ?? destination?.directory ?? ""}
+                ref={location}
+                value={outputFolder}
+                dir="ltr"
+                className="export-location"
+                title={outputFolder}
+                onBlur={({ currentTarget }) =>
+                  requestAnimationFrame(() => showLocationEnd(currentTarget))
+                }
+                aria-invalid={destinationFailed || undefined}
                 disabled={!destination}
-                onChange={(event) => setDirectory(event.target.value)}
+                onChange={(event) => {
+                  if (failed) onSetup();
+                  setDirectory(event.target.value);
+                }}
                 placeholder="Absolute folder path"
                 required
               />
             </label>
-            <p className="export-hint">
-              Existing files are kept. A free name is suggested for this folder.
-            </p>
-            {destinationError && (
-              <p className="export-error" role="alert">
-                {destinationError}
-              </p>
+            {failure && (
+              <div>
+                <p className="export-error" role="alert">
+                  {failure}
+                </p>
+                {destinationFailed && (
+                  <details className="export-error-details">
+                    <summary>
+                      <CaretRight size={10} weight="bold" />
+                      Details
+                    </summary>
+                    <p>{rawFailure}</p>
+                  </details>
+                )}
+              </div>
             )}
             <RendersList projectId={projectId} />
           </>
@@ -611,24 +688,12 @@ function ExportDialog({
             {active || job.status === "complete" ? (
               <JobProgress job={job} />
             ) : null}
-            <div
-              role={job.status === "failed" ? "alert" : "status"}
-              className={
-                job.status === "failed" ? "export-error" : "export-result"
-              }
-            >
-              {job.status === "complete" ? (
-                "Export complete."
-              ) : job.status === "failed" ? (
-                <>
-                  <strong>Export failed</strong>
-                  <p>{job.error}</p>
-                </>
-              ) : job.status === "cancelled" ? (
-                "Export cancelled. Partial output removed."
-              ) : (
-                "You can close this dialog while the export continues."
-              )}
+            <div role="status" className="export-result">
+              {job.status === "complete"
+                ? ["Export complete.", savedAs].filter(Boolean).join(" ")
+                : job.status === "cancelled"
+                  ? "Export cancelled. Partial output removed."
+                  : "You can close this dialog while the export continues."}
             </div>
             {job.notice && <p className="export-hint">{job.notice}</p>}
             {controlError && (
