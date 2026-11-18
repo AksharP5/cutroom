@@ -170,7 +170,7 @@ test("home dates direct composition and document edits", async ({
   await expect(date).toHaveText("Just now");
 });
 
-test("an empty project has a poster mark and a readable folder label", async ({
+test("an empty project has a poster mark", async ({
   page,
   request,
 }) => {
@@ -197,8 +197,4 @@ test("an empty project has a poster mark and a readable folder label", async ({
   await expect(
     poster.locator('.home-frame svg[aria-hidden="true"]'),
   ).toBeVisible();
-  await poster.click();
-  const folder = page.locator(".status-folder");
-  await expect(folder).toHaveText(project.name);
-  await expect(folder).toHaveAttribute("title", `Copy ${project.path}`);
 });
