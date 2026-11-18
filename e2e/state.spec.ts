@@ -78,7 +78,7 @@ test("changing projects closes a saved review frame and clears project-local rev
   ).toHaveCount(0);
 });
 
-test("an in-flight agent submission cannot switch conversations or erase the next draft", async ({
+test("switching chats during a submission keeps the next draft", async ({
   page,
   request,
 }) => {
@@ -141,12 +141,15 @@ test("an in-flight agent submission cannot switch conversations or erase the nex
     await expect(
       page.getByLabel("Agent provider", { exact: true }),
     ).toBeDisabled();
-    // While a turn is in flight, the chat head stays and its controls are locked.
-    await expect(
-      page.getByRole("button", { name: "New conversation", exact: true }),
-    ).toBeDisabled();
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await expect(composer).toBeFocused();
     await composer.fill("The next request");
+    const refreshed = page.waitForRequest("**/api/cutroom/agents/sessions?**");
     release();
+    await refreshed;
+    await expect(
+      page.getByRole("button", { name: "Chats, New chat" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Send message", exact: true }),
     ).toBeEnabled();
@@ -319,11 +322,9 @@ test("streamed deltas remain ordered through the final idle event", async ({
     deltas.join("").trim(),
   );
   await expect(
-    page.getByRole("button", { name: "New conversation", exact: true }),
+    page.getByLabel("Agent provider", { exact: true }),
   ).toBeEnabled();
-  await page
-    .getByRole("button", { name: "New conversation", exact: true })
-    .click();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect(page.locator(".message-assistant")).toHaveCount(0);
 });
 
