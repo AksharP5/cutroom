@@ -54,6 +54,8 @@ Once a project has a sub-composition, the Media panel's header also offers Compo
 
 ### Variables
 
+Select a mounted scene clip to open **Scene variables**. Change a value to save it on that clip. Other mounts keep their values, and **Reset** inherits the scene default again. These changes are part of the parent composition, including its exports and Undo history. Double-click the scene clip to edit the scene file instead. To edit a mount's variables, give it a `data-composition-id` and use a `data-composition-src` relative to the project root. If the project root and scene folder both contain a file with that path, the project-root file wins.
+
 A composition that declares HyperFrames variables lists them in the inspector when nothing is selected: each one's label and the value the viewer shows, edited as words, a number, a colour, a switch, a menu or an image path. Changing a value previews it at once without touching the source, as `hyperframes render --variables` would render it; double-click the label to go back to the default. **Set default** writes the shown value into the declaration as one undo step. A newer preview from another client stays visible while the default saves. Agents see and set the same values ([details](mcp.md#variables)), and their changes appear in your viewer.
 
 Select a text clip and open the **Words** or **Colour** picker in its Text section. Pick a declared variable, or choose **New variable…** to start with the clip's current value. Words accept string variables and colour accepts colour variables. Colour needs an explicit inline colour or a direct `color: var(--id)` binding. Each selection saves in one undo step.

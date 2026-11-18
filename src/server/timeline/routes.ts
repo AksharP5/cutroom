@@ -67,7 +67,6 @@ import {
   compositionScope,
   rebaseClipboard,
   declareTrackLayer,
-  mediaSources,
   parseComposition,
   patchComposition,
   timelineContent,
@@ -75,7 +74,7 @@ import {
 } from "./composition";
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
-import { mediaFacts } from "./media";
+import { compositionMediaFacts, mediaFacts } from "./media";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -131,10 +130,10 @@ export function createTimelineRoutes(
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const { lengths } = await mediaFacts(
+    const { lengths } = await compositionMediaFacts(
       project,
       composition,
-      mediaSources(source.content, scope),
+      source.content,
     );
     const fonts = new Set([
       ...declaredFonts(source.content),

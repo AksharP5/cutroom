@@ -1,21 +1,31 @@
 import { lstat, mkdir, readFile, readdir, rename } from "node:fs/promises";
 import { dirname, extname, join, posix } from "node:path";
+import {
+  decodeAuthoredAttribute,
+  scanHtmlOpeningTags,
+} from "@hyperframes/parsers";
 import { fileContentVersion } from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
-import { MEDIA_TRASH, inMediaTrash, mediaKind } from "../../shared/media";
+import {
+  MEDIA_TRASH,
+  inMediaTrash,
+  localMediaPath,
+  mediaKind,
+} from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
+import { sceneImageUrl } from "../../shared/variables";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { compositionFiles } from "./media";
 import { isMissing, projectWritePath } from "./path";
-import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
-import { renameReferences } from "./mediaReferences";
+import { sceneSources } from "./sceneSources";
+import { imageOverridesAt, renameReferences } from "./mediaReferences";
 import { moveSourceMarks } from "./view";
 
 const SOURCE_BYTES = 10 * 1024 * 1024;
@@ -45,10 +55,14 @@ const exists = (path: string) =>
 export async function mediaUses(project: Project, raw: string) {
   const { path } = await mediaFile(project, raw);
   let uses = 0;
+  const resolveScene = sceneSources(project.path);
   for (const composition of await compositionFiles(project)) {
-    const { references } = await compositionVersions(project, composition);
-    const source = await readSource(project, composition);
-    const owners = new Set<string>();
+    const { source, references } = await compositionVersions(
+      project,
+      composition,
+    );
+    const sceneImages = imageOverridesAt(composition, resolveScene);
+    const owners = new Set<string | number>();
     try {
       const { timeline } = parseComposition(
         source.content,
@@ -61,6 +75,27 @@ export async function mediaUses(project: Project, raw: string) {
       }
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
+    }
+    if (source.content.includes("data-variable-values")) {
+      for (const tag of scanHtmlOpeningTags(source.content)) {
+        const overrides = sceneImages(tag);
+        if (
+          overrides &&
+          overrides.ids.some((id) => {
+            const url = sceneImageUrl(overrides.values[id]);
+            return url && localMediaPath("index.html", url) === path;
+          })
+        ) {
+          const id = tag.attributes.find(
+            (attr) => attr.name === "id" || attr.name === "data-hf-id",
+          );
+          owners.add(
+            id?.kind === "value"
+              ? decodeAuthoredAttribute(id.value)
+              : tag.start,
+          );
+        }
+      }
     }
     uses += Math.max(owners.size, references.get(null)?.has(path) ? 1 : 0);
   }
@@ -98,8 +133,16 @@ async function referenceEdits(project: Project, from: string, to: string) {
     }
   }
   const edits: FileMutationInput[] = [];
+  const resolveScene = sceneSources(project.path);
   for (const { path, absolute, before } of sources) {
-    const after = renameReferences(before, path, from, to, files);
+    const after = renameReferences(
+      before,
+      path,
+      from,
+      to,
+      files,
+      imageOverridesAt(path, resolveScene),
+    );
     if (after === before) continue;
     const sourceFile = path === from ? to : path;
     edits.push({

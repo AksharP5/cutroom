@@ -1,5 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
-import { basename, extname, join, normalize, relative } from "node:path";
+import { basename, join, normalize, relative } from "node:path";
 import { parseSourceDocument } from "@hyperframes/studio-server";
 import { localMediaPath } from "../../shared/media";
 import type { MediaClip, Project } from "../../shared/project";
@@ -15,7 +15,7 @@ export async function compositionFiles(project: Project): Promise<string[]> {
       if (entry.name.startsWith(".") || ignored.has(entry.name)) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile() && extname(entry.name).toLowerCase() === ".html")
+      else if (entry.isFile() && /\.html?$/i.test(entry.name))
         sources.push(relative(project.path, path));
       if (sources.length > 1000) return;
     }

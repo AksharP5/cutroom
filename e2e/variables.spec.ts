@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { z } from "zod";
@@ -51,6 +51,54 @@ async function pixel(path: string, x: number, y: number) {
   expect(result.status, result.stderr.toString()).toBe(0);
   return [...result.stdout];
 }
+
+test("the Inspector edits a live variable and leaves inert template declarations alone", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Live variables", width: 320, height: 240, duration: 1 },
+      })
+    ).json(),
+  );
+  const file = join(project.path, "index.html");
+  const inert = `<template id="sample"><div data-composition-variables='[{"id":"ghost","type":"string","label":"Inert label","default":"Sample"}]'></div></template>`;
+  const source = `<!doctype html><html><head>${inert}</head><body style="margin:0;color:white;background:#161616"><main data-composition-id="main" data-width="320" data-height="240" data-duration="1" data-no-timeline data-composition-variables='[{"id":"edition","type":"string","label":"Edition","default":"Live edition"}]'><section data-composition-variables='[{"id":"headline","type":"string","label":"Headline","default":"Release preview"}]'><h1 id="headline" class="clip" data-start="0" data-duration="1" data-track-index="0" data-var-text="headline">Fallback</h1><p id="edition" data-var-text="edition">Fallback</p></section></main></body></html>`;
+  await writeFile(file, source);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await expect(shown(page, "headline")).toHaveText("Release preview");
+  await expect(shown(page, "edition")).toHaveText("Live edition");
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const field = inspector.getByRole("textbox", {
+    name: "Headline",
+    exact: true,
+  });
+  await expect(field).toHaveValue("Release preview");
+  await expect(
+    inspector.getByRole("textbox", { name: "Edition", exact: true }),
+  ).toHaveValue("Live edition");
+  await expect(
+    inspector.getByRole("textbox", { name: "Inert label" }),
+  ).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("variable-before.png") });
+  await field.fill("Ready to publish");
+  await field.press("Enter");
+  await expect(shown(page, "headline")).toHaveText("Ready to publish");
+  await inspector.getByRole("button", { name: "Set default" }).click();
+  await expect.poll(() => readFile(file, "utf8")).toContain("Ready to publish");
+  expect(await readFile(file, "utf8")).toContain(inert);
+  await page.reload();
+  await waitForPreview(page);
+  await expect(shown(page, "headline")).toHaveText("Ready to publish");
+  await expect(shown(page, "edition")).toHaveText("Live edition");
+  await page.screenshot({ path: info.outputPath("variable-after.png") });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe(source);
+  await expect(shown(page, "headline")).toHaveText("Release preview");
+});
 
 test("an image variable changes the actual viewer and MP4 picture", async ({
   page,
@@ -280,11 +328,11 @@ test("a mounted scene resolves its image default and exports its own override", 
     );
   }
   const composition = "compositions/scene.html";
-  const scene = `<template><main id="scene" data-composition-id="scene" data-width="320" data-height="240" data-duration="1" data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"../art/red.svg","alt":"Red artwork"}}]'><img id="artwork" class="clip" src="../art/red.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" width="320" height="240"></main></template>`;
+  const scene = `<template><main id="scene" data-composition-id="scene" data-width="320" data-height="240" data-duration="1" data-no-timeline data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"../art/red.svg","alt":"Red artwork"}},{"id":"headline","type":"string","label":"Scene headline","default":"Inherited"}]'><img id="artwork" class="clip" src="../art/red.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" width="320" height="240"><p data-var-text="headline" style="position:absolute;top:8px;left:16px;margin:0;color:white">Fallback</p></main></template>`;
   await writeFile(join(project.path, composition), scene);
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><body style="margin:0"><main data-composition-id="main" data-width="640" data-height="240" data-duration="1"><div id="host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div><div id="other-host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-variable-values='{"art":"art/green.svg"}' data-start="0" data-duration="1" data-track-index="1" data-width="320" data-height="240" style="position:absolute;top:0;left:320px"></div></main></body></html>`,
+    `<!doctype html><html><body style="margin:0"><main data-composition-id="main" data-width="640" data-height="240" data-duration="1" data-no-timeline><div id="host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div><div id="other-host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-variable-values='{"art":"art/green.svg"}' data-start="0" data-duration="1" data-track-index="1" data-width="320" data-height="240" style="position:absolute;top:0;left:320px"></div></main></body></html>`,
   );
   const frame = page.frameLocator("iframe[data-live]");
   const artwork = frame.locator('[data-var-src="art"]').first();
@@ -351,7 +399,53 @@ test("a mounted scene resolves its image default and exports its own override", 
   await checkPicture("parent-default-and-host-override.png", 0, 1);
   await exportPicture([0, 1]);
 
-  await page.locator('[data-clip="host"]').dblclick();
+  const firstClip = page.locator('.tl-lanes [data-clip="host"]');
+  const secondClip = page.locator('.tl-lanes [data-clip="other-host"]');
+  const section = page.getByRole("region", { name: "Scene variables" });
+  const headline = section.getByRole("textbox", { name: "Scene headline" });
+  const sceneArtwork = section.getByRole("combobox", { name: "Artwork" });
+  const leftHeadline = frame.locator('#host [data-var-text="headline"]');
+  const rightHeadline = frame.locator('#other-host [data-var-text="headline"]');
+  await firstClip.click();
+  await expect(headline).toHaveValue("Inherited");
+  await expect(sceneArtwork).toHaveText("art/red.svg");
+  await page.screenshot({ path: info.outputPath("instance-before.png") });
+  await headline.fill("Only the left scene");
+  await headline.press("Enter");
+  await expect(leftHeadline).toHaveText("Only the left scene");
+  await expect(rightHeadline).toHaveText("Inherited");
+  await sceneArtwork.click();
+  await page.getByRole("option", { name: "art/blue#2.svg" }).click();
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await expect(hostOverride).toHaveAttribute("src", "art/green.svg");
+  await page.screenshot({ path: info.outputPath("instance-after.png") });
+  await checkPicture("instance-preview.png", 2, 1);
+  await exportPicture([2, 1]);
+  const rename = await request.post(
+    `/api/cutroom/projects/${project.id}/media/rename`,
+    {
+      data: { path: "art/blue#2.svg", name: "blue renamed#2.svg" },
+    },
+  );
+  expect(rename.ok()).toBe(true);
+  await expect(artwork).toHaveAttribute("src", "art/blue%20renamed%232.svg");
+  await expect(artwork).toHaveJSProperty("naturalWidth", 320);
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await secondClip.click();
+  await expect(headline).toHaveValue("Inherited");
+  await expect(sceneArtwork).toHaveText("art/green.svg");
+  await firstClip.click();
+  await section.getByRole("button", { name: "Reset Artwork" }).click();
+  await expect(artwork).toHaveAttribute("src", "art/red.svg");
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/red.svg");
+  await page.keyboard.press("Control+z");
+  await expect(leftHeadline).toHaveText("Inherited");
+  expect(await readFile(join(project.path, composition), "utf8")).toBe(scene);
+  await firstClip.dblclick();
   await expect(
     page.getByRole("navigation", { name: "Composition" }),
   ).toHaveText(/scene/);
@@ -646,4 +740,133 @@ test("bind existing variables from the inspector and preview their words and col
     inspector.getByRole("combobox", { name: "Words variable" }),
   ).toContainText("caption-text");
   await expect(shown(page, "caption")).toHaveText("Plain words");
+});
+
+test("repeated nested mounts keep their own saved values in preview and MP4", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Nested mounts", width: 640, height: 240, duration: 1 },
+      })
+    ).json(),
+  );
+  const parent = "scenes/parent.html";
+  const child = "scenes/child.html";
+  await mkdir(join(project.path, "scenes"));
+  for (const [name, color] of [
+    ["red", "red"],
+    ["green", "lime"],
+    ["blue", "blue"],
+  ]) {
+    await writeFile(
+      join(project.path, `${name}.svg`),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="${color}"/></svg>`,
+    );
+  }
+  const mount = (
+    id: string,
+    composition: string,
+    src: string,
+    width: number,
+    track: number,
+    left = 0,
+  ) =>
+    `<div id="${id}" class="clip" data-composition-id="${composition}" data-composition-src="${src}" data-start="0" data-duration="1" data-track-index="${track}" data-width="${width}" data-height="240" style="position:absolute;top:0;left:${left}px"></div>`;
+  const root = (id: string, width: number, contents: string) =>
+    `<main data-composition-id="${id}" data-width="${width}" data-height="240" data-duration="1">${contents}</main>`;
+  await writeFile(
+    join(project.path, child),
+    `<template><section data-composition-id="child" data-width="320" data-height="240" data-duration="1" data-composition-variables='[{"id":"art","label":"Artwork","type":"image","default":"red.svg"},{"id":"title","label":"Title","type":"string","default":"Default"}]'><img data-var-src="art" src="red.svg" class="clip" id="art" data-start="0" data-duration="1" data-track-index="0"><p data-var-text="title" style="position:absolute;top:0;left:10px">Fallback</p></section></template>`,
+  );
+  await writeFile(
+    join(project.path, parent),
+    `<template>${root("parent", 640, mount("left", "child", child, 320, 0) + mount("right", "child", child, 320, 1, 320))}</template>`,
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body style="margin:0">${root("main", 640, mount("outer", "parent", parent, 640, 0))}</body></html>`,
+  );
+
+  for (const [clipId, art, title] of [
+    ["left", "green.svg", "Left title"],
+    ["right", "blue.svg", "Right title"],
+  ]) {
+    for (const [id, value] of [
+      ["art", art],
+      ["title", title],
+    ]) {
+      const saved = await request.put(
+        `/api/cutroom/projects/${project.id}/variables/instance`,
+        {
+          data: { composition: parent, clipId, id, value },
+        },
+      );
+      expect(saved.ok(), await saved.text()).toBe(true);
+    }
+  }
+
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  for (const [id, title] of [
+    ["left", "Left title"],
+    ["right", "Right title"],
+  ]) {
+    await expect(shown(page, id).locator("[data-var-text]")).toHaveText(title);
+    await expect(shown(page, id).locator("img")).toHaveJSProperty(
+      "naturalWidth",
+      320,
+    );
+  }
+  const picture = page.locator(".edit-picture");
+  const screenshot = info.outputPath("nested-mounts-preview.png");
+  await picture.screenshot({ path: screenshot });
+  const { width, height } = (await picture.boundingBox())!;
+  const expectColor = (rgb: number[], channel: number) => {
+    expect(rgb).toHaveLength(3);
+    for (const [index, value] of rgb.entries())
+      if (index === channel) expect(value).toBeGreaterThan(230);
+      else expect(value).toBeLessThan(20);
+  };
+  for (const [column, channel] of [
+    [0.25, 1],
+    [0.75, 2],
+  ]) {
+    expectColor(
+      await pixel(
+        screenshot,
+        Math.floor(width * column),
+        Math.floor(height / 2),
+      ),
+      channel,
+    );
+  }
+
+  await page.locator('.tl-lanes [data-clip="outer"]').dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toHaveText(/parent/);
+  await waitForPreview(page);
+  await expect(shown(page, "left").locator("[data-var-text]")).toHaveText(
+    "Left title",
+  );
+  await expect(shown(page, "right").locator("[data-var-text]")).toHaveText(
+    "Right title",
+  );
+
+  const exported = await request.post(`/api/projects/${project.id}/export`, {
+    data: { range: "timeline" },
+  });
+  expect(exported.ok(), await exported.text()).toBe(true);
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await exported.json());
+  await expect
+    .poll(() => existsSync(outputPath), { timeout: 45_000 })
+    .toBe(true);
+  expectColor(await pixel(outputPath, 160, 120), 1);
+  expectColor(await pixel(outputPath, 480, 120), 2);
+  await copyFile(outputPath, info.outputPath("nested-mounts.mp4"));
 });

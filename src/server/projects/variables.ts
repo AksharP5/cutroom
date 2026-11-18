@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stat } from "node:fs/promises";
 import { posix } from "node:path";
-import { applyFileMutations } from "@hyperframes/studio-server";
-import { isCompositionVariable } from "@hyperframes/core/variables";
+import {
+  applyFileMutations,
+  fileContentVersion,
+} from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -14,12 +16,20 @@ import {
   VariableDefaultSchema,
   VariableError,
   VariablesPreviewSchema,
+  SceneVariablesQuerySchema,
+  SceneVariableUpdateSchema,
+  VariableIdSchema,
+  VariableValueSchema,
+  VariableValuesSchema,
+  isEditable,
+  variableValueSchema,
+  sceneImageUrl,
   checkVariableValues,
   imageVariablePath,
-  parseDeclarations,
 } from "../../shared/variables";
 import type {
   CompositionVariable,
+  SceneVariables,
   VariableValues,
   VariablesState,
   VariableBinding,
@@ -29,12 +39,14 @@ import type { Project } from "../../shared/project";
 import {
   compositionScope,
   bindCompositionVariable,
-  declareVariables,
-  declaredVariables,
+  sourceVariables,
   parseComposition,
+  sceneInstanceSource,
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
 import { projectWritePath } from "./path";
+import { compositionMediaFacts } from "../timeline/media";
+import { sceneMountId, sceneSources } from "./sceneSources";
 import type { ReviewService } from "./review";
 import { historyWho, parseInput } from "./routes";
 import { readSource } from "./store";
@@ -78,19 +90,6 @@ const compositionPath = (requested: string | undefined) => {
   if (path === ".." || path.startsWith("../") || !/\.html?$/i.test(path))
     throw new HttpError(400, "Name an HTML composition inside the project.");
   return path;
-};
-
-/** The declarations as written, loose entries included, so a rewrite keeps every one. */
-const writtenDeclarations = (html: string): unknown[] => {
-  const raw = declaredVariables(html);
-  if (raw === undefined) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {}
-  throw new VariableError(
-    "data-composition-variables is not a JSON list. Fix it in the source first.",
-  );
 };
 
 const refusal = (error: unknown): never => {
@@ -169,7 +168,10 @@ export function createVariableRoutes(
     composition: string,
   ): Promise<VariablesState> => {
     const source = await readSource(project, composition);
-    const declarations = parseDeclarations(declaredVariables(source.content));
+    const { declarations } = sourceVariables(
+      source.content,
+      compositionScope(composition),
+    );
     return {
       composition,
       declarations,
@@ -178,6 +180,106 @@ export function createVariableRoutes(
         declarations,
       ),
     };
+  };
+
+  const loadScene = async (
+    project: Project,
+    composition: string,
+    clipId: string,
+    html: string,
+  ) => {
+    const settings =
+      (await store.document(project)).timelines[composition] ??
+      emptyTimelineSettings();
+    const { lengths } = await compositionMediaFacts(project, composition, html);
+    const instance = sceneInstanceSource(
+      parseComposition(html, settings, {
+        scope: compositionScope(composition),
+        mediaLengths: lengths,
+      }),
+      clipId,
+    );
+    const id = sceneMountId(
+      instance.compositionId,
+      instance.originalCompositionId,
+    );
+    if (!id)
+      throw new HttpError(
+        422,
+        "Give this scene mount a data-composition-id in Source before editing its variables.",
+      );
+    const mounted = sceneSources(project.path)(composition, instance.src, id);
+    if (!mounted?.renderable)
+      throw new HttpError(
+        422,
+        "Set data-composition-src to a usable project-relative HTML file so preview and export use the same scene.",
+      );
+    const { path: scene, declarations, matches } = mounted;
+    const version = fileContentVersion(
+      JSON.stringify([html, scene, mounted.html]),
+    );
+    return { instance, scene, declarations, matches, version };
+  };
+
+  const readScene = async (
+    project: Project,
+    composition: string,
+    clipId: string,
+  ): Promise<SceneVariables> => {
+    try {
+      const { content } = await readSource(project, composition);
+      const { instance, scene, declarations, version } = await loadScene(
+        project,
+        composition,
+        clipId,
+        content,
+      );
+      const { rebaseImageUrl } = await import("../hyperframes/imageVariables");
+      const values = VariableValuesSchema.parse(
+        Object.fromEntries(
+          declarations.flatMap((variable) => {
+            if (
+              !isEditable(variable) ||
+              !VariableIdSchema.safeParse(variable.id).success ||
+              !Object.hasOwn(instance.values, variable.id)
+            )
+              return [];
+            const raw = instance.values[variable.id];
+            const value = VariableValueSchema.safeParse(
+              variable.type === "image" ? sceneImageUrl(raw) : raw,
+            );
+            return value.success ? [[variable.id, value.data]] : [];
+          }),
+        ),
+      );
+      return {
+        composition,
+        clipId,
+        scene,
+        locked: instance.locked,
+        version,
+        values,
+        declarations: declarations.map((variable) => {
+          if (variable.type !== "image") return variable;
+          const url = rebaseImageUrl(
+            project.path,
+            scene,
+            typeof variable.default === "string"
+              ? variable.default
+              : variable.default.url,
+          );
+          return {
+            ...variable,
+            default:
+              typeof variable.default === "string"
+                ? url
+                : { ...variable.default, url },
+          };
+        }),
+      };
+    } catch (error) {
+      return refusal(error);
+    }
   };
 
   const setPreview = (
@@ -239,6 +341,81 @@ export function createVariableRoutes(
     );
   });
 
+  api.get("/projects/:id/variables/instance", async (c) => {
+    const input = parseInput(SceneVariablesQuerySchema, c.req.query());
+    const project = await store.get(c.req.param("id"));
+    return c.json(
+      await readScene(
+        project,
+        compositionPath(input.composition),
+        input.clipId,
+      ),
+    );
+  });
+
+  api.put("/projects/:id/variables/instance", async (c) => {
+    const input = parseInput(SceneVariableUpdateSchema, await c.req.json());
+    const { clipId, id } = input;
+    const project = await store.get(c.req.param("id"));
+    const composition = compositionPath(input.composition);
+    await edit(
+      c,
+      project,
+      composition,
+      input.value === null
+        ? `Reset ${id} on ${clipId}`
+        : `Set ${id} on ${clipId}`,
+      async (html) => {
+        const { instance, matches, version } = await loadScene(
+          project,
+          composition,
+          clipId,
+          html,
+        );
+        if (instance.locked)
+          throw new HttpError(422, "The scene clip's track is locked.");
+        if (
+          input.expectedVersion !== undefined &&
+          input.expectedVersion !== version
+        )
+          throw new HttpError(
+            409,
+            "The scene changed. Inspect its variables again.",
+          );
+        const [variable, duplicate] = matches(id);
+        if (!variable || duplicate || !isEditable(variable))
+          throw new VariableError(
+            `${id} must name one editable variable in the mounted scene.`,
+          );
+        const previous = instance.values[id];
+        if (input.value === null) {
+          if (!Object.hasOwn(instance.values, id)) return html;
+          const { [id]: _, ...remaining } = instance.values;
+          return instance.write(remaining);
+        }
+        const next = variableValueSchema(variable).safeParse(input.value);
+        if (!next.success)
+          throw new VariableError(
+            `${id}: ${next.error.issues.map((issue) => issue.message).join(" ")}`,
+          );
+        if (variable.type === "image" && typeof next.data === "string") {
+          await checkProjectImage(project, "index.html", id, next.data);
+          if (sceneImageUrl(previous) === next.data) return html;
+          const shape = previous ?? variable.default;
+          const value =
+            shape && typeof shape === "object" && "url" in shape
+              ? { ...shape, url: next.data }
+              : next.data;
+          return instance.write({ ...instance.values, [id]: value });
+        }
+        return Object.hasOwn(instance.values, id) && previous === next.data
+          ? html
+          : instance.write({ ...instance.values, [id]: next.data });
+      },
+    );
+    return c.json(await readScene(project, composition, clipId));
+  });
+
   api.put("/projects/:id/variables/preview", async (c) => {
     const input = parseInput(VariablesPreviewSchema, await c.req.json());
     const project = await store.get(c.req.param("id"));
@@ -273,10 +450,8 @@ export function createVariableRoutes(
       composition,
       `Set ${label ?? input.id} default`,
       async (html) => {
-        const declarations = writtenDeclarations(html);
-        const matches = declarations
-          .filter(isCompositionVariable)
-          .filter((item) => item.id === input.id);
+        const variables = sourceVariables(html, compositionScope(composition));
+        const matches = variables.matches(input.id);
         const [variable] = matches;
         if (!variable)
           throw new HttpError(
@@ -295,18 +470,7 @@ export function createVariableRoutes(
           matches,
         );
         if (!Object.hasOwn(changed, input.id)) return html;
-        const value =
-          variable.type === "image" && typeof variable.default === "object"
-            ? { ...variable.default, url: input.value }
-            : input.value;
-        return declareVariables(
-          html,
-          JSON.stringify(
-            declarations.map((entry) =>
-              entry === variable ? { ...variable, default: value } : entry,
-            ),
-          ),
-        );
+        return variables.setDefault(variable, input.value);
       },
     );
     const latest = previews.get(project.id)?.get(composition);
@@ -324,9 +488,10 @@ export function createVariableRoutes(
     const project = await store.get(c.req.param("id"));
     const composition = compositionPath(input.composition);
     await edit(c, project, composition, `Bind ${input.id}`, async (html) => {
-      const matches = parseDeclarations(declaredVariables(html)).filter(
-        (item) => item.id === input.id,
-      );
+      const matches = sourceVariables(
+        html,
+        compositionScope(composition),
+      ).matches(input.id);
       if (matches.length !== 1)
         throw new HttpError(
           422,
@@ -355,8 +520,8 @@ export function createVariableRoutes(
       composition,
       bind ? `Bind ${variable.label}` : `Declare ${variable.label}`,
       async (html) => {
-        const declarations = parseDeclarations(declaredVariables(html));
-        if (declarations.some((item) => item.id === variable.id))
+        const variables = sourceVariables(html, compositionScope(composition));
+        if (variables.matches(variable.id).length)
           throw new HttpError(409, `${variable.id} is already declared.`);
         if (variable.type === "image")
           await checkProjectImage(
@@ -365,10 +530,10 @@ export function createVariableRoutes(
             variable.id,
             variable.default,
           );
-        let next = html;
+        const next = variables.add(variable);
         if (bind)
-          next = bindSource(
-            html,
+          return bindSource(
+            next,
             bind,
             variable,
             (await store.document(project)).timelines[composition] ??
@@ -376,10 +541,7 @@ export function createVariableRoutes(
             composition,
             false,
           );
-        return declareVariables(
-          next,
-          JSON.stringify([...writtenDeclarations(html), variable]),
-        );
+        return next;
       },
     );
     return c.json(await read(project, composition), 201);
