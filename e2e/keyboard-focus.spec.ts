@@ -67,7 +67,7 @@ test("Space stays native in text fields, dialogs and viewer menus", async ({
 }) => {
   const stop = page.getByRole("button", { name: "Stop", exact: true });
   const now = page.getByRole("button", { name: /^Current time/ });
-  const composer = page.getByPlaceholder("Describe the next edit");
+  const composer = page.getByRole("textbox", { name: "Message your agent" });
   await composer.fill("two");
   await composer.press("Space");
   await expect(composer).toHaveValue("two ");

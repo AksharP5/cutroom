@@ -1,26 +1,19 @@
 import {
-  memo,
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import type { RefObject } from "react";
 import {
   ArrowClockwise,
   ArrowUp,
   CaretDown,
-  CaretRight,
   Paperclip,
   Plus,
-  Square,
   X,
 } from "@phosphor-icons/react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { z } from "zod";
 import {
   agentPermissionsSchema,
@@ -31,30 +24,17 @@ import {
   agentSessionSummarySchema,
   type AgentCapabilities,
   type AgentEvent,
-  type AgentMessage,
   type AgentProvider,
-  type AgentRequest,
   type AgentSession,
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
-import {
-  describeTool,
-  editsProject,
-  failureReason,
-  hiddenTools,
-  runsCommand,
-  summarizeSteps,
-  targetsFile,
-  CUTROOM_SERVER,
-  parseTool,
-} from "../../shared/toolRow";
-import { CommandBatchSchema } from "../../shared/timeline/schema";
-import { apply, TimelineError } from "../../shared/timeline/apply";
-import { editLabel } from "../../shared/timeline/labels";
-import { useTimeline } from "../edit/timeline";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
+import { Attachments } from "./chat/Attachments";
+import { RequestCard } from "./chat/RequestCard";
+import { Transcript } from "./chat/Transcript";
+import { chatClock } from "./chat/clock";
 import { waitForNoteCaptures } from "../edit/noteStore";
 
 const sessionListSchema = z.object({
@@ -149,397 +129,6 @@ function applyConversationEvents(
   return session ? { phase: "ready", session } : state;
 }
 
-const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
-  const { verb, object } = describeTool(
-    message,
-    message.status === "streaming" ? "active" : "done",
-  );
-  const reason = message.status === "failed" ? failureReason(message) : "";
-  return (
-    <div
-      className="chat-step"
-      data-status={message.status}
-      data-edit={editsProject(message.tool) || undefined}
-    >
-      <details className="chat-tool" data-status={message.status}>
-        <summary title={`${verb} ${object}`.trim()}>
-          {message.status === "streaming" ? (
-            <span className="chat-tool-now" />
-          ) : (
-            <CaretRight className="chat-tool-caret" size={10} weight="bold" />
-          )}
-          {/* The spaces are for screen readers and copying; the grid ignores them. */}
-          <span className="chat-tool-verb">{verb}</span>{" "}
-          {/* Long file paths lose their start, so the file name stays visible. */}
-          <span
-            className="chat-tool-target"
-            data-path={targetsFile(message.tool) || undefined}
-          >
-            <bdi>{object}</bdi>
-          </span>{" "}
-          {message.status === "failed" && (
-            <span className="chat-tool-note">Failed</span>
-          )}
-        </summary>
-        <pre>{message.text}</pre>
-      </details>
-      {/* A failure says why without being opened; the open row shows the whole output. */}
-      {reason && <p className="chat-tool-reason">{reason}</p>}
-    </div>
-  );
-});
-
-/**
- * One turn segment's tool calls. Routine steps fold into a single summary line whose counts
- * grow in place while the turn runs; failures and project edits keep their own rows.
- */
-function StepGroup({ steps }: { steps: AgentMessage[] }) {
-  const [open, setOpen] = useState(false);
-  const [grouped, setGrouped] = useState(false);
-  const rows = useId();
-  const { summary, running, shown } = summarizeSteps(steps, grouped);
-  // Once formed, keep the disclosure and its focus even if every routine call fails.
-  if (summary && !grouped) setGrouped(true);
-  return (
-    <div className="chat-tools" role="group" aria-label="Agent steps">
-      {summary && (
-        <button
-          type="button"
-          className="chat-steps"
-          data-running={running || undefined}
-          aria-expanded={open}
-          aria-controls={rows}
-          title={summary}
-          onClick={() => setOpen((value) => !value)}
-        >
-          {running ? (
-            <span className="chat-tool-now" />
-          ) : (
-            <CaretRight className="chat-tool-caret" size={10} weight="bold" />
-          )}
-          <span className="chat-steps-summary">{summary}</span>
-        </button>
-      )}
-      <div id={rows}>
-        {(open || !summary ? steps : shown).map((message) => (
-          <ToolRow key={message.id} message={message} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const Message = memo(function Message({
-  message,
-  provider,
-}: {
-  message: AgentMessage;
-  provider: AgentProvider;
-}) {
-  return (
-    <article className={`chat-message message-${message.role}`}>
-      <div className="sr-only">
-        {message.role === "user"
-          ? "You"
-          : message.role === "assistant"
-            ? provider === "codex"
-              ? "Codex"
-              : "Claude"
-            : "Studio"}
-      </div>
-      <div className="markdown">
-        <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
-      </div>
-    </article>
-  );
-});
-
-function RequestCard({
-  request,
-  onRespond,
-}: {
-  request: AgentRequest;
-  onRespond: (
-    decision: "allow" | "deny",
-    answers?: Record<string, string | string[]>,
-    alwaysAllowCutroomEdits?: boolean,
-  ) => Promise<void>;
-}) {
-  const batch = useMemo(() => {
-    const { server, name } = parseTool(request.tool);
-    if (
-      request.kind !== "approval" ||
-      server !== CUTROOM_SERVER ||
-      name !== "timeline_edit"
-    )
-      return undefined;
-    return CommandBatchSchema.safeParse(request.input).data;
-  }, [request]);
-  const timeline = useTimeline((state) =>
-    batch &&
-    state.projectId === request.input.projectId &&
-    state.view?.composition === batch.composition
-      ? state.view.timeline
-      : undefined,
-  );
-  const commands = useMemo(() => {
-    let before = timeline;
-    return batch?.commands.map((command) => {
-      const label = editLabel([command], before, "Edit", "pending");
-      // Later commands describe the result of earlier commands in this same batch.
-      if (before) {
-        try {
-          before = apply(before, command);
-        } catch (error) {
-          if (!(error instanceof TimelineError)) throw error;
-          before = undefined;
-        }
-      }
-      return label;
-    });
-  }, [batch, timeline]);
-  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
-  const [showInput, setShowInput] = useState(false);
-  const title = useId();
-  const raw = useId();
-  async function respond(decision: "allow" | "deny", always = false) {
-    setSending(true);
-    setError("");
-    try {
-      await onRespond(decision, answers, always);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSending(false);
-    }
-  }
-  const question = request.kind === "question";
-  const decide = (
-    <>
-      <button
-        className={question ? "text-button" : "secondary-button"}
-        disabled={sending}
-        onClick={() => void respond("allow")}
-      >
-        {question ? "Answer" : "Allow once"}
-      </button>
-      <button
-        className="text-button quiet"
-        disabled={sending}
-        onClick={() => void respond("deny")}
-      >
-        {question ? "Decline" : "Deny"}
-      </button>
-    </>
-  );
-  return (
-    <section
-      className="agent-request"
-      aria-label={
-        request.kind === "question" ? "Agent question" : "Permission request"
-      }
-      aria-describedby={request.kind === "approval" ? title : undefined}
-    >
-      {request.kind === "approval" ? (
-        <>
-          {commands ? (
-            <ul className="agent-request-commands" id={title}>
-              {commands.map((command, index) => (
-                <li key={index}>{command}</li>
-              ))}
-            </ul>
-          ) : (
-            <p className="agent-request-title" id={title}>
-              {request.title}
-            </p>
-          )}
-          {/* A command is the thing being approved, so it is read in full. */}
-          {runsCommand(request.tool) && request.target && (
-            <pre className="agent-request-command">{request.target}</pre>
-          )}
-          {!commands && request.detail && (
-            <p className="agent-request-detail">{request.detail}</p>
-          )}
-          <div className="agent-request-actions">
-            {decide}
-            <button
-              className="text-button quiet agent-request-more"
-              aria-expanded={showInput}
-              aria-controls={raw}
-              onClick={() => setShowInput((value) => !value)}
-            >
-              Details
-            </button>
-          </div>
-          {/* The lasting grant reads as one sentence with everything it covers. */}
-          {request.canAllowCutroomEdits && (
-            <p className="agent-request-scope">
-              <button
-                className="text-button"
-                disabled={sending}
-                onClick={() => void respond("allow", true)}
-              >
-                Always allow Cutroom edits
-              </button>{" "}
-              for this project, in every conversation, until you revoke. Shell
-              and native file changes still ask.
-            </p>
-          )}
-          {/* The exact request stays one click away for anyone who wants to check it. */}
-          {showInput && (
-            <pre id={raw}>
-              {`${request.tool}\n${JSON.stringify(request.input, null, 2)}`}
-            </pre>
-          )}
-        </>
-      ) : (
-        <strong className="agent-question-title">{request.title}</strong>
-      )}
-      {request.questions?.map((question) => (
-        <fieldset key={question.id}>
-          <legend>{question.question}</legend>
-          {question.options.map((option) => (
-            <label className="radio-row" key={option}>
-              <input
-                type={question.multiple ? "checkbox" : "radio"}
-                name={question.id}
-                checked={
-                  Array.isArray(answers[question.id])
-                    ? answers[question.id]?.includes(option)
-                    : answers[question.id] === option
-                }
-                onChange={(event) =>
-                  setAnswers((current) => {
-                    if (!question.multiple)
-                      return { ...current, [question.id]: option };
-                    const value = current[question.id];
-                    const selected = Array.isArray(value)
-                      ? value
-                      : value
-                        ? [value]
-                        : [];
-                    return {
-                      ...current,
-                      [question.id]: event.target.checked
-                        ? [...selected, option]
-                        : selected.filter((item) => item !== option),
-                    };
-                  })
-                }
-              />
-              {option}
-            </label>
-          ))}
-          <input
-            aria-label={`Answer: ${question.question}`}
-            value={
-              typeof answers[question.id] === "string"
-                ? answers[question.id]
-                : ""
-            }
-            onChange={(event) =>
-              setAnswers({ ...answers, [question.id]: event.target.value })
-            }
-            placeholder="Write an answer"
-          />
-        </fieldset>
-      ))}
-      {request.kind === "question" && (
-        <div className="agent-question-actions">{decide}</div>
-      )}
-      {error && (
-        <p className="inline-error" role="alert">
-          {error}
-        </p>
-      )}
-    </section>
-  );
-}
-
-const ConversationMessages = memo(function ConversationMessages({
-  session,
-  capabilities,
-  discovering,
-  messagesRef,
-  followRef,
-  onRespond,
-}: {
-  session: AgentSession | null;
-  capabilities: AgentCapabilities | null;
-  discovering: boolean;
-  messagesRef: RefObject<HTMLDivElement | null>;
-  followRef: RefObject<boolean>;
-  onRespond: (
-    decision: "allow" | "deny",
-    answers?: Record<string, string | string[]>,
-    alwaysAllowCutroomEdits?: boolean,
-  ) => Promise<void>;
-}) {
-  // Consecutive tool calls read as one step group. Empty replies and tool
-  // lookups say nothing, so they neither show nor split a group.
-  const blocks: AgentMessage[][] = [];
-  for (const message of session?.messages ?? []) {
-    if (message.role === "tool" && hiddenTools.has(message.tool ?? ""))
-      continue;
-    if (message.role !== "tool" && !message.text.trim()) continue;
-    const last = blocks.at(-1);
-    if (message.role === "tool" && last?.[0]?.role === "tool")
-      last.push(message);
-    else blocks.push([message]);
-  }
-  return (
-    <div
-      className="chat-messages"
-      ref={messagesRef}
-      onScroll={() => {
-        const element = messagesRef.current;
-        if (element)
-          followRef.current =
-            element.scrollHeight - element.scrollTop - element.clientHeight <
-            72;
-      }}
-    >
-      {!session?.messages.length && (
-        <div className="chat-empty">
-          <h2>What should we change?</h2>
-          <p>Describe an edit, or draw on the preview to show your agent.</p>
-          <p className="native-note">
-            {discovering
-              ? "Reading your agent configuration…"
-              : capabilities?.available
-                ? `${capabilities.skills.filter((skill) => skill.enabled).length} native skills available. Type $ to choose one.`
-                : (capabilities?.error ??
-                  "Choose an installed agent to begin.")}
-          </p>
-        </div>
-      )}
-      {session &&
-        blocks.map((block) =>
-          block[0]?.role === "tool" ? (
-            <StepGroup key={block[0].id} steps={block} />
-          ) : (
-            block.map((message) => (
-              <Message
-                key={message.id}
-                message={message}
-                provider={session.provider}
-              />
-            ))
-          ),
-        )}
-      {session?.pendingRequest?.kind === "question" && (
-        <RequestCard
-          key={session.pendingRequest.id}
-          request={session.pendingRequest}
-          onRespond={onRespond}
-        />
-      )}
-    </div>
-  );
-});
-
 /** Elapsed agent time as a clock (m:ss), not timecode. Re-renders only itself. */
 function Elapsed({ since }: { since: string }) {
   const [now, setNow] = useState(Date.now);
@@ -548,11 +137,8 @@ function Elapsed({ since }: { since: string }) {
     return () => clearInterval(timer);
   }, []);
   const seconds = Math.max(0, Math.floor((now - Date.parse(since)) / 1000));
-  return (
-    <span className="presence-clock mono">
-      {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-    </span>
-  );
+  if (!Number.isFinite(seconds)) return null;
+  return <span className="presence-clock mono">{chatClock(seconds)}</span>;
 }
 
 export function ChatPanel({
@@ -617,6 +203,9 @@ export function ChatPanel({
   const [attachments, setAttachments] = useState<string[]>(
     () => readDraft(projectId)?.attachments ?? [],
   );
+  const removeAttachment = useCallback((path: string) => {
+    setAttachments((items) => items.filter((item) => item !== path));
+  }, []);
   const [skillChoices, setSkillChoices] = useState(
     () => readDraft(projectId)?.skillChoices ?? {},
   );
@@ -819,7 +408,7 @@ export function ChatPanel({
   useEffect(() => {
     if (follow.current && messages.current)
       messages.current.scrollTop = messages.current.scrollHeight;
-  }, [session?.messages, session?.pendingRequest]);
+  }, [session?.messages, session?.pendingRequest, session?.status]);
 
   useEffect(() => {
     if (!prompt) return;
@@ -861,6 +450,18 @@ export function ChatPanel({
       if (alwaysAllowCutroomEdits) setAlwaysAllow(true);
     },
     [sessionId, requestId],
+  );
+  const request = session?.pendingRequest;
+  const question = useMemo(
+    () =>
+      request?.kind === "question" && (
+        <RequestCard
+          key={request.id}
+          request={request}
+          onRespond={respondToRequest}
+        />
+      ),
+    [request, respondToRequest],
   );
   const busy = session?.status === "running" || session?.status === "waiting";
   const followUps = (session?.queuedTurns ?? []).filter(
@@ -1030,103 +631,69 @@ export function ChatPanel({
 
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
-      {active ? (
-        <div className="chat-toolbar presence" data-state={session?.status}>
-          <span>
-            <strong>
-              {operation?.kind === "stop"
-                ? "Stopping"
-                : session?.status === "waiting"
-                  ? "Needs you"
-                  : busy
-                    ? "Working"
-                    : resuming
-                      ? "Resuming"
-                      : "Sending"}
-            </strong>
-            {busy &&
-              session?.status === "running" &&
-              workingNote &&
-              ` on note ${workingNote}`}
-          </span>
-          {busy && turnStart && <Elapsed since={turnStart} />}
-          {canStop && (
-            <button
-              className="icon-button"
-              aria-label="Stop agent"
-              title="Stop agent"
-              disabled={operation?.kind === "stop"}
-              onClick={() => void stop()}
-            >
-              <Square weight="fill" />
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="chat-toolbar">
-          {sessions.length === 0 && (
-            <span className="chat-toolbar-title">New conversation</span>
-          )}
-          {sessions.length > 0 && (
-            <SelectMenu
-              className="select-label conversation-picker"
-              title={sessions.find((item) => item.id === sessionId)?.title}
-              label="Conversation"
-              value={sessionId ?? ""}
-              disabled={controlsLocked}
-              options={[
-                { value: "", label: "New conversation" },
-                ...sessions.map((item) => ({
-                  value: item.id,
-                  label: item.title,
-                })),
-              ]}
-              onChange={(selected) => {
-                setConversation(
-                  selected
-                    ? { phase: "loading", id: selected }
-                    : { phase: "new" },
-                );
-                const next = sessions.find((item) => item.id === selected);
-                if (next) {
-                  setProvider(next.provider);
-                  setModel(next.model ?? "");
-                }
-              }}
-            />
-          )}
-          <span className="quiet-label">
-            {opening
-              ? "Opening"
-              : operation?.kind === "model"
-                ? "Saving model"
-                : ""}
-          </span>
-          <button
-            className="icon-button"
-            aria-label="Refresh agent configuration"
-            disabled={controlsLocked || discovering}
-            onClick={() => {
-              setError("");
-              setConfigurationRevision((value) => value + 1);
-            }}
-          >
-            <ArrowClockwise />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="New conversation"
+      <div className="chat-toolbar">
+        {sessions.length === 0 && (
+          <span className="chat-toolbar-title">New conversation</span>
+        )}
+        {sessions.length > 0 && (
+          <SelectMenu
+            className="select-label conversation-picker"
+            title={sessions.find((item) => item.id === sessionId)?.title}
+            label="Conversation"
+            value={sessionId ?? ""}
             disabled={controlsLocked}
-            onClick={() => {
-              setConversation({ phase: "new" });
-              setError("");
-              textarea.current?.focus();
+            options={[
+              { value: "", label: "New conversation" },
+              ...sessions.map((item) => ({
+                value: item.id,
+                label: item.title,
+              })),
+            ]}
+            onChange={(selected) => {
+              setConversation(
+                selected
+                  ? { phase: "loading", id: selected }
+                  : { phase: "new" },
+              );
+              const next = sessions.find((item) => item.id === selected);
+              if (next) {
+                setProvider(next.provider);
+                setModel(next.model ?? "");
+              }
             }}
-          >
-            <Plus />
-          </button>
-        </div>
-      )}
+          />
+        )}
+        <span className="quiet-label">
+          {opening
+            ? "Opening"
+            : operation?.kind === "model"
+              ? "Saving model"
+              : ""}
+        </span>
+        <button
+          className="icon-button"
+          aria-label="Refresh agent configuration"
+          disabled={controlsLocked || discovering}
+          onClick={() => {
+            setError("");
+            setConfigurationRevision((value) => value + 1);
+          }}
+        >
+          <ArrowClockwise />
+        </button>
+        <button
+          className="icon-button"
+          aria-label="New conversation"
+          disabled={controlsLocked}
+          onClick={() => {
+            setConversation({ phase: "new" });
+            setError("");
+            textarea.current?.focus();
+          }}
+        >
+          <Plus />
+        </button>
+      </div>
       {alwaysAllow && (
         <div className="agent-permissions">
           <span>Cutroom edits always allowed</span>
@@ -1146,21 +713,20 @@ export function ChatPanel({
           </button>
         </div>
       )}
-      <ConversationMessages
-        session={session}
-        capabilities={capabilities}
-        discovering={discovering}
+      <Transcript
+        messages={session?.messages}
+        provider={session?.provider ?? provider}
+        busy={busy}
+        problem={
+          capabilities && !capabilities.available
+            ? (capabilities.error ?? "Choose an installed agent to begin.")
+            : undefined
+        }
         messagesRef={messages}
         followRef={follow}
-        onRespond={respondToRequest}
-      />
-      {session?.pendingRequest?.kind === "approval" && (
-        <RequestCard
-          key={session.pendingRequest.id}
-          request={session.pendingRequest}
-          onRespond={respondToRequest}
-        />
-      )}
+      >
+        {question}
+      </Transcript>
       {error && (
         <div className="chat-error" role="alert">
           <span>{error}</span>
@@ -1172,6 +738,66 @@ export function ChatPanel({
             <X size={14} />
           </button>
         </div>
+      )}
+      {active && (
+        <div className="presence" data-state={session?.status}>
+          <span role="status">
+            <strong>
+              {operation?.kind === "stop"
+                ? "Stopping"
+                : session?.status === "waiting"
+                  ? "Needs you"
+                  : busy
+                    ? "Working"
+                    : resuming
+                      ? "Resuming"
+                      : "Sending"}
+            </strong>
+            {busy &&
+              session?.status === "running" &&
+              workingNote &&
+              ` on note ${workingNote}`}
+          </span>
+          {busy && turnStart && <Elapsed since={turnStart} />}
+        </div>
+      )}
+      {session?.pendingRequest?.kind === "approval" && (
+        <RequestCard
+          key={session.pendingRequest.id}
+          request={session.pendingRequest}
+          onRespond={respondToRequest}
+        />
+      )}
+      {followUps.length > 0 && (
+        <section className="chat-follow-ups" aria-label="Queued follow-ups">
+          {!active && (
+            <button
+              className="text-button"
+              disabled={submitting}
+              onClick={() => void changeFollowUps()}
+            >
+              Resume queue
+            </button>
+          )}
+          <ol role="list">
+            {followUps.map(({ id, turn }) => (
+              <li key={id}>
+                <span title={turn.text}>
+                  {turn.text.trim() || "Attached media"}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Remove queued follow-up"
+                  title="Remove follow-up"
+                  disabled={submitting}
+                  onClick={() => void changeFollowUps(id)}
+                >
+                  <X size={12} />
+                </button>
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
       <div className="composer-area">
         {skillResults.length > 0 && (
@@ -1200,64 +826,18 @@ export function ChatPanel({
             ))}
           </div>
         )}
-        {followUps.length > 0 && (
-          <section className="chat-follow-ups" aria-label="Queued follow-ups">
-            <div className="chat-follow-ups-heading">
-              <span>{followUps.length} queued</span>
-              {!active && (
-                <button
-                  className="text-button"
-                  disabled={submitting}
-                  onClick={() => void changeFollowUps()}
-                >
-                  Resume queue
-                </button>
-              )}
-            </div>
-            <ol>
-              {followUps.map(({ id, turn }) => (
-                <li key={id}>
-                  <span title={turn.text}>
-                    {turn.text.trim() || "Attached media"}
-                  </span>
-                  <button
-                    className="icon-button"
-                    aria-label="Remove queued follow-up"
-                    title="Remove follow-up"
-                    disabled={submitting}
-                    onClick={() => void changeFollowUps(id)}
-                  >
-                    <X size={12} />
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </section>
-        )}
         <div className="composer">
           {attachments.length > 0 && (
-            <div className="attachment-list">
-              {attachments.map((path) => (
-                <span key={path}>
-                  {path.split("/").at(-1)}
-                  <button
-                    aria-label={`Remove ${path.split("/").at(-1)}`}
-                    onClick={() =>
-                      setAttachments((items) =>
-                        items.filter((item) => item !== path),
-                      )
-                    }
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-            </div>
+            <Attachments
+              projectId={projectId}
+              paths={attachments}
+              onRemove={removeAttachment}
+            />
           )}
           <textarea
             ref={textarea}
             aria-label="Message your agent"
-            placeholder="Describe the next edit"
+            placeholder="Ask for an edit, or draw on the picture"
             title="Enter to send, Shift+Enter for a new line"
             value={draft}
             rows={1}
@@ -1390,6 +970,17 @@ export function ChatPanel({
                 }}
               />
             </div>
+            {canStop && (
+              <button
+                className="chat-stop"
+                aria-label="Stop agent"
+                title="Stop agent"
+                disabled={operation?.kind === "stop"}
+                onClick={() => void stop()}
+              >
+                <span aria-hidden="true" />
+              </button>
+            )}
             <button
               className="send-button"
               aria-label={queuesMessage ? "Queue follow-up" : "Send message"}

@@ -31,7 +31,7 @@ If a native run needs approval or an answer, the chat shows that request. Stoppi
 
 Agents mention review notes when that turn changed one, when you explicitly ask about notes, or when a note is needed to explain a blocker. Otherwise they skip recaps of untouched queued notes.
 
-The agent's replies are the transcript. The tool calls between two replies fold into one line, such as "Read 6 files, ran 3 commands, 2 more", whose counts grow while the agent works. Select it to see every call in order, and any call to see its output. Two kinds of call always keep their own row: one that failed, with the reason, and one that changed the project, naming the files or clips.
+Your messages have a yellow rule, and project edits have a blue rule. A finished turn shows its elapsed time at its end when timestamps are available. Hover a code block or tab to **Copy code** to copy its contents. The tool calls between two replies fold into one line, such as "Read 6 files, ran 3 commands, 2 more", whose counts grow while the agent works. Select it to see every call in order, and any call to see its output. Two kinds of call always keep their own row: one that failed, with the reason, and one that changed the project, naming the files or clips.
 
 ## Approvals and changed clips
 
@@ -49,7 +49,7 @@ Sending a message queues every new review note. The server then adds a digest of
 
 The digest asks the agent to reconcile the message with the queue first. Newer intent wins: when the message cancels or replaces a note, the agent withdraws it with a reason instead of doing it, and the server records which message withdrew it. A message can also answer a note the agent blocked on; the agent then claims it with that answer, which is saved on the note as a chat answer, and continues. The agent works through the queue with the [review tools](mcp.md#review-queue). When a run ends, fails, or is stopped, notes it claimed but did not finish return to the queue. Claims left by a closed app return on the next read.
 
-While the agent is working or waiting for approval, **Queue follow-up** saves your message for that conversation. Follow-ups run in order after the current turn finishes, each with the current review queue. Remove a message using the cross next to it. After you stop the agent, close Cutroom, or a turn fails, pending follow-ups stay saved until you choose **Resume queue**. An interrupted follow-up stays queued as well. Check any partial edits before running it again.
+While the agent runs, its status and elapsed time appear above the composer, followed by any approval and queued follow-ups. **Stop agent** sits beside **Queue follow-up**, which saves your message for that conversation. Follow-ups run in order after the current turn finishes, each with the current review queue. Remove a message using the cross next to it. After you stop the agent, close Cutroom, or a turn fails, pending follow-ups stay saved until you choose **Resume queue**. An interrupted follow-up stays queued as well. Check any partial edits before running it again.
 
 One conversation per project works at a time. Sending from a second conversation while another is working returns an error until it finishes or is stopped. Each conversation's native agent gets a private token on its MCP connection, so its review actions are credited to the running message, and the token is refused on other projects or once the run ends. Any other MCP client, even one active during that run, is recorded as an outside agent.
 

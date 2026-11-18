@@ -178,6 +178,7 @@
   --leading-tight: 14px;
   --leading-body: 16px;
   --leading-chat: 19px;
+  --leading-code: 17px; /* fenced code in chat */
 
   /* Space: 4px base */
   --space-1: 4px;
@@ -231,6 +232,7 @@
   --size-filmstrip: 40px;
   --size-meter: 36px;
   --size-queue-row-max: 72px;
+  --size-chat-mark: 7px; /* live status and running steps */
   --size-queue-thumb-w: 48px;
   --size-queue-thumb-h: 27px;
   --size-pin-viewer: 16px;
