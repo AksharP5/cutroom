@@ -49,10 +49,10 @@ The contrast ratios below are the measurements recorded in `tokens.css`. Hover a
 | ------------------ | ---------------------------------- | ----: | -----: | ----: | ----: | ----: |
 | `--text-primary`   | Labels, body, and current values   |  16.0 |   15.0 |  14.6 |  13.4 |  12.1 |
 | `--text-secondary` | Supporting text and quiet controls |   7.9 |    7.4 |   7.2 |   6.6 |   5.9 |
-| `--text-tertiary`  | Hints and low-priority metadata    |   6.0 |    5.7 |   5.5 |   5.1 |  4.55 |
+| `--text-tertiary`  | Hints and low-priority metadata    |  6.10 |   5.72 |  5.55 |  5.14 |  4.54 |
 | `--text-quiet`     | Quiet timecode groups only         |   3.5 |        |       |       |       |
 
-Reserve `--glyph-faint` for non-text marks such as idle diamonds and hollow accepted pins.
+Reserve `--glyph-faint` for non-text marks such as idle diamonds, hollow accepted pins, and the mark in an empty project’s poster.
 
 | Signal        | Meaning and use                                                                                                                         |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |

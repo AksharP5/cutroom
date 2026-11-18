@@ -62,6 +62,16 @@
   aspect-ratio: 16 / 9;
   background: var(--surface-raised);
 }
+.home-frame > .logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: var(--icon-lg);
+  transform: translate(-50%, -50%);
+}
+.home-frame .logo-mark {
+  fill: var(--glyph-faint);
+}
 .home-frame img {
   display: block;
   width: 100%;

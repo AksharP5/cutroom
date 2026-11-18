@@ -60,9 +60,9 @@
   /* Text. Ratios: panel / raised / float / hover-on-panel / press */
   --text-primary: #ededed; /* 16.0 / 15.0 / 14.6 / 13.4 / 12.1 */
   --text-secondary: #a8a8a8; /* 7.9 / 7.4 / 7.2 / 6.6 / 5.9 */
-  --text-tertiary: #929292; /* 6.0 / 5.7 / 5.5 / 5.1 / 4.55 */
+  --text-tertiary: #939393; /* 6.10 / 5.72 / 5.55 / 5.14 / 4.54 */
   --text-quiet: #6a6a6a; /* 3.5 on panel; quiet zeros in timecode only, never a whole value */
-  --glyph-faint: #5c5c5c; /* non-text only: idle keyframe diamonds, empty step boxes, accepted pin ring */
+  --glyph-faint: #5c5c5c; /* non-text only: idle diamonds, step boxes, accepted pins, empty poster mark (2.63 on raised) */
 
   /* Signals. Yellow is a human mark. Blue is agent work: active OR awaiting review. */
   --human: #f2c94c; /* 11.8 on panel */

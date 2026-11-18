@@ -34,6 +34,8 @@ The viewer also shows one media file at a time as a source, opened from Media. A
 
 When anything the preview uses changes on disk (HTML, CSS, scripts, or media), whether from an agent, an MCP edit, or another editor, the viewer keeps showing its last frame while the new version loads, then shows the new version at the same frame. If the new version does not load, the last frame stays and the status bar says why.
 
+The status bar shows the project name for a Cutroom-created folder and the folder name for an imported project. Hover over it for the full path or click to copy it. On Home, a project with an empty timeline has a quiet Cutroom mark in its poster.
+
 The status bar also counts HyperFrames lint errors and warnings, checked when the project opens and again after each source change. Click the count to list the findings, errors first, with any fix hint on hover. Choosing one whose element is a clip on the timeline selects that clip and moves the playhead to its start; any other finding copies its file and line. Agents read the same findings with `project_lint`.
 
 ### Code

@@ -23,6 +23,9 @@ export function StatusBar({
     toReviewStatuses.includes(item.review.status),
   );
   const folder = project.path.split(/[\\/]/).filter(Boolean).at(-1);
+  const folderLabel = folder?.endsWith(`-${project.id.slice(0, 8)}`)
+    ? project.name
+    : folder;
   return (
     <footer className="status-bar">
       <button
@@ -30,7 +33,7 @@ export function StatusBar({
         title={`Copy ${project.path}`}
         onClick={() => void navigator.clipboard.writeText(project.path)}
       >
-        {folder}
+        {folderLabel}
       </button>
       {editorError && (
         <span className="status-error" role="alert" title={editorError}>
