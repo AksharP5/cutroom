@@ -347,9 +347,12 @@ const ClipLabel = memo(function ClipLabel({
         <span className="tl-text-line tl-offline">Media offline</span>
       )}
       {timed && (
-        <span className="tl-length" data-unscaled style={{ "--f": end }}>
-          <TimecodeText timecode={formatTimecode(clip.duration, fps)} />
-        </span>
+        <TimecodeText
+          className="tl-length"
+          data-unscaled
+          style={{ "--f": end }}
+          timecode={formatTimecode(clip.duration, fps)}
+        />
       )}
     </div>
   );
