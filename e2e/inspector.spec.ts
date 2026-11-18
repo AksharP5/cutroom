@@ -176,7 +176,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
             (document.documentElement.dataset.ledgerInFrame = String(
               document
                 .querySelector(".inspector-changes")
-                ?.textContent?.includes("Agent opacity"),
+                ?.textContent?.includes("Set opacity to 40%"),
             )),
         );
       });
@@ -207,7 +207,11 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
     );
     const agentRow = inspector
       .getByRole("listitem")
-      .filter({ hasText: "Agent opacity" });
+      .filter({ hasText: "Set opacity to 40%" });
+    await expect(agentRow.locator(".inspector-change")).toHaveAttribute(
+      "title",
+      /Agent label: "Agent opacity"/,
+    );
     await expect(
       agentRow.getByRole("button", { name: "Accept", exact: true }),
     ).toBeVisible();
