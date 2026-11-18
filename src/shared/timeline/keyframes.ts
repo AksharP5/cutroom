@@ -105,7 +105,7 @@ const EASE_CURVES = {
 >;
 
 /** Progress along a CSS `cubic-bezier`, as browsers solve it: Newton steps, then bisection. */
-function cubicBezier(
+export function cubicBezier(
   [x1, y1, x2, y2]: readonly [number, number, number, number],
   progress: number,
 ) {
