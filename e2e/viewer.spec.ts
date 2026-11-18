@@ -474,9 +474,11 @@ test("a composition that cannot play keeps the last picture and says why", async
   const index = join(project.path, "index.html");
   const good = await readFile(index, "utf8");
   await writeFile(index, "<!doctype html><main>No composition</main>\n");
-  await expect(page.locator(".status-error")).toContainText(
+  // The timeline says what to fix; the status bar keeps a short form.
+  await expect(page.locator(".edit-timeline-problem")).toContainText(
     "data-composition-id",
   );
+  await expect(page.locator(".status-error")).toHaveText("No composition");
   await expect(page.locator("iframe[title='Composition preview']")).toHaveCount(
     1,
   );
