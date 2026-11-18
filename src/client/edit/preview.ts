@@ -229,6 +229,20 @@ export async function commitKeyframePreview(commit: () => Promise<boolean>) {
   keyframeDraft = null;
 }
 
+/**
+ * Region CSS drawn over the saved stylesheet while a box is dragged: a blur or highlight's new
+ * look, or every zoom set aside so the frame can be aimed at. Null draws what is saved.
+ */
+type RegionDraft = { css: string | null; seek: boolean };
+const regionTargets = new Set<(draft: RegionDraft) => void>();
+let regionDraft: RegionDraft = { css: null, seek: false };
+/** `seek` redraws the frame, for a change to which zooms run. */
+export function previewRegion(css: string | null, seek = false) {
+  if (css === regionDraft.css) return;
+  regionDraft = { css, seek };
+  for (const target of regionTargets) target(regionDraft);
+}
+
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   let state: PreviewState = {
@@ -486,6 +500,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const keyframe = (draft: KeyframeDraft) => {
     send("keyframe", draft);
   };
+  const region = (draft: RegionDraft) => {
+    send("region", draft);
+  };
   const observe = (clipId: string | null) =>
     send("observe-position", {
       clipId,
@@ -528,6 +545,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       transformDraft = null;
     if (keyframeTargets.delete(keyframe) && !keyframeTargets.size)
       keyframeDraft = null;
+    regionTargets.delete(region);
     observers.delete(observe);
     if (warningSource === frame) {
       warningSource = null;
@@ -586,6 +604,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       positionTargets.add(position);
       transformTargets.add(transform);
       keyframeTargets.add(keyframe);
+      regionTargets.add(region);
+      // A region draft outlives saves: a new document takes it before it is shown.
+      if (regionDraft.css) region({ ...regionDraft, seek: true });
       // Keep both documents following the gesture until the new one has painted its latest
       // draft. Promotion runs immediately after this resolves, before another event can edit it.
       let shown: PositionDraft | null;

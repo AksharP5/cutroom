@@ -214,6 +214,23 @@ function backdrop(region: Region) {
   return filters.length ? filters.join(" ") : "none";
 }
 
+/** The declarations that draw a blur or highlight on its adjustment layer. */
+export const regionLook = (
+  region: Region,
+  size: { width: number; height: number },
+) =>
+  `backdrop-filter:${backdrop(region)};${regionShape(region, size)};mask-size:100% 100%;mask-repeat:no-repeat`;
+
+/** A blur or highlight drawn on one adjustment layer, as the editor drafts it. */
+export const regionDraftRule = (
+  id: string,
+  region: Region,
+  size: { width: number; height: number },
+) => `${byId(id)}{${regionLook(region, size)}}`;
+
+/** Sets every zoom aside, so the whole frame shows while a box is aimed. */
+export const ZOOMS_ASIDE = "*{--cutroom-zoom:none!important}";
+
 /** Whether a clip draws on screen at all. */
 const shown = (clip: Clip, timeline: Pick<Timeline, "tracks">) =>
   clip.enabled &&
@@ -253,7 +270,7 @@ export function regionStyle(
           : null;
       if (fade) rules.push(fade.rule);
       rules.push(
-        `${byId(source.id)}{backdrop-filter:${backdrop(region)};${regionShape(region, size)};mask-size:100% 100%;mask-repeat:no-repeat${fade ? `;--cutroom-fade:${fade.name};--cutroom-fade-duration:${seconds(fade.length, fps)}` : ""}}`,
+        `${byId(source.id)}{${regionLook(region, size)}${fade ? `;--cutroom-fade:${fade.name};--cutroom-fade-duration:${seconds(fade.length, fps)}` : ""}}`,
       );
       animated.push(source);
       continue;

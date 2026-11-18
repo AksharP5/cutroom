@@ -1,6 +1,7 @@
 import type { ClipKind } from "./timeline/schema";
 
-export type EditorMode = "select" | "trim" | "blade" | "draw" | "comment";
+export type EditorMode =
+  "select" | "trim" | "blade" | "region" | "draw" | "comment";
 
 export interface EditorPoint {
   x: number;

@@ -19,6 +19,7 @@ import {
 import { useProjectNotes } from "./noteStore";
 import { POPOVER_WIDTH } from "./notes";
 import { NoteLayer } from "./NoteLayer";
+import { RegionLayer } from "./RegionLayer";
 import { PictureSelect } from "./PictureSelect";
 import { ViewerGuides } from "./ViewerGuides";
 import { ROOT_COMPOSITION, useTimeline } from "./timeline";
@@ -846,6 +847,9 @@ export function Viewer({
           scale={{ x: width / live.width, y: height / live.height }}
           active={mode === "select"}
         />
+      )}
+      {live && width > 0 && mode === "region" && (
+        <RegionLayer projectId={projectId} box={box} frame={live} />
       )}
       <NoteLayer
         projectId={projectId}

@@ -43,6 +43,7 @@ export const keymap = {
   editPointer: { area: "Tools", label: "Select", keys: ["A"] },
   editTrim: { area: "Tools", label: "Trim", keys: ["T"] },
   editBlade: { area: "Tools", label: "Blade", keys: ["B"] },
+  cutroomRegion: { area: "Tools", label: "Zoom and highlight", keys: ["H"] },
   cutroomDraw: { area: "Tools", label: "Draw", keys: ["D"] },
   cutroomComment: { area: "Tools", label: "Comment", keys: ["C"] },
   controlPlayToggle: {
