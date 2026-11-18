@@ -29,7 +29,24 @@ export function previewRuntimeScript() {
     throw new Error(
       "Cutroom's live audio adapters no longer match HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
     );
+  const mountDefaults =
+    "let o={...e.declaredVariableDefaults??(We(t)?ma(t):{}),...IS(e.host)};";
+  const fetchedTemplate =
+    '(s?A.querySelector(`template#${CSS.escape(s)}-template`):null)??A.querySelector("template")';
+  if (
+    source.split(mountDefaults).length !== 2 ||
+    source.split(fetchedTemplate).length !== 2
+  )
+    throw new Error(
+      "Cutroom's scene variable adapter no longer matches HyperFrames 0.9.26. Review the runtime adapter before upgrading.",
+    );
   script = source
+    // A standalone preview fetches its children. Use the same template and default order as the compiler.
+    .replace(fetchedTemplate, 'A.querySelector("template")')
+    .replace(
+      mountDefaults,
+      "let o={...e.declaredVariableDefaults,...(We(t)?ma(t):{}),...IS(e.host)};",
+    )
     // A static group fader has no previous automation targets. Refresh its authored gain too.
     .replace(before, "a&&O.length===0&&QW(a,C)")
     .replace(

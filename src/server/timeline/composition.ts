@@ -1484,6 +1484,8 @@ export function sceneInstanceSource(parsed: ParsedComposition, clipId: string) {
     );
   return {
     src: clip.src,
+    compositionId: element.attrs["data-composition-id"],
+    originalCompositionId: element.attrs["data-hf-original-composition-id"],
     locked:
       parsed.timeline.tracks.find((track) => track.index === clip.track)
         ?.locked === true,

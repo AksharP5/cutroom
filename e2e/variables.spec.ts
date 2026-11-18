@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { z } from "zod";
@@ -740,4 +740,133 @@ test("bind existing variables from the inspector and preview their words and col
     inspector.getByRole("combobox", { name: "Words variable" }),
   ).toContainText("caption-text");
   await expect(shown(page, "caption")).toHaveText("Plain words");
+});
+
+test("repeated nested mounts keep their own saved values in preview and MP4", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Nested mounts", width: 640, height: 240, duration: 1 },
+      })
+    ).json(),
+  );
+  const parent = "scenes/parent.html";
+  const child = "scenes/child.html";
+  await mkdir(join(project.path, "scenes"));
+  for (const [name, color] of [
+    ["red", "red"],
+    ["green", "lime"],
+    ["blue", "blue"],
+  ]) {
+    await writeFile(
+      join(project.path, `${name}.svg`),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="${color}"/></svg>`,
+    );
+  }
+  const mount = (
+    id: string,
+    composition: string,
+    src: string,
+    width: number,
+    track: number,
+    left = 0,
+  ) =>
+    `<div id="${id}" class="clip" data-composition-id="${composition}" data-composition-src="${src}" data-start="0" data-duration="1" data-track-index="${track}" data-width="${width}" data-height="240" style="position:absolute;top:0;left:${left}px"></div>`;
+  const root = (id: string, width: number, contents: string) =>
+    `<main data-composition-id="${id}" data-width="${width}" data-height="240" data-duration="1">${contents}</main>`;
+  await writeFile(
+    join(project.path, child),
+    `<template><section data-composition-id="child" data-width="320" data-height="240" data-duration="1" data-composition-variables='[{"id":"art","label":"Artwork","type":"image","default":"red.svg"},{"id":"title","label":"Title","type":"string","default":"Default"}]'><img data-var-src="art" src="red.svg" class="clip" id="art" data-start="0" data-duration="1" data-track-index="0"><p data-var-text="title" style="position:absolute;top:0;left:10px">Fallback</p></section></template>`,
+  );
+  await writeFile(
+    join(project.path, parent),
+    `<template>${root("parent", 640, mount("left", "child", child, 320, 0) + mount("right", "child", child, 320, 1, 320))}</template>`,
+  );
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body style="margin:0">${root("main", 640, mount("outer", "parent", parent, 640, 0))}</body></html>`,
+  );
+
+  for (const [clipId, art, title] of [
+    ["left", "green.svg", "Left title"],
+    ["right", "blue.svg", "Right title"],
+  ]) {
+    for (const [id, value] of [
+      ["art", art],
+      ["title", title],
+    ]) {
+      const saved = await request.put(
+        `/api/cutroom/projects/${project.id}/variables/instance`,
+        {
+          data: { composition: parent, clipId, id, value },
+        },
+      );
+      expect(saved.ok(), await saved.text()).toBe(true);
+    }
+  }
+
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  for (const [id, title] of [
+    ["left", "Left title"],
+    ["right", "Right title"],
+  ]) {
+    await expect(shown(page, id).locator("[data-var-text]")).toHaveText(title);
+    await expect(shown(page, id).locator("img")).toHaveJSProperty(
+      "naturalWidth",
+      320,
+    );
+  }
+  const picture = page.locator(".edit-picture");
+  const screenshot = info.outputPath("nested-mounts-preview.png");
+  await picture.screenshot({ path: screenshot });
+  const { width, height } = (await picture.boundingBox())!;
+  const expectColor = (rgb: number[], channel: number) => {
+    expect(rgb).toHaveLength(3);
+    for (const [index, value] of rgb.entries())
+      if (index === channel) expect(value).toBeGreaterThan(230);
+      else expect(value).toBeLessThan(20);
+  };
+  for (const [column, channel] of [
+    [0.25, 1],
+    [0.75, 2],
+  ]) {
+    expectColor(
+      await pixel(
+        screenshot,
+        Math.floor(width * column),
+        Math.floor(height / 2),
+      ),
+      channel,
+    );
+  }
+
+  await page.locator('.tl-lanes [data-clip="outer"]').dblclick();
+  await expect(
+    page.getByRole("navigation", { name: "Composition" }),
+  ).toHaveText(/parent/);
+  await waitForPreview(page);
+  await expect(shown(page, "left").locator("[data-var-text]")).toHaveText(
+    "Left title",
+  );
+  await expect(shown(page, "right").locator("[data-var-text]")).toHaveText(
+    "Right title",
+  );
+
+  const exported = await request.post(`/api/projects/${project.id}/export`, {
+    data: { range: "timeline" },
+  });
+  expect(exported.ok(), await exported.text()).toBe(true);
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await exported.json());
+  await expect
+    .poll(() => existsSync(outputPath), { timeout: 45_000 })
+    .toBe(true);
+  expectColor(await pixel(outputPath, 160, 120), 1);
+  expectColor(await pixel(outputPath, 480, 120), 2);
+  await copyFile(outputPath, info.outputPath("nested-mounts.mp4"));
 });

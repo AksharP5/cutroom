@@ -20,6 +20,7 @@ import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
 import { checkProjectVariableValues } from "../projects/variables";
+import { rebasePreviewSceneSources } from "../projects/sceneSources";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
@@ -219,14 +220,10 @@ export function createHyperframesApi(
   api.use("/projects/:id/preview/*", async (c, next) => {
     if (c.req.method !== "GET") return next();
     const composition = requestSubPath(c.req.url, "projects/:id/preview");
-    if (
-      composition.startsWith("comp/") ||
-      !composition.includes("/") ||
-      !/\.html?$/i.test(composition)
-    )
+    if (composition.startsWith("comp/") || !/\.html?$/i.test(composition))
       return next();
-    // Studio's raw .htm validator only tracks the source file. An image next
-    // to that file can change how its declaration resolves without editing it.
+    // Studio's raw .htm validator only tracks the source file. A scene or image can
+    // resolve differently when a sibling file appears without editing this file.
     const ifNoneMatch = c.req.header("Range")
       ? undefined
       : c.req.header("If-None-Match");
@@ -241,7 +238,11 @@ export function createHyperframesApi(
     if (!c.res.headers.has("Content-Encoding")) {
       const html = await c.res.clone().text();
       const { path } = await store.get(c.req.param("id"));
-      const rebased = rebaseSceneImageDeclarations(html, path, composition);
+      const rebased = rebasePreviewSceneSources(
+        rebaseSceneImageDeclarations(html, path, composition),
+        path,
+        composition,
+      );
       if (rebased !== html) rewritten = rebased;
     }
     if (rewritten === undefined) {
@@ -849,6 +850,12 @@ export function createHyperframesApi(
     },
     transformPreviewHtml: async ({ html, project, activeCompositionPath }) => {
       const currentProject = await store.get(project.id);
+      if (activeCompositionPath !== "index.html")
+        html = rebasePreviewSceneSources(
+          html,
+          project.dir,
+          activeCompositionPath,
+        );
       for (const source of await readTrackMix(store, currentProject))
         html = mixCompositionInstances(
           html,

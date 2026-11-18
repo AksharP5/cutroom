@@ -4,21 +4,61 @@ import {
   encodeUrlPath,
   scanHtmlOpeningTags,
 } from "@hyperframes/parsers";
+import type { HtmlOpeningTagSpan } from "@hyperframes/parsers";
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
+import { HttpError } from "../../shared/errors";
 import { localMediaPath } from "../../shared/media";
 import {
   parseSceneVariableValues,
   rewriteImageDeclarationUrls,
   sceneImageUrl,
 } from "../../shared/variables";
+import { sceneMountId } from "./sceneSources";
+import type { sceneSources } from "./sceneSources";
+
+type SceneImageOverrides = {
+  ids: string[];
+  values: Record<string, unknown>;
+  renderable: boolean;
+};
+
+export function imageOverridesAt(
+  composition: string,
+  resolveScene: ReturnType<typeof sceneSources>,
+) {
+  return (tag: HtmlOpeningTagSpan): SceneImageOverrides | undefined => {
+    const attr = (name: string) => {
+      const value = tag.attributes.find((item) => item.name === name);
+      return value?.kind === "value"
+        ? decodeAuthoredAttribute(value.value)
+        : undefined;
+    };
+    const src = attr("data-composition-src");
+    const raw = attr("data-variable-values");
+    if (!src || raw === undefined) return;
+    const id = sceneMountId(
+      attr("data-composition-id"),
+      attr("data-hf-original-composition-id"),
+    );
+    const scene = resolveScene(composition, src, id);
+    const values = scene && parseSceneVariableValues(raw);
+    if (!scene || !values) return;
+    return {
+      renderable: scene.renderable,
+      ids: scene.declarations.flatMap(({ id, type }) =>
+        type === "image" ? [id] : [],
+      ),
+      values,
+    };
+  };
+}
 
 function renameSceneImages(
   raw: string,
-  ids: ReadonlySet<string>,
+  overrides: SceneImageOverrides,
   rename: (url: string) => string,
 ) {
-  const values = parseSceneVariableValues(raw);
-  if (!values) return raw;
+  const { ids, values } = overrides;
   let changed = false;
   for (const id of ids) {
     const current = values[id];
@@ -30,17 +70,23 @@ function renameSceneImages(
     values[id] =
       typeof current === "object" && current ? { ...current, url: next } : next;
   }
-  return changed ? JSON.stringify(values) : raw;
+  if (!changed) return raw;
+  if (!overrides.renderable)
+    throw new HttpError(
+      409,
+      "This image is used by a scene that resolves only in preview. Set its data-composition-src to a project-relative HTML file in Source before renaming.",
+    );
+  return JSON.stringify(values);
 }
 
 /** Rewrite only paths that resolve to the renamed file, retaining their relative prefix. */
-export async function renameReferences(
+export function renameReferences(
   source: string,
   file: string,
   from: string,
   to: string,
   files: Set<string>,
-  sceneImageIds: (src: string) => Promise<ReadonlySet<string> | undefined>,
+  sceneImages: ReturnType<typeof imageOverridesAt>,
 ) {
   const path = (value: string, url: boolean, fromFile = file) => {
     const local = localMediaPath(fromFile, value);
@@ -122,14 +168,9 @@ export async function renameReferences(
       const value = decodeAuthoredAttribute(attr.value);
       let instance = value;
       if (attr.name === "data-variable-values") {
-        const src = tag.attributes.find(
-          (item) => item.name === "data-composition-src",
-        );
-        const ids =
-          src?.kind === "value" &&
-          (await sceneImageIds(decodeAuthoredAttribute(src.value)));
-        if (ids)
-          instance = renameSceneImages(value, ids, (url) =>
+        const overrides = sceneImages(tag);
+        if (overrides)
+          instance = renameSceneImages(value, overrides, (url) =>
             path(url, true, "index.html"),
           );
       }

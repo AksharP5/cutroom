@@ -85,6 +85,7 @@ try {
     `${JSON.stringify({ ...manifest, main: "desktop/main.cjs" }, null, 2)}\n`,
   );
   await cp(join(root, "bun.lock"), join(app, "bun.lock"));
+  await cp(join(root, "patches"), join(app, "patches"), { recursive: true });
   await run(
     [
       process.execPath,

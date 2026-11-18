@@ -22,7 +22,6 @@ import {
   VariableValueSchema,
   VariableValuesSchema,
   isEditable,
-  variableDefaultValue,
   variableValueSchema,
   sceneImageUrl,
   checkVariableValues,
@@ -46,7 +45,8 @@ import {
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
 import { projectWritePath } from "./path";
-import { sceneSourceBase, sceneSourcePath } from "./sceneSources";
+import { compositionMediaFacts } from "../timeline/media";
+import { sceneMountId, sceneSources } from "./sceneSources";
 import type { ReviewService } from "./review";
 import { historyWho, parseInput } from "./routes";
 import { readSource } from "./store";
@@ -191,30 +191,32 @@ export function createVariableRoutes(
     const settings =
       (await store.document(project)).timelines[composition] ??
       emptyTimelineSettings();
+    const { lengths } = await compositionMediaFacts(project, composition, html);
     const instance = sceneInstanceSource(
       parseComposition(html, settings, {
         scope: compositionScope(composition),
+        mediaLengths: lengths,
       }),
       clipId,
     );
-    const from = await sceneSourceBase(
-      composition,
-      html,
-      async () => (await readSource(project)).content,
+    const id = sceneMountId(
+      instance.compositionId,
+      instance.originalCompositionId,
     );
-    const scene = sceneSourcePath(from, instance.src);
-    if (!scene)
+    if (!id)
       throw new HttpError(
         422,
-        "The scene must point to an HTML file inside this project.",
+        "Give this scene mount a data-composition-id in Source before editing its variables.",
       );
-    const source = await readSource(project, scene);
-    const { declarations, matches } = sourceVariables(
-      source.content,
-      "sub-composition",
-    );
+    const mounted = sceneSources(project.path)(composition, instance.src, id);
+    if (!mounted?.renderable)
+      throw new HttpError(
+        422,
+        "Set data-composition-src to a usable project-relative HTML file so preview and export use the same scene.",
+      );
+    const { path: scene, declarations, matches } = mounted;
     const version = fileContentVersion(
-      JSON.stringify([html, scene, source.version]),
+      JSON.stringify([html, scene, mounted.html]),
     );
     return { instance, scene, declarations, matches, version };
   };
@@ -232,16 +234,7 @@ export function createVariableRoutes(
         clipId,
         content,
       );
-      const imageDefaults = Object.fromEntries(
-        declarations.flatMap((variable) =>
-          variable.type === "image"
-            ? [[variable.id, variableDefaultValue(variable)]]
-            : [],
-        ),
-      );
-      const { rebaseImageOverrides } =
-        await import("../hyperframes/imageVariables");
-      const defaults = rebaseImageOverrides(project.path, scene, imageDefaults);
+      const { rebaseImageUrl } = await import("../hyperframes/imageVariables");
       const values = VariableValuesSchema.parse(
         Object.fromEntries(
           declarations.flatMap((variable) => {
@@ -267,16 +260,21 @@ export function createVariableRoutes(
         version,
         values,
         declarations: declarations.map((variable) => {
-          const url = defaults[variable.id];
-          return variable.type === "image" && typeof url === "string"
-            ? {
-                ...variable,
-                default:
-                  typeof variable.default === "string"
-                    ? url
-                    : { ...variable.default, url },
-              }
-            : variable;
+          if (variable.type !== "image") return variable;
+          const url = rebaseImageUrl(
+            project.path,
+            scene,
+            typeof variable.default === "string"
+              ? variable.default
+              : variable.default.url,
+          );
+          return {
+            ...variable,
+            default:
+              typeof variable.default === "string"
+                ? url
+                : { ...variable.default, url },
+          };
         }),
       };
     } catch (error) {

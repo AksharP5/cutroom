@@ -1,0 +1,183 @@
+diff --git a/dist/compiler/resolveCompositionSrc.js b/dist/compiler/resolveCompositionSrc.js
+new file mode 100644
+--- /dev/null
++++ b/dist/compiler/resolveCompositionSrc.js
+@@ -0,0 +1,28 @@
++import { existsSync } from "node:fs";
++import { dirname, resolve } from "node:path";
++import { decodedUrlPath } from "@hyperframes/parsers/asset-paths";
++import { isPathInside } from "./assetPaths.js";
++import { isSafePath } from "../safePath.js";
++
++// Producer references are project-relative, including those in nested files.
++export function resolveCompositionSrc(projectDir, src) {
++    const rooted = (value) => resolve(projectDir, value.replace(/^(?:\.?[\\/])+/, ""));
++    const decoded = rooted(decodedUrlPath(src));
++    if (!isPathInside(decoded, projectDir)) return null;
++    const raw = rooted(src);
++    return !existsSync(decoded) && isPathInside(raw, projectDir) && existsSync(raw) ? raw : decoded;
++}
++
++// A standalone preview can also load an authored sibling when render has no root file.
++export function resolvePreviewCompositionSrc(projectDir, owner, src, onRead) {
++    if (!src || src.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(src) || src.includes("\0")) return null;
++    const root = resolveCompositionSrc(projectDir, src);
++    if (root && isSafePath(projectDir, root)) {
++        onRead?.(root);
++        if (existsSync(root)) return { file: root, renderable: true };
++    }
++    const file = resolve(projectDir, dirname(owner), decodedUrlPath(src));
++    if (!isSafePath(projectDir, file)) return null;
++    onRead?.(file);
++    return { file, renderable: false };
++}
+diff --git a/dist/compiler/resolveCompositionSrc.d.ts b/dist/compiler/resolveCompositionSrc.d.ts
+new file mode 100644
+--- /dev/null
++++ b/dist/compiler/resolveCompositionSrc.d.ts
+@@ -0,0 +1,2 @@
++export declare function resolveCompositionSrc(projectDir: string, src: string): string | null;
++export declare function resolvePreviewCompositionSrc(projectDir: string, owner: string, src: string, onRead?: (path: string) => void): { file: string; renderable: boolean } | null;
+diff --git a/dist/compiler/index.js b/dist/compiler/index.js
+--- a/dist/compiler/index.js
++++ b/dist/compiler/index.js
+@@ -13,7 +13,7 @@
+ export { addScenePartsManifest } from "./scenePartsManifest.js";
+ // Script ordering shared by the bundler and the producer coalescers
+ export { AFTER_FONTS_SCRIPT_TYPE, compositionStyle, cssStyleMergeKey, isAlwaysAppliedStyle, deferScriptsUntilFonts, headStyleRuns, inlineScriptRuns, styleElementsFor, } from "./scriptRuns.js";
+-export { isJavaScriptType } from "./compositionAssembly.js";
++export { isJavaScriptType, planCompositionAssembly } from "./compositionAssembly.js";
+ // Static guard
+ export { validateHyperframeHtmlContract, } from "./staticGuard.js";
+ // Composition isolation helpers
+@@ -30,3 +30,4 @@
+ export { AUDIO_GROUP_RENDER_ID_ATTR, MEDIA_RENDER_ID_ATTR, assignMediaRenderIds, } from "./mediaRenderIds.js";
+ export { ensureExternalScriptTag } from "./externalScripts.js";
+ export { emitMountedModuleScripts } from "./importMaps.js";
++export { resolveCompositionSrc, resolvePreviewCompositionSrc } from "./resolveCompositionSrc.js";
+diff --git a/dist/compiler/index.d.ts b/dist/compiler/index.d.ts
+--- a/dist/compiler/index.d.ts
++++ b/dist/compiler/index.d.ts
+@@ -7,7 +7,7 @@
+ export { RUNTIME_BOOTSTRAP_ATTR, injectScriptsAtHeadStart, injectTagsAtHeadStart, injectScriptsIntoHtml, insertBeforeCloseTag, insertRuntimeTag, isRuntimeFileUrl, parseHTMLContent, stripEmbeddedRuntimeScripts, } from "./htmlDocument.js";
+ export { addScenePartsManifest } from "./scenePartsManifest.js";
+ export { AFTER_FONTS_SCRIPT_TYPE, compositionStyle, cssStyleMergeKey, isAlwaysAppliedStyle, deferScriptsUntilFonts, headStyleRuns, inlineScriptRuns, styleElementsFor, type CompositionStyle, type InlineScriptRun, } from "./scriptRuns.js";
+-export { isJavaScriptType } from "./compositionAssembly.js";
++export { isJavaScriptType, planCompositionAssembly } from "./compositionAssembly.js";
+ export { validateHyperframeHtmlContract, type HyperframeStaticFailureReason, type HyperframeStaticGuardResult, } from "./staticGuard.js";
+ export { buildVariablesByCompScript, emitVariablesByCompScript, dedupeFontFaceRules, scopeCssToComposition, wrapScopedCompositionScript, } from "./compositionScoping.js";
+ export { ensureExternalLinkTag, inlineSubCompositions, type InlineSubCompositionsOptions, type InlineSubCompositionsResult, } from "./inlineSubCompositions.js";
+@@ -17,3 +17,4 @@
+ export { AUDIO_GROUP_RENDER_ID_ATTR, MEDIA_RENDER_ID_ATTR, assignMediaRenderIds, } from "./mediaRenderIds.js";
+ export { ensureExternalScriptTag } from "./externalScripts.js";
+ export { emitMountedModuleScripts } from "./importMaps.js";
++export { resolveCompositionSrc, resolvePreviewCompositionSrc } from "./resolveCompositionSrc.js";
+diff --git a/dist/compiler/inlineSubCompositions.js b/dist/compiler/inlineSubCompositions.js
+--- a/dist/compiler/inlineSubCompositions.js
++++ b/dist/compiler/inlineSubCompositions.js
+@@ -194,7 +194,8 @@
+  */
+ // fallow-ignore-next-line complexity
+ export function inlineSubCompositions(document, hosts, options) {
+-    const { resolveHtml, parseHtml, hostIdentityMap, rewriteInlineStyles = false, flattenInnerRoot, compoundAuthoredRoot, readVariableDefaults, parseHostVariables, buildScopeSelector = defaultBuildScopeSelector, scriptErrorLabel = "[HyperFrames] composition script error:", onMissingComposition, assetExists, tagScenes = false, readProjectScript, } = options;
++    const { resolveHtml, resolveSourcePath, parseHtml, hostIdentityMap, rewriteInlineStyles = false, flattenInnerRoot, compoundAuthoredRoot, readVariableDefaults, parseHostVariables, buildScopeSelector = defaultBuildScopeSelector, scriptErrorLabel = "[HyperFrames] composition script error:", onMissingComposition, assetExists, tagScenes = false, readProjectScript, } = options;
++    const lateInstances = new Map();
+     const rootStyles = [...document.querySelectorAll("style")];
+     const styles = [];
+     const styleScenes = [];
+@@ -232,9 +233,14 @@
+     }));
+     for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+         const { element: hostEl, ancestry, scene: parentScene } = queue[queueIndex];
+-        const src = hostEl.getAttribute("data-composition-src");
+-        if (!src)
++        const authoredSrc = hostEl.getAttribute("data-composition-src");
++        if (!authoredSrc)
+             continue;
++        const src = resolveSourcePath ? resolveSourcePath(authoredSrc, ancestry.at(-1)) : authoredSrc;
++        if (src === null || ancestry.includes(src)) {
++            onMissingComposition?.(authoredSrc, src === null ? undefined : "circular composition reference");
++            continue;
++        }
+         const compHtml = resolveHtml(src);
+         // Shared with lint + render pre-flight (@hyperframes/parsers'
+         // subCompositionValidity.ts) so all three callers agree on what counts
+@@ -269,8 +275,21 @@
+             runtimeCompId = identity.runtimeCompositionId || compId || "";
+         }
+         else {
+-            compId = hostEl.getAttribute("data-composition-id") || null;
++            compId = (hostEl.getAttribute("data-hf-original-composition-id") || hostEl.getAttribute("data-composition-id") || "").trim() || null;
+             runtimeCompId = compId || "";
++            if (compId && hostIdentityMap) {
++                // The bundler's initial map predates hosts introduced by inlining a parent.
++                let index = lateInstances.get(compId) ?? 0;
++                do {
++                    runtimeCompId = `${compId}__hf${++index}`;
++                } while ([...document.querySelectorAll("[data-composition-id]")].some(
++                    (el) => el !== hostEl && el.getAttribute("data-composition-id") === runtimeCompId
++                ));
++                lateInstances.set(compId, index);
++                hostEl.setAttribute("data-hf-original-composition-id", compId);
++                hostEl.setAttribute("data-composition-id", runtimeCompId);
++                hostIdentityMap.set(hostEl, { authoredCompositionId: compId, runtimeCompositionId: runtimeCompId });
++            }
+         }
+         const { contentHtml, hasTemplate } = resolveSubCompositionContent(compHtml, compDoc);
+         if (!contentHtml.trim()) {
+diff --git a/dist/compiler/inlineSubCompositions.d.ts b/dist/compiler/inlineSubCompositions.d.ts
+--- a/dist/compiler/inlineSubCompositions.d.ts
++++ b/dist/compiler/inlineSubCompositions.d.ts
+@@ -20,6 +20,8 @@
+      * Return `null` when the file cannot be found.
+      */
+     resolveHtml: (srcPath: string) => string | null;
++    /** Canonicalize a mount's source before resolving its HTML and rebasing its assets. */
++    resolveSourcePath?: (srcPath: string, parentPath?: string) => string | null;
+     /**
+      * Parse an HTML string into a Document. The returned object must expose
+      * standard DOM APIs (querySelector, querySelectorAll, body, head, etc.).
+diff --git a/dist/compiler/htmlBundler.js b/dist/compiler/htmlBundler.js
+--- a/dist/compiler/htmlBundler.js
++++ b/dist/compiler/htmlBundler.js
+@@ -1,3 +1,4 @@
++import { resolvePreviewCompositionSrc } from "./resolveCompositionSrc.js";
+ import { createHash } from "node:crypto";
+ import { compositionStyle, cssStyleMergeKey, deferScriptsUntilFonts, isAlwaysAppliedStyle, headStyleRuns, INLINED_FILE_ATTR, inlineScriptRuns, styleElementsFor, } from "./scriptRuns.js";
+ import { countPageRoot, executableScripts, isJavaScriptType, planCompositionAssembly, } from "./compositionAssembly.js";
+@@ -944,10 +945,14 @@
+     const subCompositionHosts = trackedCompositionHosts.filter((host) => host.hasAttribute("data-composition-src"));
+     const sceneSources = new Map();
+     const subCompResult = inlineSubCompositions(document, subCompositionHosts, {
++        resolveSourcePath: (srcPath, parentPath) => {
++            const selected = resolvePreviewCompositionSrc(
++                projectDir, parentPath ?? (mountedShell ? "index.html" : entryFile), srcPath, noteRead
++            );
++            return selected ? relative(projectDir, selected.file).split(sep).join("/") : null;
++        },
+         resolveHtml: (srcPath) => {
+-            if (!isRelativeUrl(srcPath))
+-                return null;
+-            const compPath = resolveEntryPath(srcPath);
++            const compPath = resolveProjectPath(srcPath);
+             if (!compPath)
+                 return null;
+             let source = sceneSources.get(compPath);
+@@ -968,7 +973,7 @@
+         // re-pointed at its own directory when its content moves to the root
+         // document; project-root refs with no such sibling stay as authored.
+         assetExists: (path) => {
+-            const resolved = resolveEntryPath(path);
++            const resolved = resolveProjectPath(path);
+             if (resolved)
+                 noteRead(resolved);
+             return resolved !== null && existsSync(resolved);
+@@ -976,7 +981,7 @@
+         flattenInnerRoot: prepareFlattenedInnerRoot,
+         tagScenes: options?.sceneParts === true,
+         readProjectScript: (path) => {
+-            const resolved = isRelativeUrl(path) ? resolveEntryUrl(path) : null;
++            const resolved = isRelativeUrl(path) ? resolveProjectPath(decodedUrlPath(path)) : null;
+             return resolved ? safeReadFile(resolved) : null;
+         },
+         readVariableDefaults: readDeclaredDefaults,

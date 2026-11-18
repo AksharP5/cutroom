@@ -1,0 +1,79 @@
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1004,9 +1004,8 @@
+   relative as nodeRelative,
+   isAbsolute as nodeIsAbsolute
+ } from "node:path";
+-import { existsSync as existsSync3 } from "node:fs";
+ import { fileURLToPath as fileURLToPath2 } from "node:url";
+-import { decodedUrlPath } from "@hyperframes/parsers/asset-paths";
++import { resolveCompositionSrc } from "@hyperframes/core/compiler";
+ var DEFAULT_RENDERS_DIR = process.env.PRODUCER_RENDERS_DIR ?? // fileURLToPath (not URL.pathname): on Windows .pathname is "/D:/..." which
+ // resolves to a bogus renders dir.
+ nodeResolve(fileURLToPath2(import.meta.url), "../../..", "renders");
+@@ -1043,13 +1042,6 @@
+   const resolvedOutputPath = outputPath ?? join2(rendersDir, `${projectName}.mp4`);
+   const absoluteOutputPath = nodeResolve(resolvedOutputPath);
+   return { absoluteProjectDir, absoluteOutputPath };
+-}
+-function resolveCompositionSrc(projectDir, src) {
+-  const rooted = (value) => nodeResolve(projectDir, value.replace(/^(?:\.?[\\/])+/, ""));
+-  const decoded = rooted(decodedUrlPath(src));
+-  if (!isPathInside2(decoded, projectDir)) return null;
+-  const raw = rooted(src);
+-  return !existsSync3(decoded) && isPathInside2(raw, projectDir) && existsSync3(raw) ? raw : decoded;
+ }
+
+ // src/services/render/shared.ts
+@@ -7780,38 +7772,6 @@
+   }
+   return document2.toString();
+ }
+-var ProducerHostIdentityMap = class extends Map {
+-  #document;
+-  #lateInstanceByCompositionId = /* @__PURE__ */ new Map();
+-  constructor(document2, initialHosts) {
+-    super(assignBundledRuntimeCompositionIds(initialHosts));
+-    this.#document = document2;
+-  }
+-  get(host) {
+-    const existing = super.get(host);
+-    if (existing) return existing;
+-    const authoredCompositionId = (host.getAttribute("data-hf-original-composition-id") || host.getAttribute("data-composition-id") || "").trim() || null;
+-    if (!authoredCompositionId) {
+-      const identity2 = { authoredCompositionId: null, runtimeCompositionId: null };
+-      this.set(host, identity2);
+-      return identity2;
+-    }
+-    let instanceIndex = this.#lateInstanceByCompositionId.get(authoredCompositionId) || 0;
+-    let runtimeCompositionId;
+-    do {
+-      instanceIndex += 1;
+-      runtimeCompositionId = `${authoredCompositionId}__hf${instanceIndex}`;
+-    } while (Array.from(this.#document.querySelectorAll("[data-composition-id]")).some(
+-      (element) => element !== host && element.getAttribute("data-composition-id") === runtimeCompositionId
+-    ));
+-    this.#lateInstanceByCompositionId.set(authoredCompositionId, instanceIndex);
+-    host.setAttribute("data-hf-original-composition-id", authoredCompositionId);
+-    host.setAttribute("data-composition-id", runtimeCompositionId);
+-    const identity = { authoredCompositionId, runtimeCompositionId };
+-    this.set(host, identity);
+-    return identity;
+-  }
+-};
+ function coalesceHeadStylesAndBodyScripts(html) {
+   const { document: document2 } = parseHTML5(html);
+   const head = document2.querySelector("head");
+@@ -7876,10 +7836,7 @@
+     );
+     return emitted ? document2.toString() : html;
+   }
+-  const hostIdentityByElement = new ProducerHostIdentityMap(
+-    document2,
+-    hosts
+-  );
++  const hostIdentityByElement = assignBundledRuntimeCompositionIds(hosts);
+   const result = inlineSubCompositionsShared(
+     document2,
+     hosts,

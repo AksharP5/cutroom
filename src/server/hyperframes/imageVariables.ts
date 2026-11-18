@@ -19,6 +19,11 @@ import {
   rewriteImageDeclarationUrls,
 } from "../../shared/variables.ts";
 
+import {
+  mountedSceneVariables,
+  sceneMountId,
+} from "../projects/sceneSources.ts";
+
 const declarationAttribute = "data-composition-variables";
 
 /** Inspector values are paths relative to the selected composition. */
@@ -40,7 +45,11 @@ export function rebaseImageOverrides(
   return rebased;
 }
 
-function rebaseImageUrl(dir: string, composition: string, value: string) {
+export function rebaseImageUrl(
+  dir: string,
+  composition: string,
+  value: string,
+) {
   const path = localMediaPath(composition, value);
   if (path === null || path === ".." || path.startsWith("../")) return value;
   return rewriteAssetPath(composition, value, (path) =>
@@ -79,11 +88,15 @@ export function rebaseSceneImageDeclarations(
   return end ? parts.join("") + html.slice(end) : html;
 }
 
-function sceneImageIds(dir: string, composition: string) {
+function sceneImageIds(dir: string, composition: string, mountId?: string) {
   const file = resolveWithinProject(dir, composition);
   if (!file) return [];
   const source = readProjectFile(file);
   if (source.kind !== "file") return [];
+  if (mountId)
+    return mountedSceneVariables(source.text, mountId)
+      .declarations.filter(({ type }) => type === "image")
+      .map(({ id }) => id);
   return new Set(
     scanHtmlOpeningTags(source.text).flatMap(({ attributes }) =>
       attributes.flatMap((attr) =>
@@ -144,8 +157,13 @@ export function rebaseCompiledImageVariables(
       const scoped = values[id];
       if (composition === entryFile) mountedEntry = true;
       if (!scoped) continue;
-      const ids = sceneIds.get(composition) ?? sceneImageIds(dir, composition);
-      sceneIds.set(composition, ids);
+      const mountId = sceneMountId(
+        id,
+        host.getAttribute("data-hf-original-composition-id") ?? undefined,
+      );
+      const key = JSON.stringify([composition, mountId]);
+      const ids = sceneIds.get(key) ?? sceneImageIds(dir, composition, mountId);
+      sceneIds.set(key, ids);
       const authored = parseHostVariableValues(host);
       for (const variable of ids) {
         const value = scoped[variable];
