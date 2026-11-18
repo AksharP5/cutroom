@@ -159,21 +159,49 @@ function zoomTranslate(
   return `${number((size.width / 2) * share - x * size.width)}px ${number((size.height / 2) * share - y * size.height)}px ${number(PERSPECTIVE * share)}px`;
 }
 
-/** The mask that lets a blur or highlight through: the box, or everything outside it. */
-function regionMask(region: Region, size: { width: number; height: number }) {
-  const { x, y, width, height } = region.box;
-  const feather = region.feather / 2;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}" viewBox="0 0 ${size.width} ${size.height}">` +
-    (feather
-      ? `<filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${number(feather)}"/></filter>`
-      : "") +
-    `<rect x="${number(x * size.width)}" y="${number(y * size.height)}" width="${number(width * size.width)}" height="${number(height * size.height)}" rx="${number(region.radius)}" fill="#fff"${feather ? ' filter="url(#f)"' : ""}/></svg>`;
-  const box = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+const px = (value: number) => `${number(value)}px`;
+
+/** A rounded rectangle as path commands, its corners no rounder than half its shorter side. */
+function roundedRect(x: number, y: number, w: number, h: number, r: number) {
+  const radius = Math.min(r, w / 2, h / 2);
+  const n = (value: number) => number(value);
+  if (!radius) return `M${n(x)} ${n(y)}H${n(x + w)}V${n(y + h)}H${n(x)}Z`;
+  const arc = (toX: number, toY: number) =>
+    `A${n(radius)} ${n(radius)} 0 0 1 ${n(toX)} ${n(toY)}`;
+  return (
+    `M${n(x + radius)} ${n(y)}H${n(x + w - radius)}${arc(x + w, y + radius)}` +
+    `V${n(y + h - radius)}${arc(x + w - radius, y + h)}` +
+    `H${n(x + radius)}${arc(x, y + h - radius)}` +
+    `V${n(y + radius)}${arc(x + radius, y)}Z`
+  );
+}
+
+/**
+ * Where a blur or highlight draws: the box, or everything outside it. A sharp edge is a clip path
+ * with rounded corners; a feathered one is a pair of gradients across the box's edges, whose
+ * product also softens the corners (Chromium drops a backdrop's mask under a clip path). Both are
+ * drawn with the element, never loaded, so the first frame a capture takes already has them.
+ */
+function regionShape(region: Region, size: { width: number; height: number }) {
+  const { width: W, height: H } = size;
+  const x = region.box.x * W;
+  const y = region.box.y * H;
+  const w = region.box.width * W;
+  const h = region.box.height * H;
   const outside = region.effect === "highlight" || region.area === "outside";
+  const half = region.feather / 2;
+  if (half) {
+    // Soft from half the feather outside each edge to half inside it.
+    const ramp = (from: number, to: number, direction: string) =>
+      `linear-gradient(${direction},transparent ${px(from - half)},#000 ${px(from + half)},#000 ${px(to - half)},transparent ${px(to + half)})`;
+    const box = `${ramp(y, y + h, "to bottom")},${ramp(x, x + w, "to right")}`;
+    return outside
+      ? `clip-path:none;mask-image:linear-gradient(#000,#000),${box};mask-composite:exclude,intersect`
+      : `clip-path:none;mask-image:${box};mask-composite:intersect`;
+  }
   return outside
-    ? `mask-image:${box},linear-gradient(#000,#000);mask-composite:exclude`
-    : `mask-image:${box}`;
+    ? `clip-path:path(evenodd,"M0 0H${number(W)}V${number(H)}H0Z${roundedRect(x, y, w, h, region.radius)}");mask-image:none`
+    : `clip-path:inset(${px(y)} ${px(W - x - w)} ${px(H - y - h)} ${px(x)} round ${px(region.radius)});mask-image:none`;
 }
 
 function backdrop(region: Region) {
@@ -225,7 +253,7 @@ export function regionStyle(
           : null;
       if (fade) rules.push(fade.rule);
       rules.push(
-        `${byId(source.id)}{backdrop-filter:${backdrop(region)};${regionMask(region, size)};mask-size:100% 100%;mask-repeat:no-repeat${fade ? `;--cutroom-fade:${fade.name};--cutroom-fade-duration:${seconds(fade.length, fps)}` : ""}}`,
+        `${byId(source.id)}{backdrop-filter:${backdrop(region)};${regionShape(region, size)};mask-size:100% 100%;mask-repeat:no-repeat${fade ? `;--cutroom-fade:${fade.name};--cutroom-fade-duration:${seconds(fade.length, fps)}` : ""}}`,
       );
       animated.push(source);
       continue;

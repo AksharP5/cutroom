@@ -166,13 +166,21 @@ test("blur and highlight draw over the picture below, so they need an adjustment
       clip: {
         kind: "adjustment",
         duration: 60,
-        region: { effect: "highlight", dim: 0.75, blur: 4, in: 0, out: 0 },
+        region: {
+          effect: "highlight",
+          dim: 0.75,
+          blur: 4,
+          radius: 0,
+          feather: 0,
+        },
       },
     },
   ]);
   expect(html).toContain("backdrop-filter:blur(4px) brightness(0.25)");
-  // Everything outside the box: the box's mask excluded from a full one.
-  expect(html).toContain("mask-composite:exclude");
+  // Everything outside the box: the frame with the box cut out of it.
+  expect(html).toContain(
+    'clip-path:path(evenodd,"M0 0H1920V1080H0ZM672 378H1248V702H672Z")',
+  );
   expect(html).not.toContain("--cutroom-fade:");
 });
 
