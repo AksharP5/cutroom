@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -295,7 +295,12 @@ test("two default exports choose distinct names, show size and keep the tool row
       .object({ jobId: z.string(), outputPath: z.string() })
       .parse(await (await started).json());
     paths.push(outputPath);
-    await expect(dialog).toContainText("Export complete.", { timeout: 45_000 });
+    await expect(dialog).toContainText(
+      filename === "Export proof.mp4"
+        ? "Export complete."
+        : "Saved as Export proof 2.mp4 because Export proof.mp4 already exists.",
+      { timeout: 45_000 },
+    );
     await expect(dialog).toContainText("Finished");
     await expect(dialog).not.toContainText(/Encoding frame/);
     const size = (await stat(outputPath)).size;
@@ -380,9 +385,48 @@ test("Export reports a refused pending edit instead of rendering the saved versi
     "The pending edit was refused.",
   );
   await expect(
-    page.getByRole("button", { name: "New export", exact: true }),
+    page.getByRole("button", { name: "Export MP4", exact: true }),
   ).toBeEnabled();
   expect(renders).toBe(0);
+});
+
+test("a folder failure keeps the export settings and offers the original error", async ({
+  page,
+  request,
+}) => {
+  const { project } = await exportable(page, request);
+  const locked = join(project.path, "Read-only exports");
+  await mkdir(locked);
+  await chmod(locked, 0o555);
+  try {
+    await page.goto(`/#project/${project.id}`);
+    await expect(page.locator('[data-clip="picture"]')).toBeVisible();
+    await page.getByRole("button", { name: "Export", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Export" });
+    const location = dialog.getByLabel("Location", { exact: true });
+    const filename = dialog.getByLabel("File name", { exact: true });
+    const start = dialog.getByRole("button", {
+      name: "Export MP4",
+      exact: true,
+    });
+    await location.fill(locked);
+    await filename.fill("Review copy.mp4");
+    await start.click();
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "Cutroom cannot write to this folder. Choose another location.",
+    );
+    await expect(location).toHaveAttribute("aria-invalid", "true");
+    await expect(filename).toHaveValue("Review copy.mp4");
+    await dialog.getByText("Details", { exact: true }).click();
+    await expect(dialog.getByText(/EACCES:.*mkdtemp/)).toBeVisible();
+
+    await location.fill(join(locked, "Missing"));
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "This folder does not exist. Choose another location.",
+    );
+  } finally {
+    await chmod(locked, 0o755);
+  }
 });
 
 test("Location initializes before accepting edits and keeps the typed destination", async ({

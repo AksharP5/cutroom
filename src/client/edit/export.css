@@ -67,6 +67,18 @@
   color: var(--text-primary);
   font: inherit;
 }
+.export-field .export-location[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.export-error-details {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.export-error-details p {
+  margin: var(--space-1) 0 0;
+  font: var(--type-xs) var(--font-mono);
+}
 .export-hint,
 .export-path {
   margin: 0;
