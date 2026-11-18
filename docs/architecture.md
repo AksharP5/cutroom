@@ -403,7 +403,9 @@ The structure follows what Resolve 21.1 imports, measured by importing variants 
 - Position and crop are hundredths of the frame's height, y up; rotation is counter-clockwise. Linear and held keyframes keep their keys. CSS eases and region zooms (a perspective `translate`, so the scale is not eased linearly) are keyed on every frame where the motion bends. Resolve rounds key times down in floating point, so keys sit a hundredth of a frame late.
 - Resolve opens every retimed clip as a compound clip, and imports no FCPXML markers, so markers travel as Resolve's marker EDL. Resolve on Linux plays AAC sound silent, so on Linux the export decodes that sound to a WAV in `Sound/`, aligned to the file's media time, while pictures keep linking the originals.
 
-Clips Resolve can't open as media (titles, scenes, captions, HTML elements, blur and highlight layers) are listed in the summary.
+Clips Resolve can't open as media (titles, scenes, captions, HTML elements, SVG images, blur and highlight layers) render into `Layers/V<n>.mov`, one ProRes 4444 MOV per video track covering its first to its last such clip, and each clip is its own cut of that file on its own track, so it stays a movable layer. Each render is an ordinary MOV job, so the editor's export indicator follows it, and it reads `layerHtml` (`layers.ts`): the composition with every other clip hidden, every track silent and the root's background cleared. The export sets that HTML in an `AsyncLocalStorage` around its own render request, which the render workers' source overrides read; no client request can supply it. A blur or highlight shows the picture beneath it, so its track's render keeps the tracks below and sits over them in Resolve. Zoom layers stay visible in every render, so a rendered title zooms with the shot. A failed render removes the export's folder.
+
+`ResolveSource.grades` takes each graded clip's grade as `.cube` text and writes it to `LUTs/`, named in the summary; nothing fills it until clip grades land.
 
 ### Variables
 
