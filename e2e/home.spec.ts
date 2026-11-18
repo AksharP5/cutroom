@@ -170,10 +170,7 @@ test("home dates direct composition and document edits", async ({
   await expect(date).toHaveText("Just now");
 });
 
-test("an empty project has a poster mark", async ({
-  page,
-  request,
-}) => {
+test("an empty project has a poster mark", async ({ page, request }) => {
   const project = await create(request, { name: "Empty rushes" });
   const path = `/api/cutroom/projects/${project.id}`;
   const { revision, timeline } = TimelineViewSchema.parse(
