@@ -13,7 +13,13 @@ import type {
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
 import { TimelineError } from "./errors";
-import { clipFades, windowMix, withVolumePoints } from "./mix";
+import {
+  clipFades,
+  CUTROOM_AUDIO_GROUP_PREFIX,
+  trackGainWarning,
+  windowMix,
+  withVolumePoints,
+} from "./mix";
 import { MAX_FX_NODES, asHfChain } from "./fx";
 import type { FxInput, FxNode } from "./fx";
 import {
@@ -237,6 +243,7 @@ export function normalizeTimeline(timeline: Timeline): Timeline {
 const usedNames = (timeline: Timeline, retired: ReadonlySet<string>) =>
   new Set([
     ...retired,
+    ...(timeline.authoredAudioGroups ?? []).map(({ id }) => id),
     ...timeline.clips.flatMap((clip) =>
       clip.link ? [clip.id, clip.link] : [clip.id],
     ),
@@ -919,8 +926,14 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         if (clip.link && !links.has(clip.link))
           links.set(clip.link, uniqueName(taken, "lk", 1));
         onCreate(id, { clipboardId: command.clipboardId, clipId: clip.id });
+        const { authoredAudioGroupId, trackGainWarning, ...copy } = clip;
+        const dropGroup =
+          authoredAudioGroupId?.startsWith(CUTROOM_AUDIO_GROUP_PREFIX) &&
+          !timeline.authoredAudioGroups?.some(
+            (group) => group.id === authoredAudioGroupId,
+          );
         return {
-          ...clip,
+          ...(dropGroup ? copy : clip),
           id,
           start: command.at + clip.start - start,
           link: clip.link ? links.get(clip.link)! : null,
@@ -1335,8 +1348,75 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ],
       };
     }
+    case "routeAudioGroup": {
+      const selected = new Set(command.clipIds.map(find));
+      for (const clip of selected) {
+        if (trackAt(clip.track)?.locked)
+          throw new TimelineError("locked", `Track ${clip.track} is locked.`);
+        if (!clip.hasAudio)
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(clip)} has no sound.`,
+          );
+      }
+      let groups = timeline.authoredAudioGroups ?? [];
+      const target = command.group;
+      let id = typeof target === "string" ? target : null;
+      if (target && typeof target !== "string") {
+        // The renderer falls back to matching bare IDs across scenes. Keep bus
+        // IDs independent of labels and use UUIDs even across unrelated projects.
+        do {
+          id = CUTROOM_AUDIO_GROUP_PREFIX + crypto.randomUUID();
+        } while (taken.has(id));
+        taken.add(id);
+        groups = [
+          ...groups,
+          { id, label: target.label, volume: target.volume ?? 1 },
+        ];
+      } else if (target) {
+        const group = groups.find(({ id }) => id === target);
+        if (!group)
+          throw new TimelineError(
+            "not_found",
+            `No audio group has ID ${target}.`,
+          );
+        if (group.sourceRestriction)
+          throw new TimelineError("unsupported", group.sourceRestriction);
+      }
+      return {
+        ...timeline,
+        ...(groups.length && { authoredAudioGroups: groups }),
+        clips: clips.map((clip) => {
+          if (
+            !selected.has(clip) ||
+            clip.authoredAudioGroupId === (id ?? undefined)
+          )
+            return clip;
+          const {
+            authoredAudioGroupId: _group,
+            trackGainWarning: _warning,
+            ...rest
+          } = clip;
+          return id
+            ? {
+                ...rest,
+                authoredAudioGroupId: id,
+                trackGainWarning: trackGainWarning(id),
+              }
+            : rest;
+        }),
+      };
+    }
     case "setAudioGroup": {
       const target = find(command.clipId);
+      if (
+        command.expectedGroupId !== undefined &&
+        target.authoredAudioGroupId !== command.expectedGroupId
+      )
+        throw new TimelineError(
+          "unsupported",
+          `${clipName(target)} changed audio groups. Check its group before editing gain.`,
+        );
       const groups = timeline.authoredAudioGroups;
       const group = groups?.find(
         ({ id }) => id === target.authoredAudioGroupId,

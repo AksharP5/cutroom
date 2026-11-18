@@ -306,6 +306,15 @@
   color: var(--text-tertiary);
   background: var(--surface-panel);
 }
+.inspector-audio-group-form input[type="text"] {
+  text-align: left;
+}
+.inspector-audio-group-form > div:last-child {
+  display: flex;
+  justify-content: end;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
 /* A value nobody set recedes, so a changed clip reads differently from an untouched one. */
 .inspector-field input[data-default]:not(:focus, :disabled) {
   color: var(--text-secondary);

@@ -182,6 +182,15 @@ export const StillRequestSchema = z.object({
   time: z.number().nonnegative().finite(),
   timecode: z.string().regex(/^\d{2}:\d{2}:\d{2}:\d{2}$/),
 });
+export const StillFrameRequestSchema = StillRequestSchema.pick({
+  composition: true,
+}).extend({
+  frame: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe("Zero-based composition frame"),
+});
 export const StillSchema = z.object({ path: z.string(), filename: z.string() });
 
 export const ExportStageSchema = z.object({

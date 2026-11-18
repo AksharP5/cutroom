@@ -280,9 +280,18 @@ function name(commands: Command[], timeline: Timeline) {
   return { commands: named, creates, origins, timeline: current };
 }
 
+function createsAudioGroup(commands: readonly Command[]) {
+  return commands.some(
+    (command) =>
+      command.type === "routeAudioGroup" &&
+      command.group !== null &&
+      typeof command.group !== "string",
+  );
+}
+
 /**
- * The engine's last answer with each pending edit applied again on top. An edit that no longer
- * applies is left out here; its own request reports why.
+ * Reapply pending edits that still fit the server's last answer. A new audio group
+ * appears once the server returns its ID, so another edit can safely name it.
  */
 function shown(projectId: string): TimelineView | null {
   if (confirmed?.projectId !== projectId) return null;
@@ -293,7 +302,11 @@ function shown(projectId: string): TimelineView | null {
         edit.projectId === projectId && edit.composition === view.composition,
     )
     .reduce((current, edit) => {
-      if (anchorsChanged(edit.anchors, current)) return current;
+      if (
+        createsAudioGroup(edit.commands) ||
+        anchorsChanged(edit.anchors, current)
+      )
+        return current;
       try {
         return applyAll(current, edit.commands, { clipboards });
       } catch (error) {
@@ -564,9 +577,8 @@ function humanReason(message: string, timeline: Timeline) {
 /**
  * Makes one undo step from the commands `build` returns for the timeline the user sees. They are
  * built once, here: a key acts on what was on screen when it was pressed, never on what a
- * rebuild against newer server state would pick. The shared engine shows the result at once and
- * the server's answer then replaces it. A refusal, here or from the server, takes the edit back
- * and says why in the header.
+ * rebuild against newer server state would pick. The shared engine previews edits whose IDs are
+ * already known, then the server's answer settles them. A refusal says why in the header.
  */
 export async function editTimeline(
   projectId: string,
@@ -628,7 +640,10 @@ export async function editTimeline(
     const feedback =
       overwriteFeedback(view.timeline, timeline, commands) ||
       rippleFeedback(view.timeline, timeline, commands, clipboards);
-    useTimeline.setState({ view: { ...view, timeline } });
+    // Other edits can look up this bus as soon as it appears in the inspector.
+    // Publish only the persisted ID from the server.
+    if (!createsAudioGroup(commands))
+      useTimeline.setState({ view: { ...view, timeline } });
     pending.push(made);
     onApply?.(timeline, commands, named.origins);
     let report = "";
