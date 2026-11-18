@@ -25,7 +25,7 @@ for (const kind of [
   "syntax",
   "nested-startup",
 ] as const)
-  test(`${kind} composition failures reach the header and an outside MCP client`, async ({
+  test(`${kind} composition failures reach the workspace and an outside MCP client`, async ({
     page,
     baseURL,
   }, testInfo) => {
@@ -126,12 +126,16 @@ for (const kind of [
               : "Title setup exploded";
       expect(JSON.stringify(view.content)).toContain(file);
       expect(JSON.stringify(view.content)).toContain(message);
-      const notice = page.locator("header [role=alert]");
+      const startup = kind.endsWith("startup");
+      const headerAlert = page.locator("header [role=alert]");
+      const notice = startup
+        ? page.locator(".status-error[role=alert]")
+        : headerAlert;
       await expect(notice).toContainText(file);
       await expect(notice).toContainText(message);
       await page.screenshot({ path: testInfo.outputPath("notice.png") });
-      await notice.getByRole("button", { name: "Dismiss" }).click();
-      if (!kind.endsWith("startup")) {
+      if (!startup) {
+        await headerAlert.getByRole("button", { name: "Dismiss" }).click();
         await page
           .getByRole("button", { name: "Play forward", exact: true })
           .click();
@@ -142,7 +146,7 @@ for (const kind of [
         ).not.toHaveText("00:00:00:00");
         await page.getByRole("button", { name: "Stop", exact: true }).click();
       }
-      await expect(notice).toHaveCount(0);
+      await expect(headerAlert).toHaveCount(0);
       await write(original.content);
       await expect(page.locator("iframe[data-live]")).toHaveCount(1);
       await expect
