@@ -914,3 +914,82 @@
   color: var(--text-secondary);
   font-size: var(--type-xs);
 }
+
+/* Curves: a square plot, the neutral diagonal faint, the curve in its channel's colour. */
+.inspector-curve {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-1) var(--space-2);
+}
+.inspector-curve-channels {
+  display: flex;
+  gap: var(--space-1);
+}
+.clip-inspector .inspector-curve-channels button {
+  flex: 1;
+  min-height: var(--size-field);
+  padding: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.clip-inspector .inspector-curve-channels button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.inspector-curve svg {
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--surface-raised);
+  border-radius: var(--radius-control);
+  touch-action: none;
+  overflow: visible;
+}
+.inspector-curve
+  svg[aria-disabled="true"]
+  :is(.inspector-curve-line, .inspector-curve-point) {
+  stroke: var(--glyph-faint);
+  cursor: default;
+}
+.inspector-curve-grid line {
+  stroke: var(--line-subtle);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.inspector-curve-neutral {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.inspector-curve-line {
+  fill: none;
+  stroke: var(--curve-master);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.inspector-curve[data-channel="red"] .inspector-curve-line {
+  stroke: var(--curve-red);
+}
+.inspector-curve[data-channel="green"] .inspector-curve-line {
+  stroke: var(--curve-green);
+}
+.inspector-curve[data-channel="blue"] .inspector-curve-line {
+  stroke: var(--curve-blue);
+}
+.inspector-curve-point {
+  fill: var(--surface-panel);
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+.inspector-curve-point:focus-visible {
+  outline: none;
+  stroke: var(--focus-ring-color);
+  stroke-width: var(--focus-ring-width);
+}
+.clip-inspector .inspector-curve-reset {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
