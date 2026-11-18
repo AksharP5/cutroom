@@ -171,6 +171,9 @@ export const showToast = (
   return () => dismissToast(toast);
 };
 
+export const NO_COMPOSITION_ROOT =
+  "This file has no live element with data-composition-id.";
+
 type EditorErrorSide = "viewer" | "timeline";
 
 /** Shows a failure from one side of the new editor, or clears that side with null. */

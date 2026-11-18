@@ -26,7 +26,12 @@ import {
 import type { Action } from "../keymap";
 import { ProjectTimeline } from "../timeline/ProjectTimeline";
 import { subscribeProjectEvents } from "../api";
-import { reportEditorError, showToast, useWorkspace } from "../workspace";
+import {
+  NO_COMPOSITION_ROOT,
+  reportEditorError,
+  showToast,
+  useWorkspace,
+} from "../workspace";
 import "./edit.css";
 import {
   Inspector,
@@ -62,7 +67,7 @@ import { SourceViewer } from "./SourceViewer";
 import { CompositionPath } from "./CompositionPath";
 import { ToolButtons } from "./ToolButtons";
 import { CodePanel } from "./code/CodePanel";
-import { codeCanLeave, useCode } from "./code/code";
+import { codeCanLeave, openFile, useCode } from "./code/code";
 import { TransportBar } from "./TransportBar";
 import { transport, useTransport } from "./transport";
 import type { SaveNote } from "./NoteLayer";
@@ -154,6 +159,9 @@ export function EditPage({
   const [fullscreen, setFullscreen] = useState(false);
   const history = useTimeline((state) => state.history);
   const composition = useTimeline((state) => state.composition);
+  const missingRoot = useWorkspace(
+    (state) => state.editorErrors.timeline === NO_COMPOSITION_ROOT,
+  );
   useFollowVariables(projectId, composition);
   const snapping = useTimeline((state) => state.snapping);
   const source = useSource((state) => state.file !== null);
@@ -677,13 +685,42 @@ export function EditPage({
         onPointerDownCapture={clearBrowserSelection}
       >
         <CompositionPath projectId={projectId} projectName={projectName} />
-        <ProjectTimeline
-          voiceover={voiceover}
-          projectId={projectId}
-          tool={mode === "trim" || mode === "blade" ? mode : "pointer"}
-          notes={notes}
-          onOpenNote={onOpenNote}
-        />
+        {missingRoot ? (
+          <div className="edit-timeline-problem">
+            <p role="alert">
+              {composition} has no composition to edit. Add{" "}
+              <code>data-composition-id</code> to its root element
+              {history.canUndo ? ", or undo the last change." : "."}
+            </p>
+            <div>
+              {history.canUndo && (
+                <button
+                  className="secondary-button"
+                  onClick={() => step("undo")}
+                >
+                  Undo
+                </button>
+              )}
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  useWorkspace.setState({ code: true });
+                  void openFile(composition);
+                }}
+              >
+                Open source
+              </button>
+            </div>
+          </div>
+        ) : (
+          <ProjectTimeline
+            voiceover={voiceover}
+            projectId={projectId}
+            tool={mode === "trim" || mode === "blade" ? mode : "pointer"}
+            notes={notes}
+            onOpenNote={onOpenNote}
+          />
+        )}
       </section>
       <DiscardRecording session={voiceover} />
     </div>

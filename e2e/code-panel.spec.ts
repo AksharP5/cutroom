@@ -193,3 +193,35 @@ test("an agent's write refreshes a clean buffer and is a conflict over an edited
     await agent.close();
   }
 });
+
+test("a missing composition root offers the source and undo from the timeline", async ({
+  page,
+  request,
+}) => {
+  const { project } = await cardsProject(request);
+  const path = `/api/cutroom/projects/${project.id}/source`;
+  const original = SourceSchema.parse(await (await request.get(path)).json());
+  const broken = original.content.replace(/ data-composition-id="[^"]+"/, "");
+  expect(broken).not.toBe(original.content);
+  const saved = await request.put(path, {
+    data: {
+      path: "index.html",
+      expectedVersion: original.version,
+      content: broken,
+    },
+  });
+  expect(saved.ok()).toBe(true);
+
+  await page.goto(`/#project/${project.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline.getByRole("alert")).toHaveText(
+    "index.html has no composition to edit. Add data-composition-id to its root element, or undo the last change.",
+  );
+  await timeline.getByRole("button", { name: "Open source" }).click();
+  const code = page.getByRole("region", { name: "Code" });
+  await expect(
+    code.getByRole("button", { name: "index.html" }),
+  ).toHaveAttribute("aria-current", "true");
+  await timeline.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(timeline.locator("[data-clip]")).toHaveCount(3);
+});

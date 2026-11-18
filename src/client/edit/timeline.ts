@@ -26,7 +26,12 @@ import { ApiError, api, json, tabOrigin } from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
-import { reportEditorError, showToast, useWorkspace } from "../workspace";
+import {
+  NO_COMPOSITION_ROOT,
+  reportEditorError,
+  showToast,
+  useWorkspace,
+} from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
 import {
@@ -360,6 +365,7 @@ async function read(
   notify = true,
   composition = useTimeline.getState().composition,
 ) {
+  const historyRead = readHistory(projectId, signal);
   const [view, history] = await Promise.all([
     api(
       `${project(projectId)}/timeline${
@@ -370,8 +376,16 @@ async function read(
       TimelineViewSchema,
       { signal },
     ),
-    readHistory(projectId, signal),
-  ]);
+    historyRead,
+  ]).catch(async (error: unknown) => {
+    // A bad source can still be repaired by undoing the edit that broke it.
+    if (error instanceof ApiError && error.message === NO_COMPOSITION_ROOT) {
+      const history = await historyRead.catch(() => null);
+      if (history && !signal?.aborted && isOpen(projectId, composition))
+        useTimeline.setState({ history });
+    }
+    throw error;
+  });
   if (useTimeline.getState().projectId !== projectId) return view;
   answers.set(view.composition, view);
   if (!isOpen(projectId, view.composition)) return view;
