@@ -103,14 +103,18 @@ test("Stop cancels turn preparation, keeps the draft, and does not appear for mo
   );
   try {
     await page.goto(`/#project/${project.id}`);
-    await expect(page.getByLabel("Model", { exact: true })).toBeEnabled();
-    await page.getByLabel("Model", { exact: true }).click();
-    await page.getByRole("option", { name: "Model B", exact: true }).click();
+    const model = page.getByRole("button", { name: /^Model:/ });
+    await expect(model).toBeEnabled();
+    await model.click();
+    await page
+      .getByRole("group", { name: "Codex", exact: true })
+      .getByRole("option", { name: "Model B", exact: true })
+      .click();
     await modelPending;
     await expect(
       page.getByRole("button", { name: "Stop agent", exact: true }),
     ).toHaveCount(0);
-    await expect(page.getByLabel("Model", { exact: true })).toBeDisabled();
+    await expect(model).toBeDisabled();
     changed();
     const composer = page.getByLabel("Message your agent");
     await composer.fill("Preserve this cancelled request");
