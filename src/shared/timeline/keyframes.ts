@@ -158,6 +158,24 @@ export function valueAt<P extends KeyframeProperty>(
   );
 }
 
+/** Hold the editor's animated picture values at one clip-local frame. */
+export function holdKeyframes(clip: Clip, frame: number): Clip {
+  const hold = <P extends KeyframeProperty>(property: P) => {
+    if (!tracksOf(clip)[property]) return {};
+    const value = parseKeyframeValue(property, valueAt(clip, property, frame));
+    return value.success ? PROPERTIES[property].write(value.data) : {};
+  };
+  return {
+    ...clip,
+    ...hold("position"),
+    ...hold("scale"),
+    ...hold("rotation"),
+    ...hold("crop"),
+    ...hold("opacity"),
+    keyframes: null,
+  };
+}
+
 const withTrack = <P extends KeyframeProperty>(
   clip: Clip,
   property: P,

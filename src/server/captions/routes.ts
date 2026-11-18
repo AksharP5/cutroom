@@ -18,7 +18,7 @@ import type {
 import { TranscriptImportSchema } from "../../shared/project";
 import type { Project, Transcript } from "../../shared/project";
 import { AGENT_HEADER } from "../../shared/review";
-import { sourcePath } from "../../shared/media";
+import { sourceUrl } from "../../shared/media";
 import { toSeconds } from "../../shared/timeline/apply";
 import { projectMutationGuard } from "../projects/authorization";
 import { projectWritePath } from "../projects/path";
@@ -139,7 +139,7 @@ export function createCaptionRoutes(
         toSeconds(duration, composition.fps),
       ),
     );
-    const src = sourcePath(sourceFile, file);
+    const src = sourceUrl(sourceFile, file);
     const result = await editInWindow(
       project,
       sourceFile,

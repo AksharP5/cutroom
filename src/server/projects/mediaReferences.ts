@@ -7,14 +7,15 @@ import {
 import type { HtmlOpeningTagSpan } from "@hyperframes/parsers";
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
 import { HttpError } from "../../shared/errors";
-import { localMediaPath } from "../../shared/media";
+import { localMediaPath, sourceUrl } from "../../shared/media";
+import type { Project } from "../../shared/project";
 import {
   parseSceneVariableValues,
   rewriteImageDeclarationUrls,
   sceneImageUrl,
 } from "../../shared/variables";
-import { sceneMountId } from "./sceneSources";
-import type { sceneSources } from "./sceneSources";
+import { canonicalAssetPath } from "./path";
+import { sceneMountId, sceneSources } from "./sceneSources";
 
 type SceneImageOverrides = {
   ids: string[];
@@ -53,6 +54,26 @@ export function imageOverridesAt(
   };
 }
 
+export function* sceneImageReferences(
+  source: string,
+  sceneImages: ReturnType<typeof imageOverridesAt>,
+) {
+  if (!source.includes("data-variable-values")) return;
+  for (const tag of scanHtmlOpeningTags(source)) {
+    const overrides = sceneImages(tag);
+    if (!overrides) continue;
+    const attr = tag.attributes.find(
+      ({ name }) => name === "id" || name === "data-hf-id",
+    );
+    const owner =
+      attr?.kind === "value" ? decodeAuthoredAttribute(attr.value) : tag.start;
+    for (const id of overrides.ids) {
+      const url = sceneImageUrl(overrides.values[id]);
+      if (url) yield { owner, url };
+    }
+  }
+}
+
 function renameSceneImages(
   raw: string,
   overrides: SceneImageOverrides,
@@ -79,36 +100,105 @@ function renameSceneImages(
   return JSON.stringify(values);
 }
 
-/** Rewrite only paths that resolve to the renamed file, retaining their relative prefix. */
-export function renameReferences(
-  source: string,
-  file: string,
-  from: string,
-  to: string,
-  files: Set<string>,
-  sceneImages: ReturnType<typeof imageOverridesAt>,
+export type ProjectEntry = "file" | "directory" | "unscanned";
+
+/** Rewrite URLs while the files and their aliases still resolve to the original targets. */
+export function mediaReferenceRenamer(
+  project: Project,
+  names: ReadonlyMap<string, string>,
+  entries: ReadonlyMap<string, ProjectEntry>,
 ) {
-  const path = (value: string, url: boolean, fromFile = file) => {
-    const local = localMediaPath(fromFile, value);
-    if (local === null) return value;
-    // Registry sources may name a project-root asset when no sibling exists.
-    const resolved =
-      files.has(local) || /^[./]/.test(value)
-        ? local
-        : localMediaPath("index.html", value);
-    if (resolved !== from) return value;
-    const pathname = value.split(/[?#]/, 1)[0]!;
-    const name = posix.basename(to);
-    const replacement =
-      /%[\da-f]{2}/i.test(pathname) || url
-        ? encodeUrlPath(name)
-        : name.replace(/[%?#]/g, encodeURIComponent);
-    return (
-      pathname.slice(0, pathname.lastIndexOf("/") + 1) +
-      replacement +
-      value.slice(pathname.length)
+  const resolveScene = sceneSources(project.path);
+  const paths = new Map<string, Promise<string | null>>();
+  const resolve = (path: string) => {
+    const entry = entries.get(path);
+    if (entry === "file" || entry === "directory") return Promise.resolve(path);
+    if (entry === undefined && entries.get(posix.dirname(path)) === "directory")
+      return Promise.resolve(null);
+    const cached = paths.get(path);
+    if (cached) return cached;
+    const pending = canonicalAssetPath(project, path).catch(
+      (error: unknown) => {
+        // Arbitrary strings in scripts and attributes can look like local paths.
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          ["ENOTDIR", "ENAMETOOLONG", "ELOOP"].includes(String(error.code))
+        )
+          return null;
+        throw error;
+      },
+    );
+    paths.set(path, pending);
+    return pending;
+  };
+
+  return async (source: string, file: string) => {
+    const sceneImages = imageOverridesAt(file, resolveScene);
+    const values = new Map<string, Set<string>>();
+    mapReferences(source, file, sceneImages, (value, _url, fromFile = file) => {
+      let urls = values.get(fromFile);
+      if (!urls) values.set(fromFile, (urls = new Set()));
+      urls.add(value);
+      return value;
+    });
+    const replacements = new Map<
+      string,
+      { path: string; keepPrefix: boolean }
+    >();
+    await Promise.all(
+      [...values].flatMap(([fromFile, urls]) =>
+        [...urls].map(async (value) => {
+          let reference = localMediaPath(fromFile, value);
+          if (!reference || reference === "." || reference.includes("\0"))
+            return;
+          let canonical = await resolve(reference);
+          // Registry sources may name a project-root asset when no sibling exists.
+          if (canonical === null && !/^[./]/.test(value)) {
+            reference = localMediaPath("index.html", value);
+            if (reference === null) return;
+            canonical = await resolve(reference);
+          }
+          if (canonical === null) return;
+          const path = names.get(canonical);
+          if (path === undefined) return;
+          replacements.set(JSON.stringify([fromFile, value]), {
+            path,
+            keepPrefix:
+              reference === canonical ||
+              (await resolve(posix.dirname(reference))) === posix.dirname(path),
+          });
+        }),
+      ),
+    );
+    if (!replacements.size) return source;
+    return mapReferences(
+      source,
+      file,
+      sceneImages,
+      (value, url, fromFile = file) => {
+        const target = replacements.get(JSON.stringify([fromFile, value]));
+        if (!target) return value;
+        const pathname = value.split(/[?#]/, 1)[0]!;
+        const name = posix.basename(target.path);
+        const replacement = target.keepPrefix
+          ? pathname.slice(0, pathname.lastIndexOf("/") + 1) +
+            (/%[\da-f]{2}/i.test(pathname) || url
+              ? encodeUrlPath(name)
+              : name.replace(/[%?#]/g, encodeURIComponent))
+          : sourceUrl(fromFile, target.path);
+        return replacement + value.slice(pathname.length);
+      },
     );
   };
+}
+
+function mapReferences(
+  source: string,
+  file: string,
+  sceneImages: ReturnType<typeof imageOverridesAt>,
+  path: (value: string, url: boolean, fromFile?: string) => string,
+) {
   const css = (text: string) =>
     text.replace(CSS_URL_RE, (whole: string, _quote: string, raw: string) => {
       const value = decodeCssEscapes(raw);

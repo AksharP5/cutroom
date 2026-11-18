@@ -1,5 +1,8 @@
 import type { VideoMetadata } from "@hyperframes/engine";
-import { chromeColourGuess } from "../../shared/videoColour.ts";
+import {
+  chromeColourGuess,
+  usesPreviewColourMatrix,
+} from "../../shared/videoColour.ts";
 
 type SdrSource = Pick<
   VideoMetadata,
@@ -82,4 +85,16 @@ export function chromeSdrColourFilters(metadata: SdrSource) {
   return [
     `colorspace=ispace=${matrix}:iprimaries=${primary}:itrc=${sourceTransfer}:irange=${range}:space=bt709:primaries=bt709:trc=srgb:range=tv`,
   ];
+}
+
+/** Match the footage compositor for the SDR footage it converts directly. */
+export function previewSdrColourFilters(metadata: SdrSource) {
+  const guess = chromeColourGuess(metadata.height, metadata.videoCodec);
+  const primaries = tagged(metadata.colorSpace?.colorPrimaries) ?? guess;
+  const transfer = tagged(metadata.colorSpace?.colorTransfer) ?? guess;
+  if (!usesPreviewColourMatrix(primaries, transfer))
+    return chromeSdrColourFilters(metadata);
+  return tagged(metadata.colorSpace?.colorSpace)
+    ? []
+    : [`setparams=colorspace=${guess}`];
 }

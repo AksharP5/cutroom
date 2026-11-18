@@ -4,7 +4,7 @@ import type { Clip } from "../../../shared/timeline/schema";
 import {
   localMediaPath,
   previewMediaPath,
-  sourcePath,
+  sourceUrl,
 } from "../../../shared/media";
 import {
   isEditable,
@@ -392,10 +392,7 @@ export function BindImageVariable({
   const resolved = src && previewMediaPath(state.composition, src, files);
   const value =
     src && resolved && resolved !== local && !/[?#]/.test(src)
-      ? sourcePath(state.composition, resolved)
-          .split("/")
-          .map(encodeURIComponent)
-          .join("/")
+      ? sourceUrl(state.composition, resolved)
       : src;
   const declaration = VariableDeclarationSchema.safeParse({
     type: "image",

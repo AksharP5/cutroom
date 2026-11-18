@@ -1,4 +1,8 @@
-import { fileFingerprint, inMediaTrash } from "../../shared/media";
+import {
+  fileFingerprint,
+  inMediaTrash,
+  isFreezeExport,
+} from "../../shared/media";
 import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1289,7 +1293,7 @@ export function createHyperframesApi(
   );
   // Studio's listing feeds the Media panel, Assets, and the code tree. Dot folders hold app
   // state such as Cutroom's review captures, so they are hidden here like everywhere else,
-  // and so are the files Remove moved to the project's trash.
+  // and so are trash files and the export PNGs that belong to freeze-frame Media items.
   api.get("/projects/:id", async (c, next) => {
     await next();
     if (!c.res.ok) return;
@@ -1299,7 +1303,8 @@ export function createHyperframesApi(
     const files = listing.files.filter(
       (file) =>
         !file.split("/").some((part) => part.startsWith(".")) &&
-        !inMediaTrash(file),
+        !inMediaTrash(file) &&
+        !isFreezeExport(file),
     );
     const project = await store.get(c.req.param("id"));
     const fileVersions = Object.fromEntries(

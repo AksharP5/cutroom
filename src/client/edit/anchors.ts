@@ -58,6 +58,7 @@ export function editAnchors(
         type === "remove" ||
         type === "trim" ||
         type === "split" ||
+        type === "freeze" ||
         type === "move" ||
         type === "setClip",
     )

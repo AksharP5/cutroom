@@ -39,8 +39,11 @@ import {
 import { newTrack, nextTrackIndex } from "./tracks";
 import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
+import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import {
   moveKeyframe,
+  holdKeyframes,
   parseKeyframeValue,
   removeKeyframe,
   setKeyframe,
@@ -59,6 +62,15 @@ export type { TimelineErrorCode } from "./errors";
  */
 export type ClipOrigin =
   | { copyOf: string }
+  | {
+      freeze: {
+        clipId: string;
+        src: string;
+        media: string;
+        path: string;
+        time: number;
+      };
+    }
   | { insert: InsertClip | InsertTitle | InsertComposition }
   | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
@@ -73,6 +85,7 @@ export type NewId = (
 ) => string;
 /** Ids are never reused within a batch, so every created clip has one unambiguous origin. */
 interface Batch {
+  composition: string;
   clipboards: ReadonlyMap<string, readonly Clip[]>;
   /** Ids in the timeline and ids the project used before; a new clip takes none of them. */
   reserved: Set<string>;
@@ -90,6 +103,7 @@ interface Batch {
  * `silentMedia` every `src` known to hold no audio stream.
  */
 interface ApplyOptions {
+  composition?: string;
   clipboards?: Batch["clipboards"];
   /** Observe each admitted command before the batch is written. */
   onApply?: (before: Timeline, after: Timeline, command: Command) => void;
@@ -259,6 +273,7 @@ export function apply(
   timeline: Timeline,
   command: Command,
   {
+    composition = "index.html",
     clipboards = new Map(),
     onSkip = () => {},
     onCreate = () => {},
@@ -269,6 +284,7 @@ export function apply(
   }: ApplyOptions = {},
 ): Timeline {
   const next = applyIn(timeline, command, {
+    composition,
     clipboards,
     reserved: usedNames(timeline, retired),
     retired,
@@ -286,6 +302,7 @@ export function applyAll(
   timeline: Timeline,
   commands: readonly Command[],
   {
+    composition = "index.html",
     clipboards = new Map(),
     onApply,
     onSkip = () => {},
@@ -298,6 +315,7 @@ export function applyAll(
 ): Timeline {
   const origins = new Map<string, ClipOrigin>();
   const batch: Batch = {
+    composition,
     clipboards,
     reserved: usedNames(timeline, retired),
     retired,
@@ -384,6 +402,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
   const supplied = new Map(
     Object.entries(
       command.type === "paste" ||
+        command.type === "freeze" ||
         command.type === "split" ||
         command.type === "insert" ||
         command.type === "trim" ||
@@ -565,6 +584,88 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         ),
       };
     }
+    case "freeze": {
+      const { at } = command;
+      const video = find(command.clipId);
+      const { src, mediaStart } = video;
+      const media = src && localMediaPath(batch.composition, src);
+      if (video.kind !== "video" || !src || !media || mediaStart === null)
+        throw new TimelineError(
+          "unsupported",
+          "Select a clip with a local video source.",
+        );
+      if (at <= video.start || at >= clipEnd(video))
+        throw new TimelineError(
+          "out_of_bounds",
+          "Move the playhead inside the video clip to freeze a frame.",
+        );
+      const linked = withPartners(clips, [video]);
+      const targets = linked.filter(
+        (clip) => clip.start < at && at < clipEnd(clip),
+      );
+      if (targets.some((clip) => parseRateLane(clip.automation)))
+        throw new TimelineError(
+          "unsupported",
+          "Freeze frame needs a constant playback speed on every clip it cuts.",
+        );
+      const tracks = new Set(linked.map((clip) => clip.track));
+      const duration = Math.max(1, Math.round((2 * fps.num) / fps.den));
+      const id = command.id ? claim(command.id) : mint.name("freeze", null);
+      const path = `${FREEZE_DIR}/${id}.png`;
+      onCreate(id, {
+        freeze: {
+          clipId: video.id,
+          src,
+          media,
+          path,
+          time:
+            mediaStart + frameTime(at - video.start, fps) * video.playbackRate,
+        },
+      });
+      const cut = splitClips(clips, targets, at, fps, mint);
+      const held = holdKeyframes(video, at - video.start);
+      const image: Clip = {
+        id,
+        track: video.track,
+        kind: "image",
+        start: at,
+        duration,
+        mediaStart: null,
+        playbackRate: 1,
+        src: sourceUrl(batch.composition, path),
+        sourceDuration: null,
+        hasAudio: false,
+        link: null,
+        label: "Freeze",
+        volume: null,
+        opacity: held.opacity,
+        x: held.x,
+        y: held.y,
+        scaleX: held.scaleX,
+        scaleY: held.scaleY,
+        rotation: held.rotation,
+        crop: held.crop,
+        keyframes: null,
+        text: null,
+        title: null,
+        style: video.style,
+        ...(video.variableBindings && {
+          variableBindings: video.variableBindings,
+        }),
+        fadeIn: 0,
+        fadeOut: 0,
+        transitionIn: null,
+        transitionOut: null,
+        automation: null,
+        fx: [],
+        enabled: video.enabled,
+        startRef: null,
+      };
+      return {
+        ...timeline,
+        clips: [...shiftAfter(cut, tracks, () => at, duration), image],
+      };
+    }
     case "remove": {
       const removing = withPartners(clips, command.clipIds.map(find));
       for (const clip of removing)
@@ -736,11 +837,15 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "track_kind",
           "Only video can have linked audio.",
         );
+      const sourceName =
+        input.kind === "title"
+          ? null
+          : (localMediaPath("index.html", input.src) ?? input.src);
       // A file name is quoted so it reads as written, never as a clip id.
       assertTrackKind(
         input.kind === "title" ? "element" : input.kind,
         trackAt(track),
-        input.id ?? (input.kind === "title" ? "title" : `"${input.src}"`),
+        input.id ?? (sourceName === null ? "title" : `"${sourceName}"`),
       );
       const id =
         input.id === undefined
@@ -757,7 +862,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       // A named sound track is edited as the picture's is; left out, the sound is routed to room.
       const soundTrack = separate ? command.linkedAudio?.track : undefined;
       if (soundTrack !== undefined && input.kind === "video")
-        assertTrackKind("audio", trackAt(soundTrack), `"${input.src}" sound`);
+        assertTrackKind("audio", trackAt(soundTrack), `"${sourceName}" sound`);
       let next = clips;
       if (mode === "overwrite")
         next = clearRange(next, track, at, end, fps, mint);

@@ -57,11 +57,17 @@ import { parseInput } from "../projects/routes";
 import { isMissing, readSource } from "../projects/store";
 import {
   STILL_SECONDS,
+  isFreezeExport,
   stillMediaExtensions,
   localMediaPath,
+  sourceUrl,
 } from "../../shared/media";
 import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
-import { projectPath, projectWritePath } from "../projects/path";
+import {
+  canonicalAssetPath,
+  projectPath,
+  projectWritePath,
+} from "../projects/path";
 import type { ProjectStore } from "../projects/store";
 import {
   compositionScope,
@@ -75,6 +81,8 @@ import {
 import type { HostedComposition, ParsedComposition } from "./composition";
 import { animationFeedback } from "./animationFeedback";
 import { compositionMediaFacts, mediaFacts } from "./media";
+import { prepareFrozenFrames, saveFrozenFrames } from "./freeze";
+import { freezeCompanion } from "../projects/freezeAssets";
 import {
   DuckRequestSchema,
   LoudnessRequestSchema,
@@ -337,6 +345,7 @@ export function createTimelineRoutes(
     // Commands keep source times exact; the written timeline holds them to the microsecond.
     const timeline = canonicalTimeline(
       applyAll(current.parsed.timeline, batch.commands, {
+        composition,
         onCreate: (id, origin) => origins.set(id, origin),
         onApply: (before, after, command) => {
           labels.push(editLabel([command], before, "Edited timeline"));
@@ -374,12 +383,62 @@ export function createTimelineRoutes(
         retired: await usedClipIds(project),
       }),
     );
+    const freezes = new Map(
+      timeline.clips.flatMap(({ id }) => {
+        const origin = origins.get(id);
+        return origin && "freeze" in origin
+          ? [[origin.freeze.path, origin.freeze] as const]
+          : [];
+      }),
+    );
+    const frozen = await prepareFrozenFrames(
+      project,
+      [...freezes.values()],
+      lengths,
+    );
+    const generated = new Map(
+      frozen.map(({ frame, exportPath }) => [frame.path, exportPath]),
+    );
+    const freezeExports = new Map<string, string>();
+    for (const { frame, exportPath } of frozen) {
+      if (exportPath)
+        freezeExports.set(
+          sourceUrl(composition, frame.path),
+          sourceUrl(composition, exportPath),
+        );
+    }
+    const imageSources = new Set(
+      batch.commands.flatMap((command) =>
+        command.type === "insert" && command.clip.kind === "image"
+          ? [command.clip.src]
+          : [],
+      ),
+    );
+    for (const src of imageSources) {
+      const local = localMediaPath(composition, src);
+      if (local === null) continue;
+      // Generated files are published by this batch. Existing aliases resolve to the same pair.
+      const path = generated.has(local)
+        ? local
+        : await canonicalAssetPath(project, local);
+      if (isFreezeExport(local) || (path !== null && isFreezeExport(path)))
+        throw new TimelineError(
+          "unsupported",
+          "Insert the freeze frame from Media to keep its preview and export together.",
+        );
+      if (path === null) continue;
+      const exported = generated.has(path)
+        ? generated.get(path)
+        : (await freezeCompanion(project, path))?.path;
+      if (exported) freezeExports.set(src, sourceUrl(composition, exported));
+    }
     const html = patchComposition(
       current.parsed,
       timeline,
       origins,
       snapshots,
       hosted,
+      freezeExports,
     );
     const settings = settingsOf(timeline);
     // Compare authored content; removing markup can change the remaining source restrictions.
@@ -505,17 +564,19 @@ export function createTimelineRoutes(
             });
         }
         // Persist inferred tracks too, before their last source clip can disappear on the next read.
-        if (
-          !Bun.deepEquals(
-            settings,
-            timelines[composition] ?? emptyTimelineSettings(),
-          )
-        ) {
-          if (Bun.deepEquals(settings, emptyTimelineSettings()))
-            delete timelines[composition];
-          else timelines[composition] = settings;
-          await store.writeDocument(project, document, files);
-        } else if (files.length) store.writeFiles(project, files);
+        await saveFrozenFrames(project, frozen, async () => {
+          if (
+            !Bun.deepEquals(
+              settings,
+              timelines[composition] ?? emptyTimelineSettings(),
+            )
+          ) {
+            if (Bun.deepEquals(settings, emptyTimelineSettings()))
+              delete timelines[composition];
+            else timelines[composition] = settings;
+            await store.writeDocument(project, document, files);
+          } else if (files.length) store.writeFiles(project, files);
+        });
         return {
           composition,
           revision: revisionOf(

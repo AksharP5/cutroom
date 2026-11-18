@@ -9,7 +9,11 @@ import {
   parseMasterFxChain,
   runFfmpeg,
 } from "@hyperframes/engine";
-import type { AudioElement, EngineConfig } from "@hyperframes/engine";
+import type {
+  AudioElement,
+  EngineConfig,
+  VideoMetadata,
+} from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
@@ -50,7 +54,11 @@ const PART_FRAMES = 300;
 /** Inputs one FFmpeg process opens at a time; each holds a decoder. */
 const PART_INPUTS = 8;
 
-type Piece = SourceSegment & { path: string };
+type MediaInput = {
+  path: string;
+  video?: Pick<VideoMetadata, "width" | "height" | "pixelFormat">;
+};
+type Piece = SourceSegment & MediaInput;
 /** An encoded run of frames, in the export's frame numbers. */
 export type EncodedPart = { start: number; end: number; path: string };
 
@@ -100,7 +108,7 @@ export async function prepareDirectExport(
   const segments = plan.segments.filter(
     (segment): segment is SourceSegment => segment.kind === "source",
   );
-  const sources = new Map<string, string | undefined>();
+  const sources = new Map<string, MediaInput>();
   for (const { src, still } of segments) {
     if (sources.has(src)) continue;
     // The browser asks the capture server for the decoded path, which this same boundary checks.
@@ -110,7 +118,7 @@ export async function prepareDirectExport(
     if (!path) return { reason: `${src} is not a file in the project` };
     // The server read the still's header when it planned the export.
     if (still) {
-      sources.set(src, path);
+      sources.set(src, { path });
       continue;
     }
     const metadata = await extractMediaMetadata(path);
@@ -119,18 +127,33 @@ export async function prepareDirectExport(
     if (metadata.rotation) return { reason: `${src} is rotated` };
     if (metadata.width * plan.height !== metadata.height * plan.width)
       return { reason: `${src} has a different aspect ratio` };
-    sources.set(src, path);
+    sources.set(src, {
+      path,
+      video: {
+        width: metadata.width,
+        height: metadata.height,
+        pixelFormat: metadata.pixelFormat,
+      },
+    });
   }
   return {
     pieces: segments.map((segment) => ({
       ...segment,
-      path: sources.get(segment.src)!,
+      ...sources.get(segment.src)!,
     })),
   };
 }
 
 /** Pixels of transparent margin around a placed picture, so resampling at its edges blends to nothing. */
 const MARGIN = 2;
+
+// Normalize every input before concat. Older FFmpeg versions use the first input's
+// matrix for a scale after concat, even when later inputs carry different tags.
+const deliveryMatrix =
+  "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd";
+const deliveryFormat = "format=yuv420p";
+const deliveryTags =
+  "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv";
 
 /**
  * The filter graph that draws a placed picture as the browser composites it: cropped in its box,
@@ -220,9 +243,9 @@ function placed(
     `color=c=${beneath}:s=${frame.width}x${frame.height}:r=${rate},format=gbrp[b${index}]`,
     `[b${index}][q${index}]${[
       "overlay=format=gbrp:shortest=1",
-      "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd",
-      "format=yuv420p",
-      "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+      deliveryMatrix,
+      deliveryFormat,
+      deliveryTags,
       ...after,
     ].join(",")}[p${index}]`,
   ].join(";");
@@ -333,12 +356,24 @@ async function encodePart(input: {
       );
       continue;
     }
+    // Resizing first can make older FFmpeg versions infer a different source matrix.
+    // For plain footage, do the colour conversion at source size and resize afterwards.
+    const sampleSize = piece.placement ? frame : (piece.video ?? frame);
+    const resize =
+      sampleSize.width === width && sampleSize.height === height
+        ? null
+        : `scale=${width}:${height}:flags=bicubic`;
+    // Keep finer chroma until after resampling. Ordinary 4:2:0 needs no intermediate.
+    const format =
+      resize && !/^yuvj?420p/.test(piece.video?.pixelFormat ?? "")
+        ? ["format=yuv444p", resize, deliveryFormat]
+        : [deliveryFormat, ...(resize ? [resize] : [])];
     const layer = await buildVideoLayerInput(
       piece.path,
       piece.mediaStart,
       (frames * fps.den) / fps.num,
       fps,
-      { width, height },
+      sampleSize,
       "fill",
     );
     if (!layer)
@@ -359,13 +394,12 @@ async function encodePart(input: {
             trim,
             layer.filters,
           )
-        : `[${index}:v]${[...layer.filters, ...trim].join(",")}[p${index}]`,
+        : `[${index}:v]${[...layer.filters, deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);
-  // Frames leave the layer filters in their source matrix and range, tagged as the sRGB the
-  // preview draws. The capture path writes the same tagged BT.709 limited-range 4:2:0.
-  const graph = `${chains.join(";")};${pieces.map((_, index) => `[p${index}]`).join("")}concat=n=${pieces.length}:v=1:a=0,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv[v]`;
+  // Each piece is tagged BT.709 limited-range 4:2:0, as the capture path writes.
+  const graph = `${chains.join(";")};${pieces.map((_, index) => `[p${index}]`).join("")}concat=n=${pieces.length}:v=1:a=0[v]`;
   const args = partEncoderArgs(
     input.encoder,
     total,

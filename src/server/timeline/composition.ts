@@ -17,6 +17,7 @@ import type {
   VariableBinding,
   VariableValue,
 } from "../../shared/variables";
+import { freezeExportSource } from "../hyperframes/freezeSources";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import {
@@ -1981,28 +1982,61 @@ function hostMarkup(
   ])}></div>`;
 }
 
+const fittedMedia =
+  "position:absolute;inset:0;width:100%;height:100%;object-fit:contain";
+
 function insertMarkup(
   clip: Clip,
-  input: InsertClip,
+  input: Pick<InsertClip, "src" | "muted">,
   fps: Fps,
   mix: TrackMix,
   transitions: AttributeChange[],
+  template?: SourceElement["attrs"],
+  exportSrc?: string,
 ): string {
+  const authoredStyle = template
+    ? template.style
+    : clip.kind === "video" || clip.kind === "image"
+      ? fittedMedia
+      : undefined;
+  const before = clipStyle({
+    ...readClipStyle(authoredStyle),
+    style: readElementStyle(authoredStyle),
+  });
+  const styleChanges = Object.fromEntries(
+    Object.entries(clipStyle(clip)).filter(
+      ([key, value]) => before[key as keyof typeof before] !== value,
+    ),
+  );
+  const style = Object.keys(styleChanges).length
+    ? writeClipStyle(authoredStyle, styleChanges)
+    : authoredStyle;
+  const classes = new Set((template?.class ?? "").split(/\s+/).filter(Boolean));
+  if (clip.kind === "image") classes.add("clip");
+  const inherited = [
+    "width",
+    "height",
+    "data-color-grading",
+    "data-color-group",
+  ];
+  const keyframes = keyframesAttribute(clip.keyframes, fps);
   const attributes: AttributeChange[] = [
     ["id", clip.id],
-    ...(clip.kind === "image" ? [["class", "clip"] as const] : []),
+    ...(classes.size ? [["class", [...classes].join(" ")] as const] : []),
     ["src", input.src],
+    ...(exportSrc ? [[freezeExportSource, exportSrc] as const] : []),
     ...(clip.kind === "voiceover"
       ? [["data-cutroom-kind", "voiceover"] as const]
       : []),
-    ...(clip.kind === "video" || clip.kind === "image"
-      ? [
-          [
-            "style",
-            "position:absolute;inset:0;width:100%;height:100%;object-fit:contain",
-          ] as const,
-        ]
-      : []),
+    ...(style ? [["style", style] as const] : []),
+    ...inherited.flatMap((name) => {
+      const value = template?.[name];
+      return value === undefined ? [] : [[name, value] as const];
+    }),
+    ...positionAttributes(template ?? {}, clip).filter(
+      ([, value]) => value !== null,
+    ),
+    ...(keyframes ? [[KEYFRAMES_ATTRIBUTE, keyframes] as const] : []),
     ["data-start", String(toSeconds(clip.start, fps))],
     ["data-duration", String(toSeconds(clip.duration, fps))],
     ["data-track-index", String(clip.track)],
@@ -2230,6 +2264,17 @@ function managedStyleEdits(
   return [{ start, end: start, text: `${style}\n` }];
 }
 
+/** The authored clip after which a new piece or still is inserted. */
+function sourceAnchor(
+  origin: ClipOrigin,
+  origins: ReadonlyMap<string, ClipOrigin>,
+) {
+  if ("copyOf" in origin) return origin.copyOf;
+  if (!("freeze" in origin)) return;
+  const video = origins.get(origin.freeze.clipId);
+  return video && "copyOf" in video ? video.copyOf : origin.freeze.clipId;
+}
+
 /**
  * Which edges of a dissolve draw under their partner. The clip later in the document is drawn on
  * top and fades; new clips go after every existing one, and a piece right after its source clip.
@@ -2243,9 +2288,8 @@ function dissolveLayers(
   const position = (id: string): number => {
     const origin = origins.get(id);
     if (existing.has(id)) return parsed.elements.get(id)!.start;
-    return origin && "copyOf" in origin
-      ? position(origin.copyOf) + 0.5
-      : Infinity;
+    const anchor = origin && sourceAnchor(origin, origins);
+    return anchor && existing.has(anchor) ? position(anchor) + 0.5 : Infinity;
   };
   const above = (a: Clip, b: Clip) =>
     position(a.id) - position(b.id) || a.start - b.start;
@@ -2292,6 +2336,8 @@ export function patchComposition(
   clipboards: ReadonlyMap<string, ParsedComposition> = new Map(),
   /** The compositions new hosts play, by `src`. */
   hosted: ReadonlyMap<string, HostedComposition> = new Map(),
+  /** Export-colour stills by their authored preview `src`. */
+  freezeExports: ReadonlyMap<string, string> = new Map(),
 ): string {
   const { html, timeline: before } = parsed;
   const { fps } = before;
@@ -2414,6 +2460,38 @@ export function patchComposition(
       );
     const origin = origins.get(clip.id);
     if (!origin) throw new Error(`Clip ${clip.id} has no origin.`);
+    if ("freeze" in origin) {
+      const { clipId } = origin.freeze;
+      const videoOrigin = origins.get(clipId);
+      const sourceId = sourceAnchor(origin, origins)!;
+      const template = parsed.elements.get(sourceId);
+      const snapshot =
+        videoOrigin && "clipboardId" in videoOrigin
+          ? clipboards
+              .get(videoOrigin.clipboardId)
+              ?.elements.get(videoOrigin.clipId)
+          : undefined;
+      const last = template ? ([sourceId, template] as const) : lastClip;
+      const at = last
+        ? elementEnd(parsed, last[1], last[0])
+        : parsed.root.openEnd;
+      const indent = last ? indentOf(html, last[1].start) : "";
+      const attrs = template?.attrs ??
+        snapshot?.attrs ?? { style: fittedMedia };
+      inserts.set(at, [
+        ...(inserts.get(at) ?? []),
+        `\n${indent}${insertMarkup(
+          elementClip(clip, fps),
+          { src: clip.src!, muted: false },
+          fps,
+          mix,
+          transitionChanges({}, clip, under(clip.id), fps),
+          attrs,
+          freezeExports.get(clip.src!),
+        )}`,
+      ]);
+      continue;
+    }
     if ("insert" in origin) {
       const at = lastClip
         ? elementEnd(parsed, lastClip[1], lastClip[0])
@@ -2432,6 +2510,8 @@ export function patchComposition(
                   fps,
                   mix,
                   transitionChanges({}, clip, under(clip.id), fps),
+                  undefined,
+                  freezeExports.get(origin.insert.src),
                 )
         }`,
       ]);
@@ -2595,9 +2675,13 @@ export function rebaseClipboard(
   for (const element of descendants(parsed.roots, true)) {
     const changes: AttributeChange[] = [];
     for (const [name, value] of Object.entries(element.attrs)) {
-      const next = ["src", "poster", "href", "data-composition-src"].includes(
-        name,
-      )
+      const next = [
+        "src",
+        "poster",
+        "href",
+        "data-composition-src",
+        freezeExportSource,
+      ].includes(name)
         ? rewrite(value)
         : name === "srcset"
           ? rewriteSrcsetUrls(value, rewrite)

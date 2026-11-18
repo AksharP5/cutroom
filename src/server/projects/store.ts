@@ -32,6 +32,7 @@ import type {
   ProjectDocument,
 } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
+import { guardFreezeHistory } from "./freezeHistory";
 import { isMissing, projectPath, projectWritePath } from "./path";
 
 export { isMissing, projectPath } from "./path";
@@ -52,7 +53,10 @@ export class ProjectDocumentError extends HttpError {
 }
 const PERSON: HistoryWho = { kind: "person", name: "You" };
 
-export async function readSource(project: Project, path = "index.html") {
+export async function readSource(
+  project: Pick<Project, "path">,
+  path = "index.html",
+) {
   const absolute = await projectPath(project, path);
   const info = await stat(absolute);
   if (!info.isFile() || info.size > 10 * 1024 * 1024)
@@ -175,6 +179,8 @@ export async function createProjectStore(options: {
       projectDir,
       historyRoot: join(dataDir, "history"),
       undoScope: "everyone",
+      beforeReplay: (changes, readBlob, context) =>
+        guardFreezeHistory({ path: projectDir }, changes, readBlob, context),
     }),
   );
   const documentReads = new WeakMap<ProjectDocument, string | null>();

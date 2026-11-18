@@ -80,6 +80,7 @@ const rows = (
     onPasteStyle() {},
     onDuck() {},
     onNormalize() {},
+    onFreeze() {},
     ...state,
   }).filter((item): item is MenuEntry => item !== "separator");
 
@@ -140,6 +141,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
     expect(disabled(rows({ selected: ["a"], clipboard: true, frame }))).toEqual(
       [
         keymap.editM2SplitClip.label,
+        "Freeze frame",
         keymap.editLink.label,
         "Paste style",
         "Reveal media",

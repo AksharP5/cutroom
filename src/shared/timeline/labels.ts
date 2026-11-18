@@ -1,4 +1,5 @@
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
+import { localMediaPath } from "../media";
 import { gapAt, toFrames } from "./apply";
 import { firstTextLine, isAudioKind } from "./schema";
 import type { Clip, Command, Timeline } from "./schema";
@@ -29,12 +30,17 @@ const STYLE_NAMES = new Map<string, string>(
 );
 
 /** A clip's name as the timeline shows it. A title without a label goes by its first line. */
-export const clipName = (
+export function clipName(
   clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview">,
-) =>
-  clip.label ??
-  clip.src?.split("/").at(-1) ??
-  ((clip.title && clip.textPreview) || clip.id);
+) {
+  const { label, src } = clip;
+  if (label !== null) return label;
+  if (src !== null)
+    return (
+      (localMediaPath("index.html", src) ?? src).split("/").at(-1) ?? clip.id
+    );
+  return (clip.title && clip.textPreview) || clip.id;
+}
 
 /** Percentages keep every digit the engine stores (six decimals of the fraction). */
 export const formatPercent = (value: number) =>
@@ -146,6 +152,8 @@ export function editLabel(
         return pending
           ? `${command.ripple ? "Ripple delete" : "Lift"} ${target(command.clipIds)}`
           : `${command.ripple ? "Ripple deleted" : "Lifted"} ${named ? target(command.clipIds) : "clips"}`;
+      case "freeze":
+        return `${pending ? "Freeze" : "Froze"} ${named ? target([command.clipId]) : "frame"} at ${time(command.at)}`;
       case "closeGap": {
         const gap = timeline && gapAt(timeline, command.track, command.at);
         return `${pending ? "Close" : "Closed"} ${gap ? `the ${span(gap.to - gap.from)} gap` : "the gap"} on ${trackName(command.track)}${gap ? ` at ${time(gap.from)}` : ""}`;

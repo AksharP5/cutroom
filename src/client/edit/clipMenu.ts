@@ -21,6 +21,7 @@ export function clipMenuItems({
   onPasteStyle,
   onDuck,
   onNormalize,
+  onFreeze,
   clicked,
 }: {
   timeline: Timeline;
@@ -41,6 +42,7 @@ export function clipMenuItems({
   onDuck(bed: Clip, voices: Clip[]): void;
   /** Sets each clip's gain so it measures -16 LUFS. */
   onNormalize(clips: Clip[]): void;
+  onFreeze(clip: Clip, frame: number): void;
   /** The clip a right-click landed on, which Duck under voice lowers. */
   clicked?: Clip;
 }): MenuItem[] {
@@ -54,6 +56,15 @@ export function clipMenuItems({
     (clip) => (copiedStyle === "title") === !!clip.title,
   );
   const sound = clips.filter((clip) => clip.hasAudio);
+  const pictures = clips.filter((clip) => clip.kind === "video");
+  const freeze =
+    clicked?.kind === "video"
+      ? clicked
+      : clicked
+        ? undefined
+        : pictures.length === 1
+          ? pictures[0]
+          : undefined;
   const bed = sound.find((clip) => clip.id === clicked?.id) ?? sound[0];
   const voices = sound.filter((clip) => clip !== bed);
   return [
@@ -69,6 +80,16 @@ export function clipMenuItems({
         (clip) => clip.start < frame && frame < clipEnd(clip),
       ),
     },
+    ...(freeze
+      ? [
+          {
+            label: "Freeze frame",
+            disabled:
+              !freeze.src || frame <= freeze.start || frame >= clipEnd(freeze),
+            run: () => onFreeze(freeze, frame),
+          },
+        ]
+      : []),
     { action: "editBackspace", disabled: none },
     { action: "editDelete", disabled: none },
     { action: "editClipEnabled", disabled: none },

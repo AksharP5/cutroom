@@ -1,13 +1,17 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, join, normalize, relative } from "node:path";
+import { collectSubCompositionSrcs } from "@hyperframes/parsers/asset-resolution";
 import { parseSourceDocument } from "@hyperframes/studio-server";
-import { localMediaPath } from "../../shared/media";
+import { inMediaTrash, localMediaPath } from "../../shared/media";
 import type { MediaClip, Project } from "../../shared/project";
 import { ProjectDocumentSchema } from "../../shared/project";
 import { projectPath, readSource } from "./store";
+import { resolveProjectPath, unavailableProjectFile } from "./path";
 
 /** Every HTML file in the project, as project-relative paths. Hidden and vendored folders are skipped. */
-export async function compositionFiles(project: Project): Promise<string[]> {
+export async function compositionFiles(
+  project: Pick<Project, "path">,
+): Promise<string[]> {
   const sources: string[] = [];
   const ignored = new Set(["node_modules", "dist", "build"]);
   const walk = async (directory: string) => {
@@ -22,6 +26,61 @@ export async function compositionFiles(project: Project): Promise<string[]> {
   };
   await walk(project.path);
   return sources;
+}
+
+/** Follow the compiler's project-root mount paths without walking ignored folders. */
+export async function* compositionSources(
+  project: Pick<Project, "path">,
+  options: {
+    files?: Iterable<string>;
+    changed?: Iterable<string>;
+    readOverride?: (path: string) => Promise<string | null | undefined>;
+  } = {},
+) {
+  const discovered = new Set(
+    options.files ?? (await compositionFiles(project)),
+  );
+  const entries = new Set([
+    "index.html",
+    ...discovered,
+    ...(options.changed ?? []),
+  ]);
+  const visited = new Map<string, boolean>();
+  for (const entry of entries) {
+    const compositions = new Map([[entry, false]]);
+    for (const [path, mounted] of compositions) {
+      const previous = visited.get(path);
+      if (previous === true || previous === mounted || inMediaTrash(path))
+        continue;
+      visited.set(path, mounted);
+      let canonical = path;
+      let content = await options.readOverride?.(path);
+      if (content === undefined && !discovered.has(path)) {
+        // The history ledger records the owned source, including edits read through aliases.
+        const resolved = await resolveProjectPath(project, path)
+          .then(async (source) =>
+            (await stat(source.absolute)).isFile() ? source : null,
+          )
+          .catch((error: unknown) => {
+            if (unavailableProjectFile(error)) return null;
+            throw error;
+          });
+        if (!resolved) continue;
+        canonical = resolved.path;
+        if (canonical !== path)
+          content = await options.readOverride?.(canonical);
+      }
+      if (content === null) continue;
+      content ??= (await readSource(project, path)).content;
+      if (/data-composition-src/i.test(content))
+        for (const src of collectSubCompositionSrcs(content)) {
+          const child = localMediaPath("index.html", src);
+          if (child && child !== "." && !child.includes("\0"))
+            compositions.set(child, true);
+        }
+      yield { path, canonical, content, mounted };
+    }
+  }
 }
 
 export async function listMedia(project: Project): Promise<MediaClip[]> {

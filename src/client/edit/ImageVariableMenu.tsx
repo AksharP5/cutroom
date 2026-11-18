@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import {
   inMediaTrash,
+  isFreezeExport,
   localMediaPath,
   mediaKind,
-  sourcePath,
+  sourceUrl,
 } from "../../shared/media";
 import { SelectMenu } from "../components/SelectMenu";
 import { useWorkspace } from "../workspace";
@@ -32,13 +33,11 @@ export function ImageVariableMenu({
       Object.entries(files).flatMap(([path, version]) =>
         version !== null &&
         !inMediaTrash(path) &&
+        !isFreezeExport(path) &&
         mediaKind(path)?.kind === "image"
           ? [
               {
-                value: sourcePath(composition, path)
-                  .split("/")
-                  .map(encodeURIComponent)
-                  .join("/"),
+                value: sourceUrl(composition, path),
                 label: path,
               },
             ]

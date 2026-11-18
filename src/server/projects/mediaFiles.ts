@@ -1,45 +1,63 @@
-import { lstat, mkdir, readFile, readdir, rename } from "node:fs/promises";
-import { dirname, extname, join, posix } from "node:path";
+import { renameSync } from "node:fs";
+import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises";
+import { dirname, extname, join, posix, relative } from "node:path";
+import { isProjectIgnoredDir } from "@hyperframes/core/project-folders";
 import {
-  decodeAuthoredAttribute,
-  scanHtmlOpeningTags,
-} from "@hyperframes/parsers";
-import { fileContentVersion } from "@hyperframes/studio-server";
+  affectsProjectSignature,
+  fileContentVersion,
+} from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
 import {
-  MEDIA_TRASH,
+  FREEZE_DIR,
+  FREEZE_EXPORT_DIR,
+  freezeExportPath,
+  inFreezeAssets,
   inMediaTrash,
-  localMediaPath,
-  mediaKind,
+  isFreezeExport,
+  isMediaItem,
 } from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
-import { sceneImageUrl } from "../../shared/variables";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { compositionScope, parseComposition } from "../timeline/composition";
-import { compositionFiles } from "./media";
-import { isMissing, projectWritePath } from "./path";
+import { compositionSources } from "./media";
+import { mediaRemoveLabel, mediaTrashPath } from "./mediaTrash";
+import { isMissing, projectStatePath, projectWritePath } from "./path";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
+import { mediaReferenceRenamer } from "./mediaReferences";
+import type { ProjectEntry } from "./mediaReferences";
 import { sceneSources } from "./sceneSources";
-import { imageOverridesAt, renameReferences } from "./mediaReferences";
 import { moveSourceMarks } from "./view";
+import { freezeCompanion } from "./freezeAssets";
 
 const SOURCE_BYTES = 10 * 1024 * 1024;
 
-/** A media file the panel lists: a regular file of a known kind, outside the trash. */
+/** Resolve a still's export path to the same Media item as its preview path. */
 async function mediaFile(project: Project, raw: string) {
-  const path = posix.normalize(raw.replaceAll("\\", "/"));
-  if (!mediaKind(path) || inMediaTrash(path))
+  const requested = posix.normalize(raw.replaceAll("\\", "/"));
+  const path = isFreezeExport(requested)
+    ? `${FREEZE_DIR}/${requested.slice(FREEZE_EXPORT_DIR.length + 1)}`
+    : requested;
+  const companion = await freezeCompanion(project, path);
+  if (requested !== path && companion?.path !== requested)
+    throw new HttpError(404, "Freeze frame not found.");
+  if (!isMediaItem(path))
     throw new HttpError(400, "Choose a video, audio, or image file.");
   const absolute = await projectWritePath(project, path, { sourceOnly: false });
+  const canonical = relative(await realpath(project.path), absolute).replaceAll(
+    "\\",
+    "/",
+  );
+  if (canonical !== path && (inFreezeAssets(path) || inFreezeAssets(canonical)))
+    throw new HttpError(403, "Use the freeze frame's Media path.");
   // The file itself moves, never the target of a link.
   if (!(await lstat(join(project.path, path))).isFile())
     throw new HttpError(400, "Choose a video, audio, or image file.");
-  return { path, absolute, name: posix.basename(path) };
+  return { path, absolute, canonical, name: posix.basename(path), companion };
 }
 
 const exists = (path: string) =>
@@ -53,70 +71,89 @@ const exists = (path: string) =>
 
 /** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
-  const { path } = await mediaFile(project, raw);
-  let uses = 0;
+  const { canonical, companion } = await mediaFile(project, raw);
+  const counts = new Map<string, number>();
   const resolveScene = sceneSources(project.path);
-  for (const composition of await compositionFiles(project)) {
-    const { source, references } = await compositionVersions(
-      project,
-      composition,
-    );
-    const sceneImages = imageOverridesAt(composition, resolveScene);
+  for await (const {
+    path: composition,
+    canonical: sourceFile,
+    content,
+    mounted,
+  } of compositionSources(project)) {
+    const { references, canonicalMedia, sceneImages } =
+      await compositionVersions(project, composition, {
+        content,
+        mounted,
+        resolveScene,
+      });
+    const usesFile = (paths: Set<string> | undefined) =>
+      paths &&
+      [...paths].some((reference) => {
+        const resolved = canonicalMedia.get(reference);
+        return (
+          resolved === canonical ||
+          (companion !== undefined && resolved === companion.path)
+        );
+      });
     const owners = new Set<string | number>();
+    const links = new Map<string, string>();
     try {
-      const { timeline } = parseComposition(
-        source.content,
-        emptyTimelineSettings(),
-        { scope: compositionScope(composition) },
-      );
+      const { timeline } = parseComposition(content, emptyTimelineSettings(), {
+        scope: compositionScope(composition),
+      });
       for (const clip of timeline.clips) {
-        if (references.get(clip.id)?.has(path))
-          owners.add(clip.link ?? clip.id);
+        if (clip.link) links.set(clip.id, clip.link);
+        if (usesFile(references.get(clip.id))) owners.add(clip.link ?? clip.id);
       }
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
     }
-    if (source.content.includes("data-variable-values")) {
-      for (const tag of scanHtmlOpeningTags(source.content)) {
-        const overrides = sceneImages(tag);
-        if (
-          overrides &&
-          overrides.ids.some((id) => {
-            const url = sceneImageUrl(overrides.values[id]);
-            return url && localMediaPath("index.html", url) === path;
-          })
-        ) {
-          const id = tag.attributes.find(
-            (attr) => attr.name === "id" || attr.name === "data-hf-id",
-          );
-          owners.add(
-            id?.kind === "value"
-              ? decodeAuthoredAttribute(id.value)
-              : tag.start,
-          );
-        }
-      }
-    }
-    uses += Math.max(owners.size, references.get(null)?.has(path) ? 1 : 0);
+    for (const [owner, paths] of sceneImages)
+      if (usesFile(paths))
+        owners.add(
+          typeof owner === "string" ? (links.get(owner) ?? owner) : owner,
+        );
+    counts.set(
+      sourceFile,
+      Math.max(
+        counts.get(sourceFile) ?? 0,
+        owners.size,
+        usesFile(references.get(null)) ? 1 : 0,
+      ),
+    );
   }
-  return uses;
+  return [...counts.values()].reduce((total, count) => total + count, 0);
 }
 
 /** Read only editable sources, resolving references against each source's directory. */
-async function referenceEdits(project: Project, from: string, to: string) {
+async function referenceEdits(
+  project: Project,
+  names: Map<string, string>,
+  freeze: boolean,
+) {
   const sources: { path: string; absolute: string; before: string }[] = [];
-  const files = new Set<string>();
+  const entries = new Map<string, ProjectEntry>([[".", "directory"]]);
   const directories = [""];
   for (const directory of directories) {
     for (const entry of await readdir(join(project.path, directory), {
       withFileTypes: true,
     })) {
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const path = posix.join(directory, entry.name);
-      if (inMediaTrash(path)) continue;
-      if (entry.isDirectory()) directories.push(path);
+      if (
+        entry.name.startsWith(".") ||
+        entry.name === "node_modules" ||
+        entry.isSymbolicLink() ||
+        inMediaTrash(path)
+      ) {
+        entries.set(path, "unscanned");
+        continue;
+      }
+      if (entry.isDirectory()) {
+        entries.set(path, "directory");
+        directories.push(path);
+      }
       if (!entry.isFile()) continue;
-      files.add(path);
+      entries.set(path, "file");
       const absolute = await projectWritePath(project, path).catch(
         (error: unknown) => {
           if (error instanceof HttpError && error.status === 403) return null;
@@ -132,31 +169,95 @@ async function referenceEdits(project: Project, from: string, to: string) {
       }
     }
   }
+  const renameReferences = mediaReferenceRenamer(project, names, entries);
   const edits: FileMutationInput[] = [];
-  const resolveScene = sceneSources(project.path);
   for (const { path, absolute, before } of sources) {
-    const after = renameReferences(
-      before,
-      path,
-      from,
-      to,
-      files,
-      imageOverridesAt(path, resolveScene),
-    );
+    const after = await renameReferences(before, path);
     if (after === before) continue;
-    const sourceFile = path === from ? to : path;
+    if (freeze && !affectsProjectSignature(project.path, absolute))
+      throw new HttpError(
+        409,
+        `Renaming this freeze frame would change ${path} outside project history.`,
+      );
+    const sourceFile = names.get(path) ?? path;
     edits.push({
       sourceFile,
       absPath:
-        path === from
-          ? await projectWritePath(project, to, { allowMissing: true })
+        sourceFile !== path
+          ? await projectWritePath(project, sourceFile, { allowMissing: true })
           : absolute,
       before,
       after,
       expectedVersion: fileContentVersion(before),
     });
   }
+  if (freeze) {
+    const html = new Map(
+      sources
+        .filter(({ path }) => /\.html?$/i.test(path))
+        .map(({ path, before }) => [path, before]),
+    );
+    const drafted = new Map(
+      edits.map(({ sourceFile, after }) => [sourceFile, after]),
+    );
+    const readChanged = async (path: string) => drafted.get(path);
+    for await (const {
+      path,
+      canonical,
+      content,
+      mounted,
+    } of compositionSources(project, {
+      files: html.keys(),
+      readOverride: async (path) => html.get(path),
+    })) {
+      if (html.has(path) && !path.split("/").some(isProjectIgnoredDir))
+        continue;
+      const after = drafted.get(canonical) ?? content;
+      if ((await renameReferences(content, path)) === after) {
+        const { canonicalMedia } = await compositionVersions(project, path, {
+          content: after,
+          mounted,
+          readChanged,
+        });
+        if (![...canonicalMedia.values()].some((asset) => names.has(asset)))
+          continue;
+      }
+      throw new HttpError(
+        409,
+        `Renaming this freeze frame would leave a broken reference in ${path}.`,
+      );
+    }
+  }
   return edits;
+}
+
+function moveFiles(
+  moves: { absolute: string; destination: string }[],
+  writeSources?: () => void,
+) {
+  const moved: typeof moves = [];
+  try {
+    for (const move of moves) {
+      renameSync(move.absolute, move.destination);
+      moved.push(move);
+    }
+    writeSources?.();
+  } catch (error) {
+    const failures: unknown[] = [];
+    for (const { absolute, destination } of moved.reverse()) {
+      try {
+        renameSync(destination, absolute);
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(
+        [error, ...failures],
+        "Could not roll back the media move.",
+      );
+    throw error;
+  }
 }
 
 /** Renames a media file in its folder and points every source reference at the new name. */
@@ -178,7 +279,14 @@ export async function renameMedia(
     allowMissing: true,
     sourceOnly: false,
   });
-  if (await exists(absolute))
+  const exportPath = freezeExportPath(path);
+  const exportAbsolute = exportPath
+    ? await projectStatePath(project, exportPath, true)
+    : undefined;
+  if (
+    (await exists(absolute)) ||
+    (exportAbsolute && (await exists(exportAbsolute)))
+  )
     throw new HttpError(
       409,
       `${input.name} already exists in this folder. Choose another name.`,
@@ -187,15 +295,23 @@ export async function renameMedia(
     project,
     `Rename ${file.name} to ${input.name}`,
     async () => {
-      const edits = await referenceEdits(project, file.path, path);
-      await rename(file.absolute, absolute);
-      try {
-        store.writeFiles(project, edits);
-      } catch (error) {
-        // A source changed under the rewrite: leave the project as it was.
-        await rename(absolute, file.absolute);
-        throw error;
+      const names = new Map([
+        [file.canonical, posix.join(posix.dirname(file.canonical), input.name)],
+      ]);
+      const moves = [{ absolute: file.absolute, destination: absolute }];
+      if (file.companion && exportPath && exportAbsolute) {
+        names.set(file.companion.path, exportPath);
+        moves.push({
+          absolute: file.companion.absolute,
+          destination: exportAbsolute,
+        });
       }
+      const edits = await referenceEdits(
+        project,
+        names,
+        exportPath !== undefined,
+      );
+      moveFiles(moves, () => store.writeFiles(project, edits));
       await moveSourceMarks(project, file.path, path);
       return { path, sources: edits.map((edit) => edit.sourceFile) };
     },
@@ -204,8 +320,7 @@ export async function renameMedia(
 }
 
 /**
- * Moves a media file into the project's trash folder. History sees one move between two tracked
- * paths, so undo moves the file back, including video and audio it never keeps a copy of.
+ * Moves a Media item into the project's trash in one history step, including its export PNG.
  */
 export async function removeMedia(
   store: ProjectStore,
@@ -216,19 +331,31 @@ export async function removeMedia(
   const file = await mediaFile(project, input.path);
   return store.mutate(
     project,
-    `Remove ${file.name}`,
+    mediaRemoveLabel(file.path),
     async () => {
-      const extension = extname(file.name);
-      const stem = file.name.slice(0, file.name.length - extension.length);
       for (let copy = 1; ; copy++) {
-        const trash = `${MEDIA_TRASH}/${stem}${copy === 1 ? "" : ` ${copy}`}${extension}`;
+        const trash = mediaTrashPath(file.path, copy);
         const absolute = await projectWritePath(project, trash, {
           allowMissing: true,
           sourceOnly: false,
         });
         if (await exists(absolute)) continue;
-        await mkdir(dirname(absolute), { recursive: true });
-        await rename(file.absolute, absolute);
+        const moves = [{ absolute: file.absolute, destination: absolute }];
+        if (file.companion) {
+          const destination = await projectWritePath(
+            project,
+            mediaTrashPath(file.companion.path, copy),
+            {
+              allowMissing: true,
+              sourceOnly: false,
+            },
+          );
+          if (await exists(destination)) continue;
+          moves.push({ absolute: file.companion.absolute, destination });
+        }
+        for (const { destination } of moves)
+          await mkdir(dirname(destination), { recursive: true });
+        moveFiles(moves);
         return { path: file.path, trash };
       }
     },

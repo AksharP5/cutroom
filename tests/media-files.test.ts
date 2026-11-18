@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpHttpHandler } from "../src/server/mcp/server";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
 import { ProjectSchema } from "../src/shared/project";
+import { TimelineViewSchema } from "../src/shared/timeline/schema";
+import type { CommandInput } from "../src/shared/timeline/schema";
+import { localMediaPath } from "../src/shared/media";
 import { projectFixture } from "./project-fixture";
 import { projectViews } from "../src/server/projects/view";
 
@@ -375,6 +388,841 @@ test("removed files leave the project listing and cannot be removed twice", asyn
           .status,
       ).toBe(400);
     expect(await present("trash/unused.mp3")).toBe(true);
+  } finally {
+    await editor.dispose();
+  }
+});
+
+test("a freeze frame is one Media item through nested reuse, rename, trash and history", async () => {
+  const editor = createHyperframesApi(fixture.store, fixture.review);
+  fixture.app.route("/api/editor", editor);
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  const scene = "compositions/deep/scene.html";
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await mkdir(at("compositions/deep"));
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  const entry = await readFile(at("index.html"), "utf8");
+  const html = (src: string, extra: string) =>
+    `<img id="still" class="clip" src="${src}" ${extra} data-start="0" data-duration="2" data-track-index="0">`;
+  await writeFile(
+    at("index.html"),
+    entry.replace(
+      /<main([^>]*)>[\s\S]*<\/main>/,
+      `<main$1>${html(preview, `data-cutroom-freeze-export="${exported}"`)}</main>`,
+    ),
+  );
+  await writeFile(
+    at(scene),
+    '<main data-composition-id="scene" data-duration="4" data-width="320" data-height="180" data-fps="30"></main>',
+  );
+  await (await fixture.store.history(project)).checkpoint();
+  const base = `/projects/${project.id}`;
+  const files = async () =>
+    z
+      .object({ files: z.array(z.string()) })
+      .parse(await (await fixture.app.request(`/api/editor${base}`)).json())
+      .files.filter((path) => path.startsWith("assets/freeze/"));
+  try {
+    expect(await files()).toEqual([preview]);
+    const { revision } = z
+      .object({ revision: z.string() })
+      .parse(
+        await (
+          await fixture.request(`${base}/timeline?composition=${scene}`)
+        ).json(),
+      );
+    const insert = await fixture.request(`${base}/commands`, "POST", {
+      composition: scene,
+      expectedRevision: revision,
+      commands: [
+        {
+          type: "insert",
+          at: 15,
+          track: 0,
+          clip: {
+            kind: "image",
+            src: `../../${preview}`,
+            id: "reused",
+            duration: 30,
+          },
+        },
+      ],
+    });
+    expect(insert.status).toBe(200);
+    const nested = await readFile(at(scene), "utf8");
+    expect(nested).toContain(`data-cutroom-freeze-export="../../${exported}"`);
+    for (const path of [preview, exported]) {
+      const ask = await post("remove", { path });
+      expect(ask.status).toBe(409);
+      expect(await ask.json()).toMatchObject({ uses: 2 });
+    }
+
+    const name = "renamed & held.png";
+    const renamed = `assets/freeze/${name}`;
+    const renamedExport = `assets/freeze/export/${name}`;
+    await writeFile(at(renamedExport), "collision");
+    expect((await post("rename", { path: preview, name })).status).toBe(409);
+    expect(await files()).toEqual([preview]);
+    expect(await readFile(at(renamedExport), "utf8")).toBe("collision");
+    // Use another name with the same characters that need escaping in HTML.
+    const finalName = "held & reused.png";
+    const finalPreview = renamed.replace(name, finalName);
+    const finalExport = renamedExport.replace(name, finalName);
+    expect(
+      (await post("rename", { path: preview, name: finalName })).status,
+    ).toBe(200);
+    expect(await files()).toEqual([finalPreview]);
+    expect(await readFile(at(finalPreview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(finalExport), "utf8")).toBe("export pixels");
+    expect(await readFile(at(scene), "utf8")).toContain(
+      'data-cutroom-freeze-export="../../assets/freeze/export/held &amp; reused.png"',
+    );
+    expect(await readFile(at("index.html"), "utf8")).toContain(
+      'data-cutroom-freeze-export="assets/freeze/export/held &amp; reused.png"',
+    );
+    expect((await step("undo")).status).toBe(200);
+    expect(await readFile(at(scene), "utf8")).toBe(nested);
+    expect(await files()).toEqual([preview]);
+    expect((await step("redo")).status).toBe(200);
+
+    const removal = await post("remove", {
+      path: finalExport,
+      confirmUsed: true,
+    });
+    expect(removal.status).toBe(200);
+    expect(await removal.json()).toEqual({
+      path: finalPreview,
+      trash: `trash/${finalName}`,
+      uses: 2,
+    });
+    expect(await files()).toEqual([]);
+    expect(await readFile(at(`trash/${finalName}`), "utf8")).toBe(
+      "preview pixels",
+    );
+    expect(
+      await readFile(at(`trash/assets/freeze/export/${finalName}`), "utf8"),
+    ).toBe("export pixels");
+    expect((await step("undo")).status).toBe(200);
+    expect(await files()).toEqual([finalPreview]);
+    expect(await readFile(at(finalExport), "utf8")).toBe("export pixels");
+    expect((await step("redo")).status).toBe(200);
+    expect(await present(finalExport)).toBe(false);
+  } finally {
+    await editor.dispose();
+  }
+});
+
+test("freeze reuse and removal resolve in-project media aliases", async () => {
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await symlink("assets/freeze", at("alias"));
+  await symlink(exported, at("render.png"));
+  const html = await readFile(at("index.html"), "utf8");
+  await writeFile(
+    at("index.html"),
+    html.replace(
+      /<main([^>]*)>[\s\S]*<\/main>/,
+      '<main$1><img id="still" class="clip" src="alias/still.png" data-start="0" data-duration="2" data-track-index="0"></main>',
+    ),
+  );
+  await (await fixture.store.history(project)).checkpoint();
+
+  const base = `/projects/${project.id}`;
+  const insert = async (src: string) => {
+    const { revision } = z
+      .object({ revision: z.string() })
+      .parse(await (await fixture.request(`${base}/timeline`)).json());
+    return fixture.request(`${base}/commands`, "POST", {
+      expectedRevision: revision,
+      commands: [
+        {
+          type: "insert",
+          at: 60,
+          track: 0,
+          clip: { kind: "image", src, id: "reused", duration: 30 },
+        },
+      ],
+    });
+  };
+
+  const refusal = await post("remove", { path: preview });
+  expect(refusal.status).toBe(409);
+  expect(await refusal.json()).toMatchObject({ uses: 1 });
+  for (const alias of ["alias/export/still.png", "render.png"]) {
+    const result = await insert(alias);
+    expect(result.status).toBe(422);
+    expect(await result.json()).toMatchObject({
+      error: expect.stringContaining("keep its preview and export together"),
+    });
+  }
+  expect((await insert("alias/still.png")).status).toBe(200);
+  const authored = await readFile(at("index.html"), "utf8");
+  expect(authored).toContain(
+    `src="alias/still.png" data-cutroom-freeze-export="${exported}"`,
+  );
+  expect(
+    (await post("remove", { path: preview, confirmUsed: true })).status,
+  ).toBe(200);
+  expect(await present("alias/still.png")).toBe(false);
+  expect((await step("undo")).status).toBe(200);
+  expect(await present("alias/still.png")).toBe(true);
+  expect(await readFile(at("index.html"), "utf8")).toBe(authored);
+});
+
+test("freeze rename keeps directory aliases and rewrites file aliases in their declaring scope", async () => {
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await symlink("assets/freeze", at("alias"));
+  await symlink("../assets/freeze/still.png", at("compositions/file.png"));
+  const main = (await readFile(at("index.html"), "utf8")).replace(
+    /<main([^>]*)>[\s\S]*<\/main>/,
+    `<main$1><img id="still" class="clip" src="/${preview}" data-cutroom-freeze-export="/${exported}" data-start="0" data-duration="2" data-track-index="0"></main>`,
+  );
+  await writeFile(at("index.html"), main);
+  const scene = "compositions/intro.html";
+  const before = await insertImages(scene, [
+    "../alias/still.png",
+    "./file.png",
+  ]);
+  expect(before).toContain(
+    `src="../alias/still.png" data-cutroom-freeze-export="../${exported}"`,
+  );
+  expect(before).toContain(
+    `src="./file.png" data-cutroom-freeze-export="../${exported}"`,
+  );
+
+  const rootBefore = await readFile(at("index.html"), "utf8");
+  const name = "held#2 %23.png";
+  const encoded = "held%232 %2523.png";
+  const renamed = await post("rename", { path: preview, name });
+  expect(renamed.status).toBe(200);
+  expect(await renamed.json()).toMatchObject({
+    sources: ["index.html", scene],
+  });
+  const root = await readFile(at("index.html"), "utf8");
+  const nested = await readFile(at(scene), "utf8");
+  expect(root).toContain(
+    `src="/assets/freeze/${encoded}" data-cutroom-freeze-export="/assets/freeze/export/${encoded}"`,
+  );
+  expect(nested).toContain(
+    `src="../alias/${encoded}" data-cutroom-freeze-export="../assets/freeze/export/${encoded}"`,
+  );
+  expect(nested).toContain('src="../assets/freeze/held%232%20%2523.png"');
+  for (const [file, source] of [
+    ["index.html", root],
+    [scene, nested],
+  ] as const) {
+    for (const [, attribute, value] of source.matchAll(
+      /(src|data-cutroom-freeze-export)="([^"]+held[^"]+)"/g,
+    )) {
+      const path = localMediaPath(file, value!);
+      expect(path).not.toBeNull();
+      expect(await readFile(at(path!), "utf8")).toBe(
+        attribute === "src" ? "preview pixels" : "export pixels",
+      );
+    }
+  }
+  expect((await step("undo")).status).toBe(200);
+  expect(await readFile(at("index.html"), "utf8")).toBe(rootBefore);
+  expect(await readFile(at(scene), "utf8")).toBe(before);
+  expect(await readFile(at("compositions/file.png"), "utf8")).toBe(
+    "preview pixels",
+  );
+  expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+  expect((await step("redo")).status).toBe(200);
+  expect(await readFile(at(scene), "utf8")).toBe(nested);
+});
+
+async function insertImages(composition: string, sources: string[]) {
+  const base = `/projects/${project.id}`;
+  const { revision } = TimelineViewSchema.parse(
+    await (
+      await fixture.request(`${base}/timeline?composition=${composition}`)
+    ).json(),
+  );
+  const commands = sources.map<CommandInput>((src, index) => ({
+    type: "insert",
+    at: 30 * index,
+    track: index + 1,
+    clip: { kind: "image", src, duration: 30 },
+  }));
+  const response = await fixture.request(`${base}/commands`, "POST", {
+    composition,
+    expectedRevision: revision,
+    commands,
+  });
+  expect(response.status, await response.clone().text()).toBe(200);
+  return readFile(at(composition), "utf8");
+}
+
+test("selective history protects a freeze used by another composition, including mounted build scenes", async () => {
+  const editor = createHyperframesApi(fixture.store, fixture.review);
+  fixture.app.route("/api/editor", editor);
+  fixture.app.route(
+    "/api/cutroom",
+    createTimelineRoutes(fixture.store, fixture.review),
+  );
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  const scene = "compositions/intro.html";
+  const built = "build/intro.html";
+  const builtSource =
+    '<div data-composition-id="intro-build" data-width="1920" data-height="1080" data-duration="2"></div>';
+  const ledger = await fixture.store.history(project);
+  const indexBefore = (await readFile(at("index.html"), "utf8"))
+    .replace(
+      "<head>",
+      "<head><style data-cutroom-track-layer>@layer cutroom-tracks;</style>\n",
+    )
+    .replace(
+      "</main>",
+      `<div id="nested-scene" data-composition-src="${scene}" data-start="0" data-duration="2" data-track-index="3"></div></main>`,
+    );
+  await mkdir(at("build"));
+  await writeFile(at(built), builtSource);
+  // The broken image URL must not block replay when the freeze has no uses.
+  await writeFile(
+    at(scene),
+    `<div data-composition-id="intro" data-width="1920" data-height="1080" data-duration="2"><div data-composition-src="${built}" data-start="0" data-duration="2" data-track-index="0"></div><img src="../assets/unused.mp3/missing.png"></div>`,
+  );
+  await writeFile(at("index.html"), indexBefore);
+  await ledger.checkpoint();
+  const indexFrozen = indexBefore.replace(
+    "</main>",
+    `<img id="still" class="clip" src="${preview}" data-cutroom-freeze-export="${exported}" data-start="0" data-duration="2" data-track-index="2"></main>`,
+  );
+  const targets = [{ file: "index.html", id: "still" }];
+  const who = { kind: "person", name: "You" } as const;
+  const selected = (entryId: string, mode?: "keep-later-edits" | "just-this") =>
+    fixture.app.request(`/api/editor/projects/${project.id}/history/undo`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entryId, mode }),
+    });
+  const refuse = async (response: Response, usedBy = scene) => {
+    expect(response.status, await response.clone().text()).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining(`still used by ${usedBy}`),
+    });
+  };
+  try {
+    await mkdir(at("assets/freeze/export"), { recursive: true });
+    await symlink("assets/freeze", at("alias"));
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    await writeFile(at("index.html"), indexFrozen);
+    await ledger.claim(who, "Freeze frame", ["index.html", preview, exported], {
+      targets,
+    });
+    await ledger.checkpoint();
+    const freeze = ledger.list().at(-1)!;
+    expect(freeze.targets).toEqual(targets);
+    const builtReuse = await insertImages(built, ["../alias/still.png"]);
+    const buildHistory = ledger.list();
+    await refuse(await selected(freeze.id, "keep-later-edits"), built);
+    expect(ledger.list()).toEqual(buildHistory);
+    expect(await readFile(at(built), "utf8")).toBe(builtReuse);
+    expect(await present(preview)).toBe(true);
+    expect(await present(exported)).toBe(true);
+    await writeFile(at(built), builtSource);
+
+    const reused = await insertImages(scene, ["../alias/still.png"]);
+    const history = ledger.list();
+    for (const mode of [undefined, "keep-later-edits", "just-this"] as const)
+      await refuse(await selected(freeze.id, mode));
+    expect(ledger.list()).toEqual(history);
+    expect(await readFile(at(scene), "utf8")).toBe(reused);
+    expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
+    expect(await present(preview)).toBe(true);
+    expect(await present(exported)).toBe(true);
+
+    expect((await step("undo")).status).toBe(200);
+    expect((await selected(freeze.id)).status).toBe(200);
+    expect(ledger.list().at(-1)).toMatchObject({ undoes: freeze.id, targets });
+    expect(await readFile(at("index.html"), "utf8")).toBe(indexBefore);
+    expect(await present(preview)).toBe(false);
+    expect(await present(exported)).toBe(false);
+    expect((await step("redo")).status).toBe(200);
+    expect(await readFile(at("index.html"), "utf8")).toBe(indexFrozen);
+
+    expect(
+      (await post("rename", { path: preview, name: "renamed.png" })).status,
+    ).toBe(200);
+    expect((await step("undo")).status).toBe(200);
+    const undoneRename = ledger.list().at(-1)!;
+    const reusedAgain = await insertImages(scene, ["../alias/still.png"]);
+    const beforeRedo = ledger.list();
+    await refuse(await selected(undoneRename.id));
+    expect(ledger.list()).toEqual(beforeRedo);
+    expect(await readFile(at(scene), "utf8")).toBe(reusedAgain);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+  } finally {
+    await editor.dispose();
+  }
+});
+
+test.each([
+  ["build", "image"],
+  ["node_modules", "image"],
+  ["node_modules", "stylesheet"],
+])(
+  "Media protects a freeze referenced by a mounted %s scene's %s",
+  async (directory, reference) => {
+    const preview = "assets/freeze/still.png";
+    const exported = "assets/freeze/export/still.png";
+    const scene = `${directory}/scene.html`;
+    await mkdir(at(`${directory}/missing.html`), { recursive: true });
+    await mkdir(at("assets/freeze/export"), { recursive: true });
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    const source = `<div data-composition-id="mounted" data-width="1920" data-height="1080" data-duration="2">${
+      reference === "image"
+        ? `<img id="still" class="clip" src="../${preview}" data-cutroom-freeze-export="../${exported}" data-start="0" data-duration="2" data-track-index="0">`
+        : '<link rel="stylesheet" href="./scene.css">'
+    } </div>`;
+    const stylesheet = `${directory}/scene.css`;
+    const css = `[data-composition-id="mounted"]{background-image:url("../${preview}")}`;
+    if (reference === "stylesheet") await writeFile(at(stylesheet), css);
+    await writeFile(at(scene), source);
+    await writeFile(
+      at("index.html"),
+      (await readFile(at("index.html"), "utf8")).replace(
+        "</main>",
+        `<div id="mounted" data-composition-src="${scene}" data-start="0" data-duration="2" data-track-index="3"></div><div data-composition-src="${directory}/missing.html"></div></main>`,
+      ),
+    );
+    await (await fixture.store.history(project)).checkpoint();
+
+    const removed = await post("remove", { path: preview });
+    expect(removed.status).toBe(409);
+    expect(await removed.json()).toMatchObject({ uses: 1 });
+    const renamed = await post("rename", {
+      path: preview,
+      name: "renamed.png",
+    });
+    expect(renamed.status).toBe(409);
+    expect(await renamed.json()).toMatchObject({
+      error: expect.stringContaining(scene),
+    });
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await readFile(at(scene), "utf8")).toBe(source);
+    if (reference === "stylesheet")
+      expect(await readFile(at(stylesheet), "utf8")).toBe(css);
+
+    expect(
+      (await post("remove", { path: preview, confirmUsed: true })).status,
+    ).toBe(200);
+    expect(await present(preview)).toBe(false);
+    expect(await present(exported)).toBe(false);
+    expect((await step("undo")).status).toBe(200);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await readFile(at(scene), "utf8")).toBe(source);
+  },
+);
+
+test("mounted freeze URLs prefer existing siblings and keep explicit parent paths", async () => {
+  const preview = "assets/freeze/still.png";
+  const scene = "build/scenes/scene.html";
+  const setImage = (src: string) =>
+    writeFile(
+      at(scene),
+      `<div data-composition-id="scene" data-width="1920" data-height="1080" data-duration="2"><img id="still" class="clip" src="${src}" data-start="0" data-duration="2" data-track-index="0"></div>`,
+    );
+  const uses = async () => {
+    const response = await fixture.request(
+      `/projects/${project.id}/media/uses?path=${encodeURIComponent(preview)}`,
+    );
+    expect(response.status).toBe(200);
+    return await response.json();
+  };
+  await mkdir(at("build/scenes"), { recursive: true });
+  await setImage(preview);
+  await writeFile(
+    at("index.html"),
+    (await readFile(at("index.html"), "utf8")).replace(
+      "</main>",
+      `<div data-composition-src="${scene}" data-start="0" data-duration="2"></div></main>`,
+    ),
+  );
+  const ledger = await fixture.store.history(project);
+  await ledger.checkpoint();
+  const beforeFreeze = ledger.list().at(-1)!;
+  await mkdir(at("assets/freeze"));
+  await writeFile(at(preview), "preview pixels");
+  await ledger.checkpoint();
+
+  const removal = await post("remove", { path: preview });
+  expect(removal.status).toBe(409);
+  expect(await removal.json()).toMatchObject({ uses: 1 });
+  await expect(
+    ledger.restore(beforeFreeze.id, { kind: "person", name: "You" }),
+  ).rejects.toThrow(`still used by ${scene}`);
+  expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+
+  await mkdir(at("build/scenes/assets/freeze"), { recursive: true });
+  await writeFile(at(`build/scenes/${preview}`), "different sibling");
+  expect(await uses()).toMatchObject({ uses: 0 });
+  await setImage(`/${preview}`);
+  expect(await uses()).toMatchObject({ uses: 1 });
+  await setImage(`../${preview}`);
+  expect(await uses()).toMatchObject({ uses: 0 });
+});
+
+test("a mounted image override keeps its freeze pair through Remove, Rename and history", async () => {
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  const owner = "compositions/intro.html";
+  const vars = JSON.stringify([
+    { id: "art", label: "Art", type: "image", default: "default.png" },
+    { id: "caption", label: "Caption", type: "string", default: "" },
+  ]);
+  await writeFile(
+    at("child.html"),
+    `<template><div data-composition-id="child" data-width="160" data-height="120" data-duration="2" data-composition-variables='${vars}'><img data-var-src="art" src="default.png"></div></template>`,
+  );
+  const values = JSON.stringify({ art: preview, caption: preview });
+  const source = `<div data-composition-id="intro" data-width="160" data-height="120" data-duration="2"><div id="mount" data-composition-id="child" data-composition-src="child.html" data-variable-values='${values}' data-start="0" data-duration="2" data-track-index="0"></div><img src="${preview}"></div>`;
+  await writeFile(at(owner), source);
+  await mkdir(at("compositions/assets/freeze"), { recursive: true });
+  await writeFile(at(`compositions/${preview}`), "sibling pixels");
+  const ledger = await fixture.store.history(project);
+  await ledger.checkpoint();
+  const beforeFreeze = ledger.list().at(-1)!;
+
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await ledger.checkpoint();
+
+  const removal = await post("remove", { path: exported });
+  expect(removal.status).toBe(409);
+  expect(await removal.json()).toMatchObject({ uses: 1 });
+  await expect(
+    ledger.restore(beforeFreeze.id, { kind: "person", name: "You" }),
+  ).rejects.toThrow(`still used by ${owner}`);
+
+  const renamed = "assets/freeze/renamed.png";
+  const response = await post("rename", { path: preview, name: "renamed.png" });
+  expect(response.status).toBe(200);
+  const updated = await readFile(at(owner), "utf8");
+  expect(updated).toContain(
+    `data-variable-values='{&quot;art&quot;:&quot;${renamed}&quot;,&quot;caption&quot;:&quot;${preview}&quot;}'`,
+  );
+  expect(updated).toContain(`<img src="${preview}">`);
+  expect(await readFile(at(renamed), "utf8")).toBe("preview pixels");
+  expect(await readFile(at("assets/freeze/export/renamed.png"), "utf8")).toBe(
+    "export pixels",
+  );
+  expect((await step("undo")).status).toBe(200);
+  expect(await readFile(at(owner), "utf8")).toBe(source);
+  expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+});
+
+test("restoring a trash move preserves a mounted freeze with identical pixels", async () => {
+  const first = "assets/freeze/first.png";
+  const firstExport = "assets/freeze/export/first.png";
+  const second = "assets/freeze/second.png";
+  const secondExport = "assets/freeze/export/second.png";
+  const trash = "trash/first 2.png";
+  const trashExport = "trash/assets/freeze/export/first 2.png";
+  const scene = "build/scene.html";
+  const who = { kind: "person", name: "You" } as const;
+  await mkdir(at("build"));
+  await mkdir(at("trash"));
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at("trash/first.png"), "older trash");
+  await writeFile(at(first), "preview pixels");
+  await writeFile(at(firstExport), "export pixels");
+  const referencedInScene = (preview: string, exported: string) =>
+    `<div data-composition-id="scene" data-width="1920" data-height="1080" data-duration="2"><img id="still" class="clip" src="../${preview}" data-cutroom-freeze-export="../${exported}" data-start="0" data-duration="2" data-track-index="0"></div>`;
+  await writeFile(at(scene), referencedInScene(first, firstExport));
+  await writeFile(
+    at("index.html"),
+    (await readFile(at("index.html"), "utf8")).replace(
+      "</main>",
+      `<div data-composition-src="${scene}" data-start="0" data-duration="2"></div></main>`,
+    ),
+  );
+  const ledger = await fixture.store.history(project);
+  await ledger.checkpoint();
+  const removed = await post("remove", { path: first, confirmUsed: true });
+  expect(removed.status).toBe(200);
+  expect(await removed.json()).toMatchObject({ trash });
+  const point = ledger.list().at(-1)!;
+
+  expect((await step("undo")).status).toBe(200);
+  expect(await readFile(at(first), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(firstExport), "utf8")).toBe("export pixels");
+  expect((await step("redo")).status).toBe(200);
+  expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
+  const redone = ledger.list().at(-1)!;
+  expect((await step("undo")).status).toBe(200);
+  expect(await ledger.restore(redone.id, who)).toMatchObject({
+    restoredTo: redone.id,
+  });
+  expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(trashExport), "utf8")).toBe("export pixels");
+  expect(await present(first)).toBe(false);
+  expect(await present(firstExport)).toBe(false);
+  expect((await step("undo")).status).toBe(200);
+
+  await writeFile(at(second), "preview pixels");
+  await writeFile(at(secondExport), "export pixels");
+  const usedScene = referencedInScene(second, secondExport);
+  await writeFile(at(scene), usedScene);
+  await ledger.checkpoint();
+  const before = ledger.list();
+  await expect(ledger.restore(point.id, who)).rejects.toThrow(
+    `still used by ${scene}`,
+  );
+  expect(ledger.list()).toEqual(before);
+  expect(await readFile(at(first), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(firstExport), "utf8")).toBe("export pixels");
+  expect(await readFile(at(second), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(secondExport), "utf8")).toBe("export pixels");
+  expect(await present(trash)).toBe(false);
+  expect(await present(trashExport)).toBe(false);
+  expect(await readFile(at(scene), "utf8")).toBe(usedScene);
+});
+
+test.each(["still.png", "still 2.png"])(
+  "restoring a numbered trash path preserves a newer used freeze named %s",
+  async (name) => {
+    const original = "assets/freeze/still 2.png";
+    const originalExport = "assets/freeze/export/still 2.png";
+    const trash = "trash/still 2.png";
+    const trashExport = "trash/assets/freeze/export/still 2.png";
+    const preview = `assets/freeze/${name}`;
+    const exported = `assets/freeze/export/${name}`;
+    const scene = "build/scene.html";
+    await mkdir(at("build"));
+    await mkdir(at("assets/freeze/export"), { recursive: true });
+    await writeFile(at(original), "preview pixels");
+    await writeFile(at(originalExport), "export pixels");
+    await writeFile(
+      at("index.html"),
+      (await readFile(at("index.html"), "utf8")).replace(
+        "</main>",
+        `<div data-composition-src="${scene}" data-start="0" data-duration="2"></div></main>`,
+      ),
+    );
+    const ledger = await fixture.store.history(project);
+    await ledger.checkpoint();
+    const removed = await post("remove", { path: original });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ trash });
+    const point = ledger.list().at(-1)!;
+    await unlink(at(trash));
+    await unlink(at(trashExport));
+    await ledger.checkpoint();
+
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    const usedScene = `<div data-composition-id="scene" data-width="1920" data-height="1080" data-duration="2"><img id="still" class="clip" src="../${preview}" data-cutroom-freeze-export="../${exported}" data-start="0" data-duration="2" data-track-index="0"></div>`;
+    await writeFile(at(scene), usedScene);
+    await ledger.checkpoint();
+    const before = ledger.list();
+    await expect(
+      ledger.restore(point.id, { kind: "person", name: "You" }),
+    ).rejects.toThrow(`still used by ${scene}`);
+    expect(ledger.list()).toEqual(before);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await present(trash)).toBe(false);
+    expect(await present(trashExport)).toBe(false);
+    expect(await readFile(at(scene), "utf8")).toBe(usedScene);
+  },
+);
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)(
+  "history rolls back a failed freeze replay and retries the same entry",
+  async () => {
+    const preview = "assets/freeze/still.png";
+    const exportDir = "assets/freeze/export";
+    const exported = `${exportDir}/still.png`;
+    const trash = "trash/still.png";
+    const trashExportDir = "trash/assets/freeze/export";
+    const trashExported = `${trashExportDir}/still.png`;
+    const renamed = "assets/freeze/renamed.png";
+    const renamedExported = `${exportDir}/renamed.png`;
+    await mkdir(at(exportDir), { recursive: true });
+    await writeFile(at(preview), "preview pixels");
+    await writeFile(at(exported), "export pixels");
+    const html = await readFile(at("index.html"), "utf8");
+    await writeFile(
+      at("index.html"),
+      html.replace(
+        /<main([^>]*)>[\s\S]*<\/main>/,
+        `<main$1><img id="still" class="clip" src="${preview}" data-cutroom-freeze-export="${exported}" data-start="0" data-duration="2" data-track-index="0"></main>`,
+      ),
+    );
+    await (await fixture.store.history(project)).checkpoint();
+    const original = await readFile(at("index.html"), "utf8");
+    const deny = async (dir: string, direction: "undo" | "redo") => {
+      const history = await entries();
+      await chmod(at(dir), 0o555);
+      try {
+        const response = await step(direction);
+        expect(response.status).toBe(500);
+        expect(await response.json()).toMatchObject({
+          error: expect.stringContaining("EACCES"),
+        });
+      } finally {
+        await chmod(at(dir), 0o755);
+      }
+      expect(await entries()).toEqual(history);
+    };
+    const state = () =>
+      Promise.all(
+        [preview, exported, trash, trashExported, renamed, renamedExported].map(
+          present,
+        ),
+      );
+
+    const removed = await post("remove", { path: preview, confirmUsed: true });
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toMatchObject({ uses: 1 });
+    const removedState = [false, false, true, true, false, false];
+    const originalState = [true, true, false, false, false, false];
+    await deny(exportDir, "undo");
+    expect(await state()).toEqual(removedState);
+    expect(await readFile(at(trash), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(trashExported), "utf8")).toBe("export pixels");
+    expect((await step("undo")).status).toBe(200);
+    expect(await state()).toEqual(originalState);
+    expect((await entries()).at(-1)?.label).toBe("Undid: Remove still.png");
+
+    await deny(trashExportDir, "redo");
+    expect(await state()).toEqual(originalState);
+    expect((await step("redo")).status).toBe(200);
+    expect(await state()).toEqual(removedState);
+    expect((await step("undo")).status).toBe(200);
+
+    expect(
+      (await post("rename", { path: preview, name: "renamed.png" })).status,
+    ).toBe(200);
+    const authored = await readFile(at("index.html"), "utf8");
+    await deny(exportDir, "undo");
+    expect(await state()).toEqual([false, false, false, false, true, true]);
+    expect(await readFile(at("index.html"), "utf8")).toBe(authored);
+    expect((await step("undo")).status).toBe(200);
+    expect(await state()).toEqual(originalState);
+    expect(await readFile(at("index.html"), "utf8")).toBe(original);
+    await deny(exportDir, "redo");
+    expect(await state()).toEqual(originalState);
+    expect(await readFile(at("index.html"), "utf8")).toBe(original);
+    expect((await step("redo")).status).toBe(200);
+    expect(await readFile(at("index.html"), "utf8")).toBe(authored);
+  },
+);
+
+test("source marks follow the visible still across undo and redo of identical variants", async () => {
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  const renamed = "assets/freeze/renamed.png";
+  const renamedExported = "assets/freeze/export/renamed.png";
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  const pixels = Buffer.from("identical PNG bytes");
+  await writeFile(at(preview), pixels);
+  await writeFile(at(exported), pixels);
+  await (await fixture.store.history(project)).checkpoint();
+
+  const identity = { size: pixels.length, duration: 5 };
+  const marks = { in: 30, out: 60 };
+  await projectViews.saveSource(project, preview, { ...marks, identity });
+  expect(
+    (await post("rename", { path: preview, name: "renamed.png" })).status,
+  ).toBe(200);
+  expect(await projectViews.readSource(project, renamed, identity)).toEqual(
+    marks,
+  );
+  expect((await step("undo")).status).toBe(200);
+  expect(await projectViews.readSource(project, preview, identity)).toEqual(
+    marks,
+  );
+  expect(await projectViews.readSource(project, exported, identity)).toEqual({
+    in: null,
+    out: null,
+  });
+  expect((await step("redo")).status).toBe(200);
+  expect(await projectViews.readSource(project, renamed, identity)).toEqual(
+    marks,
+  );
+  expect(
+    await projectViews.readSource(project, renamedExported, identity),
+  ).toEqual({ in: null, out: null });
+});
+
+test("direct file operations cannot split a freeze frame", async () => {
+  const editor = createHyperframesApi(fixture.store, fixture.review);
+  fixture.app.route("/api/editor", editor);
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await symlink(at("assets/freeze/export"), at("effects"));
+  const base = `/api/editor/projects/${project.id}/files/`;
+  try {
+    for (const path of [
+      preview,
+      exported,
+      "effects/still.png",
+      "assets/freeze/export",
+      "assets",
+    ]) {
+      for (const method of ["DELETE", "PATCH"]) {
+        const response = await fixture.app.request(`${base}${path}`, {
+          method,
+          ...(method === "PATCH" && {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ newPath: "moved.png" }),
+          }),
+        });
+        expect(response.status).toBe(409);
+      }
+    }
+    const moveIntoExport = await fixture.app.request(
+      `${base}assets/unused.mp3`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ newPath: "assets/freeze/export/incoming.png" }),
+      },
+    );
+    expect(moveIntoExport.status).toBe(409);
+    expect(
+      (await post("remove", { path: "effects/still.png", confirmUsed: true }))
+        .status,
+    ).toBe(403);
+    expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+    expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+    expect(await present("moved.png")).toBe(false);
   } finally {
     await editor.dispose();
   }

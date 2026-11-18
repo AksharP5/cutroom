@@ -659,6 +659,20 @@ export const CommandSchema = z.discriminatedUnion("type", [
     .describe("Razor clips and their linked partners at a frame."),
   z
     .object({
+      type: z.literal("freeze"),
+      clipId,
+      at: frame.describe("A timeline frame strictly inside the video clip"),
+      id: z
+        .string()
+        .regex(/^[a-zA-Z0-9_-]{1,80}$/)
+        .optional(),
+      ids: pieceIds,
+    })
+    .describe(
+      "Insert a two-second still of a local video frame. Split the video and linked clips at that frame, then shift the right halves and later cuts on their tracks. The still is silent.",
+    ),
+  z
+    .object({
       type: z.literal("remove"),
       clipIds,
       ripple: z

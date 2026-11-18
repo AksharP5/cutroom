@@ -1,0 +1,62 @@
+diff --git a/dist/chunk-LVEVVTIB.js b/dist/chunk-LVEVVTIB.js
+index 9975d9e29049763ff9b752f3fa00f4a12db79541..82198ba4b7b632cf23a5426e02c9ee270e244bff 100644
+--- a/dist/chunk-LVEVVTIB.js
++++ b/dist/chunk-LVEVVTIB.js
+@@ -2625,10 +2625,39 @@ var Engine = class {
+     const deleted = new Set(changes.filter(([, hash]) => hash === null).map(([path]) => path));
+     const blocked = changes.filter(([, hash]) => hash !== null).map(([path]) => this.inTheWay(path, deleted)).find(Boolean);
+     if (blocked) throw new Error(`${blocked} is in the way; move or delete it, then try again.`);
++    if (this.options.beforeReplay)
++      await this.options.beforeReplay(
++        changes.map(([path, after]) => ({ path, before: this.tracked.get(path)?.hash ?? null, after })),
++        (hash) => this.blobs.read(hash),
++        { ...extra, entries: this.log.entries }
++      );
+     const group = this.newGroup(who, label);
+     this.windows.push(group);
+     try {
+-      for (const [path, hash] of changes) await this.writeProjectFile(path, hash);
++      const attempted = [];
++      try {
++        for (const [path, hash] of changes) {
++          const before = this.tracked.get(path)?.hash ?? null;
++          attempted.push([path, before]);
++          await this.writeProjectFile(path, hash);
++        }
++      } catch (error) {
++        // The history queue excludes its watcher while we restore the original files.
++        const failures = [];
++        for (const [path, before] of attempted.reverse()) {
++          try {
++            const standing = this.standingAt(path);
++            const present = standing?.at === path && standing.stat.isFile();
++            const current = present ? await hashFile(join8(this.dir, path)) : null;
++            if (current !== before) await this.writeProjectFile(path, before);
++          } catch (failure) {
++            failures.push(failure);
++          }
++        }
++        if (failures.length)
++          throw new AggregateError([error, ...failures], "Could not roll back the history write.");
++        throw error;
++      }
+       await this.blobs.release(
+         changes.flatMap(([path, hash]) => hash ? [[hash, path]] : [])
+       );
+diff --git a/dist/projectHistory-C18HDvac.d.ts b/dist/projectHistory-C18HDvac.d.ts
+index 16528dc8076fa204b5c95ba83a0aad2990ecfbf6..f805de2db0fd6365e1ff6f2f1303ca4004cbd496 100644
+--- a/dist/projectHistory-C18HDvac.d.ts
++++ b/dist/projectHistory-C18HDvac.d.ts
+@@ -55,6 +55,12 @@ interface ProjectHistoryOptions {
+     closedWindow?: ClosedWindow;
+     closedWindowAfterOwnership?: () => ClosedWindow | undefined;
+     undoScope?: "own" | "everyone";
++    /** Validates the settled changes in an undo, redo or restore before any project file is written. */
++    beforeReplay?: (
++        changes: readonly HistoryFileChange[],
++        readBlob: (hash: string) => Promise<Buffer>,
++        context: Pick<HistoryEntry, "undoes" | "restoredTo"> & { entries: readonly HistoryEntry[] }
++    ) => Promise<void>;
+     pruneGoneProjectsBudgetMs?: number;
+ }
+ interface ClaimOptions {

@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
-import { relative } from "node:path";
+import { rewriteAssetPath } from "@hyperframes/parsers/asset-paths";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { imageDeclarationUrls } from "../../shared/variables";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import { isMissing, projectPath, readSource } from "./store";
-import { HttpError } from "../../shared/errors";
+import { imageOverridesAt, sceneImageReferences } from "./mediaReferences";
+import { sceneSources } from "./sceneSources";
+import { readSource } from "./store";
+import { resolveProjectPath, unavailableProjectFile } from "./path";
+import { freezeExportSource } from "../hyperframes/freezeSources";
 
 export type ClipVersions = Map<string | null, string>;
 export const missingSignature = "v3:missing";
@@ -18,7 +21,7 @@ const signature = (content: string) =>
 type SourceVersions = {
   source: string;
   versions: ClipVersions;
-  references: Map<string | null, Set<string>>;
+  urls: Map<string | null, Set<string>>;
 };
 // Reads dominate edits. Retain only the latest parse for eight compositions.
 const cache = new Map<string, SourceVersions>();
@@ -39,12 +42,11 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
   const versions: ClipVersions = new Map();
   const media = new Map<string | null, Set<string>>();
   const add = (id: string | null, value: string) => {
-    if (!value.trim() || value.startsWith("#")) return;
-    const path = localMediaPath(composition, value.trim());
-    if (path === null || path === "." || path.startsWith("..")) return;
-    let paths = media.get(id);
-    if (!paths) media.set(id, (paths = new Set()));
-    paths.add(path);
+    const url = value.trim();
+    if (!url || url.startsWith("#")) return;
+    let urls = media.get(id);
+    if (!urls) media.set(id, (urls = new Set()));
+    urls.add(url);
   };
   try {
     const parsed = parseComposition(source, emptyTimelineSettings(), {
@@ -68,6 +70,8 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
             element.attrs["data-composition-variables"],
           ))
             add(null, url);
+        if (element.tag === "img" && element.attrs[freezeExportSource])
+          add(target, element.attrs[freezeExportSource]);
         for (const candidate of (element.attrs.srcset ?? "").split(",")) {
           const url = candidate.trim().split(/\s+/)[0];
           if (url) add(target, url);
@@ -112,7 +116,7 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
     versions.set(null, signature(source));
     for (const url of references(source)) add(null, url);
   }
-  const result = { source, versions, references: media };
+  const result = { source, versions, urls: media };
   cache.delete(cacheKey);
   cache.set(cacheKey, result);
   if (cache.size > 8) cache.delete(cache.keys().next().value!);
@@ -129,48 +133,62 @@ export function sourceClipVersions(
 
 /** Stat each referenced path once per read, shared by every clip using that file. */
 export async function compositionVersions(
-  project: Project,
+  project: Pick<Project, "path">,
   composition: string,
+  options?: {
+    content: string;
+    mounted?: boolean;
+    resolveScene?: ReturnType<typeof sceneSources>;
+    readChanged?: (path: string) => Promise<string | null | undefined>;
+  },
 ) {
-  const source = await readSource(project, composition);
+  const content =
+    options?.content ?? (await readSource(project, composition)).content;
   const parsed = sourceVersions(
-    source.content,
+    content,
     composition,
     `${project.path}/${composition}`,
   );
-  const paths = new Map(
-    [...parsed.references].map(([id, refs]) => [id, new Set(refs)]),
-  );
-  const shared = paths.get(null) ?? new Set<string>();
-  paths.set(null, shared);
+  const canonicalMedia = new Map<string, string>();
   const files = new Map<
     string,
-    Promise<{ fingerprint: string; content?: string }>
+    Promise<{ exists: boolean; fingerprint: string; content?: string }>
   >();
   const file = (path: string) => {
     let pending = files.get(path);
     if (!pending) {
       pending = (async () => {
-        try {
-          const absolute = await projectPath(project, path);
-          const info = await stat(absolute);
+        const isSource = /\.(?:css|[cm]?[jt]sx?)$/i.test(path);
+        const unavailable = {
+          exists: false,
+          fingerprint: JSON.stringify([path, "missing"]),
+        };
+        const changed = isSource
+          ? await options?.readChanged?.(path)
+          : undefined;
+        if (changed !== undefined)
           return {
-            fingerprint: fileFingerprint(
-              relative(project.path, absolute).replaceAll("\\", "/"),
-              info,
-            ),
-            ...(/\.(?:css|[cm]?[jt]sx?)$/i.test(path) &&
-            info.isFile() &&
-            info.size <= 10 * 1024 * 1024
-              ? { content: await readFile(absolute, "utf8") }
-              : {}),
+            ...unavailable,
+            exists: changed !== null,
+            content: changed ?? undefined,
           };
+        try {
+          const { absolute, path: owned } = await resolveProjectPath(
+            project,
+            path,
+          );
+          const info = await stat(absolute);
+          if (info.isFile()) canonicalMedia.set(path, owned);
+          const fingerprint = fileFingerprint(owned, info);
+          if (!isSource || !info.isFile() || info.size > 10 * 1024 * 1024)
+            return { exists: true, fingerprint };
+          const replacement =
+            owned !== path ? await options?.readChanged?.(owned) : undefined;
+          if (replacement === null) return unavailable;
+          const content = replacement ?? (await readFile(absolute, "utf8"));
+          return { exists: true, fingerprint, content };
         } catch (error) {
-          if (
-            isMissing(error) ||
-            (error instanceof HttpError && [403, 404].includes(error.status))
-          )
-            return { fingerprint: JSON.stringify([path, "missing"]) };
+          if (unavailableProjectFile(error)) return unavailable;
           throw error;
         }
       })();
@@ -178,6 +196,47 @@ export async function compositionVersions(
     }
     return pending;
   };
+  const localPath = (source: string, url: string) => {
+    const path = localMediaPath(source, url);
+    return path &&
+      path !== "." &&
+      !path.startsWith("..") &&
+      !path.includes("\0")
+      ? path
+      : null;
+  };
+  const authoredPath = async (url: string) => {
+    // HyperFrames rebases mounted HTML to the project root, preferring existing siblings.
+    const rooted = localPath("index.html", rewriteAssetPath(composition, url));
+    const sibling = localPath(
+      "index.html",
+      rewriteAssetPath(composition, url, () => true),
+    );
+    return sibling && sibling !== rooted && (await file(sibling)).exists
+      ? sibling
+      : rooted;
+  };
+  const resolvedUrls = new Map<string, string | null>();
+  if (options?.mounted) {
+    const urls = new Set(
+      [...parsed.urls.values()].flatMap((urls) => [...urls]),
+    );
+    await Promise.all(
+      [...urls].map(async (url) =>
+        resolvedUrls.set(url, await authoredPath(url)),
+      ),
+    );
+  }
+  const paths = new Map(
+    [...parsed.urls].map(([id, urls]) => {
+      const paths = [...urls].map((url) =>
+        options?.mounted ? resolvedUrls.get(url) : localPath(composition, url),
+      );
+      return [id, new Set(paths.filter((path) => path != null))];
+    }),
+  );
+  const shared = paths.get(null) ?? new Set<string>();
+  paths.set(null, shared);
   // Follow local styles/scripts for media URLs, relative to the file declaring them.
   const dependencies = [
     ...new Set([...paths.values()].flatMap((refs) => [...refs])),
@@ -194,9 +253,10 @@ export async function compositionVersions(
         ),
       ].map((match) => match[1]!),
     ]) {
-      const resolved = localMediaPath(path, url);
-      if (!resolved || resolved.startsWith("..") || shared.has(resolved))
-        continue;
+      const source =
+        options?.mounted && url.startsWith("/") ? "index.html" : path;
+      const resolved = localPath(source, url);
+      if (!resolved || shared.has(resolved)) continue;
       shared.add(resolved);
       dependencies.push(resolved);
     }
@@ -221,7 +281,31 @@ export async function compositionVersions(
       versions.set(id, signature(JSON.stringify([versions.get(id), media])));
     }),
   );
-  return { source, versions, mediaFiles, references: paths };
+  // Mount overrides use the project root even when the owner has a sibling asset.
+  const sceneImages = new Map<string | number, Set<string>>();
+  if (content.includes("data-variable-values")) {
+    const resolveScene = options?.resolveScene ?? sceneSources(project.path);
+    for (const { owner, url } of sceneImageReferences(
+      content,
+      imageOverridesAt(composition, resolveScene),
+    )) {
+      const path = localPath("index.html", url);
+      if (!path) continue;
+      let refs = sceneImages.get(owner);
+      if (!refs) sceneImages.set(owner, (refs = new Set()));
+      refs.add(path);
+    }
+    await Promise.all(
+      [...sceneImages.values()].flatMap((refs) => [...refs].map(file)),
+    );
+  }
+  return {
+    versions,
+    mediaFiles,
+    canonicalMedia,
+    references: paths,
+    sceneImages,
+  };
 }
 
 /** A null id covers every authored byte outside addressable clip elements. */

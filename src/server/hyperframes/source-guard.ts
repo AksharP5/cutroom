@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { readdir, realpath, stat } from "node:fs/promises";
+import { join, posix, relative } from "node:path";
 import {
   requestSubPath,
   STUDIO_SIGNATURE_MANIFEST_PATHS,
@@ -11,6 +12,8 @@ import type { ProjectStore } from "../projects/store";
 import { projectStatePath, projectWritePath } from "../projects/path";
 import { REVIEW_STATE_PATH } from "../../shared/review";
 import { LEDGER_PATH } from "../projects/ids";
+import { HttpError } from "../../shared/errors";
+import { FREEZE_DIR, inFreezeAssets } from "../../shared/media";
 
 const stateFiles = new Set([
   REVIEW_STATE_PATH,
@@ -40,18 +43,39 @@ export function sourceWriteGuard(store: ProjectStore): MiddlewareHandler {
     const project = await store.get(c.req.param("id") ?? "");
     const check = (path: string, sourceOnly = true) =>
       projectWritePath(project, path, { allowMissing: true, sourceOnly });
+    const checkFreezePaths = async (
+      path: string,
+      absolute: string,
+      tree = false,
+    ) => {
+      const root = await realpath(project.path);
+      for (const name of [
+        posix.normalize(path.replaceAll("\\", "/")),
+        relative(root, absolute).replaceAll("\\", "/"),
+      ]) {
+        if (
+          inFreezeAssets(name) ||
+          (tree &&
+            (name === "" || FREEZE_DIR.startsWith(`${name}/`)) &&
+            existsSync(join(root, FREEZE_DIR)))
+        )
+          throw new HttpError(
+            409,
+            "Rename or remove freeze frames in Media to keep their preview and export together.",
+          );
+      }
+    };
     const bodyPath = z.object({ path: z.string() });
     if (family === "files") {
       const file = requestSubPath(c.req.url, "projects/:id/files");
-      const absolute = await check(
-        file,
-        !["PATCH", "DELETE"].includes(c.req.method),
-      );
+      const moveOrDelete = ["PATCH", "DELETE"].includes(c.req.method);
+      const absolute = await check(file, !moveOrDelete);
+      await checkFreezePaths(file, absolute, moveOrDelete);
       if (c.req.method === "PATCH") {
         const { newPath } = z
           .object({ newPath: z.string() })
           .parse(await c.req.json());
-        await check(newPath, false);
+        await checkFreezePaths(newPath, await check(newPath, false));
         // Upstream rename rewrites references in all these text files, including native settings.
         // Refuse that operation if its broad writer could reach protected content.
         const directories = [""];
@@ -112,21 +136,21 @@ export function sourceWriteGuard(store: ProjectStore): MiddlewareHandler {
       family === "duplicate-file" ||
       (family === "file-mutations" && action === "freeze-frame")
     ) {
-      await check(
-        bodyPath.parse(await c.req.json()).path,
-        family !== "duplicate-file",
-      );
+      const { path } = bodyPath.parse(await c.req.json());
+      const absolute = await check(path, family !== "duplicate-file");
+      if (family === "duplicate-file") await checkFreezePaths(path, absolute);
     } else if (family === "upload") {
       const dir = c.req.query("dir") ?? ".";
       // Validate the directory itself too, including an empty upload into a hidden directory.
-      await check(dir, false);
+      await checkFreezePaths(dir, await check(dir, false));
       const paths: string[] = [];
       (await c.req.formData()).forEach((value) => {
         if (typeof value === "string") return;
         const name = value.name.split(/[\\/]/).at(-1) ?? "";
         paths.push(`${dir}/${name}`);
       });
-      for (const path of paths) await check(path, false);
+      for (const path of paths)
+        await checkFreezePaths(path, await check(path, false));
     } else {
       const prefix =
         family === "file-mutations" ? `${family}/${action}` : family;
