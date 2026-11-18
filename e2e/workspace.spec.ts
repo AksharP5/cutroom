@@ -225,8 +225,9 @@ test("visual review, native skill selection, and script edits survive real works
   await page
     .getByRole("button", { name: "Use 1 note in chat", exact: true })
     .click();
-  await expect(composer).toHaveValue(/pending review notes/);
-  await composer.fill("");
+  await expect(composer).toBeFocused();
+  await expect(composer).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Send now" })).toBeVisible();
   await page.screenshot({
     path: `${process.env.CUTROOM_E2E_DIR ?? "artifacts"}/workspace.png`,
     fullPage: true,
