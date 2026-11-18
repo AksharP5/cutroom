@@ -167,7 +167,6 @@ export function RegionLayer({
   const latest = useRef({ target, saved, aiming });
   latest.current = { target, saved, aiming };
 
-  const base = aiming ? ZOOMS_ASIDE : null;
   /**
    * The preview's region CSS while the tool is up: zooms set aside to aim, and a blur or highlight
    * drawn from the editor's own timeline, at the box being dragged or the saved one. Drawing the
@@ -183,7 +182,11 @@ export function RegionLayer({
             frame,
           )
         : null;
-    return [base, look].filter(Boolean).join("\n") || null;
+    return (
+      [latest.current.aiming ? ZOOMS_ASIDE : null, look]
+        .filter(Boolean)
+        .join("\n") || null
+    );
   };
 
   /** Places the box and its readout outside React, so a drag repaints only them. */
@@ -238,7 +241,7 @@ export function RegionLayer({
   // The whole frame shows while aiming; leaving the tool or previewing brings zooms back.
   useEffect(() => {
     previewRegion(regionCss(null), true);
-  }, [base]);
+  }, [aiming]);
   const look = target && JSON.stringify([target.id, target.region]);
   useEffect(() => {
     if (!gesture.current && !wheel.current) previewRegion(regionCss(null));

@@ -6,6 +6,7 @@ import type { APIRequestContext, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema } from "../src/shared/project";
 import { expect, test } from "./fixtures";
+import { seekFrame } from "./position-helpers";
 import { waitForPreview } from "./preview-ready";
 
 const HistorySchema = z.object({
@@ -23,7 +24,10 @@ const GradesSchema = z.object({
 });
 
 /** Two shots of one mid-grey picture, so a grade's colour shift is plain to read. */
-async function gradeProject(request: APIRequestContext) {
+async function gradeProject(
+  request: APIRequestContext,
+  filters: string[] = [],
+) {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -40,7 +44,14 @@ async function gradeProject(request: APIRequestContext) {
       "-i",
       "color=0x808080:s=640x360:r=30:d=4",
     ],
-    ...["-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast"],
+    ...[
+      "-vf",
+      [...filters, "format=yuv420p"].join(","),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+    ],
     join(project.path, "grey.mp4"),
   ]);
   const index = join(project.path, "index.html");
@@ -67,8 +78,7 @@ async function gradeProject(request: APIRequestContext) {
   return { project, steps, grade };
 }
 
-/** Red minus blue at the picture's centre: positive is warm. */
-async function warmth(page: Page) {
+async function centrePixel(page: Page) {
   const png = await page.locator("iframe[data-live]").screenshot();
   return page.evaluate(async (data) => {
     const image = new Image();
@@ -77,15 +87,102 @@ async function warmth(page: Page) {
     const canvas = new OffscreenCanvas(image.width, image.height);
     const context = canvas.getContext("2d")!;
     context.drawImage(image, 0, 0);
-    const [r, , b] = context.getImageData(
+    const [red, green, blue] = context.getImageData(
       Math.round(image.width / 2),
       Math.round(image.height / 2),
       1,
       1,
     ).data;
-    return r! - b!;
+    return { warmth: red! - blue!, green: green! };
   }, png.toString("base64"));
 }
+
+/** Red minus blue at the picture's centre: positive is warm. */
+async function warmth(page: Page) {
+  return (await centrePixel(page)).warmth;
+}
+
+test("a video grade and a clip zoom compose while dragging and switching between Aim and Result", async ({
+  page,
+  request,
+}) => {
+  const { project, steps } = await gradeProject(request, [
+    "drawbox=x=400:y=80:w=140:h=100:color=white:t=fill",
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 40);
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+
+  await page.keyboard.press("h");
+  await page.getByRole("radio", { name: "Clip", exact: true }).click();
+  const picture = (await page.locator(".edit-picture").boundingBox())!;
+  const at = (x: number, y: number) =>
+    page.mouse.move(
+      picture.x + x * picture.width,
+      picture.y + y * picture.height,
+    );
+  await at(0.6, 0.2);
+  await page.mouse.down();
+  await at(0.85, 0.45);
+  await page.mouse.up();
+  await expect(page.locator(".edit-region-box")).toBeVisible();
+  await page.getByRole("radio", { name: "Result" }).click();
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeGreaterThan(200);
+
+  const history = await steps();
+  const frame = page.locator("iframe[data-live]");
+  const src = await frame.getAttribute("src");
+  const exposureSlider = inspector.getByRole("slider", { name: "Exposure" });
+  await exposureSlider.scrollIntoViewIfNeeded();
+  const exposure = (await exposureSlider.boundingBox())!;
+  await page.mouse.move(
+    exposure.x + exposure.width / 2,
+    exposure.y + exposure.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    exposure.x + exposure.width * 0.25,
+    exposure.y + exposure.height / 2,
+  );
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeLessThan(200);
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeGreaterThan(95);
+  expect(await steps()).toBe(history);
+  await expect(frame).toHaveAttribute("src", src!);
+  const beforeGradeSave = await page
+    .locator(".edit-stage")
+    .getAttribute("data-preview-ready");
+  await page.mouse.up();
+  await expect.poll(steps).toBe(history + 1);
+  await waitForPreview(page, { after: beforeGradeSave });
+
+  await page.getByRole("radio", { name: "Aim" }).click();
+  await expect
+    .poll(async () => (await centrePixel(page)).green)
+    .toBeLessThan(90);
+  await expect(page.locator(".edit-region-box")).toBeVisible();
+  const aimSrc = await frame.getAttribute("src");
+  const box = page.locator(".edit-region-box");
+  const savedBox = await box.boundingBox();
+  await at(0.725, 0.325);
+  await page.mouse.down();
+  await at(0.55, 0.6);
+  await expect
+    .poll(async () => (await box.boundingBox())?.x)
+    .toBeLessThan(savedBox!.x - 20);
+  expect(await steps()).toBe(history + 1);
+  await expect(frame).toHaveAttribute("src", aimSrc!);
+  await page.mouse.up();
+  await expect.poll(steps).toBe(history + 2);
+});
 
 test("Colour drafts a grade into the viewer while a slider moves and saves one undo step when it lets go", async ({
   page,
