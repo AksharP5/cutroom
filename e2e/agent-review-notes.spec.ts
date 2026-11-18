@@ -99,7 +99,7 @@ test("a drawing waits in chat and Send now carries its captured frame", async ({
   await expect(row).toHaveCount(0);
 });
 
-test("Send now queues the current draft in a busy linked chat", async ({
+test("Send now sends the current draft to a busy linked chat", async ({
   page,
   request,
 }) => {
@@ -130,7 +130,7 @@ test("Send now queues the current draft in a busy linked chat", async ({
       },
     }),
   );
-  await page.route(`**/agents/sessions/${chat.id}/follow-ups`, (route) =>
+  await page.route(`**/agents/sessions/${chat.id}/turns`, (route) =>
     route.fulfill({ status: 202, json: { ...chat, queued: true } }),
   );
 
@@ -164,11 +164,12 @@ test("Send now queues the current draft in a busy linked chat", async ({
   const composer = page.getByLabel("Message your agent");
   const draft = "Check these first.";
   await composer.fill(draft);
+  // T3 Code queues a message sent to a busy thread; Cutroom keeps no queue of its own.
   await expect(
-    page.getByRole("button", { name: "Queue follow-up" }),
+    page.getByRole("button", { name: "Send to T3 Code" }),
   ).toBeEnabled();
   const outgoing = page.waitForRequest(
-    (sent) => sent.method() === "POST" && sent.url().endsWith("/follow-ups"),
+    (sent) => sent.method() === "POST" && sent.url().endsWith("/turns"),
   );
   await row.getByRole("button", { name: "Send now" }).click();
   expect((await outgoing).postDataJSON()).toMatchObject({ text: draft });

@@ -246,6 +246,7 @@ export const Transcript = memo(function Transcript({
   provider,
   busy,
   problem,
+  importedCount,
   messagesRef,
   followRef,
   children,
@@ -254,6 +255,7 @@ export const Transcript = memo(function Transcript({
   provider: AgentProvider;
   busy: boolean;
   problem?: string;
+  importedCount?: number;
   messagesRef: RefObject<HTMLDivElement | null>;
   followRef: RefObject<boolean>;
   children?: ReactNode;
@@ -287,6 +289,11 @@ export const Transcript = memo(function Transcript({
       }}
     >
       {!messages.length && problem && <p className="chat-empty">{problem}</p>}
+      {importedCount !== undefined && (
+        <p className="chat-import-count">
+          Showing the latest {importedCount} messages
+        </p>
+      )}
       {turns}
       {children}
     </div>
