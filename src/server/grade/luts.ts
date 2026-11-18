@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, posix } from "node:path";
+import { basename, dirname, isAbsolute, posix } from "node:path";
 import { bakeHfColorGradingCube } from "@hyperframes/core";
 import { CubeLutParseError, parseCubeLut } from "@hyperframes/core/color-luts";
 import type { CubeLut3D } from "@hyperframes/core/color-luts";
@@ -130,7 +130,7 @@ export async function importLutFile(
   project: Pick<Project, "path">,
   path: string,
 ) {
-  if (!posix.isAbsolute(path.replaceAll("\\", "/")) || !/\.cube$/i.test(path))
+  if (!isAbsolute(path) || !/\.cube$/i.test(path))
     throw new HttpError(400, "Name a .cube file by its full path.");
   const info = await stat(path).catch((error: unknown) => {
     if (isMissing(error))
@@ -140,8 +140,7 @@ export async function importLutFile(
   if (!info.isFile()) throw new HttpError(400, "That path is not a file.");
   if (info.size > LUT_FILE_BYTES)
     throw new HttpError(413, "A .cube LUT must be smaller than 16 MB.");
-  const name = posix.basename(path.replaceAll("\\", "/"));
-  return saveLut(project, name, readCube(await readFile(path)));
+  return saveLut(project, basename(path), readCube(await readFile(path)));
 }
 
 /** A project LUT, named relative to the composition file as its grade names it. */
