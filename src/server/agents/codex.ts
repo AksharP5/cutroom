@@ -17,7 +17,12 @@ import {
 import type { CodexToolConfig } from "./tool-permissions";
 import { CodexClient } from "./codex-client";
 import type { RpcMessage } from "./codex-client";
-import { agentPrompt, completeMessage, toolCalls } from "./runtime";
+import {
+  agentInstructions,
+  agentPrompt,
+  completeMessage,
+  toolCalls,
+} from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const threadResultSchema = z.object({ thread: z.object({ id: z.string() }) });
@@ -208,6 +213,7 @@ export class CodexRuntime implements AgentRuntime {
             ? { threadId: this.options.nativeSessionId, excludeTurns: true }
             : {}),
           cwd: this.options.cwd,
+          developerInstructions: agentInstructions(this.options.cwd),
           ...(this.options.model ? { model: this.options.model } : {}),
           approvalPolicy: "on-request",
           sandbox: "workspace-write",
@@ -238,7 +244,7 @@ export class CodexRuntime implements AgentRuntime {
     if (this.active)
       throw new Error("Codex is already working in this conversation.");
     const input: Array<Record<string, unknown>> = [
-      { type: "text", text: agentPrompt(turn, this.options.cwd) },
+      { type: "text", text: agentPrompt(turn) },
     ];
     for (const skill of turn.skills) {
       if (!skill.path)
