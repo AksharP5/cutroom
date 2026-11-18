@@ -141,13 +141,10 @@ test("an in-flight agent submission cannot switch conversations or erase the nex
     await expect(
       page.getByLabel("Agent provider", { exact: true }),
     ).toBeDisabled();
-    // While a turn is in flight, the presence line replaces the conversation controls.
-    await expect(page.getByLabel("Conversation", { exact: true })).toHaveCount(
-      0,
-    );
+    // While a turn is in flight, the chat head stays and its controls are locked.
     await expect(
       page.getByRole("button", { name: "New conversation", exact: true }),
-    ).toHaveCount(0);
+    ).toBeDisabled();
     await composer.fill("The next request");
     release();
     await expect(

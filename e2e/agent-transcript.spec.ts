@@ -60,9 +60,23 @@ test("the chat composer queues a follow-up during work and lets you resume it af
   const stop = chat.getByRole("button", { name: "Stop agent" });
   const queue = chat.getByRole("region", { name: "Queued follow-ups" });
   await expect(stop).toBeVisible();
+  await expect(
+    chat.getByRole("combobox", { name: "Conversation" }),
+  ).toBeDisabled();
+  const status = chat.getByRole("status").filter({ hasText: "Working" });
+  await expect(status).toBeVisible();
+  const transcriptBox = await chat.locator(".chat-messages").boundingBox();
+  expect((await status.boundingBox())?.y).toBeGreaterThan(
+    (transcriptBox?.y ?? 0) + (transcriptBox?.height ?? 0),
+  );
   await composer.fill(text);
   const queueButton = chat.getByRole("button", { name: "Queue follow-up" });
   await expect(queueButton).toBeEnabled();
+  await composer.press("Tab"); // Attach a file
+  await page.keyboard.press("Tab");
+  await expect(stop).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(queueButton).toBeFocused();
   await queueButton.click();
   await expect(composer).toHaveValue("");
   await stream.advance();
@@ -83,6 +97,37 @@ test("the chat composer queues a follow-up during work and lets you resume it af
   await expect(stop).toBeVisible();
   await expect(queue).toHaveCount(0);
   await expect(chat.getByText(text)).toBeVisible();
+});
+
+test("a finished reply shows the turn time and its code can be copied with the keyboard", async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request, "Code in chat");
+  const turn = agentTurn(project.id);
+  const code = "const duration = 0.3;\n";
+  const reply = {
+    ...turn.reply,
+    text: "```js\n" + code + "```",
+    createdAt: new Date(Date.parse(turn.ask.createdAt) + 72_000).toISOString(),
+  };
+  const stream = await playSession(page, [
+    turn.session([turn.ask, { ...reply, status: "streaming" }], "running"),
+    turn.session([turn.ask, reply], "idle"),
+  ]);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(`/#project/${project.id}`);
+  const chat = page.getByRole("complementary", { name: "Agent chat" });
+  const copy = chat.getByRole("button", { name: "Copy code" });
+  await expect(copy).toBeAttached();
+  await expect(chat.getByText("Worked 1:12")).toHaveCount(0);
+  await stream.advance();
+  await expect(chat.getByText("Worked 1:12")).toBeVisible();
+  await chat.getByRole("button", { name: "New conversation" }).press("Tab");
+  await expect(copy).toBeFocused();
+  await copy.press("Enter");
+  await expect(chat.getByRole("button", { name: "Copied code" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
 });
 
 /** Where the summary line sits in the transcript, whatever the panel's entrance transform is doing. */

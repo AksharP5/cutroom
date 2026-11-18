@@ -119,6 +119,14 @@ test("an approval shows the full target and scoped Always allow in a short windo
   });
   const approval = page.getByRole("region", { name: "Permission request" });
   const allow = approval.getByRole("button", { name: "Allow once" });
+  const status = page
+    .getByRole("complementary", { name: "Agent chat" })
+    .getByRole("status")
+    .filter({ hasText: "Needs you" });
+  await expect(status).toBeVisible();
+  expect((await status.boundingBox())?.y).toBeLessThan(
+    (await approval.boundingBox())?.y ?? 0,
+  );
   await expectInWindow(allow, page);
   await expectInWindow(approval.getByRole("button", { name: "Deny" }), page);
   // The long target wraps in full above the controls, with no tool identifier beside it.

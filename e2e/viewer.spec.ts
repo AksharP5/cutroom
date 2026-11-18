@@ -396,7 +396,7 @@ test("the new editor plays, steps, and marks in and out as undoable timeline edi
   ).toBeVisible();
 
   // Typing never drives the transport.
-  const composer = page.getByPlaceholder("Describe the next edit");
+  const composer = page.getByRole("textbox", { name: "Message your agent" });
   await composer.fill("");
   await composer.press("l");
   await composer.press("Space");
