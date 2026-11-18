@@ -63,6 +63,14 @@ export function previewRuntimeScript() {
       "if(!br(L))return;F.add(L);let V=Ka(L)",
       "if(!br(L)||window.__cutroomParkedMedia?.has(L))return;F.add(L);let V=Ka(L)",
     ],
+    [
+      "E=(F,N,L)=>{r.delete(F);let V=t.get(F);",
+      "E=(F,N,L)=>{r.delete(F);if(window.__cutroomParkedMedia?.has(F))return!1;let V=t.get(F);",
+    ],
+    [
+      '(!L.isConnected||V.source==="attribute"&&!F.has(L))',
+      '(!L.isConnected||window.__cutroomParkedMedia?.has(L)||V.source==="attribute"&&!F.has(L))',
+    ],
   ] as const;
   for (const [before] of gradeChanges)
     if (source.split(before).length !== 2)

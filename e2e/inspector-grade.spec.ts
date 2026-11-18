@@ -45,14 +45,20 @@ async function gradeProject(
       "-i",
       "color=0x808080:s=640x360:r=30:d=4",
     ],
-    ...[
-      "-vf",
-      [...filters, "format=yuv420p"].join(","),
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-    ],
+    "-vf",
+    [
+      ...filters,
+      "format=yuv420p",
+      ...(pipeline
+        ? [
+            "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+          ]
+        : []),
+    ].join(","),
+    "-c:v",
+    "libx264",
+    "-preset",
+    pipeline ? "medium" : "ultrafast",
     join(project.path, "grey.mp4"),
   ]);
   const index = join(project.path, "index.html");
@@ -335,12 +341,12 @@ test("the footage pipeline draws a grade draft and bypass from the same paused f
   );
   await expect.poll(() => warmth(page)).toBeGreaterThan(neutral + 20);
 
-  const preview = page
-    .frames()
-    .find((frame) => frame.url().includes("/api/isolated/"))!;
-  await expect
-    .poll(() => preview.locator("[data-hf-color-grading-canvas]").count())
-    .toBe(0);
+  await expect(
+    page
+      .locator("iframe[data-live]")
+      .contentFrame()
+      .locator("[data-hf-color-grading-canvas]"),
+  ).toHaveCount(0);
 });
 
 test("the pipeline's 33-point grade matches export on synthetic swatches", async ({
@@ -460,8 +466,8 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
       "1",
       "-f",
       "rawvideo",
-      "-pix_fmt",
-      "rgb24",
+      "-vf",
+      "scale=in_color_matrix=bt709:flags=accurate_rnd+full_chroma_int,format=rgb24",
       "pipe:1",
     ],
     { encoding: "buffer", maxBuffer: 1024 * 1024 },
@@ -473,6 +479,9 @@ test("the pipeline's 33-point grade matches export on synthetic swatches", async
   );
   const mean = offsets.reduce((sum, delta) => sum + delta, 0) / offsets.length;
   const max = Math.max(...offsets);
+  console.log(
+    `Grade swatches differ from export by ${mean.toFixed(2)} levels on average, max ${max}.`,
+  );
   expect(mean, `mean colour error, max ${max}`).toBeLessThan(1.6);
   expect(max, `max colour error, mean ${mean.toFixed(2)}`).toBeLessThanOrEqual(
     6,

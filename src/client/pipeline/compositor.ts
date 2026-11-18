@@ -1,4 +1,4 @@
-import { GRADE_CACHE_SIZE, GRADE_SIZE } from "./grades";
+import { GRADE_CACHE_SIZE } from "./grades";
 import type { GradeTexture } from "./grades";
 import { usesPreviewColourMatrix } from "../../shared/videoColour";
 
@@ -234,9 +234,9 @@ export function createCompositor(canvas: HTMLCanvasElement) {
         gl.TEXTURE_3D,
         0,
         gl.RGBA8,
-        GRADE_SIZE,
-        GRADE_SIZE,
-        GRADE_SIZE,
+        lut.size,
+        lut.size,
+        lut.size,
         0,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
@@ -245,7 +245,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     }
     grades.set(lut.key, texture);
     // The cube's first and last values live at the centres of the edge texels.
-    gl.uniform2f(gradeGrid, (GRADE_SIZE - 1) / GRADE_SIZE, 0.5 / GRADE_SIZE);
+    gl.uniform2f(gradeGrid, (lut.size - 1) / lut.size, 0.5 / lut.size);
   };
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

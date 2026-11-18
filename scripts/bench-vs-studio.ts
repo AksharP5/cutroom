@@ -488,7 +488,12 @@ async function session(
     };
     const slider =
       editor === "cutroom" && options.slider
-        ? await step("slider", () => gradeSlider(page, ui, cdp, decoder))
+        ? await step("slider", () => gradeSlider(page, ui, cdp, decoder)).catch(
+            (error: unknown) => {
+              console.warn("The grade slider measurement failed.", error);
+              return null;
+            },
+          )
         : null;
     await mcp?.close();
     return { ...result, slider };

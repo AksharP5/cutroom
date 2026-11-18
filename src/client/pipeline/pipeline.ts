@@ -276,8 +276,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const { bypass } = useGradeBypass.getState();
     const textures = Promise.all(
       shown.map(({ clip }) => {
-        const grade = draft?.clipId === clip.id ? draft.grade : clip.grade;
-        return grade && !bypass ? grades.get(grade) : null;
+        const editing = draft?.clipId === clip.id;
+        const grade = editing ? draft.grade : clip.grade;
+        return grade && !bypass ? grades.get(grade, editing) : null;
       }),
     ).then(
       (textures) => ({ textures }),
