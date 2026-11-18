@@ -76,6 +76,11 @@ import {
   versionChanges,
   VERSIONS_ATTRIBUTE,
 } from "./versions";
+import {
+  GRADE_ATTRIBUTE,
+  readGrade,
+  writeGrade,
+} from "../../shared/timeline/grade";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -837,6 +842,9 @@ export function parseComposition(
       transitionIn: edges.in,
       transitionOut: edges.out,
       fx: hasAudio ? readableFx(element.attrs["data-fx-chain"]) : [],
+      grade: gradedKind(kind)
+        ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
+        : null,
       automation: element.attrs["data-automation"]
         ? offsetAutomation(
             serializeAutomation(
@@ -1296,6 +1304,8 @@ function clipChanges(
       ]);
   if (before.automation !== after.automation)
     changes.push(["data-automation", after.automation]);
+  if (!Bun.deepEquals(before.grade, after.grade))
+    changes.push([GRADE_ATTRIBUTE, writeGrade(after.grade)]);
   if (!Bun.deepEquals(before.fx, after.fx))
     changes.push([
       "data-fx-chain",
@@ -1792,6 +1802,15 @@ function textRestriction(
   return undefined;
 }
 
+/** HyperFrames grades pictures: video and image clips. */
+const gradedKind = (kind: Clip["kind"]) => kind === "video" || kind === "image";
+
+/** A clip's grade, or none when Cutroom cannot read it; `sourceRestrictions.grade` says why. */
+const readableGrade = (attribute: string | undefined) => {
+  const read = readGrade(attribute);
+  return "grade" in read ? read.grade : null;
+};
+
 /** A clip's effects, or none when its chain cannot be read; `sourceRestrictions.fx` says why. */
 const readableFx = (attribute: string | undefined) => {
   try {
@@ -1826,11 +1845,20 @@ function sourceRestrictions(
     ? undefined
     : readClipStyle(element.attrs.style).restriction;
   const fx = fxRestriction(element.attrs["data-fx-chain"]);
+  const graded = readGrade(element.attrs[GRADE_ATTRIBUTE]);
+  const grade = gradedKind(clip.kind)
+    ? "restriction" in graded
+      ? graded.restriction
+      : element.attrs["data-color-group"]
+        ? "It takes its grade from a colour group. Edit the group in the source."
+        : undefined
+    : undefined;
   const all = {
     ...restrictions,
     ...(read && "reason" in read && { title: read.reason }),
     ...(transform && { transform }),
     ...(fx && { fx }),
+    ...(grade && { grade }),
   };
   if (clip.kind === "image") {
     if (element.insidePicture || Object.hasOwn(element.attrs, "srcset"))

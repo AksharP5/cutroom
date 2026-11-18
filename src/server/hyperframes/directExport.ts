@@ -16,6 +16,7 @@ import type {
 } from "@hyperframes/engine";
 import { alignRangeAudio, mixRangeAudio } from "./rangeAudio.ts";
 import { projectPath } from "../projects/path.ts";
+import { bakeGrade, writeBakedGrade } from "../grade/luts.ts";
 import { PARALLEL_ENCODES } from "./exportMemory.ts";
 import { NVENC } from "./nvenc.ts";
 import type { DirectPlan, Placement, SourceSegment } from "./directSchema.ts";
@@ -58,7 +59,8 @@ type MediaInput = {
   path: string;
   video?: Pick<VideoMetadata, "width" | "height" | "pixelFormat">;
 };
-type Piece = SourceSegment & MediaInput;
+/** A run with its file on disk and, when graded, the baked grade FFmpeg reads. */
+type Piece = SourceSegment & MediaInput & { cube?: string };
 /** An encoded run of frames, in the export's frame numbers. */
 export type EncodedPart = { start: number; end: number; path: string };
 
@@ -104,6 +106,8 @@ function partition(pieces: Piece[], fps: Fps) {
 export async function prepareDirectExport(
   plan: DirectPlan,
   projectDir: string,
+  entryFile: string,
+  workDir: string,
 ): Promise<{ pieces: Piece[] } | { reason: string }> {
   const segments = plan.segments.filter(
     (segment): segment is SourceSegment => segment.kind === "source",
@@ -136,13 +140,53 @@ export async function prepareDirectExport(
       },
     });
   }
+  // One bake per distinct grade, at 65 points, written where every part's FFmpeg reads it.
+  const cubes = new Map<string, string>();
+  for (const { grade } of segments) {
+    if (!grade) continue;
+    const key = JSON.stringify(grade);
+    if (cubes.has(key)) continue;
+    const cube = join(workDir, "grades", `${cubes.size}.cube`);
+    const baked = await bakeGrade(
+      { path: projectDir },
+      entryFile,
+      grade,
+      65,
+    ).catch((error: unknown) => (error instanceof Error ? error : null));
+    if (baked instanceof Error || baked === null)
+      return { reason: `a grade cannot be baked (${baked?.message})` };
+    await writeBakedGrade(cube, baked);
+    cubes.set(key, cube);
+  }
   return {
     pieces: segments.map((segment) => ({
       ...segment,
       ...sources.get(segment.src)!,
+      ...(segment.grade && { cube: cubes.get(JSON.stringify(segment.grade)) }),
     })),
   };
 }
+
+/**
+ * A path as a filter option inside a graph: escaped once for the option, once for the graph.
+ * Only numbers, validated colours and this path reach the graph.
+ */
+const graphPath = (path: string) =>
+  path.replace(/[\\':]/g, "\\$&").replace(/[\\'[\],;]/g, "\\$&");
+
+/**
+ * The grade, drawn as the runtime's shader draws it: on the picture decoded to 8-bit RGB, rounded
+ * and with chroma interpolated as the browser decodes it (FFmpeg's default conversion reads half a
+ * level darker, which a grade's contrast doubles), through the LUT baked from the grade.
+ */
+const gradeFilters = (cube: string | undefined) =>
+  cube
+    ? [
+        "scale=flags=accurate_rnd+full_chroma_int",
+        "format=gbrp",
+        `lut3d=file=${graphPath(cube)}:interp=trilinear`,
+      ]
+    : [];
 
 /** Pixels of transparent margin around a placed picture, so resampling at its edges blends to nothing. */
 const MARGIN = 2;
@@ -170,6 +214,7 @@ function placed(
   rate: string,
   after: string[],
   before: string[] = [],
+  grading: string[] = [],
 ) {
   const content = contentRect(fit, picture, frame);
   const shown = visibleRect(content, placement.crop, frame);
@@ -221,6 +266,7 @@ function placed(
   const beneath = (placement.beneath ?? "#000000").replace("#", "0x");
   const picturePart = [
     ...before,
+    ...grading,
     "format=gbrap",
     ...(crop.x ||
     crop.y ||
@@ -352,6 +398,8 @@ async function encodePart(input: {
             `loop=loop=${frames - 1}:size=1:start=0`,
             "setpts=N/FRAME_RATE/TB",
           ],
+          [],
+          gradeFilters(piece.cube),
         ),
       );
       continue;
@@ -393,8 +441,9 @@ async function encodePart(input: {
             rate,
             trim,
             layer.filters,
+            gradeFilters(piece.cube),
           )
-        : `[${index}:v]${[...layer.filters, deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
+        : `[${index}:v]${[...layer.filters, ...gradeFilters(piece.cube), deliveryMatrix, ...format, deliveryTags, ...trim].join(",")}[p${index}]`,
     );
   }
   const total = pieces.reduce((sum, piece) => sum + piece.end - piece.start, 0);

@@ -30,6 +30,7 @@ import { registerCaptionTools } from "./captionTools";
 import { registerVariableTools } from "./variableTools";
 import { registerMotionTools } from "./motionTools";
 import { registerFontTools } from "./fontTools";
+import { registerGradeTools } from "./gradeTools";
 import { compactLint } from "../../shared/lint";
 
 type LocalFetch = (
@@ -412,6 +413,7 @@ export function createMcpServer(options: McpOptions = {}) {
   registerVariableTools(registry, request);
   registerMotionTools(registry, request);
   registerFontTools(registry, request);
+  registerGradeTools(registry, request);
   registry.registerTool(
     "history_list",
     {

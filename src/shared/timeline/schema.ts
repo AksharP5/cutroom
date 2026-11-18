@@ -6,6 +6,7 @@ import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
 import { MAX_AUTOMATION_POINTS } from "@hyperframes/core/audio-automation";
 // The export worker loads this file in Node, which needs the extension.
 import { FxChainInputSchema, FxNodeSchema, MAX_FX_NODES } from "./fx.ts";
+import { GradeEditSchema, GradeSchema } from "./grade.ts";
 import {
   ElementStyleEditSchema,
   ElementStyleSchema,
@@ -420,6 +421,11 @@ export const ClipSchema = z.object({
   style: ElementStyleSchema.default({}).describe(
     "The clip's inline look, as setClip.style writes it: text style on text elements, fill, corner radius, shadow, blur, layout size, and fit on video and images. A field is left out when the clip sets no inline value Cutroom can read; the composition's stylesheets and animation then decide it.",
   ),
+  grade: GradeSchema.nullable()
+    .default(null)
+    .describe(
+      "The colour grade on a video or image clip, from HyperFrames' data-color-grading: adjust, wheels, curves, hueCurves, secondaries and a look lut, mixed by intensity. null is ungraded. Change it with setClip.grade; sourceRestrictions.grade says why it cannot be changed.",
+    ),
   /** Authored clip-edge fades in frames; playback proportionally scales them to fit. */
   fadeIn: frame
     .default(0)
@@ -471,6 +477,7 @@ export const ClipSchema = z.object({
       text: z.string().optional(),
       title: z.string().optional(),
       fx: z.string().optional(),
+      grade: z.string().optional(),
       transform: z.string().optional(),
       imageVariable: z.string().optional(),
     })
@@ -941,6 +948,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
       style: ElementStyleEditSchema.optional().describe(
         "Restyle any visual clip that is not a Cutroom title, written as inline CSS on its element: omitted fields keep their values, null removes one and hands it back to the composition's stylesheets. Text fields need an element clip, objectFit a video or image. Inline style draws over stylesheets but not over the composition's own animation of the same property.",
       ),
+      grade: GradeEditSchema.nullable()
+        .optional()
+        .describe(
+          "Change a video or image clip's colour grade: fields left out keep their values; null removes the whole grade. Check the picture with timeline_view.",
+        ),
       enabled: z
         .boolean()
         .optional()

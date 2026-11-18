@@ -16,9 +16,10 @@ const tools = Array.from(cutroomToolRegistry, ([name, tool]) => {
   return {
     name,
     readOnly: tool.annotations?.readOnlyHint === true,
-    // Export writes a chosen output folder, beyond the project's editable files.
+    // Export writes a chosen output folder, and a LUT import reads a file, beyond the project.
     projectScoped:
       name !== "export_start" &&
+      name !== "lut_import" &&
       projectId !== undefined &&
       !isSchemaOptional(projectId),
   };

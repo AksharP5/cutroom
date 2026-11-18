@@ -8,6 +8,8 @@
  *   node scripts/bench-vs-studio.ts --editor studio  --throttle 4 --runs 3 --out studio-4x.json
  *   node scripts/bench-vs-studio.ts --summary cutroom-1x.json studio-1x.json ...
  *
+ * --grade puts a colour grade on every shot, to compare against the same project ungraded.
+ *
  * Runs under Node, not Bun: Playwright's library loses its browser under Bun. Each invocation
  * starts the editor's own server on a private port, copies the project for it, launches one
  * browser, and stops both before it exits. See docs/performance.md, "Cutroom vs HyperFrames
@@ -49,6 +51,7 @@ const { values: options, positionals } = parseArgs({
     out: { type: "string" },
     browser: { type: "string", default: "/usr/lib/chromium/chromium" },
     summary: { type: "boolean", default: false },
+    grade: { type: "boolean", default: false },
   },
 });
 
@@ -302,10 +305,10 @@ async function measure(editor: Editor) {
   const runs = Number(options.runs);
   const port = Number(options.port);
   const dir = resolve(options.dir!);
-  const master = join(dir, "master");
+  const master = join(dir, options.grade ? "master-graded" : "master");
   if (!existsSync(join(master, "index.html"))) {
     console.log("Making the project…");
-    await makeProject(master);
+    await makeProject(master, options.grade);
   }
   const results = [];
   for (let run = 0; run < runs; run++) {

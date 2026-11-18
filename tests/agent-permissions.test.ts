@@ -17,6 +17,7 @@ const unscoped = [
   "project_import",
   "export_start",
   "export_cancel",
+  "lut_import",
 ];
 const reads = [
   "projects_list",
@@ -33,6 +34,7 @@ const reads = [
   "variables_instance_read",
   "motion_read",
   "fonts_list",
+  "luts_list",
   "history_list",
   "review_list",
   "export_status",
@@ -146,6 +148,7 @@ test("native permission rules match every tool advertised over MCP", async () =>
     expect(claudeToolPermissions(true).settings.permissions.ask).toEqual([
       "mcp__cutroom_studio__project_create",
       "mcp__cutroom_studio__project_import",
+      "mcp__cutroom_studio__lut_import",
       "mcp__cutroom_studio__export_start",
       "mcp__cutroom_studio__export_cancel",
     ]);

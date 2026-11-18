@@ -186,6 +186,10 @@ export async function toolSubject(
     }
     case "project_import":
       return text("path");
+    case "lut_import": {
+      const lut = text("path");
+      return lut && fileName(lut);
+    }
     case "fonts_add":
       return text("family");
     case "transcription_start":

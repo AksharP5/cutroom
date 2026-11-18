@@ -3,6 +3,7 @@ import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
 import type { DefaultTreeAdapterTypes } from "parse5";
 import type { Fps } from "../../shared/timeline/schema.ts";
+import { GRADE_ATTRIBUTE, readGrade } from "../../shared/timeline/grade.ts";
 import { readPosition } from "../timeline/position.ts";
 import { readClipStyle } from "../timeline/style.ts";
 import { coversFrame, visibleRect } from "./directPlacement.ts";
@@ -564,14 +565,21 @@ export function pageColour(
 export function placedClip(
   element: Element,
   frame: { width: number; height: number; beneath: string | null },
-): Pick<SourceSegment, "still" | "placement"> | Refusal {
+): Pick<SourceSegment, "still" | "placement" | "grade"> | Refusal {
   const id = attribute(element, "id") ?? "a clip";
   const image = element.tagName === "img";
   if (element.tagName !== "video" && !image)
     return { reason: `${id} is not a video or image` };
   const allowed = image ? IMAGE_ATTRIBUTES : VIDEO_ATTRIBUTES;
-  const extra = element.attrs.find((entry) => !allowed.has(entry.name));
+  const extra = element.attrs.find(
+    (entry) => !allowed.has(entry.name) && entry.name !== GRADE_ATTRIBUTE,
+  );
   if (extra) return { reason: `${id} has ${extra.name}` };
+  // FFmpeg draws the grade as a 3D LUT baked from the same stages the runtime's shader runs.
+  const read = readGrade(attribute(element, GRADE_ATTRIBUTE));
+  if ("restriction" in read)
+    return { reason: `${id} has a grade Cutroom cannot bake` };
+  const grade = read.grade ? { grade: read.grade } : {};
   if (image && attribute(element, "class") !== "clip")
     return { reason: `${id} has a class of its own` };
   if (elements(element).length) return { reason: `${id} has child elements` };
@@ -631,7 +639,7 @@ export function placedClip(
     declarations
       .map((_, index) => VIDEO_FITS.get(keys[index]!))
       .findLast((value) => value !== undefined) ?? "fill";
-  if (image) return { still: { fit }, placement };
+  if (image) return { still: { fit }, placement, ...grade };
   const plain =
     placement.x === 0 &&
     placement.y === 0 &&
@@ -640,12 +648,12 @@ export function placedClip(
     placement.rotation === 0 &&
     Object.values(crop).every((edge) => edge === 0) &&
     placement.opacity === 1;
-  if (plain) return {};
+  if (plain) return grade;
   // The worker refuses a video whose shape differs from the frame's, so its picture fills the box.
   const box = { left: 0, top: 0, right: frame.width, bottom: frame.height };
   const shown = visibleRect(box, crop, frame);
   if (!shown) return { reason: `${id} is cropped away` };
   if (!frame.beneath && !coversFrame(placement, shown, frame))
     return { reason: `${id} shows what lies beneath it` };
-  return { placement };
+  return { placement, ...grade };
 }

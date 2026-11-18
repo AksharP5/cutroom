@@ -57,6 +57,7 @@ const timeline = normalizeTimeline({
       transitionOut: null,
       automation: null,
       fx: [],
+      grade: null,
       enabled: true,
       hasAudio: false,
       startRef: null,

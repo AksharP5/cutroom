@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ExportRangeSchema } from "../../shared/export.ts";
+import { GradeSchema } from "../../shared/timeline/grade.ts";
 
 const frame = z.number().int().nonnegative();
 const edge = z.number().int().nonnegative();
@@ -46,6 +47,8 @@ const SourceSegmentSchema = z.object({
     .optional(),
   /** Absent for a plain full-frame clip, drawn as a straight copy of the source. */
   placement: PlacementSchema.optional(),
+  /** The clip's colour grade, drawn as a 3D LUT baked from it before placement. */
+  grade: GradeSchema.optional(),
 });
 /** A run of frames the browser draws. */
 const CaptureSegmentSchema = z.object({
