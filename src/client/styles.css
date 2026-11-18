@@ -1613,6 +1613,49 @@ option {
 .composer:focus-within {
   border-color: var(--line-strong);
 }
+.chat-review-notes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 3px 0;
+  color: var(--text-secondary);
+  font-size: var(--type-sm);
+  white-space: nowrap;
+}
+.chat-review-mark {
+  flex: none;
+  width: var(--size-chat-mark);
+  height: var(--size-chat-mark);
+  background: var(--human);
+}
+.chat-review-frames {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+}
+.chat-review-thumb {
+  width: var(--size-queue-thumb-w);
+  min-width: 0;
+  height: var(--size-queue-thumb-h);
+  border: var(--stroke-hair) solid var(--line);
+  border-radius: var(--radius-clip);
+  background: var(--surface-lane);
+}
+.chat-review-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+.chat-review-more {
+  font-size: var(--type-2xs);
+}
+.chat-review-notes .text-button {
+  flex: none;
+  margin-left: auto;
+  padding-inline: 2px;
+}
 .composer textarea {
   display: block;
   width: 100%;
