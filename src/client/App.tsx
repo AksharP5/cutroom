@@ -697,7 +697,7 @@ export function App() {
             </aside>
             <ChatPanel
               key={project.id}
-              projectId={project.id}
+              project={project}
               visible={chatVisible}
               getContext={getContext}
               getReviewAttachments={async () => {

@@ -35,12 +35,19 @@ export const agentCapabilitiesSchema = z.object({
 });
 export type AgentCapabilities = z.infer<typeof agentCapabilitiesSchema>;
 
+export const agentAttachmentSchema = z.object({
+  path: z.string().min(1),
+  mimeType: z.string().optional(),
+});
+export type AgentAttachment = z.infer<typeof agentAttachmentSchema>;
+
 export const agentMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "tool", "system"]),
   text: z.string(),
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "failed"]).default("complete"),
+  attachments: z.array(agentAttachmentSchema).optional(),
   tool: z.string().optional(),
   /** What a tool call acted on, such as a file path or command, kept after its result arrives. */
   target: z.string().optional(),
@@ -126,12 +133,7 @@ export const agentTurnSchema = z
       .array(z.object({ name: z.string().min(1), path: z.string().optional() }))
       .max(30)
       .default([]),
-    attachments: z
-      .array(
-        z.object({ path: z.string().min(1), mimeType: z.string().optional() }),
-      )
-      .max(30)
-      .default([]),
+    attachments: z.array(agentAttachmentSchema).max(30).default([]),
     context: z.string().max(100_000).optional(),
   })
   .refine(

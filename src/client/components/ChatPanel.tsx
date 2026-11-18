@@ -22,6 +22,7 @@ import {
   type AgentSessionSummary,
   type AgentSkill,
 } from "../../shared/agent";
+import type { Project } from "../../shared/project";
 import type { ReviewItem } from "../../shared/review";
 import { ApiError, api, json } from "../api";
 import { useWorkspace } from "../workspace";
@@ -164,7 +165,7 @@ function Elapsed({ since }: { since: string }) {
 }
 
 export function ChatPanel({
-  projectId,
+  project,
   visible,
   getContext,
   getReviewAttachments,
@@ -176,7 +177,7 @@ export function ChatPanel({
   waitingNotes,
   onOpenNote,
 }: {
-  projectId: string;
+  project: Pick<Project, "id" | "path">;
   visible: boolean;
   getContext: () => string;
   getReviewAttachments: () => Promise<string[]>;
@@ -189,6 +190,7 @@ export function ChatPanel({
   waitingNotes: readonly ReviewItem[];
   onOpenNote: (note: ReviewItem) => void;
 }) {
+  const projectId = project.id;
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -232,6 +234,10 @@ export function ChatPanel({
   const [draft, setDraft] = useState(() => readDraft(projectId)?.text ?? "");
   const [attachments, setAttachments] = useState<string[]>(
     () => readDraft(projectId)?.attachments ?? [],
+  );
+  const draftFiles = useMemo(
+    () => attachments.map((path) => ({ path })),
+    [attachments],
   );
   const removeAttachment = useCallback((path: string) => {
     setAttachments((items) => items.filter((item) => item !== path));
@@ -877,6 +883,7 @@ export function ChatPanel({
         <RecentChats chats={sessions} onSelect={selectChat} />
       )}
       <Transcript
+        project={project}
         messages={session?.messages}
         provider={session?.provider ?? provider}
         busy={busy}
@@ -1065,8 +1072,8 @@ export function ChatPanel({
           )}
           {attachments.length > 0 && (
             <Attachments
-              projectId={projectId}
-              paths={attachments}
+              project={project}
+              files={draftFiles}
               onRemove={removeAttachment}
             />
           )}
