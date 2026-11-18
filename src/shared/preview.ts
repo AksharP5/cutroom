@@ -134,6 +134,12 @@ export const PreviewReplySchema = z.object({
   diagnostics: z.array(CompositionDiagnosticSchema).max(20).optional(),
 });
 
+export const PreviewFrameStatusSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("frame-status"),
+  error: z.string().nullable(),
+});
+
 export const ClipBoxSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("clip-box"),

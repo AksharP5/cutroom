@@ -321,11 +321,19 @@ for (const { codec, pipeline, delayed } of [
       );
       await expect(stage).not.toHaveAttribute("data-preview-ready");
       expect(await shownFrame(page)).toBe(149);
+      await expect(page.locator(".toast")).toHaveCount(0);
       await body.evaluate(() =>
         dispatchEvent(new Event("release-decoded-frame")),
       );
       await page.keyboard.press("ArrowRight");
       await expect(stage).toHaveAttribute("data-preview-ready");
       expect(await shownFrame(page)).toBe(121);
+      await page.screenshot({
+        path: testInfo.outputPath("recovered-seek.png"),
+      });
+      await expect(page.locator(".status-error")).toHaveCount(0, {
+        timeout: 1000,
+      });
+      await expect(page.locator(".toast")).toHaveCount(0);
     }
   });

@@ -37,6 +37,7 @@ import {
   join,
   posix,
   relative,
+  resolve,
   sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +95,7 @@ import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
 import { exportResolve } from "../resolve/export";
+import { layerHtml, layerSources } from "../resolve/layers";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
@@ -350,12 +352,14 @@ export function createHyperframesApi(
     },
     published: async (id, path) =>
       renderIndex.record(await store.get(id), path),
-    sourceOverrides: async (id) =>
-      Object.fromEntries(
+    sourceOverrides: async (id) => ({
+      ...Object.fromEntries(
         (await readTrackMix(store, await store.get(id))).map(
           ({ path, html }) => [path, html],
         ),
       ),
+      ...layerSources.getStore(),
+    }),
   });
   const exportRequest = new AsyncLocalStorage<ExportRequest>();
   /** A composition's timeline and frame size, as the editor reads them, for an export. */
@@ -371,11 +375,12 @@ export function createHyperframesApi(
       composition,
       mediaSources(source.content, scope),
     );
-    const { timeline, root } = parseComposition(
+    const parsed = parseComposition(
       source.content,
       document.timelines[composition] ?? emptyTimelineSettings(),
       { scope, mediaLengths: lengths },
     );
+    const { timeline, root } = parsed;
     // The preview and frame capture render a composition without a size at 1920 x 1080.
     const size = (name: string, fallback: number) => {
       const pixels = Math.floor(Number(root.attrs[name]));
@@ -402,6 +407,7 @@ export function createHyperframesApi(
       }
     };
     return {
+      parsed,
       timeline,
       size: {
         width: size("data-width", 1920),
@@ -424,10 +430,8 @@ export function createHyperframesApi(
     const input = ExportStartSchema.parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
     const composition = exportedComposition(input.composition);
-    const { timeline, size, variables, declarations } = await readComposition(
-      project.id,
-      composition,
-    );
+    const { timeline, size, variables, declarations, parsed } =
+      await readComposition(project.id, composition);
     const overrides = await variables(input.variables);
     const { format } = input;
     if (format === "resolve") {
@@ -457,7 +461,67 @@ export function createHyperframesApi(
             size,
             images,
           },
-          { directory, copyMedia: input.copyMedia },
+          {
+            directory,
+            copyMedia: input.copyMedia,
+            // Each layer is an ordinary MOV render job, so the editor shows its progress.
+            render: async (layer, output) => {
+              const started = await layerSources.run(
+                {
+                  [resolve(project.path, composition)]: layerHtml(
+                    parsed,
+                    layer,
+                  ),
+                },
+                () =>
+                  api.request(
+                    new URL(
+                      `/projects/${encodeURIComponent(project.id)}/render`,
+                      c.req.url,
+                    ),
+                    {
+                      method: "POST",
+                      headers: c.req.raw.headers,
+                      body: JSON.stringify({
+                        format: "mov",
+                        quality: "high",
+                        fps: `${timeline.fps.num}/${timeline.fps.den}`,
+                        ...(composition !== "index.html" && { composition }),
+                        ...(overrides &&
+                          Object.keys(overrides).length && {
+                            variables: overrides,
+                          }),
+                        cutroom: {
+                          ...output,
+                          range: { start: layer.start, end: layer.end },
+                          gpu: false,
+                        },
+                      }),
+                    },
+                  ),
+              );
+              if (!started.ok)
+                throw new HttpError(
+                  started.status === 409 ? 409 : 500,
+                  await started.text(),
+                );
+              const { jobId, outputPath } = z
+                .object({ jobId: z.string(), outputPath: z.string() })
+                .parse(await started.json());
+              for (;;) {
+                await Bun.sleep(500);
+                const job = renders.get(jobId);
+                if (!job) continue;
+                const { status, error } = snapshot(job);
+                if (status === "complete") return outputPath;
+                if (status !== "rendering")
+                  throw new HttpError(
+                    500,
+                    `The ${output.filename} layer did not render: ${error ?? status}.`,
+                  );
+              }
+            },
+          },
         ),
       );
     }

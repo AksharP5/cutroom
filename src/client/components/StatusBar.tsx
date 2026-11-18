@@ -21,7 +21,12 @@ export function StatusBar({
   const composition = useWorkspace((state) => state.composition);
   const exporting = useWorkspace((state) => state.exporting);
   const agent = useWorkspace((state) => state.agent);
-  const { timeline, viewer } = useWorkspace((state) => state.editorErrors);
+  const {
+    timeline,
+    viewer: viewerError,
+    previewFrame,
+  } = useWorkspace((state) => state.editorErrors);
+  const viewer = previewFrame ?? viewerError;
   const missingRoot = timeline === NO_COMPOSITION_ROOT;
   const editorError = missingRoot ? "No composition" : (timeline ?? viewer);
   const separateViewerError = timeline && viewer !== timeline ? viewer : null;

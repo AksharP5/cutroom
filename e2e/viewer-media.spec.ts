@@ -1161,6 +1161,56 @@ test("paused holds match native object-fit, transforms, opacity and stacking, th
   await expect(page.locator(".status-error")).toHaveCount(0);
 });
 
+test("a late native playback frame clears the preview warning", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "false");
+  });
+  await openMedia(page, request, { pattern: true });
+  await expect(page.locator(".edit-stage")).toHaveAttribute(
+    "data-preview-ready",
+  );
+  const live = page.frameLocator("iframe[data-live]");
+  const held = live.locator("[data-cutroom-video-hold]");
+  await expect(held).toHaveCount(1);
+  await live.locator("video").evaluate((video) => {
+    if (!(video instanceof HTMLVideoElement)) throw new Error("Missing video");
+    const native = video.requestVideoFrameCallback.bind(video);
+    let blocked = true;
+    addEventListener("release-playback-frame", () => (blocked = false), {
+      once: true,
+    });
+    video.requestVideoFrameCallback = (callback) => {
+      let current: number;
+      const wait: VideoFrameRequestCallback = (now, frame) => {
+        if (blocked) current = native(wait);
+        else callback(now, frame);
+      };
+      const id = (current = native(wait));
+      const cancel = video.cancelVideoFrameCallback.bind(video);
+      video.cancelVideoFrameCallback = (cancelled) =>
+        cancel(cancelled === id ? current : cancelled);
+      return id;
+    };
+  });
+  await page.keyboard.press("Space");
+  await expect(page.locator(".status-error")).toContainText(
+    "did not supply a playback frame in time",
+    { timeout: 10_000 },
+  );
+  await expect(held).toHaveCount(1);
+  await expect(page.locator(".toast")).toHaveCount(0);
+  await live
+    .locator("body")
+    .evaluate(() => dispatchEvent(new Event("release-playback-frame")));
+  await expect(held).toHaveCount(0, { timeout: 1500 });
+  await expect(page.locator(".status-error")).toHaveCount(0, { timeout: 1000 });
+  await expect(page.locator(".toast")).toHaveCount(0);
+});
+
 test("the ordinary paused picture is pixel-identical and a timed-out hold keeps it", async ({
   page,
   request,

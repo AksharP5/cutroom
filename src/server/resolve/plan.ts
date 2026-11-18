@@ -56,6 +56,8 @@ export interface PlanInput {
   size: { width: number; height: number };
   /** Local media for each clip that has it, by clip id. */
   media: ReadonlyMap<string, ClipMedia>;
+  /** Clips rendered into a layer, whose zooms are already drawn. */
+  baked?: ReadonlySet<string>;
 }
 
 export interface Plan {
@@ -284,7 +286,8 @@ function sourceStart(clip: Clip, media: ClipMedia): Rational {
   return rational(Math.round(seconds * rate), rate);
 }
 
-const label = (clip: Clip) =>
+/** What Resolve and the summary call a clip. */
+export const label = (clip: Clip) =>
   clip.label ?? clip.textPreview ?? (clip.src ? basename(clip.src) : clip.id);
 
 const where = (context: Context, clip: Clip) =>
@@ -719,6 +722,7 @@ export function planResolveTimeline(input: PlanInput): Plan {
           const span = elementSpan(clip);
           return (
             !isAudioKind(clip.kind) &&
+            !input.baked?.has(clip.id) &&
             clip.track !== source.track &&
             videoTracks.indexOf(clip.track) <
               videoTracks.indexOf(source.track) &&
@@ -742,6 +746,8 @@ export function planResolveTimeline(input: PlanInput): Plan {
     (clip) =>
       !pictures.includes(clip) &&
       !sounds.includes(clip) &&
+      // A sound clip of a file without sound plays silence in Cutroom too.
+      !(isAudioKind(clip.kind) && media(clip)) &&
       !(clip.adjustment && clip.region?.effect === "zoom"),
   );
   for (const clip of notCarried)

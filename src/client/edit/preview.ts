@@ -8,6 +8,7 @@ import {
   TextWarningSchema,
   PositionFoldSchema,
   PreviewLevelsSchema,
+  PreviewFrameStatusSchema,
   PlaybackClockSchema,
   PreviewReplySchema,
   PreviewTimingSchema,
@@ -257,6 +258,12 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   };
   const closing = new AbortController();
   let active = false;
+  let frameError: string | null = null;
+  const reportFrameError = (error: string | null) => {
+    if (frameError === error) return;
+    frameError = error;
+    if (warningSource === frame) reportEditorError("previewFrame", error);
+  };
   let timingRevision: string | undefined;
   let timingAllowed = false;
   let diagnostics: CompositionDiagnostic[] = [];
@@ -295,6 +302,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       // The first document says so before it can show anything; later ones once they show.
       if (preparingSource === frame || preparingSource === null)
         usePreparing.setState({ copies });
+      return;
+    }
+    if (
+      event.data &&
+      typeof event.data === "object" &&
+      "type" in event.data &&
+      event.data.type === "frame-status"
+    ) {
+      const status = PreviewFrameStatusSchema.safeParse(event.data);
+      if (status.success) reportFrameError(status.data.error);
       return;
     }
     if (active) {
@@ -373,10 +390,14 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (!parsed.success) return;
     const reply = parsed.data;
     timingRevision = reply.timingRevision;
-    if (playbackRequest === null || reply.id === playbackRequest) {
+    const transportReply =
+      playbackRequest !== null && reply.id === playbackRequest;
+    if (playbackRequest === null || transportReply) {
       state = reply.state;
-      if (playbackRequest !== null)
+      if (transportReply) {
         frame.toggleAttribute("data-seek-pending", Boolean(reply.error));
+        if (reply.error) reportFrameError(reply.error);
+      }
       playbackRequest = null;
     }
     if (reply.diagnostics) {
@@ -386,7 +407,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     const id = reply.id;
     const request = id ? pending.get(id) : undefined;
     if (!id || !request) {
-      if (active && reply.error)
+      if (active && reply.error && !transportReply)
         reportEditorError("viewer", new Error(reply.error));
       return;
     }
@@ -429,7 +450,9 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       };
       const timer = window.setTimeout(() => {
         finish();
-        reject(new Error("The preview did not draw the frame in time."));
+        const message = "The preview did not draw the frame in time.";
+        if (id === playbackRequest) reportFrameError(message);
+        reject(new Error(message));
       }, 10_000);
       signal.addEventListener("abort", cancel, { once: true });
       pending.set(id, {
@@ -454,9 +477,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
         playbackRequest = id;
       });
     },
-    (error) => {
-      if (!closing.signal.aborted) reportEditorError("viewer", error);
-    },
+    // Transport replies and timeouts report only for the latest request above.
+    () => {},
     (start) => {
       queueMicrotask(() => start(performance.now()));
       return 1;
@@ -530,7 +552,10 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       );
     },
     (error) => {
-      if (!closing.signal.aborted) reportEditorError("viewer", error);
+      if (!closing.signal.aborted)
+        reportFrameError(
+          error instanceof Error ? error.message : String(error),
+        );
     },
   );
   let unfollowEdit = () => {};
@@ -549,6 +574,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     observers.delete(observe);
     if (warningSource === frame) {
       warningSource = null;
+      reportEditorError("previewFrame", null);
       usePositionWarning.setState({ warning: null });
       useTextWarning.setState({ warning: null });
       pictureBox.publish(null);
@@ -656,6 +682,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     /** Selection belongs to the shown document, including a retained picture after a superseded handoff. */
     present() {
       if (closing.signal.aborted) return;
+      if (warningSource !== frame)
+        reportEditorError("previewFrame", frameError);
       warningSource = frame;
       pictureTarget = picture;
       observers.add(observe);

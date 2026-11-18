@@ -1462,6 +1462,13 @@ function installPreviewBridge(
   const SCRUB_REST_MS = 60;
   let retired = false;
   let pictureVersion = 0;
+  const frameStatus = (error: string | null) =>
+    parent.postMessage(
+      { source: "cutroom-preview", type: "frame-status", error },
+      "*",
+    );
+  const reportFrameFailure = (error: unknown) =>
+    frameStatus(error instanceof Error ? error.message : String(error));
   /** The picture version whose source frames, rather than scrub proxies, are on screen. */
   let exactVersion = -1;
   let picture = Promise.resolve();
@@ -1620,6 +1627,7 @@ function installPreviewBridge(
         (frame): frame is VideoFrame => frame instanceof VideoFrame,
       );
       frames.length = 0;
+      frameStatus(null);
     } finally {
       for (const frame of frames)
         if (frame instanceof VideoFrame) frame.close();
@@ -2144,6 +2152,7 @@ function installPreviewBridge(
                   video.removeAttribute("data-cutroom-held");
               }
               exactVersion = version;
+              frameStatus(null);
             } finally {
               for (const frame of frames.values()) frame.close();
             }
@@ -2669,11 +2678,19 @@ function installPreviewBridge(
     if (!hold || hold.callback !== undefined) return;
     hold.callback = video.requestVideoFrameCallback(() => {
       delete hold.callback;
-      if (!video.paused && win.__player?.isPlaying()) removeHold(video);
+      if (video.paused || !win.__player?.isPlaying()) return;
+      removeHold(video);
+      if (holds.size === 0) {
+        const version = pictureVersion;
+        void paint().then(() => {
+          if (version === pictureVersion && win.__player?.isPlaying())
+            frameStatus(null);
+        });
+      }
     });
+    // Keep observing the video after the timeout so a late frame can replace the hold.
     hold.timer = window.setTimeout(() => {
-      cancelRelease(video);
-      reply(undefined, "The preview did not supply a playback frame in time.");
+      frameStatus("The preview did not supply a playback frame in time.");
     }, FRAME_TIMEOUT);
   };
   document.addEventListener(
@@ -2908,7 +2925,7 @@ function installPreviewBridge(
           // which also redraws held video frames at their new place.
           if (data.seek && win.__player && !win.__player.isPlaying()) {
             seekRuntime(win.__player.getTime());
-            await refreshPicture();
+            await refreshPicture().catch(reportFrameFailure);
           }
           scheduleBox();
           return;
@@ -3687,12 +3704,7 @@ function installPreviewBridge(
                 await restored;
                 if (exact === pictureVersion) clearEditPicture();
               });
-              picture.catch((error: unknown) =>
-                reply(
-                  undefined,
-                  error instanceof Error ? error.message : String(error),
-                ),
-              );
+              picture.catch(reportFrameFailure);
             } else if (version === pictureVersion) {
               applySeeks();
               const restored = refreshPicture();
