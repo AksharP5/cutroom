@@ -443,11 +443,10 @@ export function createHyperframesApi(
           overrides?.[variable.id] ?? variableDefaultValue(variable);
         if (typeof value === "string" && value) images.set(variable.id, value);
       }
-      let directory = input.directory;
-      if (!directory) {
-        directory = await projectStatePath(project, ".cutroom/renders", true);
-        await mkdir(directory, { recursive: true });
-      }
+      // The project's renders folder is made on demand, as for any export.
+      const own = await projectStatePath(project, ".cutroom/renders", true);
+      const directory = input.directory ?? own;
+      if (directory === own) await mkdir(own, { recursive: true });
       return c.json(
         await exportResolve(
           {
