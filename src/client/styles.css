@@ -250,6 +250,40 @@ kbd,
   }
 }
 
+/* Repeated rows and words only create a feedback layer under the pointer. */
+:is(
+  .media-row,
+  .workspace-tabs button,
+  .script-panel .select-trigger,
+  .transcript-words button
+) {
+  position: relative;
+  transition: transform var(--duration-press) var(--ease-out);
+
+  &:hover:not(:disabled, [aria-disabled="true"])::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--overlay-hover);
+    pointer-events: none;
+    transition: opacity var(--duration-hover) var(--ease-fade);
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
+  &:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(var(--press-scale));
+  }
+}
+.script-panel button:disabled {
+  opacity: 1;
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
 /* Controls */
 .icon-button {
   flex: none;
@@ -689,6 +723,13 @@ option {
   padding: 0 6px;
   border-radius: var(--radius-control);
   outline: none;
+  cursor: pointer;
+}
+.media-row[draggable="true"] {
+  cursor: grab;
+}
+.media-row[draggable="true"]:active {
+  cursor: grabbing;
 }
 /* The focused row is the list's current row, also when a clip's menu reveals it. */
 .media-row:focus {
@@ -2597,8 +2638,9 @@ option {
   border-radius: var(--radius-clip);
   text-align: left;
 }
-.transcript-words button:hover {
-  background: var(--overlay-hover);
+/* content-visibility clips to the transcript chunk, including the first word. */
+.transcript-words button:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .transcript-words button.word-selected {
   background: var(--text-primary);

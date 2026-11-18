@@ -55,6 +55,16 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   const inspector = page.getByRole("complementary", { name: "Inspector" });
   await expect(inspector).toContainText("Picture");
   await expect(inspector).toContainText("Video on V1");
+  const position = inspector.getByRole("textbox", {
+    name: "Position X",
+    exact: true,
+  });
+  await page.keyboard.press("Tab");
+  await position.focus();
+  await expect(position).toBeFocused();
+  await expect(position).toHaveCSS("outline-width", "2px");
+  await expect(position).toHaveCSS("outline-offset", "1px");
+  await expect(position.locator("..")).toHaveCSS("outline-style", "none");
   const set = async (label: string, value: string) => {
     await inspector
       .getByRole("textbox", { name: label, exact: true })

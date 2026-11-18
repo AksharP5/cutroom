@@ -61,11 +61,44 @@
   padding-inline: var(--space-1);
   min-height: var(--size-tool-button);
 }
-.clip-inspector button:hover {
-  background: var(--overlay-hover);
+/* Standard buttons already draw their feedback in the shared control styles. */
+.clip-inspector
+  :where(
+    button:not(
+      .icon-button,
+      .text-button,
+      .primary-button,
+      .secondary-button,
+      .select-menu button
+    ),
+    summary
+  ) {
+  position: relative;
+  transition: transform var(--duration-press) var(--ease-out);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--overlay-hover);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-hover) var(--ease-fade);
+  }
+
+  &:hover:not(:disabled, [aria-disabled="true"])::after {
+    opacity: 1;
+  }
+
+  &:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(var(--press-scale));
+  }
 }
 .clip-inspector button:disabled {
   color: var(--text-tertiary);
+  opacity: 1;
+  cursor: default;
 }
 .inspector-content {
   min-height: 0;
@@ -157,7 +190,9 @@
   padding: 0;
   color: var(--text-tertiary);
   opacity: 0;
-  transition: opacity var(--duration-hover) var(--ease-fade);
+  transition:
+    opacity var(--duration-hover) var(--ease-fade),
+    transform var(--duration-press) var(--ease-out);
 }
 .inspector-section:is(:hover, :focus-within)
   > .inspector-section-reset:not(:disabled) {
@@ -170,7 +205,8 @@
   gap: var(--space-2);
   list-style: none;
   font-weight: var(--weight-semibold);
-  cursor: default;
+  border-radius: var(--radius-control);
+  cursor: pointer;
 }
 .inspector-section summary::-webkit-details-marker {
   display: none;
@@ -234,6 +270,11 @@
   border-radius: 0;
   text-align: left;
   font: inherit;
+}
+.edit-page
+  .clip-inspector
+  :is(.inspector-change, .inspector-markers button):focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .inspector-change-text {
   flex: 1;
@@ -397,12 +438,13 @@
   padding-left: 0;
   background: transparent;
 }
-.inspector-cell:has(input:focus-visible) {
-  outline: var(--focus-ring-width) solid var(--focus-ring-color);
-  outline-offset: var(--focus-ring-offset);
-}
-.edit-page .inspector-cell input:focus-visible {
-  outline: none;
+/* Keep the focus ring around the value without including its scrub label. */
+.inspector-field
+  input:is([type="text"], [type="color"], [type="checkbox"]):hover:not(
+    :disabled
+  ),
+.inspector-text textarea:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line-strong);
 }
 .inspector-net {
   padding-right: var(--space-1);
@@ -682,10 +724,6 @@
 }
 .clip-inspector .inspector-keyframe:hover:not(:disabled)::before {
   border-color: var(--text-primary);
-}
-.clip-inspector .inspector-keyframe:disabled {
-  cursor: default;
-  opacity: 0.5;
 }
 /* The effect rack: one row per effect in signal order, its knobs under it when opened. */
 .inspector-fx {

@@ -595,12 +595,14 @@ export function App() {
               <button
                 className={chatVisible ? "active" : ""}
                 aria-pressed={chatVisible}
+                title="Agent"
                 onClick={() => setWorkPanel("agent")}
               >
                 Agent
               </button>
               <button
                 aria-label="Review"
+                title="Review"
                 className={
                   notebookVisible && panel === "review" ? "active" : ""
                 }
@@ -618,6 +620,7 @@ export function App() {
                   notebookVisible && panel === "script" ? "active" : ""
                 }
                 aria-pressed={notebookVisible && panel === "script"}
+                title="Script"
                 onClick={() => {
                   setPanel("script");
                   setWorkPanel("notebook");
