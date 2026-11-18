@@ -89,14 +89,10 @@ import {
   mixCompositionInstances,
   parseComposition,
   mediaSources,
-  declaredVariables,
+  sourceVariables,
 } from "../timeline/composition";
 import { mediaFacts } from "../timeline/media";
-import {
-  VariableError,
-  VariableValuesSchema,
-  parseDeclarations,
-} from "../../shared/variables";
+import { VariableError, VariableValuesSchema } from "../../shared/variables";
 import type { VariableValues } from "../../shared/variables";
 import {
   emptyTimelineSettings,
@@ -368,7 +364,7 @@ export function createHyperframesApi(
           project,
           composition,
           values,
-          parseDeclarations(declaredVariables(source.content)),
+          sourceVariables(source.content, scope).declarations,
         );
       } catch (error) {
         if (error instanceof VariableError)

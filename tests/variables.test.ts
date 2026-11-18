@@ -454,6 +454,33 @@ test("agents list, preview, default and declare variables through typed tools, a
       variables: { nope: "x" },
     });
     expect(undeclared.isError).toBe(true);
+
+    const composition = "scene.html";
+    const scene = join(f.project.path, composition);
+    const wrapper = `<html data-composition-variables='[{"id":"edition","type":"string","label":"Edition","default":"Wrapper default"},{"id":"title","type":"string","label":"Title","default":"Wrapper title"}]'>`;
+    const source = `<!doctype html>${wrapper}<body><template><main data-composition-id="scene" data-duration="1" data-composition-variables='[{"id":"title","type":"string","label":"Title","default":"Scene default"}]'></main></template></body></html>`;
+    await writeFile(scene, source);
+    const sceneVariables = await call("variables_list", { composition });
+    expect(
+      VariablesStateSchema.parse(
+        sceneVariables.structuredContent?.result,
+      ).declarations.map(({ id, default: value }) => [id, value]),
+    ).toEqual([
+      ["edition", "Wrapper default"],
+      ["title", "Scene default"],
+    ]);
+    const saved = await call("variables_set_default", {
+      composition,
+      id: "title",
+      value: "Scene changed",
+    });
+    expect(saved.isError).not.toBe(true);
+    const changed = await readFile(scene, "utf8");
+    expect(changed).toContain(wrapper);
+    expect(changed).toContain("Scene changed");
+    expect(changed).not.toContain("Scene default");
+    await f.undo();
+    expect(await readFile(scene, "utf8")).toBe(source);
   } finally {
     await client.close();
     await server.close();

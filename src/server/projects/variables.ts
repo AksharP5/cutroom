@@ -3,7 +3,6 @@ import type { Context } from "hono";
 import { stat } from "node:fs/promises";
 import { posix } from "node:path";
 import { applyFileMutations } from "@hyperframes/studio-server";
-import { isCompositionVariable } from "@hyperframes/core/variables";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -16,7 +15,6 @@ import {
   VariablesPreviewSchema,
   checkVariableValues,
   imageVariablePath,
-  parseDeclarations,
 } from "../../shared/variables";
 import type {
   CompositionVariable,
@@ -29,8 +27,7 @@ import type { Project } from "../../shared/project";
 import {
   compositionScope,
   bindCompositionVariable,
-  declareVariables,
-  declaredVariables,
+  sourceVariables,
   parseComposition,
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
@@ -71,19 +68,6 @@ const compositionPath = (requested: string | undefined) => {
   if (path === ".." || path.startsWith("../") || !/\.html?$/i.test(path))
     throw new HttpError(400, "Name an HTML composition inside the project.");
   return path;
-};
-
-/** The declarations as written, loose entries included, so a rewrite keeps every one. */
-const writtenDeclarations = (html: string): unknown[] => {
-  const raw = declaredVariables(html);
-  if (raw === undefined) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {}
-  throw new VariableError(
-    "data-composition-variables is not a JSON list. Fix it in the source first.",
-  );
 };
 
 const refusal = (error: unknown): never => {
@@ -160,7 +144,10 @@ export function createVariableRoutes(
     composition: string,
   ): Promise<VariablesState> => {
     const source = await readSource(project, composition);
-    const declarations = parseDeclarations(declaredVariables(source.content));
+    const { declarations } = sourceVariables(
+      source.content,
+      compositionScope(composition),
+    );
     return {
       composition,
       declarations,
@@ -264,10 +251,8 @@ export function createVariableRoutes(
       composition,
       `Set ${label ?? input.id} default`,
       async (html) => {
-        const declarations = writtenDeclarations(html);
-        const matches = declarations
-          .filter(isCompositionVariable)
-          .filter((item) => item.id === input.id);
+        const variables = sourceVariables(html, compositionScope(composition));
+        const matches = variables.matches(input.id);
         const [variable] = matches;
         if (!variable)
           throw new HttpError(
@@ -286,18 +271,7 @@ export function createVariableRoutes(
           matches,
         );
         if (!Object.hasOwn(changed, input.id)) return html;
-        const value =
-          variable.type === "image" && typeof variable.default === "object"
-            ? { ...variable.default, url: input.value }
-            : input.value;
-        return declareVariables(
-          html,
-          JSON.stringify(
-            declarations.map((entry) =>
-              entry === variable ? { ...variable, default: value } : entry,
-            ),
-          ),
-        );
+        return variables.setDefault(variable, input.value);
       },
     );
     const latest = previews.get(project.id)?.get(composition);
@@ -315,9 +289,10 @@ export function createVariableRoutes(
     const project = await store.get(c.req.param("id"));
     const composition = compositionPath(input.composition);
     await edit(c, project, composition, `Bind ${input.id}`, async (html) => {
-      const matches = parseDeclarations(declaredVariables(html)).filter(
-        (item) => item.id === input.id,
-      );
+      const matches = sourceVariables(
+        html,
+        compositionScope(composition),
+      ).matches(input.id);
       if (matches.length !== 1)
         throw new HttpError(
           422,
@@ -346,13 +321,13 @@ export function createVariableRoutes(
       composition,
       bind ? `Bind ${variable.label}` : `Declare ${variable.label}`,
       async (html) => {
-        const declarations = parseDeclarations(declaredVariables(html));
-        if (declarations.some((item) => item.id === variable.id))
+        const variables = sourceVariables(html, compositionScope(composition));
+        if (variables.matches(variable.id).length)
           throw new HttpError(409, `${variable.id} is already declared.`);
-        let next = html;
+        const next = variables.add(variable);
         if (bind)
-          next = bindSource(
-            html,
+          return bindSource(
+            next,
             bind,
             variable,
             (await store.document(project)).timelines[composition] ??
@@ -360,10 +335,7 @@ export function createVariableRoutes(
             composition,
             false,
           );
-        return declareVariables(
-          next,
-          JSON.stringify([...writtenDeclarations(html), variable]),
-        );
+        return next;
       },
     );
     return c.json(await read(project, composition), 201);

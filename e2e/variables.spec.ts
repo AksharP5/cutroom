@@ -52,6 +52,54 @@ async function pixel(path: string, x: number, y: number) {
   return [...result.stdout];
 }
 
+test("the Inspector edits a live variable and leaves inert template declarations alone", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Live variables", width: 320, height: 240, duration: 1 },
+      })
+    ).json(),
+  );
+  const file = join(project.path, "index.html");
+  const inert = `<template id="sample"><div data-composition-variables='[{"id":"ghost","type":"string","label":"Inert label","default":"Sample"}]'></div></template>`;
+  const source = `<!doctype html><html><head>${inert}</head><body style="margin:0;color:white;background:#161616"><main data-composition-id="main" data-width="320" data-height="240" data-duration="1" data-no-timeline data-composition-variables='[{"id":"edition","type":"string","label":"Edition","default":"Live edition"}]'><section data-composition-variables='[{"id":"headline","type":"string","label":"Headline","default":"Release preview"}]'><h1 id="headline" class="clip" data-start="0" data-duration="1" data-track-index="0" data-var-text="headline">Fallback</h1><p id="edition" data-var-text="edition">Fallback</p></section></main></body></html>`;
+  await writeFile(file, source);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await expect(shown(page, "headline")).toHaveText("Release preview");
+  await expect(shown(page, "edition")).toHaveText("Live edition");
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const field = inspector.getByRole("textbox", {
+    name: "Headline",
+    exact: true,
+  });
+  await expect(field).toHaveValue("Release preview");
+  await expect(
+    inspector.getByRole("textbox", { name: "Edition", exact: true }),
+  ).toHaveValue("Live edition");
+  await expect(
+    inspector.getByRole("textbox", { name: "Inert label" }),
+  ).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("variable-before.png") });
+  await field.fill("Ready to publish");
+  await field.press("Enter");
+  await expect(shown(page, "headline")).toHaveText("Ready to publish");
+  await inspector.getByRole("button", { name: "Set default" }).click();
+  await expect.poll(() => readFile(file, "utf8")).toContain("Ready to publish");
+  expect(await readFile(file, "utf8")).toContain(inert);
+  await page.reload();
+  await waitForPreview(page);
+  await expect(shown(page, "headline")).toHaveText("Ready to publish");
+  await expect(shown(page, "edition")).toHaveText("Live edition");
+  await page.screenshot({ path: info.outputPath("variable-after.png") });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(() => readFile(file, "utf8")).toBe(source);
+  await expect(shown(page, "headline")).toHaveText("Release preview");
+});
+
 test("an image variable changes the actual viewer and MP4 picture", async ({
   page,
   request,

@@ -2,11 +2,17 @@ import {
   parseAutomation,
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
+import { isCompositionVariable } from "@hyperframes/core/variables";
 import {
   CSS_URL_RE,
   rewriteSrcsetUrls,
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
+import { VariableError } from "../../shared/variables";
+import type {
+  CompositionVariable,
+  VariableValue,
+} from "../../shared/variables";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
 import {
@@ -1421,47 +1427,78 @@ export function elementAttributes(
 
 const VARIABLES_ATTRIBUTE = "data-composition-variables";
 
-/**
- * The element that carries a composition's variable declarations: the first that declares them
- * (`<html>` in a page), otherwise where HyperFrames' SDK would put them, the composition root of a
- * `<template>` file or the page's `<html>`.
- */
-function variableDeclarer(html: string) {
-  const all: { element: SourceElement; inTemplate: boolean }[] = [];
-  const visit = (elements: SourceElement[], inTemplate: boolean) => {
-    for (const element of elements) {
-      all.push({ element, inTemplate });
-      visit(element.children, inTemplate);
-      visit(element.content, true);
+/** Live declarations and their source owners, in the order HyperFrames reads them. */
+export function sourceVariables(html: string, scope: CompositionScope) {
+  const { roots } = parseElements(html);
+  const live = scopeElements(roots, scope);
+  const page = roots.find((element) => element.tag === "html");
+  const root = live.find(
+    (element) => element.attrs["data-composition-id"] !== undefined,
+  );
+  // A mounted scene inherits its HTML document's defaults, then its rendered root's.
+  const carriers = scope === "document" ? live : [...new Set([page, root])];
+  const written = carriers.flatMap((element) => {
+    const raw = element?.attrs[VARIABLES_ATTRIBUTE];
+    if (!element || raw === undefined) return [];
+    let items: unknown[] | null = null;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {
+      // HyperFrames ignores malformed declarations. Keep their source intact.
     }
+    return [{ element, items }];
+  });
+  const entries = written.flatMap(
+    ({ element, items }) =>
+      items?.flatMap((item) =>
+        isCompositionVariable(item) ? [{ element, items, variable: item }] : [],
+      ) ?? [],
+  );
+  const effective = new Map(entries.map((entry) => [entry.variable.id, entry]));
+  const write = (element: SourceElement, items: unknown[]) =>
+    rewriteAttributes(html, element, `<${element.tag}>`, [
+      [VARIABLES_ATTRIBUTE, JSON.stringify(items)],
+    ]);
+  return {
+    declarations: Array.from(effective.values(), ({ variable }) => variable),
+    // Later carriers override earlier defaults. Duplicate IDs in one list are ambiguous.
+    matches: (id: string) =>
+      effective
+        .get(id)
+        ?.items.filter(isCompositionVariable)
+        .filter((variable) => variable.id === id) ?? [],
+    add(variable: CompositionVariable) {
+      const first = written[0];
+      const owner =
+        first?.element ??
+        (scope === "document" ? (page ?? root) : (root ?? page));
+      if (!owner)
+        throw new VariableError(
+          "This file has no <html> element or composition root to declare variables on.",
+        );
+      if (first?.items === null)
+        throw new VariableError(
+          "data-composition-variables is not a JSON list. Fix it in the source first.",
+        );
+      return write(owner, [...(first?.items ?? []), variable]);
+    },
+    setDefault(variable: CompositionVariable, value: VariableValue) {
+      const owner = effective.get(variable.id);
+      if (owner?.variable !== variable)
+        throw new VariableError(`${variable.id} has no live declaration.`);
+      const next =
+        variable.type === "image" && typeof variable.default === "object"
+          ? { ...variable.default, url: value }
+          : value;
+      return write(
+        owner.element,
+        owner.items.map((item) =>
+          item === variable ? { ...variable, default: next } : item,
+        ),
+      );
+    },
   };
-  visit(parseElements(html).roots, false);
-  const declaring = all.find(
-    ({ element }) => element.attrs[VARIABLES_ATTRIBUTE] !== undefined,
-  );
-  if (declaring) return declaring.element;
-  const page = all.find(({ element }) => element.tag === "html");
-  const root = all.find(
-    ({ element }) => element.attrs["data-composition-id"] !== undefined,
-  );
-  return (root?.inTemplate || !page ? root : page)?.element ?? null;
-}
-
-/** The raw `data-composition-variables` value HyperFrames reads for this composition. */
-export const declaredVariables = (html: string): string | undefined =>
-  variableDeclarer(html)?.attrs[VARIABLES_ATTRIBUTE];
-
-/** Replaces the composition's declarations, rewriting only that attribute. */
-export function declareVariables(html: string, json: string): string {
-  const element = variableDeclarer(html);
-  if (!element)
-    throw new TimelineError(
-      "unsupported",
-      "This file has no <html> element or composition root to declare variables on.",
-    );
-  return rewriteAttributes(html, element, `<${element.tag}>`, [
-    [VARIABLES_ATTRIBUTE, json],
-  ]);
 }
 
 /** Re-applies sidecar mix state without changing authored timing, stacking, or clip ids. */
