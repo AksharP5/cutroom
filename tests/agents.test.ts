@@ -7,16 +7,18 @@ import type {
   AgentRequest,
   AgentStatus,
   AgentTurn,
+  ConfigureAgentSession,
 } from "../src/shared/agent";
 import { z } from "zod";
 import {
   agentEventEnvelopeSchema,
   agentSessionSummarySchema,
+  agentSessionSchema,
   toolTarget,
 } from "../src/shared/agent";
 import { codexToolPermissions } from "../src/server/agents/tool-permissions";
 import { CodexClient } from "../src/server/agents/codex-client";
-import { CodexRuntime } from "../src/server/agents/codex";
+import { CodexRuntime, codexCapabilities } from "../src/server/agents/codex";
 import { createAgentRoutes } from "../src/server/agents/routes";
 import { createAgentService } from "../src/server/agents/service";
 import type { AgentService } from "../src/server/agents/service";
@@ -433,6 +435,7 @@ describe("agent conversations", () => {
     });
     cleanup.push(() => restored.dispose());
     expect(restored.get(session.id).messages).toHaveLength(2);
+    expect(restored.get(session.id).effort).toBeUndefined();
     const updated = await restored.configure(session.id, {
       model: "chosen-model",
     });
@@ -834,6 +837,71 @@ describe("agent conversations", () => {
     }
   });
 
+  test("validates effort on create and configure, clears it on model change, and refuses changes during a run", async () => {
+    const running = Promise.withResolvers<void>();
+    const runtime = factory(() => running.promise);
+    const { project, service } = await setup({
+      ...runtime,
+      capabilities: async (provider) => ({
+        ...(await runtime.capabilities(provider, project.path)),
+        models: [
+          { id: "sol", name: "Sol", isDefault: true, efforts: ["low", "high"] },
+          { id: "terra", name: "Terra", efforts: ["low", "medium"] },
+        ],
+      }),
+    });
+    const routes = createAgentRoutes(service);
+    const post = (effort: string) =>
+      routes.request("/agents/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: project.id,
+          provider: "codex",
+          effort,
+        }),
+      });
+    const invalid = await post("ultra");
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({
+      error: "Sol does not offer the effort ultra.",
+    });
+    const created = await post("high");
+    expect(created.status).toBe(201);
+    const session = agentSessionSchema.parse(await created.json());
+    expect(session.effort).toBe("high");
+    const patch = (body: ConfigureAgentSession) =>
+      routes.request(`/agents/sessions/${session.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    const refused = await patch({ model: "terra", effort: "high" });
+    expect(refused.status).toBe(400);
+    expect(service.get(session.id).effort).toBe("high");
+
+    await service.send(session.id, {
+      text: "First",
+      attachments: [],
+      skills: [],
+    });
+    const busy = await patch({ effort: "low" });
+    expect(busy.status).toBe(409);
+    expect(await busy.json()).toEqual({
+      error: "Stop the current run before changing the model or effort.",
+    });
+    running.resolve();
+    await idle(service, session.id);
+
+    expect(await (await patch({ model: "terra" })).json()).toMatchObject({
+      model: "terra",
+    });
+    expect(service.get(session.id).effort).toBeUndefined();
+    expect(await (await patch({ effort: "medium" })).json()).toMatchObject({
+      effort: "medium",
+    });
+    expect((await patch({ effort: null })).status).toBe(200);
+    expect(service.get(session.id).effort).toBeUndefined();
+  });
+
   test("validates routes and project attachment boundaries", async () => {
     const { service, project, directory } = await setup(
       factory(async () => {}),
@@ -884,6 +952,12 @@ const reply = value => process.stdout.write(JSON.stringify(value) + "\n");
 for await (const line of createInterface({input:process.stdin})) {
   const input = JSON.parse(line);
   if (input.method === "initialize") reply({id:input.id,result:{}});
+  if (input.method === "skills/list" || input.method === "mcpServerStatus/list") reply({id:input.id,result:{data:[]}});
+  if (input.method === "model/list") reply({id:input.id,result:{data:[
+    {id:"sol",model:"sol",displayName:"Sol",description:"Sol",isDefault:true,supportedReasoningEfforts:[{reasoningEffort:"high"},{reasoningEffort:"low"}],defaultReasoningEffort:"low"},
+    {id:"terra",model:"terra",displayName:"Terra",description:"Terra",supportedReasoningEfforts:[{reasoningEffort:"medium"}],defaultReasoningEffort:"medium"},
+    {id:"plain",model:"plain",displayName:"Plain",description:"Plain"}
+  ]}});
   if (input.method === "config/read") reply({id:input.id,result:{config:{}}});
   if (input.method === "thread/start" || input.method === "thread/resume") { appendFileSync(process.argv[2] + ".thread", JSON.stringify(input)+"\n"); reply({id:input.id,result:{thread:{id:"native-session"}}}); }
   if (input.method === "turn/start") {
@@ -1085,6 +1159,54 @@ test("Codex applies the same standing instructions when starting and resuming a 
       { type: "localImage", path: "/projects/harbor/frame.png" },
     ]),
   );
+});
+
+test("Codex advertises native efforts and updates the next turn on the same thread", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-effort-protocol-"));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const script = join(directory, "provider.mjs");
+  const recording = join(directory, "turns.jsonl");
+  await writeFile(script, nativeFixture);
+  const client = new CodexClient({
+    executable: process.execPath,
+    args: [script, recording],
+  });
+  cleanup.push(() => client.dispose());
+  const { models } = await codexCapabilities(client, directory);
+  expect(models).toMatchObject([
+    { id: "sol", efforts: ["high", "low"], defaultEffort: "low" },
+    { id: "terra", efforts: ["medium"], defaultEffort: "medium" },
+    { id: "plain", efforts: [] },
+  ]);
+
+  const runtime = new CodexRuntime(client, {
+    cwd: directory,
+    model: "sol",
+    effort: "high",
+    agentToken: "test-token",
+    emit: () => {},
+    request: async ({ id }) => ({ requestId: id, decision: "deny" }),
+  });
+  cleanup.push(() => runtime.dispose());
+  const turn = { text: "Command check", skills: [], attachments: [] };
+  await runtime.send(turn);
+  runtime.configureModel({ model: "sol" });
+  await runtime.send(turn);
+  runtime.configureModel({ model: "terra", effort: "medium" });
+  await runtime.send(turn);
+
+  const sent = (await readFile(recording, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(sent).toMatchObject([
+    { threadId: "native-session", model: "sol", effort: "high" },
+    { threadId: "native-session", model: "sol", effort: "low" },
+    { threadId: "native-session", model: "terra", effort: "medium" },
+  ]);
+  const threads = await readFile(`${recording}.thread`, "utf8");
+  expect(threads.match(/"model":"sol"/g)).toHaveLength(1);
+  expect(threads).not.toContain('"model":"terra"');
 });
 
 test("Codex accepts nullable running command output and streams it before completion", async () => {

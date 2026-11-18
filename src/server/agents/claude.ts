@@ -8,6 +8,7 @@ import type {
 import { z } from "zod";
 import type {
   AgentCapabilities,
+  AgentModel,
   AgentRequest,
   AgentTurn,
 } from "../../shared/agent";
@@ -53,6 +54,36 @@ const imageTypeSchema = z.enum([
   "image/webp",
 ]);
 type StudioMcp = NonNullable<Options["mcpServers"]>;
+
+const modelInfoSchema = z.array(
+  z.object({
+    value: z.string(),
+    displayName: z.string(),
+    description: z.string(),
+    supportsEffort: z.boolean().optional(),
+    supportedEffortLevels: z.array(z.string()).optional(),
+  }),
+);
+
+// The installed CLI can report effort levels that this SDK version does not type yet.
+const queryEffortSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] satisfies NonNullable<Options["effort"]>[]);
+
+export function claudeModels(models: unknown): AgentModel[] {
+  return modelInfoSchema.parse(models).map((model) => ({
+    id: model.value,
+    name: model.displayName,
+    description: model.description,
+    isDefault: model.value === "default",
+    efforts:
+      model.supportsEffort === false ? [] : (model.supportedEffortLevels ?? []),
+  }));
+}
 
 function nativeOptions(
   cwd: string,
@@ -138,12 +169,7 @@ export async function claudeCapabilities(
           description: command.description,
           enabled: true,
         })),
-      models: initial.models.map((model) => ({
-        id: model.value,
-        name: model.displayName,
-        description: model.description,
-        isDefault: model.value === "default",
-      })),
+      models: claudeModels(initial.models),
       mcpServers: servers.map((server) => ({
         name: server.name,
         status: server.status,
@@ -191,6 +217,8 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private ensureQuery() {
     this.starting ??= (async () => {
+      const effort = this.options.effort;
+      const sdkEffort = queryEffortSchema.safeParse(effort);
       const session = await this.startQuery({
         prompt: this.input,
         options: {
@@ -207,10 +235,16 @@ export class ClaudeRuntime implements AgentRuntime {
             snapshot: false,
           },
           ...(this.options.model ? { model: this.options.model } : {}),
+          effort: sdkEffort.success ? sdkEffort.data : undefined,
+          extraArgs: effort && !sdkEffort.success ? { effort } : undefined,
           ...(this.nativeSessionId ? { resume: this.nativeSessionId } : {}),
           canUseTool: this.canUseTool,
         },
       });
+      if (this.disposed) {
+        session.close();
+        throw new Error("The conversation was closed.");
+      }
       this.query = session;
       void this.read(session).catch((error) => {
         if (this.disposed) return;

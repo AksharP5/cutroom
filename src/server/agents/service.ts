@@ -22,7 +22,7 @@ import { createNativeRuntimeFactory } from "./factory";
 import { isCutroomEdit } from "./tool-permissions";
 import { projectNames } from "./tool-subject";
 import { completeMessage } from "./runtime";
-import type { AgentRuntime, RuntimeFactory } from "./runtime";
+import type { AgentRuntime, ModelSelection, RuntimeFactory } from "./runtime";
 import { projectAttachments, T3Chats } from "./t3-chats";
 import type { T3Runner } from "./t3-link";
 
@@ -239,6 +239,8 @@ export class AgentService {
     this.requireOpen();
     await this.options.projects.get(input.projectId);
     this.requireOpen();
+    const selection = await this.modelSelection(input, {}, input);
+    this.requireOpen();
     const now = new Date().toISOString();
     const session: StoredSession = {
       id: crypto.randomUUID(),
@@ -246,7 +248,7 @@ export class AgentService {
       provider: input.provider,
       title: input.title ?? newChatTitle,
       ...(input.title ? { customTitle: true } : {}),
-      ...(input.model ? { model: input.model } : {}),
+      ...selection,
       createdAt: now,
       updatedAt: now,
       status: "idle",
@@ -298,11 +300,16 @@ export class AgentService {
   async configure(id: string, input: ConfigureAgentSession) {
     this.requireOpen();
     const session = this.requireSession(id);
-    if (input.model !== undefined && session.t3Thread)
+    const changesModel =
+      input.model !== undefined || input.effort !== undefined;
+    if (changesModel && session.t3Thread)
       throw new HttpError(409, "Change the model in T3 Code.");
-    if (input.model !== undefined && this.operations.has(id))
-      throw new HttpError(409, "Stop the current run before changing models.");
-    if (input.model === undefined || input.model === session.model) {
+    if (changesModel && this.operations.has(id))
+      throw new HttpError(
+        409,
+        "Stop the current run before changing the model or effort.",
+      );
+    if (!changesModel) {
       if (input.title === undefined) return this.get(id);
       session.title = input.title;
       session.customTitle = true;
@@ -315,35 +322,41 @@ export class AgentService {
     const operation: SessionOperation = { kind: "configure" };
     this.operations.set(id, operation);
     try {
-      let model = input.model;
-      if (model === null) {
-        const capabilities = await this.capabilities(
-          session.provider,
-          session.projectId,
-          true,
-        );
-        this.requireOpen();
-        const configured = capabilities.models.find(
-          (candidate) => candidate.isDefault,
-        );
-        if (!configured)
-          throw new HttpError(
-            503,
-            "The native default model could not be discovered. Choose a model from the list.",
-          );
-        model = configured.id;
-        this.requireSession(id);
-      }
-      const previous = this.runtimes.get(id);
-      this.runtimes.delete(id);
-      previous?.dispose();
-      session.model = model;
+      const selection = await this.modelSelection(session, session, input);
+      this.requireOpen();
+      this.requireSession(id);
+      const sameSelection =
+        selection.model === session.model &&
+        selection.effort === session.effort;
+      if (sameSelection && input.title === undefined) return this.get(id);
+      const { model, effort, updatedAt, title, customTitle } = session;
+      Object.assign(session, selection, {
+        updatedAt: new Date().toISOString(),
+      });
       if (input.title !== undefined) {
         session.title = input.title;
         session.customTitle = true;
       }
-      session.updatedAt = new Date().toISOString();
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (error) {
+        Object.assign(session, {
+          model,
+          effort,
+          updatedAt,
+          title,
+          customTitle,
+        });
+        throw error;
+      }
+      if (!sameSelection) {
+        const runtime = this.runtimes.get(id);
+        if (runtime?.configureModel) runtime.configureModel(selection);
+        else {
+          this.runtimes.delete(id);
+          runtime?.dispose();
+        }
+      }
       const updated = this.get(id);
       this.emit(id, { type: "snapshot", session: updated });
       return updated;
@@ -380,6 +393,58 @@ export class AgentService {
     this.sequences.delete(id);
     for (const listener of this.listeners.get(id) ?? []) listener.close?.();
     this.listeners.delete(id);
+  }
+
+  private async modelSelection(
+    conversation: Pick<AgentSession, "provider" | "projectId">,
+    previous: ModelSelection,
+    input: ConfigureAgentSession,
+  ): Promise<ModelSelection> {
+    let model = input.model ?? previous.model;
+    let effort =
+      input.effort === undefined
+        ? previous.effort
+        : (input.effort ?? undefined);
+    const resetModel = input.model === null;
+    if (
+      !resetModel &&
+      (effort === undefined ||
+        (model === previous.model && input.effort === undefined))
+    )
+      return { model, effort };
+
+    const capabilities = await this.capabilities(
+      conversation.provider,
+      conversation.projectId,
+      resetModel,
+    );
+    const selected = capabilities.models.find((candidate) =>
+      resetModel || model === undefined
+        ? candidate.isDefault
+        : candidate.id === model,
+    );
+    if (!capabilities.available && capabilities.models.length === 0)
+      throw new HttpError(
+        503,
+        capabilities.error ?? "The native agent is unavailable.",
+      );
+    if (resetModel) {
+      if (!selected)
+        throw new HttpError(
+          503,
+          "The native default model could not be discovered. Choose a model from the list.",
+        );
+      model = selected.id;
+    }
+    if (effort !== undefined && !selected?.efforts.includes(effort)) {
+      if (input.effort !== undefined)
+        throw new HttpError(
+          400,
+          `${selected?.name ?? model ?? "The default model"} does not offer the effort ${effort}.`,
+        );
+      effort = undefined;
+    }
+    return { model, effort };
   }
 
   async send(id: string, turn: AgentTurn) {
@@ -637,6 +702,7 @@ export class AgentService {
       runtime = this.factory.create(session.provider, {
         cwd: project.path,
         model: session.model,
+        effort: session.effort,
         nativeSessionId: session.nativeSessionId,
         agentToken: this.agentToken(id),
         allowCutroomEdits: () => this.cutroomEdits[session.projectId] === true,

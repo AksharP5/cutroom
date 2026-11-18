@@ -17,6 +17,8 @@ export const agentModelSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   isDefault: z.boolean().optional(),
+  efforts: z.array(z.string()).default([]),
+  defaultEffort: z.string().optional(),
 });
 export type AgentModel = z.infer<typeof agentModelSchema>;
 
@@ -152,6 +154,7 @@ export const agentSessionSchema = z.object({
   provider: agentProviderSchema,
   title: z.string(),
   model: z.string().optional(),
+  effort: z.string().optional(),
   nativeSessionId: z.string().optional(),
   t3Thread: z
     .object({ threadId: t3ThreadIdSchema, link: z.string() })
@@ -179,7 +182,8 @@ const agentChatTitleSchema = z.string().trim().min(1).max(agentChatTitleLimit);
 export const createAgentSessionSchema = z.object({
   projectId: z.string().min(1),
   provider: agentProviderSchema,
-  model: z.string().min(1).optional(),
+  model: z.string().min(1).nullable().optional(),
+  effort: z.string().min(1).nullable().optional(),
   title: agentChatTitleSchema.optional(),
 });
 export type CreateAgentSession = z.infer<typeof createAgentSessionSchema>;
@@ -187,6 +191,7 @@ export type CreateAgentSession = z.infer<typeof createAgentSessionSchema>;
 export const configureAgentSessionSchema = z.object({
   title: agentChatTitleSchema.optional(),
   model: z.string().trim().min(1).nullable().optional(),
+  effort: z.string().min(1).nullable().optional(),
 });
 export type ConfigureAgentSession = z.infer<typeof configureAgentSessionSchema>;
 
