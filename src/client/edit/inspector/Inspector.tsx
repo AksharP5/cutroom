@@ -58,6 +58,7 @@ import {
   useClipFrame,
 } from "./Keyframes";
 import { ledgerChanges } from "./changes";
+import { SelectionSummary } from "./SelectionSummary";
 import { ChangeList } from "./ChangeList";
 import { TimelineOverview } from "./TimelineOverview";
 import { transport } from "../transport";
@@ -495,10 +496,22 @@ export function Inspector({
           <X size={14} />
         </button>
       </header>
-      {selection.ids.size > 1 && !subject ? (
+      {timeline && selection.ids.size > 1 && !subject ? (
         <div className="inspector-content">
           <p className="inspector-empty">{selection.ids.size} clips selected</p>
-          {timeline && sound.length > 0 && (
+          <SelectionSummary
+            clips={timeline.clips.filter((clip) => selection.ids.has(clip.id))}
+            fps={timeline.fps}
+          />
+          <ChangeList
+            key={selection.anchor}
+            projectId={projectId}
+            timeline={timeline}
+            edits={ledgerChanges(view?.clipEdits ?? [], selection.ids)}
+            limit={3}
+            hold={holdChanges}
+          />
+          {sound.length > 0 && (
             <details
               open={audioOpen}
               onToggle={(event) => setAudioOpen(event.currentTarget.open)}
