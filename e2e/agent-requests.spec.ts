@@ -151,7 +151,7 @@ test("an approval shows the full target and scoped Always allow in a short windo
     page,
   );
   const scope = approval.locator(".agent-request-scope");
-  await expect(scope).toContainText("every conversation, until you revoke");
+  await expect(scope).toContainText("every chat, until you revoke");
   await expect(scope).toContainText("Shell and native file changes still ask");
   await expectInWindow(scope, page);
   await expectInWindow(page.getByLabel("Message your agent"), page);

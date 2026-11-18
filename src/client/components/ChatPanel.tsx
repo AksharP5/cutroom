@@ -6,14 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowClockwise,
-  ArrowUp,
-  CaretDown,
-  Paperclip,
-  Plus,
-  X,
-} from "@phosphor-icons/react";
+import { ArrowUp, Paperclip, X } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
   agentPermissionsSchema,
@@ -26,11 +19,13 @@ import {
   type AgentEvent,
   type AgentProvider,
   type AgentSession,
+  type AgentSessionSummary,
   type AgentSkill,
 } from "../../shared/agent";
 import { api, json } from "../api";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
+import { ChatList, RecentChats, chatIsBusy } from "./chat/ChatList";
 import { Attachments } from "./chat/Attachments";
 import { RequestCard } from "./chat/RequestCard";
 import { Transcript } from "./chat/Transcript";
@@ -41,6 +36,20 @@ const sessionListSchema = z.object({
   sessions: z.array(agentSessionSummarySchema),
 });
 const acceptedSchema = agentSessionSchema;
+const deletedSchema = z.object({ deleted: z.literal(true) });
+
+function lastChatKey(projectId: string) {
+  return `cutroom:chat:${projectId}`;
+}
+
+function lastChat(projectId: string, chats: AgentSessionSummary[]) {
+  try {
+    const id = localStorage.getItem(lastChatKey(projectId));
+    return chats.find((chat) => chat.id === id) ?? chats[0];
+  } catch {
+    return chats[0];
+  }
+}
 const draftSchema = z.object({
   version: z.literal(1),
   text: z.string(),
@@ -67,7 +76,7 @@ function readDraft(projectId: string) {
   }
 }
 
-type ConversationState =
+type ChatState =
   | { phase: "restoring" }
   | { phase: "new" }
   | { phase: "loading"; id: string }
@@ -84,11 +93,11 @@ type ChatOperation =
   | { kind: "resume-follow-ups" }
   | { kind: "remove-follow-up" };
 
-function applyConversationEvents(
-  state: ConversationState,
+function applyChatEvents(
+  state: ChatState,
   id: string,
   events: AgentEvent[],
-): ConversationState {
+): ChatState {
   if (state.phase === "new" || state.phase === "restoring") return state;
   if ((state.phase === "ready" ? state.session.id : state.id) !== id)
     return state;
@@ -187,18 +196,20 @@ export function ChatPanel({
   const [sessions, setSessions] = useState<
     z.infer<typeof sessionListSchema>["sessions"]
   >([]);
-  const [conversation, setConversation] = useState<ConversationState>({
+  const listRequest = useRef(0);
+  // An in-flight request can finish after the owner has opened a different chat.
+  const view = useRef(0);
+  const [chat, setChat] = useState<ChatState>({
     phase: "restoring",
   });
-  const session = conversation.phase === "ready" ? conversation.session : null;
+  const session = chat.phase === "ready" ? chat.session : null;
   const sessionId =
-    conversation.phase === "ready"
-      ? conversation.session.id
-      : conversation.phase === "loading"
-        ? conversation.id
+    chat.phase === "ready"
+      ? chat.session.id
+      : chat.phase === "loading"
+        ? chat.id
         : null;
-  const opening =
-    conversation.phase === "restoring" || conversation.phase === "loading";
+  const opening = chat.phase === "restoring" || chat.phase === "loading";
   const [draft, setDraft] = useState(() => readDraft(projectId)?.text ?? "");
   const [attachments, setAttachments] = useState<string[]>(
     () => readDraft(projectId)?.attachments ?? [],
@@ -264,38 +275,70 @@ export function ChatPanel({
   }, [saveDraft]);
 
   const loadSessions = useCallback(async () => {
+    const request = ++listRequest.current;
     const result = await api(
       `/agents/sessions?projectId=${encodeURIComponent(projectId)}`,
       sessionListSchema,
     );
-    setSessions(result.sessions);
+    if (request === listRequest.current) setSessions(result.sessions);
     return result.sessions;
   }, [projectId]);
 
+  const selectChat = useCallback(
+    (selected: AgentSessionSummary) => {
+      view.current++;
+      setOperation(null);
+      setError("");
+      setProvider(selected.provider);
+      setModel(selected.model ?? "");
+      follow.current = true;
+      setChat({ phase: "loading", id: selected.id });
+      try {
+        localStorage.setItem(lastChatKey(projectId), selected.id);
+      } catch {
+        /* Selection works without browser storage. */
+      }
+    },
+    [projectId],
+  );
+
+  const newChat = useCallback(() => {
+    view.current++;
+    setOperation(null);
+    setChat({ phase: "new" });
+    setError("");
+    textarea.current?.focus();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    setConversation({ phase: "restoring" });
-    setError("");
     void loadSessions()
       .then((items) => {
         if (cancelled) return;
-        const recent = items[0];
-        if (recent) {
-          setProvider(recent.provider);
-          setModel(recent.model ?? "");
-          setConversation({ phase: "loading", id: recent.id });
-        } else setConversation({ phase: "new" });
+        const recent = lastChat(projectId, items);
+        if (recent) selectChat(recent);
+        else setChat({ phase: "new" });
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setConversation({ phase: "new" });
+          setChat({ phase: "new" });
           setError(error instanceof Error ? error.message : String(error));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [loadSessions]);
+  }, [loadSessions, projectId, selectChat]);
+
+  const hasMessages = Boolean(session?.messages.length);
+  useEffect(() => {
+    if (!sessionId || !hasMessages) return;
+    try {
+      localStorage.setItem(lastChatKey(projectId), sessionId);
+    } catch {
+      /* Selection works without browser storage. */
+    }
+  }, [sessionId, hasMessages, projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -332,6 +375,7 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!sessionId) return;
+    const openedView = view.current;
     const source = new EventSource(
       `/api/cutroom/agents/sessions/${encodeURIComponent(sessionId)}/events`,
     );
@@ -344,21 +388,13 @@ export function ChatPanel({
       clearTimeout(timer);
       frame = undefined;
       timer = undefined;
-      if (closed || !pending.length) return;
+      if (closed || view.current !== openedView || !pending.length) return;
       const events = pending;
       pending = [];
-      setConversation((current) =>
-        applyConversationEvents(current, sessionId, events),
-      );
+      setChat((current) => applyChatEvents(current, sessionId, events));
       for (const event of events)
         if (event.type === "error") setError(event.message);
-      if (
-        events.some(
-          (event) =>
-            event.type === "status" &&
-            (event.status === "idle" || event.status === "error"),
-        )
-      )
+      if (events.some((event) => event.type === "status"))
         void loadSessions().catch(() => {});
     };
     source.onmessage = (message) => {
@@ -463,7 +499,7 @@ export function ChatPanel({
       ),
     [request, respondToRequest],
   );
-  const busy = session?.status === "running" || session?.status === "waiting";
+  const busy = session ? chatIsBusy(session) : false;
   const followUps = (session?.queuedTurns ?? []).filter(
     ({ id }) => id !== session?.runningFollowUpId,
   );
@@ -485,6 +521,7 @@ export function ChatPanel({
   )?.createdAt;
 
   async function stop() {
+    const openedView = view.current;
     const pending = operation?.kind === "turn" ? operation : null;
     if (pending) pending.stopped = true;
     const id = pending?.sessionId ?? sessionId;
@@ -501,7 +538,8 @@ export function ChatPanel({
         json("POST"),
       );
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      if (view.current === openedView)
+        setError(error instanceof Error ? error.message : String(error));
     } finally {
       setOperation((current) => (current === stopping ? null : current));
     }
@@ -534,6 +572,7 @@ export function ChatPanel({
 
   async function send() {
     if (!canSend) return;
+    const openedView = view.current;
     const text = draft;
     const submittedAttachments = attachments;
     const skills = [...skillMentions(text)].flatMap((name) => {
@@ -552,6 +591,7 @@ export function ChatPanel({
     };
     setOperation(submission);
     setError("");
+    let createdId: string | undefined;
     try {
       await waitForNoteCaptures(projectId);
       if (submission.stopped) return;
@@ -569,9 +609,11 @@ export function ChatPanel({
           agentSessionSchema,
           json("POST", { projectId, provider, ...(model ? { model } : {}) }),
         );
-        if (submission.stopped) return;
+        createdId = active.id;
         submission.sessionId = active.id;
-        setConversation({ phase: "ready", session: active });
+        if (submission.stopped) return;
+        if (view.current === openedView)
+          setChat({ phase: "ready", session: active });
       }
       if (!queuesMessage && active.model !== (model || undefined)) {
         active = await api(
@@ -580,8 +622,10 @@ export function ChatPanel({
           json("PATCH", { model: model || null }),
         );
         if (submission.stopped) return;
-        setConversation({ phase: "ready", session: active });
-        setModel(active.model ?? "");
+        if (view.current === openedView) {
+          setChat({ phase: "ready", session: active });
+          setModel(active.model ?? "");
+        }
       }
       await api(
         `/agents/sessions/${active.id}/${queuesMessage ? "follow-ups" : "turns"}`,
@@ -593,6 +637,7 @@ export function ChatPanel({
           context,
         }),
       );
+      createdId = undefined;
       if (submission.stopped) return;
       setDraft((current) => (current === text ? "" : current));
       setAttachments((current) =>
@@ -602,15 +647,38 @@ export function ChatPanel({
       onSent();
       void loadSessions().catch(() => {});
     } catch (error) {
-      if (!submission.stopped)
+      if (!submission.stopped && view.current === openedView)
         setError(error instanceof Error ? error.message : String(error));
     } finally {
+      if (createdId) {
+        // A refused or cancelled first send can leave an empty server record.
+        const id = createdId;
+        const unused = await api(
+          `/agents/sessions/${id}`,
+          agentSessionSchema,
+        ).catch(() => null);
+        if (unused && !unused.messages.length && !chatIsBusy(unused)) {
+          const deleted = await api(
+            `/agents/sessions/${id}`,
+            deletedSchema,
+            json("DELETE"),
+          ).catch(() => null);
+          if (deleted && view.current === openedView)
+            setChat((current) =>
+              current.phase === "ready" && current.session.id === id
+                ? { phase: "new" }
+                : current,
+            );
+        }
+        void loadSessions().catch(() => {});
+      }
       setOperation((current) => (current === submission ? null : current));
     }
   }
 
   async function changeFollowUps(queuedId?: string) {
     if (!session || submitting) return;
+    const openedView = view.current;
     const change: ChatOperation = queuedId
       ? { kind: "remove-follow-up" }
       : { kind: "resume-follow-ups" };
@@ -623,77 +691,81 @@ export function ChatPanel({
         json(queuedId ? "DELETE" : "POST"),
       );
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
+      if (view.current === openedView)
+        setError(error instanceof Error ? error.message : String(error));
     } finally {
       setOperation((current) => (current === change ? null : current));
+      void loadSessions().catch(() => {});
     }
   }
 
+  const renameChat = useCallback(async (id: string, title: string) => {
+    const renamed = await api(
+      `/agents/sessions/${id}`,
+      agentSessionSchema,
+      json("PATCH", { title }),
+    );
+    listRequest.current++;
+    setSessions((items) =>
+      items
+        .map((item) =>
+          item.id === id
+            ? { ...item, title: renamed.title, updatedAt: renamed.updatedAt }
+            : item,
+        )
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    );
+  }, []);
+
+  const deleteChat = useCallback(
+    async (id: string) => {
+      const openedView = view.current;
+      await api(`/agents/sessions/${id}`, deletedSchema, json("DELETE"));
+      listRequest.current++;
+      const remaining = sessions.filter((item) => item.id !== id);
+      setSessions((items) => items.filter((item) => item.id !== id));
+      try {
+        if (localStorage.getItem(lastChatKey(projectId)) === id)
+          localStorage.removeItem(lastChatKey(projectId));
+      } catch {
+        /* Selection works without browser storage. */
+      }
+      const latest = await loadSessions().catch(() => remaining);
+      if (id !== sessionId || view.current !== openedView) return false;
+      if (!latest[0]) return true;
+      selectChat(latest[0]);
+      return false;
+    },
+    [loadSessions, projectId, selectChat, sessionId, sessions],
+  );
+
+  const refreshAgents = useCallback(() => {
+    setError("");
+    setConfigurationRevision((value) => value + 1);
+  }, []);
+
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
-      <div className="chat-toolbar">
-        {sessions.length === 0 && (
-          <span className="chat-toolbar-title">New conversation</span>
-        )}
-        {sessions.length > 0 && (
-          <SelectMenu
-            className="select-label conversation-picker"
-            title={sessions.find((item) => item.id === sessionId)?.title}
-            label="Conversation"
-            value={sessionId ?? ""}
-            disabled={controlsLocked}
-            options={[
-              { value: "", label: "New conversation" },
-              ...sessions.map((item) => ({
-                value: item.id,
-                label: item.title,
-              })),
-            ]}
-            onChange={(selected) => {
-              setConversation(
-                selected
-                  ? { phase: "loading", id: selected }
-                  : { phase: "new" },
-              );
-              const next = sessions.find((item) => item.id === selected);
-              if (next) {
-                setProvider(next.provider);
-                setModel(next.model ?? "");
-              }
-            }}
-          />
-        )}
-        <span className="quiet-label">
-          {opening
-            ? "Opening"
-            : operation?.kind === "model"
-              ? "Saving model"
-              : ""}
-        </span>
-        <button
-          className="icon-button"
-          aria-label="Refresh agent configuration"
-          disabled={controlsLocked || discovering}
-          onClick={() => {
-            setError("");
-            setConfigurationRevision((value) => value + 1);
-          }}
-        >
-          <ArrowClockwise />
-        </button>
-        <button
-          className="icon-button"
-          aria-label="New conversation"
-          disabled={controlsLocked}
-          onClick={() => {
-            setConversation({ phase: "new" });
-            setError("");
-            textarea.current?.focus();
-          }}
-        >
-          <Plus />
-        </button>
-      </div>
+      <ChatList
+        chats={sessions}
+        selectedId={sessionId}
+        title={
+          sessions.find((item) => item.id === sessionId)?.title ??
+          session?.title ??
+          "New chat"
+        }
+        visible={visible}
+        restoring={chat.phase === "restoring"}
+        refreshDisabled={controlsLocked || discovering}
+        working={busy}
+        loadChats={loadSessions}
+        onSelect={selectChat}
+        onNew={newChat}
+        onRename={renameChat}
+        onDelete={deleteChat}
+        onRefresh={refreshAgents}
+        onError={setError}
+      />
       {alwaysAllow && (
         <div className="agent-permissions">
           <span>Cutroom edits always allowed</span>
@@ -712,6 +784,9 @@ export function ChatPanel({
             Revoke
           </button>
         </div>
+      )}
+      {chat.phase === "new" && (
+        <RecentChats chats={sessions} onSelect={selectChat} />
       )}
       <Transcript
         messages={session?.messages}
@@ -920,8 +995,7 @@ export function ChatPanel({
                 onChange={(selected) => {
                   setProvider(selected);
                   setModel("");
-                  setConversation({ phase: "new" });
-                  setError("");
+                  newChat();
                 }}
               />
               <SelectMenu
@@ -941,6 +1015,7 @@ export function ChatPanel({
                     setModel(selected);
                     return;
                   }
+                  const openedView = view.current;
                   const changing: ChatOperation = { kind: "model" };
                   setOperation(changing);
                   void api(
@@ -949,7 +1024,9 @@ export function ChatPanel({
                     json("PATCH", { model: selected || null }),
                   )
                     .then((result) => {
-                      setConversation((current) =>
+                      void loadSessions().catch(() => {});
+                      if (view.current !== openedView) return;
+                      setChat((current) =>
                         current.phase === "ready" &&
                         current.session.id === result.id
                           ? { phase: "ready", session: result }
@@ -957,11 +1034,14 @@ export function ChatPanel({
                       );
                       setModel(result.model ?? "");
                     })
-                    .catch((error: unknown) =>
-                      setError(
-                        error instanceof Error ? error.message : String(error),
-                      ),
-                    )
+                    .catch((error: unknown) => {
+                      if (view.current === openedView)
+                        setError(
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                        );
+                    })
                     .finally(() =>
                       setOperation((current) =>
                         current === changing ? null : current,

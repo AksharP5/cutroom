@@ -173,15 +173,19 @@ export const agentSessionSummarySchema = agentSessionSchema.omit({
 });
 export type AgentSessionSummary = z.infer<typeof agentSessionSummarySchema>;
 
+export const agentChatTitleLimit = 160;
+const agentChatTitleSchema = z.string().trim().min(1).max(agentChatTitleLimit);
+
 export const createAgentSessionSchema = z.object({
   projectId: z.string().min(1),
   provider: agentProviderSchema,
   model: z.string().min(1).optional(),
-  title: z.string().trim().min(1).max(160).optional(),
+  title: agentChatTitleSchema.optional(),
 });
 export type CreateAgentSession = z.infer<typeof createAgentSessionSchema>;
 
 export const configureAgentSessionSchema = z.object({
+  title: agentChatTitleSchema.optional(),
   model: z.string().trim().min(1).nullable().optional(),
 });
 export type ConfigureAgentSession = z.infer<typeof configureAgentSessionSchema>;

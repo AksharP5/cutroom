@@ -94,6 +94,106 @@ function factory(
 }
 
 describe("agent conversations", () => {
+  test("a renamed chat keeps its title on reopening and after the first message", async () => {
+    const runtimeFactory = factory(async () => {});
+    const { project, projects, review, service, dataDir } =
+      await setup(runtimeFactory);
+    const { id } = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const path = `/agents/sessions/${id}`;
+    const routes = createAgentRoutes(service);
+    for (const title of ["  ", "X".repeat(161)]) {
+      const result = await routes.request(path, {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
+      });
+      expect(result.status).toBe(400);
+    }
+    const renamed = await routes.request(path, {
+      method: "PATCH",
+      body: JSON.stringify({ title: "  New chat  " }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ title: "New chat" });
+    await service.dispose();
+    const reopened = await createAgentService({
+      projects,
+      review,
+      dataDir,
+      runtimeFactory,
+    });
+    cleanup.push(() => reopened.dispose());
+    expect(reopened.get(id).title).toBe("New chat");
+    await reopened.send(id, {
+      text: "Make the intro shorter",
+      attachments: [],
+      skills: [],
+    });
+    await idle(reopened, id);
+    expect(reopened.get(id).title).toBe("New chat");
+  });
+
+  test("a live chat can be renamed but cannot be deleted until it stops", async () => {
+    const run = Promise.withResolvers<void>();
+    const { project, service, dataDir } = await setup(
+      factory(() => run.promise),
+    );
+    const { id } = await service.create({
+      projectId: project.id,
+      provider: "codex",
+    });
+    const path = `/agents/sessions/${id}`;
+    const routes = createAgentRoutes(service);
+    await service.send(id, {
+      text: "Make the intro shorter",
+      attachments: [],
+      skills: [],
+    });
+    try {
+      const refused = await routes.request(path, { method: "DELETE" });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({
+        error: "Stop the run before deleting this chat.",
+      });
+      const other = await service.create({
+        projectId: project.id,
+        provider: "claude",
+      });
+      const busy = await routes.request(`/agents/sessions/${other.id}/turns`, {
+        method: "POST",
+        body: JSON.stringify({ text: "Mix the score" }),
+      });
+      expect(busy.status).toBe(409);
+      expect(await busy.json()).toEqual({
+        error:
+          "Another chat in this project is already working. Stop it or wait for it to finish.",
+      });
+      await service.delete(other.id);
+      const renamed = await routes.request(path, {
+        method: "PATCH",
+        body: JSON.stringify({ title: "Intro edits" }),
+      });
+      expect(renamed.status).toBe(200);
+      expect(service.get(id).title).toBe("Intro edits");
+    } finally {
+      run.resolve();
+    }
+    await idle(service, id);
+    const response = await routes.request(`${path}/events`);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Expected an event stream");
+    expect((await reader.read()).done).toBe(false);
+    expect((await routes.request(path, { method: "DELETE" })).status).toBe(200);
+    expect((await reader.read()).done).toBe(true);
+    expect((await routes.request(path)).status).toBe(404);
+    expect(service.list(project.id)).toEqual([]);
+    expect(
+      JSON.parse(await readFile(join(dataDir, "agents.json"), "utf8")),
+    ).toMatchObject({ sessions: [] });
+  });
+
   test("runs queued follow-ups in order with the latest unfinished notes", async () => {
     const observed: AgentTurn[] = [];
     const first = Promise.withResolvers<void>();

@@ -61,8 +61,9 @@ test("the chat composer queues a follow-up during work and lets you resume it af
   const queue = chat.getByRole("region", { name: "Queued follow-ups" });
   await expect(stop).toBeVisible();
   await expect(
-    chat.getByRole("combobox", { name: "Conversation" }),
+    chat.getByLabel("Agent provider", { exact: true }),
   ).toBeDisabled();
+  await expect(chat.getByRole("button", { name: /^Chats,/ })).toBeEnabled();
   const status = chat.getByRole("status").filter({ hasText: "Working" });
   await expect(status).toBeVisible();
   const transcriptBox = await chat.locator(".chat-messages").boundingBox();
@@ -123,7 +124,7 @@ test("a finished reply shows the turn time and its code can be copied with the k
   await expect(chat.getByText("Worked 1:12")).toHaveCount(0);
   await stream.advance();
   await expect(chat.getByText("Worked 1:12")).toBeVisible();
-  await chat.getByRole("button", { name: "New conversation" }).press("Tab");
+  await chat.getByRole("button", { name: "New chat" }).press("Tab");
   await expect(copy).toBeFocused();
   await copy.press("Enter");
   await expect(chat.getByRole("button", { name: "Copied code" })).toBeVisible();
@@ -361,7 +362,7 @@ test("a staged approval lists each command, keeps raw input collapsed, and answe
   }
   // The lasting grant says what it covers in the same sentence.
   await expect(approval.locator(".agent-request-scope")).toHaveText(
-    "Always allow Cutroom edits for this project, in every conversation, until you revoke. Shell and native file changes still ask.",
+    "Always allow Cutroom edits for this project, in every chat, until you revoke. Shell and native file changes still ask.",
   );
   // The exact request is still there for anyone who asks for it.
   const details = approval.getByRole("button", { name: "Details" });

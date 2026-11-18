@@ -26,9 +26,18 @@ import type { AgentRuntime, RuntimeFactory } from "./runtime";
 import { projectAttachments, T3Chats } from "./t3-chats";
 import type { T3Runner } from "./t3-link";
 
+const newChatTitle = "New chat";
+const storedSessionSchema = agentSessionSchema.extend({
+  customTitle: z.boolean().optional(),
+});
+type StoredSession = z.infer<typeof storedSessionSchema>;
+type SessionListener = {
+  send: (event: AgentEventEnvelope) => void;
+  close?: () => void;
+};
 const storedSessionsSchema = z.object({
   version: z.literal(1),
-  sessions: z.array(agentSessionSchema),
+  sessions: z.array(storedSessionSchema),
   cutroomEdits: z.record(z.string(), z.boolean()).default({}),
 });
 type PendingRequest = {
@@ -60,13 +69,10 @@ export type AgentServiceOptions = {
 };
 
 export class AgentService {
-  private readonly sessions = new Map<string, AgentSession>();
+  private readonly sessions = new Map<string, StoredSession>();
   private readonly operations = new Map<string, SessionOperation>();
   private readonly runtimes = new Map<string, AgentRuntime>();
-  private readonly listeners = new Map<
-    string,
-    Set<(event: AgentEventEnvelope) => void>
-  >();
+  private readonly listeners = new Map<string, Set<SessionListener>>();
   private readonly pendingRequests = new Map<string, PendingRequest[]>();
   private readonly capabilitiesCache = new Map<
     string,
@@ -104,6 +110,12 @@ export class AgentService {
     const stored = storedSessionsSchema.parse(JSON.parse(content));
     this.cutroomEdits = stored.cutroomEdits;
     for (const session of stored.sessions) {
+      if (
+        session.title === "New conversation" &&
+        !session.customTitle &&
+        !session.messages.length
+      )
+        session.title = newChatTitle;
       session.runningFollowUpId = undefined;
       if (
         !session.t3Thread &&
@@ -132,7 +144,7 @@ export class AgentService {
 
   private requireSession(id: string) {
     const session = this.sessions.get(id);
-    if (!session) throw new HttpError(404, "Conversation not found.");
+    if (!session) throw new HttpError(404, "Chat not found.");
     return session;
   }
 
@@ -208,6 +220,7 @@ export class AgentService {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(
         ({
+          customTitle: _customTitle,
           messages: _messages,
           pendingRequest: _pendingRequest,
           queuedTurns: _queuedTurns,
@@ -218,7 +231,8 @@ export class AgentService {
   }
 
   get(id: string) {
-    return structuredClone(this.requireSession(id));
+    const { customTitle: _customTitle, ...session } = this.requireSession(id);
+    return structuredClone(session);
   }
 
   async create(input: CreateAgentSession) {
@@ -226,11 +240,12 @@ export class AgentService {
     await this.options.projects.get(input.projectId);
     this.requireOpen();
     const now = new Date().toISOString();
-    const session: AgentSession = {
+    const session: StoredSession = {
       id: crypto.randomUUID(),
       projectId: input.projectId,
       provider: input.provider,
-      title: input.title ?? "New conversation",
+      title: input.title ?? newChatTitle,
+      ...(input.title ? { customTitle: true } : {}),
       ...(input.model ? { model: input.model } : {}),
       createdAt: now,
       updatedAt: now,
@@ -283,15 +298,23 @@ export class AgentService {
   async configure(id: string, input: ConfigureAgentSession) {
     this.requireOpen();
     const session = this.requireSession(id);
-    if (session.t3Thread)
+    if (input.model !== undefined && session.t3Thread)
       throw new HttpError(409, "Change the model in T3 Code.");
-    if (this.operations.has(id))
+    if (input.model !== undefined && this.operations.has(id))
       throw new HttpError(409, "Stop the current run before changing models.");
+    if (input.model === undefined || input.model === session.model) {
+      if (input.title === undefined) return this.get(id);
+      session.title = input.title;
+      session.customTitle = true;
+      session.updatedAt = new Date().toISOString();
+      await this.persist();
+      const updated = this.get(id);
+      this.emit(id, { type: "snapshot", session: updated });
+      return updated;
+    }
     const operation: SessionOperation = { kind: "configure" };
     this.operations.set(id, operation);
     try {
-      if (input.model === undefined || input.model === session.model)
-        return this.get(id);
       let model = input.model;
       if (model === null) {
         const capabilities = await this.capabilities(
@@ -309,18 +332,54 @@ export class AgentService {
             "The native default model could not be discovered. Choose a model from the list.",
           );
         model = configured.id;
+        this.requireSession(id);
       }
       const previous = this.runtimes.get(id);
       this.runtimes.delete(id);
       previous?.dispose();
       session.model = model;
+      if (input.title !== undefined) {
+        session.title = input.title;
+        session.customTitle = true;
+      }
       session.updatedAt = new Date().toISOString();
       await this.persist();
-      this.emit(id, { type: "snapshot", session: structuredClone(session) });
-      return this.get(id);
+      const updated = this.get(id);
+      this.emit(id, { type: "snapshot", session: updated });
+      return updated;
     } finally {
       if (this.operations.get(id) === operation) this.operations.delete(id);
     }
+  }
+
+  async delete(id: string) {
+    this.requireOpen();
+    const session = this.requireSession(id);
+    if (
+      this.operations.get(id)?.kind === "turn" ||
+      (session.t3Thread &&
+        (session.status === "running" || session.status === "waiting")) ||
+      session.pendingRequest ||
+      this.pendingRequests.get(id)?.length
+    )
+      throw new HttpError(409, "Stop the run before deleting this chat.");
+    this.t3.unwatch(session);
+    this.sessions.delete(id);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.sessions.set(id, session);
+      if (this.listeners.has(id) && !this.disposed)
+        this.t3.watch(session, (event) => this.apply(id, event));
+      throw error;
+    }
+    this.runtimes.get(id)?.dispose();
+    this.runtimes.delete(id);
+    this.runtimePermissions.delete(id);
+    this.agentTokens.delete(id);
+    this.sequences.delete(id);
+    for (const listener of this.listeners.get(id) ?? []) listener.close?.();
+    this.listeners.delete(id);
   }
 
   async send(id: string, turn: AgentTurn) {
@@ -387,7 +446,7 @@ export class AgentService {
   }
 
   private async runTurn(
-    session: AgentSession,
+    session: StoredSession,
     turn: AgentTurn,
     queuedId?: string,
   ) {
@@ -478,7 +537,7 @@ export class AgentService {
   }
 
   private async startTurn(
-    session: AgentSession,
+    session: StoredSession,
     turn: AgentTurn,
     operation: TurnOperation,
   ) {
@@ -520,7 +579,11 @@ export class AgentService {
     );
     const nativeTurn = { ...turn, skills, attachments };
     if (this.admissionCancelled(id, operation)) return this.get(id);
-    if (!session.messages.some((message) => message.role === "user"))
+    if (
+      session.title === newChatTitle &&
+      !session.customTitle &&
+      !session.messages.some((message) => message.role === "user")
+    )
       session.title = turn.text.trim().slice(0, 90) || "Attached media";
     const message = completeMessage(
       turn.text || "Attached media",
@@ -792,14 +855,15 @@ export class AgentService {
       this.apply(id, { type: "status", status: "running" });
   }
 
-  subscribe(id: string, listener: (event: AgentEventEnvelope) => void) {
+  subscribe(id: string, send: SessionListener["send"], close?: () => void) {
     const session = this.requireSession(id);
-    const listeners = this.listeners.get(id) ?? new Set();
+    const listeners = this.listeners.get(id) ?? new Set<SessionListener>();
+    const listener = { send, close };
     listeners.add(listener);
     this.listeners.set(id, listeners);
-    listener({
+    send({
       seq: this.sequences.get(id) ?? 0,
-      event: { type: "snapshot", session: structuredClone(session) },
+      event: { type: "snapshot", session: this.get(id) },
     });
     if (!this.disposed)
       this.t3.watch(session, (event) => this.apply(id, event));
@@ -868,7 +932,7 @@ export class AgentService {
     const seq = (this.sequences.get(id) ?? 0) + 1;
     this.sequences.set(id, seq);
     for (const listener of this.listeners.get(id) ?? [])
-      listener({ seq, event });
+      listener.send({ seq, event });
   }
 
   private scheduleSave() {
@@ -880,7 +944,7 @@ export class AgentService {
   }
 
   private storageFailed(error: unknown) {
-    const message = `Conversation history could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+    const message = `Chat history could not be saved: ${error instanceof Error ? error.message : String(error)}`;
     for (const session of this.sessions.values()) {
       this.emit(session.id, { type: "error", message });
       if (!this.operations.has(session.id)) {
@@ -906,7 +970,11 @@ export class AgentService {
       const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
       await writeFile(temporary, content, { mode: 0o600 });
       await rename(temporary, this.path);
-      if (change && turns) {
+      if (
+        change &&
+        turns &&
+        this.sessions.get(change.session.id) === change.session
+      ) {
         change.session.queuedTurns = turns;
         this.publishFollowUps(change.session);
       }
