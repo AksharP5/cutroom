@@ -1087,6 +1087,7 @@ export const ClipEditSchema = z.object({
   clipId: z.string().nullable(),
   composition: z.string(),
   label: z.string(),
+  batchLabels: z.array(z.string()).optional(),
   by: z.enum(["human", "agent"]),
   agentName: z.string().optional(),
   at: z.string(),

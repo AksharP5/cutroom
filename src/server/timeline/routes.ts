@@ -514,6 +514,7 @@ export function createTimelineRoutes(
       label,
       summary,
       encodedSummary,
+      batchLabels: summaries.length > 1 ? summaries : undefined,
       save: async () => {
         // Preparation precedes the store queue; preserve other metadata saved while it waited.
         const document = await store.document(project);
@@ -884,10 +885,14 @@ export function createTimelineRoutes(
             view: result,
             summary: prepared.summary,
             encodedSummary: prepared.encodedSummary,
+            batchLabels: prepared.batchLabels,
           };
         },
         batch.noteId,
-        { label: (result) => result.summary },
+        {
+          label: (result) => result.summary,
+          batchLabels: (result) => result.batchLabels,
+        },
       );
       const response = {
         ...result,

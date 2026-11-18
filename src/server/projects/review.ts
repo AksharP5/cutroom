@@ -470,6 +470,8 @@ export function createReviewService(store: ProjectStore) {
     pendingRows: Awaited<ReturnType<typeof currentEdits>>,
     /** What a timeline edit did, for the row that covers bytes outside any clip. */
     label?: string,
+    /** Stored once for the ledger, on the last row so normal row retention keeps it. */
+    batchLabels?: string[],
   ) => {
     const entry = (await store.history(project)).list().at(-1);
     const state = await readState(project);
@@ -487,7 +489,8 @@ export function createReviewService(store: ProjectStore) {
                 edit.clipId === id,
             ),
         )
-        .map((clipId) => ({
+        .map((clipId, index, ids) => ({
+          ...(index === ids.length - 1 && batchLabels && { batchLabels }),
           id: randomUUID(),
           clipId,
           composition,
@@ -653,6 +656,7 @@ export function createReviewService(store: ProjectStore) {
         )
           compositions.set(key, {
             ...edit,
+            batchLabels: undefined,
             clipId: null,
             label: `Edited ${edit.composition} composition`,
           });
@@ -727,6 +731,7 @@ export function createReviewService(store: ProjectStore) {
       options: {
         create?: boolean;
         label?: string | ((result: T) => string);
+        batchLabels?: (result: T) => string[] | undefined;
       } = {},
     ) =>
       serialize(project, async () => {
@@ -794,6 +799,7 @@ export function createReviewService(store: ProjectStore) {
           typeof options.label === "function"
             ? options.label(result)
             : options.label,
+          options.batchLabels?.(result),
         );
         return result;
       }),

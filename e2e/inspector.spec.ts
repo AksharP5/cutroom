@@ -652,6 +652,19 @@ test("with nothing selected the inspector shows the timeline, its markers and it
     { type: "setMarker", frame: 45, name: "Hook" },
     { type: "setRange", in: 30, out: 120 },
   ]);
+  await edit(
+    [1, 2, 3].map((index) => ({ type: "setTrack", index, kind: "video" })),
+  );
+  const names = [
+    "Interview A cameras",
+    "Exterior and location shots",
+    "Graphics and captions",
+    "Archival images from the studio",
+  ];
+  await edit([
+    ...names.map((name, index) => ({ type: "setTrack", index, name })),
+    { type: "setClip", clipId: "intro", opacity: 0.9 },
+  ]);
   await edit([{ type: "setClip", clipId: "outro", opacity: 0.5 }], true);
   await page.goto(`/#project/${project.id}`);
   const inspector = page.getByRole("complementary", { name: "Inspector" });
@@ -669,6 +682,15 @@ test("with nothing selected the inspector shows the timeline, its markers and it
   await markers.filter({ hasText: "Ending" }).getByRole("button").click();
   await expect(clock).toHaveText("00:00:08:00");
 
+  const batch = inspector
+    .locator(".inspector-change")
+    .filter({ hasText: "Renamed track to Interview A cameras" });
+  await expect(batch).toContainText("and 4 more");
+  await expect(batch).toHaveAttribute(
+    "title",
+    /Renamed track to Archival images from the studio/,
+  );
+
   // The project's ledger: a click seeks to the changed clip and selects it.
   const change = inspector
     .locator(".inspector-changes li")
@@ -677,6 +699,7 @@ test("with nothing selected the inspector shows the timeline, its markers and it
   await change.locator(".inspector-change").click();
   await expect(clock).toHaveText("00:00:06:00");
   await expect(inspector.locator(".inspector-clip strong")).toHaveText("Outro");
+  await expect(batch).toHaveCount(0);
   await expect(page.locator("[data-clip].selected")).toHaveCount(1);
   await expect(page.locator('[data-clip="outro"]')).toHaveClass(/selected/);
 });
