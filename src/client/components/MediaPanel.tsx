@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
-import { MEDIA_TRASH, mediaKind, mediaKinds } from "../../shared/media";
+import {
+  MEDIA_TRASH,
+  mediaKind,
+  mediaKinds,
+  previewMediaPath,
+} from "../../shared/media";
+import type { TimelineView } from "../../shared/timeline/schema";
 import { api, frameTimecode, json, mediaUrl } from "../api";
 import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
@@ -100,6 +106,30 @@ function RenameField({
   );
 }
 
+// Every row selects one number, so a timeline edit only renders the rows whose counts changed.
+const usedMediaByTimeline = new WeakMap<
+  TimelineView,
+  {
+    files: ReturnType<typeof useWorkspace.getState>["fileChanges"];
+    counts: ReadonlyMap<string, number>;
+  }
+>();
+
+function usedMediaCount(view: TimelineView, name: string) {
+  const files = useWorkspace.getState().fileChanges;
+  const cached = usedMediaByTimeline.get(view);
+  if (cached?.files === files) return cached.counts.get(name) ?? 0;
+
+  const counts = new Map<string, number>();
+  for (const clip of view.timeline.clips) {
+    if (!clip.src) continue;
+    const path = previewMediaPath(view.composition, clip.src, files);
+    if (path) counts.set(path, (counts.get(path) ?? 0) + 1);
+  }
+  usedMediaByTimeline.set(view, { files, counts });
+  return counts.get(name) ?? 0;
+}
+
 /** One row: a thumbnail, the file name, and its length read from the file itself. */
 function MediaRow({
   projectId,
@@ -132,6 +162,11 @@ function MediaRow({
   onRemove(): void;
 }) {
   const fps = useFps();
+  const uses = useTimeline((state) =>
+    state.projectId === projectId && state.view
+      ? usedMediaCount(state.view, path)
+      : 0,
+  );
   const [duration, setDuration] = useState<number | null>(null);
   const [hasAudio, setHasAudio] = useState<boolean | null>(null);
   // Decoders start only for rows that have been on screen.
@@ -205,7 +240,13 @@ function MediaRow({
   return (
     <li
       className="media-row"
-      title={path}
+      aria-label={path}
+      title={
+        uses
+          ? `${path} · Used by ${uses} ${uses === 1 ? "clip" : "clips"}`
+          : path
+      }
+      data-used={uses || undefined}
       data-kind={kind}
       data-offline={offline || undefined}
       data-path={path}

@@ -65,7 +65,7 @@ async function pictures(page: Page, name: string) {
         ).data,
     ];
     const thumb = document.querySelector<HTMLImageElement | HTMLVideoElement>(
-      `.media-row[title="${name}"] .media-thumb img, .media-row[title="${name}"] .media-thumb video`,
+      `.media-row[data-path="${name}"] .media-thumb img, .media-row[data-path="${name}"] .media-thumb video`,
     );
     if (
       !thumb ||
@@ -181,7 +181,7 @@ for (const video of [false, true]) {
         .toBe(true);
       if (video)
         await expect(
-          page.locator(`.media-row[title="${name}"] .media-duration`),
+          page.locator(`.media-row[data-path="${name}"] .media-duration`),
         ).toHaveText("00:00:06:00");
       if (video)
         await expect
@@ -214,7 +214,7 @@ for (const video of [false, true]) {
       ]);
       await rename(replacement, join(project.path, name));
       await expect.poll(() => waveHeight(page)).toBe(0);
-      const row = page.locator(`.media-row[title="${name}"]`);
+      const row = page.locator(`.media-row[data-path="${name}"]`);
       await expect(row.locator(".media-duration")).toHaveText("00:00:04:00");
       const droppedRequest = page.waitForRequest(
         (sent) =>
