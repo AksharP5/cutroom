@@ -763,9 +763,20 @@ option {
 .media-confirm-remove {
   color: var(--danger);
 }
-/* A paper tick marks the open composition or a source already on its timeline. */
-.media-row:is([aria-current="true"], [data-used]) {
+/* The composition the editor has open carries a paper tick. */
+.media-row[aria-current="true"] {
   box-shadow: inset var(--stroke-rail) 0 var(--selection);
+}
+.media-row[data-used] {
+  position: relative;
+}
+.media-row[data-used]::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--stroke-rail);
+  background: var(--selection);
+  pointer-events: none;
 }
 .composition-lint {
   flex: none;
