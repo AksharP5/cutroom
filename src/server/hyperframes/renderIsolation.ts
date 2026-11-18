@@ -269,6 +269,9 @@ export function registerRenderIsolation(
   const colour = JSON.stringify(
     new URL("./videoColour.ts", import.meta.url).href,
   );
+  const imageVariables = JSON.stringify(
+    new URL("./imageVariables.ts", import.meta.url).href,
+  );
   const frameCache = JSON.stringify(
     new URL("./frameCache.ts", import.meta.url).href,
   );
@@ -365,7 +368,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",
@@ -376,6 +379,18 @@ export function registerRenderIsolation(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
           "rebaseDirectEntryAssetPaths(cutroomSources[htmlPath] ?? readTextFile(htmlPath), projectDir, htmlPath)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '  const compiled = await compileForRender(projectDir, htmlPath, join19(workDir, "downloads"), {',
+          '  const compiled = await compileForRender(projectDir, htmlPath, join19(workDir, "downloads"), {\n    cutroomEntryFile: entryFile,',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "const sanitizedHtml = inlinedHtml.replace(",
+          'const sanitizedHtml = rebaseCompiledImageVariables(inlinedHtml, projectDir, options.cutroomEntryFile ?? "index.html", options.variables).replace(',
           url,
         );
         if (range?.range) {

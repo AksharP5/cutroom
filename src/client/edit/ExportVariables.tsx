@@ -1,10 +1,11 @@
-import { isEditable } from "../../shared/variables";
+import { isEditable, variableDefaultValue } from "../../shared/variables";
 import type {
   EditableVariable,
   VariableValue,
   VariableValues,
 } from "../../shared/variables";
 import { SelectMenu } from "../components/SelectMenu";
+import { ImageVariableMenu } from "./ImageVariableMenu";
 import { useVariables } from "./variables";
 
 /**
@@ -23,7 +24,7 @@ export function exportVariables(drafts: Record<string, string | boolean>) {
       if (!String(draft).trim() || !Number.isFinite(value))
         throw new Error(`Enter a number for ${variable.label}.`);
     }
-    if (value !== variable.default) values[variable.id] = value;
+    if (value !== variableDefaultValue(variable)) values[variable.id] = value;
   }
   return values;
 }
@@ -60,7 +61,9 @@ export function ExportVariables({
           {variable.type !== "boolean" && variable.label}
           <Field
             variable={variable}
-            value={drafts[variable.id] ?? fieldValue(variable.default)}
+            value={
+              drafts[variable.id] ?? fieldValue(variableDefaultValue(variable))
+            }
             onChange={(value) => onChange(variable.id, value)}
           />
           {variable.type === "boolean" && variable.label}
@@ -83,6 +86,14 @@ function Field({
   onChange(value: string | boolean): void;
 }) {
   switch (variable.type) {
+    case "image":
+      return (
+        <ImageVariableMenu
+          label={variable.label}
+          value={String(value)}
+          onChange={onChange}
+        />
+      );
     case "boolean":
       return (
         <input
