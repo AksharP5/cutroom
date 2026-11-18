@@ -33,6 +33,7 @@ import { auditionClip, auditionQuery, useVersions } from "./versions";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 import { usePipeline } from "../pipeline/setting";
+import type { attachPipeline } from "../pipeline/pipeline";
 
 export type Zoom = "fit" | "actual";
 
@@ -87,6 +88,7 @@ export function Viewer({
   );
   // The footage pipeline draws the videos beneath the preview while it is active.
   const pipelineCanvas = useRef<HTMLCanvasElement>(null);
+  const pipeline = useRef<ReturnType<typeof attachPipeline>>(null);
   const pipelineEnabled = usePipeline((state) => state.enabled);
   const copies = usePreparing((state) => state.copies);
   const pipelineActive = usePipeline((state) => state.active);
@@ -95,16 +97,21 @@ export function Viewer({
     const canvas = pipelineCanvas.current;
     if (!pipelineEnabled || !canvas) return;
     // Loaded only once the setting is on.
-    let detach: (() => void) | null = null;
     let gone = false;
     void import("../pipeline/pipeline").then(({ attachPipeline }) => {
-      if (!gone) detach = attachPipeline(projectId, canvas);
+      if (!gone) pipeline.current = attachPipeline(projectId, canvas);
     });
     return () => {
       gone = true;
-      detach?.();
+      pipeline.current?.dispose();
+      pipeline.current = null;
     };
   }, [projectId, pipelineEnabled]);
+  useEffect(() => {
+    // A saved GSAP file can stop being the pinned library without changing the timeline.
+    if (revision && /(?:^|\/)gsap\.min\.js$/i.test(change.path))
+      pipeline.current?.refreshDependencies();
+  }, [revision, change.path]);
   useEffect(() => {
     for (const connection of connections.current.values())
       connection.pipeline(pipelineActive, pipelineDrawn);

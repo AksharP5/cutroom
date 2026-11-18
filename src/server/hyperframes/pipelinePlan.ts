@@ -11,7 +11,6 @@ import {
   transitionStyle,
 } from "../timeline/transitions.ts";
 import {
-  LIBRARY_SCRIPTS,
   activeContent,
   PINNED,
   ROOT_ATTRIBUTES,
@@ -33,6 +32,8 @@ type Element = DefaultTreeAdapterTypes.Element;
 const TRANSITION_RULES = /<style[^>]*>([\s\S]*)<\/style>/
   .exec(transitionStyle())![1]!
   .trim();
+const EMPTY_TIMELINE =
+  /^(?:window\.__timelines\s*=\s*window\.__timelines\s*\|\|\s*\{\s*\}\s*;\s*)?window\.__timelines\.([\w$]+)\s*=\s*gsap\.timeline\(\s*\{\s*paused\s*:\s*true\s*\}\s*\)\s*;?$/;
 const TRANSITION_ATTRIBUTE =
   /^data-transition-(in|out)(-duration|-align|-under)?$/;
 /**
@@ -92,9 +93,14 @@ const text = (element: Element) =>
  * Plans the viewer's footage pipeline with the export classifier's rules: a video clip is
  * drawable when the export could draw it from its source, and the pipeline paints beneath the
  * preview, so every clip HyperFrames draws must lie above every drawable video it overlaps.
- * Anything the rules cannot prove keeps the whole composition on HyperFrames, with a reason.
+ * The client checks that order at the playhead. Page-wide refusals keep the entry on HyperFrames.
  */
-export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
+export function planPreviewPipeline(
+  html: string,
+  fps: Fps,
+  libraries: ReadonlySet<string> = new Set(),
+  footageRefusals: ReadonlyMap<string, string> = new Map(),
+): PipelinePlan {
   const document = parse(html);
   const page = elements(document).find((element) => element.tagName === "html");
   const head =
@@ -105,12 +111,23 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     return { reason: "the page has no head or body" };
   const roots = elements(body);
   const root = roots[0];
-  if (
-    roots.length !== 1 ||
-    !root ||
-    attribute(root, "data-composition-id") === undefined
-  )
+  if (!root || attribute(root, "data-composition-id") === undefined)
     return { reason: "the body holds more than the composition" };
+  const tail = roots.slice(1);
+  if (
+    tail.length &&
+    (tail.length !== 1 ||
+      tail[0]!.tagName !== "script" ||
+      tail[0]!.attrs.length !== 0 ||
+      !libraries.size ||
+      EMPTY_TIMELINE.exec(text(tail[0]!).trim())?.[1] !==
+        attribute(root, "data-composition-id"))
+  )
+    return {
+      reason: tail.some((element) => element.tagName === "script")
+        ? "the body has a script other than an empty paused GSAP timeline"
+        : "the body holds more than the composition",
+    };
   for (const element of [page, body])
     if (element.attrs.some((entry) => entry.name !== "lang"))
       return { reason: `<${element.tagName}> has attributes` };
@@ -123,7 +140,12 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   if (unknown) return { reason: `the composition has ${unknown.name}` };
   const width = Number(attribute(root, "data-width"));
   const height = Number(attribute(root, "data-height"));
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0)
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width <= 0 ||
+    height <= 0
+  )
     return { reason: "the composition has no size" };
 
   const styles: string[] = [];
@@ -144,7 +166,7 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     }
     if (
       element.tagName === "script" &&
-      LIBRARY_SCRIPTS.has(attribute(element, "src") ?? "") &&
+      libraries.has(attribute(element, "src") ?? "") &&
       element.childNodes.length === 0 &&
       element.attrs.length === 1
     )
@@ -159,19 +181,12 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       ? Math.round(frame)
       : null;
   };
-  type Layer = {
-    id: string;
-    element: Element;
-    start: number;
-    end: number;
-    track: string;
-    index: number;
-  };
-  const videos: Layer[] = [];
-  const others: Layer[] = [];
+  const videos: { id: string; element: Element }[] = [];
+  const others: Element[] = [];
   const order: string[] = [];
+  const fractional: string[] = [];
   /** Videos HyperFrames draws, on top of the pipeline's, and why. */
-  const hyperframes: Record<string, string> = {};
+  const hyperframes: Record<string, string> = Object.create(null);
   for (const element of elements(root)) {
     if (element.tagName === "hf-audio-group" && element.childNodes.length === 0)
       continue;
@@ -180,6 +195,10 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       element.tagName === "audio"
     )
       continue;
+    if (attribute(element, "data-no-timeline") !== undefined)
+      return {
+        reason: `${attribute(element, "id") ?? element.tagName} draws outside the timeline`,
+      };
     const start = seconds(attribute(element, "data-start"));
     const duration = seconds(attribute(element, "data-duration"));
     const id = attribute(element, "id") ?? attribute(element, "data-hf-id");
@@ -187,32 +206,27 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       return {
         reason: `${id ?? element.tagName} has no fixed start, duration and id`,
       };
-    // HyperFrames draws everything but videos, so only a video must start and end on frames.
     const video = element.tagName === "video";
-    const first = frameAt(start) ?? Math.floor(toFrame(start));
-    const last =
-      frameAt(start + duration) ?? Math.ceil(toFrame(start + duration));
-    if (
-      video &&
-      (frameAt(start) === null || frameAt(start + duration) === null)
-    )
+    const betweenFrames = frameAt(start) === null || frameAt(duration) === null;
+    // Native layers keep their authored timing. GPU footage uses whole frames.
+    if (video && (betweenFrames || frameAt(start + duration) === null))
       hyperframes[id] = `${id} starts or ends between frames`;
-    const layer = {
-      id,
-      element,
-      start: first,
-      end: last,
-      track: attribute(element, "data-track-index") ?? "",
-      index: order.length,
-    };
+    if (betweenFrames) fractional.push(id);
     order.push(id);
-    (video ? videos : others).push(layer);
+    if (video) videos.push({ id, element });
+    else others.push(element);
   }
 
   // A video the pipeline cannot draw exactly is HyperFrames', as a title is.
-  const fits: Record<string, "fill" | "contain" | "cover"> = {};
+  const fits: Record<string, "fill" | "contain" | "cover"> =
+    Object.create(null);
   for (const { id, element } of videos) {
-    if (hyperframes[id]) continue;
+    if (Object.hasOwn(hyperframes, id)) continue;
+    const refusal = footageRefusals.get(attribute(element, "src") ?? "");
+    if (refusal) {
+      hyperframes[id] = `${id} stays in HyperFrames because ${refusal}`;
+      continue;
+    }
     if (
       attribute(element, "muted") === undefined &&
       attribute(element, "data-has-audio") !== "false"
@@ -243,7 +257,9 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       {
         ...element,
         attrs: element.attrs.filter(
-          (entry) => !TRANSITION_ATTRIBUTE.test(entry.name),
+          (entry) =>
+            !TRANSITION_ATTRIBUTE.test(entry.name) &&
+            !(entry.name === "class" && entry.value.trim() === "clip"),
         ),
       },
       // The pipeline draws whatever lies beneath, so coverage never matters here.
@@ -264,7 +280,7 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     authored: false,
     backgrounds: [],
   };
-  for (const { element } of [...videos, ...others])
+  for (const element of [...videos.map(({ element }) => element), ...others])
     try {
       if (
         declarationsOf(attribute(element, "style") ?? "").some(
@@ -298,35 +314,13 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
   if (background === null && stacking.backgrounds.length)
     return { reason: "the page background is not one colour" };
 
-  const level = (layer: Layer) => stacking.trackZ.get(layer.track) ?? 0;
-  const below = (a: Layer, b: Layer) =>
-    level(a) < level(b) || (level(a) === level(b) && a.index < b.index);
-  // The pipeline paints beneath the preview, so a video above anything HyperFrames draws at the
-  // same time is HyperFrames' too, which may put more videos above one of its own.
-  for (let settled = false; !settled;) {
-    settled = true;
-    const drawnByHyperframes = [
-      ...others,
-      ...videos.filter(({ id }) => hyperframes[id]),
-    ];
-    for (const video of videos) {
-      if (hyperframes[video.id]) continue;
-      const beneath = drawnByHyperframes.find(
-        (other) =>
-          other.start < video.end &&
-          video.start < other.end &&
-          !below(video, other),
-      );
-      if (!beneath) continue;
-      hyperframes[video.id] = `${beneath.id} lies beneath ${video.id}`;
-      delete fits[video.id];
-      settled = false;
-    }
-  }
-  if (!Object.keys(fits).length)
+  if (videos.length && !Object.keys(fits).length)
     return {
-      reason: Object.values(hyperframes)[0] ?? "it has no video to draw",
+      reason: "no video clips passed the footage classifier",
+      hyperframes,
     };
+
+  if (!videos.length) return { reason: "it has no video to draw" };
 
   return {
     width,
@@ -334,6 +328,7 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
     drawable: fits,
     hyperframes,
     order,
+    fractional,
     trackZ: Object.fromEntries(stacking.trackZ),
     background,
   };

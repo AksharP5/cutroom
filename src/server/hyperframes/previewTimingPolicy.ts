@@ -8,6 +8,8 @@ const gsap = readFileSync(
   "utf8",
 );
 
+export const isPinnedGsap = (source: string) => source === gsap;
+
 /** Cutroom's own state: media caches, review and view state, attachments, exports. */
 export const APP_STATE_DIR = ".cutroom";
 
@@ -67,7 +69,10 @@ export function previewTimingPolicy(dir: string) {
               // Only the actual pinned library is exempt, never a filename or authored marker.
               const local = resolve(dirname(path), src);
               const script = realpathSync(local);
-              if (unsigned(script) || readFileSync(script, "utf8") !== gsap)
+              if (
+                unsigned(script) ||
+                !isPinnedGsap(readFileSync(script, "utf8"))
+              )
                 allowed = false;
             }
           }

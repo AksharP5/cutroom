@@ -14,6 +14,8 @@ export const PipelinePlanSchema = z.union([
     hyperframes: z.record(z.string(), z.string()),
     /** Every visual clip in document order, which breaks ties between clips on one level. */
     order: z.array(z.string()),
+    /** Native layers whose authored times can differ from their projected whole frames. */
+    fractional: z.array(z.string()),
     /** Stacking level of each track that Cutroom's track layer orders. */
     trackZ: z.record(z.string(), z.number().int()),
     /** The one colour beneath every clip, or null when the page paints none. */
@@ -22,7 +24,10 @@ export const PipelinePlanSchema = z.union([
       .regex(/^#[0-9a-f]{6}$/)
       .nullable(),
   }),
-  z.object({ reason: z.string() }),
+  z.object({
+    reason: z.string(),
+    hyperframes: z.record(z.string(), z.string()).optional(),
+  }),
 ]);
 export type PipelinePlan = z.infer<typeof PipelinePlanSchema>;
 

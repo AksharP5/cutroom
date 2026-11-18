@@ -211,7 +211,8 @@ test("the direct export draws a graded clip from its source with the grade; the 
     reason: "shot has a grade Cutroom cannot bake",
   });
   expect(planPreviewPipeline(grained, { num: 30, den: 1 })).toEqual({
-    reason: "shot has a grade Cutroom cannot bake",
+    reason: "no video clips passed the footage classifier",
+    hyperframes: { shot: "shot has a grade Cutroom cannot bake" },
   });
 });
 

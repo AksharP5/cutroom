@@ -1,6 +1,7 @@
 import { offsetSourceTime } from "../../shared/timeline/time";
 import { frameTime, toSeconds } from "../../shared/timeline/apply";
 import { framesAfter, framesBefore } from "../../shared/timeline/transition";
+import { isAudioKind } from "../../shared/timeline/schema";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { PipelinePlan } from "../../shared/pipeline";
 
@@ -29,13 +30,16 @@ export interface Shown {
  */
 function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
   const { fps } = timeline;
+  const fractional = new Set(plan.fractional);
   const order = new Map(plan.order.map((id, index) => [id, index]));
   const off = new Set(
     timeline.tracks.filter((track) => !track.enabled).map(({ index }) => index),
   );
   type Owner = Fit | "hyperframes";
-  const named = (id: string): Owner | undefined =>
-    plan.drawable[id] ?? (plan.hyperframes[id] ? "hyperframes" : undefined);
+  const named = (id: string): Owner | undefined => {
+    if (Object.hasOwn(plan.drawable, id)) return plan.drawable[id]!;
+    if (Object.hasOwn(plan.hyperframes, id)) return "hyperframes";
+  };
   const ownerOf = (clip: Clip): Owner | null => {
     const owner = named(clip.id);
     if (owner === "hyperframes") return owner;
@@ -61,13 +65,20 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
   // intervals once; ownership still sees the whole timeline, including clips outside it.
   const candidates: { clip: Clip; first: number; end: number }[] = [];
   for (const clip of timeline.clips) {
-    if (clip.kind !== "video" || !clip.enabled || off.has(clip.track)) continue;
+    if (isAudioKind(clip.kind) || !clip.enabled || off.has(clip.track))
+      continue;
+    // The timeline rounds a clip's start and duration separately. Leave a frame on either
+    // edge of an authored fractional interval for HyperFrames' continuous-time boundary.
+    const pad = fractional.has(clip.id) ? 1 : 0;
     const first =
-      clip.start - (clip.transitionIn ? framesBefore(clip.transitionIn) : 0);
+      clip.start -
+      (clip.transitionIn ? framesBefore(clip.transitionIn) : 0) -
+      pad;
     const end =
       clip.start +
       clip.duration +
-      (clip.transitionOut ? framesAfter(clip.transitionOut) : 0);
+      (clip.transitionOut ? framesAfter(clip.transitionOut) : 0) +
+      pad;
     if (end <= from || first > to) continue;
     candidates.push({ clip, first, end });
   }
@@ -76,10 +87,10 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
     const hyperframes: { level: number; index: number }[] = [];
     for (const { clip, first, end } of candidates) {
       if (frame < first || frame >= end) continue;
-      const fit = ownerOf(clip);
-      if (!fit) return null;
       const level = plan.trackZ[String(clip.track)] ?? 0;
       const index = order.get(clip.id) ?? Infinity;
+      const fit = clip.kind === "video" ? ownerOf(clip) : "hyperframes";
+      if (!fit) return null;
       if (fit === "hyperframes") {
         hyperframes.push({ level, index });
         continue;
@@ -201,7 +212,7 @@ export interface Appearance {
 /**
  * Every clip that comes into view after `from` and up to `to`, in time order, whether it starts
  * there or a clip above it stops covering it. Each needs its opening decoded before the clock
- * gets there. Stops at a frame that needs HyperFrames.
+ * gets there, including the first pipeline frame after a native range.
  */
 export function appearances(
   timeline: Timeline,
@@ -214,7 +225,10 @@ export function appearances(
   let before = new Set(visible(at(from))?.map(({ clip }) => clip.id));
   for (let frame = from + 1; frame <= to; frame++) {
     const layers = visible(at(frame));
-    if (!layers) break;
+    if (!layers) {
+      before.clear();
+      continue;
+    }
     for (const layer of layers)
       if (!before.has(layer.clip.id)) found.push({ frame, layer });
     before = new Set(layers.map(({ clip }) => clip.id));

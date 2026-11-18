@@ -8,7 +8,18 @@ import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
 
 const ProbeSchema = z.object({
-  streams: z.array(z.object({ codec_type: z.string().optional() })).default([]),
+  streams: z
+    .array(
+      z.object({
+        codec_type: z.string().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        pix_fmt: z.string().optional(),
+        color_transfer: z.string().optional(),
+        tags: z.object({ alpha_mode: z.string().optional() }).optional(),
+      }),
+    )
+    .default([]),
   format: z.object({ duration: z.coerce.number().optional() }).default({}),
 });
 interface Probe {
@@ -16,6 +27,7 @@ interface Probe {
   seconds: number | null;
   /** The file was read and holds no audio stream. */
   silent: boolean;
+  footageRefusal?: string;
 }
 
 /**
@@ -33,7 +45,7 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
       "error",
       ...localMediaInputOptions,
       "-show_entries",
-      "format=duration:stream=codec_type",
+      "format=duration:stream=codec_type,width,height,pix_fmt,color_transfer:stream_tags=alpha_mode",
       "-of",
       "json",
       path,
@@ -47,12 +59,28 @@ async function probe(ffprobe: string, path: string): Promise<Probe | null> {
   if (code !== 0) return null;
   const { streams, format } = ProbeSchema.parse(JSON.parse(output));
   const seconds = format.duration;
+  const video = streams.find((stream) => stream.codec_type === "video");
+  let footageRefusal: string | undefined;
+  if (video?.width && video.height && video.width * video.height > 1920 * 1080)
+    footageRefusal = `its source is ${video.width} × ${video.height}, above the pipeline's 1080p limit`;
+  else if (
+    /^(yuva|rgba|bgra|argb|abgr|gbrap|ya)/.test(video?.pix_fmt ?? "") ||
+    video?.tags?.alpha_mode === "1"
+  )
+    footageRefusal = "its source has alpha";
+  else if (
+    video?.color_transfer === "smpte2084" ||
+    video?.color_transfer === "arib-std-b67"
+  )
+    footageRefusal = "its source is HDR";
+
   return {
     seconds:
       seconds !== undefined && Number.isFinite(seconds) && seconds > 0
         ? seconds
         : null,
     silent: !streams.some((stream) => stream.codec_type === "audio"),
+    footageRefusal,
   };
 }
 
@@ -61,6 +89,7 @@ export interface MediaFacts {
   lengths: Map<string, number>;
   /** Every `src` that was read and holds no audio stream. */
   silent: Set<string>;
+  footageRefusals: Map<string, string>;
 }
 
 /** What ffprobe reports for the given `src` values; files that are missing or unreadable are left out. */
@@ -70,7 +99,11 @@ export async function mediaFacts(
   sources: Iterable<string>,
 ): Promise<MediaFacts> {
   const ffprobe = findFfBinary("ffprobe", { configuredMustExist: true });
-  const facts: MediaFacts = { lengths: new Map(), silent: new Set() };
+  const facts: MediaFacts = {
+    lengths: new Map(),
+    silent: new Set(),
+    footageRefusals: new Map(),
+  };
   await Promise.all(
     [...new Set(sources)].map(async (src) => {
       const relative = localMediaPath(composition, src);
@@ -92,6 +125,8 @@ export async function mediaFacts(
       if (!result) return;
       if (result.seconds) facts.lengths.set(src, result.seconds);
       if (result.silent) facts.silent.add(src);
+      if (result.footageRefusal)
+        facts.footageRefusals.set(src, result.footageRefusal);
     }),
   );
   return facts;
