@@ -42,6 +42,10 @@
   flex-direction: column;
   width: 100%;
   text-align: left;
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.home-project:active {
+  transform: scale(var(--press-scale));
 }
 /* The picture takes the selection, as a clip does. */
 .home-project:focus-visible {
@@ -55,6 +59,18 @@
   place-items: center;
   aspect-ratio: 16 / 9;
   background: var(--surface-lane);
+}
+.home-well::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.home-project:hover .home-well::after {
+  opacity: 1;
 }
 .home-frame {
   position: relative;
@@ -123,7 +139,8 @@
 }
 .home-project:focus-visible .home-selection {
   color: var(--selection);
-  box-shadow: inset 0 0 0 var(--stroke-selection) var(--selection);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
   opacity: 1;
   transition: none;
 }

@@ -180,6 +180,7 @@ function Menu({ menu }: { menu: OpenMenu }) {
             aria-keyshortcuts={keys?.replace("Ctrl", "Control")}
             data-label={label}
             disabled={item.disabled}
+            aria-disabled={item.disabled || undefined}
             tabIndex={-1}
             // The row under the pointer is the focused row, so there is one highlight, not two.
             onPointerMove={(event) =>

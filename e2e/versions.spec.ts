@@ -221,7 +221,11 @@ test("an agent's four takes on one clip: hover plays each, a click switches, kee
 
     // Keep ends the choice: one take is left and the count goes away.
     await badge.click();
-    await page.getByRole("button", { name: "Keep Clip wall" }).click();
+    await page.keyboard.press("End");
+    await expect(
+      menu.getByRole("menuitem", { name: "Keep Clip wall" }),
+    ).toBeFocused();
+    await page.keyboard.press("Enter");
     await expect(badge).toHaveCount(0);
     // The badge goes with the optimistic edit; the server has it once the save lands.
     await expect

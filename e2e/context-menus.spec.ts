@@ -100,7 +100,18 @@ test("the clip menu acts on the selection through the same edits as the keys", a
       keymap[action].keys[0],
     );
   // Nothing is copied yet, and the playhead is at the clip's first frame, not inside it.
-  await expect(row(clips, "editPaste")).toBeDisabled();
+  const paste = row(clips, "editPaste");
+  await expect(paste).toBeDisabled();
+  await expect(paste).toHaveAttribute("aria-disabled", "true");
+  await expect(paste).toHaveCSS("opacity", "1");
+  await paste.hover();
+  expect(
+    await paste.evaluate(
+      (button) => getComputedStyle(button, "::before").display,
+    ),
+  ).toBe("none");
+  await paste.click({ force: true });
+  await expect(clips).toBeVisible();
   await expect(row(clips, "editM2SplitClip")).toBeDisabled();
 
   // Arrows skip unavailable rows and wrap; letters search; Escape closes.

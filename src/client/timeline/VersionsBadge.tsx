@@ -84,7 +84,7 @@ function VersionsMenu({
     [clip.id],
   );
   const items = () =>
-    menu.current?.querySelectorAll<HTMLButtonElement>("[data-version]") ?? [];
+    menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [];
   const show = (index: number) => {
     if (index === active) return;
     run(`Show version "${versions[index]!.name}"`, () => [
@@ -125,7 +125,7 @@ function VersionsMenu({
         const buttons = [...items()];
         const next = menuStep(
           event,
-          versions.map(({ name }) => name),
+          buttons.map((button) => button.textContent ?? ""),
           buttons.findIndex((button) => button === document.activeElement),
           search.current,
         );
@@ -157,8 +157,10 @@ function VersionsMenu({
       <button
         type="button"
         className="versions-keep"
+        role="menuitem"
         tabIndex={-1}
         onPointerEnter={() => hoverVersion(clip, null)}
+        onFocus={() => hoverVersion(clip, null)}
         onClick={() => {
           run(`Keep version "${versions[active]!.name}"`, () => [
             { type: "keepVersion", clipId: clip.id },

@@ -17,10 +17,24 @@
 .tl-versions[aria-expanded="true"] {
   background: color-mix(in srgb, var(--clip-head-text) 28%, var(--head));
 }
-@media (hover: hover) and (pointer: fine) {
-  .tl-versions:hover {
-    background: color-mix(in srgb, var(--clip-head-text) 28%, var(--head));
-  }
+.tl-versions {
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.tl-versions::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.tl-versions:hover::before {
+  opacity: 1;
+}
+.tl-versions:active {
+  transform: scale(var(--press-scale));
 }
 
 /* The list hangs under the count, on the menu surface, and flips above near the bottom. */
@@ -88,15 +102,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.versions-menu button[data-hovered],
-.versions-menu button:focus-visible {
+.versions-menu button[aria-checked="true"] {
   background: var(--surface-active);
-  outline: none;
-}
-@media (hover: hover) and (pointer: fine) {
-  .versions-keep:hover {
-    background: var(--overlay-hover);
-  }
 }
 .versions-menu hr {
   width: auto;

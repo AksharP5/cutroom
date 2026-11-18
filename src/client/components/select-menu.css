@@ -66,7 +66,7 @@
   text-align: left;
   overflow-wrap: anywhere;
 }
-.select-menu button::before {
+:is(.select-menu, .versions-menu) button::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -76,8 +76,26 @@
   pointer-events: none;
   transition: opacity var(--duration-hover) var(--ease-fade);
 }
-.select-menu button:hover::before {
+:is(.select-menu, .versions-menu) button:hover:not(:disabled)::before,
+.versions-menu button[data-hovered]::before {
   opacity: 1;
+}
+:is(.select-menu:not(.export-body .select-menu), .versions-menu) button {
+  transition: transform var(--duration-press) var(--ease-out);
+
+  &:active:not(:disabled) {
+    transform: scale(var(--press-scale));
+  }
+
+  &:disabled {
+    opacity: 1;
+    color: var(--text-tertiary);
+    cursor: default;
+  }
+
+  &:focus-visible {
+    outline-offset: calc(-1 * var(--focus-ring-width));
+  }
 }
 .select-menu button[aria-selected="true"] {
   background: var(--surface-active);
@@ -122,11 +140,16 @@
   font-stretch: var(--stretch-mono);
   color: var(--text-tertiary);
 }
-.context-menu button:focus::before {
+.context-menu button:focus:not(:disabled)::before {
   opacity: 1;
 }
 .context-menu button:disabled::before {
   display: none;
+}
+/* An unavailable command's key hint is as quiet as its name. */
+.context-menu button:disabled kbd {
+  color: inherit;
+  font-weight: var(--weight-regular);
 }
 .context-menu hr {
   width: auto;

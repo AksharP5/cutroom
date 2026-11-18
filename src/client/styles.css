@@ -3131,6 +3131,59 @@ option {
   font-size: var(--type-2xs);
 }
 
+/* The project and file dialogs keep their unavailable actions readable. */
+:where(.project-form, .modal:has(.file-location)) button:disabled {
+  background: var(--surface-active);
+  color: var(--text-tertiary);
+  opacity: 1;
+  cursor: default;
+}
+:is(
+  .project-form input,
+  .file-location input,
+  .shortcuts > input,
+  .settings-toggle input
+):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+:is(.project-form input, .file-location input, .shortcuts > input):hover {
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line-strong);
+}
+:is(.file-row, .project-row, .toast button, .settings-toggle) {
+  transition: transform var(--duration-press) var(--ease-out);
+
+  &:active:not(:disabled) {
+    transform: scale(var(--press-scale));
+  }
+}
+:is(
+  .home-actions .primary-button,
+  .project-form .primary-button,
+  .settings-toggle
+) {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--overlay-hover);
+    opacity: 0;
+    transition: opacity var(--duration-hover) var(--ease-fade);
+    pointer-events: none;
+  }
+
+  &:hover:not(:disabled)::before {
+    opacity: 1;
+  }
+}
+.settings-toggle,
+.settings-toggle input {
+  cursor: pointer;
+}
+
 /* Breakpoints are the tokens' @custom-media; the build expands them. */
 @media (--short) {
   .media-body {

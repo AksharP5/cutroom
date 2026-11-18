@@ -93,6 +93,7 @@ export function FileDialog({
           className="icon-button"
           type="button"
           aria-label="Parent folder"
+          title="Parent folder"
           disabled={
             !directory || directory.path === directory.parent || loading
           }
@@ -126,6 +127,9 @@ export function FileDialog({
             <button
               key={entry.path}
               disabled={loading}
+              aria-pressed={
+                entry.directory ? undefined : selected === entry.path
+              }
               className={`file-row ${selected === entry.path ? "selected" : ""}`}
               onClick={() =>
                 entry.directory ? setPath(entry.path) : setSelected(entry.path)
