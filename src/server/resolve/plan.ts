@@ -8,6 +8,7 @@ import {
 import { clampFadesToDuration, fadeGain } from "@hyperframes/core/audio-fade";
 import { cubicBezier, valueAt } from "../../shared/timeline/keyframes";
 import type { KeyframeValues } from "../../shared/timeline/keyframes";
+import type { Grade } from "../../shared/timeline/grade";
 import { REGION_EASE_CURVES } from "../../shared/timeline/region";
 import type { Region } from "../../shared/timeline/region";
 import { elementSpan } from "../../shared/timeline/regionStyle";
@@ -60,7 +61,16 @@ export interface PlanInput {
   baked?: ReadonlySet<string>;
 }
 
+export interface GradeTarget {
+  grade: Grade;
+  track: number;
+  start: number;
+  end: number;
+  label: string;
+}
+
 export interface Plan {
+  grades: GradeTarget[];
   fcpxml: string;
   /** Resolve's marker EDL, or null when the timeline has no markers. */
   markers: string | null;
@@ -1070,6 +1080,19 @@ export function planResolveTimeline(input: PlanInput): Plan {
     fcpxml: fcpxmlDocument(root),
     markers: markerList(input.name, timeline.markers, fps),
     notes: context.notes,
+    grades: pictures.flatMap((clip) =>
+      clip.grade && !input.baked?.has(clip.id)
+        ? [
+            {
+              grade: clip.grade,
+              track: videoTracks.indexOf(clip.track) + 1,
+              start: clip.start,
+              end: clip.start + clip.duration,
+              label: label(clip),
+            },
+          ]
+        : [],
+    ),
   };
 }
 

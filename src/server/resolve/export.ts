@@ -20,7 +20,8 @@ import { localMediaInputOptions } from "../media/input";
 import { projectPath, unavailableProjectFile } from "../projects/path";
 import { layerTracks } from "./layers";
 import type { LayerTrack } from "./layers";
-import { label, planResolveTimeline } from "./plan";
+import { planResolveTimeline } from "./plan";
+import { writeResolveGrades } from "./grades";
 import type { ClipMedia } from "./plan";
 import { probeMedia } from "./probe";
 import type { MediaFacts } from "./probe";
@@ -61,8 +62,6 @@ export interface ResolveSource {
   size: { width: number; height: number };
   /** Image variables' current files, by variable id. */
   images: ReadonlyMap<string, string>;
-  /** Each graded clip's grade as a .cube LUT, by clip id. */
-  grades?: ReadonlyMap<string, string>;
 }
 
 /** Each clip's local media: only files inside the project, which the timeline names. */
@@ -347,27 +346,6 @@ async function writePackage(
       }
     : source.timeline;
 
-  const grades = [...(source.grades ?? [])].flatMap(([id, cube]) => {
-    const clip = source.timeline.clips.find((entry) => entry.id === id);
-    return clip ? [{ clip, cube }] : [];
-  });
-  const gradeNotes: string[] = [];
-  if (grades.length) {
-    await mkdir(join(folder, "LUTs"));
-    const taken = new Set<string>();
-    for (const { clip, cube } of grades) {
-      const stemOf = safeName(label(clip).replace(/\.[^.]+$/, ""), "Grade");
-      let name = `${stemOf}.cube`;
-      for (let number = 2; taken.has(name); number++)
-        name = `${stemOf} ${number}.cube`;
-      taken.add(name);
-      await writeFile(join(folder, "LUTs", name), cube, { flag: "wx" });
-      gradeNotes.push(
-        `Apply LUTs/${name} to "${label(clip)}" at ${formatTimecode(clip.start, fps)} on ${trackName(clip.track)}, its Cutroom grade.`,
-      );
-    }
-  }
-
   const plan = planResolveTimeline({
     name: stem,
     timeline: timelineIn,
@@ -386,6 +364,7 @@ async function writePackage(
   ];
   const timeline = join(folder, `${stem}.fcpxml`);
   await writeFile(timeline, plan.fcpxml, { flag: "wx" });
+  const grades = await writeResolveGrades(source, timeline, plan.grades);
   const markers = plan.markers ? join(folder, `${stem} markers.edl`) : null;
   if (markers && plan.markers)
     await writeFile(markers, plan.markers, { flag: "wx" });
@@ -395,7 +374,9 @@ async function writePackage(
     [
       `${stem} for DaVinci Resolve`,
       "",
-      `Import the timeline with File > Import > Timeline and choose ${basename(timeline)}.`,
+      ...(grades?.instructions ?? [
+        `Import the timeline with File > Import > Timeline and choose ${basename(timeline)}.`,
+      ]),
       ...(markers
         ? [
             `Then add the markers with Timeline > Import > Timeline Markers from EDL and choose ${basename(markers)}.`,
@@ -406,8 +387,8 @@ async function writePackage(
       options.copyMedia
         ? "Media: copied into the Media folder beside the timeline."
         : "Media: linked where it is in the project.",
-      ...(gradeNotes.length
-        ? ["", "Grades:", ...gradeNotes.map((note) => `- ${note}`)]
+      ...(grades
+        ? ["", "Grades:", ...grades.notes.map((note) => `- ${note}`)]
         : []),
       "",
       ...(layerNotes.length
@@ -425,6 +406,7 @@ async function writePackage(
     timeline,
     markers,
     summary,
+    gradeScript: grades?.script ?? null,
     notes: [...layerNotes, ...notes],
   };
 }

@@ -115,7 +115,7 @@ test("a layer render shows only its own clips, silent, over a clear background",
 });
 
 test.skipIf(!Bun.which("ffmpeg"))(
-  "layer clips are cuts of their track's render, and grades travel as LUTs",
+  "layer clips are cuts of their track's render",
   async () => {
     const f = await projectFixture();
     try {
@@ -156,7 +156,6 @@ test.skipIf(!Bun.which("ffmpeg"))(
           timeline: edit(),
           size: { width: 320, height: 240 },
           images: new Map(),
-          grades: new Map([["shot", "LUT_3D_SIZE 2\n"]]),
         },
         {
           directory: f.directory,
@@ -202,13 +201,7 @@ test.skipIf(!Bun.which("ffmpeg"))(
       expect(fcpxml).toMatch(
         /<video ref="r\d+" lane="3" name="[^"]*" offset="[^"]+" start="0s" duration="1001\/2000s"/,
       );
-      expect(
-        await readFile(join(result.outputPath, "LUTs", "shot.cube"), "utf8"),
-      ).toBe("LUT_3D_SIZE 2\n");
       const summary = await readFile(result.summary, "utf8");
-      expect(summary).toContain(
-        'Apply LUTs/shot.cube to "shot.mp4" at 00:00:00:00 on V1',
-      );
       expect(summary).toContain(
         "V2's titles, scenes and other clips Resolve can't open are rendered with transparency in Layers/V2.mov",
       );

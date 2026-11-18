@@ -407,7 +407,7 @@ The structure follows what Resolve 21.1 imports, measured by importing variants 
 
 Clips Resolve can't open as media (titles, scenes, captions, HTML elements, SVG images, blur and highlight layers) render into `Layers/V<n>.mov`, one ProRes 4444 MOV per video track covering its first to its last such clip, and each clip is its own cut of that file on its own track, so it stays a movable layer. Each render is an ordinary MOV job, so the editor's export indicator follows it, and it reads `layerHtml` (`layers.ts`): the composition with every other clip hidden, every track silent and the root's background cleared. The export sets that HTML in an `AsyncLocalStorage` around its own render request, which the render workers' source overrides read; no client request can supply it. A blur or highlight shows the picture beneath it, so its track's render keeps the tracks below and sits over them in Resolve. Zoom layers stay visible in every render, so a rendered title zooms with the shot. A failed render removes the export's folder.
 
-`ResolveSource.grades` takes each graded clip's grade as `.cube` text and writes it to `LUTs/`, named in the summary; nothing fills it until clip grades land.
+The Resolve plan collects grades for the video and still clips it links. The export uses the same 65-point baker as the direct FFmpeg export, with one cube per grade hash in `LUTs/Cutroom Grades/`. A rendered layer already contains its grade. Resolve reads the per-clip LUTs through a console script that imports the FCPXML, finds the planned cuts by video track and frame range, and assigns their LUTs to node 01 on that new timeline. The summary explains how to register the LUTs with Resolve and lists the clip assignments for manual import.
 
 ### Variables
 

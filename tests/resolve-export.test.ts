@@ -5,6 +5,7 @@ import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { ResolveExportSchema } from "../src/shared/export";
+import { readCube } from "../src/server/grade/luts";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpServer } from "../src/server/mcp/server";
 import { createTimelineRoutes } from "../src/server/timeline/routes";
@@ -158,4 +159,89 @@ test.skipIf(!Bun.which("ffmpeg"))(
     }
   },
   60_000,
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "Resolve bakes identical grades once and writes an import script for the exported cuts",
+  async () => {
+    const f = await projectFixture();
+    const api = createHyperframesApi(f.store, f.review);
+    try {
+      const project = await f.store.create({
+        name: 'Chart "A" & cut',
+        width: 320,
+        height: 240,
+        duration: 4,
+      });
+      await clip(join(project.path, "chart.mp4"), "red");
+      const grade = (exposure: number) =>
+        `data-color-grading='${JSON.stringify({ adjust: { exposure } })}'`;
+      await writeFile(
+        join(project.path, "index.html"),
+        `<!doctype html><main data-composition-id="main" data-width="320" data-height="240" data-fps="30000/1001" data-duration="4">
+<video id="first" muted src="chart.mp4" data-start="0" data-duration="1.001" data-track-index="0" ${grade(1)}></video>
+<video id="same" muted src="chart.mp4" data-start="1.001" data-duration="1.001" data-track-index="0" ${grade(1)}></video>
+<video id="other" muted src="chart.mp4" data-start="2.002" data-duration="1.001" data-track-index="0" ${grade(-1)}></video>
+<video id="offline" muted src="offline.mp4" data-start="3.003" data-duration="1.001" data-track-index="0" ${grade(2)}></video>
+</main>`,
+      );
+      const response = await api.request(
+        `http://localhost/projects/${project.id}/export`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ format: "resolve", directory: f.directory }),
+        },
+      );
+      const body: unknown = await response.json();
+      expect(response.ok, JSON.stringify(body)).toBe(true);
+      const result = ResolveExportSchema.parse(body);
+      expect(result.gradeScript).toBeString();
+
+      const lutFolder = join(result.outputPath, "LUTs", "Cutroom Grades");
+      const cubes = await readdir(lutFolder);
+      expect(cubes).toHaveLength(2);
+      for (const name of cubes) {
+        expect(name).toMatch(/^[a-f0-9]{64}\.cube$/);
+        const cube = readCube(await readFile(join(lutFolder, name)));
+        expect(cube.size).toBe(65);
+      }
+
+      const script = await readFile(result.gradeScript!, "utf8");
+      expect(script).toContain(JSON.stringify('Chart "A" & cut.fcpxml'));
+      expect(script).toContain("ImportTimelineFromFile(str(path))");
+      expect(script).toContain('imported.GetItemListInTrack("video", track)');
+      expect(script).toContain("graph.SetLUT(1, lut)");
+      const assignments = [
+        ...script.matchAll(
+          /\[1,(\d+),(\d+),"Cutroom Grades\/([a-f\d]+\.cube)"\]/g,
+        ),
+      ];
+      expect(assignments.map(([, start, end]) => [start, end])).toEqual([
+        ["0", "30"],
+        ["30", "60"],
+        ["60", "90"],
+      ]);
+      expect(assignments[0]?.[3]).toBe(assignments[1]?.[3]);
+      expect(assignments[2]?.[3]).not.toBe(assignments[0]?.[3]);
+      expect(cubes).toContain(assignments[0]?.[3]);
+      expect(cubes).toContain(assignments[2]?.[3]);
+
+      const summary = await readFile(result.summary, "utf8");
+      expect(summary).toContain("Open LUT Folder");
+      expect(summary).toContain("Update Lists");
+      expect(summary).toContain("Workspace > Console");
+      expect(summary).toContain(
+        `runpy.run_path(${JSON.stringify(result.gradeScript)}`,
+      );
+      expect(summary).toContain(
+        `at 00:00:01:00 on V1: LUTs/Cutroom Grades/${assignments[1]?.[3]}`,
+      );
+      expect(summary).toContain("offline.mp4 is offline");
+    } finally {
+      await api.dispose();
+      await f.close();
+    }
+  },
+  30_000,
 );
