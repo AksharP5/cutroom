@@ -68,7 +68,7 @@ The 2px rail identifies the kind, the tinted head carries the name and duration,
 Keep clip colours out of action, selection, and status cues.
 
 Marker flags and names use grey, green, violet, rose, or sand. Keep those colours for markers, and reserve the human yellow, agent blue, and error or playhead reds for their own signals.
-In the code editor, use `--code-keyword`, `--code-name`, `--code-attribute`, `--code-string`, and `--code-number` for syntax. Keep that palette in the source editor.
+Wherever source is shown, in the code editor or in a code block in chat, use `--code-keyword`, `--code-name`, `--code-attribute`, `--code-string`, and `--code-number` for syntax. Keep that palette out of everything else.
 
 ## Type
 
