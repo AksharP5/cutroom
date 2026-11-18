@@ -63,6 +63,11 @@
   --text-tertiary: #939393; /* 6.10 / 5.72 / 5.55 / 5.14 / 4.54 */
   --text-quiet: #6a6a6a; /* 3.5 on panel; quiet zeros in timecode only, never a whole value */
   --glyph-faint: #5c5c5c; /* non-text only: idle diamonds, step boxes, accepted pins, empty poster mark (2.63 on raised) */
+  /* Curve lines, one per channel; marks only, never text. */
+  --curve-master: #ededed;
+  --curve-red: #e5605a;
+  --curve-green: #5bbf72;
+  --curve-blue: #5b8ff0;
 
   /* Signals. Yellow is a human mark. Blue is agent work: active OR awaiting review. */
   --human: #f2c94c; /* 11.8 on panel */

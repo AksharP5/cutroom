@@ -17,6 +17,8 @@ import {
 import { editTimeline } from "../timeline";
 import { Row } from "./TitleSection";
 import { ValueField } from "./ValueField";
+import { CurveEditor, IDENTITY } from "./CurveEditor";
+import type { CurveChannel } from "./CurveEditor";
 
 type AdjustKey = keyof NonNullable<Grade["adjust"]>;
 
@@ -267,6 +269,7 @@ export function ColorSection({
   const locked = disabled || !!restriction;
   const bypass = useGradeBypass((state) => state.bypass);
   const { luts, reload } = useLuts(projectId, open);
+  const [channel, setChannel] = useState<CurveChannel>("master");
   const file = useRef<HTMLInputElement>(null);
 
   const save = (label: string, change: GradeEdit | null) =>
@@ -462,6 +465,32 @@ export function ColorSection({
           />
         );
       })}
+      <Row label="Curves">
+        <button
+          type="button"
+          className="inspector-curve-reset"
+          disabled={locked || !grade?.curves?.[channel]}
+          onClick={() =>
+            void save(`Reset ${channel} curve`, {
+              curves: { [channel]: null },
+            })
+          }
+        >
+          Reset
+        </button>
+      </Row>
+      <CurveEditor
+        key={`${clip.id}:${channel}`}
+        channel={channel}
+        points={grade?.curves?.[channel] ?? IDENTITY}
+        disabled={locked}
+        onChannel={setChannel}
+        onPreview={(points) => draft({ curves: { [channel]: points } })}
+        onCancel={() => cancelGradePreview(clip.id)}
+        onCommit={(points) =>
+          commit(`Set ${channel} curve`, { curves: { [channel]: points } })
+        }
+      />
     </details>
   );
 }

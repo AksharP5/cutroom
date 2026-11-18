@@ -282,3 +282,79 @@ test("Colour drafts a grade into the viewer while a slider moves and saves one u
   await expect.poll(steps).toBe(pasting + 1);
   expect(await grade("b")).toEqual(await grade("a"));
 });
+
+test("Curves add, move and remove points on each channel, drafting while they move", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const { project, steps, grade } = await gradeProject(request);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  await inspector
+    .locator("details", {
+      has: page.locator("summary", { hasText: /^Colour/ }),
+    })
+    .locator("summary")
+    .click();
+  const plot = inspector.getByRole("group", { name: "Master curve" });
+  await plot.scrollIntoViewIfNeeded();
+  const box = (await plot.boundingBox())!;
+  const brightness = async () => {
+    const png = await page.locator("iframe[data-live]").screenshot();
+    return page.evaluate(async (data) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return context.getImageData(image.width >> 1, image.height >> 1, 1, 1)
+        .data[1]!;
+    }, png.toString("base64"));
+  };
+  const grey = await brightness();
+
+  // Pressing the line at mid grey adds a point there; dragging it up brightens the picture.
+  const before = await steps();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3, {
+    steps: 5,
+  });
+  await expect.poll(brightness).toBeGreaterThan(grey + 25);
+  expect(await steps()).toBe(before);
+  await page.mouse.up();
+  await expect.poll(steps).toBe(before + 1);
+  const master = (await grade("a"))?.curves as { master: number[][] };
+  expect(master.master).toHaveLength(3);
+  expect(master.master[1]![1]).toBeGreaterThan(0.6);
+
+  // Double-clicking the point removes it, and the curve is straight again.
+  await inspector.getByRole("slider", { name: "Master point 2" }).dblclick();
+  await expect.poll(steps).toBe(before + 2);
+  await expect.poll(async () => (await grade("a"))?.curves ?? null).toBeNull();
+
+  // The red channel's curve is its own.
+  await inspector.getByRole("radio", { name: "Red" }).click();
+  const red = inspector.getByRole("group", { name: "Red curve" });
+  const redBox = (await red.boundingBox())!;
+  await page.mouse.move(
+    redBox.x + redBox.width / 2,
+    redBox.y + redBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    redBox.x + redBox.width / 2,
+    redBox.y + redBox.height * 0.6,
+    {
+      steps: 3,
+    },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () => Object.keys((await grade("a"))?.curves ?? {}))
+    .toEqual(["red"]);
+});
