@@ -1,4 +1,5 @@
 import { fileFingerprint, inMediaTrash } from "../../shared/media";
+import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -66,7 +67,12 @@ import type {
   createPreviewDocumentStore,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
-import { isMissing, projectPath, readSource } from "../projects/store";
+import {
+  ProjectDocumentError,
+  isMissing,
+  projectPath,
+  readSource,
+} from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import {
@@ -83,7 +89,7 @@ import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
-import { readTrackMix } from "../timeline/mix";
+import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
   compositionScope,
   mixCompositionInstances,
@@ -633,7 +639,13 @@ export function createHyperframesApi(
   };
 
   const watchProject = async (project: ResolvedProject) => {
-    await reviews.observeAssets(await store.get(project.id));
+    const current = await store.get(project.id);
+    await reviews.observeAssets(current);
+    const readMix = () =>
+      store.document(current).then(trackMixStamp, (error: unknown) => {
+        if (!(error instanceof ProjectDocumentError)) throw error;
+      });
+    let mix = await readMix();
     const watcher = watch(
       project.dir,
       { recursive: true },
@@ -710,7 +722,15 @@ export function createHyperframesApi(
             absolute,
             version ?? DELETED_VERSION,
           );
-          const affects = affectsPreview(project.dir, path);
+          let mixChanged = false;
+          if (path === PROJECT_DOCUMENT_PATH) {
+            const next = await readMix();
+            if (next !== undefined) {
+              mixChanged = next !== mix;
+              mix = next;
+            }
+          }
+          const affects = mixChanged || affectsPreview(project.dir, path);
           const change: FileChange = {
             projectId: project.id,
             path,

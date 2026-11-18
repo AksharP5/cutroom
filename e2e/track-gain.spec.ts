@@ -641,6 +641,12 @@ test("track membership follows splits, moves, clipboard snapshots and history; c
           ?.volume,
     )
     .toBe(db(-18));
+  const frame = page.locator("iframe[data-live]");
+  const group = frame
+    .contentFrame()
+    .locator('hf-audio-group[data-cutroom-track="2"]');
+  await expect(group).toHaveAttribute("data-volume", String(db(-18)));
+  const preview = (await frame.getAttribute("src"))!;
   const settingsPath = join(project.path, "cutroom.json");
   const settings = ProjectDocumentSchema.parse(
     JSON.parse(await readFile(settingsPath, "utf8")),
@@ -649,11 +655,8 @@ test("track membership follows splits, moves, clipboard snapshots and history; c
     "index.html"
   ]!.tracks.map((track) => ({ ...track, volume: 1 }));
   await writeFile(settingsPath, JSON.stringify(settings, null, 2));
-  await expect(
-    page
-      .frameLocator("iframe[data-live]")
-      .locator('hf-audio-group[data-cutroom-track="2"]'),
-  ).toHaveAttribute("data-volume", "1");
+  await expect(group).toHaveAttribute("data-volume", "1");
+  await expect(frame).toHaveAttribute("src", preview);
 });
 
 test("@performance a gain edit changes one group attribute and reaches the preview at 500 clips", async ({

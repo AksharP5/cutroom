@@ -2,6 +2,8 @@ import { z } from "zod";
 import { TimelineSettingsSchema } from "./timeline/schema";
 import { JobStateSchema } from "./jobs";
 
+export const PROJECT_DOCUMENT_PATH = "cutroom.json";
+
 export const PointSchema = z.object({
   x: z.number().min(0).max(1),
   y: z.number().min(0).max(1),
