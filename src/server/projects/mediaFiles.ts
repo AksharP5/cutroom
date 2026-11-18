@@ -30,6 +30,7 @@ import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
 import { mediaReferenceRenamer } from "./mediaReferences";
 import type { ProjectEntry } from "./mediaReferences";
+import { sceneSources } from "./sceneSources";
 import { moveSourceMarks } from "./view";
 import { freezeCompanion } from "./freezeAssets";
 
@@ -72,17 +73,19 @@ const exists = (path: string) =>
 export async function mediaUses(project: Project, raw: string) {
   const { canonical, companion } = await mediaFile(project, raw);
   const counts = new Map<string, number>();
+  const resolveScene = sceneSources(project.path);
   for await (const {
     path: composition,
     canonical: sourceFile,
     content,
     mounted,
   } of compositionSources(project)) {
-    const { references, canonicalMedia } = await compositionVersions(
-      project,
-      composition,
-      { content, mounted },
-    );
+    const { references, canonicalMedia, sceneImages } =
+      await compositionVersions(project, composition, {
+        content,
+        mounted,
+        resolveScene,
+      });
     const usesFile = (paths: Set<string> | undefined) =>
       paths &&
       [...paths].some((reference) => {
@@ -92,17 +95,24 @@ export async function mediaUses(project: Project, raw: string) {
           (companion !== undefined && resolved === companion.path)
         );
       });
-    const owners = new Set<string>();
+    const owners = new Set<string | number>();
+    const links = new Map<string, string>();
     try {
       const { timeline } = parseComposition(content, emptyTimelineSettings(), {
         scope: compositionScope(composition),
       });
       for (const clip of timeline.clips) {
+        if (clip.link) links.set(clip.id, clip.link);
         if (usesFile(references.get(clip.id))) owners.add(clip.link ?? clip.id);
       }
     } catch (error) {
       if (!(error instanceof TimelineError)) throw error;
     }
+    for (const [owner, paths] of sceneImages)
+      if (usesFile(paths))
+        owners.add(
+          typeof owner === "string" ? (links.get(owner) ?? owner) : owner,
+        );
     counts.set(
       sourceFile,
       Math.max(

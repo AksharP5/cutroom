@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { projectPath } from "../projects/store";
+import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
 
 const ProbeSchema = z.object({
@@ -94,4 +95,17 @@ export async function mediaFacts(
     }),
   );
   return facts;
+}
+
+/** The same source discovery and probe mapping used to build the timeline. */
+export function compositionMediaFacts(
+  project: Project,
+  composition: string,
+  html: string,
+) {
+  return mediaFacts(
+    project,
+    composition,
+    mediaSources(html, compositionScope(composition)),
+  );
 }

@@ -7,6 +7,8 @@ import { fileFingerprint, localMediaPath } from "../../shared/media";
 import { imageDeclarationUrls } from "../../shared/variables";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
+import { imageOverridesAt, sceneImageReferences } from "./mediaReferences";
+import { sceneSources } from "./sceneSources";
 import { readSource } from "./store";
 import { resolveProjectPath, unavailableProjectFile } from "./path";
 import { freezeExportSource } from "../hyperframes/freezeSources";
@@ -136,6 +138,7 @@ export async function compositionVersions(
   options?: {
     content: string;
     mounted?: boolean;
+    resolveScene?: ReturnType<typeof sceneSources>;
     readChanged?: (path: string) => Promise<string | null | undefined>;
   },
 ) {
@@ -278,7 +281,31 @@ export async function compositionVersions(
       versions.set(id, signature(JSON.stringify([versions.get(id), media])));
     }),
   );
-  return { versions, mediaFiles, canonicalMedia, references: paths };
+  // Mount overrides use the project root even when the owner has a sibling asset.
+  const sceneImages = new Map<string | number, Set<string>>();
+  if (content.includes("data-variable-values")) {
+    const resolveScene = options?.resolveScene ?? sceneSources(project.path);
+    for (const { owner, url } of sceneImageReferences(
+      content,
+      imageOverridesAt(composition, resolveScene),
+    )) {
+      const path = localPath("index.html", url);
+      if (!path) continue;
+      let refs = sceneImages.get(owner);
+      if (!refs) sceneImages.set(owner, (refs = new Set()));
+      refs.add(path);
+    }
+    await Promise.all(
+      [...sceneImages.values()].flatMap((refs) => [...refs].map(file)),
+    );
+  }
+  return {
+    versions,
+    mediaFiles,
+    canonicalMedia,
+    references: paths,
+    sceneImages,
+  };
 }
 
 /** A null id covers every authored byte outside addressable clip elements. */

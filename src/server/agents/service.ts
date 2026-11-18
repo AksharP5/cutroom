@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 import { agentSessionSchema } from "../../shared/agent";
 import type {
@@ -16,7 +16,6 @@ import type {
   CreateAgentSession,
 } from "../../shared/agent";
 import { HttpError } from "../../shared/errors";
-import { projectPath } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { createNativeRuntimeFactory } from "./factory";
@@ -24,6 +23,8 @@ import { isCutroomEdit } from "./tool-permissions";
 import { projectNames } from "./tool-subject";
 import { completeMessage } from "./runtime";
 import type { AgentRuntime, RuntimeFactory } from "./runtime";
+import { projectAttachments, T3Chats } from "./t3-chats";
+import type { T3Runner } from "./t3-link";
 
 const storedSessionsSchema = z.object({
   version: z.literal(1),
@@ -55,6 +56,7 @@ export type AgentServiceOptions = {
   dataDir: string;
   studioUrl?: string;
   runtimeFactory?: RuntimeFactory;
+  t3Runner?: T3Runner;
 };
 
 export class AgentService {
@@ -72,6 +74,7 @@ export class AgentService {
   >();
   private readonly factory: RuntimeFactory;
   private readonly path: string;
+  private readonly t3: T3Chats;
   private readonly sequences = new Map<string, number>();
   /** One per conversation, so review actions are bound to that conversation's project and run. */
   private readonly agentTokens = new Map<string, string>();
@@ -84,6 +87,7 @@ export class AgentService {
 
   constructor(private readonly options: AgentServiceOptions) {
     this.path = join(options.dataDir, "agents.json");
+    this.t3 = new T3Chats(options.review, options.t3Runner);
     this.factory =
       options.runtimeFactory ?? createNativeRuntimeFactory(options.studioUrl);
   }
@@ -101,7 +105,10 @@ export class AgentService {
     this.cutroomEdits = stored.cutroomEdits;
     for (const session of stored.sessions) {
       session.runningFollowUpId = undefined;
-      if (session.status === "running" || session.status === "waiting") {
+      if (
+        !session.t3Thread &&
+        (session.status === "running" || session.status === "waiting")
+      ) {
         session.status = "idle";
         session.pendingRequest = undefined;
         for (const message of session.messages)
@@ -153,7 +160,7 @@ export class AgentService {
     // Revocation stops active native sessions too: their native allow entries must not outlive it.
     if (!always)
       for (const session of this.sessions.values()) {
-        if (session.projectId !== projectId) continue;
+        if (session.projectId !== projectId || session.t3Thread) continue;
         await this.interrupt(session.id).catch((error: unknown) => {
           // Dispose below still closes the native process and its session allow entries.
           console.error(
@@ -235,9 +242,49 @@ export class AgentService {
     return this.get(session.id);
   }
 
+  async listT3Threads(projectId: string) {
+    this.requireOpen();
+    return this.t3.list(await this.options.projects.get(projectId));
+  }
+
+  async linkT3Thread(projectId: string, threadId: string) {
+    this.requireOpen();
+    const findLink = () =>
+      [...this.sessions.values()].find(
+        (session) =>
+          session.projectId === projectId &&
+          session.t3Thread?.threadId === threadId,
+      );
+    const existing = findLink();
+    if (existing) {
+      await this.writeChain;
+      return this.get(existing.id);
+    }
+    const session = await this.t3.open(
+      await this.options.projects.get(projectId),
+      threadId,
+    );
+    this.requireOpen();
+    const concurrent = findLink();
+    if (concurrent) {
+      await this.writeChain;
+      return this.get(concurrent.id);
+    }
+    this.sessions.set(session.id, session);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.sessions.delete(session.id);
+      throw error;
+    }
+    return this.get(session.id);
+  }
+
   async configure(id: string, input: ConfigureAgentSession) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.t3Thread)
+      throw new HttpError(409, "Change the model in T3 Code.");
     if (this.operations.has(id))
       throw new HttpError(409, "Stop the current run before changing models.");
     const operation: SessionOperation = { kind: "configure" };
@@ -279,6 +326,16 @@ export class AgentService {
   async send(id: string, turn: AgentTurn) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.t3Thread) {
+      const project = await this.options.projects.get(session.projectId);
+      this.requireOpen();
+      const result = await this.t3.send(
+        project,
+        session.t3Thread.threadId,
+        turn,
+      );
+      return { ...this.get(id), ...result };
+    }
     if (session.queuedTurns?.length)
       throw new HttpError(409, "Resume the queued follow-ups first.");
     return this.runTurn(session, turn);
@@ -287,6 +344,7 @@ export class AgentService {
   async queueFollowUp(id: string, turn: AgentTurn) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.t3Thread) return this.send(id, turn);
     const entry = { id: crypto.randomUUID(), turn };
     return this.changeFollowUps(session, (current) => [...current, entry]);
   }
@@ -458,22 +516,7 @@ export class AgentService {
     });
     const attachments = await this.prepare(
       operation,
-      Promise.all(
-        turn.attachments.map(async (attachment) => {
-          if (!isAbsolute(attachment.path))
-            throw new HttpError(
-              400,
-              "Attachments must use an absolute project file path.",
-            );
-          return {
-            ...attachment,
-            path: await projectPath(
-              project,
-              relative(project.path, attachment.path),
-            ),
-          };
-        }),
-      ),
+      projectAttachments(project, turn),
     );
     const nativeTurn = { ...turn, skills, attachments };
     if (this.admissionCancelled(id, operation)) return this.get(id);
@@ -618,6 +661,7 @@ export class AgentService {
   async interrupt(id: string) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.t3Thread) throw new HttpError(409, "Stop this run in T3 Code.");
     const operation = this.operations.get(id);
     if (operation?.kind === "turn") {
       operation.controller.abort();
@@ -639,6 +683,7 @@ export class AgentService {
   async respond(id: string, response: AgentResponse) {
     this.requireOpen();
     const session = this.requireSession(id);
+    if (session.t3Thread) throw new HttpError(409, "Answer in T3 Code.");
     const operation = this.operations.get(id);
     const queue = this.pendingRequests.get(id) ?? [];
     const current = queue[0];
@@ -756,9 +801,14 @@ export class AgentService {
       seq: this.sequences.get(id) ?? 0,
       event: { type: "snapshot", session: structuredClone(session) },
     });
+    if (!this.disposed)
+      this.t3.watch(session, (event) => this.apply(id, event));
     return () => {
       listeners.delete(listener);
-      if (!listeners.size) this.listeners.delete(id);
+      if (!listeners.size) {
+        this.listeners.delete(id);
+        this.t3.unwatch(session);
+      }
     };
   }
 
@@ -872,6 +922,7 @@ export class AgentService {
 
   private async close() {
     this.disposed = true;
+    this.t3.close();
     if (this.saveTimer) clearTimeout(this.saveTimer);
     for (const operation of this.operations.values())
       if (operation.kind === "turn") operation.controller.abort();

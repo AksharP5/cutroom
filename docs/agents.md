@@ -51,6 +51,18 @@ The digest asks the agent to reconcile the message with the queue first. Newer i
 
 While the agent is working or waiting for approval, **Queue follow-up** saves your message for that conversation. Follow-ups run in order after the current turn finishes, each with the current review queue. Remove a message using the cross next to it. After you stop the agent, close Cutroom, or a turn fails, pending follow-ups stay saved until you choose **Resume queue**. An interrupted follow-up stays queued as well. Check any partial edits before running it again.
 
-One conversation per project works at a time. Sending from a second conversation while another is working returns an error until it finishes or is stopped. Each conversation's native agent gets a private token on its MCP connection, so its review actions are credited to the running message, and the token is refused on other projects or once the run ends. Any other MCP client, even one active during that run, is recorded as an outside agent.
+One Cutroom-run conversation per project works at a time. Sending from a second conversation while another is working returns an error until it finishes or is stopped. Each conversation's native agent gets a private token on its MCP connection, so its review actions are credited to the running message, and the token is refused on other projects or once the run ends. Any other MCP client, even one active during that run, is recorded as an outside agent.
 
 Hover a Review row to move it up or down in the queue, or withdraw it. The order and withdrawal reason survive restarting Cutroom.
+
+## Shared chats
+
+Link a T3 Code thread to pick up a conversation you already started there. Cutroom lists threads by project folder and also accepts a bare thread ID from another folder. T3 Code runs the agent with its own settings. Answer questions, approve tool calls, and stop runs in T3 Code.
+
+Cutroom mirrors the thread's recent messages and status while the chat is open. It sends your message, the current video context, and a digest of unfinished review notes. Attachments and note frames go as absolute local file paths. A busy T3 Code thread queues the message for its next turn. The attached paths and context also appear in T3 Code's transcript.
+
+All paths below are under `/api/cutroom`.
+
+- `GET /projects/:id/t3-threads` returns `{ available, threads, reason? }`. Each thread has `threadId`, `title`, `link`, `status`, `providerInstanceId`, `model`, `createdAt`, and `updatedAt`. A folder missing from T3 Code returns an empty list. When the CLI or app is unavailable, `available` is false and `reason` explains why.
+- `POST /projects/:id/t3-threads/link` takes `{ threadId }` and returns the linked session with HTTP 201, including on repeat requests. Session summaries and snapshots include `t3Thread: { threadId, link }` for linked chats. The existing `provider` field identifies the underlying provider for display.
+- Use the existing session `/events` stream for snapshots, messages and status. Send through `/turns` or `/follow-ups`. Both return the session plus `queued: boolean` for T3 Code's delivery. Use `/turns` and the same `text`, `context`, and `attachments` fields for Send notes. T3 Code manages the queue and skills, so Cutroom's queue and model controls do not apply. `/interrupt` returns 409 with “Stop this run in T3 Code.” A chat awaiting approval or an answer reports `waiting` and shows “Answer in T3 Code.”

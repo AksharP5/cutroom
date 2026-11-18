@@ -76,10 +76,12 @@
     "typescript": "7.0.2",
     "vite": "6.4.2"
   },
+  "patchedDependencies": {
+    "@hyperframes/core@0.9.26": "patches/@hyperframes+core@0.9.26.patch",
+    "@hyperframes/producer@0.9.26": "patches/@hyperframes+producer@0.9.26.patch",
+    "@hyperframes/studio-server@0.9.26": "patches/@hyperframes%2Fstudio-server@0.9.26.patch"
+  },
   "trustedDependencies": [
     "electron"
-  ],
-  "patchedDependencies": {
-    "@hyperframes/studio-server@0.9.26": "patches/@hyperframes%2Fstudio-server@0.9.26.patch"
-  }
+  ]
 }

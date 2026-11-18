@@ -891,6 +891,57 @@ test("mounted freeze URLs prefer existing siblings and keep explicit parent path
   expect(await uses()).toMatchObject({ uses: 0 });
 });
 
+test("a mounted image override keeps its freeze pair through Remove, Rename and history", async () => {
+  const preview = "assets/freeze/still.png";
+  const exported = "assets/freeze/export/still.png";
+  const owner = "compositions/intro.html";
+  const vars = JSON.stringify([
+    { id: "art", label: "Art", type: "image", default: "default.png" },
+    { id: "caption", label: "Caption", type: "string", default: "" },
+  ]);
+  await writeFile(
+    at("child.html"),
+    `<template><div data-composition-id="child" data-width="160" data-height="120" data-duration="2" data-composition-variables='${vars}'><img data-var-src="art" src="default.png"></div></template>`,
+  );
+  const values = JSON.stringify({ art: preview, caption: preview });
+  const source = `<div data-composition-id="intro" data-width="160" data-height="120" data-duration="2"><div id="mount" data-composition-id="child" data-composition-src="child.html" data-variable-values='${values}' data-start="0" data-duration="2" data-track-index="0"></div><img src="${preview}"></div>`;
+  await writeFile(at(owner), source);
+  await mkdir(at("compositions/assets/freeze"), { recursive: true });
+  await writeFile(at(`compositions/${preview}`), "sibling pixels");
+  const ledger = await fixture.store.history(project);
+  await ledger.checkpoint();
+  const beforeFreeze = ledger.list().at(-1)!;
+
+  await mkdir(at("assets/freeze/export"), { recursive: true });
+  await writeFile(at(preview), "preview pixels");
+  await writeFile(at(exported), "export pixels");
+  await ledger.checkpoint();
+
+  const removal = await post("remove", { path: exported });
+  expect(removal.status).toBe(409);
+  expect(await removal.json()).toMatchObject({ uses: 1 });
+  await expect(
+    ledger.restore(beforeFreeze.id, { kind: "person", name: "You" }),
+  ).rejects.toThrow(`still used by ${owner}`);
+
+  const renamed = "assets/freeze/renamed.png";
+  const response = await post("rename", { path: preview, name: "renamed.png" });
+  expect(response.status).toBe(200);
+  const updated = await readFile(at(owner), "utf8");
+  expect(updated).toContain(
+    `data-variable-values='{&quot;art&quot;:&quot;${renamed}&quot;,&quot;caption&quot;:&quot;${preview}&quot;}'`,
+  );
+  expect(updated).toContain(`<img src="${preview}">`);
+  expect(await readFile(at(renamed), "utf8")).toBe("preview pixels");
+  expect(await readFile(at("assets/freeze/export/renamed.png"), "utf8")).toBe(
+    "export pixels",
+  );
+  expect((await step("undo")).status).toBe(200);
+  expect(await readFile(at(owner), "utf8")).toBe(source);
+  expect(await readFile(at(preview), "utf8")).toBe("preview pixels");
+  expect(await readFile(at(exported), "utf8")).toBe("export pixels");
+});
+
 test("restoring a trash move preserves a mounted freeze with identical pixels", async () => {
   const first = "assets/freeze/first.png";
   const firstExport = "assets/freeze/export/first.png";
