@@ -636,9 +636,6 @@ export function Viewer({
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
-      preview.gradeScale(
-        frame.getBoundingClientRect().width / frame.clientWidth,
-      );
       await preview.inspect();
       const { active, drawn } = usePipeline.getState();
       if (active) preview.pipeline(true, drawn);
@@ -676,9 +673,6 @@ export function Viewer({
         await new Promise((resolve) => setTimeout(resolve, 50));
         preview.signal.throwIfAborted();
         if (gen !== latest.current) return;
-        preview.gradeScale(
-          frame.getBoundingClientRect().width / frame.clientWidth,
-        );
         await preview.inspect();
       }
       if (!preview.state.root) throw new Error(NO_COMPOSITION_ROOT);
@@ -743,12 +737,6 @@ export function Viewer({
     left: reserveNote ? 12 : Math.floor((stageSize.width - width) / 2),
     top: Math.floor((stageSize.height - height) / 2),
   };
-  useEffect(() => {
-    for (const [gen, connection] of connections.current) {
-      const size = gen === handoff.confirmed?.gen ? handoff.confirmed : fit;
-      connection.gradeScale(width / size.width);
-    }
-  }, [width, fit.width, handoff.confirmed]);
   const armed = mode === "draw" || mode === "comment";
   // The next candidate mounts once a dropped one has left: never more than two documents.
   const slots = [

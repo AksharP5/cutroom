@@ -46,7 +46,8 @@ interface PreviewWindow extends DiagnosticWindow {
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
-      setSourceVisibility(target: Element, visible: boolean): boolean;
+      isGraded(target: Element): boolean;
+      setGrading(target: Element, grade: null): boolean;
       setCompare(
         target: Element,
         compare: {
@@ -60,7 +61,6 @@ interface PreviewWindow extends DiagnosticWindow {
       redraw(): void;
     };
   };
-  __cutroomGradeScale?: number;
   __cutroomParkedMedia?: ReadonlyMap<HTMLMediaElement, unknown>;
   __player?: {
     play(): void;
@@ -1772,11 +1772,11 @@ function installPreviewBridge(
       media.srcObject = new MediaStream();
     }
     parked.set(media, { released });
-    if (
-      media instanceof HTMLVideoElement &&
-      media.hasAttribute(GRADE_ATTRIBUTE)
-    )
-      win.__hf?.colorGrading?.setSourceVisibility(media, false);
+    if (media instanceof HTMLVideoElement) {
+      if (holds.has(media)) removeHold(media);
+      const grading = win.__hf?.colorGrading;
+      if (grading?.isGraded(media)) grading.setGrading(media, null);
+    }
     const value = (get: () => unknown) => ({ configurable: true, get });
     Object.defineProperties(media, {
       currentTime: {
@@ -1847,6 +1847,22 @@ function installPreviewBridge(
     }
   };
   let residency = 0;
+  // The runtime may replace one video in place when a source edit changes its grade, even
+  // though the plan still names the same clip. Park the replacement and release the old entry.
+  const pipelineMedia = new MutationObserver((records) => {
+    for (const { addedNodes, removedNodes } of records) {
+      for (const node of removedNodes)
+        if (node instanceof HTMLVideoElement && !node.isConnected)
+          unpark(node, false);
+      for (const node of addedNodes)
+        if (
+          node instanceof HTMLVideoElement &&
+          node.isConnected &&
+          drawnByPipeline(node)
+        )
+          park(node);
+    }
+  });
   /** Parks the videos the pipeline draws and gives back the rest; true when one comes back. */
   const parkRootVideos = () => {
     if (!pipelineActive) return false;
@@ -1869,7 +1885,10 @@ function installPreviewBridge(
     );
     document.adoptedStyleSheets = active ? [...sheets, pipelineSheet] : sheets;
     clearInterval(residency);
+    pipelineMedia.disconnect();
     if (active) {
+      const root = document.querySelector(ROOT_COMPOSITION);
+      if (root) pipelineMedia.observe(root, { childList: true });
       const released = parkRootVideos();
       if (document.querySelector(`video[${GRADE_ATTRIBUTE}]`)) {
         win.__hf?.colorGrading?.refresh();
@@ -1966,6 +1985,11 @@ function installPreviewBridge(
     frame: VideoFrame,
     proxy: boolean,
   ) => {
+    // The pipeline can take ownership while a native seek is waiting for a decoded frame.
+    if (parked.has(video)) {
+      frame.close();
+      return;
+    }
     cancelRelease(video);
     const previous = holds.get(video);
     video.removeAttribute("data-cutroom-held");
@@ -2797,6 +2821,7 @@ function installPreviewBridge(
     boxFrame = 0;
     boxMutations.disconnect();
     boxResize.disconnect();
+    pipelineMedia.disconnect();
     // The parent compositor can still show this document while retiring its iframe.
     // Release decoding resources without erasing the last painted picture.
     for (const frame of editFrames) frame.close();
@@ -2836,8 +2861,7 @@ function installPreviewBridge(
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
     // Every other command starts from the playhead's true time.
-    if (!scrub && data.action !== "paint" && data.action !== "grade-scale")
-      applySeeks();
+    if (!scrub && data.action !== "paint") applySeeks();
     void (async () => {
       switch (data.action) {
         case "track-gains": {
@@ -2979,19 +3003,6 @@ function installPreviewBridge(
           )
             scheduleObservation(data.hfId);
           return;
-        case "grade-scale": {
-          if (
-            !("scale" in data) ||
-            typeof data.scale !== "number" ||
-            !(data.scale > 0) ||
-            data.scale > 1 ||
-            win.__cutroomGradeScale === data.scale
-          )
-            return;
-          win.__cutroomGradeScale = data.scale;
-          win.__hf?.colorGrading?.redraw();
-          return;
-        }
         case "grade": {
           if (
             !("clipId" in data) ||

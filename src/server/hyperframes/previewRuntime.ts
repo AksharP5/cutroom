@@ -47,12 +47,6 @@ export function previewRuntimeScript() {
       'gr(e,e.element,"timeupdate",t),gr(e,window,"resize",t)',
       'gr(e,e.element,"timeupdate",()=>{(!ve(e.element)||e.element.paused||typeof e.element.requestVideoFrameCallback!=="function")&&t()}),gr(e,window,"resize",t)',
     ],
-    // A colour-only grade in the fitted editor viewer needs only the displayed pixels.
-    // Spatial stages, capture/export and the actual-size viewer keep their original backing.
-    [
-      "let c=Math.max(1,window.devicePixelRatio||1),{width:d,height:f}=UH(l*c,s*c)",
-      "let c=Math.max(1,window.devicePixelRatio||1)*(ve(n)&&!e.grading.details.grain&&!e.grading.details.vignette&&!Object.values(e.grading.effects).some(Boolean)&&!C_.some(([,p])=>ao(n,p)!==null)?Math.min(1,(window.__cutroomGradeScale??1)*Math.max(1,a.width/l,a.height/s)):1),{width:d,height:f}=UH(l*c,s*c)",
-    ],
     // Parked videos retain their attributes for seek, edit and fallback. The runtime must
     // neither draw them nor keep a pending grading entry for each of them.
     [

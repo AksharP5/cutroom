@@ -753,8 +753,6 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       return state;
     },
     inspect: async () => void (await request("inspect")),
-    gradeScale: (scale: number) =>
-      send("grade-scale", { scale: Math.min(1, scale) }),
     painted: async () => void (await request("paint")),
     get hasTimingHint() {
       return Boolean(timingRevision);
