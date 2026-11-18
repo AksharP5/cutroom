@@ -1232,7 +1232,7 @@ option {
   opacity: 0;
 }
 .chat-copy svg,
-.chat-attachment button svg {
+.chat-attachment-remove svg {
   width: var(--icon-sm);
   height: var(--icon-sm);
 }
@@ -1787,13 +1787,13 @@ option {
   outline: var(--stroke-hair) solid var(--line);
   object-fit: cover;
 }
-.chat-attachment button {
+.chat-attachment-remove {
   flex: none;
   display: grid;
   place-items: center;
   color: var(--text-secondary);
 }
-.chat-attachment[data-thumbnail] button {
+.chat-attachment[data-thumbnail] .chat-attachment-remove {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -1803,12 +1803,42 @@ option {
   background: var(--surface-float);
   opacity: 0;
 }
-.chat-attachment:hover button,
-.chat-attachment button:focus-visible {
+.chat-attachment:hover .chat-attachment-remove,
+.chat-attachment-remove:focus-visible {
   opacity: 1;
 }
-.chat-attachment button:hover {
+.chat-attachment-remove:hover {
   color: var(--text-primary);
+}
+.sent-attachments {
+  padding: var(--space-2) 0 0;
+}
+.sent-attachments .chat-attachment {
+  height: auto;
+  padding: 0;
+  background: none;
+  color: var(--text-secondary);
+}
+.sent-attachments .chat-attachment[data-thumbnail] {
+  width: 64px;
+  height: 36px;
+}
+.chat-attachment-open {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+.chat-attachment-open img {
+  display: block;
+}
+.modal:has(> .chat-attachment-full) {
+  width: fit-content;
+}
+.chat-attachment-full {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100dvh - 104px);
+  object-fit: contain;
 }
 .skill-picker {
   position: absolute;

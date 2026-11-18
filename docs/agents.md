@@ -39,6 +39,8 @@ Agents mention review notes when that turn changed one, when you explicitly ask 
 
 Your messages have a yellow rule, and project edits have a blue rule. A finished turn shows its elapsed time at its end when timestamps are available. Hover a code block or tab to **Copy code** to copy its contents. The tool calls between two replies fold into one line, such as "Read 6 files, ran 3 commands, 2 more", whose counts grow while the agent works. Select it to see every call in order, and any call to see its output. Two kinds of call always keep their own row: one that failed, with the reason, and one that changed the project, naming the files or clips.
 
+Messages sent from Cutroom show the files they carried, including review frames. Select an image to see it large and press Escape to return to the thumbnail.
+
 ## Approvals and changed clips
 
 `timeline_view` and other Cutroom reads run without approval unless your native settings ask. So does queue bookkeeping: claiming a note, finishing it, asking a question about it, or releasing it changes only its status, never the project. Edits, withdrawals, and exports ask; [MCP approvals](mcp.md#approvals) lists every tool.

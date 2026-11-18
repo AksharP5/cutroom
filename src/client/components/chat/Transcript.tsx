@@ -5,6 +5,7 @@ import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentMessage, AgentProvider } from "../../../shared/agent";
+import type { Project } from "../../../shared/project";
 import {
   describeTool,
   editsProject,
@@ -16,6 +17,7 @@ import {
 import { TimecodeText } from "../TimecodeText";
 import { chatClock } from "./clock";
 import { CodeBlock } from "./CodeBlock";
+import { Attachments } from "./Attachments";
 
 const ToolRow = memo(function ToolRow({ message }: { message: AgentMessage }) {
   const { verb, object } = describeTool(
@@ -148,9 +150,11 @@ const markdownComponents: Components = {
 const Message = memo(function Message({
   message,
   provider,
+  project,
 }: {
   message: AgentMessage;
   provider: AgentProvider;
+  project: Pick<Project, "id" | "path">;
 }) {
   return (
     <article className={`chat-message message-${message.role}`}>
@@ -173,6 +177,9 @@ const Message = memo(function Message({
           </Markdown>
         </MessageComplete.Provider>
       </div>
+      {message.role === "user" && Boolean(message.attachments?.length) && (
+        <Attachments project={project} files={message.attachments ?? []} />
+      )}
     </article>
   );
 });
@@ -185,12 +192,14 @@ const Turn = memo(
     start,
     end,
     provider,
+    project,
     finished,
   }: {
     messages: readonly AgentMessage[];
     start: number;
     end: number;
     provider: AgentProvider;
+    project: Pick<Project, "id" | "path">;
     finished: boolean;
   }) {
     const turn = messages.slice(start, end);
@@ -198,7 +207,12 @@ const Turn = memo(
     for (const message of turn) {
       if (message.role === "tool" && hiddenTools.has(message.tool ?? ""))
         continue;
-      if (message.role !== "tool" && !message.text.trim()) continue;
+      if (
+        message.role !== "tool" &&
+        !message.text.trim() &&
+        !(message.role === "user" && message.attachments?.length)
+      )
+        continue;
       const last = blocks.at(-1);
       if (message.role === "tool" && last?.[0]?.role === "tool")
         last.push(message);
@@ -217,7 +231,12 @@ const Turn = memo(
           return first.role === "tool" ? (
             <StepGroup key={first.id} steps={steps} />
           ) : (
-            <Message key={first.id} message={first} provider={provider} />
+            <Message
+              key={first.id}
+              message={first}
+              provider={provider}
+              project={project}
+            />
           );
         })}
         {finished && from !== 0 && to !== 0 && seconds > 0 && (
@@ -231,6 +250,7 @@ const Turn = memo(
       before.start !== after.start ||
       before.end !== after.end ||
       before.provider !== after.provider ||
+      before.project !== after.project ||
       before.finished !== after.finished
     )
       return false;
@@ -242,6 +262,7 @@ const Turn = memo(
 );
 
 export const Transcript = memo(function Transcript({
+  project,
   messages = noMessages,
   provider,
   busy,
@@ -250,6 +271,7 @@ export const Transcript = memo(function Transcript({
   followRef,
   children,
 }: {
+  project: Pick<Project, "id" | "path">;
   messages?: readonly AgentMessage[];
   provider: AgentProvider;
   busy: boolean;
@@ -265,6 +287,7 @@ export const Transcript = memo(function Transcript({
     turns.push(
       <Turn
         key={messages[start]?.id}
+        project={project}
         messages={messages}
         start={start}
         end={end}

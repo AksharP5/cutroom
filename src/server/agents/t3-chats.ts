@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
+import { z } from "zod";
+import { agentAttachmentSchema } from "../../shared/agent";
 import type { AgentEvent, AgentSession, AgentTurn } from "../../shared/agent";
 import { HttpError } from "../../shared/errors";
 import type { Project } from "../../shared/project";
@@ -13,6 +16,19 @@ import type { T3Runner } from "./t3-link";
 const workingPollMs = 12_000;
 const idlePollMs = 30_000;
 const afterSendPollMs = [2_000, 4_000, 8_000];
+
+export const t3AttachmentReceiptsSchema = z.array(
+  z.object({
+    promptHash: z.string(),
+    attachments: z.array(agentAttachmentSchema),
+  }),
+);
+type LinkedSession = AgentSession & {
+  t3AttachmentReceipts?: z.infer<typeof t3AttachmentReceiptsSchema>;
+};
+
+const hashPrompt = (text: string) =>
+  createHash("sha256").update(text.trim()).digest("hex");
 
 export function projectAttachments(project: Project, turn: AgentTurn) {
   return Promise.all(
@@ -40,7 +56,7 @@ export class T3Chats {
     {
       sessions: Map<
         string,
-        { session: AgentSession; emit: (event: AgentEvent) => void }
+        { session: LinkedSession; emit: (event: AgentEvent) => void }
       >;
       stop: () => void;
       afterSend: () => void;
@@ -86,7 +102,7 @@ export class T3Chats {
     return session;
   }
 
-  watch(session: AgentSession, emit: (event: AgentEvent) => void) {
+  watch(session: LinkedSession, emit: (event: AgentEvent) => void) {
     const id = session.t3Thread?.threadId;
     if (!id) return;
     const existingWatch = this.watches.get(id);
@@ -117,6 +133,17 @@ export class T3Chats {
           for (const message of threadMessages(snapshot, session.messages)) {
             const existing = previous.get(message.id);
             previous.delete(message.id);
+            const receipts = session.t3AttachmentReceipts;
+            if (!existing && message.role === "user" && receipts?.length) {
+              const hash = hashPrompt(message.text);
+              const index = receipts.findIndex(
+                ({ promptHash }) => promptHash === hash,
+              );
+              if (index !== -1)
+                message.attachments = receipts.splice(index, 1)[0]?.attachments;
+            } else if (existing?.attachments) {
+              message.attachments = existing.attachments;
+            }
             if (
               existing?.text !== message.text ||
               existing.status !== message.status
@@ -190,7 +217,12 @@ export class T3Chats {
     for (const watch of this.watches.values()) watch.stop();
   }
 
-  async send(project: Project, threadId: string, turn: AgentTurn) {
+  async send(
+    project: Project,
+    threadId: string,
+    session: LinkedSession,
+    turn: AgentTurn,
+  ) {
     if (turn.skills.length)
       throw new HttpError(400, "Choose skills in T3 Code for this chat.");
     const attachments = await projectAttachments(project, turn);
@@ -243,7 +275,18 @@ export class T3Chats {
       attachments,
       context: [origin, digest, turn.context].filter(Boolean).join("\n\n"),
     });
-    const result = await this.cli.send(threadId, prompt);
+    // The CLI acknowledges delivery without a message ID. Match the mirrored
+    // prompt once it appears, which can happen during send or after a queued run starts.
+    const receipt = { promptHash: hashPrompt(prompt), attachments };
+    const pending = (session.t3AttachmentReceipts ??= []);
+    if (attachments.length) pending.push(receipt);
+    const result = await this.cli
+      .send(threadId, prompt)
+      .catch((error: unknown) => {
+        const index = pending.indexOf(receipt);
+        if (index !== -1) pending.splice(index, 1);
+        throw error;
+      });
     this.watches.get(threadId)?.afterSend();
     return result;
   }
