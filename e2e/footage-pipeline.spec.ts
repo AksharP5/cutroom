@@ -208,7 +208,9 @@ function compare(page: Page, expected: string[], actual: string[]) {
     async ({ expected, actual, band, height }) => {
       const read = async (base64: string, size?: ImageData) => {
         const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        const image = await createImageBitmap(new Blob([bytes]));
+        const image = await createImageBitmap(new Blob([bytes]), {
+          colorSpaceConversion: "none",
+        });
         const canvas = new OffscreenCanvas(
           size?.width ?? image.width,
           size?.height ?? image.height,
@@ -791,6 +793,7 @@ test("the original benchmark markup draws graded cuts under two GSAP scene mount
     join(created.path, "scene.html"),
     `<template><main data-composition-id="scene" data-duration="0.066667" data-width="${WIDTH}" data-height="${HEIGHT}"><div id="card" style="position:absolute;right:30px;top:130px;width:120px;height:90px;background:#2985c9">Scene</div></main><script>{const tl=gsap.timeline({paused:true});tl.fromTo("#card",{x:30,opacity:0},{x:0,opacity:1,duration:0.04},0);window.__timelines.scene=tl;}</script></template>`,
   );
+  // A matrix-only H.264 tag can live in the bitstream without an MP4 colr box.
   await numbered(
     join(created.path, "a.mp4"),
     "60",
@@ -799,12 +802,8 @@ test("the original benchmark markup draws graded cuts under two GSAP scene mount
     [
       "-g",
       "15",
-      "-colorspace",
-      "bt709",
-      "-color_trc",
-      "bt709",
-      "-color_primaries",
-      "bt709",
+      "-bsf:v",
+      "h264_metadata=colour_primaries=2:transfer_characteristics=2:matrix_coefficients=1",
     ],
   );
   const frames = Array.from({ length: frameCount }, (_, frame) => frame);
@@ -834,6 +833,8 @@ test("the original benchmark markup draws graded cuts under two GSAP scene mount
     "error",
     "-i",
     path,
+    "-vf",
+    "setparams=color_trc=iec61966-2-1",
     join(output, "frame-%03d.png"),
   ]);
   const names = (await readdir(output))
@@ -846,7 +847,18 @@ test("the original benchmark markup draws graded cuts under two GSAP scene mount
     ),
   );
   const result = await compare(page, expected, actual);
-  console.log("EXPORT PARITY", JSON.stringify(result));
+  for (const [index, picture] of result.entries()) {
+    // This includes the edges of the scaled shot and animated overlays after
+    // 4:2:0 encoding. Keep the tighter colour-only bound on the swatch test.
+    expect(
+      picture.difference,
+      `frame ${index} mean RGB difference`,
+    ).toBeLessThan(3.6);
+    expect(
+      Math.max(...picture.bias),
+      `frame ${index} channel bias`,
+    ).toBeLessThan(2.4);
+  }
   expect(result.map(({ numbers }) => numbers[0])).toEqual([
     0, 1, 2, 3, 4, 5, 60, 61, 62, 63, 64, 65,
   ]);

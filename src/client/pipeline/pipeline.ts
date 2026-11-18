@@ -1,5 +1,5 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
-import type { PipelinePlan } from "../../shared/pipeline";
+import type { FootageColour, PipelinePlan } from "../../shared/pipeline";
 import type { TimelineView } from "../../shared/timeline/schema";
 import { useGradeBypass, usePreviewGrade } from "../edit/preview";
 import { previewGrades } from "./grades";
@@ -66,24 +66,26 @@ const mediaUrl = (projectId: string, path: string) =>
 /** The colours Chrome draws a `<video>` with: its tags, and its guess for those it lacks. */
 function colourOf(
   track: Awaited<ReturnType<typeof readVideoTrack>>,
+  probe?: FootageColour,
 ): VideoColorSpaceInit {
   const guess = chromeColourGuess(
     track.height,
     track.codec.startsWith("avc") ? "h264" : "hevc",
   );
-  const primaries = guess === "bt709" ? "bt709" : "smpte170m";
+  const matrix = probe?.matrix ?? track.colour?.matrix ?? guess;
+  const fallback = matrix === "bt709" ? "bt709" : guess;
   return {
-    primaries: track.colour?.primaries ?? primaries,
-    transfer:
-      track.colour?.transfer ?? (guess === "bt709" ? "bt709" : "smpte170m"),
-    matrix: track.colour?.matrix ?? (guess === "bt709" ? "bt709" : "smpte170m"),
-    fullRange: track.colour?.fullRange ?? false,
+    primaries: probe?.primaries ?? track.colour?.primaries ?? fallback,
+    transfer: probe?.transfer ?? track.colour?.transfer ?? fallback,
+    matrix,
+    fullRange: probe?.fullRange ?? track.colour?.fullRange ?? false,
   };
 }
 
 async function openSource(
   url: string,
   signal: AbortSignal,
+  colour?: FootageColour,
 ): Promise<{ decoder: SourceDecoder; intrinsic: Source["intrinsic"] }> {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
@@ -91,7 +93,7 @@ async function openSource(
     throw new Error(`This browser cannot decode ${track.codec}.`);
   const turned = track.rotation % 180 !== 0;
   return {
-    decoder: new SourceDecoder(track, read, size, colourOf(track)),
+    decoder: new SourceDecoder(track, read, size, colourOf(track, colour)),
     intrinsic: {
       width: turned ? track.height : track.width,
       height: turned ? track.width : track.height,
@@ -122,6 +124,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     { signal: closing.signal },
   );
   let plan: Plan | null = null;
+  let sourceColours: Record<string, FootageColour> = {};
   const explained = new Set<string>();
   let stopped: string | null = null;
   const stop = (reason: string) => {
@@ -162,15 +165,16 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         response.ok ? FrameGridSchema.parse(await response.json()) : null,
       )
       .catch(() => null);
-    const lanes = (url: string) =>
+    const lanes = (url: string, colour?: FootageColour) =>
       Promise.all([
-        openSource(url, closing.signal),
-        openSource(url, closing.signal),
+        openSource(url, closing.signal, colour),
+        openSource(url, closing.signal, colour),
       ]);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
     const [{ decoder, intrinsic }, second] = await lanes(
       mediaUrl(projectId, path),
+      sourceColours[path],
     ).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
@@ -474,19 +478,20 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       plan = null;
       return stop("only the entry composition plays through it");
     }
-    let next: PipelinePlan;
+    let response: ReturnType<typeof PipelineResponseSchema.parse>;
     try {
-      const response = await fetch(
+      const request = await fetch(
         `/api/cutroom/projects/${encodeURIComponent(projectId)}/pipeline`,
         { signal: closing.signal },
       );
-      next = PipelineResponseSchema.parse(await response.json()).plan;
+      response = PipelineResponseSchema.parse(await request.json());
     } catch (error) {
       if (!isCurrent()) return;
       plan = null;
       return stop(error instanceof Error ? error.message : String(error));
     }
     if (!isCurrent()) return;
+    const { plan: next, colours } = response;
     // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
     for (const reason of Object.values(next.hyperframes ?? {}))
       if (!explained.has(reason)) {
@@ -497,6 +502,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       plan = null;
       return stop(next.reason);
     }
+    sourceColours = colours;
     plan = next;
     const drawn = Object.keys(next.drawable);
     if (drawn.join("\n") !== usePipeline.getState().drawn.join("\n"))
