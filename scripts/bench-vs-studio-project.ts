@@ -45,7 +45,11 @@ export const benchGrade = {
   },
 };
 
-export async function makeProject(directory: string, graded = false) {
+export async function makeProject(
+  directory: string,
+  graded = false,
+  compatible = false,
+) {
   await mkdir(join(directory, "compositions"), { recursive: true });
   await run("ffmpeg", [
     "-v",
@@ -87,14 +91,17 @@ export async function makeProject(directory: string, graded = false) {
     "-y",
     join(directory, "music.m4a"),
   ]);
+  const gsap = compatible ? "assets/vendor/gsap.min.js" : "gsap.min.js";
+  if (compatible)
+    await mkdir(join(directory, "assets/vendor"), { recursive: true });
   await copyFile(
     resolve("node_modules/gsap/dist/gsap.min.js"),
-    join(directory, "gsap.min.js"),
+    join(directory, gsap),
   );
   const cuts = Array.from(
     { length: clipCount },
     (_, index) =>
-      `<video id="shot-${index}" class="clip" src="footage.mp4" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index)}" data-track-index="0"${graded ? ` data-color-grading='${JSON.stringify(benchGrade)}'` : ""} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
+      `<video id="shot-${index}"${compatible ? "" : ' class="clip"'} src="footage.mp4" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index)}" data-track-index="0"${graded ? ` data-color-grading='${JSON.stringify(benchGrade)}'` : ""} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
   );
   const music = `<audio id="music" class="clip" src="music.m4a" data-start="0" data-duration="${duration}" data-track-index="1" data-volume="0.5"></audio>`;
   const titles = Array.from(
@@ -112,7 +119,7 @@ export async function makeProject(directory: string, graded = false) {
 <html>
 <head>
 <meta charset="utf-8">
-<script src="gsap.min.js"></script>
+<script src="${gsap}"></script>
 <style>
 html,body{margin:0;background:#000}
 main{position:relative;width:1920px;height:1080px;overflow:hidden}
@@ -124,7 +131,7 @@ main{position:relative;width:1920px;height:1080px;overflow:hidden}
 <main id="main" data-composition-id="main" data-width="1920" data-height="1080" data-duration="${duration}" data-fps="${fps}">
 ${[...cuts, music, ...titles, ...scenes].join("\n")}
 </main>
-<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script>
+${compatible ? "" : "<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script>"}
 </body>
 </html>
 `,

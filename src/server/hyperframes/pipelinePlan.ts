@@ -253,10 +253,6 @@ export function planPreviewPipeline(html: string, fps: Fps): PipelinePlan {
       hyperframes[id] = placed.reason;
       continue;
     }
-    if (placed.grade) {
-      hyperframes[id] = `${id} is graded, which HyperFrames draws`;
-      continue;
-    }
     fits[id] =
       declarationsOf(attribute(element, "style") ?? "")
         .map((declaration) => VIDEO_FITS.get(key(declaration)))

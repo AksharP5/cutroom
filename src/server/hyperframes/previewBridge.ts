@@ -46,6 +46,7 @@ interface PreviewWindow extends DiagnosticWindow {
     };
     /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
     colorGrading?: {
+      setSourceVisibility(target: Element, visible: boolean): boolean;
       setCompare(
         target: Element,
         compare: {
@@ -57,9 +58,10 @@ interface PreviewWindow extends DiagnosticWindow {
       ): boolean;
       refresh(): number;
       redraw(): void;
-      waitForActiveLuts(): Promise<unknown>;
     };
   };
+  __cutroomGradeScale?: number;
+  __cutroomParkedMedia?: ReadonlyMap<HTMLMediaElement, unknown>;
   __player?: {
     play(): void;
     pause(): void;
@@ -679,20 +681,23 @@ function installPreviewBridge(
     if (element instanceof HTMLVideoElement && holds.has(element))
       removeHold(element);
     // The runtime watches the attribute only from `<body>` on, which its head script misses.
-    win.__hf?.colorGrading?.refresh();
+    if (!(element instanceof HTMLVideoElement && parked.has(element)))
+      win.__hf?.colorGrading?.refresh();
   };
   /** Before/after: every graded picture shows its source, through the runtime's own compare. */
   let gradeBypass = false;
   const writeGradeBypass = () => {
     const grading = win.__hf?.colorGrading;
     if (!grading) return;
-    for (const element of document.querySelectorAll(`[${GRADE_ATTRIBUTE}]`))
+    for (const element of document.querySelectorAll(`[${GRADE_ATTRIBUTE}]`)) {
+      if (element instanceof HTMLVideoElement && parked.has(element)) continue;
       grading.setCompare(element, {
         enabled: gradeBypass,
         position: 1,
         softness: 0,
         lineWidth: 0,
       });
+    }
   };
   let observedClip: string | null = null;
   let observedText: string | null = null;
@@ -1737,6 +1742,7 @@ function installPreviewBridge(
   };
   /** Parked media, and whether parking released media the element had loaded. */
   const parked = new Map<HTMLMediaElement, { released: boolean }>();
+  win.__cutroomParkedMedia = parked;
   const PARKED = [
     "currentTime",
     "readyState",
@@ -1766,6 +1772,11 @@ function installPreviewBridge(
       media.srcObject = new MediaStream();
     }
     parked.set(media, { released });
+    if (
+      media instanceof HTMLVideoElement &&
+      media.hasAttribute(GRADE_ATTRIBUTE)
+    )
+      win.__hf?.colorGrading?.setSourceVisibility(media, false);
     const value = (get: () => unknown) => ({ configurable: true, get });
     Object.defineProperties(media, {
       currentTime: {
@@ -1860,11 +1871,19 @@ function installPreviewBridge(
     clearInterval(residency);
     if (active) {
       const released = parkRootVideos();
+      if (document.querySelector(`video[${GRADE_ATTRIBUTE}]`)) {
+        win.__hf?.colorGrading?.refresh();
+        if (released && gradeBypass) writeGradeBypass();
+      }
       residentAudio(false);
       return released;
     }
     const released = parked.size > 0;
     for (const media of [...parked.keys()]) unpark(media, false);
+    if (released && document.querySelector(`video[${GRADE_ATTRIBUTE}]`)) {
+      win.__hf?.colorGrading?.refresh();
+      if (gradeBypass) writeGradeBypass();
+    }
     return released;
   };
   const holdStyle = document.createElement("style");
@@ -2817,7 +2836,8 @@ function installPreviewBridge(
     const scrub =
       data.action === "seek" && "scrub" in data && data.scrub === true;
     // Every other command starts from the playhead's true time.
-    if (!scrub && data.action !== "paint") applySeeks();
+    if (!scrub && data.action !== "paint" && data.action !== "grade-scale")
+      applySeeks();
     void (async () => {
       switch (data.action) {
         case "track-gains": {
@@ -2959,6 +2979,19 @@ function installPreviewBridge(
           )
             scheduleObservation(data.hfId);
           return;
+        case "grade-scale": {
+          if (
+            !("scale" in data) ||
+            typeof data.scale !== "number" ||
+            !(data.scale > 0) ||
+            data.scale > 1 ||
+            win.__cutroomGradeScale === data.scale
+          )
+            return;
+          win.__cutroomGradeScale = data.scale;
+          win.__hf?.colorGrading?.redraw();
+          return;
+        }
         case "grade": {
           if (
             !("clipId" in data) ||
@@ -2970,16 +3003,15 @@ function installPreviewBridge(
           )
             return;
           writeGradeDraft(data.clipId, data.attribute, data.restore);
+          const target = clipElement(data.clipId);
+          if (target instanceof HTMLVideoElement && parked.has(target)) return;
           if (gradeBypass) writeGradeBypass();
-          await win.__hf?.colorGrading?.waitForActiveLuts();
-          win.__hf?.colorGrading?.redraw();
           return;
         }
         case "grade-bypass": {
           if (!("bypass" in data) || typeof data.bypass !== "boolean") return;
           gradeBypass = data.bypass;
           writeGradeBypass();
-          win.__hf?.colorGrading?.redraw();
           return;
         }
         case "keyframe": {

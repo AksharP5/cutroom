@@ -9,6 +9,11 @@
  *   node scripts/bench-vs-studio.ts --summary cutroom-1x.json studio-1x.json ...
  *
  * --grade puts a colour grade on every shot, to compare against the same project ungraded.
+ * --pipeline enables GPU footage playback. --pipeline-compatible removes the root's empty
+ * timeline script, uses the vendored GSAP URL and omits the videos' CSS class so the pipeline
+ * can classify them. The footage, cuts, titles and scenes are the same.
+ * --footage-only runs just opens, ruler drag, playback and memory. --slider also measures
+ * the time from a Colour Exposure slider drag to the composited viewer picture.
  *
  * Runs under Node, not Bun: Playwright's library loses its browser under Bun. Each invocation
  * starts the editor's own server on a private port, copies the project for it, launches one
@@ -51,13 +56,17 @@ const { values: options, positionals } = parseArgs({
     out: { type: "string" },
     browser: { type: "string", default: "/usr/lib/chromium/chromium" },
     summary: { type: "boolean", default: false },
+    "pipeline-compatible": { type: "boolean", default: false },
+    pipeline: { type: "boolean", default: false },
+    "footage-only": { type: "boolean", default: false },
     grade: { type: "boolean", default: false },
+    slider: { type: "boolean", default: false },
   },
 });
 
 type Editor = "cutroom" | "studio";
 type Box = { x: number; y: number; width: number; height: number };
-type Picture = { time: number; number: number | null };
+type Picture = { time: number; number: number | null; tone?: number };
 
 const viewport = { width: 1720, height: 1050 };
 const editsAt = [22, 23, 24, 27, 28] as const;
@@ -251,9 +260,10 @@ async function decode(
   decoder: Page,
   frames: { time: number; data: string }[],
   box: Box,
+  readTone = false,
 ): Promise<Picture[]> {
   return decoder.evaluate(
-    async ({ frames, box, width }) => {
+    async ({ frames, box, width, readTone }) => {
       const canvas = new OffscreenCanvas(1, 1);
       const context = canvas.getContext("2d", { willReadFrequently: true })!;
       const decoded: Picture[] = [];
@@ -284,11 +294,17 @@ async function decode(
           if (l > 60 && l < 190) number = null;
           else if (l >= 190) number |= 1 << bit;
         }
-        decoded.push({ time, number });
+        const tone = readTone
+          ? [0.22, 0.42, 0.62, 0.82].reduce(
+              (sum, x) => sum + luma(x, 0.4).l,
+              0,
+            ) / 4
+          : undefined;
+        decoded.push({ time, number, tone });
       }
       return decoded;
     },
-    { frames, box, width: viewport.width },
+    { frames, box, width: viewport.width, readTone },
   );
 }
 
@@ -305,10 +321,19 @@ async function measure(editor: Editor) {
   const runs = Number(options.runs);
   const port = Number(options.port);
   const dir = resolve(options.dir!);
-  const master = join(dir, options.grade ? "master-graded" : "master");
+  const master = join(
+    dir,
+    [
+      "master",
+      options.grade && "graded",
+      options["pipeline-compatible"] && "pipeline",
+    ]
+      .filter(Boolean)
+      .join("-"),
+  );
   if (!existsSync(join(master, "index.html"))) {
     console.log("Making the project…");
-    await makeProject(master, options.grade);
+    await makeProject(master, options.grade, options["pipeline-compatible"]);
   }
   const results = [];
   for (let run = 0; run < runs; run++) {
@@ -401,6 +426,12 @@ async function session(
         `--class=${marker}`,
       ],
     });
+    if (options.pipeline) {
+      await context.addInitScript(() => {
+        if (window === window.top)
+          localStorage.setItem("cutroom.footagePipeline", "true");
+      });
+    }
     const decoder = await context.newPage();
     await decoder.goto("about:blank");
     const ui = adapter(editor);
@@ -415,34 +446,52 @@ async function session(
     page = page!;
     const cdp = await page.context().newCDPSession(page);
     const throttled = await throttleAll(page, cdp, throttle);
-    const result = {
+    const footage = {
+      pipeline:
+        editor === "cutroom"
+          ? await page.locator(".edit-stage").getAttribute("data-pipeline")
+          : null,
       run,
       opens,
       throttledTargets: throttled,
       scrub: await step("scrub", () => scrub(page, ui, cdp, decoder)),
       playback: await step("playback", () => playback(page, ui, cdp, decoder)),
-      zoom: await step("zoom", () => zoom(page, ui)),
-      razor: await step("razor", () => edits(page, ui, cdp, decoder, "razor")),
-      rippleDelete: await step("rippleDelete", () =>
-        edits(page, ui, cdp, decoder, "ripple"),
-      ),
-      trim: await step("trim", () => drag(page, ui, cdp, decoder, "trim")),
-      move: await step("move", () => drag(page, ui, cdp, decoder, "move")),
-      agentFile: await step("agentFile", () =>
-        agentEdits(page, ui, cdp, decoder, project, "file"),
-      ),
-      agentMcp: mcp
-        ? await step("agentMcp", () =>
-            agentEdits(page, ui, cdp, decoder, project, "mcp", mcp),
-          )
-        : null,
+    };
+    const editsResult = options["footage-only"]
+      ? null
+      : {
+          zoom: await step("zoom", () => zoom(page, ui)),
+          razor: await step("razor", () =>
+            edits(page, ui, cdp, decoder, "razor"),
+          ),
+          rippleDelete: await step("rippleDelete", () =>
+            edits(page, ui, cdp, decoder, "ripple"),
+          ),
+          trim: await step("trim", () => drag(page, ui, cdp, decoder, "trim")),
+          move: await step("move", () => drag(page, ui, cdp, decoder, "move")),
+          agentFile: await step("agentFile", () =>
+            agentEdits(page, ui, cdp, decoder, project, "file"),
+          ),
+          agentMcp: mcp
+            ? await step("agentMcp", () =>
+                agentEdits(page, ui, cdp, decoder, project, "mcp", mcp),
+              )
+            : null,
+        };
+    const result = {
+      ...footage,
+      ...editsResult,
       memory: {
         browserMB: await treePss(await browserPid(marker)),
         serverMB: await treePss(server.child.pid!),
       },
     };
+    const slider =
+      editor === "cutroom" && options.slider
+        ? await step("slider", () => gradeSlider(page, ui, cdp, decoder))
+        : null;
     await mcp?.close();
-    return result;
+    return { ...result, slider };
   } catch (error) {
     console.error(server.log().slice(-2000));
     throw error;
@@ -523,7 +572,20 @@ async function seekToShot(
     n !== null && n >= first && n < first + clipSeconds * fps;
   const picture = await waitPicture(page, ui, cast, decoder, inShot, 10_000);
   await cast.stop();
-  if (!picture) throw new Error(`Seeking into shot ${shot} showed no picture.`);
+  if (!picture) {
+    const shown = await decode(
+      decoder,
+      cast.frames.slice(-12),
+      await ui.pictureBox(page),
+    );
+    const drawn = await page
+      .locator(".edit-pipeline")
+      .getAttribute("data-frame", { timeout: 300 })
+      .catch(() => null);
+    throw new Error(
+      `Seeking into shot ${shot} (media frames ${first} to ${first + clipSeconds * fps - 1}) saw ${shown.map((frame) => frame.number).join(", ")}; playhead ${await ui.playhead(page)}, pipeline frame ${drawn}.`,
+    );
+  }
   await sleep(400);
   return picture.number!;
 }
@@ -655,6 +717,50 @@ async function playback(
     editorFrameP95: quantile(editor, 0.95),
     editorLateFrames: editor.filter((gap) => gap > 25).length,
   };
+}
+
+/** Each input is timestamped before dispatch. The first composited colour change counts. */
+async function gradeSlider(
+  page: Page,
+  ui: Adapter,
+  cdp: CDPSession,
+  decoder: Page,
+) {
+  await seekToShot(page, ui, cdp, decoder, 22, 0.1);
+  await ui.clip(page, "shot-22").click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const control = inspector.getByRole("slider", { name: "Exposure" });
+  await control.scrollIntoViewIfNeeded();
+  const box = (await control.boundingBox())!;
+  const y = box.y + box.height / 2;
+  const picture = await ui.pictureBox(page);
+  const cast = await screencast(cdp);
+  await page.mouse.move(box.x + box.width / 2, y);
+  await page.mouse.down();
+  await sleep(300);
+  const inputs: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    inputs.push(Date.now());
+    await page.mouse.move(box.x + box.width * (0.25 + 0.033 * i), y);
+    await sleep(80);
+  }
+  const end = Date.now();
+  const frames = await decode(decoder, await cast.stop(), picture, true);
+  await page.mouse.up();
+  return inputs.map((time, i) => {
+    const before = frames.findLast((frame) => frame.time < time)?.tone;
+    const next = inputs[i + 1] ?? end;
+    const after = frames.find(
+      (frame) =>
+        frame.time >= time &&
+        frame.time < next &&
+        frame.tone !== undefined &&
+        before !== undefined &&
+        Math.abs(frame.tone - before) >= 2,
+    );
+    return after ? after.time - time : null;
+  });
 }
 
 /** Sixteen Ctrl+wheel steps in, one per displayed frame, then back to Fit. */
@@ -1051,22 +1157,34 @@ function summaryOf(output: Output) {
     playGapP95: stat(pick((x) => [x.playback.gapP95])),
     playLateGaps: stat(pick((x) => [x.playback.lateGaps])),
     playEditorFrameP95: stat(pick((x) => [x.playback.editorFrameP95])),
-    zoomFrameP95: stat(pick((x) => [x.zoom.frameP95])),
-    zoomLateFrames: stat(pick((x) => [x.zoom.lateFrames])),
-    razorTimeline: stat(pick((x) => x.razor.map((s) => s.timeline))),
-    razorUndoTimeline: stat(pick((x) => x.razor.map((s) => s.undoTimeline))),
-    rippleTimeline: stat(pick((x) => x.rippleDelete.map((s) => s.timeline))),
-    ripplePicture: stat(pick((x) => x.rippleDelete.map((s) => s.picture))),
-    undoTimeline: stat(pick((x) => x.rippleDelete.map((s) => s.undoTimeline))),
-    undoPicture: stat(pick((x) => x.rippleDelete.map((s) => s.undoPicture))),
-    trimFrameP95: stat(pick((x) => x.trim.map((s) => s.frameP95))),
-    trimPicturesWhileDragging: stat(
-      pick((x) => x.trim.map((s) => s.picturesWhileDragging)),
+    zoomFrameP95: stat(pick((x) => [x.zoom?.frameP95])),
+    zoomLateFrames: stat(pick((x) => [x.zoom?.lateFrames])),
+    razorTimeline: stat(pick((x) => (x.razor ?? []).map((s) => s.timeline))),
+    razorUndoTimeline: stat(
+      pick((x) => (x.razor ?? []).map((s) => s.undoTimeline)),
     ),
-    moveFrameP95: stat(pick((x) => x.move.map((s) => s.frameP95))),
-    agentFilePicture: stat(pick((x) => x.agentFile.map((s) => s.picture))),
+    rippleTimeline: stat(
+      pick((x) => (x.rippleDelete ?? []).map((s) => s.timeline)),
+    ),
+    ripplePicture: stat(
+      pick((x) => (x.rippleDelete ?? []).map((s) => s.picture)),
+    ),
+    undoTimeline: stat(
+      pick((x) => (x.rippleDelete ?? []).map((s) => s.undoTimeline)),
+    ),
+    undoPicture: stat(
+      pick((x) => (x.rippleDelete ?? []).map((s) => s.undoPicture)),
+    ),
+    trimFrameP95: stat(pick((x) => (x.trim ?? []).map((s) => s.frameP95))),
+    trimPicturesWhileDragging: stat(
+      pick((x) => (x.trim ?? []).map((s) => s.picturesWhileDragging)),
+    ),
+    moveFrameP95: stat(pick((x) => (x.move ?? []).map((s) => s.frameP95))),
+    agentFilePicture: stat(
+      pick((x) => (x.agentFile ?? []).map((s) => s.picture)),
+    ),
     agentFileUndoPicture: stat(
-      pick((x) => x.agentFile.map((s) => s.undoPicture)),
+      pick((x) => (x.agentFile ?? []).map((s) => s.undoPicture)),
     ),
     agentMcpPicture: stat(
       pick((x) => (x.agentMcp ?? []).map((s) => s.picture)),
@@ -1074,6 +1192,7 @@ function summaryOf(output: Output) {
     agentMcpUndoPicture: stat(
       pick((x) => (x.agentMcp ?? []).map((s) => s.undoPicture)),
     ),
+    gradePointerToPicture: stat(pick((x) => x.slider ?? [])),
     browserMB: stat(pick((x) => [x.memory.browserMB])),
     serverMB: stat(pick((x) => [x.memory.serverMB])),
   };

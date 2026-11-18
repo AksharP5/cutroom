@@ -1,6 +1,9 @@
 import { PipelineResponseSchema } from "../../shared/pipeline";
 import type { PipelinePlan } from "../../shared/pipeline";
 import type { TimelineView } from "../../shared/timeline/schema";
+import { useGradeBypass, usePreviewGrade } from "../edit/preview";
+import { previewGrades } from "./grades";
+import type { GradeTexture } from "./grades";
 import { useTimeline } from "../edit/timeline";
 import { useTransport } from "../edit/transport";
 import { createCompositor } from "./compositor";
@@ -100,6 +103,7 @@ async function openSource(
 export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   const closing = new AbortController();
   let compositor = createCompositor(canvas);
+  const grades = previewGrades(projectId);
   // A GPU under memory pressure can drop the context; HyperFrames draws until it comes back.
   canvas.addEventListener(
     "webglcontextlost",
@@ -240,6 +244,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     frame: VideoFrame,
     turn: Layer["turn"],
     intrinsic: Source["intrinsic"],
+    grade: GradeTexture | null,
   ): Layer => {
     const { clip } = layer;
     return {
@@ -255,6 +260,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       crop: clip.crop ?? { top: 0, right: 0, bottom: 0, left: 0 },
       opacity: layer.opacity,
       brightness: layer.brightness,
+      grade,
     };
   };
 
@@ -266,6 +272,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     if (!shown) return stop("a clip at the playhead is not one it can draw");
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
+    const { draft } = usePreviewGrade.getState();
+    const { bypass } = useGradeBypass.getState();
+    const textures = Promise.all(
+      shown.map(({ clip }) => {
+        const grade = draft?.clipId === clip.id ? draft.grade : clip.grade;
+        return grade && !bypass ? grades.get(grade) : null;
+      }),
+    ).then(
+      (textures) => ({ textures }),
+      (error: unknown) => ({ error }),
+    );
     const pictures = await Promise.all(
       shown.map(async (layer) => {
         const found = await source(layer.clip.src!);
@@ -299,10 +316,18 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       // A page that paints nothing shows the browser's white canvas, as frame capture does.
       if (plan !== drawingPlan || closing.signal.aborted || compositor.lost())
         return;
+      const baked = await textures;
+      if ("error" in baked) throw baked.error;
       await compositor.draw(
         pictures.map(({ layer, found }, at) =>
           // The proxy is stored upright; a phone's file may be stored turned.
-          placed(layer, frames[at]!, from[at]!.rotation, found.intrinsic),
+          placed(
+            layer,
+            frames[at]!,
+            from[at]!.rotation,
+            found.intrinsic,
+            baked.textures[at]!,
+          ),
         ),
         drawingPlan.background ?? "#ffffff",
         drawingPlan.width,
@@ -406,8 +431,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       };
     }
     const sources = new Set<string>();
+    let preparedGrade = false;
     for (const { frame: at, layer } of upcoming.list) {
       if (at <= frame || at > frame + span) continue;
+      if (
+        !preparedGrade &&
+        layer.clip.grade &&
+        !useGradeBypass.getState().bypass
+      ) {
+        preparedGrade = true;
+        void grades.get(layer.clip.grade).catch(() => {});
+      }
       const src = layer.clip.src!;
       // At rest, only the next opening of each file: the spare lane holds one.
       if (count === PREPARED && sources.has(src)) continue;
@@ -472,6 +506,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   void refresh();
 
   const unsubscribe = [
+    usePreviewGrade.subscribe(() => void draw()),
+    useGradeBypass.subscribe(() => void draw()),
     useTransport.subscribe((state, previous) => {
       if (state.frame !== previous.frame || state.state !== previous.state)
         void draw();
@@ -496,6 +532,7 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         for (const lane of lanes) lane.close();
         proxy?.close();
       });
+    grades.dispose();
     compositor.dispose();
   };
 }

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HttpError } from "../../shared/errors";
-import { LutImportSchema } from "../../shared/timeline/grade";
+import { LutImportSchema, LutPathSchema } from "../../shared/timeline/grade";
 import { projectMutationGuard } from "../projects/authorization";
 import type { ReviewService } from "../projects/review";
 import { parseInput } from "../projects/routes";
@@ -10,6 +10,7 @@ import {
   importLutFile,
   listLuts,
   readCube,
+  readProjectLutBytes,
   saveLut,
 } from "./luts";
 
@@ -20,6 +21,17 @@ export function createGradeRoutes(store: ProjectStore, reviews: ReviewService) {
   api.get("/projects/:id/luts", async (c) => {
     const project = await store.get(c.req.param("id"));
     return c.json({ luts: await listLuts(project) });
+  });
+
+  // The entry composition's look LUT, parsed and baked in the playback worker.
+  api.get("/projects/:id/luts/source", async (c) => {
+    const src = LutPathSchema.parse(c.req.query("path"));
+    const project = await store.get(c.req.param("id"));
+    const bytes = await readProjectLutBytes(project, "index.html", src);
+    return c.body(bytes, 200, {
+      "cache-control": "no-store",
+      "content-type": "application/octet-stream",
+    });
   });
 
   /** The editor uploads a chosen file; an agent names one on this computer. */
