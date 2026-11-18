@@ -1,0 +1,160 @@
+/* The zoom and highlight tool over the picture: a box to aim, and the tool's choices above it. */
+.edit-region {
+  position: absolute;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+.edit-region:is([data-locked], :not([data-aiming])) {
+  pointer-events: none;
+}
+.edit-region-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  outline: var(--stroke-selection) solid var(--selection);
+  box-shadow: 0 0 0 var(--stroke-hair) var(--pencil-casing);
+  cursor: move;
+}
+/* Aiming a zoom: what lies outside its box will be cut off, so it recedes. */
+.edit-region-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.edit-region-scrim i {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+  background: var(--scrim);
+}
+.edit-region-box b {
+  position: absolute;
+  width: calc(var(--space-1) * 2);
+  height: calc(var(--space-1) * 2);
+  background: var(--selection);
+  box-shadow: 0 0 0 var(--stroke-hair) var(--pencil-casing);
+  cursor: nwse-resize;
+}
+/* A larger target than the mark itself, centred on it. */
+.edit-region-box b::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
+}
+.edit-region-box b[data-corner="nw"] {
+  top: calc(-1 * var(--space-1));
+  left: calc(-1 * var(--space-1));
+}
+.edit-region-box b[data-corner="ne"] {
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+  cursor: nesw-resize;
+}
+.edit-region-box b[data-corner="sw"] {
+  bottom: calc(-1 * var(--space-1));
+  left: calc(-1 * var(--space-1));
+  cursor: nesw-resize;
+}
+.edit-region-box b[data-corner="se"] {
+  right: calc(-1 * var(--space-1));
+  bottom: calc(-1 * var(--space-1));
+}
+.edit-region-bar {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  transform: translate(-50%, var(--space-2));
+  font-size: var(--type-xs);
+  white-space: nowrap;
+}
+.edit-region-choice {
+  display: flex;
+  gap: var(--stroke-hair);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.edit-region-choice button {
+  height: var(--size-field);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+}
+.edit-region-choice button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.edit-region-readout {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.edit-region-readout:empty {
+  display: none;
+}
+
+/* The inspector's region section. */
+.inspector-region-segments {
+  display: flex;
+  gap: var(--stroke-hair);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.inspector-region .inspector-region-segments button {
+  height: var(--size-field);
+  min-height: 0;
+  padding: 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.inspector-region .inspector-region-segments button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+/* Each ease is its curve: time across, progress up, in the armed tool's colours when chosen. */
+.inspector-eases {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-1);
+  width: 100%;
+}
+.inspector-region .inspector-eases button {
+  display: grid;
+  place-items: center;
+  min-height: var(--size-row);
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  color: var(--text-tertiary);
+}
+.inspector-region .inspector-eases button[aria-checked="true"] {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+.inspector-eases svg {
+  width: 100%;
+  height: calc(var(--size-row) - var(--space-2));
+  overflow: visible;
+}
+.inspector-eases path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.inspector-region-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
+.inspector-region .inspector-region-actions button {
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}

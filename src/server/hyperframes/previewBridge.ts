@@ -604,6 +604,23 @@ function installPreviewBridge(
     if (!style) keyframeOriginals.delete(element);
     scheduleBox();
   };
+  /**
+   * Region CSS the editor draws over the saved stylesheet while a box is dragged. It comes last in
+   * the head, so its rules win over the saved ones they repeat.
+   */
+  let regionDraft: HTMLStyleElement | null = null;
+  const writeRegion = (css: string | null) => {
+    if (css === null) {
+      regionDraft?.remove();
+      regionDraft = null;
+      return;
+    }
+    regionDraft ??= document.createElement("style");
+    regionDraft.setAttribute("data-cutroom-region-draft", "");
+    if (regionDraft.textContent !== css) regionDraft.textContent = css;
+    if (regionDraft !== document.head.lastElementChild)
+      document.head.append(regionDraft);
+  };
   let observedClip: string | null = null;
   let observedText: string | null = null;
   /** The clip's saved transform longhands, which the warning compares while no draft shows. */
@@ -2863,6 +2880,24 @@ function installPreviewBridge(
             if (typeof value === "string") style.set(property, value);
           }
           writeKeyframe(data.clipId, style);
+          return;
+        }
+        case "region": {
+          if (
+            !("css" in data) ||
+            !(data.css === null || typeof data.css === "string") ||
+            !("seek" in data) ||
+            typeof data.seek !== "boolean"
+          )
+            return;
+          writeRegion(data.css);
+          // A zoom set aside or brought back is a new CSS animation: seek it to the frame shown,
+          // which also redraws held video frames at their new place.
+          if (data.seek && win.__player && !win.__player.isPlaying()) {
+            seekRuntime(win.__player.getTime());
+            await refreshPicture();
+          }
+          scheduleBox();
           return;
         }
         case "transform": {

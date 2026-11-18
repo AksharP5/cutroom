@@ -47,6 +47,7 @@ import {
 } from "./VariablesSection";
 import { TransformFields } from "./TransformFields";
 import { MotionSection } from "./MotionSection";
+import { RegionSection } from "./RegionSection";
 import { valueAt } from "../../../shared/timeline/keyframes";
 import {
   KeyframeButton,
@@ -314,6 +315,7 @@ export function Inspector({
   const [compositeOpen, setCompositeOpen] = useState(true);
   const [textOpen, setTextOpen] = useState(true);
   const [titleOpen, setTitleOpen] = useState(true);
+  const [regionOpen, setRegionOpen] = useState(true);
   // Closed until opened, so a text clip's Timing stays in view; the choice then holds.
   const [styleOpen, setStyleOpen] = useState(false);
   const [timingOpen, setTimingOpen] = useState(true);
@@ -585,9 +587,11 @@ export function Inspector({
               <span>
                 {titled
                   ? "Title"
-                  : clip.kind === "element"
-                    ? "Text"
-                    : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
+                  : clip.adjustment
+                    ? "Adjustment layer"
+                    : clip.kind === "element"
+                      ? "Text"
+                      : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
                 on {track?.id}
               </span>
               <time>
@@ -606,6 +610,17 @@ export function Inspector({
             times={false}
             hold={holdChanges}
           />
+          {clip.region && !isAudioKind(clip.kind) && (
+            <RegionSection
+              projectId={projectId}
+              clip={clip}
+              region={clip.region}
+              fps={timeline.fps}
+              disabled={track?.track.locked ?? false}
+              open={regionOpen}
+              onToggle={setRegionOpen}
+            />
+          )}
           {!isAudioKind(clip.kind) && !clip.adjustment && (
             <MotionSection
               key={`${projectId}:${view!.composition}:${clip.id}`}

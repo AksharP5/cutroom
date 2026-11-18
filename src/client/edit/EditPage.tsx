@@ -145,7 +145,8 @@ export function EditPage({
   const mode = editorTools?.mode ?? "select";
   const setMode = (next: typeof mode) => {
     // Notes go on the timeline's picture.
-    if (next === "draw" || next === "comment") showSource(false);
+    if (next === "draw" || next === "comment" || next === "region")
+      showSource(false);
     editorTools?.setMode(next);
   };
   const page = useRef<HTMLDivElement>(null);
@@ -401,6 +402,7 @@ export function EditPage({
     editPointer: () => setMode("select"),
     editTrim: () => setMode("trim"),
     editBlade: () => setMode("blade"),
+    cutroomRegion: () => setMode("region"),
     cutroomDraw: () => setMode("draw"),
     cutroomComment: () => setMode("comment"),
     controlPlayToggle: () => player.dispatch({ type: "toggle" }),

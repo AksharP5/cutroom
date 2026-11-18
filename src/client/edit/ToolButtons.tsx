@@ -3,6 +3,7 @@ import {
   ChatCircle,
   Cursor,
   Knife,
+  MagnifyingGlassPlus,
   PencilSimple,
   SplitHorizontal,
 } from "@phosphor-icons/react";
@@ -15,6 +16,7 @@ const groups = [
     { mode: "select", action: "editPointer", icon: Cursor },
     { mode: "trim", action: "editTrim", icon: SplitHorizontal },
     { mode: "blade", action: "editBlade", icon: Knife },
+    { mode: "region", action: "cutroomRegion", icon: MagnifyingGlassPlus },
   ],
   [
     { mode: "draw", action: "cutroomDraw", icon: PencilSimple },
