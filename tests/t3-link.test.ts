@@ -1,10 +1,12 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { mock } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, AgentSession } from "../src/shared/agent";
 import { createAgentRoutes } from "../src/server/agents/routes";
 import { createAgentService } from "../src/server/agents/service";
+import { T3Chats } from "../src/server/agents/t3-chats";
 import { threadMessages } from "../src/server/agents/t3-link";
 import type { T3Runner } from "../src/server/agents/t3-link";
 import {
@@ -248,7 +250,7 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
           expect(sent).toContain(
             `Attached local files:\n${join(project.path, "index.html")}\n${frame}`,
           );
-          const deadline = Date.now() + 500;
+          const deadline = Date.now() + 4_000;
           while (
             service.get(session.id).status !== "waiting" &&
             Date.now() < deadline
@@ -286,7 +288,7 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
         waiting = false;
         const stop = restarted.subscribe(session.id, () => {});
         try {
-          const deadline = Date.now() + 500;
+          const deadline = Date.now() + 4_000;
           while (
             restarted.get(session.id).status === "waiting" &&
             Date.now() < deadline
@@ -319,6 +321,79 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
     }
   } finally {
     await projects.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("sending to T3 Code reads at 2, 4 and 8 seconds, then returns to a 12 second interval", async () => {
+  const cache = join(homedir(), ".cache");
+  await mkdir(cache, { recursive: true });
+  const directory = await mkdtemp(join(cache, "cutroom-t3-poll-test-"));
+  const projects = await createProjectStore({ dataDir: directory });
+  const project = await projects.create({ name: "Synthetic timing" });
+  const review = createReviewService(projects);
+  const working = { ...cliShow.thread, status: "running", activeRunId: runId };
+  const reply = { role: "assistant", runId, text: "The slate is ready." };
+  const reads: number[] = [];
+  let sentAt: number | undefined;
+  const runner: T3Runner = async (args) => {
+    if (args[1] === "send") {
+      sentAt = Date.now();
+      return ok({ threadId: cliThread.threadId, delivery: "started" });
+    }
+    if (args[1] !== "show") throw new Error("Expected a thread read");
+    if (sentAt !== undefined) reads.push(Date.now() - sentAt);
+    return ok({
+      thread: working,
+      messages: sentAt !== undefined ? [reply] : [],
+    });
+  };
+  const t3 = new T3Chats(review, runner);
+  const startedAt = Date.now();
+  mock.timers.enable({ apis: ["setTimeout", "Date"], now: startedAt });
+  const clock = spyOn(performance, "now").mockImplementation(
+    () => Date.now() - startedAt,
+  );
+  async function advance(ms: number) {
+    mock.timers.tick(ms);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  try {
+    const session = await t3.open(project, cliThread.threadId);
+    const emitted: string[] = [];
+    t3.watch(session, (event) => {
+      if (event.type !== "message") return;
+      session.messages.push(event.message);
+      emitted.push(event.message.text);
+    });
+    await advance(0);
+    await t3.send(project, cliThread.threadId, {
+      text: "Finish the slate.",
+      attachments: [],
+      skills: [],
+    });
+    await advance(1_999);
+    expect(reads).toEqual([]);
+    expect(emitted).toEqual([]);
+    await advance(1);
+    expect(reads).toEqual([2_000]);
+    expect(emitted).toEqual([reply.text]);
+    await advance(2_000);
+    expect(reads).toEqual([2_000, 4_000]);
+    await advance(4_000);
+    expect(reads).toEqual([2_000, 4_000, 8_000]);
+    await advance(11_999);
+    expect(reads).toHaveLength(3);
+    await advance(1);
+    expect(reads).toEqual([2_000, 4_000, 8_000, 20_000]);
+
+    t3.unwatch(session);
+    await advance(30_000);
+    expect(reads).toHaveLength(4);
+  } finally {
+    t3.close();
+    clock.mockRestore();
+    mock.timers.reset();
     await rm(directory, { recursive: true, force: true });
   }
 });
