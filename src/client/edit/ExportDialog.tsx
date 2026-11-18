@@ -1,5 +1,6 @@
 import { MixLoudness } from "./MixLoudness";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CaretRight } from "@phosphor-icons/react";
 import {
   compositionExportName,
   defaultExportRange,
@@ -651,7 +652,10 @@ function ExportDialog({
                 </p>
                 {destinationFailed && (
                   <details className="export-error-details">
-                    <summary>Details</summary>
+                    <summary>
+                      <CaretRight size={10} weight="bold" />
+                      Details
+                    </summary>
                     <p>{rawFailure}</p>
                   </details>
                 )}

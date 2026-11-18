@@ -75,6 +75,24 @@
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
+.export-error-details summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  list-style: none;
+  cursor: pointer;
+}
+.export-error-details summary::-webkit-details-marker {
+  display: none;
+}
+.export-error-details summary svg {
+  color: var(--text-tertiary);
+  transition: transform var(--duration-hover) var(--ease-out);
+}
+.export-error-details[open] summary svg {
+  transform: rotate(90deg);
+}
 .export-error-details p {
   margin: var(--space-1) 0 0;
   font: var(--type-xs) var(--font-mono);
