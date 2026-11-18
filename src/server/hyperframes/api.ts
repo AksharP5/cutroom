@@ -93,6 +93,7 @@ import type { ExportRequest } from "./jobs";
 import { measureLoudness } from "../timeline/audio";
 import { probeNvenc } from "./nvenc";
 import { nextExportName } from "./exportName";
+import { exportResolve } from "../resolve/export";
 import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
@@ -423,15 +424,48 @@ export function createHyperframesApi(
     const input = ExportStartSchema.parse(await c.req.json());
     const project = await store.get(c.req.param("id"));
     const composition = exportedComposition(input.composition);
-    const { timeline, size, variables } = await readComposition(
+    const { timeline, size, variables, declarations } = await readComposition(
       project.id,
       composition,
     );
     const overrides = await variables(input.variables);
+    const { format } = input;
+    if (format === "resolve") {
+      if (input.filename)
+        throw new HttpError(
+          400,
+          "A Resolve export is a folder named after the project; leave out filename.",
+        );
+      const images = new Map<string, string>();
+      for (const variable of declarations()) {
+        if (variable.type !== "image") continue;
+        const value =
+          overrides?.[variable.id] ?? variableDefaultValue(variable);
+        if (typeof value === "string" && value) images.set(variable.id, value);
+      }
+      let directory = input.directory;
+      if (!directory) {
+        directory = await projectStatePath(project, ".cutroom/renders", true);
+        await mkdir(directory, { recursive: true });
+      }
+      return c.json(
+        await exportResolve(
+          {
+            project,
+            composition,
+            name: compositionExportName(project.name, composition),
+            timeline,
+            size,
+            images,
+          },
+          { directory, copyMedia: input.copyMedia },
+        ),
+      );
+    }
     const output = exportSize(input.size, size);
     if ("problem" in output) throw new HttpError(400, output.problem);
     const fps = exportFps(
-      input.format,
+      format,
       input.fps ? { num: input.fps, den: 1 } : timeline.fps,
     );
     const choice = input.range ?? defaultExportRange(timeline);
@@ -458,7 +492,7 @@ export function createHyperframesApi(
         directory,
         exportFilename(
           compositionExportName(project.name, composition),
-          input.format,
+          format,
         ),
       ));
     // Enter the dialog's route with the caller's identity. It owns destination validation and registration.
@@ -468,8 +502,8 @@ export function createHyperframesApi(
         method: "POST",
         headers: c.req.raw.headers,
         body: JSON.stringify({
-          format: input.format,
-          gifLoop: input.format === "gif" ? input.gifLoop : undefined,
+          format,
+          gifLoop: format === "gif" ? input.gifLoop : undefined,
           quality: input.quality,
           fps: `${fps.num}/${fps.den}`,
           ...(output.resolution && { resolution: output.resolution }),

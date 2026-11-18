@@ -61,7 +61,12 @@ function approvalDetail(name: string, args: Record<string, unknown>) {
     case "export_start": {
       const folder = oneLine(args.directory);
       return (
-        [oneLine(args.filename), folder && `in ${folder}`]
+        [
+          args.format === "resolve"
+            ? "for DaVinci Resolve"
+            : oneLine(args.filename),
+          folder && `in ${folder}`,
+        ]
           .filter(Boolean)
           .join(" ") || undefined
       );

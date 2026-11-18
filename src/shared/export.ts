@@ -128,7 +128,18 @@ export const ExportStartSchema = ExportDestinationSchema.partial().extend({
     ),
   range: z.union([z.enum(["timeline", "marks"]), ExportRangeSchema]).optional(),
   quality: ExportQualitySchema.default("standard"),
-  format: ExportFormatSchema.default("mp4"),
+  format: z
+    .enum([...exportFormats, "resolve"])
+    .default("mp4")
+    .describe(
+      "resolve writes a folder for DaVinci Resolve instead of rendering: the timeline as FCPXML linked to the original media, its markers, and a summary of what Resolve can't show",
+    ),
+  copyMedia: z
+    .boolean()
+    .default(false)
+    .describe(
+      "resolve only: copy the media into the folder instead of linking it where it is",
+    ),
   gifLoop: GifLoopSchema.optional().describe(
     "GIF loop count. Zero or omitted repeats forever.",
   ),
@@ -148,6 +159,23 @@ export const ExportStartSchema = ExportDestinationSchema.partial().extend({
     "Composition variable overrides by id, as variables_list declares them, like hyperframes render --variables. Each value must fit its declaration; omitted variables render their defaults. The preview's overrides are not applied unless passed here",
   ),
 });
+
+/** What a Resolve export wrote: a new folder holding the timeline, its markers and a summary. */
+export const ResolveExportSchema = z.object({
+  outputPath: z.string().describe("The new folder"),
+  timeline: z.string().describe("The FCPXML file to import in Resolve"),
+  markers: z
+    .string()
+    .nullable()
+    .describe(
+      "The marker list, for Timeline > Import > Timeline Markers from EDL; null without markers",
+    ),
+  summary: z.string(),
+  notes: z
+    .array(z.string())
+    .describe("What Resolve won't show as Cutroom does, one sentence each"),
+});
+export type ResolveExport = z.infer<typeof ResolveExportSchema>;
 
 /** What an export of one composition is called: the project, then the scene's file name. */
 export const compositionExportName = (
