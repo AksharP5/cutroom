@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -188,7 +195,22 @@ test("Remove asks before taking a file the timeline uses, and Undo brings it bac
   await row("talk.mp4").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Remove", exact: true }).click();
   await dialog.getByRole("button", { name: "Remove", exact: true }).click();
-  await expect(row("talk.mp4")).toHaveCount(0);
+  await expect(row("talk.mp4")).toContainText("Offline");
+  await expect(row("talk.mp4")).toHaveAttribute("draggable", "false");
+  const offline = page.getByRole("button", { name: "1 file offline" });
+  await offline.click();
+  await expect(timeline.locator('[data-clip="picture"]')).toHaveClass(
+    /selected/,
+  );
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const exporting = page.getByRole("dialog", { name: "Export" });
+  await exporting
+    .getByRole("button", { name: "Export MP4", exact: true })
+    .click();
+  await expect(exporting.getByRole("alert")).toContainText(
+    "Restore these offline files before exporting: assets/talk.mp4.",
+  );
+  await page.keyboard.press("Escape");
   // The file is moved, never deleted: it sits in the project's trash folder.
   expect(await present("assets/talk.mp4")).toBe(false);
   expect(await readdir(join(project.path, "trash"))).toEqual(["talk.mp4"]);
@@ -200,7 +222,8 @@ test("Remove asks before taking a file the timeline uses, and Undo brings it bac
     "Moved talk.mp4 to the project's trash folder.",
   );
   await toast.getByRole("button", { name: "Undo" }).click();
-  await expect(row("talk.mp4")).toBeVisible();
+  await expect(offline).toHaveCount(0);
+  await expect(row("talk.mp4")).not.toContainText("Offline");
   expect(await present("assets/talk.mp4")).toBe(true);
   expect(await readdir(join(project.path, "trash"))).toEqual([]);
   await expect(media.getByRole("listitem")).toHaveCount(4);
@@ -383,4 +406,26 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
     ).ok(),
   ).toBe(true);
   await expect(page.locator(".edit-source")).toHaveCount(0);
+});
+
+test("a clip using a directory alias keeps the original Media row online", async ({
+  page,
+  request,
+}) => {
+  const { project, media, row, timeline } = await open(page, request);
+  const index = join(project.path, "index.html");
+  await symlink("assets", join(project.path, "alias"), "dir");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "</main>",
+      '<img src="alias/still.png" id="aliased-still" class="clip" data-start="4" data-duration="2" data-track-index="0"></main>',
+    ),
+  );
+  await page.reload();
+  await expect(media.getByRole("listitem")).toHaveCount(4);
+  await expect(row("still.png")).not.toContainText("Offline");
+  await expect(timeline.locator('[data-clip="aliased-still"]')).not.toHaveClass(
+    /offline/,
+  );
 });

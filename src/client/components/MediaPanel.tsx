@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 import { MEDIA_TRASH, mediaKind, mediaKinds } from "../../shared/media";
 import { api, frameTimecode, json, mediaUrl } from "../api";
+import { useOfflineMedia } from "../edit/offlineMedia";
 import { placeAtPlayhead } from "../edit/placeMedia";
 import { closeSource, openSource, useSource } from "../edit/source";
 import { stepHistory, useTimeline } from "../edit/timeline";
@@ -105,6 +106,7 @@ function MediaRow({
   projectPath,
   path,
   kind,
+  offline,
   tabbable,
   onFocus,
   renaming,
@@ -118,6 +120,7 @@ function MediaRow({
   projectPath: string;
   path: string;
   kind: (typeof mediaKinds)[number]["kind"];
+  offline: boolean;
   /** One row is in the tab order; the arrow keys move between rows. */
   tabbable: boolean;
   onFocus(): void;
@@ -146,7 +149,7 @@ function MediaRow({
   const changed = useWorkspace((state) => state.fileChanges[path]);
   // The file left this name, by a rename or a move, before the list read it again: asking for
   // it now would only show a broken picture until the row goes.
-  const gone = changed === null;
+  const gone = offline || changed === null;
   useEffect(() => setDuration(null), [changed]);
   useEffect(() => {
     if (!seen || gone || kind !== "video") return;
@@ -183,8 +186,9 @@ function MediaRow({
   };
   // A row goes onto the timeline once its length is known.
   const placeable =
-    kind === "image" ||
-    (duration !== null && (kind !== "video" || hasAudio !== null));
+    !gone &&
+    (kind === "image" ||
+      (duration !== null && (kind !== "video" || hasAudio !== null)));
   const dragged = (): MediaDrag => ({
     kind,
     path,
@@ -203,6 +207,7 @@ function MediaRow({
       className="media-row"
       title={path}
       data-kind={kind}
+      data-offline={offline || undefined}
       data-path={path}
       ref={row}
       tabIndex={tabbable ? 0 : -1}
@@ -211,6 +216,7 @@ function MediaRow({
       }}
       draggable={placeable && !renaming}
       onDragStart={(event) => {
+        if (!placeable) return event.preventDefault();
         event.dataTransfer.setData(MEDIA_DRAG_TYPE, path);
         event.dataTransfer.effectAllowed = "copy";
         setMediaDrag(dragged());
@@ -222,6 +228,19 @@ function MediaRow({
           open();
       }}
       onContextMenu={(event) => {
+        if (gone)
+          return openContextMenu(
+            event,
+            path,
+            [
+              {
+                label: "Copy path",
+                run: () =>
+                  void navigator.clipboard.writeText(`${projectPath}/${path}`),
+              },
+            ],
+            event.currentTarget,
+          );
         // Needs the file's length and a timeline to put it on.
         const unplaceable = !placeable || !useTimeline.getState().view;
         const reveal = revealRows(`${projectPath}/${path}`);
@@ -265,10 +284,10 @@ function MediaRow({
             onLoadedMetadata={(event) => measure(event.currentTarget)}
           />
         )}
-        {kind === "audio" && (
+        {!gone && kind === "audio" && (
           <>
             <Waveform size={14} />
-            {seen && !gone && (
+            {seen && (
               <audio
                 src={src}
                 preload="metadata"
@@ -279,7 +298,7 @@ function MediaRow({
         )}
         {kind === "image" && !gone && <img src={src} alt="" loading="lazy" />}
       </span>
-      {renaming ? (
+      {renaming && !gone ? (
         <RenameField
           name={fileName(path)}
           onCommit={onRenameCommit}
@@ -294,11 +313,13 @@ function MediaRow({
         <span className="media-name">{fileName(path)}</span>
       )}
       <span className="media-duration mono">
-        {kind === "image"
-          ? "Still"
-          : duration !== null && (
-              <TimecodeText timecode={frameTimecode(duration, fps)} />
-            )}
+        {offline
+          ? "Offline"
+          : kind === "image"
+            ? "Still"
+            : duration !== null && (
+                <TimecodeText timecode={frameTimecode(duration, fps)} />
+              )}
       </span>
     </li>
   );
@@ -315,9 +336,19 @@ export function MediaPanel({
 }) {
   // Read here rather than in the shell, so a burst of file events re-renders only this panel.
   const revision = useWorkspace((state) => state.mediaRevision);
-  const [media, setMedia] = useState<
+  const [listedMedia, setListedMedia] = useState<
     { path: string; kind: (typeof mediaKinds)[number]["kind"] }[] | null
   >(null);
+  const offline = useOfflineMedia(projectId);
+  const media = useMemo(() => {
+    if (!listedMedia || !offline.size) return listedMedia;
+    const paths = new Map(listedMedia.map((item) => [item.path, item]));
+    for (const path of offline.keys()) {
+      const type = mediaKind(path);
+      if (type) paths.set(path, { path, kind: type.kind });
+    }
+    return [...paths.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [listedMedia, offline]);
   const [focused, setFocused] = useState<string>();
   const tabbable = media?.some((item) => item.path === focused)
     ? focused
@@ -355,6 +386,9 @@ export function MediaPanel({
     },
   });
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
+  const composition = useTimeline((state) =>
+    state.projectId === projectId ? state.composition : "index.html",
+  );
   const cutroomUrl = `/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
@@ -371,7 +405,9 @@ export function MediaPanel({
 
   const load = useCallback(async () => {
     const id = ++latestLoad.current;
-    const response = await fetch(projectUrl);
+    const response = await fetch(
+      `${projectUrl}?${new URLSearchParams({ mediaComposition: composition })}`,
+    );
     if (id !== latestLoad.current) return;
     if (!response.ok)
       throw new Error(`The project media could not load (${response.status}).`);
@@ -402,7 +438,7 @@ export function MediaPanel({
     listed.current = { projectUrl, files };
     const source = useSource.getState().file;
     if (source && !files.includes(source.path)) closeSource();
-    setMedia(
+    setListedMedia(
       files
         .flatMap((path) => {
           const type = mediaKind(path);
@@ -410,7 +446,7 @@ export function MediaPanel({
         })
         .sort((a, b) => a.path.localeCompare(b.path)),
     );
-  }, [projectUrl]);
+  }, [projectUrl, composition]);
 
   useEffect(() => {
     // A bulk copy reports each file; one trailing reload covers the burst.
@@ -698,7 +734,7 @@ export function MediaPanel({
                 path !== undefined
               ) {
                 event.preventDefault();
-                void remove(path, true);
+                if (!offline.has(path)) void remove(path, true);
                 return;
               }
               if (
@@ -732,6 +768,7 @@ export function MediaPanel({
                 projectPath={projectPath}
                 path={path}
                 kind={kind}
+                offline={offline.has(path)}
                 tabbable={path === tabbable}
                 onFocus={() => {
                   setFocused(path);

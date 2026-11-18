@@ -1,5 +1,9 @@
 import type { Project } from "../../shared/project";
 import type { ReviewItem } from "../../shared/review";
+import { useOfflineMedia } from "../edit/offlineMedia";
+import { showSource } from "../edit/source";
+import { useTimeline } from "../edit/timeline";
+import { transport } from "../edit/transport";
 import { useWorkspace } from "../workspace";
 import { toReviewStatuses } from "../review";
 import { LintStatus } from "./LintStatus";
@@ -19,6 +23,18 @@ export function StatusBar({
   const agent = useWorkspace((state) => state.agent);
   const { timeline, viewer } = useWorkspace((state) => state.editorErrors);
   const editorError = timeline ?? viewer;
+  const offline = useOfflineMedia(project.id);
+  const selectOffline = () => {
+    let first;
+    for (const clip of offline.values())
+      if (!first || clip.start < first.start) first = clip;
+    if (!first) return;
+    showSource(false);
+    useTimeline.setState({
+      selection: { ids: new Set([first.id]), anchor: first.id },
+    });
+    transport.seek(first.start);
+  };
   const waiting = items.filter((item) =>
     toReviewStatuses.includes(item.review.status),
   );
@@ -36,6 +52,16 @@ export function StatusBar({
         <span className="status-error" role="alert" title={editorError}>
           {editorError}
         </span>
+      )}
+      {offline.size > 0 && (
+        <button
+          type="button"
+          className="status-offline"
+          title="Go to the first offline clip"
+          onClick={selectOffline}
+        >
+          {offline.size} {offline.size === 1 ? "file" : "files"} offline
+        </button>
       )}
       <span className="status-space" />
       {composition && (

@@ -6,10 +6,9 @@ import {
   trackDensities,
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
-import { fileMissing, useWorkspace } from "../workspace";
-import { previewMediaPath } from "../../shared/media";
-import { variableDefaultValue } from "../../shared/variables";
-import { useVariables } from "../edit/variables";
+import { useWorkspace } from "../workspace";
+import { offlineMediaPath } from "../edit/offlineMedia";
+import { previewImageSources, useVariables } from "../edit/variables";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
@@ -886,26 +885,17 @@ export function Timeline({
       ? state
       : null,
   );
-  const imageSources = useMemo(() => {
-    const sources = new Map<string, string>();
-    if (!variables) return sources;
-    for (const variable of variables.declarations) {
-      if (variable.type !== "image") continue;
-      const value =
-        variables.preview[variable.id] ?? variableDefaultValue(variable);
-      if (typeof value === "string" && value) sources.set(variable.id, value);
-    }
-    return sources;
-  }, [variables]);
+  const imageSources = useMemo(
+    () => previewImageSources(variables),
+    [variables],
+  );
   // As a string, so a file change that leaves the same clips offline renders nothing.
   const offlineIds = useWorkspace(({ fileChanges }) =>
     timeline.clips
       .filter((clip) => {
         const image = clip.variableBindings?.image;
         const src = (image ? imageSources.get(image) : undefined) ?? clip.src;
-        const path =
-          src && previewMediaPath(source.composition, src, fileChanges);
-        return path && fileMissing(fileChanges, source.composition, path);
+        return offlineMediaPath(fileChanges, source.composition, src);
       })
       .map((clip) => clip.id)
       .join("\n"),

@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   VariableValuesSchema,
   VariablesStateSchema,
+  variableDefaultValue,
 } from "../../shared/variables";
 import type {
   VariableBinding,
@@ -20,6 +21,18 @@ export const useVariables = create<{
   projectId: string | null;
   state: VariablesState | null;
 }>(() => ({ projectId: null, state: null }));
+
+export function previewImageSources(variables: VariablesState | null) {
+  const sources = new Map<string, string>();
+  if (!variables) return sources;
+  for (const variable of variables.declarations) {
+    if (variable.type !== "image") continue;
+    const value =
+      variables.preview[variable.id] ?? variableDefaultValue(variable);
+    if (typeof value === "string" && value) sources.set(variable.id, value);
+  }
+  return sources;
+}
 
 const ChangeSchema = z.object({
   composition: z.string(),
