@@ -52,6 +52,7 @@ interface PreviewWindow extends DiagnosticWindow {
     getTime(): number;
     isPlaying(): boolean;
   };
+  __cutroomSeekFrame?: (time: number) => Promise<void>;
   /** Replaced each time the runtime lays out the composition's clips again. */
   __clipManifest?: unknown;
   /** Without `videoFrames`, it settles everything except native video decodes. */
@@ -2651,6 +2652,21 @@ function installPreviewBridge(
     picture = holdPaused(version);
     return picture;
   };
+  const seekPicture = async (time: number) => {
+    seekRuntime(time);
+    residentAudio(false);
+    if (win.__player?.isPlaying()) return false;
+    const restored = refreshPicture();
+    const version = pictureVersion;
+    await restored;
+    if (version === pictureVersion) clearEditPicture();
+    return true;
+  };
+  // The thumbnail browser has no parent player. It still needs the editor's exact paused seek.
+  win.__cutroomSeekFrame = async (time) => {
+    win.__player?.pause();
+    await seekPicture(time);
+  };
   const releasePlaying = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
     if (!hold || hold.callback !== undefined) return;
@@ -3691,15 +3707,7 @@ function installPreviewBridge(
             scheduleBox();
             break;
           }
-          seekRuntime(data.time);
-          residentAudio(false);
-          const paused = !win.__player?.isPlaying();
-          if (paused) {
-            const restored = refreshPicture();
-            const version = pictureVersion;
-            await restored;
-            if (version === pictureVersion) clearEditPicture();
-          }
+          const paused = await seekPicture(data.time);
           scheduleObservation();
           scheduleBox();
           if (paused) await paint();
