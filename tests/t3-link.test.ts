@@ -383,7 +383,7 @@ test("sending to T3 Code reads at 2, 4 and 8 seconds, then returns to a 12 secon
       emitted.push(event.message.text);
     });
     await advance(0);
-    await t3.send(project, cliThread.threadId, {
+    await t3.send(project, cliThread.threadId, session, {
       text: "Finish the slate.",
       attachments: [],
       skills: [],
