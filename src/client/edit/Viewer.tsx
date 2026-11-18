@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import {
   useEffect,
   useLayoutEffect,
@@ -318,7 +319,8 @@ export function Viewer({
           if (
             picture &&
             preview?.timingAllowed &&
-            change.path === ROOT_COMPOSITION &&
+            (change.path === ROOT_COMPOSITION ||
+              change.path === PROJECT_DOCUMENT_PATH) &&
             documentCompositions.current.get(picture.gen) ===
               ROOT_COMPOSITION &&
             useTransport.getState().state.kind === "stopped" &&
@@ -374,7 +376,8 @@ export function Viewer({
           }
           if (
             preview &&
-            (/\.html?$/i.test(change.path) || change.path === "cutroom.json")
+            (/\.html?$/i.test(change.path) ||
+              change.path === PROJECT_DOCUMENT_PATH)
           ) {
             try {
               const response = await fetch(

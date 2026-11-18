@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { Project } from "../../shared/project";
+import type { Project, ProjectDocument } from "../../shared/project";
 import { HttpError } from "../../shared/errors";
 import { isMissing, readSource } from "../projects/store";
 import type { ProjectStore } from "../projects/store";
@@ -10,6 +10,33 @@ import {
   parseComposition,
 } from "./composition";
 import { mediaFacts } from "./media";
+import type { Track } from "../../shared/timeline/schema";
+
+const hasTrackMix = ({ enabled, muted, solo, volume, fx }: Track) =>
+  !enabled || muted || solo || volume !== 1 || fx.length > 0;
+
+/** Only settings the preview projects onto the composition. */
+export function trackMixStamp(document: ProjectDocument) {
+  const compositions = Object.entries(document.timelines).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return JSON.stringify(
+    compositions.flatMap(([composition, settings]) => {
+      const tracks = settings.tracks
+        .filter(hasTrackMix)
+        .map(({ index, kind, enabled, muted, solo, volume, fx }) => [
+          index,
+          kind,
+          enabled,
+          muted,
+          solo,
+          volume,
+          fx,
+        ]);
+      return tracks.length ? [[composition, tracks]] : [];
+    }),
+  );
+}
 
 /** Mix state is projected on read, so outside writes need no follow-up command or history entry. */
 export async function readTrackMix(store: ProjectStore, project: Project) {
@@ -28,14 +55,7 @@ export async function readTrackMix(store: ProjectStore, project: Project) {
       );
       if (!source) return null;
       if (
-        !settings.tracks.some(
-          (track) =>
-            !track.enabled ||
-            track.muted ||
-            track.solo ||
-            track.volume !== 1 ||
-            track.fx.length,
-        ) &&
+        !settings.tracks.some(hasTrackMix) &&
         !/data-cutroom-(track(?:-hidden)?|muted)\b/.test(source.content)
       )
         return null;

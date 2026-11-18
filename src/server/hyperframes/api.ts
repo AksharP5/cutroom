@@ -1,4 +1,5 @@
 import { fileFingerprint, inMediaTrash } from "../../shared/media";
+import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import { AGENT_HEADER } from "../../shared/review";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -66,7 +67,12 @@ import type {
   createPreviewDocumentStore,
 } from "@hyperframes/studio-server";
 import type { ProjectStore } from "../projects/store";
-import { isMissing, projectPath, readSource } from "../projects/store";
+import {
+  ProjectDocumentError,
+  isMissing,
+  projectPath,
+  readSource,
+} from "../projects/store";
 import type { ReviewService } from "../projects/review";
 import { HttpError } from "../../shared/errors";
 import {
@@ -83,7 +89,7 @@ import { previewPolicy } from "./isolation";
 import { APP_STATE_DIR, previewTimingPolicy } from "./previewTimingPolicy";
 import { previewDependencies } from "./previewTiming";
 import { previewDocument, withPreviewClipIdentities } from "./previewBridge";
-import { readTrackMix } from "../timeline/mix";
+import { readTrackMix, trackMixStamp } from "../timeline/mix";
 import {
   compositionScope,
   mixCompositionInstances,
@@ -134,12 +140,18 @@ const ignored = new Set([
   "renders",
 ]);
 
+function scheduleFileSettle(_path: string, read: () => Promise<void>) {
+  const timer = setTimeout(() => void read(), 60);
+  return () => clearTimeout(timer);
+}
+
 /** `reviews` must be the server's one review service, so editor undo shares its per-project queue. */
 export function createHyperframesApi(
   store: ProjectStore,
   reviews: ReviewService,
   /** Serves scrub proxies to the preview; without it the preview always seeks its sources. */
   media?: MediaService,
+  scheduleSettle = scheduleFileSettle,
 ) {
   const api = new Hono();
   api.use("/projects/:id/thumbnail/*", async (c, next) => {
@@ -290,7 +302,7 @@ export function createHyperframesApi(
     { users: number; ready: Promise<ReturnType<typeof watch>> }
   >();
   let disposed = false;
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingSettles = new Map<string, () => void>();
   const announced = new Map<string, string>();
   /** Per file: reads started, the newest read announced, and the announcements in order. */
   const reads = new Map<
@@ -633,7 +645,13 @@ export function createHyperframesApi(
   };
 
   const watchProject = async (project: ResolvedProject) => {
-    await reviews.observeAssets(await store.get(project.id));
+    const current = await store.get(project.id);
+    await reviews.observeAssets(current);
+    const readMix = () =>
+      store.document(current).then(trackMixStamp, (error: unknown) => {
+        if (!(error instanceof ProjectDocumentError)) throw error;
+      });
+    let mix = await readMix();
     const watcher = watch(
       project.dir,
       { recursive: true },
@@ -710,7 +728,15 @@ export function createHyperframesApi(
             absolute,
             version ?? DELETED_VERSION,
           );
-          const affects = affectsPreview(project.dir, path);
+          let mixChanged = false;
+          if (path === PROJECT_DOCUMENT_PATH) {
+            const next = await readMix();
+            if (next !== undefined) {
+              mixChanged = next !== mix;
+              mix = next;
+            }
+          }
+          const affects = mixChanged || affectsPreview(project.dir, path);
           const change: FileChange = {
             projectId: project.id,
             path,
@@ -728,13 +754,13 @@ export function createHyperframesApi(
         const failed = (error: unknown) =>
           console.error("Project watch failed:", error);
         // Outside editors can write a file in several steps, so wait for them to settle.
-        clearTimeout(timers.get(key));
-        timers.set(
+        pendingSettles.get(key)?.();
+        pendingSettles.set(
           key,
-          setTimeout(() => {
-            timers.delete(key);
-            void read().then(announce).catch(failed);
-          }, 60),
+          scheduleSettle(path, async () => {
+            pendingSettles.delete(key);
+            await read().then(announce).catch(failed);
+          }),
         );
         // Cutroom's own writes are whole once their receipt exists, so they skip that wait.
         void read()
@@ -1470,10 +1496,10 @@ export function createHyperframesApi(
         if (--shared.users) return;
         watchers.delete(project.path);
         signatures.delete(project.path);
-        for (const [key, timer] of timers) {
+        for (const [key, cancel] of pendingSettles) {
           if (!key.startsWith(`${projectId}\0`)) continue;
-          clearTimeout(timer);
-          timers.delete(key);
+          cancel();
+          pendingSettles.delete(key);
         }
         for (const key of announced.keys())
           if (key.startsWith(`${projectId}\0`)) announced.delete(key);
@@ -1501,9 +1527,9 @@ export function createHyperframesApi(
       );
       for (const result of opened)
         if (result.status === "fulfilled") result.value.close();
-      for (const timer of timers.values()) clearTimeout(timer);
+      for (const cancel of pendingSettles.values()) cancel();
       watchers.clear();
-      timers.clear();
+      pendingSettles.clear();
       await renders.cancelAll();
       await thumbnails.close();
     },
