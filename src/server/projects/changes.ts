@@ -4,6 +4,7 @@ import { rewriteAssetPath } from "@hyperframes/parsers/asset-paths";
 import { TimelineError } from "../../shared/timeline/apply";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
+import { imageDeclarationUrls } from "../../shared/variables";
 import { compositionScope, parseComposition } from "../timeline/composition";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
 import { readSource } from "./store";
@@ -62,6 +63,11 @@ function sourceVersions(source: string, composition: string, cacheKey: string) {
           : id;
         for (const name of ["src", "poster"])
           if (element.attrs[name]) add(target, element.attrs[name]);
+        if (element.attrs["data-composition-variables"])
+          for (const url of imageDeclarationUrls(
+            element.attrs["data-composition-variables"],
+          ))
+            add(null, url);
         if (element.tag === "img" && element.attrs[freezeExportSource])
           add(target, element.attrs[freezeExportSource]);
         for (const candidate of (element.attrs.srcset ?? "").split(",")) {

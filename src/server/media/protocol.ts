@@ -37,8 +37,12 @@ export const PiecesSchema = z.object({
   start: z.number(),
   /** The source's first sound stream, which AAC pieces carry as it is. */
   audio: z.string().nullable(),
+  /** The first picture on the proxy's clock. */
+  videoStart: z.number().finite(),
   /** Where each piece after the first starts: midway between two frames. */
   cuts: z.array(z.number().nonnegative()),
+  /** The first sample in each piece after the first, for the playlist clock. */
+  starts: z.array(z.number().nonnegative()),
   /** Where the last frame ends. */
   end: z.number().positive(),
 });

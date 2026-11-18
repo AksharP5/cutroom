@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "parse5";
 import { z } from "zod";
@@ -117,6 +117,71 @@ function scripts(html: string): number {
   };
   return count(parse(html));
 }
+
+test("image overrides name project assets and preserve authored image metadata when saved", async () => {
+  const f = await fixture();
+  try {
+    const logo = {
+      id: "logo",
+      type: "image",
+      label: "Logo",
+      default: { url: "assets/first.svg", alt: "Logo", fit: "contain" },
+    };
+    const source = SOURCE.replace(
+      JSON.stringify(DECLARATIONS),
+      JSON.stringify([...DECLARATIONS, logo]),
+    );
+    await writeFile(join(f.project.path, "index.html"), source);
+    await mkdir(join(f.project.path, "assets"), { recursive: true });
+    const image =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>';
+    await writeFile(join(f.project.path, "assets/first.svg"), image);
+    await writeFile(join(f.project.path, "assets/hold#2.svg"), image);
+    expect(
+      (await f.json(await f.preview({ logo: logo.default.url }))).preview,
+    ).toEqual({});
+    for (const url of [
+      "https://example.invalid/logo.svg",
+      "/assets/first.svg",
+      "assets/hold#2.svg",
+      "assets%2ffirst.svg",
+      "assets/missing.svg",
+      "../first.svg",
+      "index.html",
+    ]) {
+      expect((await f.preview({ logo: url })).ok).toBe(false);
+    }
+    const url = "assets/hold%232.svg";
+    expect((await f.json(await f.preview({ logo: url }))).preview).toEqual({
+      logo: url,
+    });
+    expect(await f.source()).toBe(source);
+    expect((await f.json(await f.setDefault("logo", url))).preview).toEqual({});
+    expect(writtenDeclarations(await f.source())).toEqual([
+      ...DECLARATIONS,
+      { ...logo, default: { ...logo.default, url } },
+    ]);
+    const media = `/projects/${f.project.id}/media`;
+    const path = "assets/hold#2.svg";
+    expect((await f.request(`${media}/remove`, "POST", { path })).status).toBe(
+      409,
+    );
+    const renamed = await f.request(`${media}/rename`, "POST", {
+      path,
+      name: "new#2.svg",
+    });
+    expect(renamed.status, await renamed.text()).toBe(200);
+    expect(writtenDeclarations(await f.source())).toEqual([
+      ...DECLARATIONS,
+      { ...logo, default: { ...logo.default, url: "assets/new%232.svg" } },
+    ]);
+    expect((await f.undo()).ok).toBe(true);
+    expect((await f.undo()).ok).toBe(true);
+    expect(await f.source()).toBe(source);
+  } finally {
+    await f.close();
+  }
+});
 
 test("previewed overrides are checked against each declaration and never touch the source", async () => {
   const f = await fixture();

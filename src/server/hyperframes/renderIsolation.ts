@@ -236,6 +236,7 @@ export function registerRenderIsolation(
 ) {
   rangeProgress = range?.range ? range.progress : undefined;
   for (const [name, version] of [
+    ["@hyperframes/core", "0.9.26"],
     ["@hyperframes/producer", "0.9.26"],
     ["@hyperframes/engine", "0.9.26"],
     ["@puppeteer/browsers", "3.2.2"],
@@ -268,6 +269,9 @@ export function registerRenderIsolation(
   const colour = JSON.stringify(
     new URL("./videoColour.ts", import.meta.url).href,
   );
+  const imageVariables = JSON.stringify(
+    new URL("./imageVariables.ts", import.meta.url).href,
+  );
   const freezeSources = JSON.stringify(
     new URL("./freezeSources.ts", import.meta.url).href,
   );
@@ -281,6 +285,23 @@ export function registerRenderIsolation(
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
+      // Standalone templates keep the parent shell's styles and scripts. Its
+      // render canvas, like its duration, belongs to the selected scene.
+      if (url.endsWith("/@hyperframes/core/dist/compiler/standaloneEntry.js"))
+        return {
+          ...loaded,
+          source: replaceOnce(
+            String(loaded.source),
+            "    replaceBodyWithRenderClone(body, renderClone);",
+            `    for (const name of ["data-width", "data-height"]) {
+        const pixels = Math.floor(Number(sceneRoot?.getAttribute(name)));
+        if (Number.isSafeInteger(pixels) && pixels > 0)
+            renderClone.setAttribute(name, String(pixels));
+    }
+    replaceBodyWithRenderClone(body, renderClone);`,
+            url,
+          ),
+        };
       // Puppeteer starts each Chromium in its own session. Keeping it in the worker's
       // process group lets a stopped export take its browsers with it, even when the
       // worker is killed before Puppeteer's exit handlers can run.
@@ -350,7 +371,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",
@@ -361,6 +382,18 @@ export function registerRenderIsolation(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
           "rebaseDirectEntryAssetPaths(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath)), projectDir, htmlPath)",
+          url,
+        );
+        source = replaceOnce(
+          source,
+          '  const compiled = await compileForRender(projectDir, htmlPath, join19(workDir, "downloads"), {',
+          '  const compiled = await compileForRender(projectDir, htmlPath, join19(workDir, "downloads"), {\n    cutroomEntryFile: entryFile,',
+          url,
+        );
+        source = replaceOnce(
+          source,
+          "const sanitizedHtml = inlinedHtml.replace(",
+          'const sanitizedHtml = rebaseCompiledImageVariables(inlinedHtml, projectDir, options.cutroomEntryFile ?? "index.html", options.variables).replace(',
           url,
         );
         if (range?.range) {

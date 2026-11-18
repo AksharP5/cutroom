@@ -529,14 +529,14 @@ test.skipIf(!Bun.which("ffmpeg"))(
       const p = await f.store.create({
         name: "Scenes",
         duration: 2,
-        width: 320,
-        height: 240,
+        width: 640,
+        height: 360,
       });
       await mkdir(join(p.path, "compositions"));
       await writeFile(
         join(p.path, "compositions", "red.html"),
         `<template>
-  <div id="red-root" data-composition-id="red" data-width="320" data-height="240" data-duration="1" style="position:absolute;inset:0;background:#ff0000">
+  <div id="red-root" data-composition-id="red" data-width="3.2e2" data-height="240" data-duration="1" style="position:absolute;inset:0;background:#ff0000">
     <div id="red-card" class="clip" data-start="0" data-duration="1" data-track-index="0"></div>
   </div>
 </template>
@@ -612,13 +612,14 @@ test.skipIf(!Bun.which("ffmpeg"))(
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=nb_read_frames",
+        "stream=width,height,nb_read_frames",
         "-of",
-        "csv=p=0",
+        "json",
         whole.outputPath,
       ]);
-      // One second of the scene, not the root's two.
-      expect(probe.stdout.toString().trim()).toBe("30");
+      expect(JSON.parse(probe.stdout.toString()).streams).toEqual([
+        { width: 320, height: 240, nb_read_frames: "30" },
+      ]);
       const pixel = Bun.spawnSync([
         "ffmpeg",
         "-v",

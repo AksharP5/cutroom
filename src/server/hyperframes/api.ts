@@ -22,6 +22,7 @@ import {
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
 import { projectStatePath } from "../projects/path";
+import { checkProjectVariableValues } from "../projects/variables";
 import { watch } from "node:fs";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import {
@@ -41,6 +42,11 @@ import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
 import { previewRuntimeScript } from "./previewRuntime";
+import {
+  rebaseCompiledImageVariables,
+  rebaseImageOverrides,
+  rebaseSceneImageDeclarations,
+} from "./imageVariables";
 import { lintHyperframeHtml, lintProject } from "@hyperframes/core/lint";
 import {
   DELETED_VERSION,
@@ -92,7 +98,6 @@ import { mediaFacts } from "../timeline/media";
 import {
   VariableError,
   VariableValuesSchema,
-  checkVariableValues,
   parseDeclarations,
 } from "../../shared/variables";
 import type { VariableValues } from "../../shared/variables";
@@ -107,6 +112,7 @@ import {
   framesOf,
   proxyExposedHeaders,
   proxyPreview,
+  proxySamplesPreview,
   scrubPreview,
 } from "../media/routes";
 import type { MediaService } from "../media/service";
@@ -215,6 +221,70 @@ export function createHyperframesApi(
   };
   api.use("/projects/:id/preview", unstampStaleCompile);
   api.use("/projects/:id/preview/comp/*", unstampStaleCompile);
+  api.use("/projects/:id/preview/*", async (c, next) => {
+    if (c.req.method !== "GET") return next();
+    const composition = requestSubPath(c.req.url, "projects/:id/preview");
+    if (
+      composition.startsWith("comp/") ||
+      !composition.includes("/") ||
+      !/\.html?$/i.test(composition)
+    )
+      return next();
+    // Studio's raw .htm validator only tracks the source file. An image next
+    // to that file can change how its declaration resolves without editing it.
+    const ifNoneMatch = c.req.header("Range")
+      ? undefined
+      : c.req.header("If-None-Match");
+    if (ifNoneMatch) {
+      const headers = new Headers(c.req.raw.headers);
+      headers.delete("If-None-Match");
+      c.req.raw = new Request(c.req.url, { headers, signal: c.req.raw.signal });
+    }
+    await next();
+    if (c.res.status !== 200) return;
+    let rewritten: string | undefined;
+    if (!c.res.headers.has("Content-Encoding")) {
+      const html = await c.res.clone().text();
+      const { path } = await store.get(c.req.param("id"));
+      const rebased = rebaseSceneImageDeclarations(html, path, composition);
+      if (rebased !== html) rewritten = rebased;
+    }
+    if (rewritten === undefined) {
+      if (!ifNoneMatch || ifNoneMatch !== c.res.headers.get("ETag")) return;
+      c.res = new Response(null, { status: 304 });
+    } else {
+      c.res = new Response(rewritten, c.res);
+      c.res.headers.delete("ETag");
+      c.res.headers.delete("Last-Modified");
+      c.res.headers.set("Cache-Control", "no-store");
+    }
+    c.res.headers.delete("Content-Length");
+    c.res.headers.delete("Accept-Ranges");
+  });
+  api.use("/projects/:id/preview/comp/*", async (c, next) => {
+    const raw = c.req.query("variables");
+    if (!raw) return next();
+    let values: unknown;
+    try {
+      values = JSON.parse(raw);
+    } catch {
+      return next(); // Studio reports malformed JSON.
+    }
+    const overrides = z.record(z.string(), z.unknown()).safeParse(values);
+    if (!overrides.success) return next();
+    const project = await store.get(c.req.param("id"));
+    const composition = requestSubPath(c.req.url, "projects/:id/preview/comp");
+    const rebased = rebaseImageOverrides(
+      project.path,
+      composition,
+      overrides.data,
+    );
+    if (rebased === overrides.data) return next();
+    const url = new URL(c.req.url);
+    url.searchParams.set("variables", JSON.stringify(rebased));
+    c.req.raw = new Request(url, c.req.raw);
+    return next();
+  });
   const subscribers = new Set<(change: FileChange) => void>();
   const watchers = new Map<
     string,
@@ -288,14 +358,16 @@ export function createHyperframesApi(
     );
     // The preview and frame capture render a composition without a size at 1920 x 1080.
     const size = (name: string, fallback: number) => {
-      const value = Number(root.attrs[name]);
-      return Number.isFinite(value) && value > 0 ? value : fallback;
+      const pixels = Math.floor(Number(root.attrs[name]));
+      return Number.isSafeInteger(pixels) && pixels > 0 ? pixels : fallback;
     };
     /** Overrides for this composition's declarations, without those that equal a default. */
-    const variables = (values: VariableValues | undefined) => {
+    const variables = async (values: VariableValues | undefined) => {
       if (!values) return undefined;
       try {
-        return checkVariableValues(
+        return await checkProjectVariableValues(
+          project,
+          composition,
           values,
           parseDeclarations(declaredVariables(source.content)),
         );
@@ -331,7 +403,7 @@ export function createHyperframesApi(
       project.id,
       composition,
     );
-    const overrides = variables(input.variables);
+    const overrides = await variables(input.variables);
     const output = exportSize(input.size, size);
     if ("problem" in output) throw new HttpError(400, output.problem);
     const fps = exportFps(
@@ -467,7 +539,7 @@ export function createHyperframesApi(
           .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
           .join("; "),
       );
-    variables(overrides.data.variables);
+    await variables(overrides.data.variables);
     const rate = parseFps(request.data.fps);
     if (!rate.ok) throw new HttpError(400, "Choose a valid frame rate.");
     // The render route plays GIF at 30 fps at most; the range follows the rate it renders.
@@ -783,7 +855,16 @@ export function createHyperframesApi(
         lengths,
       );
       return injectDeterministicFontFaces(
-        withPreviewClipIdentities(html, source.content, scope, lengths),
+        withPreviewClipIdentities(
+          rebaseCompiledImageVariables(
+            html,
+            project.dir,
+            activeCompositionPath,
+          ),
+          source.content,
+          scope,
+          lengths,
+        ),
       );
     },
     async getProjectSignature(dir) {
@@ -893,6 +974,15 @@ export function createHyperframesApi(
             );
           throw error;
         },
+      );
+      isolate(response.headers);
+      return response;
+    }
+    if (media && path === "proxy-samples") {
+      const response = await proxySamplesPreview(
+        media,
+        await store.get(projectId),
+        url.searchParams,
       );
       isolate(response.headers);
       return response;

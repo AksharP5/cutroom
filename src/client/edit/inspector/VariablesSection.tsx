@@ -1,5 +1,5 @@
 import type { Clip } from "../../../shared/timeline/schema";
-import { isEditable } from "../../../shared/variables";
+import { isEditable, variableDefaultValue } from "../../../shared/variables";
 import type {
   CompositionVariable,
   EditableVariable,
@@ -7,6 +7,7 @@ import type {
   VariableValue,
 } from "../../../shared/variables";
 import { SelectMenu } from "../../components/SelectMenu";
+import { ImageVariableMenu } from "../ImageVariableMenu";
 import {
   declareVariable,
   bindVariable,
@@ -68,7 +69,7 @@ function VariableRow({
         {isEditable(variable) ? (
           <VariableControl
             variable={variable}
-            value={preview ?? variable.default}
+            value={preview ?? variableDefaultValue(variable)}
             onChange={(value) =>
               void previewVariable(projectId, variable.id, value)
             }
@@ -80,9 +81,7 @@ function VariableRow({
             value={
               typeof variable.default === "string"
                 ? variable.default
-                : "name" in variable.default
-                  ? variable.default.name
-                  : variable.default.url
+                : variable.default.name
             }
             disabled
             parse={(text) => text}
@@ -112,6 +111,14 @@ function VariableControl({
   onChange(value: VariableValue): void;
 }) {
   switch (variable.type) {
+    case "image":
+      return (
+        <ImageVariableMenu
+          label={variable.label}
+          value={String(value)}
+          onChange={onChange}
+        />
+      );
     case "string":
       return (
         <DraftField

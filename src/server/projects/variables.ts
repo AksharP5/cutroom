@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { stat } from "node:fs/promises";
 import { posix } from "node:path";
 import { applyFileMutations } from "@hyperframes/studio-server";
 import { isCompositionVariable } from "@hyperframes/core/variables";
@@ -14,6 +15,7 @@ import {
   VariableError,
   VariablesPreviewSchema,
   checkVariableValues,
+  imageVariablePath,
   parseDeclarations,
 } from "../../shared/variables";
 import type {
@@ -39,6 +41,28 @@ import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 
 export type VariablesChange = Pick<VariablesState, "composition" | "preview">;
+
+export async function checkProjectVariableValues(
+  project: Project,
+  composition: string,
+  values: VariableValues,
+  declarations: readonly CompositionVariable[],
+) {
+  const checked = checkVariableValues(values, declarations);
+  await Promise.all(
+    declarations.map(async (variable) => {
+      const value = checked[variable.id];
+      if (variable.type !== "image" || typeof value !== "string") return;
+      const path = imageVariablePath(composition, value);
+      const absolute = await projectWritePath(project, path, {
+        sourceOnly: false,
+      });
+      if (!(await stat(absolute)).isFile())
+        throw new VariableError(`${variable.id}: choose a project image file.`);
+    }),
+  );
+  return checked;
+}
 
 const compositionPath = (requested: string | undefined) => {
   const path = posix
@@ -213,7 +237,12 @@ export function createVariableRoutes(
     const { declarations } = await read(project, composition);
     let values: VariableValues;
     try {
-      values = checkVariableValues(input.values, declarations);
+      values = await checkProjectVariableValues(
+        project,
+        composition,
+        input.values,
+        declarations,
+      );
     } catch (error) {
       return refusal(error);
     }
@@ -234,7 +263,7 @@ export function createVariableRoutes(
       project,
       composition,
       `Set ${label ?? input.id} default`,
-      (html) => {
+      async (html) => {
         const declarations = writtenDeclarations(html);
         const matches = declarations
           .filter(isCompositionVariable)
@@ -250,15 +279,22 @@ export function createVariableRoutes(
             422,
             `${input.id} must name one declared variable.`,
           );
-        checkVariableValues({ [input.id]: input.value }, matches);
-        if (input.value === variable.default) return html;
+        const changed = await checkProjectVariableValues(
+          project,
+          composition,
+          { [input.id]: input.value },
+          matches,
+        );
+        if (!Object.hasOwn(changed, input.id)) return html;
+        const value =
+          variable.type === "image" && typeof variable.default === "object"
+            ? { ...variable.default, url: input.value }
+            : input.value;
         return declareVariables(
           html,
           JSON.stringify(
             declarations.map((entry) =>
-              entry === variable
-                ? { ...variable, default: input.value }
-                : entry,
+              entry === variable ? { ...variable, default: value } : entry,
             ),
           ),
         );
