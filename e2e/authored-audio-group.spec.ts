@@ -61,7 +61,7 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
     await page
       .getByRole("button", { name: "First frame", exact: true })
       .click();
-    return previewPeak(page, amplitude * volume);
+    return (await previewPeaks(page, amplitude * volume)).r;
   };
   const before = await play(0.8);
   await inspector.screenshot({ path: info.outputPath("bus-before.png") });
@@ -89,7 +89,7 @@ test("Inspector changes an authored group's live and exported gain, and Undo res
   // amplitude differ slightly, so compare within 1 dB rather than by raw PCM bytes.
   const exported = [];
   for (const time of [0.5, 4.5]) {
-    const peak = await encodedPeak(outputPath, time);
+    const peak = (await encodedPeaks(outputPath, time)).l;
     expect(Math.abs(20 * Math.log10(peak / (amplitude * volume)))).toBeLessThan(
       1,
     );
@@ -191,8 +191,8 @@ test("selected clips can make a named group, return to track mixing, and export 
 
   const outputPath = await exportMp4(page);
   const amplitudes = [
-    await encodedPeak(outputPath, 0.5),
-    await encodedPeak(outputPath, 2.5),
+    (await encodedPeaks(outputPath, 0.5)).l,
+    (await encodedPeaks(outputPath, 2.5)).l,
   ];
   expect(
     Math.abs(20 * Math.log10(amplitudes[0]! / amplitudes[1]!) - 12),
@@ -243,11 +243,12 @@ test("one group control routes linked partners without changing a later pickup i
     ).json(),
   );
   const parent = `<main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="4"><div id="scene-host" data-composition-id="scene" data-composition-src="scene.html" data-start="0" data-duration="2" data-track-index="0" data-width="320" data-height="240"></div></main>`;
-  const lead = `<template><main data-composition-id="scene" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="one" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="voice.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main></template>`;
+  const lead = `<template><main data-composition-id="scene" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="one" src="left.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="two" src="right.wav" data-link="partners" data-start="0" data-duration="2" data-track-index="2"></audio></main></template>`;
   const pickup = `<template><main data-composition-id="pickup" data-no-timeline data-width="320" data-height="240" data-duration="2"><audio id="pickup" src="voice.wav" data-start="0" data-duration="2" data-track-index="1" data-audio-group="dialogue"></audio></main></template>`;
   await writeFile(join(project.path, "index.html"), parent);
   await writeFile(join(project.path, "scene.html"), lead);
   await writeFile(join(project.path, "pickup.html"), pickup);
+  // Give each partner a channel so their measured gains are independent of playback phase.
   await promisify(execFile)("ffmpeg", [
     "-v",
     "error",
@@ -256,6 +257,12 @@ test("one group control routes linked partners without changing a later pickup i
     "-i",
     "aevalsrc=0.125*sin(2*PI*440*t):s=48000:d=2",
     join(project.path, "voice.wav"),
+    "-af",
+    "pan=stereo|FL=c0|FR=0*c0",
+    join(project.path, "left.wav"),
+    "-af",
+    "pan=stereo|FL=0*c0|FR=c0",
+    join(project.path, "right.wav"),
   ]);
   await page.goto(`/#project/${project.id}`);
   await page.locator('[data-clip="scene-host"]').dblclick();
@@ -327,18 +334,22 @@ test("one group control routes linked partners without changing a later pickup i
   const level = 10 ** (-12 / 20);
   await seekFrame(page, 15);
   await expect(stage).toHaveAttribute("data-preview-ready");
-  const previewLead = await previewPeak(page, 2 * 0.125 * level);
+  const previewLead = await previewPeaks(page, 0.125 * level, ["l", "r"]);
   await seekFrame(page, 75);
   await expect(stage).toHaveAttribute("data-preview-ready");
-  const previewPickup = await previewPeak(page, 0.125);
+  const previewPickup = await previewPeaks(page, 0.125, ["l", "r"]);
 
   const outputPath = await exportMp4(page);
-  const encodedLead = await encodedPeak(outputPath, 0.5);
-  const encodedPickup = await encodedPeak(outputPath, 2.5);
-  expect(
-    Math.abs(20 * Math.log10(encodedLead / (2 * 0.125 * level))),
-  ).toBeLessThan(1);
-  expect(Math.abs(20 * Math.log10(encodedPickup / 0.125))).toBeLessThan(1);
+  const encodedLead = await encodedPeaks(outputPath, 0.5);
+  const encodedPickup = await encodedPeaks(outputPath, 2.5);
+  for (const channel of ["l", "r"] as const) {
+    expect(
+      Math.abs(20 * Math.log10(encodedLead[channel] / (0.125 * level))),
+    ).toBeLessThan(1);
+    expect(
+      Math.abs(20 * Math.log10(encodedPickup[channel] / 0.125)),
+    ).toBeLessThan(1);
+  }
   await writeFile(
     info.outputPath("parent-mix.json"),
     JSON.stringify(
@@ -367,26 +378,32 @@ test("one group control routes linked partners without changing a later pickup i
     .toBe(lead);
 });
 
-async function previewPeak(page: Page, expected: number) {
+async function previewPeaks(
+  page: Page,
+  expected: number,
+  channels: ("l" | "r")[] = ["r"],
+) {
   await page.getByRole("button", { name: "Play forward", exact: true }).click();
-  let peak = 0;
+  let peaks = { l: 0, r: 0 };
   await expect
     .poll(async () => {
-      peak = await page
+      peaks = await page
         .frameLocator("iframe[data-live]")
         .locator("main")
         .first()
         .evaluate(() => {
           const runtime = window as Window & {
-            __hf?: { audioMeter?: { read(): { master: { r: number } } } };
+            __hf?: {
+              audioMeter?: { read(): { master: { l: number; r: number } } };
+            };
           };
-          return runtime.__hf?.audioMeter?.read().master.r ?? 0;
+          return runtime.__hf?.audioMeter?.read().master ?? { l: 0, r: 0 };
         });
-      return peak;
+      return channels.map((channel) => peaks[channel]);
     })
-    .toBeCloseTo(expected, 2);
+    .toEqual(channels.map(() => expect.closeTo(expected, 2)));
   await page.getByRole("button", { name: "Stop", exact: true }).click();
-  return peak;
+  return peaks;
 }
 
 async function exportMp4(page: Page) {
@@ -407,7 +424,7 @@ async function exportMp4(page: Page) {
   return outputPath;
 }
 
-async function encodedPeak(path: string, time: number) {
+async function encodedPeaks(path: string, time: number) {
   const { stdout } = await promisify(execFile)(
     "ffmpeg",
     [
@@ -430,8 +447,10 @@ async function encodedPeak(path: string, time: number) {
     { encoding: "buffer" },
   );
   expect(stdout.byteLength).toBeGreaterThan(0);
-  let peak = 0;
-  for (let at = 0; at < stdout.byteLength; at += 8)
-    peak = Math.max(peak, Math.abs(stdout.readFloatLE(at)));
-  return peak;
+  const peaks = { l: 0, r: 0 };
+  for (let at = 0; at < stdout.byteLength; at += 8) {
+    peaks.l = Math.max(peaks.l, Math.abs(stdout.readFloatLE(at)));
+    peaks.r = Math.max(peaks.r, Math.abs(stdout.readFloatLE(at + 4)));
+  }
+  return peaks;
 }
