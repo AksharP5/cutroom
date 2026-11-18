@@ -2418,6 +2418,10 @@ option {
   border-radius: var(--radius-clip);
   text-align: left;
 }
+/* content-visibility clips to the transcript chunk, including the first word. */
+.transcript-words button:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
 .transcript-words button.word-selected {
   background: var(--text-primary);
   color: var(--surface-ground);
