@@ -272,6 +272,9 @@ export function registerRenderIsolation(
   const imageVariables = JSON.stringify(
     new URL("./imageVariables.ts", import.meta.url).href,
   );
+  const transitions = JSON.stringify(
+    new URL("../timeline/transitionSource.ts", import.meta.url).href,
+  );
   const freezeSources = JSON.stringify(
     new URL("./freezeSources.ts", import.meta.url).href,
   );
@@ -371,7 +374,7 @@ export function registerRenderIsolation(
         return loaded;
       let source = String(loaded.source);
       if (url.endsWith("/producer/dist/index.js")) {
-        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
+        source = `import { projectPath } from ${projectPaths};\nimport { useFreezeExportSources } from ${freezeSources};\nimport { transitionSourceTimes } from ${transitions};\nimport { HttpError } from ${httpErrors};\nimport { provideAudioStage as cutroomProvideAudioStage } from ${JSON.stringify(import.meta.url)};\nimport { rebaseCompiledImageVariables } from ${imageVariables};\nconst cutroomSources = ${JSON.stringify(sources)};\n${source}`;
         source = replaceOnce(
           source,
           "function runAudioStage(input) {",
@@ -381,7 +384,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "rebaseDirectEntryAssetPaths(readTextFile(htmlPath), projectDir, htmlPath)",
-          "rebaseDirectEntryAssetPaths(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath)), projectDir, htmlPath)",
+          "rebaseDirectEntryAssetPaths(transitionSourceTimes(useFreezeExportSources(cutroomSources[htmlPath] ?? readTextFile(htmlPath))), projectDir, htmlPath)",
           url,
         );
         source = replaceOnce(
@@ -571,7 +574,7 @@ export function registerRenderIsolation(
         source = replaceOnce(
           source,
           "const rawSubHtml = normalizeCompositionSrcs(read.text, projectDir);",
-          "const rawSubHtml = normalizeCompositionSrcs(useFreezeExportSources(cutroomSources[filePath] ?? read.text), projectDir);",
+          "const rawSubHtml = normalizeCompositionSrcs(transitionSourceTimes(useFreezeExportSources(cutroomSources[filePath] ?? read.text)), projectDir);",
           url,
         );
         source = replaceOnce(

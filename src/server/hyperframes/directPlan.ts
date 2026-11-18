@@ -1,3 +1,4 @@
+import { offsetSourceTime } from "../../shared/timeline/time.ts";
 import { transform, transformStyleAttribute } from "lightningcss";
 import type { Declaration, Rule, SelectorComponent } from "lightningcss";
 import { defaultTreeAdapter, parse } from "parse5";
@@ -513,9 +514,11 @@ export function planDirectExport(
       continue;
     }
     const src = attribute(top.element, "src")!;
-    const mediaStart =
-      seconds(attribute(top.element, "data-media-start") ?? "0")! +
-      ((start - top.start) * fps.den) / fps.num;
+    const mediaStart = offsetSourceTime(
+      seconds(attribute(top.element, "data-media-start") ?? "0")!,
+      start - top.start,
+      fps,
+    );
     segments.push({ kind: "source", start, end, src, mediaStart, ...drawn });
   }
   if (!segments.some((segment) => segment.kind === "source"))

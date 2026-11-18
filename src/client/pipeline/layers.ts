@@ -1,3 +1,4 @@
+import { offsetSourceTime } from "../../shared/timeline/time";
 import { frameTime, toSeconds } from "../../shared/timeline/apply";
 import { framesAfter, framesBefore } from "../../shared/timeline/transition";
 import type { Clip, Timeline } from "../../shared/timeline/schema";
@@ -28,7 +29,6 @@ export interface Shown {
  */
 function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
   const { fps } = timeline;
-  const seconds = (frames: number) => (frames * fps.den) / fps.num;
   const order = new Map(plan.order.map((id, index) => [id, index]));
   const off = new Set(
     timeline.tracks.filter((track) => !track.enabled).map(({ index }) => index),
@@ -133,8 +133,12 @@ function layerQuery(timeline: Timeline, plan: Plan, from: number, to: number) {
         clip,
         fit,
         time:
-          clip.mediaStart +
-          seconds(frame - clip.start) * clip.playbackRate +
+          offsetSourceTime(
+            clip.mediaStart,
+            frame - clip.start,
+            fps,
+            clip.playbackRate,
+          ) +
           // The runtime seeks just past the frame's start, as HyperFrames does.
           1e-5,
         opacity,

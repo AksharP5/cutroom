@@ -6,6 +6,7 @@ import {
   serializeAutomation,
 } from "@hyperframes/core/audio-automation";
 import { frameTime, toFrames, toSeconds } from "../../shared/timeline/apply";
+import { offsetSourceTime } from "../../shared/timeline/time";
 import { TransitionSchema } from "../../shared/timeline/schema";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { offsetAutomation } from "../../shared/timeline/mix";
@@ -184,9 +185,9 @@ export function elementClip(clip: Clip, fps: Fps): Clip {
     start: clip.start - before,
     duration: clip.duration + before + after,
     mediaStart:
-      clip.mediaStart === null
-        ? null
-        : clip.mediaStart - frameTime(before, fps) * clip.playbackRate,
+      clip.mediaStart === null || !before
+        ? clip.mediaStart
+        : offsetSourceTime(clip.mediaStart, -before, fps, clip.playbackRate),
     fadeIn: transitionIn && straight ? transitionIn.duration : clip.fadeIn,
     fadeOut: transitionOut && straight ? transitionOut.duration : clip.fadeOut,
     // Clip-local automation is timed from the element, which starts `before` frames early.

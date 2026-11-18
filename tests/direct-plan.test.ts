@@ -102,7 +102,7 @@ test("Cutroom's own cuts and b-roll export from the source, and frames under a t
           start: 40,
           end: 60,
           src: "a.mp4",
-          mediaStart: 2 + 40 / 30,
+          mediaStart: 100 / 30,
         },
         { kind: "source", start: 60, end: 90, src: "b.mp4", mediaStart: 0.5 },
         { kind: "capture", start: 90, end: 120 },
