@@ -3,6 +3,7 @@ import type { Clip, Timeline } from "../../shared/timeline/schema";
 import type { MenuItem } from "../components/menu";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { isTitle } from "../../shared/timeline/title";
+import { takesGrade } from "../../shared/timeline/grade";
 
 /**
  * The clip menu, shared by the timeline, the picture and the menu key. Its edits are keymap
@@ -19,6 +20,9 @@ export function clipMenuItems({
   onInspector,
   onCopyStyle,
   onPasteStyle,
+  copiedGrade,
+  onCopyGrade,
+  onPasteGrade,
   onDuck,
   onNormalize,
   onFreeze,
@@ -38,6 +42,10 @@ export function clipMenuItems({
   onInspector(): void;
   onCopyStyle(clip: Clip): void;
   onPasteStyle(clips: Clip[]): void;
+  /** A grade has been copied in this project. */
+  copiedGrade: boolean;
+  onCopyGrade(clip: Clip): void;
+  onPasteGrade(clips: Clip[]): void;
   /** Ducks the clip under the voice: the other selected clips, or every voice over it. */
   onDuck(bed: Clip, voices: Clip[]): void;
   /** Sets each clip's gain so it measures -16 LUFS. */
@@ -55,6 +63,7 @@ export function clipMenuItems({
   const pastable = styled.filter(
     (clip) => (copiedStyle === "title") === !!clip.title,
   );
+  const graded = clips.filter(takesGrade);
   const sound = clips.filter((clip) => clip.hasAudio);
   const pictures = clips.filter((clip) => clip.kind === "video");
   const freeze =
@@ -114,6 +123,20 @@ export function clipMenuItems({
             label: "Paste style",
             run: () => onPasteStyle(pastable),
             disabled: !copiedStyle || !pastable.length,
+          },
+        ]
+      : []),
+    ...(graded.length
+      ? [
+          {
+            label: "Copy grade",
+            run: () => onCopyGrade(graded[0]!),
+            disabled: graded.length !== 1,
+          },
+          {
+            label: "Paste grade",
+            run: () => onPasteGrade(graded),
+            disabled: !copiedGrade,
           },
         ]
       : []),

@@ -863,3 +863,54 @@
 .font-actions .secondary-button {
   margin-right: auto;
 }
+
+/* Colour: a slider before each basic value, as in Lumetri, on the field's own scale. */
+.inspector-color .inspector-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--size-inspector-value);
+}
+.inspector-slider {
+  width: 100%;
+  height: var(--size-field);
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  cursor: ew-resize;
+}
+.inspector-slider::-webkit-slider-runnable-track {
+  height: var(--stroke-hair);
+  background: var(--line-strong);
+}
+.inspector-slider::-webkit-slider-thumb {
+  width: var(--space-2);
+  height: var(--space-3);
+  margin-top: calc((var(--stroke-hair) - var(--space-3)) / 2);
+  border-radius: var(--radius-clip);
+  background: var(--text-secondary);
+  appearance: none;
+}
+.inspector-slider:is(:hover, :focus-visible)::-webkit-slider-thumb {
+  background: var(--text-primary);
+}
+.inspector-slider:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+.inspector-slider:disabled {
+  cursor: default;
+}
+.inspector-slider:disabled::-webkit-slider-thumb {
+  background: var(--glyph-faint);
+}
+.inspector-color-bypass {
+  margin-left: auto;
+  margin-right: calc(var(--size-field) + var(--space-2));
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
+  font-size: var(--type-xs);
+}
+.inspector-color-note {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}

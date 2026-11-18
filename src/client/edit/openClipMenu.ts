@@ -5,6 +5,7 @@ import { z } from "zod";
 import { CommandSchema } from "../../shared/timeline/schema";
 import { ApiError, api, json } from "../api";
 import { clipMenuItems } from "./clipMenu";
+import { copyGrade, hasCopiedGrade, pasteGrade } from "./copyGrade";
 import { editTimeline, hasClipboard, useTimeline } from "./timeline";
 import { copiedStyle, copyStyle, pasteStyle } from "./copyStyle";
 import { useTransport } from "./transport";
@@ -79,6 +80,13 @@ export function openClipMenu(
       onCopyStyle: (clip) => copyStyle(projectId, clip),
       onPasteStyle: (clips) =>
         pasteStyle(
+          projectId,
+          clips.map((clip) => clip.id),
+        ),
+      copiedGrade: hasCopiedGrade(projectId),
+      onCopyGrade: (clip) => copyGrade(projectId, clip),
+      onPasteGrade: (clips) =>
+        pasteGrade(
           projectId,
           clips.map((clip) => clip.id),
         ),

@@ -44,6 +44,21 @@ interface PreviewWindow extends DiagnosticWindow {
       stop(): void;
       read(): { master: { l: number; r: number } };
     };
+    /** HyperFrames' colour grading: graded pictures, and a compare that shows their source. */
+    colorGrading?: {
+      setCompare(
+        target: Element,
+        compare: {
+          enabled: boolean;
+          position: number;
+          softness: number;
+          lineWidth: number;
+        },
+      ): boolean;
+      refresh(): number;
+      redraw(): void;
+      waitForActiveLuts(): Promise<unknown>;
+    };
   };
   __player?: {
     play(): void;
@@ -163,6 +178,13 @@ function installPreviewBridge(
   const removedMedia = new Map<string, HTMLMediaElement>();
   let updatingTiming = false;
   let confirmedStructure: string | null = null;
+  // The bridge runs inside the page, so it names HyperFrames' attribute itself.
+  const GRADE_ATTRIBUTE = "data-color-grading";
+  /**
+   * The saved `data-color-grading` of each clip with a grade draft showing. HyperFrames' runtime
+   * watches the attribute and redraws the clip; the structure comparison reads the saved value.
+   */
+  const gradeSaved = new Map<Element, string | null>();
   // Attribute writes made by the pinned runtime for a parent seek or playback may change
   // visibility. Remember their exact before/after values without cloning per frame. The
   // runtime can apply a seek after its images decode, so the record runs until it settles.
@@ -272,6 +294,26 @@ function installPreviewBridge(
       }
     }
   };
+  /** The copy of a live element in a clone of the document, found by its path from the root. */
+  const cloneOf = (root: Element, element: Element) => {
+    const path: number[] = [];
+    let node: Node | null = element;
+    while (node && node !== document.documentElement) {
+      const parentNode: ParentNode | null = node.parentNode;
+      if (!parentNode) break;
+      path.unshift([...parentNode.childNodes].indexOf(node as ChildNode));
+      node = parentNode;
+    }
+    if (node !== document.documentElement)
+      throw new Error("The live preview element changed.");
+    const clone = path.reduce<Node>(
+      (node, index) => node.childNodes[index]!,
+      root,
+    );
+    if (!(clone instanceof Element))
+      throw new Error("The live preview element changed.");
+    return clone;
+  };
   const liveStructure = () => {
     flushSeek();
     if (seekDiverged)
@@ -279,28 +321,23 @@ function installPreviewBridge(
     const root = document.documentElement.cloneNode(true);
     if (!(root instanceof Element))
       throw new Error("The preview document is unavailable.");
+    // A grade draft shows in the page but is not saved yet: compare the saved grade.
+    for (const [element, saved] of gradeSaved) {
+      if (!element.isConnected) {
+        gradeSaved.delete(element);
+        continue;
+      }
+      const clone = cloneOf(root, element);
+      if (saved === null) clone.removeAttribute(GRADE_ATTRIBUTE);
+      else clone.setAttribute(GRADE_ATTRIBUTE, saved);
+    }
     for (const [element, attributes] of seekAttributes) {
       // An edit removed it; nothing of it remains to compare.
       if (!element.isConnected) {
         seekAttributes.delete(element);
         continue;
       }
-      const path: number[] = [];
-      let node: Node | null = element;
-      while (node && node !== document.documentElement) {
-        const parentNode: ParentNode | null = node.parentNode;
-        if (!parentNode) break;
-        path.unshift([...parentNode.childNodes].indexOf(node as ChildNode));
-        node = parentNode;
-      }
-      if (node !== document.documentElement)
-        throw new Error("The live preview element changed.");
-      const clone = path.reduce<Node>(
-        (node, index) => node.childNodes[index]!,
-        root,
-      );
-      if (!(clone instanceof Element))
-        throw new Error("The live preview element changed.");
+      const clone = cloneOf(root, element);
       for (const [name, { before, after }] of attributes) {
         if (element.getAttribute(name) !== after)
           throw new Error(`The live preview attribute ${name} changed.`);
@@ -620,6 +657,42 @@ function installPreviewBridge(
     if (regionDraft.textContent !== css) regionDraft.textContent = css;
     if (regionDraft !== document.head.lastElementChild)
       document.head.append(regionDraft);
+  };
+  const writeGradeDraft = (
+    clipId: string,
+    attribute: string | null,
+    restore: boolean,
+  ) => {
+    const element = clipElement(clipId);
+    if (!element) return;
+    if (!gradeSaved.has(element)) {
+      if (restore) return;
+      gradeSaved.set(element, element.getAttribute(GRADE_ATTRIBUTE));
+    }
+    const value = restore ? gradeSaved.get(element)! : attribute;
+    if (restore) gradeSaved.delete(element);
+    if (element.getAttribute(GRADE_ATTRIBUTE) === value) return;
+    if (value === null) element.removeAttribute(GRADE_ATTRIBUTE);
+    else element.setAttribute(GRADE_ATTRIBUTE, value);
+    // A paused video shows this bridge's held copy, which would cover the runtime's graded
+    // canvas; the video already shows that frame, so the hold can go.
+    if (element instanceof HTMLVideoElement && holds.has(element))
+      removeHold(element);
+    // The runtime watches the attribute only from `<body>` on, which its head script misses.
+    win.__hf?.colorGrading?.refresh();
+  };
+  /** Before/after: every graded picture shows its source, through the runtime's own compare. */
+  let gradeBypass = false;
+  const writeGradeBypass = () => {
+    const grading = win.__hf?.colorGrading;
+    if (!grading) return;
+    for (const element of document.querySelectorAll(`[${GRADE_ATTRIBUTE}]`))
+      grading.setCompare(element, {
+        enabled: gradeBypass,
+        position: 1,
+        softness: 0,
+        lineWidth: 0,
+      });
   };
   let observedClip: string | null = null;
   let observedText: string | null = null;
@@ -2886,6 +2959,29 @@ function installPreviewBridge(
           )
             scheduleObservation(data.hfId);
           return;
+        case "grade": {
+          if (
+            !("clipId" in data) ||
+            typeof data.clipId !== "string" ||
+            !("attribute" in data) ||
+            !(data.attribute === null || typeof data.attribute === "string") ||
+            !("restore" in data) ||
+            typeof data.restore !== "boolean"
+          )
+            return;
+          writeGradeDraft(data.clipId, data.attribute, data.restore);
+          if (gradeBypass) writeGradeBypass();
+          await win.__hf?.colorGrading?.waitForActiveLuts();
+          win.__hf?.colorGrading?.redraw();
+          return;
+        }
+        case "grade-bypass": {
+          if (!("bypass" in data) || typeof data.bypass !== "boolean") return;
+          gradeBypass = data.bypass;
+          writeGradeBypass();
+          win.__hf?.colorGrading?.redraw();
+          return;
+        }
         case "keyframe": {
           if (!("clipId" in data) || typeof data.clipId !== "string") return;
           if (!("style" in data)) return;

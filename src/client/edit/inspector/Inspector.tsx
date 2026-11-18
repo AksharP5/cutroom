@@ -40,6 +40,7 @@ import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
 import { StyleSection } from "./StyleSection";
+import { ColorSection } from "./ColorSection";
 import {
   BindImageVariable,
   BindVariable,
@@ -318,6 +319,7 @@ export function Inspector({
   const [regionOpen, setRegionOpen] = useState(true);
   // Closed until opened, so a text clip's Timing stays in view; the choice then holds.
   const [styleOpen, setStyleOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
   const [timingOpen, setTimingOpen] = useState(true);
   useEffect(() => {
     // Timeline presses prevent the browser's usual blur. Commit before they change selection.
@@ -802,6 +804,17 @@ export function Inspector({
                 disabled={track?.track.locked}
               />
             </details>
+          )}
+          {(clip.kind === "video" || clip.kind === "image") && (
+            <ColorSection
+              projectId={projectId}
+              composition={view!.composition}
+              clip={clip}
+              fps={timeline.fps}
+              disabled={track?.track.locked ?? false}
+              open={colorOpen}
+              onToggle={setColorOpen}
+            />
           )}
           {!isAudioKind(clip.kind) && !clip.adjustment && !titled && (
             <StyleSection

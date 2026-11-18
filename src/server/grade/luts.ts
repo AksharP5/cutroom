@@ -6,7 +6,7 @@ import type { CubeLut3D } from "@hyperframes/core/color-luts";
 import { HttpError } from "../../shared/errors.ts";
 import type { Project } from "../../shared/project.ts";
 import { LUT_DIRECTORY } from "../../shared/timeline/grade.ts";
-import type { Grade } from "../../shared/timeline/grade.ts";
+import type { Grade, LutInfo } from "../../shared/timeline/grade.ts";
 import { isMissing, projectPath, projectWritePath } from "../projects/path.ts";
 
 /** A 65-point cube written out is about 7 MB; anything past this is not a colour LUT. */
@@ -17,8 +17,6 @@ export const LUT_MAX_SIZE = 65;
 const LUT_VALUE_LIMIT = 4;
 /** The sizes Cutroom bakes: Resolve and FFmpeg read both. */
 export const BAKE_SIZES = [33, 65] as const;
-
-export type LutInfo = { path: string; title: string | null; size: number };
 
 /**
  * A `.cube` file read as untrusted input: bounded in bytes, strict UTF-8, one 3D table of at most

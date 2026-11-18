@@ -41,6 +41,8 @@ import { frameTime } from "../../shared/timeline/apply";
 import { editPicture, followEditPicture } from "./editFrame";
 import type { EditPicture } from "./editFrame";
 import { seekQueue } from "./seekQueue";
+import { writeGrade } from "../../shared/timeline/grade";
+import type { Grade } from "../../shared/timeline/grade";
 
 export const usePositionWarning = create<{
   warning: {
@@ -243,6 +245,40 @@ export function previewRegion(css: string | null, seek = false) {
   regionDraft = { css, seek };
   for (const target of regionTargets) target(regionDraft);
 }
+
+/** A grade while its control is dragged or stepped: the attribute value, or null for none. */
+type GradeDraft = {
+  clipId: string;
+  attribute: string | null;
+  restore: boolean;
+};
+const gradeTargets = new Set<(draft: GradeDraft) => void>();
+let gradeDraft: GradeDraft | null = null;
+/** Like Position, a grade draft goes only to preview documents, never through the timeline. */
+export function previewGrade(clipId: string, grade: Grade | null) {
+  gradeDraft = { clipId, attribute: writeGrade(grade), restore: false };
+  for (const target of gradeTargets) target(gradeDraft);
+}
+
+export function cancelGradePreview(clipId: string) {
+  const draft = { clipId, attribute: null, restore: true };
+  for (const target of gradeTargets) target(draft);
+  gradeDraft = null;
+}
+
+export async function commitGradePreview(commit: () => Promise<boolean>) {
+  const draft = gradeDraft;
+  const accepted = await commit();
+  // The saved document replaces the drafted one; an earlier commit never clears a later draft.
+  if (gradeDraft !== draft) return;
+  if (!accepted && draft) cancelGradePreview(draft.clipId);
+  gradeDraft = null;
+}
+
+/** Shift+D shows every clip ungraded in the viewer, as Resolve's bypass does, until pressed again. */
+export const useGradeBypass = create<{ bypass: boolean }>(() => ({
+  bypass: false,
+}));
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
 export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
@@ -525,6 +561,13 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
   const region = (draft: RegionDraft) => {
     send("region", draft);
   };
+  const grade = (draft: GradeDraft) => {
+    send("grade", draft);
+  };
+  const bypass = ({ bypass }: { bypass: boolean }) => {
+    send("grade-bypass", { bypass });
+  };
+  let unfollowBypass = () => {};
   const observe = (clipId: string | null) =>
     send("observe-position", {
       clipId,
@@ -571,6 +614,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     if (keyframeTargets.delete(keyframe) && !keyframeTargets.size)
       keyframeDraft = null;
     regionTargets.delete(region);
+    if (gradeTargets.delete(grade) && !gradeTargets.size) gradeDraft = null;
+    unfollowBypass();
     observers.delete(observe);
     if (warningSource === frame) {
       warningSource = null;
@@ -633,24 +678,31 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       regionTargets.add(region);
       // A region draft outlives saves: a new document takes it before it is shown.
       if (regionDraft.css) region({ ...regionDraft, seek: true });
+      gradeTargets.add(grade);
+      bypass(useGradeBypass.getState());
+      unfollowBypass = useGradeBypass.subscribe(bypass);
       // Keep both documents following the gesture until the new one has painted its latest
       // draft. Promotion runs immediately after this resolves, before another event can edit it.
       let shown: PositionDraft | null;
       let shownTransform: TransformDraft | null;
       let shownKeyframe: KeyframeDraft | null;
+      let shownGrade: GradeDraft | null;
       do {
         shown = positionDraft;
         shownTransform = transformDraft;
         shownKeyframe = keyframeDraft;
+        shownGrade = gradeDraft;
         if (shown) position(shown);
         if (shownTransform) transform(shownTransform);
         if (shownKeyframe) keyframe(shownKeyframe);
+        if (shownGrade) grade(shownGrade);
         await request("paint");
         closing.signal.throwIfAborted();
       } while (
         shown !== positionDraft ||
         shownTransform !== transformDraft ||
-        shownKeyframe !== keyframeDraft
+        shownKeyframe !== keyframeDraft ||
+        shownGrade !== gradeDraft
       );
       // A candidate follows a drag already under way before it can replace the picture.
       let editing: EditPicture | null;

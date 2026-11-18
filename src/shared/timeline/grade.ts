@@ -8,6 +8,7 @@ import {
   validateColorGradingContract,
 } from "@hyperframes/parsers/color-grading-contract";
 import { z } from "zod";
+import type { Clip } from "./schema.ts";
 
 /**
  * A clip's colour grade: the colour stages of HyperFrames' `data-color-grading`, which its runtime
@@ -428,3 +429,16 @@ export const GradeLutSaveSchema = z.object({
       "The LUT's title and file name; the clip's name and grade when left out",
     ),
 });
+
+/** A LUT in the project, as the server lists and imports it. */
+export const LutInfoSchema = z.object({
+  path: z.string(),
+  title: z.string().nullable(),
+  size: z.number().int(),
+});
+export type LutInfo = z.infer<typeof LutInfoSchema>;
+
+/** Video and image clips take a grade, unless their authored grade is one Cutroom cannot edit. */
+export const takesGrade = (clip: Clip) =>
+  (clip.kind === "video" || clip.kind === "image") &&
+  !clip.sourceRestrictions?.grade;

@@ -195,6 +195,7 @@
   --size-field: 22px;
   --size-section-head: 30px;
   --size-inspector-label: 64px;
+  --size-inspector-value: 52px; /* a short value beside its own control, such as a grade slider */
   --size-inspector-row: 26px;
   --size-track-id: 24px; /* id slot; names and line-2 buttons share this indent */
   --size-marker-w: 8px;

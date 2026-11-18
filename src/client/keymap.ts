@@ -480,6 +480,11 @@ export const keymap = {
     keys: ["Alt+Shift+S"],
   },
   cutroomToggleGrid: { area: "View", label: "Grid", keys: ["Shift+G"] },
+  viewBypassColorGrades: {
+    area: "View",
+    label: "Bypass grades",
+    keys: ["Shift+D"],
+  },
   viewStillsStillGrab: {
     area: "View",
     label: "Save frame as PNG",
@@ -584,7 +589,8 @@ export const isTyping = (target: EventTarget | null) =>
   target instanceof Element &&
   (!!target.ownerDocument.querySelector("dialog[open]") ||
     !!target.closest(
-      "input, textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
+      // A slider types nothing: it keeps its own arrow keys and leaves the rest to the editor.
+      "input:not([type=range]), textarea, select, [role=combobox], [role=listbox], [contenteditable]:not([contenteditable=false]), dialog",
     ));
 
 /** A text field in the page itself, which a panel key may leave. One in a dialog or menu is not. */

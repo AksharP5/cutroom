@@ -81,6 +81,9 @@ const rows = (
     onInspector() {},
     onCopyStyle() {},
     onPasteStyle() {},
+    copiedGrade: false,
+    onCopyGrade() {},
+    onPasteGrade() {},
     onDuck() {},
     onNormalize() {},
     onFreeze() {},
@@ -139,7 +142,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
   ]);
   // A selected clip can be cut, lifted and turned off; split waits for the playhead inside it,
   // and one clip has nothing to link to. Its style pastes once a picture's style, not a
-  // title's, has been copied.
+  // title's, has been copied, and its grade once a grade has.
   for (const frame of [30, 90])
     expect(disabled(rows({ selected: ["a"], clipboard: true, frame }))).toEqual(
       [
@@ -147,9 +150,13 @@ test("the clip menu offers an edit only when its key would act on the selection"
         "Freeze frame",
         keymap.editLink.label,
         "Paste style",
+        "Paste grade",
         "Reveal media",
       ],
     );
+  expect(
+    disabled(rows({ selected: ["a"], frame: 30, copiedGrade: true })),
+  ).not.toContain("Paste grade");
   // A linked clip shows Link clips checked, and the row unlinks it.
   const linked = {
     ...timeline,
@@ -167,6 +174,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
         clipboard: true,
         frame: 31,
         copiedStyle: "title",
+        copiedGrade: true,
         onReveal() {},
       }),
     ),
@@ -178,6 +186,7 @@ test("the clip menu offers an edit only when its key would act on the selection"
         clipboard: true,
         frame: 31,
         copiedStyle: "style",
+        copiedGrade: true,
         onReveal() {},
       }),
     ),
