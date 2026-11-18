@@ -909,6 +909,9 @@ option {
   flex: none;
   margin-left: auto;
 }
+.chat-toolbar > .chat-thread-link + .icon-button {
+  margin-left: 0;
+}
 .chat-toolbar > .icon-button svg {
   width: var(--icon-md);
   height: var(--icon-md);
@@ -932,6 +935,45 @@ option {
   margin: calc(var(--space-1) / 2) 0 0;
 }
 .chat-toolbar .chat-list:popover-open {
+  display: block;
+}
+.chat-toolbar .chat-list[data-shared]:popover-open {
+  display: flex;
+  flex-direction: column;
+}
+.chat-list-scroll {
+  min-height: 0;
+  overflow: auto;
+}
+.chat-list-group > .quiet-label,
+.chat-list-message {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+}
+.chat-list-message {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.chat-link-field {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-1);
+  border-top: var(--stroke-hair) solid var(--line);
+}
+.chat-link-field input {
+  flex: 1;
+  min-width: 0;
+  height: var(--size-row);
+}
+.chat-list .chat-list-branch {
+  display: none;
+  margin-right: var(--space-1);
+  color: var(--text-secondary);
+}
+.chat-native-row:is(:hover, :focus-within) .chat-list-branch {
   display: block;
 }
 .chat-toolbar .chat-list:not(:popover-open) {
@@ -1000,6 +1042,16 @@ option {
   color: var(--text-tertiary);
   font-size: var(--type-xs);
 }
+.chat-thread-meta {
+  min-width: 0;
+  max-width: 54%;
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+.chat-thread-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .chat-list-meta time {
   font-size: var(--type-2xs);
 }
@@ -1024,7 +1076,8 @@ option {
 .chat-list-row:is(:hover, :focus-within) .chat-list-actions {
   display: flex;
 }
-.chat-list-row:is(:hover, :focus-within) .chat-list-meta {
+.chat-list-row:is(:hover, :focus-within)
+  .chat-list-meta:not(.chat-thread-meta) {
   display: none;
 }
 .chat-list .chat-list-actions > button {
@@ -1127,6 +1180,11 @@ option {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.chat-import-count {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--type-xs);
 }
 .chat-empty {
   margin: 0;
@@ -1554,6 +1612,18 @@ option {
 }
 .chat-error span {
   padding-top: 4px;
+}
+.chat-error[data-notice],
+.chat-t3-label {
+  color: var(--text-secondary);
+}
+.chat-t3-label {
+  font-size: var(--type-sm);
+}
+.chat-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 .chat-error .icon-button {
   color: inherit;

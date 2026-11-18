@@ -23,10 +23,11 @@ import {
   type AgentSkill,
 } from "../../shared/agent";
 import type { ReviewItem } from "../../shared/review";
-import { api, json } from "../api";
+import { ApiError, api, json } from "../api";
 import { useWorkspace } from "../workspace";
 import { SelectMenu } from "./SelectMenu";
 import { ChatList, RecentChats, chatIsBusy } from "./chat/ChatList";
+import { openNativeChat } from "./chat/SharedChats";
 import { Attachments } from "./chat/Attachments";
 import { RequestCard } from "./chat/RequestCard";
 import { Transcript } from "./chat/Transcript";
@@ -37,6 +38,7 @@ const sessionListSchema = z.object({
   sessions: z.array(agentSessionSummarySchema),
 });
 const acceptedSchema = agentSessionSchema;
+const sentSchema = acceptedSchema.extend({ queued: z.boolean().optional() });
 const deletedSchema = z.object({ deleted: z.literal(true) });
 
 function lastChatKey(projectId: string) {
@@ -80,7 +82,7 @@ function readDraft(projectId: string) {
 type ChatState =
   | { phase: "restoring" }
   | { phase: "new" }
-  | { phase: "loading"; id: string }
+  | { phase: "loading"; selected: AgentSessionSummary }
   | { phase: "ready"; session: AgentSession };
 type TurnSubmission = {
   kind: "turn" | "follow-up";
@@ -91,6 +93,7 @@ type ChatOperation =
   | TurnSubmission
   | { kind: "model" }
   | { kind: "stop" }
+  | { kind: "branch" }
   | { kind: "resume-follow-ups" }
   | { kind: "remove-follow-up" };
 
@@ -100,7 +103,7 @@ function applyChatEvents(
   events: AgentEvent[],
 ): ChatState {
   if (state.phase === "new" || state.phase === "restoring") return state;
-  if ((state.phase === "ready" ? state.session.id : state.id) !== id)
+  if ((state.phase === "ready" ? state.session.id : state.selected.id) !== id)
     return state;
   let session = state.phase === "ready" ? state.session : null;
   for (const event of events) {
@@ -125,6 +128,8 @@ function applyChatEvents(
       session = { ...session, messages: items };
     }
     if (event.type === "status") session = { ...session, status: event.status };
+    if (event.type === "native-session")
+      session = { ...session, nativeSessionId: event.nativeSessionId };
     if (event.type === "turn-queue")
       session = {
         ...session,
@@ -137,6 +142,13 @@ function applyChatEvents(
       session = { ...session, pendingRequest: undefined };
   }
   return session ? { phase: "ready", session } : state;
+}
+
+function webThreadLink(link: string | undefined) {
+  if (!link) return undefined;
+  const url = URL.parse(link);
+  if (url && (url.protocol === "https:" || url.protocol === "http:"))
+    return url.href;
 }
 
 /** Elapsed agent time as a clock (m:ss), not timecode. Re-renders only itself. */
@@ -212,8 +224,10 @@ export function ChatPanel({
     chat.phase === "ready"
       ? chat.session.id
       : chat.phase === "loading"
-        ? chat.id
+        ? chat.selected.id
         : null;
+  const linkedThread =
+    chat.phase === "loading" ? chat.selected.t3Thread : session?.t3Thread;
   const opening = chat.phase === "restoring" || chat.phase === "loading";
   const [draft, setDraft] = useState(() => readDraft(projectId)?.text ?? "");
   const [attachments, setAttachments] = useState<string[]>(
@@ -225,7 +239,13 @@ export function ChatPanel({
   const [skillChoices, setSkillChoices] = useState(
     () => readDraft(projectId)?.skillChoices ?? {},
   );
-  const [error, setError] = useState("");
+  const [notice, setNotice] = useState<{
+    message: string;
+    kind: "error" | "conflict" | "queued";
+  } | null>(null);
+  const setError = useCallback((message: string) => {
+    setNotice(message ? { message, kind: "error" } : null);
+  }, []);
   const [operation, setOperation] = useState<ChatOperation | null>(null);
   const submitting = operation !== null;
   const [skillIndex, setSkillIndex] = useState(0);
@@ -297,14 +317,14 @@ export function ChatPanel({
       setProvider(selected.provider);
       setModel(selected.model ?? "");
       follow.current = true;
-      setChat({ phase: "loading", id: selected.id });
+      setChat({ phase: "loading", selected });
       try {
         localStorage.setItem(lastChatKey(projectId), selected.id);
       } catch {
         /* Selection works without browser storage. */
       }
     },
-    [projectId],
+    [projectId, setError],
   );
 
   const newChat = useCallback(() => {
@@ -313,7 +333,7 @@ export function ChatPanel({
     setChat({ phase: "new" });
     setError("");
     textarea.current?.focus();
-  }, []);
+  }, [setError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -345,7 +365,9 @@ export function ChatPanel({
     }
   }, [sessionId, hasMessages, projectId]);
 
+  const discover = chat.phase !== "restoring" && !linkedThread;
   useEffect(() => {
+    if (!discover) return;
     let cancelled = false;
     setDiscovering(true);
     setCapabilities(null);
@@ -366,16 +388,18 @@ export function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [provider, projectId, configurationRevision]);
+  }, [discover, provider, projectId, configurationRevision, setError]);
 
   useEffect(() => {
     useWorkspace.setState({
-      agent: capabilities && {
-        name: capabilities.provider === "codex" ? "Codex" : "Claude Code",
-        available: capabilities.available,
-      },
+      agent: linkedThread
+        ? { name: "T3 Code", available: true }
+        : capabilities && {
+            name: capabilities.provider === "codex" ? "Codex" : "Claude Code",
+            available: capabilities.available,
+          },
     });
-  }, [capabilities]);
+  }, [capabilities, linkedThread]);
   useEffect(() => () => useWorkspace.setState({ agent: null }), []);
 
   useEffect(() => {
@@ -398,7 +422,12 @@ export function ChatPanel({
       pending = [];
       setChat((current) => applyChatEvents(current, sessionId, events));
       for (const event of events)
-        if (event.type === "error") setError(event.message);
+        if (event.type === "error")
+          setNotice({
+            message: event.message,
+            kind:
+              event.code === "native_session_conflict" ? "conflict" : "error",
+          });
       if (events.some((event) => event.type === "status"))
         void loadSessions().catch(() => {});
     };
@@ -440,7 +469,7 @@ export function ChatPanel({
 
   // A new question always comes into view; it is waiting on you.
   const pendingQuestion =
-    session?.pendingRequest?.kind === "question"
+    !linkedThread && session?.pendingRequest?.kind === "question"
       ? session.pendingRequest.id
       : null;
   useEffect(() => {
@@ -458,11 +487,12 @@ export function ChatPanel({
     onPromptConsumed();
   }, [prompt, onPromptConsumed]);
 
-  const skillQuery = skillDismissed
-    ? null
-    : /\$([\w:/.-]*)$/.exec(
-        draft.slice(0, textarea.current?.selectionStart ?? draft.length),
-      );
+  const skillQuery =
+    linkedThread || skillDismissed
+      ? null
+      : /\$([\w:/.-]*)$/.exec(
+          draft.slice(0, textarea.current?.selectionStart ?? draft.length),
+        );
   const skillResults = useMemo(() => {
     if (!skillQuery || !capabilities) return [];
     const query = skillQuery[1]?.toLowerCase() ?? "";
@@ -492,7 +522,7 @@ export function ChatPanel({
     },
     [sessionId, requestId],
   );
-  const request = session?.pendingRequest;
+  const request = linkedThread ? undefined : session?.pendingRequest;
   const question = useMemo(
     () =>
       request?.kind === "question" && (
@@ -508,22 +538,28 @@ export function ChatPanel({
   const followUps = (session?.queuedTurns ?? []).filter(
     ({ id }) => id !== session?.runningFollowUpId,
   );
-  const queuesMessage = busy || followUps.length > 0;
-  const linked = Boolean(session?.t3Thread);
+  const queuesMessage = !linkedThread && (busy || followUps.length > 0);
   const sendAvailable =
     !submitting &&
     !opening &&
-    (linked || (!discovering && capabilities?.available));
+    (Boolean(linkedThread) || (!discovering && capabilities?.available));
   const canSend = sendAvailable && Boolean(draft.trim() || attachments.length);
   const controlsLocked = busy || submitting || opening;
   const canStop =
-    busy || operation?.kind === "turn" || operation?.kind === "stop";
+    !linkedThread &&
+    (busy || operation?.kind === "turn" || operation?.kind === "stop");
   const resuming = operation?.kind === "resume-follow-ups";
-  const active = canStop || resuming;
+  const active = canStop || resuming || (linkedThread && (busy || submitting));
+  const sendLabel = linkedThread
+    ? "Send to T3 Code"
+    : queuesMessage
+      ? "Queue follow-up"
+      : "Send message";
   // A turn starts with the owner's latest message.
-  const turnStart = session?.messages.findLast(
-    (message) => message.role === "user",
-  )?.createdAt;
+  const turnStart = linkedThread
+    ? undefined
+    : session?.messages.findLast((message) => message.role === "user")
+        ?.createdAt;
 
   async function stop() {
     const openedView = view.current;
@@ -581,14 +617,17 @@ export function ChatPanel({
     const text =
       sendNotes && !draft.trim() ? "Work through my review notes." : draft;
     const submittedAttachments = attachments;
-    const skills = [...skillMentions(text)].flatMap((name) => {
-      const choice = skillChoices[name];
-      if (choice?.provider === provider) return [{ name, path: choice.path }];
-      const skill = capabilities?.skills.find(
-        (candidate) => candidate.enabled && candidate.name === name,
-      );
-      return skill ? [{ name, path: skill.path }] : [];
-    });
+    const skills = linkedThread
+      ? []
+      : [...skillMentions(text)].flatMap((name) => {
+          const choice = skillChoices[name];
+          if (choice?.provider === provider)
+            return [{ name, path: choice.path }];
+          const skill = capabilities?.skills.find(
+            (candidate) => candidate.enabled && candidate.name === name,
+          );
+          return skill ? [{ name, path: skill.path }] : [];
+        });
     const context = getContext();
     const submission: TurnSubmission = {
       kind: queuesMessage ? "follow-up" : "turn",
@@ -609,7 +648,7 @@ export function ChatPanel({
       ].slice(0, 30);
       if (submission.stopped) return;
       let active = session;
-      if (!active || active.provider !== provider) {
+      if (!active || (!linkedThread && active.provider !== provider)) {
         active = await api(
           "/agents/sessions",
           agentSessionSchema,
@@ -637,9 +676,9 @@ export function ChatPanel({
           setModel(active.model ?? "");
         }
       }
-      await api(
+      const sent = await api(
         `/agents/sessions/${active.id}/${queuesMessage ? "follow-ups" : "turns"}`,
-        acceptedSchema,
+        sentSchema,
         json("POST", {
           text,
           skills,
@@ -649,6 +688,8 @@ export function ChatPanel({
       );
       createdId = undefined;
       if (submission.stopped) return;
+      if (sent.queued && linkedThread && view.current === openedView)
+        setNotice({ message: "Queued in T3 Code", kind: "queued" });
       setDraft((current) => (current === draft ? "" : current));
       setAttachments((current) =>
         current.filter((path) => !submittedAttachments.includes(path)),
@@ -658,7 +699,14 @@ export function ChatPanel({
       void loadSessions().catch(() => {});
     } catch (error) {
       if (!submission.stopped && view.current === openedView)
-        setError(error instanceof Error ? error.message : String(error));
+        setNotice({
+          message: error instanceof Error ? error.message : String(error),
+          kind:
+            error instanceof ApiError &&
+            error.code === "native_session_conflict"
+              ? "conflict"
+              : "error",
+        });
     } finally {
       if (createdId) {
         // A refused or cancelled first send can leave an empty server record.
@@ -683,6 +731,33 @@ export function ChatPanel({
         void loadSessions().catch(() => {});
       }
       setOperation((current) => (current === submission ? null : current));
+    }
+  }
+
+  async function branchChat() {
+    if (!session?.nativeSessionId || submitting) return;
+    const openedView = view.current;
+    const branching: ChatOperation = { kind: "branch" };
+    setOperation(branching);
+    try {
+      const branched = await openNativeChat(
+        projectId,
+        "branch",
+        session.provider,
+        session.nativeSessionId,
+      );
+      void loadSessions().catch(() => {});
+      if (view.current !== openedView) return;
+      selectChat(branched);
+      textarea.current?.focus();
+    } catch (error) {
+      if (view.current === openedView)
+        setNotice({
+          message: error instanceof Error ? error.message : String(error),
+          kind: "conflict",
+        });
+    } finally {
+      setOperation((current) => (current === branching ? null : current));
     }
   }
 
@@ -752,21 +827,24 @@ export function ChatPanel({
   const refreshAgents = useCallback(() => {
     setError("");
     setConfigurationRevision((value) => value + 1);
-  }, []);
+  }, [setError]);
 
   return (
     <aside className="chat-panel" aria-label="Agent chat" hidden={!visible}>
       <ChatList
         chats={sessions}
+        projectId={projectId}
+        threadLink={webThreadLink(linkedThread?.link)}
         selectedId={sessionId}
         title={
+          (chat.phase === "loading" ? chat.selected.title : undefined) ??
           sessions.find((item) => item.id === sessionId)?.title ??
           session?.title ??
           "New chat"
         }
         visible={visible}
         restoring={chat.phase === "restoring"}
-        refreshDisabled={controlsLocked || discovering}
+        refreshDisabled={Boolean(linkedThread) || controlsLocked || discovering}
         working={busy}
         loadChats={loadSessions}
         onSelect={selectChat}
@@ -776,7 +854,7 @@ export function ChatPanel({
         onRefresh={refreshAgents}
         onError={setError}
       />
-      {alwaysAllow && (
+      {!linkedThread && alwaysAllow && (
         <div className="agent-permissions">
           <span>Cutroom edits always allowed</span>
           <button
@@ -803,8 +881,13 @@ export function ChatPanel({
         provider={session?.provider ?? provider}
         busy={busy}
         problem={
-          !linked && capabilities && !capabilities.available
+          !linkedThread && capabilities && !capabilities.available
             ? (capabilities.error ?? "Choose an installed agent to begin.")
+            : undefined
+        }
+        importedCount={
+          session?.nativeImport?.omittedMessages
+            ? Math.min(session.messages.length, 200)
             : undefined
         }
         messagesRef={messages}
@@ -812,33 +895,57 @@ export function ChatPanel({
       >
         {question}
       </Transcript>
-      {error && (
-        <div className="chat-error" role="alert">
-          <span>{error}</span>
-          <button
-            className="icon-button"
-            aria-label="Dismiss agent error"
-            onClick={() => setError("")}
-          >
-            <X size={14} />
-          </button>
+      {notice && (
+        <div
+          className="chat-error"
+          data-notice={notice.kind === "queued" || undefined}
+          role={notice.kind === "queued" ? "status" : "alert"}
+        >
+          <span>{notice.message}</span>
+          <div className="chat-notice-actions">
+            {notice.kind === "conflict" && session?.nativeSessionId && (
+              <button
+                className="text-button"
+                disabled={submitting}
+                onClick={() => void branchChat()}
+              >
+                Branch
+              </button>
+            )}
+            <button
+              className="icon-button"
+              aria-label={
+                notice.kind === "queued"
+                  ? "Dismiss agent notice"
+                  : "Dismiss agent error"
+              }
+              onClick={() => setError("")}
+            >
+              <X size={14} />
+            </button>
+          </div>
         </div>
       )}
       {active && (
         <div className="presence" data-state={session?.status}>
           <span role="status">
             <strong>
-              {operation?.kind === "stop"
-                ? "Stopping"
-                : session?.status === "waiting"
-                  ? "Needs you"
-                  : busy
-                    ? "Working"
-                    : resuming
-                      ? "Resuming"
-                      : "Sending"}
+              {linkedThread && busy
+                ? session?.status === "waiting"
+                  ? "Answer in T3 Code"
+                  : "Working in T3 Code"
+                : operation?.kind === "stop"
+                  ? "Stopping"
+                  : session?.status === "waiting"
+                    ? "Needs you"
+                    : busy
+                      ? "Working"
+                      : resuming
+                        ? "Resuming"
+                        : "Sending"}
             </strong>
-            {busy &&
+            {!linkedThread &&
+              busy &&
               session?.status === "running" &&
               workingNote &&
               ` on note ${workingNote}`}
@@ -846,14 +953,14 @@ export function ChatPanel({
           {busy && turnStart && <Elapsed since={turnStart} />}
         </div>
       )}
-      {session?.pendingRequest?.kind === "approval" && (
+      {!linkedThread && session?.pendingRequest?.kind === "approval" && (
         <RequestCard
           key={session.pendingRequest.id}
           request={session.pendingRequest}
           onRespond={respondToRequest}
         />
       )}
-      {followUps.length > 0 && (
+      {!linkedThread && followUps.length > 0 && (
         <section className="chat-follow-ups" aria-label="Queued follow-ups">
           {!active && (
             <button
@@ -1036,73 +1143,84 @@ export function ChatPanel({
               >
                 <Paperclip />
               </button>
-              <SelectMenu
-                className="select-label"
-                label="Agent provider"
-                title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
-                value={provider}
-                disabled={controlsLocked}
-                options={[
-                  { value: "codex", label: "Codex" },
-                  { value: "claude", label: "Claude Code" },
-                ]}
-                onChange={(selected) => {
-                  setProvider(selected);
-                  setModel("");
-                  newChat();
-                }}
-              />
-              <SelectMenu
-                className="select-label model-select"
-                label="Model"
-                value={model}
-                disabled={controlsLocked || discovering}
-                options={[
-                  { value: "", label: "Default model" },
-                  ...(capabilities?.models.map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                  })) ?? []),
-                ]}
-                onChange={(selected) => {
-                  if (!session) {
-                    setModel(selected);
-                    return;
-                  }
-                  const openedView = view.current;
-                  const changing: ChatOperation = { kind: "model" };
-                  setOperation(changing);
-                  void api(
-                    `/agents/sessions/${session.id}`,
-                    agentSessionSchema,
-                    json("PATCH", { model: selected || null }),
-                  )
-                    .then((result) => {
-                      void loadSessions().catch(() => {});
-                      if (view.current !== openedView) return;
-                      setChat((current) =>
-                        current.phase === "ready" &&
-                        current.session.id === result.id
-                          ? { phase: "ready", session: result }
-                          : current,
-                      );
-                      setModel(result.model ?? "");
-                    })
-                    .catch((error: unknown) => {
-                      if (view.current === openedView)
-                        setError(
-                          error instanceof Error
-                            ? error.message
-                            : String(error),
+              {linkedThread ? (
+                <span
+                  className="chat-t3-label"
+                  title="T3 Code runs this chat with its own model and approvals"
+                >
+                  T3 Code
+                </span>
+              ) : (
+                <>
+                  <SelectMenu
+                    className="select-label"
+                    label="Agent provider"
+                    title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
+                    value={provider}
+                    disabled={controlsLocked}
+                    options={[
+                      { value: "codex", label: "Codex" },
+                      { value: "claude", label: "Claude Code" },
+                    ]}
+                    onChange={(selected) => {
+                      setProvider(selected);
+                      setModel("");
+                      newChat();
+                    }}
+                  />
+                  <SelectMenu
+                    className="select-label model-select"
+                    label="Model"
+                    value={model}
+                    disabled={controlsLocked || discovering}
+                    options={[
+                      { value: "", label: "Default model" },
+                      ...(capabilities?.models.map((item) => ({
+                        value: item.id,
+                        label: item.name,
+                      })) ?? []),
+                    ]}
+                    onChange={(selected) => {
+                      if (!session) {
+                        setModel(selected);
+                        return;
+                      }
+                      const openedView = view.current;
+                      const changing: ChatOperation = { kind: "model" };
+                      setOperation(changing);
+                      void api(
+                        `/agents/sessions/${session.id}`,
+                        agentSessionSchema,
+                        json("PATCH", { model: selected || null }),
+                      )
+                        .then((result) => {
+                          void loadSessions().catch(() => {});
+                          if (view.current !== openedView) return;
+                          setChat((current) =>
+                            current.phase === "ready" &&
+                            current.session.id === result.id
+                              ? { phase: "ready", session: result }
+                              : current,
+                          );
+                          setModel(result.model ?? "");
+                        })
+                        .catch((error: unknown) => {
+                          if (view.current === openedView)
+                            setError(
+                              error instanceof Error
+                                ? error.message
+                                : String(error),
+                            );
+                        })
+                        .finally(() =>
+                          setOperation((current) =>
+                            current === changing ? null : current,
+                          ),
                         );
-                    })
-                    .finally(() =>
-                      setOperation((current) =>
-                        current === changing ? null : current,
-                      ),
-                    );
-                }}
-              />
+                    }}
+                  />
+                </>
+              )}
             </div>
             {canStop && (
               <button
@@ -1117,8 +1235,8 @@ export function ChatPanel({
             )}
             <button
               className="send-button"
-              aria-label={queuesMessage ? "Queue follow-up" : "Send message"}
-              title={queuesMessage ? "Queue follow-up" : "Send message"}
+              aria-label={sendLabel}
+              title={sendLabel}
               disabled={!canSend}
               onClick={() => void send()}
             >
