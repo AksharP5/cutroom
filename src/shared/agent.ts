@@ -165,9 +165,7 @@ export const agentSessionSchema = z.object({
       lastOwnWrite: z.number().optional(),
     })
     .optional(),
-  t3Thread: z
-    .object({ threadId: t3ThreadIdSchema, link: z.string() })
-    .optional(),
+  t3Thread: z.object({ threadId: t3ThreadIdSchema }).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   status: agentStatusSchema,

@@ -145,13 +145,6 @@ function applyChatEvents(
   return session ? { phase: "ready", session } : state;
 }
 
-function webThreadLink(link: string | undefined) {
-  if (!link) return undefined;
-  const url = URL.parse(link);
-  if (url && (url.protocol === "https:" || url.protocol === "http:"))
-    return url.href;
-}
-
 /** Elapsed agent time as a clock (m:ss), not timecode. Re-renders only itself. */
 function Elapsed({ since }: { since: string }) {
   const [now, setNow] = useState(Date.now);
@@ -840,7 +833,6 @@ export function ChatPanel({
       <ChatList
         chats={sessions}
         projectId={projectId}
-        threadLink={webThreadLink(linkedThread?.link)}
         selectedId={sessionId}
         title={
           (chat.phase === "loading" ? chat.selected.title : undefined) ??

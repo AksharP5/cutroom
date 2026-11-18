@@ -460,10 +460,7 @@ async function withService(
               ...legacy,
               id: "linked",
               nativeSessionId: undefined,
-              t3Thread: {
-                threadId: linkedId,
-                link: "https://app.t3.codes/threads/synthetic",
-              },
+              t3Thread: { threadId: linkedId },
             },
           ],
         }),

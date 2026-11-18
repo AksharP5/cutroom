@@ -91,7 +91,7 @@ export class T3Chats {
           ? "claude"
           : "codex",
       title: thread.title,
-      t3Thread: { threadId: thread.threadId, link: thread.link },
+      t3Thread: { threadId: thread.threadId },
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
       status: threadStatus(thread),

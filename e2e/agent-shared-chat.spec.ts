@@ -53,14 +53,12 @@ async function sharedChat(page: Page, request: APIRequestContext) {
 test("link a folder thread with the keyboard and send while T3 Code works", async ({
   page,
   request,
-  context,
 }) => {
   const { base, chats, turn, panel, title, menu, composer, url } =
     await sharedChat(page, request);
   const thread = {
     threadId: "folder-thread",
     title: "Opening shot and music mix with a title long enough to truncate",
-    link: "https://app.t3.codes/threads/test/folder-thread",
     status: "running",
     model: "gpt-5.4",
     updatedAt: at,
@@ -68,7 +66,7 @@ test("link a folder thread with the keyboard and send while T3 Code works", asyn
   const linked = {
     ...turn.session([turn.ask, turn.plan], "running"),
     title: thread.title,
-    t3Thread: { threadId: thread.threadId, link: thread.link },
+    t3Thread: { threadId: thread.threadId },
   };
   let listings = 0;
   let links = 0;
@@ -96,11 +94,10 @@ test("link a folder thread with the keyboard and send while T3 Code works", asyn
       return route.fulfill({ status: 202, json: { ...waiting, queued: true } });
     },
   );
-  await context.route(thread.link, (route) =>
-    route.fulfill({ body: "Synthetic T3 Code destination" }),
-  );
 
   await page.goto(url);
+  // The title is disabled while the project's chats load; a key sent before then is lost.
+  await expect(title).toBeEnabled();
   await title.press("Enter");
   const entry = menu.getByRole("menuitem", { name: "Link a T3 Code thread" });
   await expect(entry).toBeVisible();
@@ -128,13 +125,8 @@ test("link a folder thread with the keyboard and send while T3 Code works", asyn
     0,
   );
   await expect(panel.locator(".presence-clock")).toHaveCount(0);
-  const opened = page.waitForEvent("popup");
-  await panel.getByRole("link", { name: "Open in T3 Code" }).click();
-  const destination = await opened;
-  await expect(
-    destination.getByText("Synthetic T3 Code destination"),
-  ).toBeVisible();
-  await destination.close();
+  // Cutroom never opens a hosted page: a linked chat offers no link out.
+  await expect(panel.getByRole("link")).toHaveCount(0);
 
   await composer.fill("Try a slower transition. $literal");
   await panel.getByRole("button", { name: "Send to T3 Code" }).click();
@@ -169,10 +161,7 @@ test("paste a thread ID and recover from a rejected ID", async ({
   const linked = {
     ...turn.session([turn.ask], "idle"),
     title: "A thread in another folder",
-    t3Thread: {
-      threadId: "other-folder",
-      link: "https://app.t3.codes/threads/test/other-folder",
-    },
+    t3Thread: { threadId: "other-folder" },
   };
   await page.route(`${base}/t3-threads/link`, (route) => {
     if (route.request().postDataJSON().threadId !== linked.t3Thread.threadId)
