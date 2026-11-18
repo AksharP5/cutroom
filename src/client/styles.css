@@ -3093,11 +3093,36 @@ option {
   color: var(--text-secondary);
   line-height: 18px;
 }
-.settings-content label {
+.settings-path-label {
   display: block;
-  margin: 8px 0 2px;
+  margin: var(--space-2) 0 2px;
+  padding-inline: var(--space-1);
   color: var(--text-tertiary);
   font-size: var(--type-xs);
+}
+.settings-path {
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  height: auto;
+  min-height: var(--size-field);
+  padding-inline: var(--space-1);
+  font-weight: var(--weight-regular);
+  text-align: left;
+}
+.settings-path code {
+  min-width: 0;
+}
+.settings-path svg {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.settings-path:is(:hover, :focus-visible) svg {
+  opacity: 1;
 }
 .settings-content .settings-toggle {
   display: flex;

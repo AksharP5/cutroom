@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { hint } from "../src/client/keymap";
 import { expect, test } from "./fixtures";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
@@ -237,4 +238,38 @@ test("review and agent drafts survive workspace tabs, panels, and resizing", asy
   await expect(composer).toHaveValue(agentDraft);
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await expect(note).toHaveValue(reviewDraft);
+});
+
+test("Settings copies both named folder paths and keeps the external agent command", async ({
+  context,
+  page,
+  request,
+}) => {
+  const status = z
+    .object({
+      projectsDir: z.string(),
+      dataDir: z.string(),
+      mcpCommand: z.string(),
+      version: z.string(),
+    })
+    .parse(await (await request.get("/api/cutroom/status")).json());
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Workspace settings" });
+  await dialog.getByRole("button", { name: "Copy projects path" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    status.projectsDir,
+  );
+  await dialog
+    .getByRole("button", { name: "Copy application data path" })
+    .press("Enter");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    status.dataDir,
+  );
+  await dialog.getByRole("button", { name: "Copy command" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    status.mcpCommand,
+  );
+  await expect(dialog.getByText(`Cutroom ${status.version}`)).toBeVisible();
 });
