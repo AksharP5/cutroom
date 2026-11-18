@@ -63,7 +63,7 @@ function blockReader(read: ReadRange, size: number) {
 /** Decoded frames shared by every source, oldest drawn closed first. */
 export const frameBudget = {
   /** Bytes of decoded pictures held, across sources. */
-  limit: 192 << 20,
+  limit: 128 << 20,
   used: 0,
 };
 /** Samples a run may feed past a frame that has not come out before it gives up on it. */
@@ -82,6 +82,7 @@ export class SourceDecoder {
   readonly #track: VideoTrack;
   readonly #sample: (offset: number, length: number) => Promise<Uint8Array>;
   readonly #config: VideoDecoderConfig;
+  readonly #keep: number;
   #decoder: VideoDecoder;
   /** Decode-order index of the next sample to send, or -1 when the next must be a keyframe. */
   #next = -1;
@@ -100,7 +101,7 @@ export class SourceDecoder {
   /** Frames the current run has put out, so a sent frame is known to be in flight or gone. */
   readonly #produced = new Set<number>();
   readonly #frames = new Map<number, VideoFrame>();
-  readonly #indexOf = new Map<number, number>();
+  readonly #indexOf: ReadonlyMap<number, number>;
   /** Requests waiting for a frame; each gets its own reference, which eviction cannot close. */
   readonly #waiting = new Map<number, Set<(frame: VideoFrame) => void>>();
   #queue: Promise<unknown> = Promise.resolve();
@@ -117,16 +118,19 @@ export class SourceDecoder {
   #frameBytes = 0;
   #closed = false;
 
-  constructor(
+  private constructor(
     track: VideoTrack,
-    read: ReadRange,
-    size: number,
+    sample: ReturnType<typeof blockReader>,
+    indexOf: ReadonlyMap<number, number>,
     colour: VideoColorSpaceInit,
+    scrubProxy: boolean,
   ) {
     this.#track = track;
-    this.#sample = blockReader(read, size);
-    for (const [index, sample] of track.shown.entries())
-      this.#indexOf.set(Math.round(track.samples[sample]!.time * 1e6), index);
+    // Every scrub proxy picture is a keyframe. Re-decoding one is cheap, and
+    // random access gains nothing from keeping a frame-threaded decoder full.
+    this.#keep = scrubProxy ? 4 : KEPT;
+    this.#sample = sample;
+    this.#indexOf = indexOf;
     this.#config = {
       codec: track.codec,
       description: track.description,
@@ -137,9 +141,24 @@ export class SourceDecoder {
       hardwareAcceleration: "prefer-software",
       // Frame threading, as the editor's <video> decodes: low-latency decoding kept up with 4K60
       // only 1.5 times over, and playback fell behind it to 2 pictures a second.
-      optimizeForLatency: false,
+      optimizeForLatency: scrubProxy,
     };
     this.#decoder = this.#create();
+  }
+
+  /** Independent decoder runs over one sample index and one cache of compressed bytes. */
+  static forTrack(
+    track: VideoTrack,
+    read: ReadRange,
+    size: number,
+    colour: VideoColorSpaceInit,
+    scrubProxy: boolean,
+  ) {
+    const sample = blockReader(read, size);
+    const indexOf = new Map<number, number>();
+    for (const [index, sampleIndex] of track.shown.entries())
+      indexOf.set(Math.round(track.samples[sampleIndex]!.time * 1e6), index);
+    return () => new SourceDecoder(track, sample, indexOf, colour, scrubProxy);
   }
 
   static supported(track: VideoTrack) {
@@ -182,7 +201,7 @@ export class SourceDecoder {
     this.#frames.set(index, frame);
     this.#frameBytes = frame.allocationSize();
     frameBudget.used += this.#frameBytes;
-    while (this.#frames.size > KEPT && this.evictOldest(frame));
+    while (this.#frames.size > this.#keep && this.evictOldest(frame));
     evict(this, frame);
     for (const wake of this.#waiting.get(index) ?? []) wake(frame.clone());
     this.#waiting.delete(index);
@@ -191,8 +210,7 @@ export class SourceDecoder {
   /**
    * How many of `count` frames a prefetch may decode: what a third of the shared budget holds at
    * this file's frame size, so the playhead's frames, the next clip's opening and another file's
-   * fit together instead of evicting each other. A 4K frame is 12 MB: 5 of them, where 1080p
-   * keeps the whole count.
+   * fit together instead of evicting each other. Twelve 8-bit 1080p frames take 36 MiB.
    */
   room(count: number) {
     const { width, height } = this.#track;
@@ -458,11 +476,11 @@ export class SourceDecoder {
    * Releases the cached frame furthest from the last one asked for, other than `keep`. Frames
    * behind it go first, since playback and steps mostly move forward. False when none is left.
    */
-  evictOldest(keep: VideoFrame) {
+  evictOldest(keep: VideoFrame, preserveDrawn = true) {
     let victim: number | undefined;
     let distance = -1;
     for (const [index, frame] of this.#frames) {
-      if (frame === keep || index === this.#drawn) continue;
+      if (frame === keep || (preserveDrawn && index === this.#drawn)) continue;
       const away =
         index < this.#asked ? (this.#asked - index) * 2 : index - this.#asked;
       if (away > distance) {
@@ -499,9 +517,16 @@ const lastUsed = new WeakMap<SourceDecoder, number>();
 function evict(from: SourceDecoder, keep: VideoFrame) {
   sources.add(from);
   lastUsed.set(from, lastUsed.get(from) ?? performance.now());
+  if (frameBudget.used <= frameBudget.limit) return;
   const order = [...sources].sort(
     (a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0),
   );
   for (const victim of order)
     while (frameBudget.used > frameBudget.limit && victim.evictOldest(keep));
+  // One last picture per lane can exceed the budget on projects with many
+  // files. Keep those pictures only while there is room for them.
+  for (const victim of order) {
+    if (frameBudget.used <= frameBudget.limit) break;
+    victim.evictOldest(keep, false);
+  }
 }

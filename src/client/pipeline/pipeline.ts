@@ -85,15 +85,24 @@ function colourOf(
 async function openSource(
   url: string,
   signal: AbortSignal,
-  colour?: FootageColour,
-): Promise<{ decoder: SourceDecoder; intrinsic: Source["intrinsic"] }> {
+  {
+    colour,
+    scrubProxy = false,
+  }: { colour?: FootageColour; scrubProxy?: boolean } = {},
+) {
   const { read, size } = await openRanges(url, signal);
   const track = await readVideoTrack(read, size);
   if (!(await SourceDecoder.supported(track)))
     throw new Error(`This browser cannot decode ${track.codec}.`);
   const turned = track.rotation % 180 !== 0;
   return {
-    decoder: new SourceDecoder(track, read, size, colourOf(track, colour)),
+    createDecoder: SourceDecoder.forTrack(
+      track,
+      read,
+      size,
+      colourOf(track, colour),
+      scrubProxy,
+    ),
     intrinsic: {
       width: turned ? track.height : track.width,
       height: turned ? track.width : track.height,
@@ -165,16 +174,12 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         response.ok ? FrameGridSchema.parse(await response.json()) : null,
       )
       .catch(() => null);
-    const lanes = (url: string, colour?: FootageColour) =>
-      Promise.all([
-        openSource(url, closing.signal, colour),
-        openSource(url, closing.signal, colour),
-      ]);
     // A file this browser cannot decode or read, such as HEVC, ProRes or Matroska, plays from
     // its editing proxy: the same frames at the same times. HyperFrames draws until it exists.
-    const [{ decoder, intrinsic }, second] = await lanes(
+    const { createDecoder, intrinsic } = await openSource(
       mediaUrl(projectId, path),
-      sourceColours[path],
+      closing.signal,
+      { colour: sourceColours[path] },
     ).catch(async (error: unknown) => {
       const url = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/proxy?path=${encodeURIComponent(path)}`;
       const response = await fetch(url, {
@@ -187,13 +192,14 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         throw new Error(`${path} is being prepared for editing`);
       }
       if (!response.ok) throw error;
-      return lanes(url);
+      return openSource(url, closing.signal);
     });
     const proxyUrl = `/api/cutroom/projects/${encodeURIComponent(projectId)}/media/scrub?path=${encodeURIComponent(path)}`;
     let askedAt = -Infinity;
     let asking: Promise<void> | null = null;
+    const decoder = createDecoder();
     const found: Source = {
-      lanes: [decoder, second.decoder],
+      lanes: [decoder, createDecoder()],
       playing: decoder,
       proxy: null,
       intrinsic,
@@ -204,10 +210,9 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         if (found.proxy || asking || performance.now() - askedAt < 2000)
           return asking;
         askedAt = performance.now();
-        asking = openSource(proxyUrl, closing.signal)
-          .then(({ decoder }) => {
-            if (closing.signal.aborted) decoder.close();
-            else found.proxy = decoder;
+        asking = openSource(proxyUrl, closing.signal, { scrubProxy: true })
+          .then(({ createDecoder }) => {
+            if (!closing.signal.aborted) found.proxy = createDecoder();
           })
           .catch(() => {})
           .finally(() => (asking = null));
@@ -542,6 +547,8 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     },
     dispose() {
       closing.abort();
+      compositor.dispose();
+      grades.dispose();
       for (const stop of unsubscribe) stop();
       usePipeline.setState({ active: false });
       for (const found of sources.values())
