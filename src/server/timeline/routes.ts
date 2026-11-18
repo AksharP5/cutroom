@@ -259,7 +259,8 @@ export function createTimelineRoutes(
       batch.commands.flatMap((command) =>
         command.type === "insert" &&
         command.clip.kind !== "title" &&
-        command.clip.kind !== "composition"
+        command.clip.kind !== "composition" &&
+        command.clip.kind !== "adjustment"
           ? [command.clip.src]
           : [],
       ),

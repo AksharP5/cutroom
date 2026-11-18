@@ -10,6 +10,7 @@ import { TransitionSchema } from "../../shared/timeline/schema";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
 import { offsetAutomation } from "../../shared/timeline/mix";
 import { KEYFRAME_ANIMATION } from "./keyframes";
+import { REGION_ANIMATION } from "../../shared/timeline/regionStyle";
 import type { Clip, Fps, Transition } from "../../shared/timeline/schema";
 import {
   framesAfter,
@@ -44,12 +45,13 @@ const RULES = [
     "--cutroom-transition-in:0;--cutroom-transition-out:0;" +
     "--cutroom-transition-in-name:none;--cutroom-transition-out-name:none;" +
     // A keyframed clip's own animation comes first, so the transition draws over it.
-    `animation-name:${KEYFRAME_ANIMATION.name},var(--cutroom-transition-in-name),var(--cutroom-transition-out-name);` +
-    `animation-duration:${KEYFRAME_ANIMATION.duration},calc(var(--cutroom-transition-in)*1s),calc(var(--cutroom-transition-out)*1s);` +
-    `animation-delay:${KEYFRAME_ANIMATION.delay},0s,calc((var(--cutroom-transition-length) - var(--cutroom-transition-out))*1s);` +
-    `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},1,1;` +
-    `animation-fill-mode:${KEYFRAME_ANIMATION.fill},none,forwards;` +
-    `animation-timing-function:${KEYFRAME_ANIMATION.timing},linear,linear}`,
+    `animation-name:${KEYFRAME_ANIMATION.name},var(--cutroom-transition-in-name),var(--cutroom-transition-out-name),${REGION_ANIMATION.name};` +
+    `animation-duration:${KEYFRAME_ANIMATION.duration},calc(var(--cutroom-transition-in)*1s),calc(var(--cutroom-transition-out)*1s),${REGION_ANIMATION.duration};` +
+    `animation-delay:${KEYFRAME_ANIMATION.delay},0s,calc((var(--cutroom-transition-length) - var(--cutroom-transition-out))*1s),${REGION_ANIMATION.delay};` +
+    `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},1,1,${REGION_ANIMATION.iterations};` +
+    `animation-fill-mode:${KEYFRAME_ANIMATION.fill},none,forwards,${REGION_ANIMATION.fill};` +
+    `animation-timing-function:${KEYFRAME_ANIMATION.timing},linear,linear,${REGION_ANIMATION.timing};` +
+    `animation-composition:replace,replace,replace,${REGION_ANIMATION.composition}}`,
   ...(["dissolve", "dip"] as const).flatMap((kind) =>
     (["in", "out"] as const).map(
       (edge) =>

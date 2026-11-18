@@ -55,6 +55,14 @@ import {
   readKeyframes,
 } from "./keyframes";
 import { shiftKeyframes } from "../../shared/timeline/keyframes";
+import { sameRegion } from "../../shared/timeline/region";
+import {
+  ADJUSTMENT_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+  REGION_STYLE_ATTRIBUTE,
+  regionStyle,
+} from "../../shared/timeline/regionStyle";
+import { readRegion, regionAttribute } from "./regions";
 import {
   CUTROOM_AUDIO_GROUP_PREFIX,
   offsetAutomation,
@@ -740,6 +748,8 @@ export function parseComposition(
     const hasAudio = isAudioKind(kind) || hasVideoAudio(element);
     if (authoredGroup && hasAudio) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
+    const adjustment =
+      kind === "element" && element.attrs[ADJUSTMENT_ATTRIBUTE] !== undefined;
     const imageVariable =
       kind === "image" ? element.attrs["data-var-src"] : undefined;
     const src =
@@ -772,7 +782,8 @@ export function parseComposition(
         element.attrs["data-timeline-label"] ??
         element.attrs["data-label"] ??
         null,
-      ...(kind === "element" && { textPreview: firstTextLine(element.text) }),
+      ...(kind === "element" &&
+        !adjustment && { textPreview: firstTextLine(element.text) }),
       ...(authoredGroup &&
         hasAudio && {
           authoredAudioGroupId: group,
@@ -795,7 +806,7 @@ export function parseComposition(
       crop: isAudioKind(kind) || keyed.crop ? null : style.crop,
       keyframes,
       text:
-        kind === "element"
+        kind === "element" && !adjustment
           ? (elementText(element, textLayout.get(element)?.preserveLines)
               ?.text ?? null)
           : null,
@@ -811,6 +822,10 @@ export function parseComposition(
         },
       }),
       title: title && "title" in title ? title.title : null,
+      region: isAudioKind(kind)
+        ? null
+        : readRegion(element.attrs[REGION_ATTRIBUTE], fps),
+      adjustment,
       style: isAudioKind(kind) ? {} : readElementStyle(element.attrs.style),
       // A transition's crossfade is its own, not the clip's fade.
       fadeIn: edges.in
@@ -904,7 +919,8 @@ export function parseComposition(
             element.attrs["data-cutroom-track-stacking"] === undefined &&
             element.attrs["data-cutroom-titles"] === undefined &&
             element.attrs[TRANSITION_STYLE_ATTRIBUTE] === undefined &&
-            element.attrs[KEYFRAME_STYLE_ATTRIBUTE] === undefined),
+            element.attrs[KEYFRAME_STYLE_ATTRIBUTE] === undefined &&
+            element.attrs[REGION_STYLE_ATTRIBUTE] === undefined),
       )
       .map((element) => html.slice(element.openEnd, element.end)),
     fonts,
@@ -1297,6 +1313,11 @@ function clipChanges(
       ]);
   }
   if (before.link !== after.link) changes.push(["data-link", after.link]);
+  if (!sameRegion(before.region, after.region))
+    changes.push([
+      REGION_ATTRIBUTE,
+      after.region && regionAttribute(after.region, fps),
+    ]);
   if (after.title && !Bun.deepEquals(before.title, after.title)) {
     const written = new Map(
       before.title ? titleAttributes(before.title, fps) : [],
@@ -1964,6 +1985,42 @@ function titleMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
   ])}>${textMarkup(clip.text!)}</div>`;
 }
 
+/**
+ * The frame size a region's pixels are measured in: the root's declared size, or HyperFrames'
+ * default stage.
+ */
+function compositionSize(root: SourceElement) {
+  const length = (name: string, fallback: number) => {
+    const value = Number.parseFloat(root.attrs[name] ?? "");
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  return {
+    width: length("data-width", 1920),
+    height: length("data-height", 1080),
+  };
+}
+
+/** A new adjustment layer: an empty clip the region stylesheet lays over the frame. */
+function adjustmentMarkup(clip: Clip, fps: Fps, mix: TrackMix): string {
+  const hidden = mix.hidden.has(clip.track);
+  return `<div${attributeMarkup([
+    ["id", clip.id],
+    ["class", "clip"],
+    [ADJUSTMENT_ATTRIBUTE, ""],
+    ["data-start", String(toSeconds(clip.start, fps))],
+    ["data-duration", String(toSeconds(clip.duration, fps))],
+    ["data-track-index", String(clip.track)],
+    ...(!clip.enabled || hidden ? [["data-hidden", ""] as const] : []),
+    ...(clip.enabled && hidden
+      ? [["data-cutroom-track-hidden", ""] as const]
+      : []),
+    ...(clip.label !== null
+      ? [["data-timeline-label", clip.label] as const]
+      : []),
+    [REGION_ATTRIBUTE, regionAttribute(clip.region!, fps)],
+  ])}></div>`;
+}
+
 /** What a host needs from the composition it plays: the root's id and declared size. */
 export interface HostedComposition {
   id: string;
@@ -2413,6 +2470,17 @@ export function patchComposition(
       true,
     ),
   ];
+  const regions = regionStyle(after, compositionSize(parsed.root));
+  edits.push(
+    ...managedStyleEdits(
+      parsed,
+      REGION_STYLE_ATTRIBUTE,
+      regions &&
+        `<style ${REGION_STYLE_ATTRIBUTE}="1">\n${regions.css}\n</style>`,
+      true,
+    ),
+  );
+  const regionClips = new Set(regions?.clips);
   const under = dissolveLayers(parsed, after, origins);
   const removedIds = new Set<string>();
   for (const clip of before.clips) {
@@ -2435,6 +2503,7 @@ export function patchComposition(
         parsed.anonymous.has(clip.id) &&
         (changes.length ||
           templates.has(clip.id) ||
+          regionClips.has(clip.id) ||
           element.start > firstRemovedAnonymous)
       )
         changes.push(["id", clip.id]);
@@ -2524,17 +2593,19 @@ export function patchComposition(
         `\n${indent}${
           origin.insert.kind === "title"
             ? titleMarkup(clip, fps, mix)
-            : origin.insert.kind === "composition"
-              ? hostMarkup(clip, hostedComposition(clip.src!), fps, mix)
-              : insertMarkup(
-                  elementClip(clip, fps),
-                  origin.insert,
-                  fps,
-                  mix,
-                  transitionChanges({}, clip, under(clip.id), fps),
-                  undefined,
-                  freezeExports.get(origin.insert.src),
-                )
+            : origin.insert.kind === "adjustment"
+              ? adjustmentMarkup(clip, fps, mix)
+              : origin.insert.kind === "composition"
+                ? hostMarkup(clip, hostedComposition(clip.src!), fps, mix)
+                : insertMarkup(
+                    elementClip(clip, fps),
+                    origin.insert,
+                    fps,
+                    mix,
+                    transitionChanges({}, clip, under(clip.id), fps),
+                    undefined,
+                    freezeExports.get(origin.insert.src),
+                  )
         }`,
       ]);
       continue;

@@ -321,6 +321,52 @@ Keyframes stay on the content they animate. Moves and ripples carry them; trimmi
 
 In the source a keyframed clip carries a `data-cutroom-keyframes` attribute, `"opacity 0 0, 0.5 1; position 0 -200 0 ease-out, 0.666667 0 0"`, with times in seconds from the element's start. One `<style data-cutroom-keyframe-style>` block, which Cutroom rewrites with every edit and removes when no clip has keyframes, turns each attribute value into a CSS animation of the inline longhands `translate`, `scale`, `rotate`, `clip-path` and `opacity`. HyperFrames' CSS adapter seeks it in clip-local time, so preview, `timeline_view` and export draw the same frames, and no script is written. Cutroom titles and transitions run it first in their own animation list, so a title's entrance or a dissolve fades over the keyframed opacity. A clip whose own stylesheet animates it keeps that animation in place of the keyframes. Exports of a composition with keyframes use frame capture.
 
+### Zoom, blur and highlight
+
+`timeline_read` returns a clip's `region`, or `null`. On an ordinary clip it is a zoom of that clip. On an adjustment layer, a clip with `adjustment: true` that draws nothing itself, it is a zoom, blur or highlight of every picture on the video tracks below it while it plays:
+
+```json
+"region": {
+  "effect": "zoom",
+  "box": { "x": 0.55, "y": 0.1, "width": 0.3, "height": 0.3 },
+  "in": 15,
+  "out": 15,
+  "ease": "ease-in-out",
+  "blur": 0, "dim": 0.6, "area": "inside", "radius": 0, "feather": 0
+}
+```
+
+`box` is in fractions of the composition frame, from its top left: divide pixel positions in a `timeline_view` image by the image's width and height. A zoom's box keeps the frame's shape: the box you send is centred in the smallest such box that holds it, kept inside the frame, and the zoom is `1 / width`, up to 10x, so leave a margin around what you zoom into. `in` is the frames from the clip's first frame over which the effect eases in, and `out` the frames before its last over which it eases back out; 0 starts it at full strength or holds it to the end. `ease` shapes both ramps: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `expo-in` (slow start, sharp finish) or `expo-out` (sharp start, slow finish). Blur uses `blur` (pixels) and `area` (`inside` or `outside` the box); highlight dims everything outside the box by `dim` (0 to 1) and blurs it by `blur`; both use `radius` and `feather` (pixels) for the box's corners and edge.
+
+An adjustment layer is an insert:
+
+```json
+{
+  "type": "insert",
+  "track": 2,
+  "at": 120,
+  "clip": {
+    "kind": "adjustment",
+    "duration": 90,
+    "region": {
+      "effect": "zoom",
+      "box": { "x": 0.6, "y": 0.1, "width": 0.25, "height": 0.1 }
+    }
+  }
+}
+```
+
+Fields left out of `region` take the effect's defaults: a 0.5 s `ease-in-out` ramp at each end for a zoom, 0.2 s fades for blur and highlight. A zoom on one clip, and any later change, is `setClip.region`, which changes only the fields it names; `null` removes it:
+
+```json
+{ "type": "setClip", "clipId": "recording", "region": { "effect": "zoom", "box": { "x": 0.2, "y": 0.3, "width": 0.4, "height": 0.4 }, "in": 20, "out": 0 } }
+{ "type": "setClip", "clipId": "adjustment-2", "region": { "box": { "x": 0.25, "y": 0.1, "width": 0.3, "height": 0.3 } } }
+```
+
+Blur and highlight draw over the picture below them, so they are refused on anything but an adjustment layer. An adjustment layer has no position, transform, style or keyframes. Ramps stay at the clip's edges through moves and trims, and a razor keeps the ramp in on the first piece and the ramp out on the second, so the effect runs straight through the cut. Where two zooms over the same picture overlap, the one that starts later takes over.
+
+In the source an effect is a `data-cutroom-region` attribute holding the region as JSON with its ramps in seconds, and an adjustment layer is an empty `<div class="clip" data-cutroom-adjustment>`. One `<style data-cutroom-region-style>` block, rewritten with every edit, draws them: a zoom moves each picture it magnifies toward the viewer under a perspective on its parent, through the `translate` longhand added onto the clip's own position and keyframes, so it zooms a moved, scaled or keyframed clip about the same point of the frame. Blur and highlight are a masked `backdrop-filter` on the layer. HyperFrames' CSS adapter seeks both in clip-local time, so preview, `timeline_view` and export draw the same frames. Exports of these frames use frame capture.
+
 ### Versions
 
 When the owner asks for several takes on one thing, such as "give me 5 different animations for this line", put them all on that one clip as versions instead of placing five clips. The owner then hovers each in the editor to watch it on the clip, switches between them, and keeps one.

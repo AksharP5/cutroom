@@ -6,6 +6,7 @@ import type {
   Fps,
   InsertClip,
   InsertTitle,
+  InsertAdjustment,
   InsertComposition,
   KeyframeProperty,
   Timeline,
@@ -13,6 +14,8 @@ import type {
   Transition,
 } from "./schema";
 import { cutTitle, defaultTitle, editTitle, isTitle } from "./title";
+import { cutRegion, defaultRegion, editRegion } from "./region";
+import type { Region, RegionEdit } from "./region";
 import { TimelineError } from "./errors";
 import {
   clipFades,
@@ -72,7 +75,9 @@ export type ClipOrigin =
         time: number;
       };
     }
-  | { insert: InsertClip | InsertTitle | InsertComposition }
+  | {
+      insert: InsertClip | InsertTitle | InsertComposition | InsertAdjustment;
+    }
   | { clipboardId: string; clipId: string };
 type OnCreate = (id: string, origin: ClipOrigin) => void;
 /**
@@ -649,6 +654,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         keyframes: null,
         text: null,
         title: null,
+        // A clip's own zoom holds on the still, at full strength.
+        region: video.region && { ...video.region, in: 0, out: 0 },
+        adjustment: false,
         style: video.style,
         ...(video.variableBindings && {
           variableBindings: video.variableBindings,
@@ -838,20 +846,20 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
           "track_kind",
           "Only video can have linked audio.",
         );
-      const sourceName =
-        input.kind === "title"
-          ? null
-          : (localMediaPath("index.html", input.src) ?? input.src);
+      const generated = input.kind === "title" || input.kind === "adjustment";
+      const sourceName = generated
+        ? null
+        : (localMediaPath("index.html", input.src) ?? input.src);
       // A file name is quoted so it reads as written, never as a clip id.
       assertTrackKind(
-        input.kind === "title" ? "element" : input.kind,
+        generated ? "element" : input.kind,
         trackAt(track),
-        input.id ?? (sourceName === null ? "title" : `"${sourceName}"`),
+        input.id ?? (sourceName === null ? input.kind : `"${sourceName}"`),
       );
       const id =
         input.id === undefined
           ? mint.name(
-              input.kind === "title" ? "title" : slug(input.src, input.kind),
+              generated ? input.kind : slug(input.src, input.kind),
               null,
             )
           : claim(input.id);
@@ -906,6 +914,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         keyframes: null,
         text: null,
         title: null,
+        region: null,
+        adjustment: false,
         style: {},
         fadeIn: 0,
         fadeOut: 0,
@@ -928,6 +938,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
               textPreview: firstTextLine(input.text),
               text: input.text,
               title: editTitle(defaultTitle(fps), input.title),
+            }),
+          ],
+        };
+      }
+      if (input.kind === "adjustment") {
+        const { effect, ...edit } = input.region;
+        onCreate(id, { insert: input });
+        return {
+          ...timeline,
+          clips: [
+            ...next,
+            placed({
+              kind: "element",
+              adjustment: true,
+              region: editRegion(defaultRegion(effect, fps), edit),
             }),
           ],
         };
@@ -1288,6 +1313,25 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 : null;
         if (refusal) throw new TimelineError("unsupported", refusal);
       }
+      if (target.adjustment) {
+        const refused = (
+          [
+            ["position", command.x !== undefined || command.y !== undefined],
+            ["transform", transform],
+            ["opacity", command.opacity !== undefined],
+            ["style", command.style !== undefined],
+          ] as const
+        ).find(([, edited]) => edited);
+        if (refused)
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} is an adjustment layer, which has no ${refused[0]}. Change its effect with setClip.region.`,
+          );
+      }
+      const region =
+        command.region === undefined
+          ? target.region
+          : regionFor(target, command.region, fps);
       if (command.fx !== undefined && !target.hasAudio)
         throw new TimelineError(
           "unsupported",
@@ -1353,6 +1397,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                 ...(command.enabled !== undefined && {
                   enabled: command.enabled,
                 }),
+                region,
               }
             : clip,
         ),
@@ -1363,10 +1408,10 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
     case "moveKeyframe": {
       const target = find(command.clipId);
       const { property } = command;
-      if (isAudioKind(target.kind))
+      if (isAudioKind(target.kind) || target.adjustment)
         throw new TimelineError(
           "unsupported",
-          `Audio clips have no ${property} to keyframe.`,
+          `${target.adjustment ? `${clipName(target)} is an adjustment layer, which has` : "Audio clips have"} no ${property} to keyframe.`,
         );
       if (property !== "opacity" && target.sourceRestrictions?.transform)
         throw new TimelineError(
@@ -2683,6 +2728,39 @@ export function canonicalTimeline(timeline: Timeline): Timeline {
  * by time: pieces that overlap stay linked, the earliest such group keeps the link, later ones get
  * a new link, and a piece that overlaps no partner is unlinked.
  */
+/**
+ * A clip's region after a `setClip.region` edit: a zoom fits any visual clip, while blur and
+ * highlight draw over the picture below, which only an adjustment layer has.
+ */
+function regionFor(
+  clip: Clip,
+  edit: RegionEdit | null,
+  fps: Fps,
+): Region | null {
+  if (edit === null) return null;
+  if (isAudioKind(clip.kind))
+    throw new TimelineError("unsupported", "Audio clips have no picture.");
+  const effect = edit.effect ?? clip.region?.effect;
+  if (!effect)
+    throw new TimelineError(
+      "unsupported",
+      `${clipName(clip)} has no region yet. Name its effect: zoom, blur or highlight.`,
+    );
+  if (effect !== "zoom" && !clip.adjustment)
+    throw new TimelineError(
+      "unsupported",
+      `A ${effect} draws over the picture below it, so it needs an adjustment layer: insert a clip of kind "adjustment" above ${clipName(clip)}.`,
+    );
+  const base =
+    clip.region && clip.region.effect === effect
+      ? clip.region
+      : {
+          ...defaultRegion(effect, fps),
+          ...(clip.region && { box: clip.region.box }),
+        };
+  return editRegion(base, edit);
+}
+
 function splitClips(
   clips: Clip[],
   targets: Clip[],
@@ -2702,6 +2780,7 @@ function splitClips(
       id,
       startRef: null,
       ...(clip.title && { title: cutTitle(clip.title).right }),
+      ...(clip.region && { region: cutRegion(clip.region).right }),
     };
   });
   const ids = new Set(targets.map((clip) => clip.id));
@@ -2711,6 +2790,7 @@ function splitClips(
         ? {
             ...windowClip(clip, clip.start, at, fps),
             ...(clip.title && { title: cutTitle(clip.title).left }),
+            ...(clip.region && { region: cutRegion(clip.region).left }),
           }
         : clip,
     ),

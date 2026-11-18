@@ -3,6 +3,7 @@ import { transform } from "lightningcss";
 import { TitleSchema } from "../../shared/timeline/schema";
 import type { Fps, Title } from "../../shared/timeline/schema";
 import { KEYFRAME_ANIMATION } from "./keyframes";
+import { REGION_ANIMATION } from "../../shared/timeline/regionStyle";
 
 /** Marks an element as a Cutroom title; the value is the attribute format's version. */
 export const TITLE_ATTRIBUTE = "data-cutroom-title";
@@ -41,12 +42,13 @@ const TITLE_RULES = [
     // An entrance and exit longer than the clip shrink together, as audio fades do.
     "--cutroom-title-fit:min(1,var(--cutroom-title-length)/max(var(--cutroom-title-in) + var(--cutroom-title-out),.001));" +
     // A keyframed title's own animation comes first, so the entrance and exit draw over it.
-    `animation-name:${KEYFRAME_ANIMATION.name},var(--cutroom-title-in-name),var(--cutroom-title-out-name);` +
-    `animation-duration:${KEYFRAME_ANIMATION.duration},calc(var(--cutroom-title-in)*var(--cutroom-title-fit)*1s),calc(var(--cutroom-title-out)*var(--cutroom-title-fit)*1s);` +
-    `animation-delay:${KEYFRAME_ANIMATION.delay},0s,calc((var(--cutroom-title-length) - var(--cutroom-title-out)*var(--cutroom-title-fit))*1s);` +
-    `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},1,1;` +
-    `animation-fill-mode:${KEYFRAME_ANIMATION.fill},backwards,forwards;` +
-    `animation-timing-function:${KEYFRAME_ANIMATION.timing},cubic-bezier(.16,1,.3,1),cubic-bezier(.7,0,.84,0)}`,
+    `animation-name:${KEYFRAME_ANIMATION.name},var(--cutroom-title-in-name),var(--cutroom-title-out-name),${REGION_ANIMATION.name};` +
+    `animation-duration:${KEYFRAME_ANIMATION.duration},calc(var(--cutroom-title-in)*var(--cutroom-title-fit)*1s),calc(var(--cutroom-title-out)*var(--cutroom-title-fit)*1s),${REGION_ANIMATION.duration};` +
+    `animation-delay:${KEYFRAME_ANIMATION.delay},0s,calc((var(--cutroom-title-length) - var(--cutroom-title-out)*var(--cutroom-title-fit))*1s),${REGION_ANIMATION.delay};` +
+    `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},1,1,${REGION_ANIMATION.iterations};` +
+    `animation-fill-mode:${KEYFRAME_ANIMATION.fill},backwards,forwards,${REGION_ANIMATION.fill};` +
+    `animation-timing-function:${KEYFRAME_ANIMATION.timing},cubic-bezier(.16,1,.3,1),cubic-bezier(.7,0,.84,0),${REGION_ANIMATION.timing};` +
+    `animation-composition:replace,replace,replace,${REGION_ANIMATION.composition}}`,
   "[data-title-plate]{background:attr(data-title-plate type(<color>));padding:.35em .6em;border-radius:.1em}",
   "[data-title-shadow]{text-shadow:0 .06em attr(data-title-shadow-blur type(<length>),0px) attr(data-title-shadow type(<color>),#000);--cutroom-title-shadow-reach:calc(attr(data-title-shadow-blur type(<length>),0px) + .06em)}",
   // The stroke is painted under the letters, so its outer half is the outline the user set.

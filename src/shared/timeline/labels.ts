@@ -30,9 +30,20 @@ const STYLE_NAMES = new Map<string, string>(
   } satisfies Record<StyleField, string>),
 );
 
-/** A clip's name as the timeline shows it. A title without a label goes by its first line. */
+/** What the editor calls each region effect. */
+export const REGION_NAMES = {
+  zoom: "Zoom",
+  blur: "Blur",
+  highlight: "Highlight",
+} as const;
+
+/**
+ * A clip's name as the timeline shows it. A title without a label goes by its first line, and an
+ * adjustment layer by its effect.
+ */
 export function clipName(
-  clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview">,
+  clip: Pick<Clip, "id" | "label" | "src" | "title" | "textPreview"> &
+    Partial<Pick<Clip, "region" | "adjustment">>,
 ) {
   const { label, src } = clip;
   if (label !== null) return label;
@@ -40,7 +51,11 @@ export function clipName(
     return (
       (localMediaPath("index.html", src) ?? src).split("/").at(-1) ?? clip.id
     );
-  return (clip.title && clip.textPreview) || clip.id;
+  return (
+    (clip.title && clip.textPreview) ||
+    (clip.adjustment && clip.region && REGION_NAMES[clip.region.effect]) ||
+    clip.id
+  );
 }
 
 /** Percentages keep every digit the engine stores (six decimals of the fraction). */
@@ -178,9 +193,12 @@ export function editLabel(
         const name =
           command.clip.kind === "title"
             ? `title "${firstTextLine(command.clip.text)}"`
-            : (command.clip.label ??
-              command.clip.src.split("/").at(-1) ??
-              command.clip.kind);
+            : command.clip.kind === "adjustment"
+              ? (command.clip.label ??
+                `${REGION_NAMES[command.clip.region.effect].toLowerCase()} layer`)
+              : (command.clip.label ??
+                command.clip.src.split("/").at(-1) ??
+                command.clip.kind);
         if (pending && command.mode === "overwrite") {
           const tracks = [trackName(command.track)];
           if (command.linkedAudio?.track !== undefined)
