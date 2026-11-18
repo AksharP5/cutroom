@@ -29,8 +29,8 @@ export type Binding = {
 const digits = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 /**
- * Every editor shortcut, keyed by DaVinci Resolve's action id and bound as in the owner's Resolve
- * preset. Cutroom-only actions use a `cutroom` prefix. This table drives the key handlers,
+ * Editor shortcuts use DaVinci Resolve's action ids and mostly follow the owner's preset.
+ * Cutroom-only actions use a `cutroom` prefix. This table drives the key handlers,
  * button tooltips, menu items, the shortcut sheet, and the table in `docs/keyboard.md`. Combos
  * list modifiers as Ctrl, Alt, Shift.
  */
@@ -43,8 +43,8 @@ export const keymap = {
   editPointer: { area: "Tools", label: "Select", keys: ["A"] },
   editTrim: { area: "Tools", label: "Trim", keys: ["T"] },
   editBlade: { area: "Tools", label: "Blade", keys: ["B"] },
-  cutroomDraw: { area: "Tools", label: "Draw", keys: ["Shift+N"] },
-  cutroomComment: { area: "Tools", label: "Comment", keys: ["N"] },
+  cutroomDraw: { area: "Tools", label: "Draw", keys: ["D"] },
+  cutroomComment: { area: "Tools", label: "Comment", keys: ["C"] },
   controlPlayToggle: {
     area: "Playback",
     label: "Play or stop",
@@ -367,7 +367,11 @@ export const keymap = {
     label: "Ripple delete",
     keys: ["Shift+X", "Delete"],
   },
-  editClipEnabled: { area: "Edit", label: "Turn clips on or off", keys: ["D"] },
+  editClipEnabled: {
+    area: "Edit",
+    label: "Turn clips on or off",
+    keys: ["Alt+D"],
+  },
   editNudgeTrimStepNudgeReverse: {
     area: "Edit",
     label: "Nudge, slip or slide one frame left",
@@ -458,7 +462,7 @@ export const keymap = {
     label: "Delete keyframe",
     keys: ["Alt+]"],
   },
-  editSnapping: { area: "Tools", label: "Snapping", keys: ["C"] },
+  editSnapping: { area: "Tools", label: "Snapping", keys: ["Alt+C"] },
   viewSafeAreaToggle: {
     area: "View",
     label: "Safe zones",

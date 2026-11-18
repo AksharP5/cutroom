@@ -399,7 +399,7 @@ test("X never lifts an agent's piece over the same frames as the editor's refuse
   ]);
 });
 
-test("D and then X act on the editor's piece while an agent cuts elsewhere", async ({
+test("Alt+D and then X act on the editor's piece while an agent cuts elsewhere", async ({
   page,
   request,
 }) => {
@@ -412,8 +412,9 @@ test("D and then X act on the editor's piece while an agent cuts elsewhere", asy
   await seek("0100");
   await page.keyboard.press("e");
   const piece = await pieceAt(page, 30);
-  await timeline.locator(`[data-clip="${piece}"]`).click();
-  await page.keyboard.press("d");
+  const clip = timeline.locator(`[data-clip="${piece}"]`);
+  await clip.click();
+  await page.keyboard.press("Alt+d");
   const theirs = (
     await agent([{ type: "split", at: 210, clipIds: ["shot-3"] }])
   ).find((clip) => clip.start === 210)!.id;
@@ -423,6 +424,10 @@ test("D and then X act on the editor's piece while an agent cuts elsewhere", asy
       (await read()).timeline.clips.map((clip) => [clip.id, clip.enabled]),
     );
   await expect.poll(enabled).toMatchObject({ [piece]: false, [theirs]: true });
+  await expect(clip).toHaveClass(/\bdisabled\b/);
+  await page.keyboard.press("Alt+d");
+  await expect(clip).not.toHaveClass(/\bdisabled\b/);
+  await expect.poll(enabled).toMatchObject({ [piece]: true, [theirs]: true });
 
   await page.keyboard.press("x");
   await expect.poll(clips).toEqual([

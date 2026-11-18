@@ -145,7 +145,7 @@ test("a comment pins where you click, takes every key while you type, and stays 
   const stop = page.getByRole("button", { name: "Stop" });
   const note = page.getByLabel("What should change?");
 
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   const spot = await project.at(0.6, 0.3);
   await page.mouse.click(spot.x, spot.y);
   await expect(note).toBeFocused();
@@ -266,7 +266,7 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   // An edit in the project's history that undo must leave alone.
   await page.keyboard.press("i");
   await expect.poll(project.range).toEqual({ in: 0, out: null });
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   await stroke([
     [0.1, 0.5],
     [0.2, 0.4],
@@ -308,7 +308,7 @@ test("a drawing holds several strokes, Ctrl+Z takes back the last, and saved not
   // A comment a second later through a third, made while another tool is chosen.
   await page.getByRole("button", { name: /^Select/ }).click();
   await page.keyboard.press("Shift+ArrowRight");
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   const spot = await project.at(0.7, 0.4);
   await page.mouse.click(spot.x, spot.y);
   await page.keyboard.type("Hold this longer");
@@ -371,7 +371,7 @@ test("ruler scrubbing returns focus to an open note and exit io never edits the 
 }) => {
   const project = await openProject(page, request, "Ruler focus");
   const before = await (await request.get(`${project.base}/timeline`)).json();
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   const at = await project.at(0.3, 0.4);
   await page.mouse.click(at.x, at.y);
   const field = page.getByLabel("What should change?");
@@ -485,7 +485,7 @@ for (const finishCapture of [true, false]) {
         },
       );
       try {
-        await page.keyboard.press("n");
+        await page.keyboard.press("c");
         const spot = await project.at(0.3, 0.4);
         await page.mouse.click(spot.x, spot.y);
         await page
@@ -568,7 +568,7 @@ test("a project switch aborts its pending capture refresh without a toast", asyn
   });
   try {
     await page.getByRole("button", { name: "Review", exact: true }).click();
-    await page.keyboard.press("n");
+    await page.keyboard.press("c");
     const spot = await first.at(0.3, 0.4);
     await page.mouse.click(spot.x, spot.y);
     await page
@@ -636,7 +636,7 @@ test("Review rows appear within one second of Enter while frame captures are hel
   );
   try {
     await page.getByRole("button", { name: "Review", exact: true }).click();
-    await page.keyboard.press("n");
+    await page.keyboard.press("c");
     for (let index = 0; index < 3; index++) {
       const spot = await project.at(0.2 + index * 0.2, 0.4);
       await page.mouse.click(spot.x, spot.y);
@@ -751,7 +751,7 @@ test("switching projects aborts the old capture and preserves the saved note and
     await route.fulfill({ response });
   });
   try {
-    await page.keyboard.press("n");
+    await page.keyboard.press("c");
     const spot = await first.at(0.3, 0.4);
     await page.mouse.click(spot.x, spot.y);
     const field = page.getByLabel("What should change?");
@@ -811,7 +811,7 @@ test("drafts and a two-stroke failed save recover in their project after switchi
     );
     await expect(page.locator(".edit-picture iframe")).toHaveCount(1);
   };
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   const at = await project.at(0.3, 0.4);
   await page.mouse.click(at.x, at.y);
   const field = page.getByLabel("What should change?");
@@ -821,7 +821,7 @@ test("drafts and a two-stroke failed save recover in their project after switchi
   await switchTo(project.id);
   await expect(field).toHaveValue("Do not lose this comment");
   await page.keyboard.press("Escape");
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   for (const y of [0.35, 0.7]) {
     const start = await project.at(0.1, y);
     const end = await project.at(0.3, y);
@@ -891,7 +891,7 @@ test("a notebook arriving before its POST response never duplicates a note or ad
     await route.fulfill({ response });
   });
   try {
-    await page.keyboard.press("n");
+    await page.keyboard.press("c");
     const at = await project.at(0.3, 0.4);
     await page.mouse.click(at.x, at.y);
     const field = page.getByLabel("What should change?");
@@ -932,7 +932,7 @@ for (const viewport of [
   }) => {
     const project = await openProject(page, request, "Popover edges");
     await page.setViewportSize(viewport);
-    await page.keyboard.press("n");
+    await page.keyboard.press("c");
     for (const [x, y] of [
       [0.01, 0.01],
       [0.99, 0.01],
@@ -989,7 +989,7 @@ test("text undo precedes stroke undo, stroke redo returns it, and saved-note und
 }) => {
   const project = await openProject(page, request, "Undo notes");
   await quickCapture(page, project.id);
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   const a = await project.at(0.1, 0.5);
   const b = await project.at(0.35, 0.5);
   await page.mouse.move(a.x, a.y);
@@ -1049,7 +1049,7 @@ for (const delayed of ["save request", "save acknowledgement"] as const) {
       await route.fulfill({ response });
     });
     try {
-      await page.keyboard.press("Shift+n");
+      await page.keyboard.press("d");
       const from = await project.at(0.1, 0.5);
       const to = await project.at(0.35, 0.5);
       await page.mouse.move(from.x, from.y);
@@ -1190,7 +1190,7 @@ test("finishing another stroke moves the popover clear of all ink and a slow 400
 }) => {
   const project = await openProject(page, request, "Clear ink");
   await quickCapture(page, project.id);
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   const start = await project.at(0.1, 0.6);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
@@ -1239,7 +1239,7 @@ test("ink spanning the whole picture gets space beside the picture", async ({
   request,
 }) => {
   const project = await openProject(page, request, "Full-picture drawing");
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   const corners = await Promise.all(
     [
       [0.03, 0.03],

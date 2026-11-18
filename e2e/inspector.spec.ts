@@ -269,7 +269,7 @@ test("inspector commits, scrubs, cancels, accepts real MCP edits and exports the
   const rect = await inspector.boundingBox();
   expect(rect?.width).toBe(300);
   await page.screenshot({ path: info.outputPath("drawer.png") });
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   await expect(
     page.getByRole("button", { name: "Inspector", exact: true }),
   ).toHaveAttribute("aria-pressed", "false");

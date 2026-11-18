@@ -737,10 +737,10 @@ test("the edit after a burst of W, undo, D and lift at 7 keys a second keeps the
   await press("w");
   await press("Control+z");
   // A W pressed before the undo is saved would find nothing to trim, so the burst goes on
-  // with D, which shows at once. Each D that turns the music bed on adds it back, before
+  // with Alt+D, which shows at once. Each Alt+D that turns the music bed on adds it back, before
   // the runtime's last layout pass is a third of a second old.
   await page.locator('[data-clip="music"]').click({ force: true });
-  for (let index = 0; index < 12; index++) await press("d");
+  for (let index = 0; index < 12; index++) await press("Alt+d");
   await page.locator('[data-clip="broll-0"]').click({ force: true });
   await press("Backspace");
   await waitForPreview(page);

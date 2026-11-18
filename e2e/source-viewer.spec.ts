@@ -558,7 +558,7 @@ test("timeline edit keys immediately edit and reveal Timeline while Source is sh
     "Shift+x",
     "Backspace",
     "Delete",
-    "d",
+    "Alt+d",
     "m",
     "Control+x",
     "Control+v",

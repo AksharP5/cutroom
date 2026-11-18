@@ -156,7 +156,7 @@ test("an active project's failed frame capture toasts the renderer's actual caus
   });
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator("iframe[data-live]")).toHaveCount(1);
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   await page
     .getByLabel("Pin a comment on the composition")
     .click({ position: { x: 100, y: 100 } });
