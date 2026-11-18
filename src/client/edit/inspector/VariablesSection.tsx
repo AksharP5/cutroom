@@ -1,5 +1,10 @@
 import type { Clip } from "../../../shared/timeline/schema";
-import { isEditable, variableDefaultValue } from "../../../shared/variables";
+import { localMediaPath, sourceUrl } from "../../../shared/media";
+import {
+  isEditable,
+  variableDefaultValue,
+  VariableDeclarationSchema,
+} from "../../../shared/variables";
 import type {
   CompositionVariable,
   EditableVariable,
@@ -7,6 +12,7 @@ import type {
   VariableValue,
 } from "../../../shared/variables";
 import { SelectMenu } from "../../components/SelectMenu";
+import { useWorkspace } from "../../workspace";
 import { ImageVariableMenu } from "../ImageVariableMenu";
 import {
   declareVariable,
@@ -188,6 +194,75 @@ function freeId(base: string, taken: readonly CompositionVariable[]) {
   for (let n = 2; taken.some((item) => item.id === id); n++)
     id = `${stem}-${n}`;
   return id;
+}
+
+export function BindImageVariable({
+  projectId,
+  clip,
+  name,
+  disabled,
+}: {
+  projectId: string;
+  clip: Clip;
+  name: string;
+  disabled: boolean;
+}) {
+  const state = useVariables((store) => store.state);
+  const files = useWorkspace((store) => store.fileChanges);
+  if (!state || clip.sourceRestrictions?.imageVariable) return null;
+  const current = clip.variableBindings?.image;
+  const options = state.declarations
+    .filter(({ type }) => type === "image")
+    .map(({ id, label }) => ({ value: id, label: `${label} (${id})` }));
+  const src = clip.src;
+  const local = src && localMediaPath(state.composition, src);
+  const root = src && localMediaPath("index.html", src);
+  // A scene can use a bare project-root asset path if no sibling file exists.
+  const value =
+    src &&
+    local &&
+    root &&
+    local !== root &&
+    !src.startsWith("../") &&
+    !/[?#]/.test(src) &&
+    !files[local] &&
+    files[root]
+      ? sourceUrl(state.composition, root)
+      : src;
+  const declaration = VariableDeclarationSchema.safeParse({
+    type: "image",
+    id: freeId(`${clip.id}-image`, state.declarations),
+    label: `${name.slice(0, 114)} image`,
+    default: value,
+  });
+  if (!current && !declaration.success && !options.length) return null;
+  if (!current || !options.some(({ value }) => value === current))
+    options.unshift({
+      value: current ?? "",
+      label: current ?? "Choose variable",
+    });
+  if (!current && declaration.success)
+    options.push({ value: "@new", label: "New variable…" });
+  const bind = { clipId: clip.id, to: "image" } as const;
+  return (
+    <section className="inspector-section">
+      <h3>Image</h3>
+      <Row label="Source">
+        <SelectMenu
+          label="Image variable"
+          value={current ?? ""}
+          options={options}
+          disabled={disabled}
+          onChange={(id) => {
+            if (id === "@new" && declaration.success)
+              void declareVariable(projectId, declaration.data, bind);
+            else if (id && id !== current)
+              void bindVariable(projectId, id, bind);
+          }}
+        />
+      </Row>
+    </section>
+  );
 }
 
 /** Binds words or colour to a declared variable, or creates one with the clip's value. */

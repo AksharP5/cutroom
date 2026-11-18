@@ -7,6 +7,7 @@ import {
   rewriteSrcsetUrls,
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
+import type { VariableBinding } from "../../shared/variables";
 import { freezeExportSource } from "../hyperframes/freezeSources";
 import { ensureHfIds } from "@hyperframes/parsers/hf-ids";
 import { readFadeSeconds } from "@hyperframes/core/audio-fade";
@@ -114,6 +115,7 @@ interface OwnedBytes {
 interface SourceElement {
   tag: string;
   attrs: Record<string, string>;
+  insidePicture?: true;
   children: SourceElement[];
   text: string;
   /** A `<template>`'s inert content, outside the live tree. */
@@ -209,6 +211,8 @@ function parseElements(html: string) {
       elements.push({
         text: contentText,
         tag: node.tagName,
+        ...(node.tagName === "img" &&
+          node.parentNode?.nodeName === "picture" && { insidePicture: true }),
         attrs: Object.fromEntries(
           node.attrs.map((attribute) => [attribute.name, attribute.value]),
         ),
@@ -713,6 +717,8 @@ export function parseComposition(
     const hasAudio = isAudioKind(kind) || hasVideoAudio(element);
     if (authoredGroup && hasAudio) authoredMembers.add(element);
     const colorVariable = readColourVariable(element.attrs.style);
+    const imageVariable =
+      kind === "image" ? element.attrs["data-var-src"] : undefined;
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -768,12 +774,15 @@ export function parseComposition(
           ? (elementText(element, textLayout.get(element)?.preserveLines)
               ?.text ?? null)
           : null,
-      ...((element.attrs["data-var-text"] || colorVariable) && {
+      ...((element.attrs["data-var-text"] ||
+        colorVariable ||
+        imageVariable) && {
         variableBindings: {
           ...(element.attrs["data-var-text"] && {
             text: element.attrs["data-var-text"],
           }),
           ...(colorVariable && { color: colorVariable }),
+          ...(imageVariable && { image: imageVariable }),
         },
       }),
       title: title && "title" in title ? title.title : null,
@@ -1330,20 +1339,22 @@ export function setElementAttributes(
 export function bindCompositionVariable(
   parsed: ParsedComposition,
   clipId: string,
-  to: "text" | "color",
+  to: VariableBinding["to"],
   variableId: string,
   existing = true,
 ): string {
   const clip = parsed.timeline.clips.find((item) => item.id === clipId);
   const element = parsed.elements.get(clipId);
-  if (!clip || !element || element.attrs.id !== clipId)
+  const idAttribute =
+    to === "image" && !element?.attrs.id ? "data-hf-id" : "id";
+  if (!clip || !element || element.attrs[idAttribute] !== clipId)
     throw new TimelineError(
       "unsupported",
-      `No text clip with authored id ${clipId}.`,
+      `No clip with authored id ${clipId}.`,
     );
   if (
     scopeElements(parsed.roots, parsed.scope).filter(
-      (item) => item.attrs.id === clipId,
+      (item) => item.attrs[idAttribute] === clipId,
     ).length !== 1
   )
     throw new TimelineError(
@@ -1354,6 +1365,21 @@ export function bindCompositionVariable(
     parsed.timeline.tracks.find((track) => track.index === clip.track)?.locked
   )
     throw new TimelineError("unsupported", `${clipId}'s track is locked.`);
+  if (to === "image") {
+    if (clip.kind !== "image")
+      throw new TimelineError(
+        "unsupported",
+        "Bind an image variable to an image clip.",
+      );
+    if (clip.sourceRestrictions?.imageVariable)
+      throw new TimelineError(
+        "unsupported",
+        clip.sourceRestrictions.imageVariable,
+      );
+    return rewriteAttributes(parsed.html, element, clipId, [
+      ["data-var-src", variableId],
+    ]);
+  }
   if (
     clip.kind !== "element" ||
     clip.title ||
@@ -1665,27 +1691,36 @@ function sourceRestrictions(
   parsed: ParsedComposition,
   clip: Clip,
 ): Clip["sourceRestrictions"] {
+  const element = parsed.elements.get(clip.id)!;
   const restrictions = cutAndTextRestrictions(parsed, clip);
   const read =
     clip.kind === "element"
-      ? readElementTitle(
-          parsed.elements.get(clip.id)!,
-          parsed.timeline.fps,
-          parsed.fonts,
-        )
+      ? readElementTitle(element, parsed.timeline.fps, parsed.fonts)
       : null;
   const transform = isAudioKind(clip.kind)
     ? undefined
-    : readClipStyle(parsed.elements.get(clip.id)!.attrs.style).restriction;
-  const fx = fxRestriction(
-    parsed.elements.get(clip.id)!.attrs["data-fx-chain"],
-  );
+    : readClipStyle(element.attrs.style).restriction;
+  const fx = fxRestriction(element.attrs["data-fx-chain"]);
   const all = {
     ...restrictions,
     ...(read && "reason" in read && { title: read.reason }),
     ...(transform && { transform }),
     ...(fx && { fx }),
   };
+  if (clip.kind === "image") {
+    if (element.insidePicture || Object.hasOwn(element.attrs, "srcset"))
+      return { ...all, imageVariable: "Edit this responsive image in Source." };
+    if (Object.hasOwn(element.attrs, "data-cutroom-freeze-export"))
+      return {
+        ...all,
+        imageVariable: "A paired freeze frame keeps its source for export.",
+      };
+    if ((element.attrs.id || element.attrs["data-hf-id"]) !== clip.id)
+      return {
+        ...all,
+        imageVariable: "Add an element ID in Source to bind this image.",
+      };
+  }
   return Object.keys(all).length ? all : undefined;
 }
 

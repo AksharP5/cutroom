@@ -58,9 +58,11 @@ A composition that declares HyperFrames variables lists them in the inspector wh
 
 Select a text clip and open the **Words** or **Colour** picker in its Text section. Pick a declared variable, or choose **New variable…** to start with the clip's current value. Words accept string variables and colour accepts colour variables. Colour needs an explicit inline colour or a direct `color: var(--id)` binding. Each selection saves in one undo step.
 
-Binding an existing variable requires an unlocked clip with a unique authored element ID and one plain line of text. Existing word bindings are shown read-only. Use Source for titles and multiline or nested text. External template compositions use their own declarations.
+Select an image clip and open **Image > Source** to bind it to a declared image variable. **New variable…** starts with the clip's current project image. Bind the same variable to several clips to change their pictures together.
 
-For an authored image variable, choose an image from the project. Import it in Media first if it is outside the project. Use Source to declare the variable and bind it with `data-var-src`.
+Bindings require an unlocked clip with a unique authored ID. Images can also use a HyperFrames element ID. Word bindings need one plain line, and existing word bindings are read-only. Edit titles, multiline or nested text, and responsive images in Source. External templates use their own declarations.
+
+Image values come from project media. Import images from outside the project in Media first.
 
 The Export dialog lists the variables too, starting from the viewer's values, so an export matches what you previewed.
 

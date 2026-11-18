@@ -430,6 +430,40 @@ test("agents list, preview, default and declare variables through typed tools, a
     });
     expect(bound.isError).not.toBe(true);
     expect(await f.source()).toContain("color: var(--accent)");
+    await mkdir(join(f.project.path, "assets"), { recursive: true });
+    await writeFile(
+      join(f.project.path, "assets", "cover.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"/>',
+    );
+    const beforeImage = (await f.source()).replace(
+      "</div>",
+      '<img id="cover" class="clip" src="assets/cover.svg" data-start="0" data-duration="2" data-track-index="2"></div>',
+    );
+    await writeFile(join(f.project.path, "index.html"), beforeImage);
+    const declaration = {
+      id: "cover-image",
+      type: "image" as const,
+      label: "Cover image",
+      default: "assets/cover.svg",
+    };
+    const target = { clipId: "cover", to: "image" };
+    const declared = await call("variables_declare", {
+      variable: declaration,
+      bind: target,
+    });
+    expect(
+      VariablesStateSchema.parse(declared.structuredContent?.result)
+        .declarations,
+    ).toContainEqual(declaration);
+    expect(await f.source()).toContain('data-var-src="cover-image"');
+    await f.undo();
+    expect(await f.source()).toBe(beforeImage);
+    const invalid = await call("variables_declare", {
+      variable: { ...declaration, default: "../cover.svg" },
+      bind: target,
+    });
+    expect(invalid.isError).toBe(true);
+    expect(await f.source()).toBe(beforeImage);
     const previewed = await call("variables_preview", {
       values: { title: "From an agent" },
     });
@@ -519,6 +553,44 @@ test("binding rejects incompatible, duplicate-id, multiline and nontext targets 
           })
         ).status,
       ).toBeGreaterThanOrEqual(400);
+      expect(await f.source()).toBe(source);
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test("image variables leave responsive and paired still sources under source control", async () => {
+  const f = await fixture();
+  try {
+    const declaration = {
+      id: "art",
+      type: "image",
+      label: "Artwork",
+      default: "assets/art.svg",
+    };
+    const authored = SOURCE.replace(
+      JSON.stringify(DECLARATIONS),
+      JSON.stringify([...DECLARATIONS, declaration]),
+    );
+    const image =
+      '<img id="artwork" class="clip" src="assets/art.svg" data-start="0" data-duration="2" data-track-index="2">';
+    for (const markup of [
+      image.replace("<img", '<img srcset="assets/art-2x.svg 2x"'),
+      `<picture><source srcset="assets/web.webp">${image}</picture>`,
+      image.replace(
+        "<img",
+        '<img data-cutroom-freeze-export="assets/hold.png"',
+      ),
+    ]) {
+      const source = authored.replace("</div>", markup + "</div>");
+      await writeFile(join(f.project.path, "index.html"), source);
+      const response = await f.request(
+        `/projects/${f.project.id}/variables/bind`,
+        "POST",
+        { id: declaration.id, bind: { clipId: "artwork", to: "image" } },
+      );
+      expect(response.status).toBe(422);
       expect(await f.source()).toBe(source);
     }
   } finally {
