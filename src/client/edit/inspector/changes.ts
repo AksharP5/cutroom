@@ -1,28 +1,52 @@
+import { EDIT_LABEL_LIMIT } from "../../../shared/timeline/labels";
 import type { TimelineView } from "../../../shared/timeline/schema";
 
 type ClipEdits = NonNullable<TimelineView["clipEdits"]>;
 export const pendingEdit = (edit: ClipEdits[number]) =>
   edit.by === "agent" && !edit.accepted && !edit.resolution;
 
-/** Linked partners share a history entry, but keep their own review records. */
-export function groupedChanges(edits: ClipEdits) {
+/** A row spans one batch. Each affected clip keeps its own review record. */
+export function ledgerChanges(edits: ClipEdits, clipIds?: ReadonlySet<string>) {
   const groups = new Map<string, ClipEdits>();
+  const batchLabels = new Map<string, string[]>();
+
   for (const edit of edits) {
     const key = edit.historyId ?? edit.id;
+    if (edit.batchLabels) batchLabels.set(key, edit.batchLabels);
+    if (clipIds && (edit.clipId === null || !clipIds.has(edit.clipId)))
+      continue;
     const group = groups.get(key);
     if (group) group.push(edit);
     else groups.set(key, [edit]);
   }
-  return [...groups.values()].map((members) => {
+  return [...groups].map(([key, members]) => {
     // Keep partially accepted or superseded groups actionable until all pending work is reviewed.
     const edit =
       members.find(pendingEdit) ??
       members.find((edit) => edit.resolution) ??
       members[0]!;
+    const raw = clipIds
+      ? [...new Set(members.map((member) => member.label))].join("; ")
+      : (members.find((member) => member.clipId === null) ?? members[0]!).label;
+    const saved = batchLabels.get(key);
+    const annotation = raw.match(/; (Agent label: [\s\S]+)$/);
+    const summary = annotation ? raw.slice(0, annotation.index) : raw;
+    // Older rows only have the bounded history label, which may end mid-batch.
+    const labels = saved ?? summary.split("; ");
+    const more =
+      labels.length < 2
+        ? null
+        : !saved && Array.from(summary).length === EDIT_LABEL_LIMIT
+          ? "and more"
+          : `and ${labels.length - 1} more`;
     return {
       ...edit,
       id: members[0]!.id,
-      label: [...new Set(members.map((edit) => edit.label))].join("; "),
+      label: labels[0] ?? raw,
+      more,
+      details: saved
+        ? [...saved, annotation?.[1]].filter(Boolean).join("\n")
+        : raw,
       members,
     };
   });
@@ -42,20 +66,7 @@ export function reviewRows(edits: ClipEdits) {
   return [...rows.values()];
 }
 
-export type ChangeRow = ReturnType<typeof groupedChanges>[number];
-
-/**
- * The timeline's own ledger: one row per history step, worded as the step's factual summary
- * when it has one, rather than as the part one clip played in it.
- */
-export function ledgerChanges(edits: ClipEdits): ChangeRow[] {
-  return groupedChanges(edits).map((edit) => ({
-    ...edit,
-    label: (
-      edit.members.find((member) => member.clipId === null) ?? edit.members[0]!
-    ).label,
-  }));
-}
+export type ChangeRow = ReturnType<typeof ledgerChanges>[number];
 
 /** `limit` recent rows, making room for every pending agent edit even when it is older. */
 export function shownChanges<T extends ClipEdits[number]>(

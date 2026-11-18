@@ -99,7 +99,7 @@ export function ChangeList({
             .toSorted((a, b) => a.start - b.start)[0];
           const [verb, ...rest] = edit.label.split(" ");
           const title = [
-            edit.label,
+            edit.details,
             edit.at &&
               new Date(edit.at).toLocaleString(undefined, {
                 dateStyle: "medium",
@@ -107,7 +107,7 @@ export function ChangeList({
               }),
           ]
             .filter(Boolean)
-            .join(" · ");
+            .join("\n");
           const text = (
             <>
               <span className="inspector-change-text">
@@ -125,6 +125,9 @@ export function ChangeList({
                     ),
                   )}
               </span>
+              {edit.more && (
+                <span className="inspector-change-more">{edit.more}</span>
+              )}
               {clip && times && (
                 <time>
                   <TimecodeText

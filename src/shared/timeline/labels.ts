@@ -47,13 +47,18 @@ export function clipName(
 export const formatPercent = (value: number) =>
   `${Number((value * 100).toFixed(4))}%`;
 
+export const EDIT_LABEL_LIMIT = 120;
+
 const truncate = (text: string, length: number) =>
   Array.from(text).slice(0, length).join("");
 
 /** Deduplicates command sentences and caps saved labels without splitting a code point. */
 export function joinEditLabels(labels: string[], fallback: string) {
   return (
-    truncate([...new Set(labels)].filter(Boolean).join("; "), 120) || fallback
+    truncate(
+      [...new Set(labels)].filter(Boolean).join("; "),
+      EDIT_LABEL_LIMIT,
+    ) || fallback
   );
 }
 

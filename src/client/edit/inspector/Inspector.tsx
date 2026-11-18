@@ -57,7 +57,7 @@ import {
   rounded,
   useClipFrame,
 } from "./Keyframes";
-import { groupedChanges } from "./changes";
+import { ledgerChanges } from "./changes";
 import { ChangeList } from "./ChangeList";
 import { TimelineOverview } from "./TimelineOverview";
 import { transport } from "../transport";
@@ -451,11 +451,12 @@ export function Inspector({
       clip.id
         .replaceAll(/[-_]+/g, " ")
         .replace(/^./, (letter) => letter.toUpperCase()));
-  const edits = groupedChanges(
-    view?.clipEdits?.filter((edit) =>
-      subject?.members.some((member) => member.id === edit.clipId),
-    ) ?? [],
-  );
+  const edits = subject
+    ? ledgerChanges(
+        view?.clipEdits ?? [],
+        new Set(subject.members.map((member) => member.id)),
+      )
+    : [];
   const track =
     timeline &&
     clip &&
@@ -567,13 +568,15 @@ export function Inspector({
         <div className="inspector-content">
           <div className="inspector-clip" data-kind={clip.kind}>
             <strong title={name || undefined}>{name}</strong>
-            <span>
-              {titled
-                ? "Title"
-                : clip.kind === "element"
-                  ? "Text"
-                  : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
-              on {track?.id} ·{" "}
+            <span className="inspector-clip-meta">
+              <span>
+                {titled
+                  ? "Title"
+                  : clip.kind === "element"
+                    ? "Text"
+                    : clip.kind[0]!.toUpperCase() + clip.kind.slice(1)}{" "}
+                on {track?.id}
+              </span>
               <time>
                 <TimecodeText
                   timecode={formatTimecode(clip.start, timeline.fps)}

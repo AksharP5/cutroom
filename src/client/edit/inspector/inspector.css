@@ -125,6 +125,17 @@
   color: var(--text-tertiary);
   font-size: var(--type-xs);
 }
+.inspector-clip-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.inspector-change-more {
+  flex: none;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
 .inspector-clip time {
   font-family: var(--font-mono);
   font-stretch: var(--stretch-mono);

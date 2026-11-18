@@ -462,7 +462,7 @@ test("linked Changes has one row per history entry and keeps review and session 
     },
   });
   expect(response.ok(), await response.text()).toBe(true);
-  const agentRow = rows.filter({ hasText: "Slowed interview" });
+  const agentRow = rows.filter({ hasText: "Set speed to 50%" });
   await expect(rows).toHaveCount(2);
   await expect(summary).toHaveText("Changes 2");
   // Another review surface can accept one partner before this grouped row is accepted.
