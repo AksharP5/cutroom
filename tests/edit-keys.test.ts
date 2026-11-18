@@ -193,7 +193,7 @@ test("X lifts and Shift+X ripple deletes the selection, and do nothing without o
   ]);
 });
 
-test("D turns each selected clip on or off, and M adds one marker at the playhead", () => {
+test("Alt+D turns each selected clip on or off, and M adds one marker at the playhead", () => {
   const timeline = sequence();
   const off = apply(timeline, press("editClipEnabled", timeline, 0, ["b"]));
   const toggled = apply(

@@ -109,6 +109,23 @@ test("tool icons are named by their key, and the tooltip waits once then follows
       .boundingBox(),
   ]);
   expect(tip!.y).toBeGreaterThan(blade!.y + blade!.height);
+  for (const [label, key] of [
+    ["Draw", "D"],
+    ["Comment", "C"],
+  ]) {
+    await tools
+      .getByRole("button", { name: `${label} ${key}`, exact: true })
+      .hover();
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toHaveText(label + key);
+  }
   await page.mouse.move(600, 500);
   await expect(tooltip).toBeHidden();
+  const snapping = tools.getByRole("button", { name: "Snapping", exact: true });
+  await expect(snapping).toHaveAttribute("title", "Snapping (Alt+C)");
+  await expect(snapping).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Alt+c");
+  await expect(snapping).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Alt+c");
+  await expect(snapping).toHaveAttribute("aria-pressed", "true");
 });

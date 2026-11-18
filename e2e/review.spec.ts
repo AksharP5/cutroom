@@ -195,7 +195,7 @@ test("typing a note after a stroke never drives the editor, and another note kee
   await page.keyboard.press("i");
   await expect.poll(range).toEqual({ in: 30, out: null });
 
-  await page.keyboard.press("Shift+n");
+  await page.keyboard.press("d");
   const canvas = page.getByLabel("Draw on the composition");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("The drawing canvas has no box.");

@@ -373,7 +373,7 @@ test("a resting pointer outlines the clip a press would take and shows the move 
   await expect(hover).toHaveAttribute("data-outlined", "words");
 
   // Other tools keep the picture to themselves.
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   await expect(hover).toBeHidden();
 });
 
@@ -922,7 +922,7 @@ test("changing tools releases the picture's arrow keys and hides the grab handle
   await page.mouse.click(...at(100, 125));
   const handle = page.locator(".edit-select-outline b").first();
   await expect(handle).toBeVisible();
-  await page.keyboard.press("n");
+  await page.keyboard.press("c");
   await expect(handle).toBeHidden();
   await expect(
     page.getByRole("application", { name: "Picture" }),

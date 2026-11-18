@@ -49,7 +49,7 @@ for (const height of [28, 200]) {
       "data-refit",
       "settled",
     );
-    await page.keyboard.press("c");
+    await page.keyboard.press("Alt+c");
     const moving = (await page.locator('[data-clip="moving"]').boundingBox())!;
     const cover = (await page.locator('[data-clip="cover"]').boundingBox())!;
     await page.mouse.move(moving.x + moving.width / 2, moving.y + 20);
