@@ -237,14 +237,13 @@ export class T3Chats {
       if (!(error instanceof ReviewFileError)) throw error;
       digest = `Review notes are unavailable: ${error.message} Do not change review status this turn.`;
     }
-    const prompt = agentPrompt(
-      {
-        ...turn,
-        attachments,
-        context: [digest, turn.context].filter(Boolean).join("\n\n"),
-      },
-      project.path,
-    );
+    // T3 Code owns this session's instructions, so each message names the project itself.
+    const origin = `From Cutroom, project ${project.name} at ${project.path}. Use the cutroom_studio MCP tools to inspect and edit it.`;
+    const prompt = agentPrompt({
+      ...turn,
+      attachments,
+      context: [origin, digest, turn.context].filter(Boolean).join("\n\n"),
+    });
     const result = await this.cli.send(threadId, prompt);
     this.watches.get(threadId)?.refresh();
     return result;
