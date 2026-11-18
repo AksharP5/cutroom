@@ -12,6 +12,7 @@ import type { T3Runner } from "./t3-link";
 
 const workingPollMs = 12_000;
 const idlePollMs = 30_000;
+const afterSendPollMs = [2_000, 4_000, 8_000];
 
 export function projectAttachments(project: Project, turn: AgentTurn) {
   return Promise.all(
@@ -42,7 +43,7 @@ export class T3Chats {
         { session: AgentSession; emit: (event: AgentEvent) => void }
       >;
       stop: () => void;
-      refresh: () => void;
+      afterSend: () => void;
     }
   >();
 
@@ -98,10 +99,9 @@ export class T3Chats {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lastError: string | undefined;
     let polling = false;
-    let refreshRequested = false;
+    let earlyReads: number[] = [];
     const poll = async () => {
       polling = true;
-      refreshRequested = false;
       const startedAt = performance.now();
       let interval = idlePollMs;
       try {
@@ -151,15 +151,15 @@ export class T3Chats {
         lastError = message;
       } finally {
         polling = false;
-        if (!controller.signal.aborted) {
-          timer = setTimeout(
-            poll,
-            refreshRequested
-              ? 0
-              : Math.max(0, interval - (performance.now() - startedAt)),
-          );
-        }
+        if (!controller.signal.aborted) schedule(startedAt + interval);
       }
+    };
+    const schedule = (regularAt: number) => {
+      const now = performance.now();
+      // A slow show can cross a deadline. Skip it instead of starting a burst of reads.
+      earlyReads = earlyReads.filter((deadline) => deadline >= now);
+      const next = earlyReads.shift() ?? regularAt;
+      timer = setTimeout(poll, Math.max(0, next - now));
     };
     this.watches.set(id, {
       sessions,
@@ -168,13 +168,12 @@ export class T3Chats {
         clearTimeout(timer);
         this.watches.delete(id);
       },
-      refresh: () => {
-        if (polling) {
-          refreshRequested = true;
-          return;
-        }
+      afterSend: () => {
+        const sentAt = performance.now();
+        earlyReads = afterSendPollMs.map((delay) => sentAt + delay);
+        if (polling) return;
         clearTimeout(timer);
-        void poll();
+        schedule(sentAt + workingPollMs);
       },
     });
     void poll();
@@ -245,7 +244,7 @@ export class T3Chats {
       context: [origin, digest, turn.context].filter(Boolean).join("\n\n"),
     });
     const result = await this.cli.send(threadId, prompt);
-    this.watches.get(threadId)?.refresh();
+    this.watches.get(threadId)?.afterSend();
     return result;
   }
 }
