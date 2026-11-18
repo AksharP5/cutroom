@@ -61,7 +61,7 @@ test("the chat composer queues a follow-up during work and lets you resume it af
   const queue = chat.getByRole("region", { name: "Queued follow-ups" });
   await expect(stop).toBeVisible();
   await expect(
-    chat.getByLabel("Agent provider", { exact: true }),
+    chat.getByRole("button", { name: /^Model: Claude Code/ }),
   ).toBeDisabled();
   await expect(chat.getByRole("button", { name: /^Chats,/ })).toBeEnabled();
   const status = chat.getByRole("status").filter({ hasText: "Working" });

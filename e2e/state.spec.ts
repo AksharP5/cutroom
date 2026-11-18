@@ -138,9 +138,7 @@ test("switching chats during a submission keeps the next draft", async ({
       .getByRole("button", { name: "Send message", exact: true })
       .click();
     await pending;
-    await expect(
-      page.getByLabel("Agent provider", { exact: true }),
-    ).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Model:/ })).toBeDisabled();
     await page.getByRole("button", { name: "New chat", exact: true }).click();
     await expect(composer).toBeFocused();
     await composer.fill("The next request");
@@ -321,9 +319,7 @@ test("streamed deltas remain ordered through the final idle event", async ({
   await expect(page.locator(".message-assistant .markdown")).toHaveText(
     deltas.join("").trim(),
   );
-  await expect(
-    page.getByLabel("Agent provider", { exact: true }),
-  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Model:/ })).toBeEnabled();
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect(page.locator(".message-assistant")).toHaveCount(0);
 });

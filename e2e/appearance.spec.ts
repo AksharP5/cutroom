@@ -117,7 +117,7 @@ for (const viewport of viewports) {
       page.getByRole("button", { name: "Export", exact: true }),
       page.getByRole("button", { name: "Import media", exact: true }),
       page.getByRole("button", { name: "Play", exact: true }),
-      page.getByLabel("Agent provider", { exact: true }),
+      page.getByRole("button", { name: /^Model:/ }),
       page.getByLabel("Message your agent", { exact: true }),
     ]) {
       await expectOnScreen(control, page);

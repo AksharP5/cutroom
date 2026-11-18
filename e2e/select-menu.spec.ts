@@ -95,7 +95,7 @@ test("the quality listbox opens from the keyboard, navigates, selects and return
   ).toBe(true);
 });
 
-test("agent, footage and viewer pickers share mouse and keyboard selection", async ({
+test("chat history, footage and viewer pickers support mouse and keyboard selection", async ({
   page,
   request,
 }) => {
@@ -163,8 +163,6 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
   await page.goto(`/#project/${project.id}`);
   const chatTitle = page.getByRole("button", { name: /^Chats,/ });
   const chats = page.getByRole("menu", { name: "Chats" });
-  const timeline = page.getByRole("region", { name: "Timeline", exact: true });
-  await page.keyboard.press("Control+4");
   await chatTitle.click();
   await chats
     .getByRole("menuitemradio", { name: "First chat", exact: true })
@@ -180,26 +178,6 @@ test("agent, footage and viewer pickers share mouse and keyboard selection", asy
   await page.keyboard.press("Enter");
   await expect(chatTitle).toHaveText("Second chat");
   await expect(chatTitle).toBeFocused();
-
-  const provider = page.getByLabel("Agent provider", { exact: true });
-  await expect(provider).toBeEnabled();
-  await provider.press("ArrowDown");
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
-  await expect(provider).toHaveText("Claude Code");
-  await provider.click();
-  await page.getByRole("option", { name: "Codex", exact: true }).click();
-  await expect(provider).toHaveText("Codex");
-  await expect(timeline).toBeFocused();
-  const model = page.getByLabel("Model", { exact: true });
-  await model.click();
-  await page.getByRole("option", { name: "Model B", exact: true }).click();
-  await expect(model).toHaveText("Model B");
-  await model.press("Space");
-  await page.keyboard.press("ArrowUp");
-  await page.keyboard.press("Enter");
-  await expect(model).toHaveText("Model A");
-  await expect(model).toBeFocused();
 
   await page.getByRole("button", { name: "Script", exact: true }).click();
   const footage = page.getByLabel("Footage", { exact: true });

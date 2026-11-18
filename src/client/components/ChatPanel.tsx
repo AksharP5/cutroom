@@ -20,13 +20,14 @@ import {
   type AgentProvider,
   type AgentSession,
   type AgentSessionSummary,
+  type ConfigureAgentSession,
   type AgentSkill,
 } from "../../shared/agent";
 import type { Project } from "../../shared/project";
 import type { ReviewItem } from "../../shared/review";
 import { ApiError, api, json } from "../api";
 import { useWorkspace } from "../workspace";
-import { SelectMenu } from "./SelectMenu";
+import { ModelMenu, providerNames, selectedModel } from "./chat/ModelMenu";
 import { ChatList, RecentChats, chatIsBusy } from "./chat/ChatList";
 import { openNativeChat } from "./chat/SharedChats";
 import { Attachments } from "./chat/Attachments";
@@ -54,6 +55,33 @@ function lastChat(projectId: string, chats: AgentSessionSummary[]) {
     return chats[0];
   }
 }
+const modelChoiceSchema = agentSessionSchema.pick({
+  model: true,
+  effort: true,
+});
+type ModelChoice = z.infer<typeof modelChoiceSchema>;
+
+function modelChoiceKey(projectId: string, provider: AgentProvider) {
+  return `cutroom:model:${projectId}:${provider}`;
+}
+
+function readModelChoice(
+  projectId: string,
+  provider: AgentProvider,
+): ModelChoice {
+  try {
+    return (
+      modelChoiceSchema.safeParse(
+        JSON.parse(
+          localStorage.getItem(modelChoiceKey(projectId, provider)) ?? "null",
+        ),
+      ).data ?? {}
+    );
+  } catch {
+    return {};
+  }
+}
+
 const draftSchema = z.object({
   version: z.literal(1),
   text: z.string(),
@@ -109,7 +137,23 @@ function applyChatEvents(
   let session = state.phase === "ready" ? state.session : null;
   for (const event of events) {
     if (event.type === "snapshot") {
-      if (event.session.id === id) session = event.session;
+      if (event.session.id !== id) continue;
+      const next = event.session;
+      // Settings updates also send full snapshots. Keep unchanged transcript inputs stable.
+      session = {
+        ...next,
+        messages:
+          session &&
+          JSON.stringify(session.messages) === JSON.stringify(next.messages)
+            ? session.messages
+            : next.messages,
+        pendingRequest:
+          session &&
+          JSON.stringify(session.pendingRequest) ===
+            JSON.stringify(next.pendingRequest)
+            ? session.pendingRequest
+            : next.pendingRequest,
+      };
       continue;
     }
     if (!session) continue;
@@ -206,11 +250,15 @@ export function ChatPanel({
     };
   }, [projectId]);
   const [provider, setProvider] = useState<AgentProvider>("codex");
-  const [model, setModel] = useState("");
-  const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(
-    null,
-  );
-  const [discovering, setDiscovering] = useState(false);
+  const [preferences, setPreferences] = useState(() => ({
+    codex: readModelChoice(projectId, "codex"),
+    claude: readModelChoice(projectId, "claude"),
+  }));
+  const [catalog, setCatalog] = useState<
+    Partial<Record<AgentProvider, AgentCapabilities>>
+  >({});
+  const capabilities = catalog[provider];
+  const discovering = !capabilities;
   const [configurationRevision, setConfigurationRevision] = useState(0);
   const [sessions, setSessions] = useState<
     z.infer<typeof sessionListSchema>["sessions"]
@@ -222,6 +270,14 @@ export function ChatPanel({
     phase: "restoring",
   });
   const session = chat.phase === "ready" ? chat.session : null;
+  const savedChoice = preferences[provider];
+  const savedModel = selectedModel(capabilities, savedChoice.model);
+  const model = session ? session.model : savedModel && savedChoice.model;
+  const effort = session
+    ? session.effort
+    : savedChoice.effort && savedModel?.efforts.includes(savedChoice.effort)
+      ? savedChoice.effort
+      : undefined;
   const sessionId =
     chat.phase === "ready"
       ? chat.session.id
@@ -321,7 +377,6 @@ export function ChatPanel({
       setOperation(null);
       setError("");
       setProvider(selected.provider);
-      setModel(selected.model ?? "");
       follow.current = true;
       setChat({ phase: "loading", selected });
       try {
@@ -375,37 +430,42 @@ export function ChatPanel({
   useEffect(() => {
     if (!discover) return;
     let cancelled = false;
-    setDiscovering(true);
-    setCapabilities(null);
-    void api(
-      `/agents/capabilities?provider=${provider}&projectId=${encodeURIComponent(projectId)}${configurationRevision ? "&refresh=true" : ""}`,
-      agentCapabilitiesSchema,
-    )
-      .then((result) => {
-        if (!cancelled) setCapabilities(result);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled)
-          setError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (!cancelled) setDiscovering(false);
-      });
+    setCatalog({});
+    for (const provider of agentProviderSchema.options) {
+      void api(
+        `/agents/capabilities?provider=${provider}&projectId=${encodeURIComponent(projectId)}${configurationRevision ? "&refresh=true" : ""}`,
+        agentCapabilitiesSchema,
+      )
+        .catch((error: unknown): AgentCapabilities => ({
+          provider,
+          available: false,
+          models: [],
+          skills: [],
+          mcpServers: [],
+          error: error instanceof Error ? error.message : String(error),
+        }))
+        .then((result) => {
+          if (!cancelled)
+            setCatalog((current) => ({ ...current, [provider]: result }));
+        });
+    }
     return () => {
       cancelled = true;
     };
-  }, [discover, provider, projectId, configurationRevision, setError]);
+  }, [discover, projectId, configurationRevision]);
 
   useEffect(() => {
     useWorkspace.setState({
       agent: linkedThread
         ? { name: "T3 Code", available: true }
-        : capabilities && {
-            name: capabilities.provider === "codex" ? "Codex" : "Claude Code",
-            available: capabilities.available,
-          },
+        : capabilities
+          ? {
+              name: providerNames[provider],
+              available: capabilities.available,
+            }
+          : null,
     });
-  }, [capabilities, linkedThread]);
+  }, [capabilities, linkedThread, provider]);
   useEffect(() => () => useWorkspace.setState({ agent: null }), []);
 
   useEffect(() => {
@@ -658,29 +718,13 @@ export function ChatPanel({
         active = await api(
           "/agents/sessions",
           agentSessionSchema,
-          json("POST", { projectId, provider, ...(model ? { model } : {}) }),
+          json("POST", { projectId, provider, model, effort }),
         );
         createdId = active.id;
         submission.sessionId = active.id;
         if (submission.stopped) return;
         if (view.current === openedView)
           setChat({ phase: "ready", session: active });
-      }
-      if (
-        !active.t3Thread &&
-        !queuesMessage &&
-        active.model !== (model || undefined)
-      ) {
-        active = await api(
-          `/agents/sessions/${active.id}`,
-          agentSessionSchema,
-          json("PATCH", { model: model || null }),
-        );
-        if (submission.stopped) return;
-        if (view.current === openedView) {
-          setChat({ phase: "ready", session: active });
-          setModel(active.model ?? "");
-        }
       }
       const sent = await api(
         `/agents/sessions/${active.id}/${queuesMessage ? "follow-ups" : "turns"}`,
@@ -765,6 +809,96 @@ export function ChatPanel({
     } finally {
       setOperation((current) => (current === branching ? null : current));
     }
+  }
+
+  function rememberChoice(provider: AgentProvider, choice: ModelChoice) {
+    setPreferences((current) => ({ ...current, [provider]: choice }));
+    try {
+      localStorage.setItem(
+        modelChoiceKey(projectId, provider),
+        JSON.stringify(choice),
+      );
+    } catch {
+      // The choice still applies in this window when storage is disabled.
+    }
+  }
+
+  async function configureModel(
+    change: Pick<ConfigureAgentSession, "model" | "effort">,
+  ) {
+    if (controlsLocked) return;
+    setError("");
+    if (!session) {
+      const nextModel =
+        change.model === undefined ? model : (change.model ?? undefined);
+      const offered = selectedModel(capabilities, nextModel)?.efforts;
+      const nextEffort =
+        change.effort === undefined ? effort : (change.effort ?? undefined);
+      rememberChoice(provider, {
+        model: nextModel,
+        effort:
+          nextEffort && offered?.includes(nextEffort) ? nextEffort : undefined,
+      });
+      return;
+    }
+
+    const openedView = view.current;
+    const changing: ChatOperation = { kind: "model" };
+    setOperation(changing);
+    try {
+      const result = await api(
+        `/agents/sessions/${session.id}`,
+        agentSessionSchema,
+        json("PATCH", change),
+      );
+      void loadSessions().catch(() => {});
+      if (view.current !== openedView) return;
+      setChat((current) => {
+        if (
+          current.phase !== "ready" ||
+          current.session.updatedAt > result.updatedAt
+        )
+          return current;
+        return {
+          phase: "ready",
+          session: {
+            ...current.session,
+            model: result.model,
+            effort: result.effort,
+            updatedAt: result.updatedAt,
+          },
+        };
+      });
+      rememberChoice(provider, {
+        model: change.model === null ? undefined : result.model,
+        effort: result.effort,
+      });
+    } catch (error) {
+      if (view.current === openedView)
+        setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOperation((current) => (current === changing ? null : current));
+    }
+  }
+
+  function chooseModel(selected: AgentProvider, model: string | null) {
+    if (controlsLocked) return;
+    if (selected === provider) {
+      void configureModel({ model });
+      return;
+    }
+    const remembered = preferences[selected].effort;
+    const offered = selectedModel(
+      catalog[selected],
+      model ?? undefined,
+    )?.efforts;
+    rememberChoice(selected, {
+      model: model ?? undefined,
+      effort:
+        remembered && offered?.includes(remembered) ? remembered : undefined,
+    });
+    setProvider(selected);
+    newChat();
   }
 
   async function changeFollowUps(queuedId?: string) {
@@ -1158,75 +1292,26 @@ export function ChatPanel({
                   T3 Code
                 </span>
               ) : (
-                <>
-                  <SelectMenu
-                    className="select-label"
-                    label="Agent provider"
-                    title={`${provider === "codex" ? "Codex" : "Claude Code"} ${capabilities?.version ?? ""}`.trim()}
-                    value={provider}
-                    disabled={controlsLocked}
-                    options={[
-                      { value: "codex", label: "Codex" },
-                      { value: "claude", label: "Claude Code" },
-                    ]}
-                    onChange={(selected) => {
-                      setProvider(selected);
-                      setModel("");
-                      newChat();
-                    }}
-                  />
-                  <SelectMenu
-                    className="select-label model-select"
-                    label="Model"
-                    value={model}
-                    disabled={controlsLocked || discovering}
-                    options={[
-                      { value: "", label: "Default model" },
-                      ...(capabilities?.models.map((item) => ({
-                        value: item.id,
-                        label: item.name,
-                      })) ?? []),
-                    ]}
-                    onChange={(selected) => {
-                      if (!session) {
-                        setModel(selected);
-                        return;
-                      }
-                      const openedView = view.current;
-                      const changing: ChatOperation = { kind: "model" };
-                      setOperation(changing);
-                      void api(
-                        `/agents/sessions/${session.id}`,
-                        agentSessionSchema,
-                        json("PATCH", { model: selected || null }),
-                      )
-                        .then((result) => {
-                          void loadSessions().catch(() => {});
-                          if (view.current !== openedView) return;
-                          setChat((current) =>
-                            current.phase === "ready" &&
-                            current.session.id === result.id
-                              ? { phase: "ready", session: result }
-                              : current,
-                          );
-                          setModel(result.model ?? "");
-                        })
-                        .catch((error: unknown) => {
-                          if (view.current === openedView)
-                            setError(
-                              error instanceof Error
-                                ? error.message
-                                : String(error),
-                            );
-                        })
-                        .finally(() =>
-                          setOperation((current) =>
-                            current === changing ? null : current,
-                          ),
-                        );
-                    }}
-                  />
-                </>
+                <ModelMenu
+                  catalog={catalog}
+                  provider={provider}
+                  model={model}
+                  effort={effort}
+                  hasMessages={hasMessages}
+                  disabled={
+                    !visible ||
+                    discovering ||
+                    busy ||
+                    opening ||
+                    (submitting && operation?.kind !== "model")
+                  }
+                  locked={busy}
+                  pending={operation?.kind === "model"}
+                  onModel={chooseModel}
+                  onEffort={(nextEffort) =>
+                    void configureModel({ effort: nextEffort })
+                  }
+                />
               )}
             </div>
             {canStop && (
