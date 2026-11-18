@@ -3069,6 +3069,13 @@ function installPreviewBridge(
             if (["data-x", "data-y"].some((name) => element.hasAttribute(name)))
               throw new Error("A positioned clip needs a fresh document.");
             if (
+              element.hasAttribute("data-var-src") ||
+              element.querySelector("[data-var-src]")
+            )
+              throw new Error(
+                "A variable-bound source needs a fresh document.",
+              );
+            if (
               [...element.attributes].some(
                 ({ name, value }) =>
                   name.startsWith("data-transition-") ||

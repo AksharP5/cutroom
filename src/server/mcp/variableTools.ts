@@ -66,7 +66,7 @@ export function registerVariableTools(
     "variables_bind",
     {
       description:
-        "Bind an existing string variable to an ordinary text clip's words, or a color variable to its explicit inline text colour, in one undo step. Requires a unique authored element id on an unlocked track, one plain line of text, and no title. Existing word bindings are refused. composition scopes external template files.",
+        "Bind an existing variable in one undo step. Use text for a string variable and plain words, color for a color variable and explicit inline text colour, or image for an image variable and an image clip's source. Requires a unique authored element id on an unlocked track. Existing word bindings are refused. composition scopes external template files.",
       inputSchema: VariableBindSchema.extend({ projectId }),
       annotations: edit,
     },
@@ -77,7 +77,7 @@ export function registerVariableTools(
     "variables_declare",
     {
       description:
-        "Declare a new string, number, color, boolean or enum variable on a composition, and optionally bind it to a text element clip that has an id: text makes the variable its words (data-var-text), color its text colour (color: var(--id)). The default should match what the element shows so nothing changes until a value is set. One undo step. Titles keep their words and colour in their own settings, so they cannot be bound.",
+        "Declare a string, number, color, boolean, enum or image variable, and optionally bind it to a clip in the same undo step. Bind text for plain words, color for inline text colour, or image for an image clip's source. An image default is a project image path relative to the composition file. Use the clip's current value as the default to preserve its appearance.",
       inputSchema: VariableDeclareSchema.extend({ projectId }),
       annotations: edit,
     },

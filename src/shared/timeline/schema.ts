@@ -348,11 +348,10 @@ export const ClipSchema = z.object({
     .object({
       text: z.string().optional(),
       color: z.string().optional(),
+      image: z.string().optional(),
     })
     .optional()
-    .describe(
-      "Authored text and inline colour variable ids, read from the source",
-    ),
+    .describe("Authored text, inline colour, and image source variable ids"),
   title: TitleSchema.nullable()
     .default(null)
     .describe(
@@ -410,6 +409,7 @@ export const ClipSchema = z.object({
       title: z.string().optional(),
       fx: z.string().optional(),
       transform: z.string().optional(),
+      imageVariable: z.string().optional(),
     })
     .optional(),
 });

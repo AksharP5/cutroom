@@ -170,6 +170,102 @@ test("an image variable changes the actual viewer and MP4 picture", async ({
   expect(blue).toBeGreaterThan(230);
 });
 
+test("turn a timeline image into a variable and bind the same source to another image", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(90_000);
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Reusable artwork",
+          width: 320,
+          height: 240,
+          duration: 1,
+        },
+      })
+    ).json(),
+  );
+  const composition = "compositions/artwork.html";
+  const scene = join(project.path, composition);
+  await mkdir(join(project.path, "assets"), { recursive: true });
+  await mkdir(join(project.path, "compositions"), { recursive: true });
+  for (const [name, colour] of [
+    ["red.svg", "red"],
+    ["blue.svg", "blue"],
+  ] as const)
+    await writeFile(
+      join(project.path, "assets", name),
+      `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="240"><rect width="160" height="240" fill="${colour}"/></svg>`,
+    );
+  const source = `<template><div data-composition-id="artwork" data-width="320" data-height="240" data-duration="1" data-no-timeline><img id="first" class="clip" src="assets/red.svg" data-start="0" data-duration="1" data-track-index="0" style="position:absolute;top:0;left:0"><img data-hf-id="second" class="clip" src="assets/blue.svg" data-start="0" data-duration="1" data-track-index="1" style="position:absolute;top:0;left:160px"></div></template>`;
+  await writeFile(scene, source);
+  await writeFile(
+    join(project.path, "index.html"),
+    `<!doctype html><html><body style="margin:0"><main data-composition-id="main" data-width="320" data-height="240" data-duration="1" data-no-timeline><div id="host" class="clip" data-composition-id="artwork" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div></main></body></html>`,
+  );
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page);
+  await page.locator('.tl-lanes [data-clip="host"]').dblclick();
+  await waitForPreview(page);
+  const first = shown(page, "first");
+  const second = page
+    .frameLocator("iframe[data-live]")
+    .locator('[data-hf-id="second"]');
+  const field = page.getByRole("combobox", { name: "Image variable" });
+  const picture = page.locator(".edit-picture");
+  await expect(second).toHaveJSProperty("naturalWidth", 160);
+  await page.locator('.tl-lanes [data-clip="first"]').click();
+  await field.click();
+  await page.screenshot({
+    path: info.outputPath("image-binding-menu.png"),
+    animations: "disabled",
+  });
+  const before = info.outputPath("image-binding-before.png");
+  await picture.screenshot({ path: before });
+  await page.getByRole("option", { name: "New variable…" }).click();
+  await expect(first).toHaveAttribute("data-var-src", "first-image");
+  await expect(first).toHaveAttribute("src", "assets/red.svg");
+  await expect
+    .poll(() => readFile(scene, "utf8"))
+    .toContain("../assets/red.svg");
+  await page.locator('.tl-lanes [data-clip="second"]').click();
+  await field.click();
+  await page.getByRole("option", { name: /\(first-image\)/ }).click();
+  await expect(second).toHaveAttribute("src", "assets/red.svg");
+  await expect(second).toHaveJSProperty("naturalWidth", 160);
+  const after = info.outputPath("image-binding-result.png");
+  await picture.screenshot({ path: after });
+  const { width, height } = (await picture.boundingBox())!;
+  const rightSide = [Math.floor(width * 0.75), Math.floor(height / 2)] as const;
+  expect((await pixel(before, ...rightSide))[2]).toBeGreaterThan(230);
+  expect((await pixel(after, ...rightSide))[0]).toBeGreaterThan(230);
+
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await dialog.getByRole("button", { name: "Export MP4", exact: true }).click();
+  const { outputPath } = z
+    .object({ outputPath: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 60_000 });
+  const [red, green, blue] = await pixel(outputPath, 240, 120);
+  expect(red).toBeGreaterThan(230);
+  expect(green).toBeLessThan(20);
+  expect(blue).toBeLessThan(20);
+  await dialog.getByRole("button", { name: "Close dialog" }).click();
+
+  await page.keyboard.press("Control+z");
+  await expect(second).toHaveAttribute("src", "assets/blue.svg");
+  await page.keyboard.press("Control+z");
+  await expect.poll(() => readFile(scene, "utf8")).toBe(source);
+});
+
 test("a mounted scene resolves its image default and exports its own override", async ({
   page,
   request,
