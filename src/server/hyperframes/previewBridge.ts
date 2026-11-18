@@ -2033,7 +2033,7 @@ function installPreviewBridge(
       ? Math.min(media, video.duration)
       : media;
   };
-  const holdPaused = async (version: number) => {
+  const holdPaused = async (version: number, keepFrames: boolean) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
       throw new Error("The preview cannot confirm that it drew the frame.");
@@ -2127,6 +2127,11 @@ function installPreviewBridge(
                 requestAnimationFrame(() => resolve()),
               );
               continue;
+            }
+            if (!keepFrames) {
+              // Screenshots use Chromium's native video colour conversion after the decode settles.
+              for (const frame of frames.values()) frame.close();
+              return;
             }
             try {
               for (const [video] of holds) {
@@ -2646,17 +2651,17 @@ function installPreviewBridge(
       for (const frame of frames.values()) frame.close();
     }
   };
-  const refreshPicture = () => {
+  const refreshPicture = (keepFrames = true) => {
     const version = ++pictureVersion;
     for (const video of holds.keys()) cancelRelease(video);
-    picture = holdPaused(version);
+    picture = holdPaused(version, keepFrames);
     return picture;
   };
-  const seekPicture = async (time: number) => {
+  const seekPicture = async (time: number, keepFrames = true) => {
     seekRuntime(time);
     residentAudio(false);
     if (win.__player?.isPlaying()) return false;
-    const restored = refreshPicture();
+    const restored = refreshPicture(keepFrames);
     const version = pictureVersion;
     await restored;
     if (version === pictureVersion) clearEditPicture();
@@ -2665,7 +2670,7 @@ function installPreviewBridge(
   // The thumbnail browser has no parent player. It still needs the editor's exact paused seek.
   win.__cutroomSeekFrame = async (time) => {
     win.__player?.pause();
-    await seekPicture(time);
+    await seekPicture(time, false);
   };
   const releasePlaying = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
