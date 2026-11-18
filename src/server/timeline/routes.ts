@@ -448,22 +448,37 @@ export function createTimelineRoutes(
       mediaLengths: lengths,
       fonts: current.parsed.fonts,
     });
-    const written = writtenSource.timeline;
-    // A batch can mount a scene or paste an off-timeline member after it changes a bus.
-    for (const group of written.authoredAudioGroups ?? []) {
-      if (
-        group.sourceRestriction &&
-        current.parsed.timeline.authoredAudioGroups?.some(
-          (before) => before.id === group.id && before.volume !== group.volume,
-        )
-      )
-        throw new TimelineError("unsupported", group.sourceRestriction);
-    }
+    const { timeline: written } = writtenSource;
     if (!Bun.deepEquals(timelineContent(written), timelineContent(timeline)))
       throw new TimelineError(
         "unsupported",
         "This edit cannot be written to the composition exactly. Edit the source instead.",
       );
+    const priorGroupVolumes = new Map(
+      current.parsed.timeline.authoredAudioGroups?.map(({ id, volume }) => [
+        id,
+        volume,
+      ]),
+    );
+    const routedGroups = new Set(
+      batch.commands.flatMap((command) =>
+        command.type === "routeAudioGroup" && typeof command.group === "string"
+          ? [command.group]
+          : [],
+      ),
+    );
+    // Placing a scene or pasting a member can affect the source scope of an edited bus.
+    for (const {
+      id,
+      volume,
+      sourceRestriction,
+    } of written.authoredAudioGroups ?? []) {
+      if (
+        sourceRestriction &&
+        (routedGroups.has(id) || priorGroupVolumes.get(id) !== volume)
+      )
+        throw new TimelineError("unsupported", sourceRestriction);
+    }
     const detectAnimation = () =>
       animationFeedback(
         current.parsed,

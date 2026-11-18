@@ -35,6 +35,7 @@ import type { TimingField } from "./fields";
 import { TransitionSection } from "./TransitionSection";
 import { FieldRow, ValueCell, ValueField } from "./ValueField";
 import { FxRack } from "./FxRack";
+import { AudioGroupRouting } from "./AudioGroupRouting";
 import { TextField } from "./TextField";
 import { TitleSection } from "./TitleSection";
 import { isTitle } from "../../../shared/timeline/title";
@@ -344,14 +345,16 @@ export function Inspector({
   const timeline = view?.timeline;
   const subject = timeline ? inspectorSubject(timeline, selection) : null;
   const clip = subject?.clip;
+  const selectedSound =
+    timeline?.clips.filter(
+      (item) => selection.ids.has(item.id) && item.hasAudio,
+    ) ?? [];
   // Several clips that are not one linked subject still share a gain field, as in Resolve.
   const sound =
-    timeline && !subject && selection.ids.size > 1
-      ? timeline.clips.filter(
+    !subject && selection.ids.size > 1
+      ? selectedSound.filter(
           (item) =>
-            selection.ids.has(item.id) &&
-            item.hasAudio &&
-            !timeline.tracks.find((track) => track.index === item.track)
+            !timeline?.tracks.find((track) => track.index === item.track)
               ?.locked,
         )
       : [];
@@ -500,6 +503,12 @@ export function Inspector({
                 <CaretRight size={10} aria-hidden />
                 Audio · {sound.length} {sound.length === 1 ? "clip" : "clips"}
               </summary>
+              <AudioGroupRouting
+                key={selectedSound.map(({ id }) => id).join("|")}
+                projectId={projectId}
+                clips={selectedSound}
+                timeline={timeline}
+              />
               {sound.some((clip) => clip.trackGainWarning) && (
                 <p className="inspector-warning" role="note">
                   Track gain does not apply to selected clips with an authored
@@ -752,14 +761,11 @@ export function Inspector({
               onToggle={setStyleOpen}
             />
           )}
-          {subject?.audio.map((audio) => {
+          {subject?.audio.map((audio, index) => {
             const fades = clipFades(audio);
             const locked = timeline.tracks.find(
               (track) => track.index === audio.track,
             )?.locked;
-            const group = timeline.authoredAudioGroups?.find(
-              ({ id }) => id === audio.authoredAudioGroupId,
-            );
             return (
               <details
                 key={audio.id}
@@ -772,51 +778,17 @@ export function Inspector({
                   Audio
                   {subject.audio.length > 1 && ` · ${audio.label || audio.id}`}
                 </summary>
-                {group && (
-                  <ValueField
-                    key={`${group.id}:group-gain`}
-                    label="Group gain"
-                    value={group.volume}
-                    initial={1}
-                    unit="gain"
-                    max={MAX_AUDIO_GAIN}
-                    fps={timeline.fps}
-                    disabled={
-                      !!group.sourceRestriction ||
-                      timeline.clips.some(
-                        (member) =>
-                          member.authoredAudioGroupId === group.id &&
-                          timeline.tracks.some(
-                            (track) =>
-                              track.index === member.track && track.locked,
-                          ),
-                      )
-                    }
-                    after={
-                      <span
-                        title={
-                          group.sourceRestriction ??
-                          "Changes every member of this authored audio group"
-                        }
-                      >
-                        {group.id}
-                      </span>
-                    }
-                    onCommit={(volume) => {
-                      if (volume !== null)
-                        void editTimeline(
-                          projectId,
-                          "Edit audio group gain",
-                          () => [
-                            { type: "setAudioGroup", clipId: audio.id, volume },
-                          ],
-                        );
-                    }}
+                {index === 0 && (
+                  <AudioGroupRouting
+                    key={selectedSound.map(({ id }) => id).join("|")}
+                    projectId={projectId}
+                    clips={selectedSound}
+                    timeline={timeline}
                   />
                 )}
                 {audio.trackGainWarning && (
                   <p className="inspector-warning" role="note">
-                    {audio.trackGainWarning}
+                    Track gain does not apply to this clip's audio group.
                   </p>
                 )}
                 <ValueField

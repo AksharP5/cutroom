@@ -2,7 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { join } from "node:path";
-import { ExportStartSchema } from "../../shared/export";
+import {
+  ExportStartSchema,
+  StillFrameRequestSchema,
+} from "../../shared/export";
 
 const DefaultsSchema = z.object({
   result: z.object({ directory: z.string(), filename: z.string() }),
@@ -60,6 +63,21 @@ export function registerExportTools(
       }
       return request(`/projects/${project}/export`, "POST", input);
     },
+  );
+  server.registerTool(
+    "export_frame",
+    {
+      description:
+        "Save a zero-based composition frame as a full-size PNG in .cutroom/renders using the editor's Save Frame capture. Omit composition for index.html. Returns the absolute path and filename. Captures saved source and declared defaults. Existing files are kept.",
+      inputSchema: StillFrameRequestSchema.extend({ projectId: z.string() }),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(
+        `/projects/${encodeURIComponent(projectId)}/still`,
+        "POST",
+        input,
+      ),
   );
   server.registerTool(
     "export_status",

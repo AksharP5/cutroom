@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -53,6 +53,59 @@ async function connect() {
     },
   };
 }
+
+test("timeline_edit creates a named audio group and reports its routed clips", async () => {
+  const mcp = await connect();
+  try {
+    const path = join(mcp.project.path, "index.html");
+    const source = `<main data-composition-id="main" data-duration="4"><audio id="lead" src="voice.wav" data-start="0" data-duration="2" data-track-index="1"></audio><audio id="pickup" src="voice.wav" data-start="2" data-duration="2" data-track-index="2"></audio></main>`;
+    await writeFile(path, source);
+    const before = await mcp.read();
+    const reply = await mcp.result("timeline_edit", {
+      expectedRevision: before.revision,
+      commands: [
+        {
+          type: "routeAudioGroup",
+          clipIds: ["lead", "pickup"],
+          group: { label: "Voices", volume: 0.25 },
+        },
+      ],
+    });
+    const id = z
+      .object({
+        changes: z.object({
+          authoredAudioGroups: z.object({
+            added: z.tuple([
+              z.object({ id: z.string().regex(/^cutroom-bus-/) }),
+            ]),
+          }),
+        }),
+      })
+      .parse(reply).changes.authoredAudioGroups.added[0].id;
+    expect(reply).toMatchObject({
+      changes: {
+        authoredAudioGroups: {
+          added: [{ id, label: "Voices", volume: 0.25 }],
+        },
+        clips: {
+          changed: [
+            { id: "lead", authoredAudioGroupId: id },
+            { id: "pickup", authoredAudioGroupId: id },
+          ],
+        },
+      },
+    });
+    expect(
+      (await mcp.read()).timeline.clips.map(
+        ({ authoredAudioGroupId }) => authoredAudioGroupId,
+      ),
+    ).toEqual([id, id]);
+    await mcp.result("history_undo", {});
+    expect(await readFile(path, "utf8")).toBe(source);
+  } finally {
+    await mcp.close();
+  }
+});
 
 test("timeline_edit adds a freeze clip with its PNG through the typed MCP command", async () => {
   const mcp = await connect();

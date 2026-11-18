@@ -475,6 +475,15 @@ export function editLabel(
             : "")
         );
       }
+      case "routeAudioGroup": {
+        const { group } = command;
+        const name =
+          typeof group === "string"
+            ? (timeline?.authoredAudioGroups?.find(({ id }) => id === group)
+                ?.label ?? group)
+            : group?.label;
+        return name ? `Route audio to ${name}` : "Return audio to track mixing";
+      }
       case "setAudioGroup":
         return "Set audio group gain";
       case "setMaster":
