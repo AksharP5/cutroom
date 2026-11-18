@@ -43,17 +43,23 @@ export interface RuntimeFactory {
   dispose(): void;
 }
 
-export function agentPrompt(turn: AgentTurn, cwd: string): string {
+export function agentInstructions(cwd: string): string {
+  return [
+    `This Cutroom project is an ordinary HyperFrames folder at ${cwd}.`,
+    "Use the cutroom_studio MCP tools to inspect and edit the open video when available. Keep source media intact. Edits to project files refresh the editor.",
+    "For composition HTML, animation, captions, audio, or rendering, load relevant installed HyperFrames skills yourself, such as hyperframes, hyperframes-core, hyperframes-animation, and hyperframes-media. If none are installed, carry on with the MCP tools.",
+    reviewReplyGuidance,
+  ].join("\n");
+}
+
+export function agentPrompt(turn: AgentTurn): string {
   const parts = [turn.text];
-  if (turn.context) parts.push(`Video review context:\n${turn.context}`);
+  if (turn.context)
+    parts.push(`<cutroom-context>\n${turn.context}\n</cutroom-context>`);
   if (turn.attachments.length)
     parts.push(
       `Attached local files:\n${turn.attachments.map((file) => file.path).join("\n")}`,
     );
-  parts.push(
-    `Working project: ${cwd}\nUse the cutroom MCP tools to inspect and edit the active video when available. Keep source media intact. Changes to the project files refresh the editor.`,
-    reviewReplyGuidance,
-  );
   return parts.filter(Boolean).join("\n\n");
 }
 

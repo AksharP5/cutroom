@@ -11,7 +11,7 @@ Both providers read their own user and project configuration. Cutroom adds a loc
 
 ## Skills and models
 
-Type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool. If two installed skills share a name, the picker shows both paths and remembers the one you choose with the draft. A name typed without choosing a path uses the first enabled match returned by the native runtime.
+Ask for an edit in your own words. The agent loads relevant installed HyperFrames skills on its own. You can also type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool. If two installed skills share a name, the picker shows both paths and remembers the one you choose with the draft. A name typed without choosing a path uses the first enabled match returned by the native runtime.
 
 The model list comes from the provider. Changing models keeps the conversation and native session. A new conversation starts a separate native session. Conversation and provider controls stay locked while a session opens or accepts a message. Text typed for the next message stays in the composer.
 
@@ -19,7 +19,7 @@ Use **Refresh agent configuration** after installing a skill or signing in. The 
 
 ## Local context
 
-Messages include the project path, the playhead, the open composition, and the selected clips, each with its id, name, kind, and start and end in seconds. The first selected clip is also published where `hyperframes preview --context --json --context-fields selection --port <Cutroom's port>` reads it, so an agent can check the current selection mid-turn; it carries only that clip's project data. Captured frames of new review notes are sent as images. Files explicitly chosen outside the project are copied into `.cutroom/attachments/` before use; files already inside the project stay in place.
+When Cutroom starts or resumes a native session, it tells the agent where the HyperFrames project is and to use the Cutroom tools and relevant installed skills. Each turn starts with your message, followed by a context block with the project name and path, playhead, open composition, selected clips, and any review digest. Clip context includes each selected clip’s id, name, kind, and start and end in seconds. Attached file paths follow the context. The first selected clip is also published where `hyperframes preview --context --json --context-fields selection --port <Cutroom's port>` reads it, so an agent can check the current selection mid-turn; it carries only that clip's project data. Captured frames of new review notes are sent as images. Files explicitly chosen outside the project are copied into `.cutroom/attachments/` before use; files already inside the project stay in place.
 
 The MCP instructions ask agents to create each animated title as its own sub-composition file with `source_write` and `expectedVersion: null`, so timeline edits carry its animation with it. New projects load their local `assets/vendor/gsap.min.js`; keep that script tag in the root HTML. [Animated titles](mcp.md#animated-titles) has the pattern.
 

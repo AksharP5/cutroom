@@ -19,7 +19,12 @@ import {
   isCutroomEdit,
 } from "./tool-permissions";
 import { InputQueue } from "./input-queue";
-import { agentPrompt, completeMessage, toolCalls } from "./runtime";
+import {
+  agentInstructions,
+  agentPrompt,
+  completeMessage,
+  toolCalls,
+} from "./runtime";
 import type { AgentRuntime, RuntimeOptions } from "./runtime";
 
 const authStatusSchema = z.object({
@@ -54,14 +59,8 @@ function nativeOptions(
   studioMcp: StudioMcp,
   always = false,
 ): Options {
-  const executable = Bun.which("claude");
-  if (!executable)
-    throw new Error(
-      "Claude Code is not installed. Install and sign in to Claude Code, then refresh.",
-    );
   return {
     cwd,
-    pathToClaudeCodeExecutable: executable,
     settingSources: ["user", "project", "local"],
     systemPrompt: { type: "preset", preset: "claude_code" },
     includePartialMessages: true,
@@ -71,14 +70,29 @@ function nativeOptions(
   };
 }
 
+async function startNativeQuery(input: {
+  prompt: AsyncIterable<SDKUserMessage>;
+  options: Options;
+}) {
+  const executable = Bun.which("claude");
+  if (!executable)
+    throw new Error(
+      "Claude Code is not installed. Install and sign in to Claude Code, then refresh.",
+    );
+  const { query } = await import("@anthropic-ai/claude-agent-sdk/core");
+  return query({
+    ...input,
+    options: { ...input.options, pathToClaudeCodeExecutable: executable },
+  });
+}
+
 export async function claudeCapabilities(
   cwd: string,
   studioMcp: StudioMcp,
   signal?: AbortSignal,
 ): Promise<AgentCapabilities> {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk/core");
   const input = new InputQueue<SDKUserMessage>();
-  const session = query({
+  const session = await startNativeQuery({
     prompt: input,
     options: nativeOptions(cwd, studioMcp),
   });
@@ -143,10 +157,19 @@ export async function claudeCapabilities(
   }
 }
 
+type ClaudeQuery = Pick<
+  Query,
+  "initializationResult" | "close" | "interrupt" | typeof Symbol.asyncIterator
+>;
+type StartClaudeQuery = (input: {
+  prompt: AsyncIterable<SDKUserMessage>;
+  options: Options;
+}) => ClaudeQuery | Promise<ClaudeQuery>;
+
 export class ClaudeRuntime implements AgentRuntime {
   private readonly input = new InputQueue<SDKUserMessage>();
-  private query?: Query;
-  private starting?: Promise<Query>;
+  private query?: ClaudeQuery;
+  private starting?: Promise<ClaudeQuery>;
   private active?: { resolve: () => void; reject: (error: Error) => void };
   private currentMessageId?: string;
   private readonly text = new Map<string, string>();
@@ -160,6 +183,7 @@ export class ClaudeRuntime implements AgentRuntime {
   constructor(
     private readonly options: RuntimeOptions,
     private readonly studioMcp: StudioMcp,
+    private readonly startQuery: StartClaudeQuery = startNativeQuery,
   ) {
     this.nativeSessionId = options.nativeSessionId;
     this.tools = toolCalls(options.cwd);
@@ -167,8 +191,7 @@ export class ClaudeRuntime implements AgentRuntime {
 
   private ensureQuery() {
     this.starting ??= (async () => {
-      const { query } = await import("@anthropic-ai/claude-agent-sdk/core");
-      const session = query({
+      const session = await this.startQuery({
         prompt: this.input,
         options: {
           ...nativeOptions(
@@ -176,6 +199,13 @@ export class ClaudeRuntime implements AgentRuntime {
             this.studioMcp,
             this.options.allowCutroomEdits?.(),
           ),
+          systemPrompt: {
+            type: "preset",
+            preset: "claude_code",
+            append: agentInstructions(this.options.cwd),
+            // A prompt recorded before Cutroom added its instructions would win on resume.
+            snapshot: false,
+          },
           ...(this.options.model ? { model: this.options.model } : {}),
           ...(this.nativeSessionId ? { resume: this.nativeSessionId } : {}),
           canUseTool: this.canUseTool,
@@ -258,7 +288,7 @@ export class ClaudeRuntime implements AgentRuntime {
     if (this.active)
       throw new Error("Claude is already working in this conversation.");
     this.hasAssistantText = false;
-    const prompt = agentPrompt(turn, this.options.cwd);
+    const prompt = agentPrompt(turn);
     const firstSkill = turn.skills[0];
     const skills = firstSkill ? `/${firstSkill.name}` : "";
     const additionalSkills = turn.skills.slice(1);
@@ -312,7 +342,7 @@ export class ClaudeRuntime implements AgentRuntime {
     }
   }
 
-  private async read(session: Query) {
+  private async read(session: ClaudeQuery) {
     for await (const message of session) this.receive(message);
     if (!this.disposed) {
       const error = new Error(

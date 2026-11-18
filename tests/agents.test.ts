@@ -785,7 +785,7 @@ for await (const line of createInterface({input:process.stdin})) {
   const input = JSON.parse(line);
   if (input.method === "initialize") reply({id:input.id,result:{}});
   if (input.method === "config/read") reply({id:input.id,result:{config:{}}});
-  if (input.method === "thread/start" || input.method === "thread/resume") { appendFileSync(process.argv[2] + ".thread", JSON.stringify(input.params)); reply({id:input.id,result:{thread:{id:"native-session"}}}); }
+  if (input.method === "thread/start" || input.method === "thread/resume") { appendFileSync(process.argv[2] + ".thread", JSON.stringify(input)+"\n"); reply({id:input.id,result:{thread:{id:"native-session"}}}); }
   if (input.method === "turn/start") {
     appendFileSync(process.argv[2],JSON.stringify(input.params)+"\n");
     reply({id:input.id,result:{turn:{id:"native-turn"}}});
@@ -881,12 +881,16 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
   });
   // Codex applies a thread's config overrides to the MCP servers it starts for that thread.
   expect(
-    JSON.parse(await readFile(`${recording}.thread`, "utf8")).config,
+    JSON.parse(await readFile(`${recording}.thread`, "utf8")).params.config,
   ).toEqual({
     ...codexToolPermissions(),
     "mcp_servers.cutroom_studio.env.CUTROOM_AGENT_TOKEN": "test-token",
   });
   const sent = JSON.parse((await readFile(recording, "utf8")).trim());
+  expect(sent.input[0]).toEqual({
+    type: "text",
+    text: "$editing Refine this scene",
+  });
   expect(sent.input).toContainEqual({
     type: "skill",
     name: "editing",
@@ -913,6 +917,74 @@ test("Codex protocol preserves explicit skill inputs, approvals, and native erro
     questions: [{ id: "formats", question: "Output formats?", options: [] }],
   });
   await expect(client.call("fail")).rejects.toThrow("Exact native failure");
+});
+
+test("Codex applies the same standing instructions when starting and resuming a thread", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cutroom-protocol-"));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const script = join(directory, "provider.mjs");
+  const recording = join(directory, "turns.jsonl");
+  await writeFile(script, nativeFixture);
+  const client = new CodexClient({
+    executable: process.execPath,
+    args: [script, recording],
+  });
+  cleanup.push(() => client.dispose());
+  for (const nativeSessionId of [undefined, "native-session"]) {
+    const runtime = new CodexRuntime(client, {
+      cwd: directory,
+      nativeSessionId,
+      agentToken: "test-token",
+      emit: () => {},
+      request: async ({ id }) => ({ requestId: id, decision: "deny" }),
+    });
+    try {
+      await runtime.send({
+        text: "Animate the title.",
+        context: "Playhead at 2 seconds",
+        attachments: [{ path: "/projects/harbor/frame.png" }],
+        skills: [],
+      });
+    } finally {
+      runtime.dispose();
+    }
+  }
+  const threads = (await readFile(`${recording}.thread`, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const instructions = threads[0]?.params.developerInstructions;
+  expect(instructions).toContain(directory);
+  expect(instructions).toContain("load relevant installed HyperFrames skills");
+  expect(threads).toEqual([
+    expect.objectContaining({
+      method: "thread/start",
+      params: expect.objectContaining({ developerInstructions: instructions }),
+    }),
+    expect.objectContaining({
+      method: "thread/resume",
+      params: expect.objectContaining({
+        threadId: "native-session",
+        developerInstructions: instructions,
+      }),
+    }),
+  ]);
+  for (const thread of threads)
+    expect(thread.params).not.toHaveProperty("baseInstructions");
+
+  const turns = (await readFile(recording, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(turns.map(({ input }) => input)).toEqual(
+    Array.from({ length: 2 }, () => [
+      {
+        type: "text",
+        text: "Animate the title.\n\n<cutroom-context>\nPlayhead at 2 seconds\n</cutroom-context>\n\nAttached local files:\n/projects/harbor/frame.png",
+      },
+      { type: "localImage", path: "/projects/harbor/frame.png" },
+    ]),
+  );
 });
 
 test("Codex accepts nullable running command output and streams it before completion", async () => {
