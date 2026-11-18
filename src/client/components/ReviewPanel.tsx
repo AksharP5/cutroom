@@ -577,9 +577,7 @@ export function ReviewPanel({
           >
             <header className="review-group-head">
               <h3>
-                <span>
-                  {title}
-                </span>
+                <span>{title}</span>
                 {members.length > 0 && (
                   <span className="mono">{members.length}</span>
                 )}
