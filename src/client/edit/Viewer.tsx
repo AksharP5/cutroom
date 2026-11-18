@@ -12,8 +12,8 @@ import type { ReviewItem } from "../../shared/review";
 import { frameTime } from "../../shared/timeline/apply";
 import {
   compositionFps,
+  NO_COMPOSITION_ROOT,
   reportEditorError,
-  showToast,
   useWorkspace,
 } from "../workspace";
 import { useProjectNotes } from "./noteStore";
@@ -124,7 +124,6 @@ export function Viewer({
   const loadingRevision = useRef<{ gen: number; revision: number } | null>(
     null,
   );
-  const dismissFailure = useRef<(() => void) | undefined>(undefined);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [handoff, transition] = useReducer(transitionHandoff, {
     kind: "showing",
@@ -404,8 +403,6 @@ export function Viewer({
                 setMixedRevision(change.revision);
                 transition({ type: "mixed", revision: change.revision });
                 reportEditorError("viewer", null);
-                dismissFailure.current?.();
-                dismissFailure.current = undefined;
                 return;
               }
             } catch (reason) {
@@ -564,14 +561,6 @@ export function Viewer({
   useEffect(() => {
     if (handoff.kind !== "failed") return;
     reportEditorError("viewer", handoff.reason);
-    dismissFailure.current?.();
-    dismissFailure.current = showToast(
-      handoff.reason instanceof Error
-        ? handoff.reason.message
-        : String(handoff.reason),
-      undefined,
-      { priority: "background" },
-    );
     transition({ type: "reported" });
   }, [handoff]);
 
@@ -620,13 +609,10 @@ export function Viewer({
       attached.current = preview;
     }
     reportEditorError("viewer", null);
-    dismissFailure.current?.();
-    dismissFailure.current = undefined;
   }, [handoff.confirmed]);
 
   useEffect(
     () => () => {
-      dismissFailure.current?.();
       for (const connection of connections.current.values())
         connection.dispose();
       connections.current.clear();
@@ -689,8 +675,7 @@ export function Viewer({
         if (gen !== latest.current) return;
         await preview.inspect();
       }
-      if (!preview.state.root)
-        throw new Error("The preview has no element with data-composition-id.");
+      if (!preview.state.root) throw new Error(NO_COMPOSITION_ROOT);
       const { player } = preview;
       let shown = -1;
       /** Seeks until the frame painted is the latest one asked for. False once superseded. */

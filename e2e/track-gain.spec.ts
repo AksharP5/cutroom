@@ -949,6 +949,9 @@ test("slow and blocked gain checks retain live audio and recover without a reloa
       "did not finish loading",
       { timeout: 17_000 },
     );
+    await expect(
+      page.locator(".toast").filter({ hasText: "did not finish loading" }),
+    ).toHaveCount(0);
     expect((await sample()).origin).toBe(initial.origin);
     await expect.poll(() => matches(0.5)).toBe(true);
     await blocked.release();

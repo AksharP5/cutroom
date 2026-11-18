@@ -24,6 +24,7 @@ export function StatusBar({
   const { timeline, viewer } = useWorkspace((state) => state.editorErrors);
   const missingRoot = timeline === NO_COMPOSITION_ROOT;
   const editorError = missingRoot ? "No composition" : (timeline ?? viewer);
+  const separateViewerError = timeline && viewer !== timeline ? viewer : null;
   const offline = useOfflineMedia(project.id);
   const selectOffline = () => {
     let first;
@@ -57,6 +58,11 @@ export function StatusBar({
           title={editorError}
         >
           {editorError}
+        </span>
+      )}
+      {separateViewerError && (
+        <span className="status-error" role="alert" title={separateViewerError}>
+          {separateViewerError}
         </span>
       )}
       {offline.size > 0 && (
