@@ -542,11 +542,43 @@ option {
     / minmax(0, 1fr);
 }
 .workspace.with-work-panel {
+  position: relative;
   grid-template:
     "media editor" auto
     "work editor" minmax(0, 1fr)
     "status status" var(--size-status)
     / var(--width-left) minmax(0, 1fr);
+}
+/* The handle spans both panes without taking width from the grid. */
+.workspace-divider {
+  position: absolute;
+  grid-area: 1 / 2 / 3 / 3;
+  inset: 0 auto 0 0;
+  z-index: var(--z-workspace-divider);
+  width: var(--space-2);
+  transform: translateX(-50%);
+  cursor: col-resize;
+  touch-action: none;
+}
+.workspace-divider::before {
+  content: "";
+  position: absolute;
+  inset: 0 calc((100% - var(--stroke-hair)) / 2);
+  background: var(--selection);
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+  pointer-events: none;
+}
+.workspace-divider[data-dragging] {
+  will-change: translate;
+}
+.workspace-divider:hover::before,
+.workspace-divider[data-dragging]::before {
+  opacity: 1;
+}
+.workspace-divider:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 .media-panel,
 .work-panel {
