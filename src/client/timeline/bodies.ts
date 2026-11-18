@@ -19,6 +19,7 @@ export interface BodyScene {
   rows: readonly Row[];
   tracks: ReadonlyMap<number, TrackClips>;
   fps: Fps;
+  imageSources: ReadonlyMap<string, string>;
 }
 export type Bodies = ReturnType<typeof createBodies>;
 /** A clip's way from where it was drawn to where it is, as its box takes it. */
@@ -417,7 +418,9 @@ export function createBodies(
       waves = paths();
       const corners: [number, number][] = [];
       for (const placed of clipsInRange(track, frames)) {
-        const src = placed.src;
+        const image = placed.variableBindings?.image;
+        const src =
+          (image ? scene.imageSources.get(image) : undefined) ?? placed.src;
         if (src === null) continue;
         const pictured =
           row.track.kind === "video" &&

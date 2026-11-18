@@ -7,7 +7,9 @@ import {
 } from "../../shared/timeline/view";
 import type { TimelineViewSettings } from "../../shared/timeline/view";
 import { fileMissing, useWorkspace } from "../workspace";
-import { localMediaPath } from "../../shared/media";
+import { previewMediaPath } from "../../shared/media";
+import { variableDefaultValue } from "../../shared/variables";
+import { useVariables } from "../edit/variables";
 import { isAudioKind } from "../../shared/timeline/schema";
 import { SelectMenu } from "../components/SelectMenu";
 import { voiceoverTrack } from "../../shared/voiceover";
@@ -867,11 +869,39 @@ export function Timeline({
     [shownTracks, rowSizes],
   );
   const tracks = useMemo(() => clipsByTrack(timeline.clips), [timeline.clips]);
+  const hasImageBindings = useMemo(
+    () =>
+      timeline.clips.some(
+        (clip) => clip.kind === "image" && clip.variableBindings?.image,
+      ),
+    [timeline.clips],
+  );
+  const variables = useVariables(({ projectId, state }) =>
+    hasImageBindings &&
+    projectId === source.projectId &&
+    state?.composition === source.composition
+      ? state
+      : null,
+  );
+  const imageSources = useMemo(() => {
+    const sources = new Map<string, string>();
+    if (!variables) return sources;
+    for (const variable of variables.declarations) {
+      if (variable.type !== "image") continue;
+      const value =
+        variables.preview[variable.id] ?? variableDefaultValue(variable);
+      if (typeof value === "string" && value) sources.set(variable.id, value);
+    }
+    return sources;
+  }, [variables]);
   // As a string, so a file change that leaves the same clips offline renders nothing.
   const offlineIds = useWorkspace(({ fileChanges }) =>
     timeline.clips
       .filter((clip) => {
-        const path = clip.src && localMediaPath(source.composition, clip.src);
+        const image = clip.variableBindings?.image;
+        const src = (image ? imageSources.get(image) : undefined) ?? clip.src;
+        const path =
+          src && previewMediaPath(source.composition, src, fileChanges);
         return path && fileMissing(fileChanges, source.composition, path);
       })
       .map((clip) => clip.id)
@@ -912,7 +942,7 @@ export function Timeline({
     draw: (next) => {
       const view = viewport.current?.state();
       if (view) bodies.current?.view(view);
-      bodies.current?.scene({ rows: next.rows, tracks, fps });
+      bodies.current?.scene({ rows: next.rows, tracks, fps, imageSources });
     },
   });
   const gestures = useLaneGestures({
@@ -921,6 +951,7 @@ export function Timeline({
     rows: layout.rows,
     newRows: layout.newRows,
     tracks,
+    imageSources,
     selection,
     tool,
     snapping,
@@ -957,10 +988,18 @@ export function Timeline({
     };
   }, [source.projectId, source.composition]);
   useLayoutEffect(() => {
-    bodies.current?.scene({ rows: layout.rows, tracks, fps });
+    bodies.current?.scene({ rows: layout.rows, tracks, fps, imageSources });
     // A newly available edge destination needs the held filmstrip redrawn.
     if (trackDrag) refreshDrag.current();
-  }, [source.projectId, source.composition, layout, tracks, fps, trackDrag]);
+  }, [
+    source.projectId,
+    source.composition,
+    layout,
+    tracks,
+    fps,
+    imageSources,
+    trackDrag,
+  ]);
 
   useLayoutEffect(() => {
     if (!scroller.current || !grid.current) return;
