@@ -172,9 +172,24 @@ test("choosing a native skill sends the selected installation when names match",
   await page.getByRole("complementary", { name: "Agent" }).screenshot({
     path: info.outputPath("duplicate-skills.png"),
   });
-  await options.nth(1).click();
-  await message.press("End");
-  await message.pressSequentially("shorten the narration");
+  await message.fill("$tri the narration");
+  await message.evaluate((input: HTMLTextAreaElement) =>
+    input.setSelectionRange(4, 4),
+  );
+  await message.pressSequentially("m");
+  const inserted = await options
+    .nth(1)
+    .evaluate(async (option: HTMLElement) => {
+      const input = document.activeElement;
+      if (!(input instanceof HTMLTextAreaElement))
+        throw new Error("Composer lost focus");
+      option.click();
+      // React commits the edit before the browser's next animation frame.
+      await Promise.resolve();
+      return { text: input.value, caret: input.selectionStart };
+    });
+  expect(inserted).toEqual({ text: "$trim-audio  the narration", caret: 12 });
+  await message.pressSequentially("shorten");
   await page.reload();
   if (!(await message.isVisible()))
     await page.getByRole("button", { name: "Agent", exact: true }).click();
