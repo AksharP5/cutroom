@@ -223,11 +223,21 @@ test("an agent's four takes on one clip: hover plays each, a click switches, kee
     await badge.click();
     await page.getByRole("button", { name: "Keep Clip wall" }).click();
     await expect(badge).toHaveCount(0);
-    const kept = (await read()).clips.find((c) => c.id === clipId);
-    expect(kept?.versions).toBeUndefined();
-    expect(kept?.src).toBe("compositions/line-wall.html");
+    // The badge goes with the optimistic edit; the server has it once the save lands.
+    await expect
+      .poll(async () => {
+        const kept = (await read()).clips.find((c) => c.id === clipId);
+        return { src: kept?.src, versions: kept?.versions ?? null };
+      })
+      .toEqual({ src: "compositions/line-wall.html", versions: null });
     await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(badge).toHaveText("4");
+    await expect
+      .poll(
+        async () =>
+          (await read()).clips.find((c) => c.id === clipId)?.versions?.length,
+      )
+      .toBe(4);
 
     // Export draws the active take alone.
     const started = result(
