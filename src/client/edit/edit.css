@@ -785,6 +785,22 @@ input.edit-now {
   min-height: 0;
 }
 
+.edit-timeline-problem {
+  padding: var(--space-4);
+}
+.edit-timeline-problem p {
+  margin: 0 0 var(--space-3);
+}
+.edit-timeline-problem code {
+  font-family: var(--font-mono);
+  font-stretch: var(--stretch-mono);
+  font-size: var(--type-xs);
+}
+.edit-timeline-problem > div {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* Inside a sub-composition: the way back, one line above the ruler. */
 .edit-path {
   flex: none;

@@ -4,7 +4,7 @@ import { useOfflineMedia } from "../edit/offlineMedia";
 import { showSource } from "../edit/source";
 import { useTimeline } from "../edit/timeline";
 import { transport } from "../edit/transport";
-import { useWorkspace } from "../workspace";
+import { NO_COMPOSITION_ROOT, useWorkspace } from "../workspace";
 import { toReviewStatuses } from "../review";
 import { LintStatus } from "./LintStatus";
 
@@ -22,7 +22,8 @@ export function StatusBar({
   const exporting = useWorkspace((state) => state.exporting);
   const agent = useWorkspace((state) => state.agent);
   const { timeline, viewer } = useWorkspace((state) => state.editorErrors);
-  const editorError = timeline ?? viewer;
+  const missingRoot = timeline === NO_COMPOSITION_ROOT;
+  const editorError = missingRoot ? "No composition" : (timeline ?? viewer);
   const offline = useOfflineMedia(project.id);
   const selectOffline = () => {
     let first;
@@ -49,7 +50,11 @@ export function StatusBar({
         {folder}
       </button>
       {editorError && (
-        <span className="status-error" role="alert" title={editorError}>
+        <span
+          className="status-error"
+          role={missingRoot ? undefined : "alert"}
+          title={editorError}
+        >
           {editorError}
         </span>
       )}
