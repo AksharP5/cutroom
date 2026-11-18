@@ -51,6 +51,10 @@ def import_cutroom_timeline():
         raise RuntimeError("Open the destination Resolve project first.")
     if project.GetSetting("colorScienceMode") != "davinciYRGB":
         raise RuntimeError("Cutroom grades need DaVinci YRGB (Rec.709). See Summary.txt.")
+    # Remote grades are shared by every timeline using the same media.
+    local_grades = project.GetSetting("colorUseLocalVersionsAsDefault")
+    if str(local_grades).lower() not in ("1", "true"):
+        raise RuntimeError("Enable Use local version for new clips in timeline. See Summary.txt.")
     path = Path(__file__).resolve().parent / ${quote(basename(fcpxml))}
     imported = project.GetMediaPool().ImportTimelineFromFile(str(path))
     if not imported:
@@ -93,6 +97,7 @@ import_cutroom_timeline()
     instructions: [
       "Import the timeline and its grades together in Resolve:",
       "1. Open the destination project. Use DaVinci YRGB and a Rec.709 timeline for these display-referred LUTs.",
+      "   In Project Settings > General Options, leave Use local version for new clips in timeline enabled so grades stay on the imported timeline.",
       `2. In Project Settings > Color Management > Lookup Tables, click Open LUT Folder. Copy the ${LUT_FOLDER} folder from LUTs into it (merge folders if it already exists), then click Update Lists.`,
       "3. Open Workspace > Console, select Py3, then paste the line below. The script imports a new timeline and applies node 01 LUTs only to that timeline.",
       `import runpy; runpy.run_path(${quote(script)}, init_globals={"resolve": resolve})`,
