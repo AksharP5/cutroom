@@ -84,6 +84,23 @@ What each row does, in both editors:
 
 Run it with `bun run build`, then `node scripts/bench-vs-studio.ts --editor cutroom|studio --throttle 1|4 --runs 3 --out <file>`, and `--summary <files>` for the medians. It runs under Node because Playwright's library loses its browser under Bun, takes about four minutes a run, and is not run in CI. The project, about 125 MB, goes in `~/.cache/cutroom-vs-studio-bench` unless `--dir` says otherwise.
 
+### Graded footage
+
+`--grade` puts one light grade (warmer, a little more contrast, an S-curve) on all 100 shots, as `data-color-grading`. On November 18, 2026, one run each at 1x on the colour grading branch, with other tests running on the same machine:
+
+| Operation                            | Ungraded | Every shot graded |
+| ------------------------------------ | -------: | ----------------: |
+| Ruler drag: new pictures per second  |     15.6 |              10.9 |
+| Ruler drag: gap between pictures p95 |    84 ms |            114 ms |
+| 1x play: pictures per second         |     29.4 |              29.3 |
+| 1x play: gaps over 42 ms             |        7 |                38 |
+| 1x play: picture gap p95             |    33 ms |             50 ms |
+| Reopen to frame 0 shown              |   750 ms |            899 ms |
+| Ripple delete, key to picture        |   609 ms |            649 ms |
+| Browser memory after the session     | 1,409 MB |          1,507 MB |
+
+HyperFrames' runtime draws a graded video through one shared WebGL context and copies the result into a canvas beside the clip, every displayed frame while it plays. The footage pipeline hands graded clips to it for now.
+
 ## Timeline engine
 
 `bun run bench:timeline` measures the timeline engine on a transcript-cut composition: 240 linked picture and sound pieces plus 20 titles, 500 clips in 75 KB of HTML. It reports median milliseconds over 31 runs and exits with an error when a step exceeds its budget. The batch is a ripple delete near the start, a razor across every track, and a ripple trim, so most clips move. A second case lifts 1,000 of 2,000 clips in one batch, as select all and delete would; each removal first checks that the clip owns its bytes.
