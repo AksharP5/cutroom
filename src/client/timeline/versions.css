@@ -51,6 +51,21 @@
 }
 .versions-menu:popover-open {
   display: grid;
+  transition:
+    opacity var(--duration-panel-in) var(--ease-out),
+    transform var(--duration-panel-in) var(--ease-out);
+  transform-origin: top right;
+}
+@starting-style {
+  .versions-menu:popover-open {
+    opacity: 0;
+    transform: scale(var(--modal-scale));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .versions-menu:popover-open {
+    transition-duration: var(--duration-press);
+  }
 }
 .versions-count {
   padding: var(--space-1) var(--space-2);
