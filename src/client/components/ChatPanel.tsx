@@ -6,7 +6,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, Paperclip, X } from "@phosphor-icons/react";
+import {
+  ArrowUp,
+  ChatCircle,
+  Paperclip,
+  PencilSimple,
+  X,
+} from "@phosphor-icons/react";
 import { z } from "zod";
 import {
   agentPermissionsSchema,
@@ -1179,12 +1185,17 @@ export function ChatPanel({
                     aria-label={`Open review note ${note.body}`}
                     onClick={() => onOpenNote(note)}
                   >
-                    {note.framePath && (
+                    {/* A note with no frame yet, or ever, shows what kind it is. */}
+                    {note.framePath ? (
                       <img
                         src={`/api/cutroom/projects/${projectId}/attachments/${encodeURIComponent(note.framePath.split("/").at(-1) ?? "")}`}
                         alt=""
                         decoding="async"
                       />
+                    ) : note.kind === "drawing" ? (
+                      <PencilSimple aria-hidden="true" />
+                    ) : (
+                      <ChatCircle aria-hidden="true" />
                     )}
                   </button>
                 ))}

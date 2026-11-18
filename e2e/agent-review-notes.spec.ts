@@ -69,6 +69,8 @@ test("a drawing waits in chat and Send now carries its captured frame", async ({
     name: "Open review note Lift the headline",
   });
   await expect(thumb.locator("img")).toHaveCount(0);
+  // Until its frame arrives, the thumbnail shows that this note is a drawing.
+  await expect(thumb.locator("svg")).toBeVisible();
   await thumb.click();
   await expect(
     page.getByText("Lift the headline", { exact: true }),

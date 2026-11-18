@@ -1723,12 +1723,19 @@ option {
   min-width: 0;
 }
 .chat-review-thumb {
+  display: grid;
+  place-items: center;
   width: var(--size-queue-thumb-w);
   min-width: 0;
   height: var(--size-queue-thumb-h);
   border: var(--stroke-hair) solid var(--line);
   border-radius: var(--radius-clip);
   background: var(--surface-lane);
+  color: var(--text-tertiary);
+}
+.chat-review-thumb svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }
 .chat-review-thumb img {
   display: block;
