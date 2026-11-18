@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
 import { ProjectSchema } from "../src/shared/project";
+import { agentTurn, playSession } from "./agent-turn";
 import {
   ClipboardSchema,
   TimelineViewSchema,
@@ -48,6 +49,9 @@ test("Ctrl+A selects unlocked clips and preserves native text selection", async 
     ).ok(),
   ).toBe(true);
   const before = await read();
+  // A finished reply gives the chat text to select.
+  const turn = agentTurn(project.id);
+  await playSession(page, [turn.session([turn.ask, turn.reply], "idle")]);
   await page.goto(`/#project/${project.id}`);
   await expect(page.locator("[data-clip]")).toHaveCount(3);
   await page.getByRole("region", { name: "Viewer", exact: true }).click();
@@ -70,14 +74,14 @@ test("Ctrl+A selects unlocked clips and preserves native text selection", async 
   ).toBe("keep this text");
   await expect(page.locator("[data-clip].selected")).toHaveCount(0);
   // Real pointer selection remains available in chat, and Ctrl+C copies that text.
-  const paragraph = page.locator(".chat-empty p").first();
+  const paragraph = page.locator(".message-assistant p").first();
   const box = await paragraph.boundingBox();
   if (!box) throw new Error("Chat text is not visible");
   await page.mouse.click(box.x + 22, box.y + 8, { clickCount: 3 });
   const selected = await page.evaluate(
     () => window.getSelection()?.toString() ?? "",
   );
-  expect(selected).toContain("Describe an edit");
+  expect(selected).toContain("Applied the note");
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.keyboard.press("Control+c");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
@@ -90,7 +94,7 @@ test("Ctrl+A selects unlocked clips and preserves native text selection", async 
     await page.mouse.click(box.x + 22, box.y + 8, { clickCount: 3 });
     expect(
       await page.evaluate(() => window.getSelection()?.toString()),
-    ).toContain("Describe an edit");
+    ).toContain("Applied the note");
     await target.click();
     await page.keyboard.press("Control+a");
     await page.screenshot({

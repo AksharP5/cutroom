@@ -871,14 +871,14 @@ option {
   flex: none;
   display: flex;
   align-items: center;
-  gap: var(--radius-clip);
+  gap: 2px;
   height: var(--size-tool-row);
-  padding: 0 var(--radius-float);
+  padding: 0 6px;
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
 }
 .chat-toolbar .conversation-picker,
 .chat-toolbar-title {
-  padding-inline: var(--radius-float);
+  padding-inline: 6px;
   color: var(--text-primary);
   font-size: var(--type-sm);
   font-weight: var(--weight-medium);
@@ -902,7 +902,7 @@ option {
   align-items: center;
   gap: var(--space-2);
   height: var(--size-icon-button);
-  padding-inline: var(--icon-md);
+  padding-inline: 14px;
   border-top: var(--stroke-hair) solid var(--line-subtle);
   color: var(--text-secondary);
 }
@@ -936,10 +936,10 @@ option {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--icon-md) var(--icon-md) var(--space-4);
+  padding: 14px 14px var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--icon-md);
+  gap: 14px;
 }
 .chat-empty {
   margin: 0;
@@ -949,8 +949,7 @@ option {
   overflow-wrap: anywhere;
 }
 .message-user {
-  padding: var(--size-chat-mark) var(--icon-xs) var(--size-chat-mark)
-    var(--space-3);
+  padding: 7px 10px 7px 12px;
   border-radius: var(--radius-clip);
   background: var(--surface-raised);
   box-shadow: inset var(--stroke-rail) 0 0 var(--human);
@@ -1000,7 +999,7 @@ option {
   text-underline-offset: 2px;
 }
 .markdown :is(h1, h2, h3, h4, h5, h6) {
-  margin: 0 0 var(--radius-float);
+  margin: 0 0 6px;
   font-size: var(--type-md);
   font-weight: var(--weight-semibold);
 }
@@ -1019,7 +1018,7 @@ option {
 .chat-code pre {
   overflow-x: auto;
   margin: 0;
-  padding: var(--space-2) var(--icon-xs);
+  padding: var(--space-2) 10px;
   border: var(--stroke-hair) solid var(--line-subtle);
   border-radius: var(--radius-control);
   background: var(--surface-lane);
@@ -1155,7 +1154,7 @@ option {
 }
 .chat-step[data-edit] summary {
   margin-inline: 0;
-  padding-left: var(--icon-xs);
+  padding-left: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto;
   box-shadow: inset var(--stroke-rail) 0 0 var(--agent);
   border-radius: 0;
@@ -1228,7 +1227,7 @@ option {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--stroke-rail) var(--icon-md) var(--icon-xs);
+  padding: 2px 14px 10px;
 }
 .agent-permissions {
   display: flex;
@@ -1275,7 +1274,7 @@ option {
 }
 .agent-request-actions .agent-request-allow {
   height: var(--size-tool-button);
-  padding-inline: var(--icon-xs);
+  padding-inline: 10px;
   background: var(--selection);
   color: var(--on-selection);
   font-weight: var(--weight-semibold);
@@ -1374,14 +1373,14 @@ option {
 }
 .chat-follow-ups {
   flex: none;
-  padding: 0 var(--icon-md) var(--radius-float);
+  padding: 0 14px 6px;
   color: var(--text-secondary);
   font-size: var(--type-sm);
 }
 .chat-follow-ups ol {
   max-height: calc(var(--size-field) * 4 + var(--space-1));
   overflow: auto;
-  padding: var(--stroke-rail) 0;
+  padding: 2px 0;
   margin: 0;
   list-style: none;
   counter-reset: chat-follow-up;
@@ -1423,7 +1422,7 @@ option {
 .composer-area {
   flex: none;
   position: relative;
-  padding: 0 var(--icon-xs) var(--icon-xs);
+  padding: 0 10px 10px;
 }
 .composer {
   border: var(--stroke-hair) solid var(--line);
@@ -1439,8 +1438,7 @@ option {
   field-sizing: content;
   min-height: calc(var(--leading-chat) + var(--space-3));
   max-height: calc(var(--leading-chat) * 8 + var(--space-3));
-  padding: calc(var(--space-2) + var(--stroke-hair)) var(--type-xs)
-    calc(var(--space-1) - var(--stroke-hair));
+  padding: 9px 11px 3px;
   border: 0;
   background: none;
   font-size: var(--type-md);
@@ -1450,7 +1448,7 @@ option {
 .composer-footer {
   display: flex;
   align-items: center;
-  gap: var(--radius-clip);
+  gap: 2px;
   height: var(--size-panel-head);
   padding: 0 var(--space-1);
 }
@@ -1458,7 +1456,7 @@ option {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: var(--radius-clip);
+  gap: 2px;
   min-width: 0;
 }
 .composer-footer .icon-button {
@@ -1470,7 +1468,7 @@ option {
 }
 .composer-footer .select-label {
   flex: 0 1 auto;
-  padding-inline: var(--radius-float);
+  padding-inline: 6px;
   color: var(--text-secondary);
   font-size: var(--type-sm);
 }
@@ -1510,7 +1508,7 @@ option {
   color: var(--text-tertiary);
 }
 .chat-stop {
-  margin-right: var(--radius-clip);
+  margin-right: 2px;
   background: var(--surface-active);
   color: var(--text-primary);
 }
@@ -1524,7 +1522,7 @@ option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--radius-float);
+  gap: 6px;
   padding: var(--space-2) var(--space-2) 0;
 }
 .chat-attachment {
@@ -1535,7 +1533,7 @@ option {
   min-width: 0;
   max-width: 100%;
   height: var(--size-track-button);
-  padding: 0 var(--space-1) 0 var(--radius-float);
+  padding: 0 var(--space-1) 0 6px;
   border-radius: var(--radius-clip);
   background: var(--surface-active);
   font-size: var(--type-xs);
@@ -1565,8 +1563,8 @@ option {
 }
 .chat-attachment[data-thumbnail] button {
   position: absolute;
-  top: var(--stroke-rail);
-  right: var(--stroke-rail);
+  top: 2px;
+  right: 2px;
   width: var(--size-track-button-compact);
   height: var(--size-track-button-compact);
   border-radius: var(--radius-control);
