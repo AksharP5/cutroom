@@ -6,6 +6,8 @@ import {
   VariableBindSchema,
   VariableDefaultSchema,
   VariablesPreviewSchema,
+  SceneVariablesQuerySchema,
+  SceneVariableUpdateSchema,
 } from "../../shared/variables";
 
 export function registerVariableTools(
@@ -39,6 +41,30 @@ export function registerVariableTools(
       request(
         `${variables(projectId)}?${new URLSearchParams({ composition })}`,
       ),
+  );
+  server.registerTool(
+    "variables_instance_read",
+    {
+      description:
+        "Read the declared defaults and saved overrides on one mounted scene clip. Use the containing timeline's composition and clip ID. Image values are paths relative to the project root. The version covers the slot and its scene source.",
+      inputSchema: SceneVariablesQuerySchema.extend({ projectId }),
+      annotations: { ...edit, readOnlyHint: true },
+    },
+    ({ projectId, composition, clipId }) =>
+      request(
+        `${variables(projectId)}/instance?${new URLSearchParams({ composition, clipId })}`,
+      ),
+  );
+  server.registerTool(
+    "variables_instance_set",
+    {
+      description:
+        "Set one saved override on a mounted scene clip, as one undo step. The scene file and other mounts keep their values. Pass null to inherit the default again; an image value is a project-root-relative image path. Pass the version from variables_instance_read to guard against a concurrent edit.",
+      inputSchema: SceneVariableUpdateSchema.extend({ projectId }),
+      annotations: edit,
+    },
+    ({ projectId, ...input }) =>
+      request(`${variables(projectId)}/instance`, "PUT", input),
   );
   server.registerTool(
     "variables_preview",

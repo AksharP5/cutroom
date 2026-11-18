@@ -4,17 +4,31 @@ import { fileContentVersion } from "@hyperframes/studio-server";
 import type { FileMutationInput, HistoryWho } from "@hyperframes/studio-server";
 import type { z } from "zod";
 import { HttpError } from "../../shared/errors";
-import { MEDIA_TRASH, inMediaTrash, mediaKind } from "../../shared/media";
+import {
+  MEDIA_TRASH,
+  inMediaTrash,
+  localMediaPath,
+  mediaKind,
+} from "../../shared/media";
 import type { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
 import type { Project } from "../../shared/project";
 import { TimelineError } from "../../shared/timeline/errors";
+import {
+  parseSceneVariableValues,
+  sceneImageUrl,
+} from "../../shared/variables";
 import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import { compositionScope, parseComposition } from "../timeline/composition";
+import {
+  compositionScope,
+  parseComposition,
+  sourceVariables,
+} from "../timeline/composition";
 import { compositionFiles } from "./media";
 import { isMissing, projectWritePath } from "./path";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
 import { compositionVersions } from "./changes";
+import { sceneSourceBase, sceneSourcePath } from "./sceneSources";
 import { renameReferences } from "./mediaReferences";
 import { moveSourceMarks } from "./view";
 
@@ -41,22 +55,76 @@ const exists = (path: string) =>
     },
   );
 
+function sceneImageIndex(load: (path: string) => Promise<string | undefined>) {
+  const cache = new Map<string, ReadonlySet<string>>();
+  return async (composition: string, html: string) => {
+    const from = html.includes("data-variable-values")
+      ? await sceneSourceBase(
+          composition,
+          html,
+          async () => (await load("index.html")) ?? "",
+        )
+      : null;
+    return async (src: string) => {
+      const path = from && sceneSourcePath(from, src);
+      if (!path) return;
+      const cached = cache.get(path);
+      if (cached) return cached;
+      const source = await load(path);
+      const ids = new Set(
+        source
+          ? sourceVariables(source, "sub-composition").declarations.flatMap(
+              ({ id, type }) => (type === "image" ? [id] : []),
+            )
+          : [],
+      );
+      cache.set(path, ids);
+      return ids;
+    };
+  };
+}
+
 /** Count linked clips once, and retain a conservative use for shared CSS/script references. */
 export async function mediaUses(project: Project, raw: string) {
   const { path } = await mediaFile(project, raw);
   let uses = 0;
+  const imageIdsAt = sceneImageIndex(async (file) => {
+    try {
+      return (await readSource(project, file)).content;
+    } catch (error) {
+      if (error instanceof HttpError || isMissing(error)) return;
+      throw error;
+    }
+  });
   for (const composition of await compositionFiles(project)) {
     const { references } = await compositionVersions(project, composition);
-    const source = await readSource(project, composition);
+    const { content: source } = await readSource(project, composition);
+    const sceneImageIds = await imageIdsAt(composition, source);
     const owners = new Set<string>();
     try {
-      const { timeline } = parseComposition(
-        source.content,
+      const { timeline, elements } = parseComposition(
+        source,
         emptyTimelineSettings(),
         { scope: compositionScope(composition) },
       );
       for (const clip of timeline.clips) {
-        if (references.get(clip.id)?.has(path))
+        if (references.get(clip.id)?.has(path)) {
+          owners.add(clip.link ?? clip.id);
+          continue;
+        }
+        if (clip.kind !== "composition" || !clip.src) continue;
+        const raw = elements.get(clip.id)?.attrs["data-variable-values"];
+        if (raw === undefined) continue;
+        const ids = await sceneImageIds(clip.src);
+        if (!ids?.size) continue;
+        const values = parseSceneVariableValues(raw);
+        if (
+          values &&
+          [...ids].some((id) => {
+            const url = sceneImageUrl(values[id]);
+            return url && localMediaPath("index.html", url) === path;
+          })
+        )
           owners.add(clip.link ?? clip.id);
       }
     } catch (error) {
@@ -98,8 +166,19 @@ async function referenceEdits(project: Project, from: string, to: string) {
     }
   }
   const edits: FileMutationInput[] = [];
+  const sourceByPath = new Map(
+    sources.map(({ path, before }) => [path, before]),
+  );
+  const imageIdsAt = sceneImageIndex(async (file) => sourceByPath.get(file));
   for (const { path, absolute, before } of sources) {
-    const after = renameReferences(before, path, from, to, files);
+    const after = await renameReferences(
+      before,
+      path,
+      from,
+      to,
+      files,
+      await imageIdsAt(path, before),
+    );
     if (after === before) continue;
     const sourceFile = path === from ? to : path;
     edits.push({

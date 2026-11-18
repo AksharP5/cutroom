@@ -6,18 +6,44 @@ import {
 } from "@hyperframes/parsers";
 import { CSS_URL_RE, decodeCssEscapes } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
-import { rewriteImageDeclarationUrls } from "../../shared/variables";
+import {
+  parseSceneVariableValues,
+  rewriteImageDeclarationUrls,
+  sceneImageUrl,
+} from "../../shared/variables";
+
+function renameSceneImages(
+  raw: string,
+  ids: ReadonlySet<string>,
+  rename: (url: string) => string,
+) {
+  const values = parseSceneVariableValues(raw);
+  if (!values) return raw;
+  let changed = false;
+  for (const id of ids) {
+    const current = values[id];
+    const url = sceneImageUrl(current);
+    if (!url) continue;
+    const next = rename(url);
+    if (next === url) continue;
+    changed = true;
+    values[id] =
+      typeof current === "object" && current ? { ...current, url: next } : next;
+  }
+  return changed ? JSON.stringify(values) : raw;
+}
 
 /** Rewrite only paths that resolve to the renamed file, retaining their relative prefix. */
-export function renameReferences(
+export async function renameReferences(
   source: string,
   file: string,
   from: string,
   to: string,
   files: Set<string>,
+  sceneImageIds: (src: string) => Promise<ReadonlySet<string> | undefined>,
 ) {
-  const path = (value: string, url: boolean) => {
-    const local = localMediaPath(file, value);
+  const path = (value: string, url: boolean, fromFile = file) => {
+    const local = localMediaPath(fromFile, value);
     if (local === null) return value;
     // Registry sources may name a project-root asset when no sibling exists.
     const resolved =
@@ -94,18 +120,33 @@ export function renameReferences(
     for (const attr of tag.attributes) {
       if (attr.kind !== "value") continue;
       const value = decodeAuthoredAttribute(attr.value);
+      let instance = value;
+      if (attr.name === "data-variable-values") {
+        const src = tag.attributes.find(
+          (item) => item.name === "data-composition-src",
+        );
+        const ids =
+          src?.kind === "value" &&
+          (await sceneImageIds(decodeAuthoredAttribute(src.value)));
+        if (ids)
+          instance = renameSceneImages(value, ids, (url) =>
+            path(url, true, "index.html"),
+          );
+      }
       const next =
         attr.name === "style"
           ? css(value)
           : attr.name === "data-composition-variables"
             ? rewriteImageDeclarationUrls(value, (url) => path(url, true))
-            : attr.name === "srcset"
-              ? value.replace(
-                  /(^|,)\s*([^,\s]+)/g,
-                  (whole: string, _lead: string, url: string) =>
-                    whole.replace(url, path(url, true)),
-                )
-              : path(value, !attr.quote);
+            : attr.name === "data-variable-values"
+              ? instance
+              : attr.name === "srcset"
+                ? value.replace(
+                    /(^|,)\s*([^,\s]+)/g,
+                    (whole: string, _lead: string, url: string) =>
+                      whole.replace(url, path(url, true)),
+                  )
+                : path(value, !attr.quote);
       if (next === value) continue;
       const escaped = next
         .replaceAll("&", "&amp;")

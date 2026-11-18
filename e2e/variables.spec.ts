@@ -292,11 +292,11 @@ test("a mounted scene resolves its image default and exports its own override", 
     );
   }
   const composition = "compositions/scene.html";
-  const scene = `<template><main id="scene" data-composition-id="scene" data-width="320" data-height="240" data-duration="1" data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"../art/red.svg","alt":"Red artwork"}}]'><img id="artwork" class="clip" src="../art/red.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" width="320" height="240"></main></template>`;
+  const scene = `<template><main id="scene" data-composition-id="scene" data-width="320" data-height="240" data-duration="1" data-no-timeline data-composition-variables='[{"id":"art","type":"image","label":"Artwork","default":{"url":"../art/red.svg","alt":"Red artwork"}},{"id":"headline","type":"string","label":"Scene headline","default":"Inherited"}]'><img id="artwork" class="clip" src="../art/red.svg" data-var-src="art" data-start="0" data-duration="1" data-track-index="0" width="320" height="240"><p data-var-text="headline" style="position:absolute;top:8px;left:16px;margin:0;color:white">Fallback</p></main></template>`;
   await writeFile(join(project.path, composition), scene);
   await writeFile(
     join(project.path, "index.html"),
-    `<!doctype html><html><body style="margin:0"><main data-composition-id="main" data-width="640" data-height="240" data-duration="1"><div id="host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div><div id="other-host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-variable-values='{"art":"art/green.svg"}' data-start="0" data-duration="1" data-track-index="1" data-width="320" data-height="240" style="position:absolute;top:0;left:320px"></div></main></body></html>`,
+    `<!doctype html><html><body style="margin:0"><main data-composition-id="main" data-width="640" data-height="240" data-duration="1" data-no-timeline><div id="host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-start="0" data-duration="1" data-track-index="0" data-width="320" data-height="240"></div><div id="other-host" class="clip" data-composition-id="scene" data-composition-src="${composition}" data-variable-values='{"art":"art/green.svg"}' data-start="0" data-duration="1" data-track-index="1" data-width="320" data-height="240" style="position:absolute;top:0;left:320px"></div></main></body></html>`,
   );
   const frame = page.frameLocator("iframe[data-live]");
   const artwork = frame.locator('[data-var-src="art"]').first();
@@ -363,7 +363,53 @@ test("a mounted scene resolves its image default and exports its own override", 
   await checkPicture("parent-default-and-host-override.png", 0, 1);
   await exportPicture([0, 1]);
 
-  await page.locator('[data-clip="host"]').dblclick();
+  const firstClip = page.locator('.tl-lanes [data-clip="host"]');
+  const secondClip = page.locator('.tl-lanes [data-clip="other-host"]');
+  const section = page.getByRole("region", { name: "Scene variables" });
+  const headline = section.getByRole("textbox", { name: "Scene headline" });
+  const sceneArtwork = section.getByRole("combobox", { name: "Artwork" });
+  const leftHeadline = frame.locator('#host [data-var-text="headline"]');
+  const rightHeadline = frame.locator('#other-host [data-var-text="headline"]');
+  await firstClip.click();
+  await expect(headline).toHaveValue("Inherited");
+  await expect(sceneArtwork).toHaveText("art/red.svg");
+  await page.screenshot({ path: info.outputPath("instance-before.png") });
+  await headline.fill("Only the left scene");
+  await headline.press("Enter");
+  await expect(leftHeadline).toHaveText("Only the left scene");
+  await expect(rightHeadline).toHaveText("Inherited");
+  await sceneArtwork.click();
+  await page.getByRole("option", { name: "art/blue#2.svg" }).click();
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await expect(hostOverride).toHaveAttribute("src", "art/green.svg");
+  await page.screenshot({ path: info.outputPath("instance-after.png") });
+  await checkPicture("instance-preview.png", 2, 1);
+  await exportPicture([2, 1]);
+  const rename = await request.post(
+    `/api/cutroom/projects/${project.id}/media/rename`,
+    {
+      data: { path: "art/blue#2.svg", name: "blue renamed#2.svg" },
+    },
+  );
+  expect(rename.ok()).toBe(true);
+  await expect(artwork).toHaveAttribute("src", "art/blue%20renamed%232.svg");
+  await expect(artwork).toHaveJSProperty("naturalWidth", 320);
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await secondClip.click();
+  await expect(headline).toHaveValue("Inherited");
+  await expect(sceneArtwork).toHaveText("art/green.svg");
+  await firstClip.click();
+  await section.getByRole("button", { name: "Reset Artwork" }).click();
+  await expect(artwork).toHaveAttribute("src", "art/red.svg");
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/blue%232.svg");
+  await page.keyboard.press("Control+z");
+  await expect(artwork).toHaveAttribute("src", "art/red.svg");
+  await page.keyboard.press("Control+z");
+  await expect(leftHeadline).toHaveText("Inherited");
+  expect(await readFile(join(project.path, composition), "utf8")).toBe(scene);
+  await firstClip.dblclick();
   await expect(
     page.getByRole("navigation", { name: "Composition" }),
   ).toHaveText(/scene/);

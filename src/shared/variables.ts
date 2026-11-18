@@ -326,3 +326,52 @@ export const VariablesStateSchema = z.object({
   preview: VariableValuesSchema,
 });
 export type VariablesState = z.infer<typeof VariablesStateSchema>;
+
+export function parseSceneVariableValues(
+  raw: string | undefined,
+): Record<string, unknown> | null {
+  if (!raw) return {};
+  try {
+    const value: unknown = JSON.parse(raw);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value))
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function sceneImageUrl(value: unknown) {
+  const url =
+    value && typeof value === "object" && "url" in value ? value.url : value;
+  return typeof url === "string" ? url : undefined;
+}
+
+export const SceneVariablesQuerySchema = z.object({
+  composition,
+  clipId: z
+    .string()
+    .min(1)
+    .describe("The mounted scene clip ID from timeline_read"),
+});
+
+export const SceneVariableUpdateSchema = SceneVariablesQuerySchema.extend({
+  id: VariableIdSchema,
+  value: VariableValueSchema.nullable().describe(
+    "The new instance value, or null to inherit the scene default. Image paths are relative to the project root.",
+  ),
+  expectedVersion: z.string().min(1).optional(),
+});
+
+export const SceneVariablesSchema = VariablesStateSchema.pick({
+  composition: true,
+  declarations: true,
+}).extend({
+  clipId: z.string(),
+  scene: z.string(),
+  version: z.string(),
+  locked: z.boolean(),
+  values: VariableValuesSchema,
+});
+
+export type SceneVariables = z.infer<typeof SceneVariablesSchema>;

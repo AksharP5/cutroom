@@ -8,7 +8,11 @@ import { z } from "zod";
 import { createMcpServer } from "../src/server/mcp/server";
 import { createVariableRoutes } from "../src/server/projects/variables";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
-import { VariablesStateSchema } from "../src/shared/variables";
+import {
+  SceneVariablesSchema,
+  VariablesStateSchema,
+} from "../src/shared/variables";
+import { elementAttributes } from "../src/server/timeline/composition";
 import { readColourVariable } from "../src/server/timeline/style";
 import { projectFixture } from "./project-fixture";
 
@@ -621,6 +625,179 @@ test("image variables leave responsive and paired still sources under source con
       expect(await f.source()).toBe(source);
     }
   } finally {
+    await f.close();
+  }
+});
+
+test("one scene instance owns its overrides, including guarded MCP saves", async () => {
+  const f = await fixture();
+  const server = createMcpServer({
+    fetch: (url, init) => f.app.request(url, init),
+  });
+  const client = new Client({ name: "instance-variables", version: "1" });
+  const [local, remote] = InMemoryTransport.createLinkedPair();
+  await server.connect(remote);
+  await client.connect(local);
+  try {
+    const child = join(f.project.path, "scenes", "title.html");
+    await mkdir(join(f.project.path, "scenes"));
+    await mkdir(join(f.project.path, "art"));
+    await writeFile(join(f.project.path, "art", "first.svg"), "<svg/>");
+    await writeFile(join(f.project.path, "art", "next#2.svg"), "<svg/>");
+    const scene = `<template><main data-composition-id="title-scene" data-width="160" data-height="120" data-duration="2" data-composition-variables='[{"id":"title","type":"string","label":"Title","default":"Common"},{"id":"art","type":"image","label":"Art","default":{"url":"../art/first.svg","alt":"Front cover"}}]'></main></template>`;
+    const hosts = `<div id="left" class="clip" data-composition-id="title-scene" data-composition-src="scenes/title.html" data-start="0" data-duration="2" data-track-index="0" data-variable-values='{"scriptOption":{"speed":2},"scriptText":"art/next%232.svg"}'></div><div id="right" class="clip" data-composition-id="title-scene" data-composition-src="scenes/title.html" data-start="0" data-duration="2" data-track-index="1" data-variable-values='{"title":"Second"}'></div>`;
+    const parent = `<!doctype html><html><body><main data-composition-id="main" data-width="320" data-height="120" data-duration="2">${hosts}</main></body></html>`;
+    await writeFile(child, scene);
+    await writeFile(join(f.project.path, "index.html"), parent);
+    const route = `/projects/${f.project.id}/variables/instance`;
+    const read = async (clipId: string) =>
+      SceneVariablesSchema.parse(
+        await (await f.request(`${route}?clipId=${clipId}`)).json(),
+      );
+    const call = async (name: string, args: Record<string, unknown>) =>
+      z
+        .object({
+          isError: z.boolean().optional(),
+          structuredContent: z.object({ result: z.unknown() }).optional(),
+        })
+        .parse(
+          await client.callTool({
+            name,
+            arguments: { projectId: f.project.id, clipId: "left", ...args },
+          }),
+        );
+    const initial = SceneVariablesSchema.parse(
+      (await call("variables_instance_read", {})).structuredContent?.result,
+    );
+    expect(initial.scene).toBe("scenes/title.html");
+    expect(initial.values).toEqual({});
+    expect(initial.declarations[1]?.default).toEqual({
+      url: "art/first.svg",
+      alt: "Front cover",
+    });
+    const replies = await Promise.all(
+      ["First edit", "Second edit"].map((value) =>
+        f.request(route, "PUT", {
+          clipId: "left",
+          id: "title",
+          value,
+          expectedVersion: initial.version,
+        }),
+      ),
+    );
+    expect(replies.map(({ status }) => status).sort()).toEqual([200, 409]);
+    const committed = SceneVariablesSchema.parse(
+      await replies.find(({ status }) => status === 200)!.json(),
+    );
+    expect((await read("left")).values).toEqual(committed.values);
+    expect((await read("right")).values).toEqual({ title: "Second" });
+
+    const saved = SceneVariablesSchema.parse(
+      (
+        await call("variables_instance_set", {
+          id: "art",
+          value: "art/next%232.svg",
+          expectedVersion: committed.version,
+        })
+      ).structuredContent?.result,
+    );
+    expect(saved.values).toEqual({
+      ...committed.values,
+      art: "art/next%232.svg",
+    });
+    const authored = await f.source();
+    expect(
+      JSON.parse(elementAttributes(authored, "left")!["data-variable-values"]!),
+    ).toEqual({
+      ...committed.values,
+      scriptOption: { speed: 2 },
+      scriptText: "art/next%232.svg",
+      art: { url: "art/next%232.svg", alt: "Front cover" },
+    });
+    expect(elementAttributes(authored, "right")).toEqual(
+      elementAttributes(parent, "right"),
+    );
+    expect(await readFile(child, "utf8")).toBe(scene);
+    const mediaRoute = `/projects/${f.project.id}/media`;
+    const remove = await f.request(`${mediaRoute}/remove`, "POST", {
+      path: "art/next#2.svg",
+    });
+    expect(remove.status).toBe(409);
+    const rename = await f.request(`${mediaRoute}/rename`, "POST", {
+      path: "art/next#2.svg",
+      name: "new #3.svg",
+    });
+    expect(rename.status).toBe(200);
+    expect((await read("left")).values.art).toBe("art/new%20%233.svg");
+    expect(
+      JSON.parse(
+        elementAttributes(await f.source(), "left")!["data-variable-values"]!,
+      ),
+    ).toMatchObject({
+      art: { url: "art/new%20%233.svg", alt: "Front cover" },
+      scriptText: "art/next%232.svg",
+    });
+    await f.undo();
+    expect(await f.source()).toBe(authored);
+    const reset = SceneVariablesSchema.parse(
+      (
+        await call("variables_instance_set", {
+          id: "art",
+          value: null,
+          expectedVersion: saved.version,
+        })
+      ).structuredContent?.result,
+    );
+    expect(reset.values).toEqual(committed.values);
+    await f.undo();
+    expect(await f.source()).toBe(authored);
+    await f.undo();
+    await f.undo();
+    expect(await f.source()).toBe(parent);
+
+    await writeFile(child, scene.replace('"Common"', '"Latest"'));
+    const stale = await f.request(route, "PUT", {
+      clipId: "left",
+      id: "title",
+      value: "Stale edit",
+      expectedVersion: initial.version,
+    });
+    expect(stale.status).toBe(409);
+    expect(await f.source()).toBe(parent);
+    const document = await f.store.document(f.project);
+    document.timelines["index.html"] = {
+      tracks: [
+        {
+          index: 0,
+          kind: "video",
+          name: null,
+          locked: true,
+          autoSelect: true,
+          enabled: true,
+          muted: false,
+          solo: false,
+          volume: 1,
+          fx: [],
+        },
+      ],
+      markers: [],
+      range: { in: null, out: null },
+    };
+    await f.store.writeDocument(f.project, document);
+    expect((await read("left")).locked).toBe(true);
+    expect(
+      (
+        await f.request(route, "PUT", {
+          clipId: "left",
+          id: "title",
+          value: "Not saved",
+        })
+      ).status,
+    ).toBe(422);
+    expect(await f.source()).toBe(parent);
+  } finally {
+    await client.close();
+    await server.close();
     await f.close();
   }
 });

@@ -176,6 +176,17 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "the variables",
   },
+  variables_instance_read: {
+    verb: read,
+    kind: "project",
+    object: () => "a scene's variables",
+  },
+  variables_instance_set: {
+    verb: ["Edited", "Editing", "Edit"],
+    kind: "edit",
+    object: (target) =>
+      target ? `the scene variable ${target}` : "a scene variable",
+  },
   variables_preview: {
     verb: ["Previewed", "Previewing", "Preview"],
     kind: "edit",

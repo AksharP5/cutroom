@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { stat } from "node:fs/promises";
 import { posix } from "node:path";
-import { applyFileMutations } from "@hyperframes/studio-server";
+import {
+  applyFileMutations,
+  fileContentVersion,
+} from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
 import { TimelineError } from "../../shared/timeline/errors";
@@ -13,11 +16,21 @@ import {
   VariableDefaultSchema,
   VariableError,
   VariablesPreviewSchema,
+  SceneVariablesQuerySchema,
+  SceneVariableUpdateSchema,
+  VariableIdSchema,
+  VariableValueSchema,
+  VariableValuesSchema,
+  isEditable,
+  variableDefaultValue,
+  variableValueSchema,
+  sceneImageUrl,
   checkVariableValues,
   imageVariablePath,
 } from "../../shared/variables";
 import type {
   CompositionVariable,
+  SceneVariables,
   VariableValues,
   VariablesState,
   VariableBinding,
@@ -29,9 +42,11 @@ import {
   bindCompositionVariable,
   sourceVariables,
   parseComposition,
+  sceneInstanceSource,
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
 import { projectWritePath } from "./path";
+import { sceneSourceBase, sceneSourcePath } from "./sceneSources";
 import type { ReviewService } from "./review";
 import { historyWho, parseInput } from "./routes";
 import { readSource } from "./store";
@@ -167,6 +182,108 @@ export function createVariableRoutes(
     };
   };
 
+  const loadScene = async (
+    project: Project,
+    composition: string,
+    clipId: string,
+    html: string,
+  ) => {
+    const settings =
+      (await store.document(project)).timelines[composition] ??
+      emptyTimelineSettings();
+    const instance = sceneInstanceSource(
+      parseComposition(html, settings, {
+        scope: compositionScope(composition),
+      }),
+      clipId,
+    );
+    const from = await sceneSourceBase(
+      composition,
+      html,
+      async () => (await readSource(project)).content,
+    );
+    const scene = sceneSourcePath(from, instance.src);
+    if (!scene)
+      throw new HttpError(
+        422,
+        "The scene must point to an HTML file inside this project.",
+      );
+    const source = await readSource(project, scene);
+    const { declarations, matches } = sourceVariables(
+      source.content,
+      "sub-composition",
+    );
+    const version = fileContentVersion(
+      JSON.stringify([html, scene, source.version]),
+    );
+    return { instance, scene, declarations, matches, version };
+  };
+
+  const readScene = async (
+    project: Project,
+    composition: string,
+    clipId: string,
+  ): Promise<SceneVariables> => {
+    try {
+      const { content } = await readSource(project, composition);
+      const { instance, scene, declarations, version } = await loadScene(
+        project,
+        composition,
+        clipId,
+        content,
+      );
+      const imageDefaults = Object.fromEntries(
+        declarations.flatMap((variable) =>
+          variable.type === "image"
+            ? [[variable.id, variableDefaultValue(variable)]]
+            : [],
+        ),
+      );
+      const { rebaseImageOverrides } =
+        await import("../hyperframes/imageVariables");
+      const defaults = rebaseImageOverrides(project.path, scene, imageDefaults);
+      const values = VariableValuesSchema.parse(
+        Object.fromEntries(
+          declarations.flatMap((variable) => {
+            if (
+              !isEditable(variable) ||
+              !VariableIdSchema.safeParse(variable.id).success ||
+              !Object.hasOwn(instance.values, variable.id)
+            )
+              return [];
+            const raw = instance.values[variable.id];
+            const value = VariableValueSchema.safeParse(
+              variable.type === "image" ? sceneImageUrl(raw) : raw,
+            );
+            return value.success ? [[variable.id, value.data]] : [];
+          }),
+        ),
+      );
+      return {
+        composition,
+        clipId,
+        scene,
+        locked: instance.locked,
+        version,
+        values,
+        declarations: declarations.map((variable) => {
+          const url = defaults[variable.id];
+          return variable.type === "image" && typeof url === "string"
+            ? {
+                ...variable,
+                default:
+                  typeof variable.default === "string"
+                    ? url
+                    : { ...variable.default, url },
+              }
+            : variable;
+        }),
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  };
+
   const setPreview = (
     project: Project,
     composition: string,
@@ -224,6 +341,81 @@ export function createVariableRoutes(
     return c.json(
       await read(project, compositionPath(c.req.query("composition"))),
     );
+  });
+
+  api.get("/projects/:id/variables/instance", async (c) => {
+    const input = parseInput(SceneVariablesQuerySchema, c.req.query());
+    const project = await store.get(c.req.param("id"));
+    return c.json(
+      await readScene(
+        project,
+        compositionPath(input.composition),
+        input.clipId,
+      ),
+    );
+  });
+
+  api.put("/projects/:id/variables/instance", async (c) => {
+    const input = parseInput(SceneVariableUpdateSchema, await c.req.json());
+    const { clipId, id } = input;
+    const project = await store.get(c.req.param("id"));
+    const composition = compositionPath(input.composition);
+    await edit(
+      c,
+      project,
+      composition,
+      input.value === null
+        ? `Reset ${id} on ${clipId}`
+        : `Set ${id} on ${clipId}`,
+      async (html) => {
+        const { instance, matches, version } = await loadScene(
+          project,
+          composition,
+          clipId,
+          html,
+        );
+        if (instance.locked)
+          throw new HttpError(422, "The scene clip's track is locked.");
+        if (
+          input.expectedVersion !== undefined &&
+          input.expectedVersion !== version
+        )
+          throw new HttpError(
+            409,
+            "The scene changed. Inspect its variables again.",
+          );
+        const [variable, duplicate] = matches(id);
+        if (!variable || duplicate || !isEditable(variable))
+          throw new VariableError(
+            `${id} must name one editable variable in the mounted scene.`,
+          );
+        const previous = instance.values[id];
+        if (input.value === null) {
+          if (!Object.hasOwn(instance.values, id)) return html;
+          const { [id]: _, ...remaining } = instance.values;
+          return instance.write(remaining);
+        }
+        const next = variableValueSchema(variable).safeParse(input.value);
+        if (!next.success)
+          throw new VariableError(
+            `${id}: ${next.error.issues.map((issue) => issue.message).join(" ")}`,
+          );
+        if (variable.type === "image" && typeof next.data === "string") {
+          await checkProjectImage(project, "index.html", id, next.data);
+          if (sceneImageUrl(previous) === next.data) return html;
+          const shape = previous ?? variable.default;
+          const value =
+            shape && typeof shape === "object" && "url" in shape
+              ? { ...shape, url: next.data }
+              : next.data;
+          return instance.write({ ...instance.values, [id]: value });
+        }
+        return Object.hasOwn(instance.values, id) && previous === next.data
+          ? html
+          : instance.write({ ...instance.values, [id]: next.data });
+      },
+    );
+    return c.json(await readScene(project, composition, clipId));
   });
 
   api.put("/projects/:id/variables/preview", async (c) => {
