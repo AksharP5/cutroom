@@ -509,6 +509,8 @@ Pass `noteId` to `source_write`, `timeline_edit`, `transcript_edit`, or `caption
 
 ## Export
 
+`export_frame` takes `projectId`, a zero-based integer `frame`, and optional `composition` (defaults to `index.html`). It saves a full-size PNG of the saved composition and its declared defaults in `.cutroom/renders`. It uses the same capture as Save Frame in the editor and returns the absolute `path` and `filename`. The filename includes the requested frame's timecode, with a suffix when that name is taken.
+
 `export_start` takes `projectId` and optional `composition`, `range`, `format`, `quality`, `size`, `fps`, `gpu`, `variables`, `filename`, and `directory`. It uses the editor's render route and job registry over both the stdio bridge and HTTP `/mcp`. The bridge sends the local Origin header; clients do not need to call the render route themselves.
 
 - Omit `composition` to render the root, `index.html`. Name a sub-composition, such as `compositions/intro.html`, to render it alone: its own length, marks, size and rate, with the default name followed by the scene's file name (`Launch intro.mp4`). A sub-composition renders with frame capture.

@@ -314,6 +314,11 @@ const cutroomTools: Record<
     kind: "edit",
     object: () => "an export",
   },
+  export_frame: {
+    verb: ["Saved", "Saving", "Save"],
+    kind: "edit",
+    object: () => "a frame as PNG",
+  },
   export_status: {
     verb: ["Checked", "Checking", "Check"],
     kind: "project",
