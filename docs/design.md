@@ -24,7 +24,7 @@ Update both declarations together in `tokens.css`.
 | `--rail`   | `--breakpoint-rail`, below 1024px wide   | The embedded workspace uses its compact tool treatment. |
 | `--short`  | `--breakpoint-short`, below 960px tall   | Media shows six rows and Timing starts collapsed.       |
 
-Reuse the closest token first. If a new value is needed, extend the nearest scale with a name that describes its role and can be reused.
+Reuse the closest token first, by meaning and not by number: a radius token is never a gap, and an icon size is never a padding. Space inside a component uses the `--space-*` scale where a step fits and a plain pixel value where the layout needs one in between, as the shared styles already do. If a new value is needed more than once, extend the nearest scale with a name that describes its role and can be reused.
 Measure WCAG contrast for each new foreground and background pair, including interactive overlays where they apply, and record the ratios in the token comment. Keep one-off values out of the scale.
 
 ## Colour
