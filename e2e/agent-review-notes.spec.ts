@@ -136,7 +136,9 @@ test("Send now queues the current draft in a busy linked chat", async ({
 
   await page.setViewportSize({ width: 1000, height: 1050 });
   await page.goto(`/#project/${project.id}`);
-  await expect(page.getByText(ask.text, { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".message-user").getByText(ask.text, { exact: true }),
+  ).toBeVisible();
   const base = `/api/cutroom/projects/${project.id}`;
   for (let index = 1; index <= 5; index++) {
     const added = await request.post(`${base}/annotations`, {
