@@ -721,6 +721,12 @@ option {
   height: 100%;
   object-fit: cover;
 }
+.media-thumb:has(> img) {
+  background: var(--surface-raised);
+}
+.media-thumb > img {
+  object-fit: contain;
+}
 .media-name {
   flex: 1;
   min-width: 0;
@@ -755,9 +761,9 @@ option {
 .media-confirm-remove {
   color: var(--danger);
 }
-/* The composition the editor has open carries a paper tick. */
-.media-row[aria-current="true"] {
-  box-shadow: inset 2px 0 var(--selection);
+/* A paper tick marks the open composition or a source already on its timeline. */
+.media-row:is([aria-current="true"], [data-used]) {
+  box-shadow: inset var(--stroke-rail) 0 var(--selection);
 }
 .composition-lint {
   flex: none;

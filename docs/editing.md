@@ -104,6 +104,8 @@ The inspector holds the rest: the effect of an adjustment layer, a zoom's magnif
 
 ### Media files
 
+A paper tick marks each source used in the open timeline. Hover the row to see how many clips use it. Still thumbnails fit the whole image on a neutral background, including transparent edges.
+
 Rename and Remove are in a Media file's right-click menu, and in the `media_rename` and `media_remove` MCP tools.
 
 Rename changes the file's name in its folder and points every reference in the project's sources at the new name: clips in any composition, CSS `url()` values, script strings, and transcript records in `cutroom.json`. Each reference keeps the spelling its author used, such as percent-encoding or a relative `../`. The file and its references change in one undo step. The extension stays, because renaming does not convert a file, and a name another file in that folder already has is refused. References resolve from the file that declares them. Agent instructions, tool configuration and hidden files are never rewritten, so a reference to the file from one of those keeps the old name. Saved source In/Out marks follow rename, undo and redo. If undo, redo or an external rename removes the loaded source path, the viewer closes it before it can be placed again.

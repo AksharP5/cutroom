@@ -105,6 +105,26 @@ async function open(page: Page, request: APIRequestContext) {
   return { project, timeline, media, row, sources, present };
 }
 
+test("Media marks exactly the sources used in the open timeline and updates through undo", async ({
+  page,
+  request,
+}) => {
+  const { timeline, row } = await open(page, request);
+  const talk = row("talk.mp4");
+  const still = row("still.png");
+
+  await expect(talk).toHaveAttribute("data-used", "2");
+  await expect(talk).toHaveAttribute("title", /Used by 2 clips/);
+  await expect(still).not.toHaveAttribute("data-used", /.+/);
+  await expect(still.locator("img")).toHaveCSS("object-fit", "contain");
+
+  await timeline.locator('[data-clip="picture"]').click();
+  await page.keyboard.press("x");
+  await expect(talk).not.toHaveAttribute("data-used", /.+/);
+  await page.keyboard.press("Control+z");
+  await expect(talk).toHaveAttribute("data-used", "2");
+});
+
 test("Rename in a media row's menu renames the file and every clip that plays it, in one undo step", async ({
   page,
   request,
