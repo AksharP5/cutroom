@@ -19,6 +19,7 @@ import type { z } from "zod";
 import { posix } from "node:path";
 import { Hono } from "hono";
 import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
+import { isPinnedGsap } from "../hyperframes/previewTimingPolicy";
 import { streamSSE } from "hono/streaming";
 import type { Context } from "hono";
 import { fileContentVersion } from "@hyperframes/studio-server";
@@ -142,7 +143,7 @@ export function createTimelineRoutes(
     const settings = document.timelines[composition] ?? emptyTimelineSettings();
     // One scope for reading, media discovery, and the readback after an edit.
     const scope = compositionScope(composition);
-    const { lengths } = await compositionMediaFacts(
+    const { lengths, footageRefusals } = await compositionMediaFacts(
       project,
       composition,
       source.content,
@@ -158,6 +159,7 @@ export function createTimelineRoutes(
       document,
       scope,
       lengths,
+      footageRefusals,
       parsed: parseComposition(source.content, settings, {
         scope,
         mediaLengths: lengths,
@@ -709,10 +711,27 @@ export function createTimelineRoutes(
     const project = await store.get(c.req.param("id"));
     c.header("cache-control", "no-store");
     try {
-      const { source, parsed } = await read(project, "index.html");
+      const { source, parsed, footageRefusals } = await read(
+        project,
+        "index.html",
+      );
+      const libraries = new Set<string>();
+      await Promise.all(
+        ["assets/vendor/gsap.min.js", "gsap.min.js"].map(async (path) => {
+          // The name alone does not establish that the script leaves the footage alone.
+          if (!source.content.includes(path)) return;
+          const script = await readSource(project, path).catch(() => null);
+          if (script && isPinnedGsap(script.content)) libraries.add(path);
+        }),
+      );
       return c.json({
         revision: source.version,
-        plan: planPreviewPipeline(source.content, parsed.timeline.fps),
+        plan: planPreviewPipeline(
+          source.content,
+          parsed.timeline.fps,
+          libraries,
+          footageRefusals,
+        ),
       });
     } catch (error) {
       return refused(c, error);

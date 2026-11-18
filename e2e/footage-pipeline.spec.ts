@@ -1,7 +1,15 @@
 import { execFile } from "node:child_process";
-import { rename, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import type { APIRequestContext, Browser, Page } from "@playwright/test";
 import {
   ProjectSchema,
@@ -57,6 +65,7 @@ async function project(
   rate: { num: number; den: number },
   body: (seconds: (frames: number) => string) => string,
   head = "",
+  length = 110,
 ) {
   const created = ProjectSchema.parse(
     await (
@@ -75,7 +84,7 @@ async function project(
   const fps = rate.den === 1 ? String(rate.num) : `${rate.num}/${rate.den}`;
   await writeFile(
     join(created.path, "index.html"),
-    `<!doctype html><html><head><style>html,body{margin:0;background:#111111}</style>${head}</head><body><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="${seconds(110)}" data-fps="${fps}">
+    `<!doctype html><html><head><style>html,body{margin:0;background:#111111}</style>${head}</head><body><main id="main" data-composition-id="main" data-width="${WIDTH}" data-height="${HEIGHT}" data-duration="${seconds(length)}" data-fps="${fps}">
 ${body(seconds)}
 </main></body></html>`,
   );
@@ -197,13 +206,17 @@ async function pictures(
 function compare(page: Page, expected: string[], actual: string[]) {
   return page.evaluate(
     async ({ expected, actual, band, height }) => {
-      const read = async (base64: string) => {
+      const read = async (base64: string, size?: ImageData) => {
         const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
         const image = await createImageBitmap(new Blob([bytes]));
-        const canvas = new OffscreenCanvas(image.width, image.height);
+        const canvas = new OffscreenCanvas(
+          size?.width ?? image.width,
+          size?.height ?? image.height,
+        );
         const context = canvas.getContext("2d")!;
-        context.drawImage(image, 0, 0);
-        return context.getImageData(0, 0, image.width, image.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        image.close();
+        return context.getImageData(0, 0, canvas.width, canvas.height);
       };
       const number = (image: ImageData) => {
         let value = 0;
@@ -219,7 +232,7 @@ function compare(page: Page, expected: string[], actual: string[]) {
       const out = [];
       for (const [index, base64] of expected.entries()) {
         const a = await read(base64);
-        const b = await read(actual[index]!);
+        const b = await read(actual[index]!, a);
         let difference = 0;
         const bias = [0, 0, 0];
         for (let at = 0; at < a.data.length; at += 4)
@@ -644,7 +657,7 @@ test("the footage pipeline draws phone and camera footage as HyperFrames does: t
   }
 });
 
-test("a paused seek shows the leading picture of a 4K open GOP after preparing a later cut", async ({
+test("a paused seek shows the leading picture of an open GOP after preparing a later cut", async ({
   page,
   request,
 }) => {
@@ -658,7 +671,7 @@ test("a paused seek shows the leading picture of a 4K open GOP after preparing a
   await numbered(
     join(created.path, "camera.mp4"),
     "30",
-    "3840x2160",
+    "1920x1080",
     undefined,
     [
       "-threads",
@@ -737,11 +750,202 @@ test("HDR named only in the bitstream stays with HyperFrames", async ({
     await expect
       .poll(() => reasons)
       .toContain(
-        "[pipeline] off: Wide-gamut and HDR video stays with HyperFrames.",
+        "[pipeline] HyperFrames draws a clip: v0 stays in HyperFrames because its source is HDR",
       );
     await expect(stage).toHaveAttribute("data-pipeline", "off");
     await expect(page.locator(".edit-pipeline")).toBeHidden();
   } finally {
     await context.close();
+  }
+});
+
+test("the original benchmark markup draws graded cuts under two GSAP scene mounts, on the source frames export selects", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(180_000);
+  const frameCount = 12;
+  const created = await project(
+    request,
+    { num: 60, den: 1 },
+    (seconds) => `
+    <video class="clip" id="v0" src="a.mp4" muted data-start="0" data-duration="${seconds(6)}" data-track-index="0" data-color-grading='{"adjust":{"contrast":0.08}}' style="${fill}"></video>
+    <video class="clip" id="v1" src="a.mp4" muted data-start="${seconds(6)}" data-duration="${seconds(6)}" data-media-start="1" data-track-index="0" data-color-grading='{"adjust":{"contrast":0.08}}' style="${fill};scale:1.02"></video>
+    <div id="title" class="clip title" data-start="0" data-duration="${seconds(frameCount)}" data-track-index="1">Title</div>
+    ${[1, 7].map((start, index) => `<div id="s${index}" class="clip scene" data-composition-id="scene" data-composition-src="scene.html" data-start="${seconds(start)}" data-duration="${seconds(4)}" data-track-index="2" data-width="${WIDTH}" data-height="${HEIGHT}"></div>`).join("")}
+  `,
+    `<script src="gsap.min.js"></script><style>.title{position:absolute;bottom:42px;left:24px;background:#142137;color:white;padding:8px}.scene{position:absolute;inset:0}</style>`,
+    frameCount,
+  );
+  const root = join(created.path, "index.html");
+  const html = (await readFile(root, "utf8")).replace(
+    "</body>",
+    "<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script></body>",
+  );
+  await writeFile(root, html);
+  await copyFile(
+    "node_modules/gsap/dist/gsap.min.js",
+    join(created.path, "gsap.min.js"),
+  );
+  await writeFile(
+    join(created.path, "scene.html"),
+    `<template><main data-composition-id="scene" data-duration="0.066667" data-width="${WIDTH}" data-height="${HEIGHT}"><div id="card" style="position:absolute;right:30px;top:130px;width:120px;height:90px;background:#2985c9">Scene</div></main><script>{const tl=gsap.timeline({paused:true});tl.fromTo("#card",{x:30,opacity:0},{x:0,opacity:1,duration:0.04},0);window.__timelines.scene=tl;}</script></template>`,
+  );
+  await numbered(
+    join(created.path, "a.mp4"),
+    "60",
+    undefined,
+    "format=yuv420p",
+    [
+      "-g",
+      "15",
+      "-colorspace",
+      "bt709",
+      "-color_trc",
+      "bt709",
+      "-color_primaries",
+      "bt709",
+    ],
+  );
+  const frames = Array.from({ length: frameCount }, (_, frame) => frame);
+  const actual = await pictures(page, created, 60, frames, true, true);
+
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export", exact: true });
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/render"),
+  );
+  await dialog.getByRole("button", { name: "Export MP4", exact: true }).click();
+  const { jobId } = z
+    .object({ jobId: z.string() })
+    .parse(await (await started).json());
+  await expect(dialog).toContainText("Export complete.", { timeout: 90_000 });
+  const output = info.outputPath("pictures");
+  await mkdir(output, { recursive: true });
+  const path = join(output, "export.mp4");
+  await writeFile(
+    path,
+    await (await request.get(`/api/render/${jobId}/download`)).body(),
+  );
+  await promisify(execFile)("ffmpeg", [
+    "-v",
+    "error",
+    "-i",
+    path,
+    join(output, "frame-%03d.png"),
+  ]);
+  const names = (await readdir(output))
+    .filter((name) => name.endsWith(".png"))
+    .sort();
+  expect(names).toHaveLength(frameCount);
+  const expected = await Promise.all(
+    names.map(async (name) =>
+      (await readFile(join(output, name))).toString("base64"),
+    ),
+  );
+  const result = await compare(page, expected, actual);
+  console.log("EXPORT PARITY", JSON.stringify(result));
+  expect(result.map(({ numbers }) => numbers[0])).toEqual([
+    0, 1, 2, 3, 4, 5, 60, 61, 62, 63, 64, 65,
+  ]);
+  expect(result.map(({ numbers }) => numbers[1])).toEqual(
+    result.map(({ numbers }) => numbers[0]),
+  );
+
+  // Both mounts have had time to reach their full opacity at their fourth frame.
+  const colours = await page.evaluate(
+    async (frames) => {
+      const canvas = new OffscreenCanvas(640, 360);
+      const context = canvas.getContext("2d")!;
+      return Promise.all(
+        frames.map(async (frame) => {
+          const bytes = Uint8Array.from(atob(frame), (value) =>
+            value.charCodeAt(0),
+          );
+          const bitmap = await createImageBitmap(new Blob([bytes]));
+          context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          bitmap.close();
+          return [...context.getImageData(550, 200, 1, 1).data].slice(0, 3);
+        }),
+      );
+    },
+    [actual[4]!, actual[10]!],
+  );
+  expect(colours).toEqual([
+    [41, 133, 201],
+    [41, 133, 201],
+  ]);
+});
+
+test("a 4K60 source stays native while overlapping HD footage and after a cut", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(180_000);
+  const created = await project(
+    request,
+    { num: 60, den: 1 },
+    (seconds) => `
+    <video id="hd" src="a.mp4" muted data-start="0" data-duration="${seconds(80)}" data-track-index="0" style="${fill}"></video>
+    <video id="uhd" src="large.mp4" muted data-start="${seconds(30)}" data-duration="${seconds(60)}" data-media-start="1" data-track-index="1" style="${fill}"></video>`,
+  );
+  await Promise.all([
+    numbered(join(created.path, "a.mp4"), "60"),
+    numbered(join(created.path, "large.mp4"), "60", "3840x2160", undefined, [
+      "-preset",
+      "ultrafast",
+      "-threads",
+      "6",
+      "-t",
+      "2",
+    ]),
+  ]);
+  const response = await request.get(
+    `/api/cutroom/projects/${created.id}/pipeline`,
+  );
+  const { plan } = PipelineResponseSchema.parse(await response.json());
+  expect(plan).toMatchObject({
+    drawable: { hd: "fill" },
+    hyperframes: {
+      uhd: expect.stringContaining("above the pipeline's 1080p limit"),
+    },
+  });
+  const shots = await pictures(page, created, 60, [24, 31, 82, 26], true, true);
+  const result = await compare(page, shots, shots);
+  expect(result.map(({ numbers }) => numbers[1])).toEqual([24, 61, 112, 26]);
+});
+
+test("a title under footage switches only the intersecting range to HyperFrames", async ({
+  page,
+  request,
+}) => {
+  const created = await project(
+    request,
+    { num: 30, den: 1 },
+    (seconds) => `
+    <div class="clip" id="under" data-start="${seconds(15)}" data-duration="${seconds(6)}" data-track-index="0" style="position:absolute;inset:0;background:#369">Behind the video</div>
+    <video id="v0" src="a.mp4" muted data-start="0" data-duration="${seconds(90)}" data-track-index="1" style="${fill};opacity:0.8"></video>`,
+  );
+  await numbered(join(created.path, "a.mp4"), "30");
+  await page.addInitScript(() => {
+    if (window === window.top)
+      localStorage.setItem("cutroom.footagePipeline", "true");
+  });
+  await page.goto(`/#project/${created.id}`);
+  const stage = page.locator(".edit-stage");
+  for (const [frame, mode] of [
+    [14, "on"],
+    [15, "off"],
+    [20, "off"],
+    [21, "on"],
+  ] as const) {
+    await typeFrame(page, frame, 30);
+    await expect(stage).toHaveAttribute("data-pipeline", mode);
+    await expect(stage).toHaveAttribute("data-preview-ready");
+    const shot = await settledShot(page);
+    const [result] = await compare(page, [shot], [shot]);
+    expect(result!.numbers[1]).toBe(frame);
   }
 });

@@ -99,7 +99,7 @@ async function openSource(
   };
 }
 
-/** Attaches the pipeline to its canvas for one project; returns the teardown. */
+/** Attaches the pipeline to its canvas for one project. */
 export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
   const closing = new AbortController();
   let compositor = createCompositor(canvas);
@@ -269,7 +269,11 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
     const { frame, state } = useTransport.getState();
     if (!view || view.composition !== "index.html") return;
     const shown = visibleAt(view.timeline, drawingPlan, frame);
-    if (!shown) return stop("a clip at the playhead is not one it can draw");
+    if (!shown) {
+      stop("the layers at the playhead need to be composited together");
+      if (state.kind === "playing") prepare(view, frame, LOOKAHEAD, OPENING);
+      return;
+    }
     const moving = state.kind === "scrubbing" || state.kind === "shuttle";
     const playing = state.kind === "playing";
     const { draft } = usePreviewGrade.getState();
@@ -483,17 +487,17 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
       return stop(error instanceof Error ? error.message : String(error));
     }
     if (!isCurrent()) return;
+    // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
+    for (const reason of Object.values(next.hyperframes ?? {}))
+      if (!explained.has(reason)) {
+        explained.add(reason);
+        console.info(`[pipeline] HyperFrames draws a clip: ${reason}`);
+      }
     if ("reason" in next) {
       plan = null;
       return stop(next.reason);
     }
     plan = next;
-    // Which videos HyperFrames keeps, and why, for whoever tries the setting, each said once.
-    for (const reason of Object.values(next.hyperframes))
-      if (!explained.has(reason)) {
-        explained.add(reason);
-        console.info(`[pipeline] HyperFrames draws a clip: ${reason}`);
-      }
     const drawn = Object.keys(next.drawable);
     if (drawn.join("\n") !== usePipeline.getState().drawn.join("\n"))
       usePipeline.setState({ drawn });
@@ -524,16 +528,21 @@ export function attachPipeline(projectId: string, canvas: HTMLCanvasElement) {
         void refresh();
     }),
   ];
-  return () => {
-    closing.abort();
-    for (const stop of unsubscribe) stop();
-    usePipeline.setState({ active: false });
-    for (const found of sources.values())
-      void found.then(({ lanes, proxy }) => {
-        for (const lane of lanes) lane.close();
-        proxy?.close();
-      });
-    grades.dispose();
-    compositor.dispose();
+  return {
+    refreshDependencies() {
+      plan = null;
+      usePipeline.setState({ active: false });
+      void refresh();
+    },
+    dispose() {
+      closing.abort();
+      for (const stop of unsubscribe) stop();
+      usePipeline.setState({ active: false });
+      for (const found of sources.values())
+        void found.then(({ lanes, proxy }) => {
+          for (const lane of lanes) lane.close();
+          proxy?.close();
+        });
+    },
   };
 }

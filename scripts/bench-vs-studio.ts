@@ -59,6 +59,7 @@ const { values: options, positionals } = parseArgs({
     "pipeline-compatible": { type: "boolean", default: false },
     pipeline: { type: "boolean", default: false },
     "footage-only": { type: "boolean", default: false },
+    "ripple-only": { type: "boolean", default: false },
     grade: { type: "boolean", default: false },
     slider: { type: "boolean", default: false },
   },
@@ -444,6 +445,7 @@ async function session(
     }
     console.log(`  opens: ${JSON.stringify(opens)}`);
     page = page!;
+    await page.bringToFront();
     const cdp = await page.context().newCDPSession(page);
     const throttled = await throttleAll(page, cdp, throttle);
     const footage = {
@@ -457,30 +459,35 @@ async function session(
       scrub: await step("scrub", () => scrub(page, ui, cdp, decoder)),
       playback: await step("playback", () => playback(page, ui, cdp, decoder)),
     };
-    const editsResult = options["footage-only"]
-      ? null
-      : {
-          zoom: await step("zoom", () => zoom(page, ui)),
-          razor: await step("razor", () =>
-            edits(page, ui, cdp, decoder, "razor"),
-          ),
-          rippleDelete: await step("rippleDelete", () =>
-            edits(page, ui, cdp, decoder, "ripple"),
-          ),
-          trim: await step("trim", () => drag(page, ui, cdp, decoder, "trim")),
-          move: await step("move", () => drag(page, ui, cdp, decoder, "move")),
-          agentFile: await step("agentFile", () =>
-            agentEdits(page, ui, cdp, decoder, project, "file"),
-          ),
-          agentMcp: mcp
-            ? await step("agentMcp", () =>
-                agentEdits(page, ui, cdp, decoder, project, "mcp", mcp),
-              )
-            : null,
-        };
+    const full = !options["footage-only"] && !options["ripple-only"];
     const result = {
       ...footage,
-      ...editsResult,
+      zoom: full ? await step("zoom", () => zoom(page, ui)) : null,
+      razor: full
+        ? await step("razor", () => edits(page, ui, cdp, decoder, "razor"))
+        : null,
+      rippleDelete: options["footage-only"]
+        ? null
+        : await step("rippleDelete", () =>
+            edits(page, ui, cdp, decoder, "ripple"),
+          ),
+      trim: full
+        ? await step("trim", () => drag(page, ui, cdp, decoder, "trim"))
+        : null,
+      move: full
+        ? await step("move", () => drag(page, ui, cdp, decoder, "move"))
+        : null,
+      agentFile: full
+        ? await step("agentFile", () =>
+            agentEdits(page, ui, cdp, decoder, project, "file"),
+          )
+        : null,
+      agentMcp:
+        full && mcp
+          ? await step("agentMcp", () =>
+              agentEdits(page, ui, cdp, decoder, project, "mcp", mcp),
+            )
+          : null,
       memory: {
         browserMB: await treePss(await browserPid(marker)),
         serverMB: await treePss(server.child.pid!),
@@ -845,7 +852,23 @@ async function edits(
   await sleep(800);
   const samples = [];
   for (const shot of editsAt) {
-    const before = await seekToShot(page, ui, cdp, decoder, shot);
+    const before = await seekToShot(page, ui, cdp, decoder, shot).catch(
+      (error: unknown) => {
+        if (!options["ripple-only"]) throw error;
+        console.warn(error);
+        return null;
+      },
+    );
+    if (before === null) {
+      samples.push({
+        shot,
+        timeline: null,
+        picture: null,
+        undoTimeline: null,
+        undoPicture: null,
+      });
+      continue;
+    }
     await ui.clip(page, `shot-${shot}`).click();
     await sleep(300);
     const count = await ui.clips(page).count();

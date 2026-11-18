@@ -62,6 +62,28 @@ test("plain footage under titles is drawable, with each video's fit and the page
   expect(plan.order).toEqual(["a", "b", "broll", "title"]);
 });
 
+test("the standard clip class and an empty timeline leave the footage drawable", () => {
+  const library = "gsap.min.js";
+  const html = page("", `<script src="${library}"></script>`)
+    .replace('<video id="a"', '<video id="a" class="clip"')
+    .replace(
+      "</body>",
+      "<script>window.__timelines=window.__timelines||{};window.__timelines.main=gsap.timeline({paused:true});</script></body>",
+    );
+  const libraries = new Set([library]);
+  expect(planPreviewPipeline(html, fps, libraries)).toMatchObject({
+    drawable: { a: "fill", b: "cover", broll: "fill" },
+  });
+  expect(planPreviewPipeline(html, fps)).toHaveProperty("reason");
+  const scripted = html.replace(
+    "paused:true});",
+    "paused:true});document.querySelector('video').remove();",
+  );
+  expect(planPreviewPipeline(scripted, fps, libraries)).toHaveProperty(
+    "reason",
+  );
+});
+
 /** A HyperFrames clip above the footage holding `inner`. */
 const card = (inner: string) =>
   `<div id="card" class="clip" data-start="0" data-duration="1" data-track-index="4">${inner}</div>`;
@@ -122,7 +144,7 @@ test("whatever could change every clip keeps the composition on HyperFrames", ()
     });
 });
 
-test("a video the pipeline cannot draw is HyperFrames', and so is any video above one of HyperFrames' clips", () => {
+test("a native video only forces other footage back to HyperFrames while the layers overlap", () => {
   const video = (id: string, track: number, rest = "muted", style = fill) =>
     `<video id="${id}" src="talk.mp4" ${rest} data-start="0" data-duration="1" data-track-index="${track}" style="${style}"></video>`;
   const cases: [string, string][] = [
@@ -142,8 +164,7 @@ test("a video the pipeline cannot draw is HyperFrames', and so is any video abov
     expect(plan.drawable).toEqual({ a: "fill", b: "cover", broll: "fill" });
     expect(Object.values(plan.hyperframes)).toEqual([reason]);
   }
-  // HyperFrames draws on top, so a video above its clip goes with it, and one above that too:
-  // top overlaps only over, after the title.
+  // Native footage stays native. Conflicting stacking sends only the overlap to HyperFrames.
   const at = (html: string, start: number, duration: number) =>
     html.replace(
       'data-start="0" data-duration="1"',
@@ -156,23 +177,30 @@ test("a video the pipeline cannot draw is HyperFrames', and so is any video abov
         at(video("top", 7), 4.2, 0.8),
     ),
   );
-  expect(stacked.drawable).toEqual({ a: "fill", b: "cover", broll: "fill" });
-  expect(stacked.hyperframes).toEqual({
-    loud: "loud plays its own sound",
-    over: "loud lies beneath over",
-    top: "over lies beneath top",
-  });
-  // B-roll moved above the title puts the title beneath footage it overlaps.
+  expect(stacked.hyperframes).toEqual({ loud: "loud plays its own sound" });
+  // Use the pipeline again as soon as the native clip ends, even mid-clip.
+  const overlap = page(
+    at(video("loud", 5, ""), 3, 1) + at(video("over", 6), 3.5, 1),
+  );
+  const { timeline } = parseComposition(overlap, emptyTimelineSettings());
+  expect(shownAt(timeline, stacked, 110)).toBeNull();
+  expect(visibleAt(timeline, stacked, 120)?.map(({ clip }) => clip.id)).toEqual(
+    ["over"],
+  );
+  // Moving footage above an HTML title affects only the title's interval.
   const under = edit(page(), [
     { type: "setTrack", index: 4, kind: "video" },
-    { type: "move", clipIds: ["broll"], by: 0, trackBy: 3, mode: "overwrite" },
+    { type: "move", clipIds: ["broll"], by: 15, trackBy: 3, mode: "overwrite" },
   ]);
-  expect(drawable(under).hyperframes).toEqual({
-    broll: "title lies beneath broll",
-  });
+  const moved = parseComposition(under, emptyTimelineSettings()).timeline;
+  expect(shownAt(moved, drawable(under), 59)).toBeNull();
+  expect(
+    visibleAt(moved, drawable(under), 60)?.map(({ clip }) => clip.id),
+  ).toEqual(["broll"]);
   // With nothing left to draw the composition stays on HyperFrames.
   expect(planPreviewPipeline(page().replaceAll(" muted ", " "), fps)).toEqual({
-    reason: "a plays its own sound",
+    reason: "no video clips passed the footage classifier",
+    hyperframes: expect.objectContaining({ a: "a plays its own sound" }),
   });
 });
 
@@ -196,10 +224,17 @@ test("a transition the pipeline would draw differently is HyperFrames' to draw",
     /<style data-cutroom-transitions[^>]*>[\s\S]*?<\/style>/,
     "",
   );
-  // Then a and b are HyperFrames', so is the b-roll above a, and nothing is left to draw.
-  expect(planPreviewPipeline(bare, fps)).toEqual({
-    reason: "a has a transition the pipeline cannot draw",
+  expect(drawable(bare).hyperframes).toEqual({
+    a: "a has a transition the pipeline cannot draw",
+    b: "b has a transition the pipeline cannot draw",
   });
+  expect(
+    shownAt(
+      parseComposition(bare, emptyTimelineSettings()).timeline,
+      drawable(bare),
+      45,
+    ),
+  ).toBeNull();
 });
 
 test("frames show the right media time, stacking and transition opacity", () => {
@@ -345,7 +380,7 @@ test("lookahead includes transition handles and keeps ownership outside its wind
   ).toEqual([{ frame: 145, id: "b-rest", fit: "cover" }]);
 });
 
-test("lookahead stops before an unclassified video rather than preparing past it", () => {
+test("lookahead prepares the pipeline’s return after an unclassified clip", () => {
   const html = page();
   const plan = drawable(html);
   const { timeline } = parseComposition(html, emptyTimelineSettings());
@@ -357,8 +392,9 @@ test("lookahead stops before an unclassified video rather than preparing past it
       { ...b, id: "new", src: "new.mp4", start: 50, duration: 5, track: 9 },
     ],
   };
-  // The unknown clip intervenes before a's reveal at 60 and b's opening at 90.
-  expect(appearances(changed, plan, 45, 100)).toEqual([]);
+  expect(appearances(changed, plan, 45, 100).map(({ frame }) => frame)).toEqual(
+    [55, 60, 90],
+  );
 });
 
 test("a frame showing one of HyperFrames' videos still draws the pipeline's beneath it", () => {

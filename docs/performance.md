@@ -99,7 +99,28 @@ Run it with `bun run build`, then `node scripts/bench-vs-studio.ts --editor cutr
 | Ripple delete, key to picture        |   609 ms |            649 ms |
 | Browser memory after the session     | 1,409 MB |          1,507 MB |
 
-HyperFrames' runtime draws a graded video through one shared WebGL context and copies the result into a canvas beside the clip, every displayed frame while it plays. These figures predate the 3D LUT compositor and the runtime's removal of redundant playback redraws. Use `--footage-only --grade --slider` to measure scrubbing, playback and slider response without running the edit suite. Add `--pipeline --pipeline-compatible` to exercise GPU footage playback. That variant uses the same media, cuts, titles and scenes and removes the root script, video's CSS class, and local GSAP path that prevented the original project from using the pipeline.
+HyperFrames' runtime draws a graded video through one shared WebGL context and copies the result into a canvas beside the clip, every displayed frame while it plays. These figures predate the 3D LUT compositor and the runtime's removal of redundant playback redraws. Use `--footage-only --grade --slider` to measure scrubbing, playback and slider response without running the edit suite. Add `--pipeline` to try GPU footage playback on the same authored project. `--pipeline-compatible` still makes the older control fixture. Use `--ripple-only` to measure scrub, playback, ripple delete and undo in one session.
+
+### GPU footage playback on the authored project
+
+The original 100-cut project used HyperFrames even with GPU footage playback enabled. Its empty root GSAP timeline stopped classification first. With that removed, the head's project-local GSAP path stopped it. With the library moved to Cutroom's usual path, the standard `clip` class still disqualified all 100 videos. The pipeline now draws those videos under the original titles and both placements of the scene. The bench project needs no markup changes.
+
+Headed Chromium, 1720 × 1050, `--editor cutroom --grade --ripple-only --runs 1` with the original project and the setting off or `--pipeline`. CPU throttling applied to the editor and the preview. Playback stayed at normal speed.
+
+| CPU | GPU setting | Scrub pictures/s | Scrub gap p95 | Playback pictures/s | Long playback holds in 10 s | Ripple / undo to picture, median | Browser PSS |
+| --- | ----------- | ---------------: | ------------: | ------------------: | --------------------------: | -------------------------------: | ----------: |
+| 1×  | Off         |              9.6 |        146 ms |                29.2 |                          11 |                     784 / 584 ms |   1,383 MiB |
+| 1×  | On          |             21.9 |         58 ms |                29.1 |                          16 |                       86 / 75 ms |   1,639 MiB |
+| 4×  | Off         |              5.0 |        288 ms |                15.9 |                         133 |    No validated seek before edit |   1,155 MiB |
+| 4×  | On          |             12.8 |        146 ms |                28.2 |                          26 |                     350 / 163 ms |   1,527 MiB |
+
+At 4× with the setting off, an earlier run measured 27.6 pictures/s and 97 long holds. It also lost a pre-edit picture check. Treat the playback spread as run-to-run variation. The 4× off memory sample covers the session without the five ripple edits, so it is a weaker comparison.
+
+A local check used a stream copy of an OBS 1080p60 HEVC recording on a millisecond clock. The timeline had eight graded cuts, alternate static zooms, a title and two animated scene placements. The pipeline owned the footage after the editing proxy was ready. On a mostly static screen recording, the headed screencast saw 2.3 → 3.6 visibly changed pictures/s while dragging and 1,119 → 1,040 MiB browser PSS at 1×. At 4× it saw 2.6 → 3.0 changed pictures/s and 1,038 → 1,030 MiB. Playback had too little picture motion to estimate dropped frames from those captures. Those counts describe visible changes in the recording.
+
+The 60 fps export check below the same two scene mounts reads the numbered source frame at all 12 positions, across a cut, a grade and a static zoom. Pixel parity with the composed MP4 remains open. A BT.709 test chart showed a mean RGB difference of roughly 9/255; the two viewer paths were within 0.6/255 on the frames where both had selected the same source picture.
+
+**Recommendation.** Keep the setting opt-in. Scrubbing and ripple edits improve on the cut-heavy project. Repeat the memory and playback measurements in Electron with moving OBS footage, and close the colour difference with the composed export before making the viewer path the default. Sources above the 1080p pixel budget, HDR and alpha stay in HyperFrames. Unproven root scripts, authored styles or adjustment effects can still require native compositing. A title or native clip below GPU footage uses HyperFrames for the overlap, with the pipeline resuming after it.
 
 ## Timeline engine
 
@@ -751,7 +772,7 @@ Chromium 155 and Electron 45 on Linux decode no HEVC, in `<video>` or WebCodecs,
 
 Before the fixes measured here, rotated phone video drew sideways (mean difference 121 to 218), HDR in a MOV and HDR named only in the bitstream drew untone-mapped (bias 26 and 18), Android's full-range EBU footage drew 8/255 too little blue, a delayed edit list drew the wrong frames, and Resolve's MOVs, which write negative composition offsets in a version 0 `ctts`, showed the previous frame for one in two or three frames, then stalled on the open GOP's B-frames once their times were read right. 4K60 played at 2.3 pictures a second: low-latency decoding ran at 94 fps there against 166 with frame threading, and the two lanes fell behind each other. On the 400-clip timeline, frame threading measured the same as low latency (29.6 pictures a second, steps 31 / 54-104 ms against 29-31 / 105-107 ms, W 39 ms, undo 96-102 against 100-165 ms).
 
-4K60 is still short of HyperFrames: the decoders put out about four frames for each one drawn, so their scheduling, not decoding, is the next fix. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
+In that comparison the 4K60 decoders produced about four frames for each one drawn. Cutroom now leaves sources above the 1080p pixel budget with HyperFrames, clip by clip. At an x264 open GOP's leading B-frames, a seeking `<video>` shows the keyframe after them and the pipeline shows the frame the file's timestamps name, as the export does; the e2e test checks those frames by number.
 
 ## Editing proxies
 
