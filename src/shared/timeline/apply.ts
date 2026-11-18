@@ -1,3 +1,4 @@
+import { frameTime, sourceGridFrame } from "./time";
 import { activeVersion, fitsVersion } from "./versions";
 import { firstTextLine, isAudioKind } from "./schema";
 import type {
@@ -207,9 +208,7 @@ function buildFxChain(
 export const canonicalSeconds = (value: number) =>
   Math.round(value * 1e6) / 1e6;
 const round6 = canonicalSeconds;
-/** Exact time of a frame, for seeking. */
-export const frameTime = (frames: number, fps: Fps) =>
-  (frames * fps.den) / fps.num;
+export { frameTime } from "./time";
 /** Frame time rounded to six decimals, as written to HTML and `cutroom.json`. */
 export const toSeconds = (frames: number, fps: Fps) =>
   round6(frameTime(frames, fps));
@@ -2572,8 +2571,9 @@ function framesAfterOut(clip: Clip, fps: Fps) {
 /** Whole frames of media a clip has before its in point. */
 function framesBeforeIn(clip: Clip, fps: Fps) {
   if (clip.mediaStart === null) return Infinity;
-  return Math.floor(
-    (clip.mediaStart / clip.playbackRate) * (fps.num / fps.den) + 1e-6,
+  return (
+    sourceGridFrame(clip.mediaStart, fps, clip.playbackRate) ??
+    Math.floor((clip.mediaStart * fps.num) / (fps.den * clip.playbackRate))
   );
 }
 

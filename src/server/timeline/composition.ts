@@ -1,3 +1,4 @@
+import { offsetSourceTime } from "../../shared/timeline/time";
 import {
   parseAutomation,
   serializeAutomation,
@@ -387,18 +388,27 @@ function scriptWritesText(scripts: readonly string[], id: string): boolean {
 }
 
 /**
- * The source time at a clip's first shown frame. An authored start between frames shifts it by the
- * gap to that frame; a start the editor wrote, within a microsecond of the frame, does not, so the
- * offset never depends on how the start was rounded. A start a hair past a frame shows from that
- * frame, before the source begins, and a media element seeks a negative time to 0.
+ * The source time at the cut, after any incoming transition handle. An authored start between
+ * frames also shifts the source by the gap to the first shown frame. An editor-written start
+ * uses its frame index so a saved decimal cannot move the source in-point.
  */
 function sourceAtFirstFrame(
   authored: number,
-  untilFirstFrame: number,
+  begin: number,
+  start: number,
+  fps: Fps,
   playbackRate: number,
 ): number {
-  const shift = Math.abs(untilFirstFrame) <= 1e-6 ? 0 : untilFirstFrame;
-  return Math.max(0, canonicalSeconds(authored + shift * playbackRate)) + 0;
+  const elementStart = toFrames(begin, fps);
+  const handle = start - elementStart;
+  const gap = frameTime(elementStart, fps) - begin;
+  const source =
+    Math.abs(gap) > 1e-6
+      ? authored + (gap + frameTime(handle, fps)) * playbackRate
+      : handle
+        ? offsetSourceTime(authored, handle, fps, playbackRate)
+        : authored;
+  return Math.max(0, canonicalSeconds(source)) + 0;
 }
 
 const sourceOf = (element: SourceElement) =>
@@ -774,7 +784,9 @@ export function parseComposition(
         kind === "video" || isAudioKind(kind) || kind === "composition"
           ? sourceAtFirstFrame(
               readMediaOffsetSeconds(attribute),
-              frameTime(start, fps) - read.begin,
+              read.begin,
+              start,
+              fps,
               playbackRate,
             )
           : null,
@@ -1262,7 +1274,10 @@ function clipChanges(
   );
   if (
     mediaStart !== null &&
-    (mediaStart !== before.mediaStart ||
+    (mediaStart !==
+      (before.mediaStart === null
+        ? null
+        : canonicalSeconds(before.mediaStart)) ||
       (writeStart && authoredMediaStart !== mediaStart))
   )
     changes.push([
