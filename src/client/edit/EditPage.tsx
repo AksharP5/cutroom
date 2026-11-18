@@ -592,6 +592,7 @@ export function EditPage({
         <SelectMenu<Zoom>
           className="edit-zoom"
           label="Viewer zoom"
+          title="Viewer zoom"
           value={zoom}
           options={[
             { value: "fit", label: "Fit" },
@@ -665,6 +666,7 @@ export function EditPage({
         role="separator"
         aria-orientation="horizontal"
         aria-label="Resize timeline"
+        title="Resize timeline"
         onPointerDown={(event) =>
           event.currentTarget.setPointerCapture(event.pointerId)
         }

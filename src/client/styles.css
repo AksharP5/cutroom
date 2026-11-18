@@ -162,7 +162,7 @@ kbd,
   color: var(--text-quiet);
 }
 
-/* Hover is a white overlay faded in by opacity; press is a scale. Nothing animates color. */
+/* A control keeps its own dimensions and backing while the feedback layer fades. */
 :is(
   .icon-button,
   .text-button,
@@ -178,57 +178,45 @@ kbd,
   .project-row,
   .file-row,
   .skill-picker button,
-  .status-bar button,
-  .toast button
+  .status-bar > button,
+  .toast button,
+  .edit-tool,
+  .edit-icon,
+  .edit-zoom,
+  .edit-export,
+  .edit-path-step,
+  button.edit-now,
+  .tl-zoom-step,
+  .tl-density-control,
+  button.tl-head-id,
+  button.tl-track-gain,
+  .tl-track-button,
+  .tl-track-fx,
+  .tl-head-name-field,
+  .edit-split,
+  .vo-input,
+  .vo-record
 ) {
   position: relative;
-}
-:is(
-  .icon-button,
-  .text-button,
-  .secondary-button,
-  .select-label,
-  .logo-button,
-  .project-switcher,
-  .tool-button,
-  .note-seek,
-  .note-thumb,
-  .chat-tool summary,
-  .chat-steps,
-  .project-row,
-  .file-row,
-  .skill-picker button,
-  .status-bar button,
-  .toast button
-)::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--overlay-hover);
-  opacity: 0;
-  transition: opacity var(--duration-hover) var(--ease-fade);
-  pointer-events: none;
-}
-:is(
-    .icon-button,
-    .text-button,
-    .secondary-button,
-    .select-label,
-    .logo-button,
-    .project-switcher,
-    .tool-button,
-    .note-seek,
-    .note-thumb,
-    .chat-tool summary,
-    .chat-steps,
-    .project-row,
-    .file-row,
-    .skill-picker button,
-    .status-bar button,
-    .toast button
-  ):hover:not(:disabled, :has(select:disabled))::before {
-  opacity: 1;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--overlay-hover);
+    opacity: 0;
+    transition: opacity var(--duration-hover) var(--ease-fade);
+    pointer-events: none;
+  }
+
+  &:hover:not(
+      :disabled,
+      [aria-disabled="true"],
+      :has(select:disabled)
+    )::before {
+    opacity: 1;
+  }
 }
 :is(
   .icon-button,
@@ -236,19 +224,30 @@ kbd,
   .primary-button,
   .secondary-button,
   .send-button,
-  .tool-button
+  .tool-button,
+  .logo-button,
+  .project-switcher,
+  .status-bar > button,
+  .edit-tool,
+  .edit-icon,
+  .edit-zoom,
+  .edit-export,
+  .edit-path-step,
+  button.edit-now,
+  .tl-zoom-step,
+  .tl-density-control,
+  button.tl-head-id,
+  button.tl-track-gain,
+  .tl-track-button,
+  .tl-track-fx,
+  .vo-input,
+  .vo-record
 ) {
   transition: transform var(--duration-press) var(--ease-out);
-}
-:is(
-    .icon-button,
-    .text-button,
-    .primary-button,
-    .secondary-button,
-    .send-button,
-    .tool-button
-  ):active:not(:disabled) {
-  transform: scale(var(--press-scale));
+
+  &:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(var(--press-scale));
+  }
 }
 
 /* Controls */
@@ -560,7 +559,7 @@ option {
   border-radius: var(--radius-control);
   color: var(--text-tertiary);
 }
-.status-bar button:hover {
+.status-bar > button:hover:not(:disabled) {
   color: var(--text-primary);
 }
 .status-folder {

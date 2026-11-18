@@ -43,6 +43,7 @@ export function StatusBar({
     <footer className="status-bar">
       <button
         className="status-folder"
+        aria-label="Copy project folder path"
         title={`Copy ${project.path}`}
         onClick={() => void navigator.clipboard.writeText(project.path)}
       >

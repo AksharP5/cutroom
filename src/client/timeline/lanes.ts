@@ -124,8 +124,8 @@ export function useLaneGestures(options: LaneGestureOptions) {
   /** The offsets a committed drag left its clips at, for `useClipMotion`. */
   const held = useRef<ReadonlyMap<string, Offset> | null>(null);
   const hoveredMix = useRef<HTMLElement | null>(null);
-  /** The clip the hover box was last put on, by where it was, so an edit that moved it moves the box. */
-  const hovered = useRef("");
+  const hovered = useRef<string | null>(null);
+  const hoverTransform = useRef("");
   const hoverBox = useRef<HTMLElement>(null);
   /** The hovered clip's label, which shows a name that rests hidden (timeline.css). */
   const hoverLabel = useRef<HTMLElement | null>(null);
@@ -761,30 +761,30 @@ export function useLaneGestures(options: LaneGestureOptions) {
       );
   }
 
-  /** Lays the hover box over a clip, or takes it away. Only a change of clip writes to it. */
+  /** Move the single overlay without changing layout or repainting the clip bodies. */
   function hoverClip(clip: Clip | null) {
     const element = hoverBox.current;
+    if (!element) return;
     const row = clip && rowOf(clip.track);
-    const key =
-      clip && row
-        ? `${clip.id}:${clip.start}:${clip.duration}:${row.top}:${row.height}`
-        : "";
-    if (!element || key === hovered.current) return;
-    hovered.current = key;
-    hoverLabel.current?.removeAttribute("data-hover");
-    hoverLabel.current =
-      (clip &&
-        latest.current.lanes.current?.querySelector<HTMLElement>(
-          `[data-clip-label="${CSS.escape(clip.id)}"]`,
-        )) ||
-      null;
-    hoverLabel.current?.setAttribute("data-hover", "");
-    element.hidden = !(clip && row);
-    if (!clip || !row) return;
-    element.style.setProperty("--s", String(clip.start));
-    element.style.setProperty("--d", String(clip.duration));
-    element.style.top = `${row.top}px`;
-    element.style.height = `${row.height - 2}px`;
+    const ppf = view()?.ppf;
+    const id = clip && row && ppf ? clip.id : null;
+    if (id !== hovered.current) {
+      hovered.current = id;
+      hoverLabel.current?.removeAttribute("data-hover");
+      hoverLabel.current = id
+        ? (latest.current.lanes.current?.querySelector<HTMLElement>(
+            `[data-clip-label="${CSS.escape(id)}"]`,
+          ) ?? null)
+        : null;
+      hoverLabel.current?.setAttribute("data-hover", "");
+      element.toggleAttribute("data-hover", id !== null);
+    }
+    if (!clip || !row || !ppf) return;
+    const transform = `translate(${clip.start * ppf}px, ${row.top + 1}px) scale(${Math.max(1, clip.duration * ppf - 1)}, ${row.height - 2})`;
+    if (hoverTransform.current !== transform) {
+      hoverTransform.current = transform;
+      element.style.transform = transform;
+    }
   }
 
   function hover(event: PointerEvent) {
@@ -1097,6 +1097,7 @@ export function useLaneGestures(options: LaneGestureOptions) {
   }
 
   function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (hovered.current) hoverClip(null);
     const over = dropAt(event);
     if (!over) return;
     event.preventDefault();
@@ -1192,6 +1193,12 @@ export function useLaneGestures(options: LaneGestureOptions) {
     held,
     /** The view scrolled or zoomed: a drag under way is drawn again from where the pointer is. */
     refresh() {
+      if (hovered.current)
+        hoverClip(
+          latest.current.timeline.clips.find(
+            (clip) => clip.id === hovered.current,
+          ) ?? null,
+        );
       drawn.current = "";
       update();
     },
