@@ -11,6 +11,7 @@ import {
   ElementStyleSchema,
   fontFamily,
 } from "./elementStyle.ts";
+import { RegionEditSchema, RegionSchema } from "./region.ts";
 import { z } from "zod";
 
 const frame = z.number().int().nonnegative();
@@ -405,6 +406,17 @@ export const ClipSchema = z.object({
     .describe(
       "A Cutroom title's look and motion; null for every other clip. Change it with setClip.title and its words with setClip.text.",
     ),
+  region: RegionSchema.nullable()
+    .default(null)
+    .describe(
+      "A zoom on this clip, or an adjustment layer's zoom, blur or highlight; null for none. Change it with setClip.region.",
+    ),
+  adjustment: z
+    .boolean()
+    .default(false)
+    .describe(
+      "An adjustment layer: a clip that draws nothing itself and applies its region to every picture on the video tracks below it while it plays",
+    ),
   style: ElementStyleSchema.default({}).describe(
     "The clip's inline look, as setClip.style writes it: text style on text elements, fill, corner radius, shadow, blur, layout size, and fit on video and images. A field is left out when the clip sets no inline value Cutroom can read; the composition's stylesheets and animation then decide it.",
   ),
@@ -618,6 +630,22 @@ export const InsertCompositionSchema = z.object({
   label: label.optional(),
 });
 
+export const InsertAdjustmentSchema = z.object({
+  id: clipId
+    .optional()
+    .describe(
+      "Element id, never used before in this project; when omitted, adjustment and a random suffix",
+    ),
+  kind: z.literal("adjustment"),
+  duration: frames.describe("Length on the timeline in frames"),
+  region: RegionEditSchema.extend({
+    effect: RegionSchema.shape.effect,
+  }).describe(
+    "The effect and its region. Omitted fields take the effect's defaults: a 0.5 s ease-in-out ramp at each end for a zoom; blur and highlight show at full strength from the first frame to the last.",
+  ),
+  label: label.optional(),
+});
+
 const clipIds = z.array(clipId).min(1).max(10_000);
 /** Ids for the pieces a command cuts off, so a caller knows a new clip's id before it exists. */
 const pieceIds = z
@@ -809,6 +837,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         InsertClipSchema,
         InsertTitleSchema,
         InsertCompositionSchema,
+        InsertAdjustmentSchema,
       ]),
       linkedAudio: z
         .object({
@@ -826,7 +855,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
       ids: pieceIds,
     })
     .describe(
-      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; or a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start.',
+      'Add a media clip; a title with clip.kind "title": words on screen with a preset entrance and exit that stay on the clip\'s edges through every edit; a scene with clip.kind "composition": a host clip that plays another composition file of the project from its start; or an adjustment layer with clip.kind "adjustment": a zoom, blur or highlight on a video track that applies to every picture below it while it plays.',
     ),
   z
     .object({
@@ -916,6 +945,11 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .boolean()
         .optional()
         .describe("False hides the clip from preview and render"),
+      region: RegionEditSchema.nullable()
+        .optional()
+        .describe(
+          "Set, change or remove the clip's zoom, or an adjustment layer's effect. Omitted fields keep their values, or take the effect's defaults when the clip has none; null removes it. Blur and highlight need an adjustment layer.",
+        ),
     })
     .describe("Change clip properties. Null clears a property."),
   z
@@ -1236,6 +1270,7 @@ export type Timeline = z.infer<typeof TimelineSchema>;
 export type InsertClip = z.infer<typeof InsertClipSchema>;
 export type InsertTitle = z.infer<typeof InsertTitleSchema>;
 export type InsertComposition = z.infer<typeof InsertCompositionSchema>;
+export type InsertAdjustment = z.infer<typeof InsertAdjustmentSchema>;
 export type Title = z.infer<typeof TitleSchema>;
 export type Transition = z.infer<typeof TransitionSchema>;
 export type TitleEdit = z.infer<typeof TitleEditSchema>;

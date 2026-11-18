@@ -314,3 +314,21 @@ export const keyframeCss = <P extends KeyframeProperty>(
   property: P,
   value: KeyframeValues[P],
 ) => CSS[property](value);
+
+/**
+ * The animation a keyframed clip runs, as one entry of an `animation-*` list. Titles and transitions
+ * put it first in theirs, so their fades draw over the keyframed opacity as they do over a static
+ * one. It runs from the first keyframe to the last and holds outside them; its iterations are cut
+ * at the element's end, so a keyframe a trim left outside the clip never lengthens a composition
+ * whose length the runtime infers from its animations.
+ */
+export const KEYFRAME_ANIMATION = {
+  name: "var(--cutroom-keyframes,none)",
+  duration: "calc(var(--cutroom-keyframes-span,1)*1s)",
+  delay:
+    "calc(min(var(--cutroom-keyframes-at,0),attr(data-duration type(<number>),0))*1s)",
+  iterations:
+    "clamp(0,(attr(data-duration type(<number>),0) - var(--cutroom-keyframes-at,0))/var(--cutroom-keyframes-span,1),1)",
+  fill: "both",
+  timing: "linear",
+};

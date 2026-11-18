@@ -10,7 +10,14 @@ import type {
   KeyframeProperty,
   Keyframes,
 } from "../../shared/timeline/schema";
-import { keyframeCss, tracksOf } from "../../shared/timeline/keyframes";
+import {
+  KEYFRAME_ANIMATION,
+  keyframeCss,
+  tracksOf,
+} from "../../shared/timeline/keyframes";
+import { REGION_ANIMATION } from "../../shared/timeline/regionStyle";
+
+export { KEYFRAME_ANIMATION };
 import type { KeyframeValues } from "../../shared/timeline/keyframes";
 
 /** A clip's keyframes, in element-local seconds. The stylesheet below draws them. */
@@ -122,32 +129,16 @@ const TIMING = {
   hold: "steps(1,end)",
 } satisfies Record<KeyframeEase, string>;
 
-/**
- * The animation a keyframed clip runs, as one entry of an `animation-*` list. Titles and transitions
- * put it first in theirs, so their fades draw over the keyframed opacity as they do over a static
- * one. It runs from the first keyframe to the last and holds outside them; its iterations are cut
- * at the element's end, so a keyframe a trim left outside the clip never lengthens a composition
- * whose length the runtime infers from its animations.
- */
-export const KEYFRAME_ANIMATION = {
-  name: "var(--cutroom-keyframes,none)",
-  duration: "calc(var(--cutroom-keyframes-span,1)*1s)",
-  delay:
-    "calc(min(var(--cutroom-keyframes-at,0),attr(data-duration type(<number>),0))*1s)",
-  iterations:
-    "clamp(0,(attr(data-duration type(<number>),0) - var(--cutroom-keyframes-at,0))/var(--cutroom-keyframes-span,1),1)",
-  fill: "both",
-  timing: "linear",
-};
-
+// A zoom over the clip runs after its keyframes, adding onto the position they draw.
 const BASE_RULE =
   `:where([${KEYFRAMES_ATTRIBUTE}]){` +
-  `animation-name:${KEYFRAME_ANIMATION.name};` +
-  `animation-duration:${KEYFRAME_ANIMATION.duration};` +
-  `animation-delay:${KEYFRAME_ANIMATION.delay};` +
-  `animation-iteration-count:${KEYFRAME_ANIMATION.iterations};` +
-  `animation-fill-mode:${KEYFRAME_ANIMATION.fill};` +
-  `animation-timing-function:${KEYFRAME_ANIMATION.timing}}`;
+  `animation-name:${KEYFRAME_ANIMATION.name},${REGION_ANIMATION.name};` +
+  `animation-duration:${KEYFRAME_ANIMATION.duration},${REGION_ANIMATION.duration};` +
+  `animation-delay:${KEYFRAME_ANIMATION.delay},${REGION_ANIMATION.delay};` +
+  `animation-iteration-count:${KEYFRAME_ANIMATION.iterations},${REGION_ANIMATION.iterations};` +
+  `animation-fill-mode:${KEYFRAME_ANIMATION.fill},${REGION_ANIMATION.fill};` +
+  `animation-timing-function:${KEYFRAME_ANIMATION.timing},${REGION_ANIMATION.timing};` +
+  `animation-composition:replace,${REGION_ANIMATION.composition}}`;
 
 const number = (value: number) => String(Number(value.toFixed(6)) + 0);
 

@@ -68,6 +68,8 @@ const clip = (
   keyframes: null,
   text: null,
   title: null,
+  region: null,
+  adjustment: false,
   style: {},
   fadeIn: 0,
   fadeOut: 0,

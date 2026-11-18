@@ -54,13 +54,17 @@ interface Offset {
   y: number;
 }
 
-/** The preview only knows elements; the timeline says which are clips that can be picked. */
+/**
+ * The preview only knows elements; the timeline says which are clips that can be picked. An
+ * adjustment layer covers the whole frame, so a press goes to the picture under it.
+ */
 const pickable = (timeline: Timeline, hits: readonly PictureHit[]) =>
   hits.filter((hit) => {
     const found = timeline.clips.find((item) => item.id === hit.clipId);
     return (
       found &&
       !isAudioKind(found.kind) &&
+      !found.adjustment &&
       !timeline.tracks.find((track) => track.index === found.track)?.locked
     );
   });

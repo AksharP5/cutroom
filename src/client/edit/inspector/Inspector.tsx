@@ -606,7 +606,7 @@ export function Inspector({
             times={false}
             hold={holdChanges}
           />
-          {!isAudioKind(clip.kind) && (
+          {!isAudioKind(clip.kind) && !clip.adjustment && (
             <MotionSection
               key={`${projectId}:${view!.composition}:${clip.id}`}
               projectId={projectId}
@@ -687,7 +687,7 @@ export function Inspector({
               disabled={track?.track.locked ?? false}
             />
           )}
-          {!isAudioKind(clip.kind) && (
+          {!isAudioKind(clip.kind) && !clip.adjustment && (
             <details
               open={transformOpen}
               onToggle={(event) => setTransformOpen(event.currentTarget.open)}
@@ -769,7 +769,7 @@ export function Inspector({
               )}
             </details>
           )}
-          {!isAudioKind(clip.kind) && (
+          {!isAudioKind(clip.kind) && !clip.adjustment && (
             <details
               open={compositeOpen}
               onToggle={(event) => setCompositeOpen(event.currentTarget.open)}
@@ -788,7 +788,7 @@ export function Inspector({
               />
             </details>
           )}
-          {!isAudioKind(clip.kind) && !titled && (
+          {!isAudioKind(clip.kind) && !clip.adjustment && !titled && (
             <StyleSection
               projectId={projectId}
               clip={clip}
