@@ -28,6 +28,7 @@ import { transport, useTransport } from "./transport";
 import { connectPreview, usePreparing } from "./preview";
 import { previewRefresh } from "./previewRefresh";
 import { previewVariablesQuery, useVariables } from "./variables";
+import { auditionClip, auditionQuery, useVersions } from "./versions";
 import { transitionHandoff } from "./viewerHandoff";
 import { editPicture, followEditPicture } from "./editFrame";
 import { usePipeline } from "../pipeline/setting";
@@ -254,13 +255,17 @@ export function Viewer({
   const documentCompositions = useRef(new Map<number, string>());
   /** The variable overrides each document was requested with, as HyperFrames' query. */
   const documentVariables = useRef(new Map<number, string>());
+  /** The clip whose versions each document carries, to switch them within a frame. */
+  const documentAuditions = useRef(new Map<number, string | null>());
   const previewQuery = (gen: number) => {
     const shown = documentCompositions.current.get(gen) ?? ROOT_COMPOSITION;
     return `${
       shown === ROOT_COMPOSITION
         ? ""
         : `&composition=${encodeURIComponent(shown)}`
-    }${documentVariables.current.get(gen) ?? ""}`;
+    }${documentVariables.current.get(gen) ?? ""}${auditionQuery(
+      documentAuditions.current.get(gen) ?? null,
+    )}`;
   };
   const reload = (
     revision: number,
@@ -272,6 +277,7 @@ export function Viewer({
       latest.current,
       previewVariablesQuery(shownComposition.current),
     );
+    documentAuditions.current.set(latest.current, auditionClip());
     loadingRevision.current = { gen: latest.current, revision };
     transition({ type: "navigate", gen: latest.current, deadline });
   };
@@ -462,6 +468,28 @@ export function Viewer({
       }),
     [],
   );
+  // A clip's versions load with a new document, over the last picture, when its list opens or
+  // it is selected; switching between them afterwards needs no load.
+  useEffect(() => {
+    const check = () => {
+      const requested = documentAuditions.current.get(latest.current);
+      if (requested === undefined || requested === auditionClip()) return;
+      checking.current?.abort();
+      reload(shownRevision.current);
+    };
+    const stopVersions = useVersions.subscribe(check);
+    const stopTimeline = useTimeline.subscribe(check);
+    return () => {
+      stopVersions();
+      stopTimeline();
+    };
+  }, []);
+  useEffect(() => {
+    const clipId = live ? documentAuditions.current.get(live.gen) : null;
+    useVersions.setState({
+      loaded: live && clipId ? { clipId, gen: live.gen } : null,
+    });
+  }, [live]);
   // Opening a composition loads its document over the last picture, as an edit's reload does.
   const opened = useRef(composition);
   useLayoutEffect(() => {

@@ -45,6 +45,7 @@ import { z } from "zod";
 import { bundleToSingleHtml } from "@hyperframes/core/compiler";
 import { injectDeterministicFontFaces } from "@hyperframes/core/fonts/embed";
 import { previewRuntimeScript } from "./previewRuntime";
+import { AUDITION_PARAM, auditionDocument } from "./audition";
 import {
   rebaseCompiledImageVariables,
   rebaseImageOverrides,
@@ -1150,7 +1151,11 @@ export function createHyperframesApi(
     // Concurrent readers share the upstream compilation, not its async-local context.
     // Reuse that build's source policy by input signature for guarded comparisons only.
     // Approval of an executing document still requires a finalized response.
+    const audition =
+      path === "preview" ? url.searchParams.get(AUDITION_PARAM) : null;
+    // A document carrying a clip's other versions differs from the source, so it always reloads.
     const eligible =
+      !audition &&
       path === "preview" &&
       (timingRead
         ? timingRead.allowed === true ||
@@ -1158,13 +1163,22 @@ export function createHyperframesApi(
             !!timingRead.signature &&
             timingPolicies.has(`${project.path}\0${timingRead.signature}`))
         : eligiblePreviews.has(compiled));
-    const html = compiled
+    const rewritten = compiled
       .replaceAll(
         `/api/projects/${encodeURIComponent(projectId)}/preview/`,
         `${prefix}preview/`,
       )
       .replaceAll("/api/runtime.js", `${prefix}runtime.js`)
       .replaceAll("/api/vendor/npm/", `${prefix}vendor/npm/`);
+    const html =
+      audition && response.ok && audition.length <= 200
+        ? await auditionDocument(
+            rewritten,
+            project,
+            activeCompositionPath,
+            audition,
+          )
+        : rewritten;
     const mix = trackGainPreview(html, activeCompositionPath);
     if (url.searchParams.get("cutroom-mix") === "1") {
       headers.set("Content-Type", "application/json");

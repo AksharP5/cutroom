@@ -115,12 +115,19 @@ export const pictureBox = {
 let pictureTarget: {
   hit(x: number, y: number): Promise<PictureHit[]>;
   boxes(): Promise<ShownClip[]>;
+  audition(version: number): void;
 } | null = null;
 /** The clips under a point of the shown picture, topmost first, in composition pixels. */
 export const hitPicture = (x: number, y: number) =>
   pictureTarget?.hit(x, y) ?? Promise.resolve([]);
 /** Every clip drawn on the shown picture, with its box in composition pixels. */
 export const shownClips = () => pictureTarget?.boxes() ?? Promise.resolve([]);
+/**
+ * Shows one of a clip's versions in the shown picture, when its document carries them all
+ * (see `versions.ts`). Any other document ignores the message.
+ */
+export const auditionPicture = (version: number) =>
+  pictureTarget?.audition(version);
 
 /** A move under way on the picture, which the inspector's Position fields show until it ends. */
 export const usePictureMove = create<{
@@ -489,6 +496,11 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     hit: async (x: number, y: number) =>
       (await request("hit", { x, y })).hits ?? [],
     boxes: async () => (await request("boxes")).boxes ?? [],
+    audition: (version: number) =>
+      frame.contentWindow?.postMessage(
+        { source: "cutroom-audition", version },
+        "*",
+      ),
   };
   const edit = seekQueue<EditPicture | null>(
     async (picture) => {

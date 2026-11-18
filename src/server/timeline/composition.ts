@@ -1922,7 +1922,7 @@ const textMarkup = (text: string) =>
     )
     .join("<br>");
 
-const attributeMarkup = (attributes: AttributeChange[]) =>
+export const attributeMarkup = (attributes: AttributeChange[]) =>
   attributes
     .map(([name, value]) =>
       value === null ? ` ${name}` : ` ${name}="${escapeAttribute(value)}"`,

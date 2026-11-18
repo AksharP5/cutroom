@@ -1,3 +1,4 @@
+import { VersionsBadge } from "./VersionsBadge";
 import { syncOffsets } from "../../shared/timeline/sync";
 import { useTrackResize } from "./heights";
 import {
@@ -342,6 +343,9 @@ const ClipLabel = memo(function ClipLabel({
             {clip.textPreview}
           </span>
         </span>
+      )}
+      {clip.versions && (
+        <VersionsBadge clip={{ ...clip, versions: clip.versions }} />
       )}
       {offline && (
         <span className="tl-text-line tl-offline">Media offline</span>

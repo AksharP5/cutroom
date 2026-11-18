@@ -815,3 +815,17 @@ Temporary `performance.measure` calls included query setup and result constructi
 The CPU reduction did not establish a general picture-latency improvement. Median first-picture latency in the three 400-clip runs ranged 37.7 to 42.7 ms before and 36.5 to 42.4 ms after; at 500 clips it ranged 40.2 to 43.9 ms before and 41.0 to 42.6 ms after. Pictures were read from composited screencasts after measurement, using the burned-in frame numbers rather than the canvas's requested-frame attribute. Every one of the 384 steps showed the expected source picture before the next input. Two additional matched 500-clip runs in each build crossed a cut in both directions from timeline frame 3070; all 128 pictures also matched. No long tasks occurred in these runs. Cold project opening was 1.4 to 2.0 seconds across both builds; that fixture warms filmstrips and peaks first, so it is not a cold-media benchmark.
 
 This improves synchronous lookahead work when the experimental footage pipeline is on. It does not establish a playback-rate or memory improvement, and does not change the setting's default, classification, decoders, clock or HyperFrames confirmation. To reproduce the interaction manually, enable the footage pipeline, open the same generated workload, type `00:01:40:00`, and alternate 16 Right and 16 Left inputs at eight inputs per second. The cut-crossing variant starts at `00:01:42:10`.
+
+## Clip versions
+
+Switching a clip's versions in the viewer posts one message to the shown document, which toggles which version's host is marked shown and answers after its next frame. The time is from the pointer entering a row in the versions list to that answer, on November 18, 2026, with four GSAP scene versions of one title, Chromium 155 on the shared Intel Core i5-14400F with 32 GB RAM:
+
+| Run                                   | Hover to picture, each switch |
+| ------------------------------------- | ----------------------------: |
+| Headed, hardware GPU                  |               15.3 to 19.7 ms |
+| Headless, software compositing        |               35.5 to 38.6 ms |
+| Headless e2e (`e2e/versions.spec.ts`) |               25.7 to 36.8 ms |
+
+Headed, that is the one frame the document needs to draw at 60 Hz. Hovering the version already shown sends nothing.
+
+Only one clip's versions are loaded at a time, and a clip holds at most 12, so the extra work is bounded by one clip's scenes, never the project's length. With the list open on that title, Chromium's processes held 1,204 MB against 1,130 MB before it opened (four scenes, three of them standing by), and the next document without them gives that back. The active version is the compiled one, so the viewer's picture with the list open matched the picture without it byte for byte in the e2e test.
