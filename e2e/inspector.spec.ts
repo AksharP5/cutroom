@@ -556,6 +556,14 @@ test("Changes stays bounded and fields, sections, selection and the drawer behav
     .locator('[data-clip="background"]')
     .click({ modifiers: ["Control"] });
   await expect(inspector).toContainText("3 clips selected");
+  await expect(inspector.locator(".inspector-facts dd")).toHaveText([
+    "3 text",
+    "00:00:00:00 to 00:00:09:29",
+    "00:00:20:00",
+  ]);
+  await expect(inspector.locator(".inspector-changes")).toContainText(
+    "Set opacity",
+  );
   await expect(opacity).toHaveCount(0);
   await page.locator('[data-clip="opening-title"]').click();
   for (const name of ["Composite", "Timing"])

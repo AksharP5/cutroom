@@ -227,7 +227,7 @@ Select one title and the inspector shows a Title section between Text and Transf
 
 To give other titles the same look, right-click a title and choose Copy style, then select the others and choose Paste style. It copies every Title setting, motions and Position included, but not the words, timing or Transform settings, and pasting onto several titles is one undo step. The copied style lasts until the editor reloads and belongs to its project, because fonts do.
 
-The section edits one title at a time. Several selected clips show the clip count, as for every other inspector section. A title Cutroom cannot read shows the reason in the section in place of the controls.
+The section edits one title at a time. Several selected clips show counts by type, the span from the first start through the last visible frame, total clip length, and their Changes. The existing audio controls still appear for selected clips with sound. A title Cutroom cannot read shows the reason in the section in place of the controls.
 
 The entrance belongs to the clip's first frame and the exit to its last:
 

@@ -609,6 +609,9 @@
   font: var(--weight-medium) var(--type-xs) var(--font-mono);
   font-stretch: var(--stretch-mono);
 }
+.inspector-facts .inspector-selection-types {
+  font: inherit;
+}
 .inspector-range-join {
   color: var(--text-tertiary);
   font-family: var(--font-sans);
