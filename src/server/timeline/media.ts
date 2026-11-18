@@ -3,7 +3,7 @@ import { findFfBinary } from "@hyperframes/parsers/ff-binaries";
 import { z } from "zod";
 import type { Project } from "../../shared/project";
 import { fileFingerprint, localMediaPath } from "../../shared/media";
-import { projectPath } from "../projects/store";
+import { projectPath, unavailableProjectFile } from "../projects/path";
 import { compositionScope, mediaSources } from "./composition";
 import { localMediaInputOptions } from "../media/input";
 
@@ -108,4 +108,49 @@ export function compositionMediaFacts(
     composition,
     mediaSources(html, compositionScope(composition)),
   );
+}
+
+/** Named local sources that would otherwise reach the renderer without a file. */
+export async function missingMediaPaths(
+  project: Project,
+  composition: string,
+  sources: Iterable<string>,
+) {
+  const files = new Map<string, Promise<boolean>>();
+  const exists = (path: string) => {
+    const cached = files.get(path);
+    if (cached) return cached;
+    const checking = projectPath(project, path)
+      .then(async (absolute) => (await stat(absolute)).isFile())
+      .catch((error: unknown) => {
+        if (unavailableProjectFile(error)) return false;
+        throw error;
+      });
+    files.set(path, checking);
+    return checking;
+  };
+  const missing = await Promise.all(
+    [...new Set(sources)].map(async (src) => {
+      const path = localMediaPath(composition, src);
+      if (
+        !path ||
+        path === "." ||
+        path.startsWith("../") ||
+        path.includes("\0")
+      )
+        return null;
+      if (await exists(path)) return null;
+      // Like the preview, a bare scene URL may name a file at the project root.
+      if (
+        composition.includes("/") &&
+        !src.startsWith("../") &&
+        !src.startsWith("/")
+      ) {
+        const root = localMediaPath("index.html", src);
+        if (root && root !== path && (await exists(root))) return null;
+      }
+      return path;
+    }),
+  );
+  return [...new Set(missing.filter((path) => path !== null))].sort();
 }

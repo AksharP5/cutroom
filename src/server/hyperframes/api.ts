@@ -102,8 +102,12 @@ import {
   mediaSources,
   sourceVariables,
 } from "../timeline/composition";
-import { mediaFacts } from "../timeline/media";
-import { VariableError, VariableValuesSchema } from "../../shared/variables";
+import { mediaFacts, missingMediaPaths } from "../timeline/media";
+import {
+  VariableError,
+  VariableValuesSchema,
+  variableDefaultValue,
+} from "../../shared/variables";
 import type { VariableValues } from "../../shared/variables";
 import {
   emptyTimelineSettings,
@@ -373,6 +377,10 @@ export function createHyperframesApi(
       const pixels = Math.floor(Number(root.attrs[name]));
       return Number.isSafeInteger(pixels) && pixels > 0 ? pixels : fallback;
     };
+    let declared:
+      ReturnType<typeof sourceVariables>["declarations"] | undefined;
+    const declarations = () =>
+      (declared ??= sourceVariables(source.content, scope).declarations);
     /** Overrides for this composition's declarations, without those that equal a default. */
     const variables = async (values: VariableValues | undefined) => {
       if (!values) return undefined;
@@ -381,7 +389,7 @@ export function createHyperframesApi(
           project,
           composition,
           values,
-          sourceVariables(source.content, scope).declarations,
+          declarations(),
         );
       } catch (error) {
         if (error instanceof VariableError)
@@ -396,6 +404,7 @@ export function createHyperframesApi(
         height: size("data-height", 1080),
       },
       variables,
+      declarations,
     };
   };
   /** A composition named by a caller, as the project path the timeline routes use. */
@@ -558,11 +567,13 @@ export function createHyperframesApi(
     if (!isAbsolute(cutroom.directory))
       throw new HttpError(400, "Enter an absolute output folder.");
     const project = await store.get(c.req.param("id"));
+    const source = exportedComposition(composition);
     const {
       timeline,
       size: composed,
       variables,
-    } = await readComposition(project.id, exportedComposition(composition));
+      declarations,
+    } = await readComposition(project.id, source);
     // Every override must fit its declaration; the render route only checks that they are an object.
     const overrides = z
       .object({ variables: VariableValuesSchema.optional() })
@@ -574,7 +585,30 @@ export function createHyperframesApi(
           .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
           .join("; "),
       );
-    await variables(overrides.data.variables);
+    const values = await variables(overrides.data.variables);
+    const imageSources = new Map<string, string>();
+    if (timeline.clips.some((clip) => clip.variableBindings?.image))
+      for (const variable of declarations()) {
+        if (variable.type !== "image") continue;
+        const value = values?.[variable.id] ?? variableDefaultValue(variable);
+        if (typeof value === "string" && value)
+          imageSources.set(variable.id, value);
+      }
+    const offline = await missingMediaPaths(
+      project,
+      source,
+      timeline.clips.flatMap((clip) => {
+        if (!clip.enabled || clip.kind === "composition") return [];
+        const image = clip.variableBindings?.image;
+        const src = (image ? imageSources.get(image) : undefined) ?? clip.src;
+        return src ? [src] : [];
+      }),
+    );
+    if (offline.length)
+      throw new HttpError(
+        422,
+        `Restore these offline files before exporting: ${offline.join(", ")}.`,
+      );
     const rate = parseFps(request.data.fps);
     if (!rate.ok) throw new HttpError(400, "Choose a valid frame rate.");
     // The render route plays GIF at 30 fps at most; the range follows the rate it renders.

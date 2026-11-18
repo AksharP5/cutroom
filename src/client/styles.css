@@ -577,7 +577,8 @@ option {
 .status-space {
   flex: 1;
 }
-.status-bar .status-lint[data-errors] {
+.status-bar .status-lint[data-errors],
+.status-bar .status-offline {
   color: var(--danger);
 }
 .lint-menu {
@@ -708,6 +709,12 @@ option {
   border-radius: var(--radius-clip);
   background: var(--surface-lane);
   color: var(--wave-audio);
+}
+.media-row[data-offline] .media-thumb {
+  visibility: hidden;
+}
+.media-row[data-offline] .media-name {
+  color: var(--danger);
 }
 .media-thumb :is(img, video) {
   width: 100%;
