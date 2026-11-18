@@ -47,6 +47,7 @@ import { saveReviewNote } from "./review";
 import { EditorToolsContext } from "./editor/EditorTools";
 import { ScriptPanel } from "./components/ScriptPanel";
 import { StatusBar } from "./components/StatusBar";
+import { WorkspaceDivider } from "./components/WorkspaceDivider";
 import { clearToasts, showToast, useWorkspace } from "./workspace";
 import { actionFor, focusPanel, keymap, useKeymap } from "./keymap";
 import type { Action } from "./keymap";
@@ -573,6 +574,7 @@ export function App() {
         ))
       ) : (
         <main className={`workspace ${workPanel ? "with-work-panel" : ""}`}>
+          {workPanel && <WorkspaceDivider />}
           <MediaPanel
             key={project.id}
             projectId={project.id}
@@ -580,6 +582,7 @@ export function App() {
             hidden={!workPanel}
           />
           <section
+            id="work-panel"
             className="work-panel"
             aria-label="Project workspace"
             hidden={!workPanel}

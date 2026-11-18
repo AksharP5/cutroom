@@ -248,7 +248,8 @@
   --breakpoint-short: 960px;
   --width-left: 320px;
   --width-left-min: 300px;
-  --width-left-max: 480px;
+  --width-left-max: 760px;
+  --width-menu-max: 480px;
   --width-inspector: 300px;
   --width-inspector-min: 264px;
   --width-centre-min: 736px;
@@ -277,6 +278,7 @@
   --z-range-lines: 3;
   --z-playhead: 4;
   --z-track-heads: 5;
+  --z-workspace-divider: 10;
   --z-popover: 20;
   --z-toast: 30;
   --z-scrim: 40;
