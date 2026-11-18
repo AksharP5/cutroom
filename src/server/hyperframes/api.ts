@@ -2,6 +2,8 @@ import {
   fileFingerprint,
   inMediaTrash,
   isFreezeExport,
+  isMediaItem,
+  localMediaPath,
 } from "../../shared/media";
 import { PROJECT_DOCUMENT_PATH } from "../../shared/project";
 import { AGENT_HEADER } from "../../shared/review";
@@ -23,7 +25,7 @@ import {
 } from "../../shared/export";
 import { projectMutationGuard } from "../projects/authorization";
 import { sourceWriteGuard } from "./source-guard";
-import { projectStatePath } from "../projects/path";
+import { projectStatePath, unavailableProjectFile } from "../projects/path";
 import { checkProjectVariableValues } from "../projects/variables";
 import { rebasePreviewSceneSources } from "../projects/sceneSources";
 import { watch } from "node:fs";
@@ -1341,18 +1343,55 @@ export function createHyperframesApi(
         !isFreezeExport(file),
     );
     const project = await store.get(c.req.param("id"));
+    const versioned = new Set(files);
+    const requested = c.req.query("mediaComposition");
+    if (requested) {
+      const composition = exportedComposition(requested);
+      const source = await readSource(project, composition).catch(
+        (error: unknown) => {
+          if (unavailableProjectFile(error)) return null;
+          throw error;
+        },
+      );
+      // A directory symlink can be absent from Studio's walk even though its media still
+      // resolves. Version the timeline's references without adding duplicate Media items.
+      if (source)
+        for (const src of mediaSources(
+          source.content,
+          compositionScope(composition),
+          { images: true },
+        )) {
+          const path = localMediaPath(composition, src);
+          if (
+            path &&
+            !path.startsWith("../") &&
+            !path.includes("\0") &&
+            isMediaItem(path)
+          )
+            versioned.add(path);
+          if (
+            composition.includes("/") &&
+            !src.startsWith("../") &&
+            !src.startsWith("/")
+          ) {
+            const root = localMediaPath("index.html", src);
+            if (
+              root &&
+              !root.startsWith("../") &&
+              !root.includes("\0") &&
+              isMediaItem(root)
+            )
+              versioned.add(root);
+          }
+        }
+    }
     const fileVersions = Object.fromEntries(
       await Promise.all(
-        files.map(async (path) => {
+        [...versioned].map(async (path) => {
           const info = await projectPath(project, path)
             .then((absolute) => stat(absolute))
             .catch((error: unknown) => {
-              if (
-                isMissing(error) ||
-                (error instanceof HttpError &&
-                  [403, 404].includes(error.status))
-              )
-                return null;
+              if (unavailableProjectFile(error)) return null;
               throw error;
             });
           return [path, info?.isFile() ? fileFingerprint(path, info) : null];

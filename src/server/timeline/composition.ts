@@ -413,12 +413,19 @@ export function scopeElements(
   return template ? [...descendants(template.content)] : live;
 }
 
-/** Media files whose length the projection needs, as authored `src` values. */
-export function mediaSources(html: string, scope: CompositionScope): string[] {
+/** Local or remote media references, as authored `src` values. */
+export function mediaSources(
+  html: string,
+  scope: CompositionScope,
+  { images = false }: { images?: boolean } = {},
+): string[] {
   return [
     ...new Set(
       scopeElements(parseElements(html).roots, scope)
-        .filter((element) => element.tag === "video" || element.tag === "audio")
+        .filter(
+          ({ tag }) =>
+            tag === "video" || tag === "audio" || (images && tag === "img"),
+        )
         .flatMap((element) => sourceOf(element) ?? []),
     ),
   ];

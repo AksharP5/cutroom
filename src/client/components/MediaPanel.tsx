@@ -386,6 +386,9 @@ export function MediaPanel({
     },
   });
   const projectUrl = `/api/projects/${encodeURIComponent(projectId)}`;
+  const composition = useTimeline((state) =>
+    state.projectId === projectId ? state.composition : "index.html",
+  );
   const cutroomUrl = `/projects/${encodeURIComponent(projectId)}`;
 
   const latestLoad = useRef(0);
@@ -402,7 +405,9 @@ export function MediaPanel({
 
   const load = useCallback(async () => {
     const id = ++latestLoad.current;
-    const response = await fetch(projectUrl);
+    const response = await fetch(
+      `${projectUrl}?${new URLSearchParams({ mediaComposition: composition })}`,
+    );
     if (id !== latestLoad.current) return;
     if (!response.ok)
       throw new Error(`The project media could not load (${response.status}).`);
@@ -441,7 +446,7 @@ export function MediaPanel({
         })
         .sort((a, b) => a.path.localeCompare(b.path)),
     );
-  }, [projectUrl]);
+  }, [projectUrl, composition]);
 
   useEffect(() => {
     // A bulk copy reports each file; one trailing reload covers the burst.

@@ -1,5 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -399,4 +406,26 @@ test("review: undo or MCP rename cannot leave a missing source available to Inse
     ).ok(),
   ).toBe(true);
   await expect(page.locator(".edit-source")).toHaveCount(0);
+});
+
+test("a clip using a directory alias keeps the original Media row online", async ({
+  page,
+  request,
+}) => {
+  const { project, media, row, timeline } = await open(page, request);
+  const index = join(project.path, "index.html");
+  await symlink("assets", join(project.path, "alias"), "dir");
+  await writeFile(
+    index,
+    (await readFile(index, "utf8")).replace(
+      "</main>",
+      '<img src="alias/still.png" id="aliased-still" class="clip" data-start="4" data-duration="2" data-track-index="0"></main>',
+    ),
+  );
+  await page.reload();
+  await expect(media.getByRole("listitem")).toHaveCount(4);
+  await expect(row("still.png")).not.toContainText("Offline");
+  await expect(timeline.locator('[data-clip="aliased-still"]')).not.toHaveClass(
+    /offline/,
+  );
 });
