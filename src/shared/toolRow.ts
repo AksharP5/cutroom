@@ -355,6 +355,26 @@ const cutroomTools: Record<
     kind: "edit",
     object: () => "loudness",
   },
+  clip_versions_set: {
+    verb: ["Added versions to", "Adding versions to", "Add versions to"],
+    kind: "edit",
+    object: (target) => target ?? "a clip",
+  },
+  clip_versions_list: {
+    verb: read,
+    kind: "project",
+    object: (target) => `the versions of ${target ?? "a clip"}`,
+  },
+  clip_version_show: {
+    verb: ["Switched", "Switching", "Switch"],
+    kind: "edit",
+    object: (target) => `the version ${target ?? "a clip"} shows`,
+  },
+  clip_version_keep: {
+    verb: ["Kept", "Keeping", "Keep"],
+    kind: "edit",
+    object: (target) => `one version of ${target ?? "a clip"}`,
+  },
 };
 /** Every Cutroom tool that has its own wording, so a new tool cannot ship without one. */
 export const describedCutroomTools = Object.keys(cutroomTools);

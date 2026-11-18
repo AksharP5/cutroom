@@ -1,3 +1,4 @@
+import { activeVersion, fitsVersion } from "./versions";
 import { firstTextLine, isAudioKind } from "./schema";
 import type {
   Clip,
@@ -1620,6 +1621,51 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
       return {
         ...timeline,
         markers: timeline.markers.filter((marker) => marker.id !== command.id),
+      };
+    }
+    case "setVersions":
+    case "setVersion":
+    case "keepVersion": {
+      const target = find(command.clipId);
+      const versions =
+        command.type === "setVersions" ? command.versions : target.versions;
+      if (target.kind !== "composition" && target.kind !== "image")
+        throw new TimelineError(
+          "unsupported",
+          "Only scene and image clips hold versions. Place each version as a composition file and give the scene clip its versions.",
+        );
+      if (!versions)
+        throw new TimelineError(
+          "not_found",
+          `Clip ${target.id} has no versions.`,
+        );
+      const misfit = versions.find(({ src }) => !fitsVersion(target.kind, src));
+      if (misfit)
+        throw new TimelineError(
+          "unsupported",
+          `"${misfit.src}" cannot be a version of ${target.kind === "composition" ? "a scene clip, which takes composition HTML files" : "an image clip, which takes image files"}.`,
+        );
+      const index =
+        command.type === "setVersions"
+          ? command.active
+          : command.type === "setVersion"
+            ? command.version
+            : (command.version ?? activeVersion(target));
+      const version = versions[index];
+      if (!version)
+        throw new TimelineError(
+          "not_found",
+          `Clip ${target.id} has ${versions.length} versions, numbered 0 to ${versions.length - 1}.`,
+        );
+      const { versions: _dropped, ...rest } = target;
+      const next: Clip =
+        command.type === "keepVersion"
+          ? { ...rest, src: version.src }
+          : { ...rest, src: version.src, versions };
+      if (JSON.stringify(next) === JSON.stringify(target)) return timeline;
+      return {
+        ...timeline,
+        clips: clips.map((clip) => (clip.id === target.id ? next : clip)),
       };
     }
     case "setRange": {

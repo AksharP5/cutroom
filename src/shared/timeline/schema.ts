@@ -277,6 +277,54 @@ export const TitleEditSchema = TitleSchema.omit({ in: true, out: true })
   .extend({ in: titleMotion.partial(), out: titleMotion.partial() })
   .partial();
 
+/** Most versions one clip holds; each is a whole composition or image the clip can show. */
+export const MAX_VERSIONS = 12;
+/** A version's name: one line of plain text, shown in the versions list. */
+export const VersionNameSchema = z
+  .string()
+  .overwrite((name) => name.replace(/\s+/g, " ").trim())
+  .pipe(
+    z
+      .string()
+      .min(1, "Name each version.")
+      .max(60, "Version names are at most 60 characters.")
+      .refine(
+        (name) => !/\p{Cc}/u.test(name),
+        "Version names cannot contain control characters.",
+      ),
+  );
+export const VersionSchema = z.object({
+  name: VersionNameSchema,
+  src: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .describe(
+      "The version's file as this composition writes it, from its folder: compositions/fan.html in index.html",
+    ),
+});
+/** Two or more versions with distinct files and names; the clip's `src` is the active one. */
+export const VersionsSchema = z
+  .array(VersionSchema)
+  .min(2, "A clip holds at least two versions.")
+  .max(MAX_VERSIONS, `A clip holds at most ${MAX_VERSIONS} versions.`)
+  .refine(
+    (versions) =>
+      new Set(versions.map(({ src }) => src)).size === versions.length,
+    "Each version needs its own file.",
+  )
+  .refine(
+    (versions) =>
+      new Set(versions.map(({ name }) => name)).size === versions.length,
+    "Each version needs its own name.",
+  );
+const versionIndex = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(MAX_VERSIONS - 1)
+  .describe("The version's place in the clip's versions list, 0 is the first");
+
 export const ClipSchema = z.object({
   id: clipId,
   track: frame,
@@ -396,6 +444,9 @@ export const ClipSchema = z.object({
     .describe(
       "Audio effects on the clip's sound, in signal order, from HyperFrames' data-fx-chain. enabled false is bypassed. Change them with setClip.fx",
     ),
+  versions: VersionsSchema.optional().describe(
+    "Alternatives this clip can show, in order; the one whose src is the clip's src is active, and only it plays in preview and export. Absent when the clip has no versions. Change them with setVersions, setVersion and keepVersion.",
+  ),
   /** False while `data-hidden` keeps the clip out of preview and render. */
   enabled: z.boolean(),
   /** Set while `data-start` names another clip and still resolves to `start`. */
@@ -1048,6 +1099,38 @@ export const CommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("removeMarker"), id: z.string().min(1) }),
   z
     .object({
+      type: z.literal("setVersions"),
+      clipId,
+      versions: VersionsSchema.describe(
+        "Every version the clip holds, replacing any it had: scene clips take composition files, image clips take images",
+      ),
+      active: versionIndex.default(0).describe("The version to show"),
+    })
+    .describe(
+      "Give a scene or image clip versions to choose between: the clip keeps its place, length, look and keyframes, and shows the active version's file. One undo step.",
+    ),
+  z
+    .object({
+      type: z.literal("setVersion"),
+      clipId,
+      version: versionIndex,
+    })
+    .describe(
+      "Show another of a clip's versions. Only the active version plays in preview and export. One undo step.",
+    ),
+  z
+    .object({
+      type: z.literal("keepVersion"),
+      clipId,
+      version: versionIndex
+        .optional()
+        .describe("The version to keep; omitted keeps the active one"),
+    })
+    .describe(
+      "Keep one version and drop the others from the clip. Their files stay in the project. One undo step.",
+    ),
+  z
+    .object({
       type: z.literal("setRange"),
       in: frame.nullable().optional(),
       out: frame.nullable().optional(),
@@ -1141,6 +1224,7 @@ export const TimelineSettingsSchema = z.object({
 
 export type Fps = z.infer<typeof FpsSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
+export type Version = z.infer<typeof VersionSchema>;
 export type Keyframes = z.infer<typeof KeyframesSchema>;
 export type KeyframeProperty = (typeof KEYFRAME_PROPERTIES)[number];
 export type KeyframeEase = (typeof KEYFRAME_EASES)[number];

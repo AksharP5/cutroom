@@ -1,3 +1,4 @@
+import { activeVersion } from "./versions";
 import { audioGainToDb } from "@hyperframes/core/audio-gain";
 import { localMediaPath } from "../media";
 import { gapAt, toFrames } from "./apply";
@@ -528,6 +529,19 @@ export function editLabel(
         return pending
           ? `Remove marker${marker?.name ? ` "${marker.name}"` : ""}`
           : "Removed marker";
+      }
+      case "setVersions":
+        return `${pending ? "Give" : "Gave"}${named ? ` ${target([command.clipId])}` : ""} ${command.versions.length} versions, showing "${command.versions[command.active]?.name ?? "the first"}"`;
+      case "setVersion":
+      case "keepVersion": {
+        const clip = clips.find((clip) => clip.id === command.clipId);
+        const index = command.version ?? (clip && activeVersion(clip));
+        const name =
+          index === undefined ? undefined : clip?.versions?.[index]?.name;
+        const version = name === undefined ? "a version" : `version "${name}"`;
+        if (command.type === "setVersion")
+          return `${pending ? "Show" : "Showed"} ${version}${named ? ` of ${target([command.clipId])}` : ""}`;
+        return `${pending ? "Keep" : "Kept"} ${version}${named ? ` of ${target([command.clipId])}` : ""} and ${pending ? "drop" : "dropped"} the others`;
       }
       case "setRange":
         return pending

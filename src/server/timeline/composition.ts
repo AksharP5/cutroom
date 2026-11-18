@@ -61,6 +61,13 @@ import {
   trackGainWarning,
 } from "../../shared/timeline/mix";
 import { readFxChain, writeFxChain } from "../../shared/timeline/fx";
+import {
+  readVersions,
+  rebaseVersions,
+  versionAttributes,
+  versionChanges,
+  VERSIONS_ATTRIBUTE,
+} from "./versions";
 import { posix } from "node:path";
 import {
   DEFAULT_IMAGE_TIMELINE_DURATION_SECONDS,
@@ -728,6 +735,13 @@ export function parseComposition(
     const colorVariable = readColourVariable(element.attrs.style);
     const imageVariable =
       kind === "image" ? element.attrs["data-var-src"] : undefined;
+    const src =
+      kind === "composition"
+        ? (element.attrs["data-composition-src"] ?? null)
+        : kind === "element"
+          ? null
+          : sourceOf(element);
+    const versions = readVersions(kind, src, element.attrs[VERSIONS_ATTRIBUTE]);
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -743,12 +757,7 @@ export function parseComposition(
             )
           : null,
       playbackRate,
-      src:
-        kind === "composition"
-          ? (element.attrs["data-composition-src"] ?? null)
-          : kind === "element"
-            ? null
-            : sourceOf(element),
+      src,
       sourceDuration: lengthOf(element),
       hasAudio,
       link: element.attrs["data-link"] || null,
@@ -817,6 +826,7 @@ export function parseComposition(
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,
+      ...(versions && { versions }),
       startRef:
         referenced && typeof referencedEnd === "number"
           ? {
@@ -939,7 +949,7 @@ interface Edit {
   end: number;
   text: string;
 }
-type AttributeChange = readonly [name: string, value: string | null];
+export type AttributeChange = readonly [name: string, value: string | null];
 
 function escapeAttribute(value: string, quote = '"'): string {
   const escaped = value.replaceAll("&", "&amp;");
@@ -1858,6 +1868,7 @@ function copyMarkup(
   normalizeTracks: boolean,
   mix: TrackMix,
   under: { in: boolean; out: boolean },
+  hosted: (src: string) => HostedComposition,
 ): string {
   const element = parsed.elements.get(template.id)!;
   if (template.sourceRestrictions?.copy)
@@ -1885,6 +1896,7 @@ function copyMarkup(
         normalizeTracks,
         mix,
       ),
+      ...versionChanges(template, clip, element.attrs, hosted),
       ...transitionChanges(element.attrs, clip, under, parsed.timeline.fps),
       ...(origin !== undefined &&
       clip.link !== null &&
@@ -1979,6 +1991,7 @@ function hostMarkup(
     ...(clip.label !== null
       ? [["data-timeline-label", clip.label] as const]
       : []),
+    ...versionAttributes(clip),
   ])}></div>`;
 }
 
@@ -2023,7 +2036,8 @@ function insertMarkup(
   const attributes: AttributeChange[] = [
     ["id", clip.id],
     ...(classes.size ? [["class", [...classes].join(" ")] as const] : []),
-    ["src", input.src],
+    ["src", clip.src ?? input.src],
+    ...versionAttributes(clip),
     ...(exportSrc ? [[freezeExportSource, exportSrc] as const] : []),
     ...(clip.kind === "voiceover"
       ? [["data-cutroom-kind", "voiceover"] as const]
@@ -2341,6 +2355,11 @@ export function patchComposition(
 ): string {
   const { html, timeline: before } = parsed;
   const { fps } = before;
+  const hostedComposition = (src: string) => {
+    const found = hosted.get(src);
+    if (!found) throw new Error(`No composition was read for ${src}.`);
+    return found;
+  };
   const previous = new Map(before.clips.map((clip) => [clip.id, clip]));
   const current = new Map(after.clips.map((clip) => [clip.id, clip]));
   const templates = new Set(
@@ -2402,6 +2421,7 @@ export function patchComposition(
           stacking !== null,
           mix,
         ),
+        ...versionChanges(clip, next, element.attrs, hostedComposition),
         ...transitionChanges(element.attrs, next, under(next.id), fps),
       ];
       if (
@@ -2436,11 +2456,6 @@ export function patchComposition(
     });
   }
 
-  const hostedComposition = (src: string) => {
-    const found = hosted.get(src);
-    if (!found) throw new Error(`No composition was read for ${src}.`);
-    return found;
-  };
   const inserts = new Map<number, string[]>();
   // New media goes after the last clip in the source, or first in the root.
   const lastClip = [...parsed.elements].reduce<
@@ -2503,7 +2518,7 @@ export function patchComposition(
           origin.insert.kind === "title"
             ? titleMarkup(clip, fps, mix)
             : origin.insert.kind === "composition"
-              ? hostMarkup(clip, hostedComposition(origin.insert.src), fps, mix)
+              ? hostMarkup(clip, hostedComposition(clip.src!), fps, mix)
               : insertMarkup(
                   elementClip(clip, fps),
                   origin.insert,
@@ -2527,7 +2542,7 @@ export function patchComposition(
         : parsed.root.openEnd;
       inserts.set(at, [
         ...(inserts.get(at) ?? []),
-        `\n${copyMarkup(snapshot, template, clip, stacking !== null, mix, under(clip.id))}`,
+        `\n${copyMarkup(snapshot, template, clip, stacking !== null, mix, under(clip.id), hostedComposition)}`,
       ]);
       continue;
     }
@@ -2536,7 +2551,7 @@ export function patchComposition(
     const at = elementEnd(parsed, element, template.id);
     inserts.set(at, [
       ...(inserts.get(at) ?? []),
-      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix, under(clip.id))}`,
+      `\n${indentOf(html, element.start)}${copyMarkup(parsed, template, clip, stacking !== null, mix, under(clip.id), hostedComposition)}`,
     ]);
   }
   for (const [at, texts] of inserts)
@@ -2691,7 +2706,9 @@ export function rebaseClipboard(
                 (_, quote: string, url: string) =>
                   `url(${quote}${rewrite(url)}${quote})`,
               )
-            : value;
+            : name === VERSIONS_ATTRIBUTE
+              ? rebaseVersions(value, rewrite)
+              : value;
       if (next !== value) changes.push([name, next]);
     }
     if (changes.length)

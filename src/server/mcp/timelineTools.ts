@@ -18,6 +18,7 @@ import {
 import type { CommandInput, TimelineView } from "../../shared/timeline/schema";
 import { mixLoudnessFx } from "../../shared/timeline/fx";
 import { DuckRequestSchema, LoudnessRequestSchema } from "../timeline/audio";
+import { registerVersionTools } from "./versionTools";
 
 type JsonRequest = (
   path: string,
@@ -264,6 +265,7 @@ export function registerTimelineTools(
       .parse(await planned.json());
     return commit(projectId, before.view, label, commands, measured);
   };
+  registerVersionTools(server, readView, request);
   const edits = {
     readOnlyHint: false,
     destructiveHint: false,

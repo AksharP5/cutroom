@@ -38,6 +38,7 @@ const reads = [
   "export_status",
   "export_list",
   "timeline_read",
+  "clip_versions_list",
   "timeline_copy",
   "timeline_view",
 ];
@@ -65,6 +66,9 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
     expect(asks(name)).toEqual({ claude: false, codex: false });
   for (const name of [
     "timeline_edit",
+    "clip_versions_set",
+    "clip_version_show",
+    "clip_version_keep",
     "source_write",
     "motion_update",
     "variables_instance_set",
