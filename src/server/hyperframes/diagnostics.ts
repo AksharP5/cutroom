@@ -241,8 +241,11 @@ function installDiagnostics(entryFile: string, sources: ScriptSource[]) {
   document.addEventListener(
     "DOMContentLoaded",
     () => {
-      // The bundler removes data-composition-src only after successfully inlining a scene.
-      for (const host of document.querySelectorAll("[data-composition-src]"))
+      // The bundler removes data-composition-src only after successfully inlining a scene. A
+      // clip's other versions are left for the runtime to load (see audition.ts).
+      for (const host of document.querySelectorAll(
+        "[data-composition-src]:not([data-cutroom-version])",
+      ))
         report(
           host.getAttribute("data-composition-src")!,
           "Sub-composition could not be loaded.",

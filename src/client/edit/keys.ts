@@ -7,6 +7,7 @@ import {
 } from "../../shared/timeline/apply";
 import { takesTransition } from "../../shared/timeline/transition";
 import { TimelineError } from "../../shared/timeline/errors";
+import { activeVersion } from "../../shared/timeline/versions";
 import type {
   Clip,
   CommandInput,
@@ -380,6 +381,35 @@ export function matchFrame(
   );
 }
 
+/**
+ * The clip whose version Alt+V changes: a selected clip with versions under the playhead, or
+ * else the topmost clip with versions there.
+ */
+export function versionTarget(timeline: Timeline, target: EditTarget) {
+  const under = timeline.clips.filter(
+    (clip) => clip.versions && spans(clip, target.frame),
+  );
+  return (
+    under.find((clip) => target.selection.has(clip.id)) ??
+    under.toSorted((a, b) => b.track - a.track)[0]
+  );
+}
+
+const cycleVersion =
+  (by: number) =>
+  (timeline: Timeline, target: EditTarget): CommandInput[] => {
+    const clip = versionTarget(timeline, target);
+    if (!clip?.versions) return [];
+    const count = clip.versions.length;
+    return [
+      {
+        type: "setVersion",
+        clipId: clip.id,
+        version: (activeVersion(clip) + by + count) % count,
+      },
+    ];
+  };
+
 /** The timeline edits bound to keys. Each press is one batch, so one undo step. */
 export const editKeys = {
   trimRippleStartToPlayhead: {
@@ -402,6 +432,11 @@ export const editKeys = {
         clipId: clip.id,
         enabled: !clip.enabled,
       })),
+  },
+  cutroomNextVersion: { label: "Show next version", commands: cycleVersion(1) },
+  cutroomPreviousVersion: {
+    label: "Show previous version",
+    commands: cycleVersion(-1),
   },
   editNudgeTrimStepNudgeReverse: { label: "Nudge", commands: nudge(-1) },
   editNudgeTrimStepNudgeForward: { label: "Nudge", commands: nudge(1) },

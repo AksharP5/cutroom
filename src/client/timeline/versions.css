@@ -1,0 +1,107 @@
+/* The count on a clip with versions: it sits in the name strip and opens their list. */
+.tl-versions {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 1px 3px 1px 4px;
+  border-radius: var(--radius-clip);
+  background: color-mix(in srgb, var(--clip-head-text) 16%, var(--head));
+  color: var(--clip-head-text);
+  font: var(--weight-medium) var(--type-micro) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+.tl-versions[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--clip-head-text) 28%, var(--head));
+}
+@media (hover: hover) and (pointer: fine) {
+  .tl-versions:hover {
+    background: color-mix(in srgb, var(--clip-head-text) 28%, var(--head));
+  }
+}
+
+/* The list hangs under the count, on the menu surface, and flips above near the bottom. */
+.versions-menu {
+  position: fixed;
+  inset: auto;
+  top: anchor(bottom);
+  right: anchor(right);
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+  margin: var(--space-1) 0;
+  min-width: 176px;
+  max-width: min(320px, calc(100vw - var(--space-4)));
+  max-height: min(60vh, calc(100dvh - var(--space-4)));
+  overflow: auto;
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-float);
+  background: var(--surface-float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+  font-size: var(--type-sm);
+  outline: none;
+  /* The label layer it is written in passes the pointer through. */
+  pointer-events: auto;
+}
+.versions-menu:popover-open {
+  display: grid;
+  transition:
+    opacity var(--duration-panel-in) var(--ease-out),
+    transform var(--duration-panel-in) var(--ease-out);
+  transform-origin: top right;
+}
+@starting-style {
+  .versions-menu:popover-open {
+    opacity: 0;
+    transform: scale(var(--modal-scale));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .versions-menu:popover-open {
+    transition-duration: var(--duration-press);
+  }
+}
+.versions-count {
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--type-xs);
+}
+.versions-menu button {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--space-3);
+  min-height: var(--size-row);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  text-align: left;
+  white-space: nowrap;
+}
+.versions-menu button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.versions-menu button[data-hovered],
+.versions-menu button:focus-visible {
+  background: var(--surface-active);
+  outline: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .versions-keep:hover {
+    background: var(--overlay-hover);
+  }
+}
+.versions-menu hr {
+  width: auto;
+  height: var(--stroke-hair);
+  margin: var(--space-1) calc(-1 * var(--space-1));
+  border: 0;
+  background: var(--line);
+}

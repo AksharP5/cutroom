@@ -372,6 +372,16 @@ export const keymap = {
     label: "Turn clips on or off",
     keys: ["Alt+D"],
   },
+  cutroomNextVersion: {
+    area: "Edit",
+    label: "Show the clip's next version",
+    keys: ["Alt+V"],
+  },
+  cutroomPreviousVersion: {
+    area: "Edit",
+    label: "Show the clip's previous version",
+    keys: ["Alt+Shift+V"],
+  },
   editNudgeTrimStepNudgeReverse: {
     area: "Edit",
     label: "Nudge, slip or slide one frame left",

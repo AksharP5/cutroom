@@ -99,6 +99,8 @@ export function createTransport() {
     /** In and out marks; out is exclusive. */
     range: { in: null, out: null } as Timeline["range"],
     loop: false,
+    /** A span that playback loops over in place of the marks, such as a clip being auditioned. */
+    span: null as { first: number; end: number } | null,
     muted: false,
     /**
      * The playhead last moved with an edit, and the documents from before the edit still show
@@ -132,7 +134,8 @@ export function createTransport() {
 
   /** Playback wraps inside the range while loop is on, and otherwise runs the whole length. */
   function bounds() {
-    const { loop, range, duration } = get();
+    const { loop, range, duration, span } = get();
+    if (span) return { first: span.first, end: Math.min(span.end, duration) };
     return loop
       ? { first: range.in ?? 0, end: Math.min(range.out ?? duration, duration) }
       : { first: 0, end: duration };
@@ -172,11 +175,12 @@ export function createTransport() {
       frame >= end - 1
     )
       frame = end;
+    const loops = get().loop || get().span !== null;
     if (frame >= end) {
-      if (get().loop) restart(first);
+      if (loops) restart(first);
       else return park(end - 1);
     } else if (frame < first) {
-      if (get().loop) restart(end - 1);
+      if (loops) restart(end - 1);
       else return park(first);
     } else if (frame !== get().frame) {
       set({ frame });
@@ -257,6 +261,10 @@ export function createTransport() {
     },
     toggleLoop() {
       set({ loop: !get().loop });
+    },
+    /** Loops playback over `span` until it is cleared with null; the marks stay as they are. */
+    loopSpan(span: { first: number; end: number } | null) {
+      set({ span });
     },
     toggleMute() {
       set({ muted: !get().muted });
