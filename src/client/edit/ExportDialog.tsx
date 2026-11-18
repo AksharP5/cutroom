@@ -440,7 +440,7 @@ function ExportDialog({
     renamed &&
     job.outputPath.split(/[\\/]/).at(-1) === renamed.to
       ? `Saved as ${renamed.to} because ${renamed.from} already exists.`
-      : "Export complete.";
+      : null;
   if (!visible) return null;
   return (
     <Modal title="Export" onClose={onClose} initialFocus={exportButton}>
@@ -686,7 +686,7 @@ function ExportDialog({
             ) : null}
             <div role="status" className="export-result">
               {job.status === "complete"
-                ? savedAs
+                ? ["Export complete.", savedAs].filter(Boolean).join(" ")
                 : job.status === "cancelled"
                   ? "Export cancelled. Partial output removed."
                   : "You can close this dialog while the export continues."}
