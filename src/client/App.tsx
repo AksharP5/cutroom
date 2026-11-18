@@ -12,6 +12,7 @@ import {
 import {
   CaretDown,
   Check,
+  CopySimple,
   FolderOpen,
   Folders,
   GearSix,
@@ -908,14 +909,38 @@ export function App() {
           <div className="settings-content">
             <section>
               <h3>Local folders</h3>
-              <label>Projects</label>
-              <code>{status?.projectsDir}</code>
-              <label>Application data</label>
-              <code>{status?.dataDir}</code>
+              {status &&
+                [
+                  {
+                    label: "Projects",
+                    action: "Copy projects path",
+                    id: "settings-projects-path",
+                    path: status.projectsDir,
+                  },
+                  {
+                    label: "Application data",
+                    action: "Copy application data path",
+                    id: "settings-data-path",
+                    path: status.dataDir,
+                  },
+                ].map(({ label, action, id, path }) => (
+                  <div key={id}>
+                    <span className="settings-path-label">{label}</span>
+                    <button
+                      type="button"
+                      className="text-button settings-path"
+                      aria-label={action}
+                      aria-describedby={id}
+                      onClick={() => void navigator.clipboard.writeText(path)}
+                    >
+                      <code id={id}>{path}</code>
+                      <CopySimple aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
             </section>
             <section>
               <h3>Connect an external agent</h3>
-              <p>Add this command as a local MCP server in your agent.</p>
               <pre>{status?.mcpCommand}</pre>
               <button
                 className="secondary-button"
@@ -970,14 +995,6 @@ export function App() {
                 {keymap.resolveCustomizedActions.label}
                 <kbd>{keymap.resolveCustomizedActions.keys[0]}</kbd>
               </button>
-            </section>
-            <section>
-              <h3>Your native agents</h3>
-              <p>
-                Codex and Claude Code use their own skills, configuration,
-                authentication, and project instructions. Choose an agent in the
-                chat panel.
-              </p>
             </section>
             <footer>Cutroom {status?.version ?? version}</footer>
           </div>
