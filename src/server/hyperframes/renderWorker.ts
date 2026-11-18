@@ -113,7 +113,12 @@ try {
   let encoder: VideoEncoder | undefined;
   const direct =
     input.direct &&
-    (await prepareDirectExport(input.direct.plan, input.projectDir));
+    (await prepareDirectExport(
+      input.direct.plan,
+      input.projectDir,
+      entryFile,
+      join(input.scratchDir, "direct"),
+    ));
   if (direct && "reason" in direct) {
     if (input.direct?.captureRefusal)
       throw new Error(input.direct.captureRefusal);

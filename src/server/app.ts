@@ -20,6 +20,7 @@ import { createMotionRoutes } from "./projects/motion";
 import { createTranscriptService } from "./transcript/service";
 import { createMediaRoutes } from "./media/routes";
 import { createFontRoutes } from "./fonts/routes";
+import { createGradeRoutes } from "./grade/routes";
 import { allowsLocalRequest } from "./localAccess";
 
 export async function createApp(
@@ -132,6 +133,7 @@ export async function createApp(
     createCaptionRoutes(projects, review, transcripts, timeline.editInWindow),
   );
   app.route("/api/cutroom", createFontRoutes(projects, review));
+  app.route("/api/cutroom", createGradeRoutes(projects, review));
   app.route("/api/cutroom", createAgentRoutes(agents));
   app.route("/api/cutroom", media);
   app.route("/api", editor);

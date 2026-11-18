@@ -92,6 +92,8 @@ import {
   loudnessPlan,
 } from "./audio";
 import { declaredFonts, undeclaredFontReason } from "./titles";
+import { GradeLutSaveSchema } from "../../shared/timeline/grade";
+import { bakeGrade, readCube, saveLut } from "../grade/luts";
 
 /** One revision covers both halves of the timeline: composition HTML and its sidecar settings. */
 const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
@@ -678,6 +680,28 @@ export function createTimelineRoutes(
     const { parsed } = await read(project, composition);
     return c.json(
       await loudnessPlan(project, composition, parsed.timeline, input),
+    );
+  });
+  // A clip's grade baked into a project LUT, for other clips, DaVinci Resolve or any editor.
+  api.post("/projects/:id/grade/lut", async (c) => {
+    const project = await store.get(c.req.param("id"));
+    const input = parseInput(GradeLutSaveSchema, await c.req.json());
+    const composition = canonical(input.composition);
+    const { parsed } = await read(project, composition);
+    const clip = parsed.timeline.clips.find((each) => each.id === input.clipId);
+    if (!clip) throw new HttpError(404, `There is no clip ${input.clipId}.`);
+    if (!clip.grade)
+      throw new HttpError(
+        409,
+        `${clip.label ?? clip.id} has no grade to save.`,
+      );
+    const cube = await bakeGrade(project, composition, clip.grade, input.size);
+    return c.json(
+      await saveLut(
+        project,
+        input.name ?? `${clip.label ?? clip.id} grade`,
+        readCube(new TextEncoder().encode(cube)),
+      ),
     );
   });
   // Which clips the viewer's footage pipeline may draw; only the entry composition has one.

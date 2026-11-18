@@ -29,7 +29,23 @@ export function expectedFrame(t: number, order: readonly number[]) {
  * source frame carries its number in sixteen blocks along the top, so a screencast can read
  * which frame the viewer shows.
  */
-export async function makeProject(directory: string) {
+/**
+ * A gentle look on every shot for `--grade`: warmer, a little more contrast and an S-curve, mild
+ * enough that the frame numbers and the red anchor still read.
+ */
+export const benchGrade = {
+  adjust: { temperature: 0.15, contrast: 0.1, saturation: 0.1 },
+  curves: {
+    master: [
+      [0, 0],
+      [0.25, 0.22],
+      [0.75, 0.78],
+      [1, 1],
+    ],
+  },
+};
+
+export async function makeProject(directory: string, graded = false) {
   await mkdir(join(directory, "compositions"), { recursive: true });
   await run("ffmpeg", [
     "-v",
@@ -78,7 +94,7 @@ export async function makeProject(directory: string) {
   const cuts = Array.from(
     { length: clipCount },
     (_, index) =>
-      `<video id="shot-${index}" class="clip" src="footage.mp4" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index)}" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
+      `<video id="shot-${index}" class="clip" src="footage.mp4" muted data-start="${index * clipSeconds}" data-duration="${clipSeconds}" data-media-start="${mediaStart(index)}" data-track-index="0"${graded ? ` data-color-grading='${JSON.stringify(benchGrade)}'` : ""} style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`,
   );
   const music = `<audio id="music" class="clip" src="music.m4a" data-start="0" data-duration="${duration}" data-track-index="1" data-volume="0.5"></audio>`;
   const titles = Array.from(

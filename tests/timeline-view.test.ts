@@ -77,6 +77,7 @@ const clip = (
   transitionOut: null,
   automation: null,
   fx: [],
+  grade: null,
   enabled: true,
   startRef: null,
   ...extra,

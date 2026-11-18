@@ -45,6 +45,7 @@ import { editTransform, hasTransformEdit } from "./transform";
 import { editStyle, takesStyleField } from "./elementStyle";
 import { FREEZE_DIR, localMediaPath, sourceUrl } from "../media";
 import { parseRateLane } from "@hyperframes/core/speed-ramp";
+import { editGrade } from "./grade";
 import {
   moveKeyframe,
   holdKeyframes,
@@ -667,6 +668,8 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         transitionOut: null,
         automation: null,
         fx: [],
+        // The still is the source's frame, so the same grade draws it as the clip showed it.
+        grade: video.grade,
         enabled: video.enabled,
         startRef: null,
       };
@@ -923,6 +926,7 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         transitionOut: null,
         automation: null,
         fx: [],
+        grade: null,
         enabled: true,
         startRef: null,
         ...fields,
@@ -1332,6 +1336,21 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
         command.region === undefined
           ? target.region
           : regionFor(target, command.region, fps);
+      if (command.grade !== undefined) {
+        if (target.kind !== "video" && target.kind !== "image")
+          throw new TimelineError(
+            "unsupported",
+            `${clipName(target)} is not a video or image, so it has no colour grade.`,
+          );
+        if (target.sourceRestrictions?.grade)
+          throw new TimelineError(
+            "unsupported",
+            target.sourceRestrictions.grade,
+          );
+      }
+      const graded = command.grade && editGrade(target.grade, command.grade);
+      if (graded && "refusal" in graded)
+        throw new TimelineError("unsupported", graded.refusal);
       if (command.fx !== undefined && !target.hasAudio)
         throw new TimelineError(
           "unsupported",
@@ -1393,6 +1412,9 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                   }),
                 ...(command.style !== undefined && {
                   style: editStyle(clip.style, command.style),
+                }),
+                ...(command.grade !== undefined && {
+                  grade: graded ? graded.grade : null,
                 }),
                 ...(command.enabled !== undefined && {
                   enabled: command.enabled,

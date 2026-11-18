@@ -358,6 +358,41 @@ export function editLabel(
               );
             }
         }
+        if (command.grade === null)
+          parts.push(`${pending ? "Remove" : "Removed"} grade`);
+        else if (command.grade) {
+          const { adjust, lut, intensity, ...stages } = command.grade;
+          const grade = [
+            ...Object.entries(adjust ?? {}).map(([control, value]) =>
+              value ? `Set ${control} to ${value}` : `Reset ${control}`,
+            ),
+            ...Object.entries({
+              wheels: "colour wheels",
+              curves: "curves",
+              hueCurves: "hue curves",
+              secondaries: "secondaries",
+            } as const).flatMap(([stage, name]) =>
+              stages[stage as keyof typeof stages] === undefined
+                ? []
+                : [`Set ${name}`],
+            ),
+            ...(lut === undefined
+              ? []
+              : [
+                  lut === null
+                    ? `${pending ? "Remove" : "Removed"} look LUT`
+                    : `Set look LUT to ${lut.src.split("/").at(-1)}`,
+                ]),
+            ...(intensity === undefined
+              ? []
+              : [`Set grade intensity to ${formatPercent(intensity)}`]),
+          ];
+          parts.push(
+            ...(grade.length > 3
+              ? [`Set ${grade.length} grade controls`]
+              : grade),
+          );
+        }
         if (command.opacity !== undefined)
           parts.push(
             `Set opacity to ${command.opacity === null ? "Auto" : formatPercent(command.opacity)}`,

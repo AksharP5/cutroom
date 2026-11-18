@@ -227,6 +227,21 @@ const cutroomTools: Record<
     kind: "edit",
     object: (target) => (target ? `the font ${target}` : "a font"),
   },
+  luts_list: {
+    verb: ["Listed", "Listing", "List"],
+    kind: "project",
+    object: () => "LUTs",
+  },
+  lut_import: {
+    verb: ["Imported", "Importing", "Import"],
+    kind: "edit",
+    object: (target) => (target ? `the LUT ${target}` : "a LUT"),
+  },
+  grade_save_lut: {
+    verb: ["Saved", "Saving", "Save"],
+    kind: "edit",
+    object: () => "a grade as a LUT",
+  },
   history_list: { verb: read, kind: "project", object: () => "the history" },
   history_undo: {
     verb: ["Undid", "Undoing", "Undo"],
