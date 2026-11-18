@@ -5,6 +5,7 @@ import type {
   AgentMessage,
   AgentRequest,
   AgentResponse,
+  AgentSession,
   AgentTurn,
 } from "../../shared/agent";
 import { toolTarget } from "../../shared/agent";
@@ -12,14 +13,15 @@ import { CUTROOM_SERVER, editSummary, parseTool } from "../../shared/toolRow";
 import { reviewReplyGuidance } from "../../shared/review";
 import type { ToolNames } from "./tool-subject";
 
-export interface RuntimeOptions {
+export type ModelSelection = Pick<AgentSession, "model" | "effort">;
+
+export interface RuntimeOptions extends ModelSelection {
   cwd: string;
   /** Identifies this conversation's review actions; its MCP bridge sends it with every call. */
   agentToken: string;
   allowCutroomEdits?: () => boolean;
   /** What the editor calls the notes, clips, and transcripts a tool call names by id. */
   names?: ToolNames;
-  model?: string;
   nativeSessionId?: string;
   emit: (event: AgentEvent) => void;
   request: (
@@ -30,6 +32,7 @@ export interface RuntimeOptions {
 
 export interface AgentRuntime {
   send(turn: AgentTurn): Promise<void>;
+  configureModel?(selection: ModelSelection): void;
   interrupt(): Promise<void>;
   dispose(): void;
 }

@@ -13,13 +13,13 @@ Both providers read their own user and project configuration. Cutroom adds a loc
 
 Ask for an edit in your own words. The agent loads relevant installed HyperFrames skills on its own. You can also type `$` in the composer to choose an enabled native skill. Codex receives explicit skill items with their native paths. Claude receives its native skill command; additional selected skills are requested through its Skill tool. If two installed skills share a name, the picker shows both paths and remembers the one you choose with the draft. A name typed without choosing a path uses the first enabled match returned by the native runtime.
 
-The model list comes from the provider. Changing models keeps the chat and native session. A new chat starts a separate native session when you send the first message. The provider and model controls lock while the open chat is working or opening. Text typed for the next message stays in the composer.
+The provider lists the available models and which reasoning efforts each supports. You can set an effort per chat or clear it to use the provider's default. Changing the model or effort keeps the chat and native session. A new chat starts a separate native session when you send the first message. The provider and model controls lock while the open chat is working or opening. Text typed for the next message stays in the composer.
 
 Each project has its own chats. Select the chat title to switch, rename, or delete a chat. The list marks chats that are working or waiting for you. You can switch while a run continues and return to it to respond or stop it. A working chat must be stopped before you can delete it. Deleting a chat removes Cutroom's history for that chat. The provider keeps its native session.
 
 The plus button opens a new chat and shows up to five recent chats. Cutroom remembers the last saved chat you opened in each project. If it is gone, Cutroom opens the most recent remaining chat.
 
-Use **Refresh agents** at the bottom of the chat list after installing a skill or signing in. The open chat must be idle to refresh or change models.
+Use **Refresh agents** at the bottom of the chat list after installing a skill or signing in. The open chat must be idle to refresh or change the model or effort.
 
 ## Local context
 

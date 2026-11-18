@@ -208,6 +208,7 @@ for await (const line of createInterface({input:process.stdin})) {
   const message = JSON.parse(line);
   if (message.method === "initialize") reply({id:message.id,result:{}});
   if (message.method === "config/read") reply({id:message.id,result:{config:{}}});
+  if (message.method === "model/list") reply({id:message.id,result:{data:[]}});
   if (message.method === "thread/start" || message.method === "thread/resume") {
     await Bun.write(process.env.RECORDING + ".thread", JSON.stringify(message.params));
     reply({id:message.id,result:{thread:{id:"test-thread"}}});

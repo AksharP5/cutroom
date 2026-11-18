@@ -23,9 +23,17 @@ import {
   completeMessage,
   toolCalls,
 } from "./runtime";
-import type { AgentRuntime, RuntimeOptions } from "./runtime";
+import type { AgentRuntime, ModelSelection, RuntimeOptions } from "./runtime";
 
-const threadResultSchema = z.object({ thread: z.object({ id: z.string() }) });
+const threadResultSchema = z.object({
+  thread: z.object({ id: z.string() }),
+  model: z.string().optional(),
+});
+const configResultSchema = codexPermissionConfigSchema.extend({
+  config: codexPermissionConfigSchema.shape.config.extend({
+    model_reasoning_effort: z.string().nullish(),
+  }),
+});
 const turnResultSchema = z.object({ turn: z.object({ id: z.string() }) });
 const skillsResultSchema = z.object({
   data: z.array(
@@ -53,6 +61,10 @@ const modelsResultSchema = z.object({
       description: z.string(),
       hidden: z.boolean().optional(),
       isDefault: z.boolean().optional(),
+      supportedReasoningEfforts: z
+        .array(z.object({ reasoningEffort: z.string() }))
+        .default([]),
+      defaultReasoningEffort: z.string().optional(),
     }),
   ),
 });
@@ -145,6 +157,10 @@ export async function codexCapabilities(
         name: model.displayName,
         description: model.description,
         isDefault: model.isDefault,
+        efforts: model.supportedReasoningEfforts.map(
+          ({ reasoningEffort }) => reasoningEffort,
+        ),
+        defaultEffort: model.defaultReasoningEffort,
       })),
     mcpServers: servers.data.map((server) => ({
       name: server.name,
@@ -155,6 +171,10 @@ export async function codexCapabilities(
 
 export class CodexRuntime implements AgentRuntime {
   private threadId?: string;
+  private threadModel?: string;
+  private configuredEffort?: string | null;
+  private selection: ModelSelection;
+  private restoreDefaultEffort: boolean;
   private permissionConfigs: CodexToolConfig[] = [];
   private turnId?: string;
   private stopRequested = false;
@@ -175,6 +195,8 @@ export class CodexRuntime implements AgentRuntime {
     private readonly options: RuntimeOptions,
     private readonly threadConfig: Record<string, string> = {},
   ) {
+    this.selection = options;
+    this.restoreDefaultEffort = Boolean(options.nativeSessionId);
     this.tools = toolCalls(options.cwd);
     this.unlisten = client.subscribe((message) => {
       try {
@@ -187,15 +209,23 @@ export class CodexRuntime implements AgentRuntime {
     });
   }
 
+  configureModel(selection: ModelSelection) {
+    this.selection = selection;
+    this.restoreDefaultEffort = Boolean(
+      this.threadId || this.options.nativeSessionId,
+    );
+  }
+
   private ensureThread() {
     if (this.threadId) return Promise.resolve(this.threadId);
     this.starting ??= (async () => {
-      const native = codexPermissionConfigSchema.parse(
+      const native = configResultSchema.parse(
         await this.client.call("config/read", {
           cwd: this.options.cwd,
           includeLayers: true,
         }),
       );
+      this.configuredEffort = native.config.model_reasoning_effort;
       // Even an untrusted project's ask rules may restrict Cutroom's grant. Read
       // restrictions only; never enable tools or permissions from a disabled layer.
       this.permissionConfigs = [
@@ -214,7 +244,7 @@ export class CodexRuntime implements AgentRuntime {
             : {}),
           cwd: this.options.cwd,
           developerInstructions: agentInstructions(this.options.cwd),
-          ...(this.options.model ? { model: this.options.model } : {}),
+          ...(this.selection.model ? { model: this.selection.model } : {}),
           approvalPolicy: "on-request",
           sandbox: "workspace-write",
           serviceName: "cutroom",
@@ -228,7 +258,9 @@ export class CodexRuntime implements AgentRuntime {
         },
       );
     })().then((value) => {
-      const id = threadResultSchema.parse(value).thread.id;
+      const response = threadResultSchema.parse(value);
+      const { id } = response.thread;
+      this.threadModel = response.model;
       this.threadId = id;
       this.options.emit({ type: "native-session", nativeSessionId: id });
       return id;
@@ -240,6 +272,22 @@ export class CodexRuntime implements AgentRuntime {
     this.stopRequested = false;
     this.turnFinished = false;
     const threadId = await this.ensureThread();
+    const model = this.selection.model ?? this.threadModel;
+    let effort = this.selection.effort;
+    if (effort === undefined && this.restoreDefaultEffort) {
+      // Codex keeps the last turn's override when effort is omitted or null.
+      const catalog = modelsResultSchema.parse(
+        await this.client.call("model/list"),
+      );
+      const selected = catalog.data.find(
+        (candidate) => candidate.model === model,
+      );
+      effort = selected?.supportedReasoningEfforts.some(
+        ({ reasoningEffort }) => reasoningEffort === this.configuredEffort,
+      )
+        ? (this.configuredEffort ?? undefined)
+        : selected?.defaultReasoningEffort;
+    }
     if (this.stopRequested) return;
     if (this.active)
       throw new Error("Codex is already working in this conversation.");
@@ -265,9 +313,10 @@ export class CodexRuntime implements AgentRuntime {
       await Promise.all([
         completed,
         this.client
-          .call("turn/start", { threadId, input })
+          .call("turn/start", { threadId, input, model, effort })
           .then(async (value) => {
             this.turnId = turnResultSchema.parse(value).turn.id;
+            this.restoreDefaultEffort = false;
             if (this.stopRequested && !this.turnFinished)
               await this.interrupt();
           }),
