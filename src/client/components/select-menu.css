@@ -146,6 +146,11 @@
 .context-menu button:disabled::before {
   display: none;
 }
+/* An unavailable command's key hint is as quiet as its name. */
+.context-menu button:disabled kbd {
+  color: inherit;
+  font-weight: var(--weight-regular);
+}
 .context-menu hr {
   width: auto;
   height: var(--stroke-hair);

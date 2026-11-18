@@ -2871,7 +2871,7 @@ option {
 
 /* The project and file dialogs keep their unavailable actions readable. */
 :where(.project-form, .modal:has(.file-location)) button:disabled {
-  background: var(--surface-raised);
+  background: var(--surface-active);
   color: var(--text-tertiary);
   opacity: 1;
   cursor: default;
