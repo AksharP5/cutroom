@@ -8,7 +8,6 @@ import { HttpError } from "../../shared/errors";
 const threadSchema = z.object({
   threadId: t3ThreadIdSchema,
   title: z.string(),
-  link: z.string(),
   status: z.string(),
   providerInstanceId: z.string(),
   model: z.string(),

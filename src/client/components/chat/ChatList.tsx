@@ -9,7 +9,6 @@ import {
 import type { KeyboardEvent } from "react";
 import {
   ArrowClockwise,
-  ArrowSquareOut,
   CaretDown,
   CaretLeft,
   LinkSimple,
@@ -100,7 +99,6 @@ type ChatEdit =
 export const ChatList = memo(function ChatList({
   chats,
   projectId,
-  threadLink,
   selectedId,
   title,
   visible,
@@ -117,7 +115,6 @@ export const ChatList = memo(function ChatList({
 }: {
   chats: AgentSessionSummary[];
   projectId: string;
-  threadLink?: string;
   selectedId: string | null;
   title: string;
   visible: boolean;
@@ -360,18 +357,6 @@ export const ChatList = memo(function ChatList({
         <span>{title}</span>
         <CaretDown />
       </button>
-      {threadLink && (
-        <a
-          className="icon-button chat-thread-link"
-          href={threadLink}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open in T3 Code"
-          title="Open in T3 Code"
-        >
-          <ArrowSquareOut />
-        </a>
-      )}
       <button
         type="button"
         className="icon-button"

@@ -16,11 +16,13 @@ import {
 import { createProjectStore } from "../src/server/projects/store";
 
 // Fields retained from the isolated CLI's list and show output on a synthetic thread.
+// The CLI also returns a hosted `link`; Cutroom must drop it.
+const hostedLink =
+  "https://app.t3.codes/threads/test/mcp%3A299c562b-fcf8-43be-9ee4-76ea289ed0b1";
 const cliThread = {
   threadId: "mcp:299c562b-fcf8-43be-9ee4-76ea289ed0b1",
   title: "Reply with the single word started.",
   status: "completed",
-  link: "https://app.t3.codes/threads/test/mcp%3A299c562b-fcf8-43be-9ee4-76ea289ed0b1",
   providerInstanceId: "codex",
   model: "gpt-6-sol",
   createdAt: "2026-11-18T02:52:51.344Z",
@@ -30,6 +32,7 @@ const runId = "run:thread:mcp%3A299c562b-fcf8-43be-9ee4-76ea289ed0b1:ordinal:1";
 const cliShow = {
   thread: {
     ...cliThread,
+    link: hostedLink,
     activeRunId: null,
     latestRunId: runId,
     pendingRequestCount: 0,
@@ -125,7 +128,7 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
           "--project",
           project.path,
         ]);
-        return ok([cliThread]);
+        return ok([{ ...cliThread, link: hostedLink }]);
       }
       if (args[1] === "show") {
         expect(args.slice(0, 5)).toEqual([
@@ -203,6 +206,9 @@ test("a linked chat mirrors T3 and sends review context while a local run owns t
       expect(first.status).toBe(201);
       const session = service.list(project.id).find((chat) => chat.t3Thread);
       if (!session) throw new Error("Linked chat was not saved");
+      // The CLI's hosted link is never kept or handed to the page.
+      expect(session.t3Thread).toEqual({ threadId: cliThread.threadId });
+      expect(JSON.stringify(service.get(session.id))).not.toContain("t3.codes");
       expect((await first.json()).id).toBe(session.id);
       expect((await second.json()).id).toBe(session.id);
       expect(
