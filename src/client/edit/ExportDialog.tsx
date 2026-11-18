@@ -560,12 +560,9 @@ function ExportDialog({
           <>
             <p className="export-path">{resolved.outputPath}</p>
             <div role="status" className="export-result">
-              Ready for Resolve. Import{" "}
-              {resolved.timeline.split(/[\\/]/).at(-1)} with File &gt; Import
-              &gt; Timeline
-              {resolved.markers &&
-                `, then its markers with Timeline > Import > Timeline Markers from EDL`}
-              .
+              {resolved.gradeScript
+                ? "Ready for Resolve. Follow Summary.txt to import the timeline with its grades."
+                : `Ready for Resolve. Import ${resolved.timeline.split(/[\\/]/).at(-1)} with File > Import > Timeline${resolved.markers ? ", then its markers with Timeline > Import > Timeline Markers from EDL" : ""}.`}
             </div>
             {resolved.notes.map((note) => (
               <p key={note} className="export-hint">

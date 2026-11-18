@@ -171,6 +171,13 @@ export const ResolveExportSchema = z.object({
       "The marker list, for Timeline > Import > Timeline Markers from EDL; null without markers",
     ),
   summary: z.string(),
+  gradeScript: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Resolve console script that imports the timeline and applies the grades",
+    ),
   notes: z
     .array(z.string())
     .describe("What Resolve won't show as Cutroom does, one sentence each"),
