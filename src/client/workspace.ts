@@ -66,7 +66,7 @@ export const useWorkspace = create(() => ({
    * The new editor's failures, shown in the status bar. Each side sets and clears only its own,
    * so a preview that loads fine never hides a timeline the engine refused.
    */
-  editorErrors: { viewer: null, timeline: null } as Record<
+  editorErrors: { viewer: null, timeline: null, previewFrame: null } as Record<
     EditorErrorSide,
     string | null
   >,
@@ -174,7 +174,7 @@ export const showToast = (
 export const NO_COMPOSITION_ROOT =
   "This file has no live element with data-composition-id.";
 
-type EditorErrorSide = "viewer" | "timeline";
+type EditorErrorSide = "viewer" | "timeline" | "previewFrame";
 
 /** Shows a failure from one side of the new editor, or clears that side with null. */
 export const reportEditorError = (side: EditorErrorSide, error: unknown) =>
