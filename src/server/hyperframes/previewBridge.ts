@@ -30,6 +30,7 @@ interface PreviewWindow extends DiagnosticWindow {
     };
   };
   gsap?: {
+    ticker?: { tick?: () => void };
     getProperty(element: Element, property: string): unknown;
     getTweensOf?(target: Element): {
       progress(): number;
@@ -2033,7 +2034,7 @@ function installPreviewBridge(
       ? Math.min(media, video.duration)
       : media;
   };
-  const holdPaused = async (version: number, keepFrames: boolean) => {
+  const holdPaused = async (version: number) => {
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
       throw new Error("The preview cannot confirm that it drew the frame.");
@@ -2127,11 +2128,6 @@ function installPreviewBridge(
                 requestAnimationFrame(() => resolve()),
               );
               continue;
-            }
-            if (!keepFrames) {
-              // Screenshots use Chromium's native video colour conversion after the decode settles.
-              for (const frame of frames.values()) frame.close();
-              return;
             }
             try {
               for (const [video] of holds) {
@@ -2651,26 +2647,22 @@ function installPreviewBridge(
       for (const frame of frames.values()) frame.close();
     }
   };
-  const refreshPicture = (keepFrames = true) => {
+  const refreshPicture = () => {
     const version = ++pictureVersion;
     for (const video of holds.keys()) cancelRelease(video);
-    picture = holdPaused(version, keepFrames);
+    picture = holdPaused(version);
     return picture;
-  };
-  const seekPicture = async (time: number, keepFrames = true) => {
-    seekRuntime(time);
-    residentAudio(false);
-    if (win.__player?.isPlaying()) return false;
-    const restored = refreshPicture(keepFrames);
-    const version = pictureVersion;
-    await restored;
-    if (version === pictureVersion) clearEditPicture();
-    return true;
   };
   // The thumbnail browser has no parent player. It still needs the editor's exact paused seek.
   win.__cutroomSeekFrame = async (time) => {
     win.__player?.pause();
-    await seekPicture(time, false);
+    seekRuntime(time);
+    win.gsap?.ticker?.tick?.();
+    await refreshPicture();
+    // Repaint the native video after the exact frame is held. Screenshots use its
+    // colour conversion, which can differ from canvas for untagged sources.
+    await paint();
+    for (const video of holds.keys()) removeHold(video);
   };
   const releasePlaying = (video: HTMLVideoElement) => {
     const hold = holds.get(video);
@@ -3712,7 +3704,15 @@ function installPreviewBridge(
             scheduleBox();
             break;
           }
-          const paused = await seekPicture(data.time);
+          seekRuntime(data.time);
+          residentAudio(false);
+          const paused = !win.__player?.isPlaying();
+          if (paused) {
+            const restored = refreshPicture();
+            const version = pictureVersion;
+            await restored;
+            if (version === pictureVersion) clearEditPicture();
+          }
           scheduleObservation();
           scheduleBox();
           if (paused) await paint();

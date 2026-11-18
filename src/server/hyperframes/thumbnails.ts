@@ -25,7 +25,6 @@ interface PreviewWindow extends DiagnosticWindow {
   __hfStartupError?: string;
   __hfStudioManualEditsApply?: () => number;
   __hfStudioMotionApply?: () => number;
-  gsap?: { ticker?: { tick?: () => void } };
 }
 
 /** Long enough to cover an agent's burst of frame checks, short enough to free the page's decoders. */
@@ -191,7 +190,6 @@ export function createThumbnailRenderer() {
               if (media instanceof HTMLMediaElement) media.muted = true;
             });
             await preview.__cutroomSeekFrame?.(time);
-            preview.gsap?.ticker?.tick?.();
             await document.fonts.ready;
             // The preview route stamps the signature it compiled this document from.
             return document
