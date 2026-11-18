@@ -197,7 +197,7 @@ test("a part marked in the source viewer goes on the timeline by key, button and
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => colour(page, picture)).toBe("blue");
   const range = page.locator(".edit-range");
-  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:02:00 Out 00:00:04:29");
   await expect(source.getByTitle("Length to place")).toHaveText("00:00:03:00");
   // Marking a source is not a timeline edit.
   expect((await read()).range).toEqual(before.range);
@@ -218,7 +218,7 @@ test("a part marked in the source viewer goes on the timeline by key, button and
   await expect(source.locator("canvas")).toBeVisible();
   await expect(range).toBeHidden();
   await (await file("talk.mp4")).dblclick();
-  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:02:00 Out 00:00:04:29");
   await expect(clock).toHaveText("00:00:02:00");
 
   // Scrubbing the timeline shows the timeline; the source stays loaded.
@@ -610,7 +610,7 @@ test("source marks survive reload and project switches without entering undo his
   await page.keyboard.press("i");
   await seek(page, "429");
   await page.keyboard.press("o");
-  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:02:00 Out 00:00:04:29");
   await page.screenshot({ path: testInfo.outputPath("before-reload.png") });
   // Observe the acknowledged disk save before reloading, as with destination tracks.
   await expect
@@ -630,7 +630,7 @@ test("source marks survive reload and project switches without entering undo his
   ).toHaveCount(2);
   await (await a.file("talk.mp4")).dblclick();
   await expect(a.source).toBeVisible();
-  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:02:00 Out 00:00:04:29");
   await expect(a.clock).toHaveText("00:00:02:00");
   await expect
     .poll(() => colour(page, a.source.locator("video")))
@@ -644,7 +644,7 @@ test("source marks survive reload and project switches without entering undo his
   await page.keyboard.press("i");
   await seek(page, "129");
   await page.keyboard.press("o");
-  await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+  await expect(range).toHaveText("In 00:00:01:00 Out 00:00:01:29");
   await expect
     .poll(async () =>
       (
@@ -659,7 +659,7 @@ test("source marks survive reload and project switches without entering undo his
     location.hash = `project/${id}`;
   }, a.project.id);
   await (await a.file("talk.mp4")).dblclick();
-  await expect(range).toHaveText("In 00:00:02:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:02:00 Out 00:00:04:29");
   // A's next save is held while B opens. A's completion cannot overwrite B's marks.
   const saving = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -678,7 +678,7 @@ test("source marks survive reload and project switches without entering undo his
       location.hash = `project/${id}`;
     }, b.project.id);
     await (await b.file("talk.mp4")).dblclick();
-    await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+    await expect(range).toHaveText("In 00:00:01:00 Out 00:00:01:29");
   } finally {
     release.resolve();
   }
@@ -691,13 +691,13 @@ test("source marks survive reload and project switches without entering undo his
       ).json(),
     )
     .toMatchObject({ in: 3, out: 5 });
-  await expect(range).toHaveText("In 00:00:01:00Out 00:00:01:29");
+  await expect(range).toHaveText("In 00:00:01:00 Out 00:00:01:29");
   await page.unroute("**/source-marks?**");
   await page.evaluate((id) => {
     location.hash = `project/${id}`;
   }, a.project.id);
   await (await a.file("talk.mp4")).dblclick();
-  await expect(range).toHaveText("In 00:00:03:00Out 00:00:04:29");
+  await expect(range).toHaveText("In 00:00:03:00 Out 00:00:04:29");
   expect(await a.read()).toEqual(a.before);
   expect(await history()).toEqual(before);
 
@@ -743,7 +743,7 @@ test("source marks survive reload and project switches without entering undo his
   ).toHaveCount(2);
   expect((await a.read()).fps).toEqual({ num: 24, den: 1 });
   await (await a.file("talk.mp4")).dblclick();
-  await expect(range).toHaveText("In 00:00:03:00Out 00:00:04:23");
+  await expect(range).toHaveText("In 00:00:03:00 Out 00:00:04:23");
 });
 
 test("review: saves stay ordered and coalesce across source navigation", async ({

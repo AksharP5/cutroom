@@ -612,10 +612,10 @@ input.edit-now {
   color: var(--text-secondary);
   white-space: nowrap;
 }
-.edit-range span {
+.edit-range-label {
   color: var(--text-tertiary);
 }
-.edit-range span:not(:first-child) {
+.edit-range-label:not(:first-child) {
   margin-left: 1ch;
 }
 /*

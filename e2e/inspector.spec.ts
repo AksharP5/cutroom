@@ -660,7 +660,17 @@ test("with nothing selected the inspector shows the timeline, its markers and it
   await expect(facts).toContainText("640 × 360");
   await expect(facts).toContainText("30 fps");
   await expect(facts).toContainText("00:00:10:00");
-  await expect(facts).toContainText("00:00:01:00 to 00:00:03:29");
+  await expect(facts.locator("dd").last().locator(":scope > span")).toHaveText([
+    "00:00:01:00",
+    "to",
+    "00:00:03:29",
+  ]);
+  await expect(page.locator(".edit-range > span")).toHaveText([
+    "In",
+    "00:00:01:00",
+    "Out",
+    "00:00:03:29",
+  ]);
   const clock = page.getByRole("button", { name: /^Current time/ });
 
   // Markers list in time order; a click seeks there.

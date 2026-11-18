@@ -121,7 +121,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.inspector-clip span {
+.inspector-clip > span {
   color: var(--text-tertiary);
   font-size: var(--type-xs);
 }
@@ -598,7 +598,7 @@
   font: var(--weight-medium) var(--type-xs) var(--font-mono);
   font-stretch: var(--stretch-mono);
 }
-.inspector-facts dd span {
+.inspector-range-join {
   color: var(--text-tertiary);
   font-family: var(--font-sans);
   font-weight: var(--weight-regular);
@@ -612,7 +612,7 @@
   background: var(--marker, var(--marker-grey));
   clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
 }
-.inspector-markers button span {
+.inspector-markers button > span {
   flex: 1;
   min-width: 0;
   overflow: hidden;

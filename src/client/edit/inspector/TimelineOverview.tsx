@@ -56,7 +56,8 @@ export function TimelineOverview({
             <>
               <dt>In to out</dt>
               <dd>
-                {time(range.in ?? 0)} <span>to</span>{" "}
+                {time(range.in ?? 0)}{" "}
+                <span className="inspector-range-join">to</span>{" "}
                 {time((range.out ?? duration) - 1)}
               </dd>
             </>

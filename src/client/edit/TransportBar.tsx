@@ -280,13 +280,14 @@ export function TransportBar({
             <span className="edit-range">
               {range.in !== null && (
                 <>
-                  <span>In</span>{" "}
+                  <span className="edit-range-label">In</span>{" "}
                   <TimecodeText timecode={formatTimecode(range.in, fps)} />
                 </>
               )}
               {range.out !== null && (
                 <>
-                  <span>Out</span>{" "}
+                  {" "}
+                  <span className="edit-range-label">Out</span>{" "}
                   <TimecodeText timecode={formatTimecode(range.out - 1, fps)} />
                 </>
               )}
