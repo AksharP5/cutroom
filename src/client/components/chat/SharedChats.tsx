@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import {
   agentProviderSchema,
@@ -51,6 +51,7 @@ export function openNativeChat(
 }
 
 export type SharedChatView = "t3" | "native";
+export const t3ThreadPageSize = 20;
 type Listing =
   | { kind: "t3"; result: z.infer<typeof threadsSchema> }
   | { kind: "native"; result: z.infer<typeof nativeSessionsSchema> }
@@ -62,12 +63,18 @@ export function SharedChats({
   chats,
   onSelect,
   loadChats,
+  threadQuery,
+  threadLimit,
+  onShowMore,
 }: {
   mode: SharedChatView;
   projectId: string;
   chats: AgentSessionSummary[];
   onSelect: (chat: AgentSessionSummary) => void;
   loadChats: () => Promise<AgentSessionSummary[]>;
+  threadQuery: string;
+  threadLimit: number;
+  onShowMore: (firstNewThread: string) => void;
 }) {
   const [listing, setListing] = useState<Listing>();
   const [slow, setSlow] = useState(false);
@@ -75,6 +82,7 @@ export function SharedChats({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const lifetime = useRef<AbortController>(null);
+  const scroll = useRef<HTMLDivElement>(null);
   const base = `/projects/${encodeURIComponent(projectId)}`;
   useEffect(() => {
     const controller = new AbortController();
@@ -107,6 +115,37 @@ export function SharedChats({
     };
   }, [base, mode]);
 
+  const threads = listing?.kind === "t3" ? listing.result.threads : undefined;
+  const linkedChats = useMemo(() => {
+    const linked = new Map<string, AgentSessionSummary>();
+    for (const chat of chats)
+      if (chat.t3Thread && !linked.has(chat.t3Thread.threadId))
+        linked.set(chat.t3Thread.threadId, chat);
+    return linked;
+  }, [chats]);
+  const orderedThreads = useMemo(
+    () =>
+      threads?.toSorted(
+        (a, b) =>
+          Number(linkedChats.has(b.threadId)) -
+            Number(linkedChats.has(a.threadId)) ||
+          Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+      ),
+    [threads, linkedChats],
+  );
+  const matchingThreads = useMemo(() => {
+    const query = threadQuery.toLowerCase();
+    return query
+      ? orderedThreads?.filter((thread) =>
+          thread.title.toLowerCase().includes(query),
+        )
+      : orderedThreads;
+  }, [orderedThreads, threadQuery]);
+  const firstHidden = matchingThreads?.[threadLimit];
+  useLayoutEffect(() => {
+    if (mode === "t3" && scroll.current) scroll.current.scrollTop = 0;
+  }, [mode, threadQuery]);
+
   async function open(request: () => Promise<AgentSessionSummary>) {
     if (pending) return;
     const signal = lifetime.current?.signal;
@@ -125,7 +164,7 @@ export function SharedChats({
   }
 
   function link(threadId: string) {
-    const existing = chats.find((chat) => chat.t3Thread?.threadId === threadId);
+    const existing = linkedChats.get(threadId);
     if (existing) {
       onSelect(existing);
       return;
@@ -142,7 +181,7 @@ export function SharedChats({
   const now = Date.now();
   return (
     <>
-      <div className="chat-list-scroll">
+      <div className="chat-list-scroll" ref={scroll}>
         {!listing && slow && (
           <p className="chat-list-message" role="status">
             {mode === "t3"
@@ -161,68 +200,79 @@ export function SharedChats({
               <p className="chat-list-message" role="status">
                 {listing.result.reason ?? "T3 Code is unavailable."}
               </p>
-            ) : !listing.result.threads.length ? (
+            ) : !matchingThreads?.length ? (
               <p className="chat-list-message" role="status">
-                No T3 Code threads for this folder.
+                {threadQuery
+                  ? "No threads match."
+                  : "No T3 Code threads for this folder."}
               </p>
             ) : null}
-            {listing.result.threads
-              .toSorted(
-                (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
-              )
-              .map((thread) => {
-                const linked = chats.some(
-                  (chat) => chat.t3Thread?.threadId === thread.threadId,
-                );
-                const running = ["starting", "running", "queued"].includes(
-                  thread.status,
-                );
-                const status = running ? "running" : thread.status;
-                return (
-                  <div className="chat-list-row" key={thread.threadId}>
-                    <button
-                      className="chat-list-pick"
-                      type="button"
-                      role="menuitem"
-                      aria-label={thread.title}
-                      aria-description={
-                        [
-                          status === "running"
-                            ? "Working"
-                            : status === "waiting"
-                              ? "Needs you"
-                              : "",
-                          linked ? "Linked" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(", ") || undefined
-                      }
-                      data-menu-row={thread.threadId}
-                      data-menu-label={thread.title}
-                      tabIndex={-1}
-                      aria-disabled={pending || undefined}
-                      onClick={() => {
-                        if (!pending) link(thread.threadId);
-                      }}
-                    >
-                      <span className="chat-list-mark" data-status={status} />
-                      <span className="chat-list-name" title={thread.title}>
-                        {thread.title}
-                      </span>
-                      <span className="chat-list-meta chat-thread-meta">
-                        <span title={thread.model}>{thread.model}</span>
-                        {linked ? (
-                          "Linked"
-                        ) : (
-                          <time className="mono" dateTime={thread.updatedAt}>
-                            {chatAge(thread.updatedAt, now)}
-                          </time>
-                        )}
-                      </span>
-                    </button>
-                  </div>
-                );
-              })}
+            {matchingThreads?.slice(0, threadLimit).map((thread) => {
+              const linked = linkedChats.has(thread.threadId);
+              const running = ["starting", "running", "queued"].includes(
+                thread.status,
+              );
+              const status = running ? "running" : thread.status;
+              return (
+                <div className="chat-list-row" key={thread.threadId}>
+                  <button
+                    className="chat-list-pick"
+                    type="button"
+                    role="menuitem"
+                    aria-label={thread.title}
+                    aria-description={
+                      [
+                        status === "running"
+                          ? "Working"
+                          : status === "waiting"
+                            ? "Needs you"
+                            : "",
+                        linked ? "Linked" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(", ") || undefined
+                    }
+                    data-menu-row={thread.threadId}
+                    data-menu-label={thread.title}
+                    tabIndex={-1}
+                    aria-disabled={pending || undefined}
+                    onClick={() => {
+                      if (!pending) link(thread.threadId);
+                    }}
+                  >
+                    <span className="chat-list-mark" data-status={status} />
+                    <span className="chat-list-name" title={thread.title}>
+                      {thread.title}
+                    </span>
+                    <span className="chat-list-meta chat-thread-meta">
+                      <span title={thread.model}>{thread.model}</span>
+                      {linked ? (
+                        "Linked"
+                      ) : (
+                        <time className="mono" dateTime={thread.updatedAt}>
+                          {chatAge(thread.updatedAt, now)}
+                        </time>
+                      )}
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+            {firstHidden && (
+              <div className="chat-list-row">
+                <button
+                  className="chat-list-pick"
+                  type="button"
+                  role="menuitem"
+                  data-menu-row=""
+                  data-menu-label="Show 20 more"
+                  tabIndex={-1}
+                  onClick={() => onShowMore(firstHidden.threadId)}
+                >
+                  Show 20 more
+                </button>
+              </div>
+            )}
           </>
         )}
         {listing?.kind === "native" && (
