@@ -5,6 +5,7 @@ import {
   ExportJobSchema,
   exportRange,
   RendersSchema,
+  ResolveExportSchema,
   retimeFrames,
 } from "../../shared/export";
 import type {
@@ -195,6 +196,40 @@ export const exportGpuAvailable = () =>
     // Without an answer the dialog offers no GPU choice, and exports keep the server's default.
     () => false,
   );
+
+/**
+ * Writes a DaVinci Resolve folder of the composition the editor shows, once the edits already
+ * shown have settled. Its layers render as ordinary jobs, which the dialog follows meanwhile.
+ */
+export function exportForResolve(
+  projectId: string,
+  options: {
+    directory: string;
+    copyMedia: boolean;
+    variables: VariableValues;
+  },
+) {
+  return afterTimelineEdits(projectId, () => {
+    const composition = useTimeline.getState().view?.composition;
+    return renderApi(
+      `/projects/${encodeURIComponent(projectId)}/export`,
+      ResolveExportSchema,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          format: "resolve",
+          directory: options.directory,
+          copyMedia: options.copyMedia,
+          ...(composition &&
+            composition !== ROOT_COMPOSITION && { composition }),
+          ...(Object.keys(options.variables).length && {
+            variables: options.variables,
+          }),
+        }),
+      },
+    );
+  });
+}
 
 /** Starts the existing Studio job after all edits already shown have settled. */
 export async function exportProject(

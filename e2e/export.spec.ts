@@ -10,7 +10,7 @@ import type { APIRequestContext, Download, Page } from "@playwright/test";
 import { z } from "zod";
 import { ProjectSchema, SourceSchema } from "../src/shared/project";
 import { embeddedEditor } from "./embedded";
-import { ExportJobSchema } from "../src/shared/export";
+import { ExportJobSchema, ResolveExportSchema } from "../src/shared/export";
 
 /** A one-second 320x240 composition with one picture clip, and the page's uncaught errors. */
 async function exportable(page: Page, request: APIRequestContext) {
@@ -167,6 +167,57 @@ test("the dialog and MCP set the loop count in the exported GIF", async ({
   } finally {
     await client.close();
   }
+});
+
+test("the dialog exports a folder for DaVinci Resolve with its layers rendered", async ({
+  page,
+  request,
+}, info) => {
+  const { project, errors } = await exportable(page, request);
+  await page.goto(`/#project/${project.id}`);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export" });
+  await dialog.getByRole("combobox", { name: "Format" }).click();
+  await page.getByRole("option", { name: /^DaVinci Resolve/ }).click();
+  // A Resolve export takes the whole timeline at its own rate, and names its own folder.
+  await expect(dialog.getByRole("textbox", { name: "File name" })).toHaveCount(
+    0,
+  );
+  await expect(
+    dialog.getByRole("combobox", { name: "Frame rate" }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByRole("radio", { name: "Whole timeline" }),
+  ).toHaveCount(0);
+  await dialog
+    .getByRole("checkbox", { name: "Copy media into the folder" })
+    .check();
+  await dialog.screenshot({ path: info.outputPath("resolve-options.png") });
+  const exported = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/export"),
+    { timeout: 60_000 },
+  );
+  await dialog.getByRole("button", { name: "Export for Resolve" }).click();
+  const response = await exported;
+  const body: unknown = await response.json();
+  expect(response.ok(), JSON.stringify(body)).toBe(true);
+  const result = ResolveExportSchema.parse(body);
+  await expect(dialog).toContainText("Ready for Resolve.", { timeout: 60_000 });
+  await expect(dialog).toContainText(result.outputPath);
+  await expect(dialog).toContainText("Layers/V1.mov");
+  await dialog.screenshot({ path: info.outputPath("resolve-done.png") });
+  // The picture is an HTML element, so V1 renders as a ProRes layer the timeline cuts from.
+  const fcpxml = await readFile(result.timeline, "utf8");
+  expect(fcpxml).toContain("Layers/V1.mov");
+  const { stdout } = await promisify(execFile)("ffprobe", [
+    ...["-v", "error", "-select_streams", "v:0"],
+    ...["-show_entries", "stream=codec_name,pix_fmt", "-of", "csv=p=0"],
+    join(result.outputPath, "Layers", "V1.mov"),
+  ]);
+  expect(stdout.trim()).toMatch(/^prores,yuva444p/);
+  expect(errors).toEqual([]);
 });
 
 test("Export waits for edits, continues when hidden and opens the completed MP4", async ({

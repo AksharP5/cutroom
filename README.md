@@ -7,7 +7,7 @@ A local video editor for HyperFrames projects. Edit the timeline yourself, or wo
 - Cut and mix footage, animate clip properties, and edit HyperFrames compositions.
 - Draw on the viewer or pin a timed comment, then send your notes to an agent.
 - Transcribe local footage, cut and restore words, and add captions.
-- Export MP4, MOV, WebM or GIF locally.
+- Export MP4, MOV, WebM or GIF locally, or finish the edit in DaVinci Resolve.
 
 ## Install
 
