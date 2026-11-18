@@ -9,6 +9,7 @@ import {
   agentTurnSchema,
   configureAgentSessionSchema,
   createAgentSessionSchema,
+  t3ThreadIdSchema,
 } from "../../shared/agent";
 import { HttpError } from "../../shared/errors";
 import type { AgentService } from "./service";
@@ -62,6 +63,15 @@ export function createAgentRoutes(service: AgentService) {
         c.req.query("refresh") === "true",
       ),
     );
+  });
+  app.get("/projects/:id/t3-threads", async (c) =>
+    c.json(await service.listT3Threads(c.req.param("id"))),
+  );
+  app.post("/projects/:id/t3-threads/link", async (c) => {
+    const { threadId } = z
+      .object({ threadId: t3ThreadIdSchema })
+      .parse(await c.req.json());
+    return c.json(await service.linkT3Thread(c.req.param("id"), threadId), 201);
   });
   app.get("/agents/sessions", (c) =>
     c.json({ sessions: service.list(c.req.query("projectId")) }),
