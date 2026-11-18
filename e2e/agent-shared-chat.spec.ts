@@ -101,6 +101,8 @@ test("link a folder thread with the keyboard and send while T3 Code works", asyn
   );
 
   await page.goto(url);
+  // The title is disabled while the project's chats load; a key sent before then is lost.
+  await expect(title).toBeEnabled();
   await title.press("Enter");
   const entry = menu.getByRole("menuitem", { name: "Link a T3 Code thread" });
   await expect(entry).toBeVisible();
