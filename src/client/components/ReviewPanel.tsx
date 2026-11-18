@@ -577,7 +577,7 @@ export function ReviewPanel({
           >
             <header className="review-group-head">
               <h3>
-                <span data-accepted={title === "Accepted" || undefined}>
+                <span>
                   {title}
                 </span>
                 {members.length > 0 && (

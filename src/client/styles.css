@@ -1976,9 +1976,6 @@ option {
   font: inherit;
   font-weight: var(--weight-semibold);
 }
-.review-group-head [data-accepted] {
-  text-decoration: line-through;
-}
 .review-group-head .text-button {
   font-size: inherit;
 }
