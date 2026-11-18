@@ -156,20 +156,20 @@ test("the new editor's timeline scrubs, selects clips, and zooms at the cursor",
 
   // The clip under the pointer lights up over its body, and a press takes the light away.
   const hover = timeline.locator(".tl-hover");
-  await expect(hover).toBeHidden();
+  await expect(hover).toHaveCSS("opacity", "0");
   const rule = (await clip("rule").boundingBox())!;
   await page.mouse.move(rule.x + rule.width / 2, rule.y + rule.height / 2);
-  await expect(hover).toBeVisible();
+  await expect(hover).toHaveCSS("opacity", "1");
   const lit = (await hover.boundingBox())!;
   expect(Math.abs(lit.x - rule.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(lit.width - rule.width)).toBeLessThanOrEqual(1);
   expect(Math.abs(lit.y - rule.y)).toBeLessThanOrEqual(1);
   await page.mouse.down();
-  await expect(hover).toBeHidden();
+  await expect(hover).toHaveCSS("opacity", "0");
   await page.mouse.up();
   await page.keyboard.press("Escape");
   await page.mouse.move(rule.x + rule.width / 2, rule.y - 200);
-  await expect(hover).toBeHidden();
+  await expect(hover).toHaveCSS("opacity", "0");
 
   // Auto-select is a timeline edit; Shift+V then skips that track.
   await timeline.getByRole("button", { name: "Auto-select V1" }).click();

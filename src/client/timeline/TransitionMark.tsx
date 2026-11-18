@@ -161,7 +161,9 @@ export function TransitionMark({
       onPointerUp={() => end(true)}
       onPointerCancel={() => end(false)}
       onLostPointerCapture={() => end(false)}
-    />
+    >
+      <i className="tl-transition-hover" aria-hidden />
+    </i>
   );
 }
 

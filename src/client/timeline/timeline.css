@@ -102,10 +102,6 @@
   height: var(--size-track-button);
   border-radius: var(--radius-control);
   color: var(--text-tertiary);
-  transition: transform var(--duration-press) var(--ease-out);
-}
-.tl-zoom-step:active {
-  transform: scale(var(--press-scale));
 }
 .tl-zoom {
   position: relative;
@@ -132,6 +128,17 @@
   width: 4px;
   height: 12px;
   background: var(--text-primary);
+  transition:
+    opacity var(--duration-hover) var(--ease-fade),
+    transform var(--duration-press) var(--ease-out);
+  opacity: 0.8;
+}
+.tl-zoom:hover .tl-zoom-thumb,
+.tl-zoom:focus-visible .tl-zoom-thumb {
+  opacity: 1;
+}
+.tl-zoom:active .tl-zoom-thumb {
+  transform: scale(var(--press-scale));
 }
 
 .tl-ruler {
@@ -140,7 +147,7 @@
   z-index: var(--z-playhead);
   border-bottom: var(--stroke-hair) solid var(--line-subtle);
   background: var(--surface-panel);
-  cursor: default;
+  cursor: ew-resize;
   touch-action: none;
 }
 .tl-ruler,
@@ -282,6 +289,34 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tl-marker,
+.tl-pin {
+  transition: transform var(--duration-press) var(--ease-out);
+}
+.tl-marker:active,
+.tl-pin:active {
+  transform: scale(var(--press-scale));
+}
+.tl-marker::after,
+.tl-pin::before,
+.tl-meter-clip:not(:disabled)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--overlay-hover);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.tl-marker:hover::after,
+.tl-pin:hover::before,
+.tl-meter-clip:not(:disabled):hover::before {
+  opacity: 1;
+}
+.tl-meter-clip:not(:disabled):active {
+  transform: scale(var(--press-scale));
+}
 .tl-marker::before {
   content: "";
   flex: none;
@@ -414,12 +449,18 @@
   background: var(--surface-active);
   color: var(--text-primary);
 }
+.tl-head-name-field {
+  border-radius: var(--radius-control);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
 .tl-head-name {
   width: 100%;
   min-width: 0;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: inherit;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
@@ -475,7 +516,6 @@ input.tl-track-gain {
   height: var(--size-track-button);
   border-radius: var(--radius-control);
   color: var(--text-secondary);
-  transition: transform var(--duration-press) var(--ease-out);
 }
 .tl-track-button.exception {
   background: var(--surface-active);
@@ -488,7 +528,9 @@ input.tl-track-gain {
 */
 @media (hover: hover) and (pointer: fine) {
   .tl-head :is(.tl-track-button.optional, .vo-arm, .vo-input) {
-    transition: opacity var(--duration-hover) var(--ease-fade);
+    transition:
+      opacity var(--duration-hover) var(--ease-fade),
+      transform var(--duration-press) var(--ease-out);
   }
   .tl-head:not(:hover, :focus-within)
     :is(.tl-track-button.optional:not(.exception), .vo-arm:not(.armed)):not(
@@ -507,27 +549,7 @@ input.tl-track-gain {
   background: var(--overlay-press);
   pointer-events: none;
 }
-.tl-track-button:active {
-  transform: scale(var(--press-scale));
-}
-/* Hover fades in a 7% white overlay. It exists only while hovered, so idle clips cost nothing. */
-@media (hover: hover) and (pointer: fine) {
-  .tl-track-button:hover::before,
-  .tl-head-id:hover::before,
-  .tl-zoom-step:hover::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: var(--overlay-hover);
-    transition: opacity var(--duration-hover) var(--ease-fade);
-    pointer-events: none;
 
-    @starting-style {
-      opacity: 0;
-    }
-  }
-}
 .tl-divider {
   position: absolute;
   right: 0;
@@ -748,18 +770,20 @@ input.tl-track-gain {
 */
 .tl-hover {
   position: absolute;
-  left: calc(var(--s) / var(--span) * 100%);
+  top: 0;
+  left: 0;
   z-index: var(--z-clip-selected);
-  width: calc(var(--d) / var(--span) * 100% - 1px);
-  margin-top: 1px;
-  border-radius: var(--radius-clip);
+  width: var(--stroke-hair);
+  height: var(--stroke-hair);
+  transform-origin: 0 0;
+  will-change: transform, opacity;
   background: var(--overlay-hover);
   pointer-events: none;
+  opacity: 0;
+}
+.tl-hover[data-hover] {
+  opacity: 1;
   transition: opacity var(--duration-hover) var(--ease-fade);
-
-  @starting-style {
-    opacity: 0;
-  }
 }
 @media not ((hover: hover) and (pointer: fine)) {
   .tl-hover {
@@ -1109,6 +1133,17 @@ input.tl-track-gain {
   pointer-events: auto;
   cursor: pointer;
 }
+.tl-transition-hover {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-hover);
+  pointer-events: none;
+  opacity: 0;
+}
+.tl-transition:hover:not(:active) .tl-transition-hover {
+  opacity: 1;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
 .tl-transition.selected {
   --transition-fill: var(--transition-fill-selected);
   --transition-line: var(--selection);
@@ -1211,10 +1246,16 @@ input.tl-track-gain {
 }
 /* The grab band is the line and a pixel each side, so a press beside it takes the clip. */
 .tl-fade-curve .tl-gain {
-  stroke: transparent;
+  stroke: var(--overlay-hover);
   stroke-width: 3;
+  opacity: 0;
+  transition: opacity var(--duration-hover) var(--ease-fade);
   cursor: ns-resize;
   pointer-events: stroke;
+}
+.tl-fade-curve .tl-gain:hover,
+.tl-fade-curve .tl-gain:active {
+  opacity: 1;
 }
 .tl-fade-handle {
   --handle-width: 8px;
@@ -1246,6 +1287,12 @@ input.tl-track-gain {
   opacity: 1;
   pointer-events: auto;
   transition: none;
+}
+.tl-fade-handle:hover {
+  background: var(--text-primary);
+}
+.tl-fade-handle:active {
+  transform: scale(var(--press-scale));
 }
 .tl-fade-handle[data-mix="fadeIn"] {
   left: clamp(
@@ -1423,9 +1470,6 @@ input.tl-track-gain {
   color: var(--text-secondary);
   border-radius: var(--radius-control);
 }
-.tl-density-control:hover {
-  background: var(--surface-active);
-}
 .tl-drop-above {
   position: absolute;
   bottom: 0;
@@ -1446,9 +1490,23 @@ input.tl-track-gain {
   cursor: ns-resize;
   touch-action: none;
 }
-.tl-track-resize:hover,
-.tl-track-resize:focus-visible {
-  background: var(--line-strong);
+.tl-track-resize::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.tl-track-resize:hover::before {
+  opacity: 1;
+}
+.tl-track-resize:active::before {
+  background: var(--overlay-press);
+}
+.tl :is(.tl-track-resize, .tl-pin):focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-offset));
 }
 .tl-head[data-compact] {
   --size-track-id: var(--space-5);

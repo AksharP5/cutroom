@@ -94,6 +94,11 @@ test("one key moves the keyboard from the timeline to Media and back, where it t
 
   await page.keyboard.press("Control+4");
   await expect(timeline).toBeFocused();
+  const paintedFocus = await timeline.evaluate((panel) => {
+    const ring = getComputedStyle(panel, "::after");
+    return [ring.outlineStyle, ring.outlineWidth, ring.outlineOffset];
+  });
+  expect(paintedFocus).toEqual(["solid", "2px", "-2px"]);
   // The timeline has the keys again: Down is the next edit.
   await page.keyboard.press("ArrowDown");
   await expect(clock).toHaveText("00:00:02:00");

@@ -504,6 +504,7 @@ export function App() {
               <button
                 className="logo-button"
                 aria-label="Cutroom projects"
+                title="Cutroom projects"
                 onClick={() => setDialog("projects")}
               >
                 <Logo />
@@ -511,6 +512,7 @@ export function App() {
               <span className="header-divider" />
               <button
                 className="project-switcher"
+                title={project.name}
                 onClick={() => setDialog("projects")}
               >
                 <span>{project.name}</span>
@@ -550,6 +552,7 @@ export function App() {
           <button
             className="icon-button"
             aria-label="Settings"
+            title="Settings"
             onClick={() => setDialog("settings")}
           >
             <GearSix />

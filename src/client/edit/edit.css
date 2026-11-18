@@ -20,47 +20,27 @@
   outline-offset: var(--focus-ring-offset);
 }
 
-/* Hover is a white overlay faded by opacity; press is a scale. Nothing animates color. */
 :is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now) {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
   color: var(--text-secondary);
-  cursor: default;
-  transition: transform var(--duration-press) var(--ease-out);
 }
-:is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now)::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--overlay-hover);
-  opacity: 0;
-  transition: opacity var(--duration-hover) var(--ease-fade);
-  pointer-events: none;
-}
+
 @media (hover: hover) and (pointer: fine) {
-  :is(.edit-tool, .edit-icon, .edit-zoom, button.edit-now):not(
-      :disabled
-    ):hover::before {
-    opacity: 1;
-  }
   .edit-icon:not(:disabled):hover {
     color: var(--text-primary);
   }
-}
-:is(.edit-tool, .edit-icon, .edit-zoom):not(:disabled):active {
-  transform: scale(var(--press-scale));
 }
 :is(.edit-tool, .edit-icon)[aria-pressed="true"] {
   background: var(--surface-active);
   color: var(--text-primary);
 }
-.edit-icon:disabled {
+:is(.edit-tools, .edit-transport, .edit-source-head, .tl) button:disabled {
   opacity: 1;
-  color: var(--glyph-faint);
+  color: var(--text-tertiary);
+  cursor: default;
 }
 
 /* Tool row */
@@ -140,15 +120,6 @@
   font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  cursor: default;
-  transition: transform var(--duration-press) var(--ease-out);
-}
-.edit-export:not(:disabled):active {
-  transform: scale(var(--press-scale));
-}
-.edit-export:disabled {
-  opacity: 1;
-  color: var(--text-secondary);
 }
 /* The switch between a loaded source and the timeline. */
 .edit-views {
@@ -447,6 +418,14 @@
 button.edit-note-pin {
   cursor: default;
 }
+.edit-timeline:focus-visible::after {
+  inset: 0;
+  height: auto;
+  background: none;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
 .edit-note-popover {
   position: absolute;
   z-index: var(--z-popover);
@@ -463,6 +442,14 @@ button.edit-note-pin {
     transform var(--duration-panel-in) var(--ease-out);
 }
 @starting-style {
+  .edit-timeline:focus-visible::after {
+    inset: 0;
+    height: auto;
+    background: none;
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: calc(-1 * var(--focus-ring-width));
+  }
+
   .edit-note-popover {
     opacity: 0;
     transform: scale(var(--modal-scale));
@@ -652,6 +639,24 @@ input.edit-now {
   position: absolute;
   inset: calc(-1 * var(--space-2)) 0;
 }
+.edit-scrub {
+  cursor: ew-resize;
+}
+.edit-scrub::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-hover);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-hover) var(--ease-fade);
+}
+.edit-scrub:hover::after {
+  opacity: 1;
+}
+.edit-scrub:active::after {
+  background: var(--overlay-press);
+}
 .edit-scrub-range {
   position: absolute;
   top: 0;
@@ -773,6 +778,9 @@ input.edit-now {
   touch-action: none;
   background: var(--surface-ground);
 }
+.edit-split:active::before {
+  background: var(--overlay-press);
+}
 .edit-timeline {
   min-height: 0;
   overflow: hidden;
@@ -825,13 +833,6 @@ input.edit-now {
 }
 .edit-path-step {
   color: var(--text-secondary);
-  cursor: default;
-}
-@media (hover: hover) and (pointer: fine) {
-  .edit-path-step:hover {
-    background: var(--overlay-hover);
-    color: var(--text-primary);
-  }
 }
 .edit-path-open {
   color: var(--text-primary);
@@ -842,9 +843,8 @@ input.edit-now {
   color: var(--text-tertiary);
 }
 /*
-  A panel key gives a whole panel the keyboard, and a line along its top edge says which one has
-  it. A ring would be painted under the panel's own scrollers. The panel is positioned only while
-  it holds focus, so nothing inside it is laid out against it otherwise.
+  A panel key gives a whole panel the keyboard. Paint its focus mark over its scroller.
+  The timeline uses a ring because clips share the panel's focus.
 */
 :is(.edit-viewer, .edit-timeline, .clip-inspector):focus-visible {
   position: relative;
@@ -858,6 +858,14 @@ input.edit-now {
   height: var(--focus-ring-width);
   background: var(--focus-ring-color);
   pointer-events: none;
+}
+
+.edit-timeline:focus-visible::after {
+  inset: 0;
+  height: auto;
+  background: none;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(-1 * var(--focus-ring-width));
 }
 
 .edit-note-popover {

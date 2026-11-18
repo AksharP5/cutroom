@@ -161,7 +161,7 @@ Resolve's Active Panel Selection keys move the keyboard between panels in one pr
 - Ctrl+3 and Ctrl+5 focus the one viewer, showing the loaded source or the timeline. Tab walks the picture and the transport. With no file loaded, Ctrl+3 says so and changes nothing. Focusing the viewer does not hand the arrows to the picture: that still takes a grab of the selected clip.
 - Ctrl+9 opens the inspector if it is closed and focuses it. Tab moves into its fields.
 
-A line along a panel's top edge shows that it has the keyboard. The focused panel is not a Tab stop, and clicking inside a panel focuses what it did before.
+A paper outline shows when the timeline has the keyboard. Other panels mark their top edge. The focused panel is not a Tab stop, and clicking inside a panel focuses what it did before.
 
 Unlike other shortcuts, the panel keys also work while a text field has focus, so Ctrl+4 leaves the agent's message box for the timeline with the draft kept. An inspector field saves its value as it loses focus, as it does on a click elsewhere. Dialogs, menus and popovers keep the keyboard until they close. In a browser tab Ctrl+2 to Ctrl+9 would otherwise switch tabs; Cutroom takes the five it binds and leaves the rest to the browser.
 

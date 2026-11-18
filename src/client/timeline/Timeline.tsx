@@ -82,7 +82,7 @@ import { createViewport } from "./view";
 import type { TimelineViewport, ViewPlacement } from "./view";
 import { formatTimecode, quietTimecode } from "../../shared/timeline/timecode";
 import { TimecodeText } from "../components/TimecodeText";
-import { useKeymap } from "../keymap";
+import { hint, keymap, useKeymap } from "../keymap";
 import "./timeline.css";
 
 declare module "react" {
@@ -234,6 +234,7 @@ const ClipBody = memo(function ClipBody({
     <div
       className={`tl-clip ${clip.kind} on-${row.track.kind}${clip.title ? " titled" : ""}${offline ? " offline" : ""}${row.track.locked ? " locked" : ""}${clip.enabled ? "" : " disabled"}${selected ? " selected" : ""}`}
       data-clip={clip.id}
+      title={clip.label ?? clip.id}
       style={{ "--s": clip.start, "--d": clip.duration, top: 0 }}
     />
   );
@@ -595,26 +596,28 @@ const TrackHeads = memo(function TrackHeads({
           >
             {id}
           </button>
-          <input
-            key={`${track.index}:${track.name}`}
-            className="tl-head-name"
-            aria-label={`Name ${id}`}
-            title="Rename track"
-            maxLength={200}
-            defaultValue={track.name ?? ""}
-            placeholder={`${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`}
-            onFocus={(event) => event.currentTarget.select()}
-            onBlur={(event) => {
-              const name = event.currentTarget.value.trim();
-              if (name !== (track.name ?? "")) onRenameTrack(track, name);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape")
-                event.currentTarget.value = track.name ?? "";
-              if (event.key === "Enter" || event.key === "Escape")
-                event.currentTarget.blur();
-            }}
-          />
+          <label className="tl-head-name-field">
+            <input
+              key={`${track.index}:${track.name}`}
+              className="tl-head-name"
+              aria-label={`Name ${id}`}
+              title="Rename track"
+              maxLength={200}
+              defaultValue={track.name ?? ""}
+              placeholder={`${track.kind === "video" ? "Video" : "Audio"} ${id.slice(1)}`}
+              onFocus={(event) => event.currentTarget.select()}
+              onBlur={(event) => {
+                const name = event.currentTarget.value.trim();
+                if (name !== (track.name ?? "")) onRenameTrack(track, name);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape")
+                  event.currentTarget.value = track.name ?? "";
+                if (event.key === "Enter" || event.key === "Escape")
+                  event.currentTarget.blur();
+              }}
+            />
+          </label>
           {track.kind === "audio" && (
             <TrackGain
               track={track}
@@ -1199,6 +1202,7 @@ export function Timeline({
             <button
               className="tl-zoom-step"
               aria-label="Zoom out"
+              title={hint("viewZoomSubZoomOut")}
               onClick={() => stepZoom(1 / ZOOM_STEP)}
             >
               <Minus size={12} />
@@ -1211,7 +1215,7 @@ export function Timeline({
               aria-label="Zoom"
               aria-valuemin={0}
               aria-valuemax={100}
-              title="Double-click to fit the timeline"
+              title={`Timeline zoom. Drag to zoom. Double-click to fit (${keymap.viewZoomSubZoomToFit.keys.join(", ")}).`}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.currentTarget.setPointerCapture(event.pointerId);
@@ -1231,6 +1235,7 @@ export function Timeline({
             <button
               className="tl-zoom-step"
               aria-label="Zoom in"
+              title={hint("viewZoomSubZoomIn")}
               onClick={() => stepZoom(ZOOM_STEP)}
             >
               <Plus size={12} />
@@ -1238,7 +1243,7 @@ export function Timeline({
             <SelectMenu
               className="tl-density-control"
               label="Track density"
-              title="Set all track heights"
+              title="Track density. Set all track heights."
               value={
                 Object.keys(viewSettings.heights).length
                   ? "custom"
@@ -1262,6 +1267,7 @@ export function Timeline({
           </div>
           <div
             className="tl-ruler"
+            title="Click or drag to move the playhead"
             onPointerDown={(event) => {
               if (
                 event.button !== 0 ||
@@ -1428,7 +1434,11 @@ export function Timeline({
                   </div>
                 ))}
                 <canvas className="tl-bodies" ref={canvas} />
-                <i className="tl-hover" ref={gestures.marks.hoverBox} hidden />
+                <i
+                  className="tl-hover"
+                  ref={gestures.marks.hoverBox}
+                  aria-hidden
+                />
                 {recording &&
                   layout.rows
                     .filter((row) => row.track.index === takeTrack?.index)
