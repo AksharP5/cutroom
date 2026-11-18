@@ -3,7 +3,6 @@ import {
   ArrowClockwise,
   FileArrowUp,
   Scissors,
-  TextAlignLeft,
   Waveform,
   X,
 } from "@phosphor-icons/react";
@@ -104,7 +103,7 @@ export const ScriptPanel = memo(function ScriptPanel({
   onSeek: (time: number, compositionPath?: string) => void;
   onAsk: (prompt: string) => void;
 }) {
-  const [media, setMedia] = useState<MediaClip[]>([]);
+  const [media, setMedia] = useState<MediaClip[] | null>(null);
   const [views, setViews] = useState<TranscriptView[]>([]);
   const [captions, setCaptions] = useState<CaptionsView[]>([]);
   const [captionEdit, setCaptionEdit] = useState<
@@ -186,7 +185,7 @@ export const ScriptPanel = memo(function ScriptPanel({
   useEffect(() => () => refreshRequest.current?.abort(), []);
 
   const clips = useMemo(() => {
-    const all = new Map(media.map((clip) => [clipKey(clip), clip]));
+    const all = new Map((media ?? []).map((clip) => [clipKey(clip), clip]));
     for (const transcript of views) {
       const key = clipKey(transcript);
       if (!all.has(key))
@@ -384,7 +383,7 @@ export const ScriptPanel = memo(function ScriptPanel({
         void cut("cut");
       }}
     >
-      <div className="script-controls">
+      <div className="script-controls" hidden={!selectedClip}>
         <label className="field-label" htmlFor="script-media">
           Footage
         </label>
@@ -431,6 +430,7 @@ export const ScriptPanel = memo(function ScriptPanel({
           <button
             className="icon-button"
             aria-label="Refresh media clips"
+            hidden={!active}
             disabled={busy}
             onClick={() =>
               void refresh().catch((error: unknown) =>
@@ -531,16 +531,10 @@ export const ScriptPanel = memo(function ScriptPanel({
           )}
         </div>
       )}
-      {!active && (
-        <div className="small-empty">
-          <TextAlignLeft size={26} weight="light" />
-          <h3>Edit with words.</h3>
-          <p>
-            Add a video or audio clip to the timeline, then transcribe it.
-            Select words to cut, restore, or discuss with your agent.
-          </p>
-          <small>Original media stays untouched.</small>
-        </div>
+      {media !== null && !selectedClip && (
+        <p className="script-empty">
+          Add a clip to the timeline to transcribe it.
+        </p>
       )}
       {active && (
         <>

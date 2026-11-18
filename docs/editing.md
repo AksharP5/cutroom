@@ -148,6 +148,8 @@ Editing a note's text preserves its other fields. Pending text stays in place wh
 
 ## Script
 
+Add a video or audio clip to the timeline, then choose it in Script to transcribe locally or import a transcript. Script edits leave the original media untouched.
+
 Word times refer to original media. The displayed timeline time is derived from the current media source, including cuts and moved clips.
 
 A direct cut removes the selected words' source intervals, splits the media element into kept pieces, and ripples subsequent clips on that lane. Other lanes keep their timing. Restoring words rebuilds the kept intervals. Both HTML and script metadata change in one history window.
