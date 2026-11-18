@@ -8,7 +8,10 @@ import {
   rewriteSrcsetUrls,
 } from "@hyperframes/parsers/asset-paths";
 import { localMediaPath } from "../../shared/media";
-import { VariableError } from "../../shared/variables";
+import {
+  parseSceneVariableValues,
+  VariableError,
+} from "../../shared/variables";
 import type {
   CompositionVariable,
   VariableBinding,
@@ -1449,6 +1452,51 @@ export function elementAttributes(
       (item) => item.attrs.id === id,
     )?.attrs ?? null
   );
+}
+
+const INSTANCE_VALUES_ATTRIBUTE = "data-variable-values";
+
+export function sceneInstanceSource(parsed: ParsedComposition, clipId: string) {
+  const clip = parsed.timeline.clips.find((item) => item.id === clipId);
+  const element = parsed.elements.get(clipId);
+  if (!clip || !element || clip.kind !== "composition" || !clip.src)
+    throw new TimelineError(
+      "unsupported",
+      "Select a clip that mounts an HTML scene.",
+    );
+  const idAttribute = element.attrs.id ? "id" : "data-hf-id";
+  if (
+    element.attrs[idAttribute] !== clipId ||
+    scopeElements(parsed.roots, parsed.scope).filter(
+      (item) => item.attrs[idAttribute] === clipId,
+    ).length !== 1
+  )
+    throw new TimelineError(
+      "unsupported",
+      "Give this scene clip a unique element ID in Source before editing its variables.",
+    );
+  const values = parseSceneVariableValues(
+    element.attrs[INSTANCE_VALUES_ATTRIBUTE],
+  );
+  if (!values)
+    throw new VariableError(
+      "This scene clip's values are not a JSON object. Fix them in Source first.",
+    );
+  return {
+    src: clip.src,
+    locked:
+      parsed.timeline.tracks.find((track) => track.index === clip.track)
+        ?.locked === true,
+    values,
+    write(next: Record<string, unknown>) {
+      return rewriteAttributes(parsed.html, element, clipId, [
+        [
+          INSTANCE_VALUES_ATTRIBUTE,
+          Object.keys(next).length ? JSON.stringify(next) : null,
+        ],
+      ]);
+    },
+  };
 }
 
 const VARIABLES_ATTRIBUTE = "data-composition-variables";
