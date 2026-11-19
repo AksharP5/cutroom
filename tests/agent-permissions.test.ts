@@ -24,6 +24,7 @@ const reads = [
   "project_read",
   "project_lint",
   "media_list",
+  "media_files",
   "source_marks",
   "source_read",
   "transcripts_list",

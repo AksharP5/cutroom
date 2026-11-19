@@ -97,6 +97,11 @@ const cutroomTools: Record<
     kind: "project",
     object: () => "project media",
   },
+  media_files: {
+    verb: ["Listed", "Listing", "List"],
+    kind: "project",
+    object: () => "media files",
+  },
   media_rename: {
     verb: ["Renamed", "Renaming", "Rename"],
     kind: "edit",

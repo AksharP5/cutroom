@@ -20,7 +20,13 @@ import {
   TranscribeInputSchema,
   TranscriptImportSchema,
 } from "../../shared/project";
-import { MediaRemoveSchema, MediaRenameSchema } from "../../shared/media";
+import {
+  MediaRemoveSchema,
+  MediaRenameSchema,
+  mediaKind,
+  mediaSearch,
+  sourceUrl,
+} from "../../shared/media";
 import { EDIT_SUMMARY_HEADER } from "../../shared/timeline/schema";
 import type { AnimationFeedback } from "../../shared/timeline/schema";
 import { animationEvents } from "./animationFollowup";
@@ -33,6 +39,7 @@ import { registerLayerTextTools } from "./layerTextTools";
 import { registerFontTools } from "./fontTools";
 import { registerGradeTools } from "./gradeTools";
 import { compactLint } from "../../shared/lint";
+import { canonicalProjectPath } from "../projects/path";
 
 type LocalFetch = (
   url: string,
@@ -255,6 +262,67 @@ export function createMcpServer(options: McpOptions = {}) {
       annotations: readOnly,
     },
     (input) => request(`/projects/${id(input.projectId)}/media`),
+  );
+  registry.registerTool(
+    "media_files",
+    {
+      description:
+        "Find video, audio, and image files in the project's Media panel, including files unused on any timeline. Search by file name or project-relative path. Use path for source_marks, and pass src and kind to timeline_edit insertion. Specify the same composition as the insert so src is relative to the right folder. Returns 100 files at a time. Pass nextOffset as offset to read the next page.",
+      inputSchema: {
+        ...project,
+        query: z.string().max(255).default(""),
+        composition: z
+          .string()
+          .min(1)
+          .max(2000)
+          .overwrite(canonicalProjectPath)
+          .default("index.html"),
+        offset: z.int().nonnegative().default(0),
+      },
+      outputSchema: {
+        result: z.object({
+          files: z.array(
+            z.object({
+              path: z.string(),
+              kind: z.enum(["audio", "image", "video"]),
+              src: z.string(),
+            }),
+          ),
+          nextOffset: z.int().nonnegative().nullable(),
+        }),
+      },
+      annotations: readOnly,
+    },
+    ({ projectId, query, composition, offset }) =>
+      requestApi(`/projects/${id(projectId)}`, "GET", undefined, {
+        reply: (result) => {
+          const { files, fileVersions } = z
+            .object({
+              files: z.array(z.string()),
+              fileVersions: z.record(z.string(), z.string().nullable()),
+            })
+            .parse(result);
+          const matches = mediaSearch(query);
+          const assets = files
+            .flatMap((path) => {
+              const media = mediaKind(path);
+              return media &&
+                typeof fileVersions[path] === "string" &&
+                matches(path)
+                ? [{ path, kind: media.kind }]
+                : [];
+            })
+            .sort((a, b) => a.path.localeCompare(b.path));
+          const end = offset + 100;
+          return {
+            files: assets.slice(offset, end).map((asset) => ({
+              ...asset,
+              src: sourceUrl(composition, asset.path),
+            })),
+            nextOffset: end < assets.length ? end : null,
+          };
+        },
+      }),
   );
   registry.registerTool(
     "source_marks",

@@ -7,14 +7,16 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { ProjectSchema } from "../src/shared/project";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 import { expect, test } from "./fixtures";
+import { seekFrame } from "./position-helpers";
 
 const exec = promisify(execFile);
 
@@ -123,6 +125,178 @@ test("Media marks exactly the sources used in the open timeline and updates thro
   await expect(talk).not.toHaveAttribute("data-used", /.+/);
   await page.keyboard.press("Control+z");
   await expect(talk).toHaveAttribute("data-used", "2");
+});
+
+test("Media search finds an unused file and MCP places that same file", async ({
+  page,
+  request,
+  baseURL,
+}, info) => {
+  const { project, media, row, timeline } = await open(page, request);
+  const asset = "assets/dailies/Day 2 # slate.svg";
+  const still =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="36"><rect width="64" height="36" fill="cyan"/></svg>';
+  for (const path of [
+    asset,
+    "assets/picks/Day 2 # slate.svg",
+    "trash/old-slate.svg",
+  ]) {
+    const file = join(project.path, path);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, still);
+  }
+  await symlink("missing.svg", join(project.path, "assets", "dangling.svg"));
+  const rows = media.getByRole("listitem");
+  await expect(rows).toHaveCount(6);
+  await row("still.png").dblclick();
+  const source = page.getByRole("group", { name: "Source", exact: true });
+  await expect(source.locator(".edit-source-name")).toHaveText("still.png");
+  await page.screenshot({ path: info.outputPath("media-unfiltered.png") });
+
+  const search = media.getByRole("searchbox", { name: "Search media" });
+  let listings = 0;
+  page.on("request", (entry) => {
+    if (new URL(entry.url()).pathname === `/api/projects/${project.id}`)
+      listings++;
+  });
+  await search.fill("  DAILIES/DAY 2  ");
+  await expect(rows).toHaveCount(1);
+  const result = media.getByRole("listitem", { name: asset, exact: true });
+  await expect(result).toBeVisible();
+  await expect(source.locator(".edit-source-name")).toHaveText("still.png");
+  await page.screenshot({ path: info.outputPath("media-filtered.png") });
+  await search.press("ArrowDown");
+  await expect(result).toBeFocused();
+  await search.fill("no-such-shot");
+  await expect(media.getByRole("status")).toHaveText("No matching media");
+  await search.press("Escape");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue("");
+  await expect(rows).toHaveCount(6);
+  expect(listings).toBe(0);
+
+  const client = new Client({ name: "Media search test", version: "1" });
+  const response = z.object({
+    structuredContent: z.object({
+      result: z.object({
+        files: z.array(
+          z.object({
+            path: z.string(),
+            kind: z.literal("image"),
+            src: z.string(),
+          }),
+        ),
+        nextOffset: z.number().nullable(),
+      }),
+    }),
+  });
+  const endpoint = `/api/cutroom/projects/${project.id}/timeline`;
+  try {
+    const origin = new URL(baseURL!).origin;
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("/mcp", origin), {
+        requestInit: { headers: { origin } },
+      }),
+    );
+    const find = async (query: string, composition?: string) =>
+      response.parse(
+        await client.callTool({
+          name: "media_files",
+          arguments: { projectId: project.id, query, composition },
+        }),
+      ).structuredContent.result;
+    const root = await find("dailies/day 2");
+    expect(root).toEqual({
+      files: [
+        {
+          path: asset,
+          kind: "image",
+          src: "assets/dailies/Day%202%20%23%20slate.svg",
+        },
+      ],
+      nextOffset: null,
+    });
+    const nested = await find("dailies/day 2", "\\compositions\\.\\scene.html");
+    expect(nested.files[0]?.src).toBe(
+      "../assets/dailies/Day%202%20%23%20slate.svg",
+    );
+    expect((await find("old-slate")).files).toEqual([]);
+    expect((await find("dangling")).files).toEqual([]);
+    const before = TimelineViewSchema.parse(
+      await (await request.get(endpoint)).json(),
+    );
+    const { kind, src } = root.files[0]!;
+    const edit = await client.callTool({
+      name: "timeline_edit",
+      arguments: {
+        projectId: project.id,
+        expectedRevision: before.revision,
+        commands: [
+          {
+            type: "insert",
+            at: 126,
+            track: 0,
+            clip: { id: "found-slate", kind, src, duration: 30 },
+          },
+        ],
+      },
+    });
+    expect(edit.isError, JSON.stringify(edit)).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+  await expect(timeline.locator('[data-clip="found-slate"]')).toBeVisible();
+  await seekFrame(page, 135);
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("img#found-slate"),
+  ).toHaveJSProperty("naturalWidth", 64);
+});
+
+test("Down Arrow brings the first search result into view in a scrolled Media list", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Dailies search" },
+      })
+    ).json(),
+  );
+  const assets = join(project.path, "assets");
+  await mkdir(assets, { recursive: true });
+  await Promise.all(
+    Array.from({ length: 30 }, (_, index) =>
+      writeFile(
+        join(assets, `Slate ${String(index).padStart(2, "0")}.svg`),
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="36"/>',
+      ),
+    ),
+  );
+  await page.goto(`/#project/${project.id}`);
+  const media = page.getByRole("region", { name: "Media", exact: true });
+  const search = media.getByRole("searchbox", { name: "Search media" });
+  await search.fill("slate");
+  await expect(media.getByRole("listitem")).toHaveCount(30);
+  const first = media.getByRole("listitem", {
+    name: "assets/Slate 00.svg",
+    exact: true,
+  });
+  await media
+    .locator(".media-list")
+    .evaluate((list) => (list.scrollTop = list.scrollHeight));
+  await expect(first).not.toBeInViewport();
+  await search.press("ArrowDown");
+  await expect(first).toBeFocused();
+  await expect(first).toBeInViewport({ ratio: 1 });
+  await media.locator(".media-list").evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+  });
+  await expect(first).not.toBeInViewport();
+  await page.keyboard.press("Delete");
+  await expect(first).toBeInViewport({ ratio: 1 });
+  await expect(media.getByRole("listitem")).toHaveCount(30);
+  expect((await stat(join(assets, "Slate 00.svg"))).isFile()).toBe(true);
 });
 
 test("Rename in a media row's menu renames the file and every clip that plays it, in one undo step", async ({
@@ -334,8 +508,12 @@ test("the delete keys remove the file reached by keyboard, and stay the timeline
   expect(await present("assets/music.wav")).toBe(true);
   await expect(media.getByRole("listitem")).toHaveCount(4);
 
-  // Tab from the import button reaches the list by keyboard.
+  // Tab reaches Search and then the current Media row.
   await media.getByRole("button", { name: "Import media" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    media.getByRole("searchbox", { name: "Search media" }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(row("music.wav")).toBeFocused();
   // A click on that same row hands the keys back to the timeline, until the keyboard returns.

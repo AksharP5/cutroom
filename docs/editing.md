@@ -116,6 +116,8 @@ The inspector holds the rest: the effect of an adjustment layer, a zoom's magnif
 
 ### Media files
 
+Use **Search media** to filter the project's files by name or folder path. Down Arrow goes to the first result. Escape clears the search.
+
 A paper tick marks each source used in the open timeline. Hover the row to see how many clips use it. Still thumbnails fit the whole image on a neutral background, including transparent edges.
 
 Rename and Remove are in a Media file's right-click menu, and in the `media_rename` and `media_remove` MCP tools.

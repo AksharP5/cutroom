@@ -16,7 +16,6 @@ import {
 } from "../../shared/review";
 import type { ReviewService } from "../projects/review";
 import type { z } from "zod";
-import { posix } from "node:path";
 import { Hono } from "hono";
 import { planPreviewPipeline } from "../hyperframes/pipelinePlan";
 import { isPinnedGsap } from "../hyperframes/previewTimingPolicy";
@@ -66,6 +65,7 @@ import {
 import { editLabel, joinEditLabels } from "../../shared/timeline/labels";
 import {
   canonicalAssetPath,
+  canonicalProjectPath,
   projectPath,
   projectWritePath,
 } from "../projects/path";
@@ -101,13 +101,6 @@ const revisionOf = (sourceVersion: string, settings: TimelineSettings) =>
   fileContentVersion(
     `${sourceVersion}\n${JSON.stringify(TimelineSettingsSchema.parse(settings))}`,
   );
-
-/**
- * `./index.html`, `/index.html`, and `index.html` name one composition, with one settings entry
- * and revision. Paths are project-relative, so a leading slash means the project root.
- */
-const canonical = (composition: string) =>
-  posix.normalize(composition.replaceAll("\\", "/")).replace(/^\/+/, "");
 
 const refused = (c: Context, error: unknown) => {
   if (!(error instanceof TimelineError)) throw error;
@@ -631,7 +624,9 @@ export function createTimelineRoutes(
   api.use("/projects/:id/*", projectMutationGuard(reviews));
   api.get("/projects/:id/timeline", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     try {
       return c.json(
         await reviews.readComposition(project, composition, async () => {
@@ -650,7 +645,9 @@ export function createTimelineRoutes(
   // The code panel follows the selection to each clip's element in the composition's source.
   api.get("/projects/:id/timeline/sources", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     try {
       const { source, parsed } = await read(project, composition);
       return c.json({
@@ -668,14 +665,18 @@ export function createTimelineRoutes(
   // an agent, so each is one undo step through the same path as any edit.
   api.post("/projects/:id/audio/duck", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     const input = parseInput(DuckRequestSchema, await c.req.json());
     const { parsed } = await read(project, composition);
     return c.json(await duckPlan(project, composition, parsed.timeline, input));
   });
   api.post("/projects/:id/audio/loudness", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     const input = parseInput(LoudnessRequestSchema, await c.req.json());
     const { parsed } = await read(project, composition);
     return c.json(
@@ -686,7 +687,7 @@ export function createTimelineRoutes(
   api.post("/projects/:id/grade/lut", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(GradeLutSaveSchema, await c.req.json());
-    const composition = canonical(input.composition);
+    const composition = canonicalProjectPath(input.composition);
     const { parsed } = await read(project, composition);
     const clip = parsed.timeline.clips.find((each) => each.id === input.clipId);
     if (!clip) throw new HttpError(404, `There is no clip ${input.clipId}.`);
@@ -758,14 +759,17 @@ export function createTimelineRoutes(
     const project = await store.get(c.req.param("id"));
     const input = parseInput(CopyClipsSchema, await c.req.json());
     try {
-      const current = await read(project, canonical(input.composition));
+      const current = await read(
+        project,
+        canonicalProjectPath(input.composition),
+      );
       if (current.revision !== input.expectedRevision)
         throw new HttpError(409, "The timeline changed. Copy the clips again.");
       const clips = copyClips(current.parsed.timeline, input.clipIds);
       const id = crypto.randomUUID();
       clipboards.set(id, {
         projectId: project.id,
-        composition: canonical(input.composition),
+        composition: canonicalProjectPath(input.composition),
         clipIds: clips.map((clip) => clip.id),
         parsed: current.parsed,
       });
@@ -781,7 +785,10 @@ export function createTimelineRoutes(
     const still = stillMediaExtensions.some(
       (extension) => `.${extension}` === extname(path).toLowerCase(),
     );
-    const src = canonical(path).split("/").map(encodeURIComponent).join("/");
+    const src = canonicalProjectPath(path)
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
     const duration = still
       ? STILL_SECONDS
       : (await mediaFacts(project, "index.html", [src])).lengths.get(src);
@@ -795,7 +802,11 @@ export function createTimelineRoutes(
     const identity = await sourceIdentity(project, path);
     return c.json({
       identity,
-      ...(await views.readSource(project, canonical(path), identity)),
+      ...(await views.readSource(
+        project,
+        canonicalProjectPath(path),
+        identity,
+      )),
     });
   });
   api.put("/projects/:id/source-marks", async (c) => {
@@ -808,18 +819,22 @@ export function createTimelineRoutes(
         409,
         "The source media changed. Reopen it before saving marks.",
       );
-    await views.saveSource(project, canonical(path), entry);
+    await views.saveSource(project, canonicalProjectPath(path), entry);
     return c.json(entry);
   });
   api.get("/projects/:id/timeline-view", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     await readSource(project, composition);
     return c.json(await views.read(project, composition));
   });
   api.put("/projects/:id/timeline-view", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     await readSource(project, composition);
     const settings = parseInput(TimelineViewSettingsSchema, await c.req.json());
     await views.save(project, composition, settings);
@@ -850,7 +865,9 @@ export function createTimelineRoutes(
   };
   api.get("/projects/:id/timeline-destinations", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     try {
       const { tracks, settings } = await destinations(project, composition);
       return c.json(destinationIndexes(tracks, settings));
@@ -860,7 +877,9 @@ export function createTimelineRoutes(
   });
   api.put("/projects/:id/timeline-destinations", async (c) => {
     const project = await store.get(c.req.param("id"));
-    const composition = canonical(c.req.query("composition") ?? "index.html");
+    const composition = canonicalProjectPath(
+      c.req.query("composition") ?? "index.html",
+    );
     const chosen = parseInput(
       TimelineViewSettingsSchema.shape.destinations,
       await c.req.json(),
@@ -891,7 +910,7 @@ export function createTimelineRoutes(
   api.post("/projects/:id/commands", async (c) => {
     const project = await store.get(c.req.param("id"));
     const input = parseInput(CommandBatchSchema, await c.req.json());
-    const composition = canonical(input.composition);
+    const composition = canonicalProjectPath(input.composition);
     try {
       const batch = { ...input, composition };
       const origin =

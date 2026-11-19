@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
-import { Plus, Waveform } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, Waveform } from "@phosphor-icons/react";
 import { z } from "zod";
 import {
   MEDIA_TRASH,
   mediaKind,
   mediaKinds,
+  mediaSearch,
   previewMediaPath,
 } from "../../shared/media";
 import type { TimelineView } from "../../shared/timeline/schema";
@@ -55,6 +56,11 @@ const uploadSchema = z.object({
 });
 
 const fileName = (path: string) => path.split("/").at(-1) ?? path;
+
+function focusMediaRow(element: HTMLElement | null | undefined) {
+  focusByKeyboard(element);
+  element?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
 
 /** The name in place of the row's label. The extension stays: a rename never converts a file. */
 function RenameField({
@@ -390,10 +396,16 @@ export function MediaPanel({
     }
     return [...paths.values()].sort((a, b) => a.path.localeCompare(b.path));
   }, [listedMedia, offline]);
+  const [query, setQuery] = useState("");
+  const visibleMedia = useMemo(() => {
+    if (!query.trim()) return media;
+    const matches = mediaSearch(query);
+    return media?.filter(({ path }) => matches(path));
+  }, [media, query]);
   const [focused, setFocused] = useState<string>();
-  const tabbable = media?.some((item) => item.path === focused)
+  const tabbable = visibleMedia?.some((item) => item.path === focused)
     ? focused
-    : media?.[0]?.path;
+    : visibleMedia?.[0]?.path;
   const [dragging, setDragging] = useState(false);
   const [importing, setImporting] = useState(false);
   const compositions = useCompositions(projectId);
@@ -410,9 +422,11 @@ export function MediaPanel({
     keyboard: boolean;
   }>();
   const keepButton = useRef<HTMLButtonElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const importButton = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLUListElement>(null);
   /** The row that takes focus once the list shows it: a renamed file, or a removed one's neighbour. */
-  const focusNext = useRef<string>(undefined);
+  const focusNext = useRef<string | null>(undefined);
   const busy = useRef(false);
   const picker = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
@@ -420,9 +434,10 @@ export function MediaPanel({
   useKeymap({
     viewActiveWindowSelectionMediaPoolClips: () => {
       if (hidden) return;
-      focusByKeyboard(
+      focusMediaRow(
         panel.current?.querySelector<HTMLElement>('.media-row[tabindex="0"]') ??
-          panel.current?.querySelector<HTMLElement>("button"),
+          search.current ??
+          importButton.current,
       );
     },
   });
@@ -483,7 +498,9 @@ export function MediaPanel({
       files
         .flatMap((path) => {
           const type = mediaKind(path);
-          return type ? [{ path, kind: type.kind }] : [];
+          return type && typeof fileVersions[path] === "string"
+            ? [{ path, kind: type.kind }]
+            : [];
         })
         .sort((a, b) => a.path.localeCompare(b.path)),
     );
@@ -503,14 +520,19 @@ export function MediaPanel({
 
   useEffect(() => {
     const path = focusNext.current;
-    if (path === undefined || !media?.some((item) => item.path === path))
+    if (
+      path === undefined ||
+      (path !== null && !media?.some((item) => item.path === path))
+    )
       return;
     focusNext.current = undefined;
-    focusByKeyboard(
-      list.current?.querySelector<HTMLElement>(
-        `[data-path="${CSS.escape(path)}"]`,
-      ),
-    );
+    const row =
+      path === null
+        ? null
+        : list.current?.querySelector<HTMLElement>(
+            `[data-path="${CSS.escape(path)}"]`,
+          );
+    focusMediaRow(row ?? search.current ?? importButton.current);
   }, [media]);
 
   const failed = (error: unknown) =>
@@ -566,8 +588,9 @@ export function MediaPanel({
       reachedByKeyboard(document.activeElement),
     confirmUsed = false,
   ) {
-    const index = media?.findIndex((item) => item.path === path) ?? -1;
-    const neighbour = media?.[index + 1]?.path ?? media?.[index - 1]?.path;
+    const index = visibleMedia?.findIndex((item) => item.path === path) ?? -1;
+    const neighbour =
+      visibleMedia?.[index + 1]?.path ?? visibleMedia?.[index - 1]?.path;
     await change(async () => {
       if (!confirmUsed) {
         const { uses } = await api(
@@ -592,7 +615,7 @@ export function MediaPanel({
             `The file could not be removed (${response.status}).`,
         );
       if (useSource.getState().file?.path === path) closeSource();
-      if (keyboard) focusNext.current = neighbour;
+      if (keyboard) focusNext.current = neighbour ?? null;
       const { entries } = await api(
         `${cutroomUrl}/history`,
         z.object({
@@ -669,6 +692,10 @@ export function MediaPanel({
 
   const acceptsFiles = (event: DragEvent) =>
     event.dataTransfer.types.includes("Files");
+  const updateSearch = (value: string) => {
+    setQuery(value);
+    if (!value && !media?.length) focusByKeyboard(importButton.current);
+  };
 
   return (
     <section
@@ -723,6 +750,7 @@ export function MediaPanel({
           </>
         )}
         <button
+          ref={importButton}
           className="icon-button"
           aria-label="Import media"
           title="Import media"
@@ -750,8 +778,41 @@ export function MediaPanel({
         </p>
       )}
       <div className="media-body">
+        {showing === "media" && (!!media?.length || !!query) && (
+          <div className="media-search">
+            <MagnifyingGlass aria-hidden />
+            <input
+              ref={search}
+              type="search"
+              aria-label="Search media"
+              placeholder="Search media"
+              spellCheck={false}
+              autoComplete="off"
+              value={query}
+              onChange={(event) => updateSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && query) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  updateSearch("");
+                }
+                if (event.key === "ArrowDown") {
+                  const first =
+                    list.current?.querySelector<HTMLElement>(".media-row");
+                  if (!first) return;
+                  event.preventDefault();
+                  focusMediaRow(first);
+                }
+              }}
+            />
+          </div>
+        )}
         {showing === "compositions" && compositions ? (
           <CompositionList projectId={projectId} paths={compositions} />
+        ) : query.trim() && visibleMedia?.length === 0 ? (
+          <div className="media-empty" role="status">
+            No matching media
+          </div>
         ) : media?.length === 0 ? (
           <div className="media-empty">
             <strong>{importing ? "Importing" : "No media yet"}</strong>
@@ -775,6 +836,12 @@ export function MediaPanel({
                 path !== undefined
               ) {
                 event.preventDefault();
+                const row = event.target.getBoundingClientRect();
+                const viewport = event.currentTarget.getBoundingClientRect();
+                if (row.bottom <= viewport.top || row.top >= viewport.bottom) {
+                  focusMediaRow(event.target);
+                  return;
+                }
                 if (!offline.has(path)) void remove(path, true);
                 return;
               }
@@ -799,10 +866,10 @@ export function MediaPanel({
               );
               if (next === null) return;
               event.preventDefault();
-              focusByKeyboard(rows[next]);
+              focusMediaRow(rows[next]);
             }}
           >
-            {media?.map(({ path, kind }) => (
+            {visibleMedia?.map(({ path, kind }) => (
               <MediaRow
                 key={path}
                 projectId={projectId}
