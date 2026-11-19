@@ -1,10 +1,18 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { ResolveExportSchema } from "../src/shared/export";
+import { voiceoverWav } from "../src/shared/voiceover";
 import { readCube } from "../src/server/grade/luts";
 import { createHyperframesApi } from "../src/server/hyperframes/api";
 import { createMcpServer } from "../src/server/mcp/server";
@@ -30,6 +38,99 @@ const clip = (path: string, colour: string) =>
     ...["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"],
     ...["-c:a", "aac", "-shortest", path],
   ]);
+
+test.skipIf(!Bun.which("ffprobe"))(
+  "Resolve names a clip with authored speed automation before writing an export",
+  async () => {
+    const f = await projectFixture();
+    f.app.route("/api", createHyperframesApi(f.store, f.review));
+    try {
+      const project = await f.store.create({
+        name: "Ramped interview",
+        width: 320,
+        height: 240,
+        duration: 4,
+      });
+      const wav = voiceoverWav([], 0, 32_000, 8_000);
+      await writeFile(join(project.path, "tone.wav"), Buffer.from(wav.bytes));
+      const directory = join(f.directory, "deliveries");
+      await mkdir(directory);
+      const scene = "compositions/interview.html";
+      await mkdir(join(project.path, "compositions"), { recursive: true });
+      const rate = {
+        target: "rate",
+        points: [
+          { t: 0, v: 0.5 },
+          { t: 1, v: 2 },
+        ],
+      };
+      const volume = { target: "volume", points: [{ t: 0, v: 0.5 }] };
+      const effect = { target: "fx.n1.threshold", points: [{ t: 0, v: -12 }] };
+      const html = (src: string, lanes: (typeof rate)[]) =>
+        `<main data-composition-id="interview" data-width="320" data-height="240" data-duration="4"><div><audio id="tone" data-label="Interview sound" src="${src}" data-start="2" data-duration="1" data-track-index="0" data-playback-rate="2" data-automation='${JSON.stringify({ version: 1, lanes })}'></audio></div></main>`;
+      const start = (options: Record<string, unknown>) =>
+        f.app.request(`/api/projects/${project.id}/export`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ format: "resolve", ...options }),
+        });
+
+      await writeFile(
+        join(project.path, "index.html"),
+        html("tone.wav", [rate]),
+      );
+      const root = await start({ range: { start: 0, end: 30 } });
+      expect(root.status).toBe(422);
+      expect(await root.json()).toEqual({
+        error: expect.stringContaining('"Interview sound"'),
+      });
+      await expect(
+        stat(join(project.path, ".cutroom/renders")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      await writeFile(
+        join(project.path, scene),
+        `<template>${html("../tone.wav", [rate])}</template>`,
+      );
+      const nested = await start({ composition: scene, directory });
+      expect(nested.status).toBe(422);
+      expect(await nested.json()).toEqual({
+        error: expect.stringContaining('"Interview sound"'),
+      });
+      expect(await readdir(directory)).toEqual([]);
+      const invalid = await start({
+        composition: scene,
+        directory: join(directory, "missing"),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({
+        error: "The output folder does not exist.",
+      });
+
+      await writeFile(
+        join(project.path, scene),
+        `<template>${html("../tone.wav", [volume, effect])}</template>`,
+      );
+      const scalar = await start({ composition: scene });
+      const body: unknown = await scalar.json();
+      expect(scalar.ok, JSON.stringify(body)).toBe(true);
+      const result = ResolveExportSchema.parse(body);
+      expect(result.outputPath).toStartWith(
+        join(project.path, ".cutroom/renders/"),
+      );
+      const fcpxml = await readFile(result.timeline, "utf8");
+      expect(fcpxml).toContain('name="Interview sound"');
+      expect(fcpxml).toContain(
+        '<timept time="1s" value="2s" interp="linear"/>',
+      );
+      expect(fcpxml).toContain('<adjust-volume amount="-6.0206dB"/>');
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test.skipIf(!Bun.which("ffmpeg"))(
   "a Resolve export writes one new folder that links only the project's own media",

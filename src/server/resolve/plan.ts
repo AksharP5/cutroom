@@ -6,6 +6,7 @@ import {
   sampleAutomationLane,
 } from "@hyperframes/core/audio-automation";
 import { clampFadesToDuration, fadeGain } from "@hyperframes/core/audio-fade";
+import { parseRateLane } from "@hyperframes/core/speed-ramp";
 import { cubicBezier, valueAt } from "../../shared/timeline/keyframes";
 import type { KeyframeValues } from "../../shared/timeline/keyframes";
 import type { Grade } from "../../shared/timeline/grade";
@@ -647,6 +648,21 @@ function isSound(clip: Clip, media: ClipMedia | undefined): media is FileMedia {
     media?.kind === "file" &&
     media.facts.audio !== null
   );
+}
+
+/** Exporting source media replaces rate lanes with a constant FCPXML time map. */
+export function sourceClipWithSpeedAutomation(
+  clips: readonly Clip[],
+  media: ReadonlyMap<string, ClipMedia>,
+) {
+  return clips.find((clip) => {
+    const source = media.get(clip.id);
+    return (
+      source?.kind === "file" &&
+      (isPicture(clip, source) || isSound(clip, source)) &&
+      parseRateLane(clip.automation) !== null
+    );
+  });
 }
 
 /** Resolve a timeline as Cutroom shows it: an FCPXML document and its markers. */
