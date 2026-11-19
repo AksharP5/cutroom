@@ -35,6 +35,7 @@ import {
   scopeElements,
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
+import { lockedCompositionTracks } from "./lockedCompositionTracks";
 import { projectWritePath, resolveProjectPath } from "./path";
 import { historyWho, parseInput } from "./routes";
 import { readSource } from "./store";
@@ -396,6 +397,7 @@ function inspect(
   composition: string,
   clipId: string,
   settings: TimelineSettings,
+  sourceLocks: ReadonlySet<number>,
 ) {
   const projection = parseComposition(content, settings, {
     scope: compositionScope(composition),
@@ -405,11 +407,9 @@ function inspect(
   if (!element || !clip)
     throw new HttpError(404, `No clip ${clipId} in ${composition}.`);
   const all = scopeElements(projection.roots, projection.scope);
-  const lockedTracks = new Set(
-    projection.timeline.tracks
-      .filter((track) => track.locked)
-      .map((track) => track.index),
-  );
+  const lockedTracks = new Set(sourceLocks);
+  for (const track of projection.timeline.tracks)
+    if (track.locked) lockedTracks.add(track.index);
   const lockedElements = projection.timeline.clips
     .filter((clip) => lockedTracks.has(clip.track))
     .map((clip) => projection.elements.get(clip.id)!)
@@ -563,6 +563,7 @@ function inspect(
     snapshot: { ...snapshot, fadeReason: fadeRestriction(clip, elementId) },
     entries,
     projection,
+    lockedTracks,
     clip,
     fadeTimeline,
     elementId,
@@ -602,7 +603,8 @@ function addFade(
   input: MotionAddFade,
   settings: TimelineSettings,
 ) {
-  const { snapshot, clip, projection, fadeTimeline, elementId } = inspected;
+  const { snapshot, clip, projection, fadeTimeline, elementId, lockedTracks } =
+    inspected;
   if (snapshot.fadeReason || !fadeTimeline || !elementId)
     throw new HttpError(
       422,
@@ -635,6 +637,7 @@ function addFade(
     snapshot.composition,
     clip.id,
     settings,
+    lockedTracks,
   );
   const [added] = written.snapshot.animations;
   const insertedId = `${fadeTimeline.start}:${id}`;
@@ -805,22 +808,24 @@ export function createMotionRoutes(
     const input = parseInput(MotionReadSchema, c.req.query());
     const project = await store.get(c.req.param("id"));
     const composition = path(input.composition);
+    const target = await resolveProjectPath(project, composition);
     const source = await readSource(project, composition);
-    const settings =
-      (await store.document(project)).timelines[composition] ??
-      emptyTimelineSettings();
+    const { timelines } = await store.document(project);
+    const settings = timelines[composition] ?? emptyTimelineSettings();
+    const locks = await lockedCompositionTracks(
+      project,
+      target.path,
+      timelines,
+    );
     const { snapshot } = inspect(
       source.content,
       source.version,
       composition,
       input.clipId,
       settings,
+      locks,
     );
-    if (
-      snapshot.fadeReason === null &&
-      (await resolveProjectPath(project, composition)).path !== composition
-    )
-      snapshot.fadeReason = FADE_FILE_LINK;
+    if (target.path !== composition) snapshot.fadeReason = FADE_FILE_LINK;
     return c.json(snapshot);
   });
   api.post("/projects/:id/motion", async (c) => {
@@ -839,10 +844,8 @@ export function createMotionRoutes(
             ? `Add fade-in to ${input.clipId}`
             : `Edit ${input.clipId} motion`,
           async () => {
-            const target = addingFade
-              ? await resolveProjectPath(project, composition)
-              : null;
-            if (target && target.path !== composition)
+            const target = await resolveProjectPath(project, composition);
+            if (addingFade && target.path !== composition)
               throw new HttpError(422, FADE_FILE_LINK);
             const source = await readSource(project, composition);
             if (source.version !== input.expectedVersion)
@@ -850,15 +853,20 @@ export function createMotionRoutes(
                 409,
                 "The source changed. Inspect motion again before editing.",
               );
-            const settings =
-              (await store.document(project)).timelines[composition] ??
-              emptyTimelineSettings();
+            const { timelines } = await store.document(project);
+            const settings = timelines[composition] ?? emptyTimelineSettings();
+            const locks = await lockedCompositionTracks(
+              project,
+              target.path,
+              timelines,
+            );
             const inspected = inspect(
               source.content,
               source.version,
               composition,
               input.clipId,
               settings,
+              locks,
             );
             const { after, snapshot } = addingFade
               ? addFade(source.content, inspected, input, settings)
@@ -867,7 +875,7 @@ export function createMotionRoutes(
                   snapshot: null,
                 };
             const absolute = await projectWritePath(project, composition);
-            if (target && absolute !== target.absolute)
+            if (absolute !== target.absolute)
               throw new HttpError(
                 409,
                 "The scene file changed. Inspect motion again.",
@@ -889,6 +897,7 @@ export function createMotionRoutes(
                 composition,
                 input.clipId,
                 settings,
+                locks,
               ).snapshot
             );
           },

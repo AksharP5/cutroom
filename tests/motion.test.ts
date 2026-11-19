@@ -536,18 +536,18 @@ window.__timelines.intro = tl;
       (await add({ composition: "index.html", expectedVersion: root.version }))
         .status,
     ).toBe(422);
-    const setLocked = async (locked: boolean) => {
+    const setLocked = async (locked: boolean, opened = composition) => {
       const timeline = TimelineViewSchema.parse(
         await (
           await f.request(
-            `${f.base}/timeline?${new URLSearchParams({ composition })}`,
+            `${f.base}/timeline?${new URLSearchParams({ composition: opened })}`,
           )
         ).json(),
       );
       expect(
         (
           await f.request(`${f.base}/commands`, "POST", {
-            composition,
+            composition: opened,
             expectedRevision: timeline.revision,
             commands: [{ type: "setTrack", index: 0, locked }],
           })
@@ -564,6 +564,12 @@ window.__timelines.intro = tl;
     expect((await add({ composition: alias })).status).toBe(422);
     expect(await readFile(file, "utf8")).toBe(source);
     await setLocked(false);
+
+    await setLocked(true, alias);
+    expect((await f.read(composition)).fadeReason).toContain("locked track");
+    expect((await add()).status).toBe(422);
+    expect(await readFile(file, "utf8")).toBe(source);
+    await setLocked(false, alias);
 
     const response = await client.callTool({
       name: "motion_add_fade",
@@ -593,6 +599,12 @@ window.__timelines.intro = tl;
     expect(await readFile(file, "utf8")).toBe(source);
     expect((await f.request(`${f.base}/history/redo`, "POST")).ok).toBe(true);
     expect(await readFile(file, "utf8")).toBe(after);
+    await setLocked(true, alias);
+    const lockedUpdate = await f.update(result, { kind: "position", value: 2 });
+    expect(lockedUpdate.status).toBe(422);
+    expect(await lockedUpdate.text()).toContain("locked track");
+    expect(await readFile(file, "utf8")).toBe(after);
+    await setLocked(false, alias);
   } finally {
     await client.close();
     await server.close();
