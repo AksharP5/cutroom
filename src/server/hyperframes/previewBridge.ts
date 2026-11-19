@@ -678,13 +678,27 @@ function installPreviewBridge(
     if (element.getAttribute(GRADE_ATTRIBUTE) === value) return;
     if (value === null) element.removeAttribute(GRADE_ATTRIBUTE);
     else element.setAttribute(GRADE_ATTRIBUTE, value);
-    // A paused video shows this bridge's held copy, which would cover the runtime's graded
-    // canvas; the video already shows that frame, so the hold can go.
-    if (element instanceof HTMLVideoElement && holds.has(element))
-      removeHold(element);
+    const video = element instanceof HTMLVideoElement ? element : null;
+    if (video && parked.has(video)) return;
+    // Let the runtime's graded canvas replace the held copy while a grade is active.
+    if (video && value !== null && holds.has(video)) removeHold(video);
     // The runtime watches the attribute only from `<body>` on, which its head script misses.
-    if (!(element instanceof HTMLVideoElement && parked.has(element)))
-      win.__hf?.colorGrading?.refresh();
+    const grading = win.__hf?.colorGrading;
+    grading?.refresh();
+    if (!video || grading?.isGraded(video) || win.__player?.isPlaying()) return;
+    // Native video and the held frame can decode untagged colour differently. Restore
+    // the hold after any pending seek, provided the video is still showing its source.
+    const version = pictureVersion;
+    const ungraded = () =>
+      video.isConnected && !parked.has(video) && !grading?.isGraded(video);
+    picture = picture.then(() => {
+      if (
+        !holds.has(video) &&
+        video.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      )
+        return holdPaused(version, ungraded);
+    });
+    void picture.catch(reportFrameFailure);
   };
   /** Before/after: every graded picture shows its source, through the runtime's own compare. */
   let gradeBypass = false;
@@ -2158,7 +2172,10 @@ function installPreviewBridge(
       ? Math.min(media, video.duration)
       : media;
   };
-  const holdPaused = async (version: number) => {
+  const holdPaused = async (version: number, shouldHold = () => true) => {
+    const current = () =>
+      version === pictureVersion && !win.__player?.isPlaying() && shouldHold();
+    if (!current()) return;
     const waitForSeek = win.__hfWaitForSeekCompletion;
     if (typeof waitForSeek !== "function")
       throw new Error("The preview cannot confirm that it drew the frame.");
@@ -2169,7 +2186,7 @@ function installPreviewBridge(
         (async () => {
           await waitForSeek();
           for (;;) {
-            if (version !== pictureVersion || win.__player?.isPlaying()) return;
+            if (!current()) return;
             const videos = visibleVideos();
             const failed = videos.find((video) => video.error);
             if (failed)
@@ -2184,7 +2201,7 @@ function installPreviewBridge(
             }
             // Frames are placed by each source's grid, which a new source reads first.
             await Promise.all(videos.map(loadGrid));
-            if (version !== pictureVersion) return;
+            if (!current()) return;
             // A grid that just came moved its videos; their frames are on the way.
             if (videos.some((video) => video.seeking)) continue;
             // A video the runtime has not moved to this time would be held at its old frame,
@@ -2233,7 +2250,7 @@ function installPreviewBridge(
                 if (sample) samples.set(video, sample);
               }),
             );
-            if (version !== pictureVersion) return;
+            if (!current()) return;
             if (videos.some((video) => video.seeking)) continue;
             const frames = captureFrames(videos, samples);
             if (!frames) {
@@ -2290,7 +2307,7 @@ function installPreviewBridge(
         }),
       ]);
     } catch (error) {
-      if (version !== pictureVersion) return;
+      if (!current()) return;
       pictureVersion += 1;
       throw error;
     } finally {

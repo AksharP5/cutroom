@@ -120,6 +120,82 @@ async function warmth(page: Page) {
   return (await centrePixel(page)).warmth;
 }
 
+test("cancelling a grade restores the paused source colours", async ({
+  page,
+  request,
+}, info) => {
+  const { project, steps } = await gradeProject(request, [
+    "drawbox=x=0:y=0:w=iw/2:h=ih:color=lime:t=fill",
+    "drawbox=x=iw/2:y=0:w=iw/2:h=ih:color=blue:t=fill",
+    "drawbox=x=0:y=0:w=iw/2:h=ih:color=blue:t=fill:enable='gte(t,2)'",
+    "drawbox=x=iw/2:y=0:w=iw/2:h=ih:color=lime:t=fill:enable='gte(t,2)'",
+  ]);
+  await page.goto(`/#project/${project.id}`);
+  await waitForPreview(page, { timing: true });
+  await seekFrame(page, 29);
+  await page.locator('.tl-lanes [data-clip="a"]').click();
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  await inspector.locator("summary", { hasText: /^Colour/ }).click();
+  const exposure = inspector.locator("label", { hasText: /^Exposure$/ });
+  const { x, y, width, height } = (await exposure.boundingBox())!;
+  const picture = page.locator(".edit-picture");
+  const frame = page.frameLocator("iframe[data-live]");
+  const source = frame.locator("video#a");
+  const swatches = async (name?: string) => {
+    const png = await picture.screenshot(
+      name ? { path: info.outputPath(`${name}.png`) } : undefined,
+    );
+    return page.evaluate(async (data) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = new OffscreenCanvas(image.width, image.height);
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return [0.25, 0.75].map((position) =>
+        Array.from(
+          context.getImageData(
+            Math.round(image.width * position),
+            Math.round(image.height / 2),
+            1,
+            1,
+          ).data,
+        ).slice(0, 3),
+      );
+    }, png.toString("base64"));
+  };
+  const history = await steps();
+  await expect(source).toHaveAttribute("data-cutroom-held", "");
+  const before = await swatches("source");
+  expect(before[0]![1]).toBeGreaterThan(230);
+  expect(before[1]![2]).toBeGreaterThan(230);
+  await page.mouse.move(x + width / 2, y + height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x + width / 2 - 20, y + height / 2, { steps: 8 });
+  await expect.poll(async () => (await swatches())[0]![1]).toBeLessThan(110);
+  const draft = await swatches("draft");
+
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await expect(source).not.toHaveAttribute("data-color-grading", /./);
+  await expect(source).toHaveAttribute("data-cutroom-held", "");
+  const after = await swatches("after-escape");
+  await info.attach("source swatches", {
+    body: JSON.stringify({ before, draft, after }),
+    contentType: "application/json",
+  });
+  expect(after).toEqual(before);
+  expect(await steps()).toBe(history);
+
+  await seekFrame(page, 75);
+  await expect.poll(() => swatches()).toEqual([...before].reverse());
+  await expect(source).not.toHaveAttribute("data-cutroom-held", "");
+  const holds = frame.locator("canvas[data-cutroom-video-hold]");
+  await expect(holds).toHaveCount(1);
+  await page.getByRole("button", { name: "Play forward" }).click();
+  await expect(holds).toHaveCount(0);
+});
+
 test("a video grade and a clip zoom compose while dragging and switching between Aim and Result", async ({
   page,
   request,
