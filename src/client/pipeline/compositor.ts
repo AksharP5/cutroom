@@ -251,6 +251,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   /** Each layer's plane bytes, reused from draw to draw. */
   const buffers: Uint8Array[] = [];
+  let disposed = false;
 
   /** Allocates a texture only when its size or format changes; each draw replaces its pixels. */
   const upload = (
@@ -338,7 +339,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
       const copies = await Promise.all(
         layers.map((layer, slot) => copy(layer.frame, slot)),
       );
-      if (gl.isContextLost()) return;
+      if (disposed || gl.isContextLost()) return;
       // Sized after the copies, since resizing clears the picture still on screen. The canvas
       // stays hidden until its first frame is drawn, so measure the picture it fills.
       const box = (canvas.parentElement ?? canvas).getBoundingClientRect();
@@ -419,6 +420,7 @@ export function createCompositor(canvas: HTMLCanvasElement) {
     },
     lost: () => gl.isContextLost(),
     dispose() {
+      disposed = true;
       for (const { texture } of textures) gl.deleteTexture(texture);
       for (const texture of grades.values()) gl.deleteTexture(texture);
       grades.clear();

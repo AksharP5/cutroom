@@ -68,6 +68,7 @@ const { values: options, positionals } = parseArgs({
 type Editor = "cutroom" | "studio";
 type Box = { x: number; y: number; width: number; height: number };
 type Picture = { time: number; number: number | null; tone?: number };
+type CastFrame = { time: number; data: string; deviceWidth: number };
 
 const viewport = { width: 1720, height: 1050 };
 const editsAt = [22, 23, 24, 27, 28] as const;
@@ -221,18 +222,23 @@ type Adapter = ReturnType<typeof adapter>;
 
 /** Records every composited frame of the tab, with its swap time on the wall clock. */
 async function screencast(cdp: CDPSession) {
-  const frames: { time: number; data: string }[] = [];
+  const frames: CastFrame[] = [];
   const onFrame = ({
     data,
     metadata,
     sessionId,
   }: {
     data: string;
-    metadata: { timestamp?: number };
+    metadata: { timestamp?: number; deviceWidth: number };
     sessionId: number;
   }) => {
     void cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
-    frames.push({ time: metadata.timestamp! * 1000, data });
+    if (metadata.timestamp === undefined) return;
+    frames.push({
+      time: metadata.timestamp * 1000,
+      data,
+      deviceWidth: metadata.deviceWidth,
+    });
   };
   cdp.on("Page.screencastFrame", onFrame);
   await cdp.send("Page.startScreencast", {
@@ -259,19 +265,19 @@ async function screencast(cdp: CDPSession) {
  */
 async function decode(
   decoder: Page,
-  frames: { time: number; data: string }[],
+  frames: CastFrame[],
   box: Box,
   readTone = false,
 ): Promise<Picture[]> {
   return decoder.evaluate(
-    async ({ frames, box, width, readTone }) => {
+    async ({ frames, box, readTone }) => {
       const canvas = new OffscreenCanvas(1, 1);
       const context = canvas.getContext("2d", { willReadFrequently: true })!;
       const decoded: Picture[] = [];
-      for (const { time, data } of frames) {
+      for (const { time, data, deviceWidth } of frames) {
         const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
         const image = await createImageBitmap(new Blob([bytes]));
-        const scale = image.width / width;
+        const scale = image.width / deviceWidth;
         canvas.width = image.width;
         canvas.height = image.height;
         context.drawImage(image, 0, 0);
@@ -305,7 +311,7 @@ async function decode(
       }
       return decoded;
     },
-    { frames, box, width: viewport.width, readTone },
+    { frames, box, readTone },
   );
 }
 
@@ -502,8 +508,17 @@ async function session(
             },
           )
         : null;
+    // The tab that reads screencast JPEGs can retain hundreds of MiB. Take
+    // another sample after its renderer has had time to exit.
+    await decoder.close();
+    await sleep(500);
+    const browserAfterCaptureMB = await treePss(await browserPid(marker));
     await mcp?.close();
-    return { ...result, slider };
+    return {
+      ...result,
+      memory: { ...result.memory, browserAfterCaptureMB },
+      slider,
+    };
   } catch (error) {
     console.error(server.log().slice(-2000));
     throw error;
@@ -1222,6 +1237,7 @@ function summaryOf(output: Output) {
     ),
     gradePointerToPicture: stat(pick((x) => x.slider ?? [])),
     browserMB: stat(pick((x) => [x.memory.browserMB])),
+    browserAfterCaptureMB: stat(pick((x) => [x.memory.browserAfterCaptureMB])),
     serverMB: stat(pick((x) => [x.memory.serverMB])),
   };
 }

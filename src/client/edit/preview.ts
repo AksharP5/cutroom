@@ -37,6 +37,7 @@ import type {
 import { z } from "zod";
 import type { RuntimePlayer } from "./transport";
 import { useTransport } from "./transport";
+import { usePipeline } from "../pipeline/setting";
 import { frameTime } from "../../shared/timeline/apply";
 import { editPicture, followEditPicture } from "./editFrame";
 import type { EditPicture } from "./editFrame";
@@ -327,6 +328,8 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       : () => {};
   };
   let clock: PlaybackClock | null = null;
+  let playbackAnchor: PlaybackClock | null = null;
+  let buffering = false;
   /** Runtime messages queued before this command must not undo the local playback intent. */
   let playbackRequest: string | null = null;
   type Reply = z.infer<typeof PreviewReplySchema>;
@@ -420,6 +423,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       if (playbackRequest !== null) return;
       state.time = runtime.data.currentTime;
       state.playing = runtime.data.isPlaying;
+      buffering = runtime.data.buffering;
       return;
     }
     if (PreviewUnloadedSchema.safeParse(event.data).success) {
@@ -530,6 +534,7 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     play: () => {
       moving.clear();
       clock = null;
+      playbackAnchor = null;
       state.playing = true;
       playbackRequest = send("play");
     },
@@ -541,13 +546,43 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     },
     seek: (time, scrub) => {
       clock = null;
+      playbackAnchor = null;
       state.time = time;
       frame.setAttribute("data-seek-pending", "");
       if (scrub) return moving.push(time);
       moving.clear();
       playbackRequest = send("seek", { time });
     },
-    time: () => state.time,
+    time: (at) => {
+      // At a display refresh, draw from the preview's continuous clock.
+      // Posted frame numbers can arrive on either side of that refresh.
+      if (
+        at === undefined ||
+        !clock ||
+        !state.playing ||
+        buffering ||
+        !usePipeline.getState().active ||
+        Math.abs(performance.timeOrigin + at - clock.at) >= 100
+      ) {
+        playbackAnchor = null;
+        return state.time;
+      }
+      // Keep the last stable sample through sub-frame jitter. Follow a
+      // real clock correction so the canvas stays in sync with the layers.
+      if (
+        !playbackAnchor ||
+        Math.abs(
+          clock.time -
+            playbackAnchor.time -
+            (clock.at - playbackAnchor.at) / 1000,
+        ) > 0.004
+      )
+        playbackAnchor = clock;
+      return (
+        playbackAnchor.time +
+        Math.max(0, performance.timeOrigin + at - playbackAnchor.at) / 1000
+      );
+    },
     clock: () => clock,
     playing: () => state.playing,
     setMuted: (muted) => {
