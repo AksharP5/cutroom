@@ -1,5 +1,6 @@
 import { offsetSourceTime } from "../../shared/timeline/time";
 import {
+  AudioAutomationError,
   RATE_TARGET,
   parseAutomation,
   serializeAutomation,
@@ -937,6 +938,22 @@ export function parseComposition(
           ? null
           : sourceOf(element);
     const versions = readVersions(kind, src, element.attrs[VERSIONS_ATTRIBUTE]);
+    const rawAutomation = element.attrs["data-automation"];
+    let automation: string | null = null;
+    if (rawAutomation) {
+      try {
+        automation = offsetAutomation(
+          serializeAutomation(parseAutomation(rawAutomation)),
+          -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
+        );
+      } catch (error) {
+        if (!(error instanceof AudioAutomationError)) throw error;
+        throw new TimelineError(
+          "unsupported",
+          `Clip ${id} has invalid audio automation. ${error.message}`,
+        );
+      }
+    }
     const clip: Clip = {
       id,
       track: read.trackIndex,
@@ -1020,14 +1037,7 @@ export function parseComposition(
       grade: gradedKind(kind)
         ? readableGrade(element.attrs[GRADE_ATTRIBUTE])
         : null,
-      automation: element.attrs["data-automation"]
-        ? offsetAutomation(
-            serializeAutomation(
-              parseAutomation(element.attrs["data-automation"]),
-            ),
-            -frameTime(edges.in ? framesBefore(edges.in) : 0, fps),
-          )
-        : null,
+      automation,
       enabled:
         element.attrs["data-hidden"] === undefined ||
         element.attrs["data-cutroom-track-hidden"] !== undefined,

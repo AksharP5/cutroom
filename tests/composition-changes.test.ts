@@ -4,6 +4,7 @@ import { SourceSchema } from "../src/shared/project";
 import { sourceClipVersions } from "../src/server/projects/changes";
 import { projectFixture } from "./project-fixture";
 import { createReviewService } from "../src/server/projects/review";
+import { createTimelineRoutes } from "../src/server/timeline/routes";
 
 const clip = (id: string) =>
   `<div id="${id}" class="clip" data-start="0" data-duration="5">${id}</div>`;
@@ -36,6 +37,33 @@ async function setup(content = source) {
     read: () => fixture.review.clipChanges(project, "index.html"),
   };
 }
+
+test("a saved invalid clip envelope keeps the source reviewable and editable", async () => {
+  const envelope =
+    '{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":1}]}]}';
+  const html = `<main data-composition-id="main" data-duration="5"><audio id="voice" src="voice.wav" data-start="0" data-duration="5" data-automation='${envelope}'></audio></main>`;
+  const f = await setup(html);
+  f.app.route("/api/cutroom", createTimelineRoutes(f.store, f.review));
+  try {
+    await f.save(
+      html.replace(
+        envelope,
+        '{"version":1,"lanes":[{"target":"rate","points":null}]}',
+      ),
+    );
+    const view = await f.read();
+    expect(view.clipEdits).toContainEqual(
+      expect.objectContaining({ composition: "index.html", clipId: null }),
+    );
+    const rejected = await f.request(`${f.base}/timeline`);
+    expect(rejected.status).toBe(422);
+    expect(await rejected.text()).toContain("voice");
+    await f.save(html);
+    expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
+  } finally {
+    await f.close();
+  }
+});
 
 for (const [name, before, after] of [
   ["timeline receiver", 'intro.to("#title"', 'outro.to("#title"'],

@@ -1,9 +1,62 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "./fixtures";
-import { AnnotationSchema, ProjectSchema } from "../src/shared/project";
+import {
+  AnnotationSchema,
+  ProjectSchema,
+  SourceSchema,
+} from "../src/shared/project";
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
+
+test("an invalid clip envelope updates the picture and can be repaired without reopening", async ({
+  page,
+  request,
+}) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: { name: "Audio source recovery" },
+      })
+    ).json(),
+  );
+  const path = `/api/cutroom/projects/${project.id}/source`;
+  const read = async () =>
+    SourceSchema.parse(await (await request.get(path)).json());
+  const original = (await read()).content;
+  const save = async (content: string) => {
+    const result = await request.put(path, {
+      data: {
+        path: "index.html",
+        expectedVersion: (await read()).version,
+        content,
+      },
+    });
+    expect(result.status(), await result.text()).toBe(200);
+  };
+
+  await page.goto(`/#project/${project.id}`);
+  const headline = page.frameLocator("iframe[data-live]").locator("#headline");
+  await expect(headline).toHaveText("Audio source recovery");
+  await save(
+    original
+      .replaceAll("Audio source recovery", "Updated picture")
+      .replace(
+        "</main>",
+        `<audio id="voice" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
+      ),
+  );
+  await expect(headline).toHaveText("Updated picture");
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
+  await save(original);
+  await expect(headline).toHaveText("Audio source recovery");
+  await expect(page.locator('[data-clip="headline"]')).toBeVisible();
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/),
+  ).toHaveCount(0);
+});
 
 test("review notes stay grouped by state until the owner accepts, answers, or restores them", async ({
   page,
