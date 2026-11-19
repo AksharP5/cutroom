@@ -4,3 +4,5 @@ src/client/tokens.css
 e2e/fixtures/animation-feedback/index.html
 e2e/fixtures/animation-feedback/review-r4/*.html
 e2e/fixtures/animation-feedback/overlap.html
+# Generated WASM build with the seed injection described in THIRD_PARTY_NOTICES.md.
+src/server/hyperframes/vendor/signalsmith-stretch.cjs

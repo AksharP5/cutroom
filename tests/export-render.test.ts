@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rm,
   symlink,
@@ -11,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { createRenderWorkers } from "../src/server/hyperframes/jobs";
+import { prepareRampAudio } from "../src/server/hyperframes/rampAudio";
 import { browserExecutable } from "../src/server/hyperframes/render";
 
 async function command(args: string[]) {
@@ -267,6 +270,189 @@ test("marked export planning refuses links outside the project before copying th
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test.skipIf(!browserExecutable() || !Bun.which("ffmpeg"))(
+  "an authored speed ramp keeps its pitch, audio landmarks and group gain in whole and marked MP4s",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "export-ramp-"));
+    const project = join(root, "project");
+    const workers = createRenderWorkers({ scratchDir: join(root, "scratch") });
+    const sampleRate = 48_000;
+    // Source times include a half-second trim. Expected playhead times are
+    // landmarks for the pinned 0.25× to 4× rate integral, in seconds.
+    const landmarks = [
+      { source: 0.71, timeline: 0.66169 },
+      { source: 1.0, timeline: 1.25442 },
+      { source: 1.7, timeline: 2.11254 },
+      { source: 2.15, timeline: 2.47812 },
+      { source: 5.55, timeline: 3.90641 },
+    ];
+    const pulses = landmarks
+      .map(
+        ({ source }) =>
+          `if(lt(abs(t-${source})\\,0.008)\\,cos(PI*(t-${source})/0.016)^2\\,0)`,
+      )
+      .join("+");
+    try {
+      await mkdir(project);
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        `aevalsrc=0.12*sin(2*PI*440*t)|0.6*sin(2*PI*1750*t)*(${pulses}):s=${sampleRate}:d=6`,
+        "-c:a",
+        "pcm_s16le",
+        join(project, "sound.wav"),
+      ]);
+      await writeFile(
+        join(project, "index.html"),
+        `<main data-composition-id="main" data-width="160" data-height="120" data-duration="4" data-fps="60" style="background:orange">
+          <hf-audio-group id="dialogue" data-volume="0.5"></hf-audio-group>
+          <audio id="sound" src="sound.wav" data-start="0" data-duration="4" data-media-start="0.5" data-audio-group="dialogue" data-automation='{"version":1,"lanes":[{"target":"rate","points":[{"t":0,"v":0.25},{"t":4,"v":4}]}]}'></audio>
+        </main>`,
+      );
+      for (const range of [null, { start: 60, end: 180 }]) {
+        const name = range ? "marked" : "whole";
+        const path = join(root, `${name}.mp4`);
+        const state = workers.start(
+          {
+            project: { id: name, dir: project },
+            outputPath: path,
+            format: "mp4",
+            fps: { num: 60, den: 1 },
+            quality: "draft",
+            jobId: name,
+          },
+          { filename: `${name}.mp4`, directory: root, range },
+        );
+        const deadline = Date.now() + 45000;
+        while (state.status === "rendering" && Date.now() < deadline)
+          await Bun.sleep(20);
+        expect(state.error).toBeUndefined();
+        expect(state.status).toBe("complete");
+        const pcm = await command([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          path,
+          "-vn",
+          "-ac",
+          "2",
+          "-ar",
+          String(sampleRate),
+          "-f",
+          "f32le",
+          "pipe:1",
+        ]);
+        const sound = new Float32Array(
+          pcm.buffer,
+          pcm.byteOffset,
+          pcm.byteLength / 4,
+        );
+        const start = (range?.start ?? 0) / 60;
+        const end = (range?.end ?? 240) / 60;
+        expect(sound.length).toBe((end - start) * sampleRate * 2);
+        for (const { timeline } of landmarks) {
+          if (timeline <= start || timeline >= end) continue;
+          const expected = timeline - start;
+          let energy = 0;
+          let weightedTime = 0;
+          for (
+            let i = Math.round((expected - 0.06) * sampleRate);
+            i < Math.round((expected + 0.06) * sampleRate);
+            i++
+          ) {
+            const power = sound[2 * i + 1]! ** 2;
+            energy += power;
+            weightedTime += (i / sampleRate) * power;
+          }
+          expect(energy, `${name} landmark at ${timeline}s`).toBeGreaterThan(1);
+          expect(
+            Math.abs(weightedTime / energy - expected),
+            `${name} landmark at ${timeline}s`,
+          ).toBeLessThan(1 / 120);
+        }
+        let upwardCrossings = 0;
+        let carrierPower = 0;
+        let quietestRms = Infinity;
+        for (let from = 4800; from < sound.length / 2 - 4800; from += 480) {
+          let power = 0;
+          for (let i = from; i < from + 480; i++) {
+            const sample = sound[2 * i]!;
+            power += sample ** 2;
+            if (sample > 0 && sound[2 * i - 2]! <= 0) upwardCrossings++;
+          }
+          carrierPower += power;
+          quietestRms = Math.min(quietestRms, Math.sqrt(power / 480));
+        }
+        const measuredSeconds = end - start - 0.2;
+        // The carrier stays audible through former slice boundaries and averages half gain.
+        expect(quietestRms).toBeGreaterThan(0.012);
+        expect(
+          Math.sqrt(carrierPower / (measuredSeconds * sampleRate)),
+        ).toBeCloseTo(0.06 / Math.SQRT2, 2);
+        const pitch = upwardCrossings / measuredSeconds;
+        expect(Math.abs(pitch - 440)).toBeLessThan(2);
+      }
+    } finally {
+      await workers.cancelAll();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  100_000,
+);
+
+test.skipIf(!Bun.which("ffmpeg"))(
+  "stretching a slow ramp twice produces the same dry samples",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "export-ramp-repeat-"));
+    try {
+      const source = join(directory, "source.wav");
+      await command([
+        "ffmpeg",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*331*t)+0.12*sin(2*PI*2273*t):s=48000:d=1",
+        "-c:a",
+        "pcm_s16le",
+        source,
+      ]);
+      const stretched = async (name: string) => {
+        const path = join(directory, name);
+        const result = await prepareRampAudio(
+          path,
+          1,
+          {
+            target: "rate",
+            points: [
+              { t: 0, v: 0.25 },
+              { t: 1, v: 0.4 },
+            ],
+          },
+          async (outputPath) => {
+            await copyFile(source, outputPath);
+            return { success: true, outputPath };
+          },
+        );
+        expect(result?.success).toBe(true);
+        return readFile(path);
+      };
+      const first = await stretched("first.wav");
+      expect(first.readUInt32LE(40)).toBe(48_000 * 4);
+      expect(first.equals(await stretched("second.wav"))).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 // The editor rewrites .cutroom during an export, so the copy must not walk it either.
 test.each(["trash", ".cutroom/cache"])(

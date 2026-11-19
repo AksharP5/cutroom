@@ -281,13 +281,36 @@ export function registerRenderIsolation(
   const frameCache = JSON.stringify(
     new URL("./frameCache.ts", import.meta.url).href,
   );
+  const rampAudio = JSON.stringify(
+    new URL("./rampAudio.ts", import.meta.url).href,
+  );
   let producerLoaded = false;
+  let audioMixerLoaded = false;
   let captureLoaded = false;
   let extractorLoaded = false;
   let coordinatorLoaded = !range?.range;
   registerHooks({
     load(url, context, nextLoad) {
       const loaded = nextLoad(url, context);
+      if (url.endsWith("/@hyperframes/engine/dist/services/audioMixer.js")) {
+        audioMixerLoaded = true;
+        return {
+          ...loaded,
+          source: replaceOnce(
+            String(loaded.source),
+            "    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);",
+            `    const normalizedPlaybackRate = normalizeRateSpec(playbackRate);
+    if (typeof normalizedPlaybackRate === "object" && !options?.loop && !isHttpUrl(srcPath)) {
+        const { prepareRampAudio } = await import(${rampAudio});
+        const prepared = await prepareRampAudio(outputPath, duration, normalizedPlaybackRate,
+            (path, seconds) => extractAudioSegment(srcPath, path, stage, mediaStart, seconds, 1, signal, config, undefined, { padToDuration: true }),
+            signal);
+        if (prepared) return prepared;
+    }`,
+            url,
+          ),
+        };
+      }
       // Standalone templates keep the parent shell's styles and scripts. Its
       // render canvas, like its duration, belongs to the selected scene.
       if (url.endsWith("/@hyperframes/core/dist/compiler/standaloneEntry.js"))
@@ -646,6 +669,7 @@ export function registerRenderIsolation(
   return () => {
     if (
       !producerLoaded ||
+      !audioMixerLoaded ||
       !captureLoaded ||
       !extractorLoaded ||
       !coordinatorLoaded
