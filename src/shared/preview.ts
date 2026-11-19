@@ -17,6 +17,8 @@ export type TrackGainPreview = z.infer<typeof TrackGainPreviewSchema>;
 
 export const PreviewStateSchema = z.object({
   mixSignature: z.string().optional(),
+  rampPending: z.boolean().optional(),
+  rampPrepared: z.boolean().optional(),
   ready: z.boolean(),
   root: z.boolean(),
   error: z.string().nullable(),
@@ -40,6 +42,11 @@ export type PlaybackClock = z.infer<typeof PlaybackClockSchema>;
 export const PreviewUnloadedSchema = z.object({
   source: z.literal("cutroom-preview"),
   type: z.literal("unloaded"),
+});
+
+export const RampAudioFailedSchema = z.object({
+  source: z.literal("cutroom-preview"),
+  type: z.literal("ramp-audio-failed"),
 });
 
 /** A clip's box in composition pixels, as the preview lays it out at the shown frame. */

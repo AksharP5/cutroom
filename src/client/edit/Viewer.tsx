@@ -14,6 +14,7 @@ import {
   compositionFps,
   NO_COMPOSITION_ROOT,
   reportEditorError,
+  showToast,
   useWorkspace,
 } from "../workspace";
 import { useProjectNotes } from "./noteStore";
@@ -126,6 +127,9 @@ export function Viewer({
   const [roomFor, setRoomFor] = useState<string | null>(null);
   const reserveNote = drawing && roomFor === draftId;
   const latest = useRef(0);
+  const [rampReady, setRampReady] = useState<number | null>(null);
+  const rampSwap = useRef<{ gen: number; previous: number } | null>(null);
+  const nativeRampDocuments = useRef(new Set<number>());
   const [mixedRevision, setMixedRevision] = useState<number | null>(null);
   const checking = useRef<AbortController | null>(null);
   const loadingRevision = useRef<{ gen: number; revision: number } | null>(
@@ -141,7 +145,10 @@ export function Viewer({
       ? handoff.candidate
       : null;
   const live =
-    handoff.kind === "promoting" ? handoff.candidate : handoff.confirmed;
+    handoff.kind === "promoting" &&
+    rampSwap.current?.gen !== handoff.candidate.gen
+      ? handoff.candidate
+      : handoff.confirmed;
 
   // Readiness follows acknowledgments and painted pixels without rendering React per frame.
   useLayoutEffect(() => {
@@ -272,13 +279,19 @@ export function Viewer({
         : `&composition=${encodeURIComponent(shown)}`
     }${documentVariables.current.get(gen) ?? ""}${auditionQuery(
       documentAuditions.current.get(gen) ?? null,
-    )}`;
+    )}${nativeRampDocuments.current.has(gen) ? "&cutroom-native-ramp=1" : ""}`;
   };
   const reload = (
     revision: number,
     deadline = performance.now() + READY_TIMEOUT,
+    ramp?: { previous: number } | "native",
   ) => {
     latest.current += 1;
+    rampSwap.current =
+      ramp && ramp !== "native"
+        ? { gen: latest.current, previous: ramp.previous }
+        : null;
+    if (ramp === "native") nativeRampDocuments.current.add(latest.current);
     documentCompositions.current.set(latest.current, shownComposition.current);
     documentVariables.current.set(
       latest.current,
@@ -288,6 +301,51 @@ export function Viewer({
     loadingRevision.current = { gen: latest.current, revision };
     transition({ type: "navigate", gen: latest.current, deadline });
   };
+  const canPromote = (gen: number) => {
+    const ramp = rampSwap.current;
+    const transport = useTransport.getState();
+    if (
+      ramp?.gen !== gen ||
+      (transport.state.kind === "stopped" && !transport.held)
+    )
+      return true;
+    // Keep the same running player if Play arrives while the prepared document warms.
+    rampSwap.current = null;
+    setRampReady(ramp.previous);
+    transition({ type: "cancelled", gen });
+    return false;
+  };
+  useLayoutEffect(() => {
+    if (!candidate || rampSwap.current?.gen !== candidate.gen) return;
+    if (!canPromote(candidate.gen)) return;
+    return useTransport.subscribe(() => {
+      canPromote(candidate.gen);
+    });
+  }, [candidate?.gen]);
+  useEffect(() => {
+    if (
+      rampReady === null ||
+      handoff.kind !== "showing" ||
+      handoff.confirmed?.gen !== rampReady
+    )
+      return;
+    const apply = () => {
+      const state = useTransport.getState();
+      if (
+        state.state.kind !== "stopped" ||
+        state.held ||
+        checking.current ||
+        editPicture()
+      )
+        return;
+      setRampReady(null);
+      stop();
+      reload(shownRevision.current, undefined, { previous: rampReady });
+    };
+    const stop = useTransport.subscribe(apply);
+    apply();
+    return stop;
+  }, [rampReady, handoff]);
   useLayoutEffect(() => {
     const closing = new AbortController();
     refresh.current = previewRefresh(
@@ -590,6 +648,7 @@ export function Viewer({
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );
       preview.signal.throwIfAborted();
+      if (!canPromote(candidate.gen)) return;
       transition({ type: "painted", gen: candidate.gen });
     })().catch((reason: unknown) => {
       if (!preview.signal.aborted)
@@ -602,6 +661,7 @@ export function Viewer({
     if (!picture) return;
     const preview = connections.current.get(picture.gen);
     if (!preview) return;
+    if (rampSwap.current?.gen === picture.gen) rampSwap.current = null;
     if (loadingRevision.current?.gen === picture.gen)
       loadingRevision.current = null;
     useWorkspace.setState({
@@ -632,18 +692,57 @@ export function Viewer({
 
   const load = async (gen: number, frame: HTMLIFrameElement) => {
     if (gen !== latest.current || !frame.isConnected) return;
-    const preview = connectPreview(frame, () => {
-      transition({
-        type: "unloaded",
-        gen,
-        deadline: performance.now() + READY_TIMEOUT,
-      });
+    const useAuthoredAudio = () => {
+      const shown = shownHandoff.current.confirmed;
+      if (gen !== latest.current && shown?.gen !== gen) return;
+      if (rampSwap.current?.gen === gen) {
+        rampSwap.current = null;
+        loadingRevision.current = null;
+        transition({ type: "cancelled", gen });
+        return;
+      }
+      const loading = loadingRevision.current;
+      const revision =
+        loading?.gen === gen || shown?.gen === gen
+          ? (loading?.revision ?? shown?.revision)
+          : undefined;
+      if (revision === undefined) return;
+      if (
+        shown?.gen === gen &&
+        useTransport.getState().state.kind === "playing"
+      ) {
+        transport.dispatch({ type: "stop" });
+        showToast("Playback paused. Reloading the original audio.");
+      }
+      reload(revision, undefined, "native");
+    };
+    const preview = connectPreview(frame, {
+      onUnload: () => {
+        transition({
+          type: "unloaded",
+          gen,
+          deadline: performance.now() + READY_TIMEOUT,
+        });
+      },
+      onRampFailure: useAuthoredAudio,
     });
     const reloaded = connections.current.has(gen);
     connections.current.get(gen)?.dispose();
     connections.current.set(gen, preview);
     try {
       await preview.inspect();
+      if (preview.state.rampPending) {
+        void preview
+          .waitForRamp()
+          .then((ready) => {
+            if (ready && gen === latest.current && !preview.signal.aborted)
+              setRampReady(gen);
+          })
+          .catch((error: unknown) => {
+            if (!preview.signal.aborted)
+              console.debug("Ramp audio could not be prepared:", error);
+          });
+      }
       const { active, drawn } = usePipeline.getState();
       if (active) preview.pipeline(true, drawn);
       const resume = () => {
@@ -683,6 +782,24 @@ export function Viewer({
         await preview.inspect();
       }
       if (!preview.state.root) throw new Error(NO_COMPOSITION_ROOT);
+      if (preview.state.rampPrepared) {
+        const available = await preview.checkRampAudio().then(
+          () => true,
+          (error: unknown) => {
+            if (!preview.signal.aborted)
+              console.warn("Could not open prepared ramp audio:", error);
+            return false;
+          },
+        );
+        preview.signal.throwIfAborted();
+        if (gen !== latest.current) return;
+        if (!available) {
+          useAuthoredAudio();
+          return;
+        }
+      }
+      preview.signal.throwIfAborted();
+      if (gen !== latest.current) return;
       const { player } = preview;
       let shown = -1;
       /** Seeks until the frame painted is the latest one asked for. False once superseded. */
@@ -708,6 +825,7 @@ export function Viewer({
       )
         return;
       const { width, height } = preview.state;
+      if (!canPromote(gen)) return;
       transition({
         type: "prepared",
         picture: {
@@ -783,6 +901,7 @@ export function Viewer({
         {slots.map((gen) => {
           const retained =
             handoff.kind === "promoting" &&
+            live?.gen === candidate?.gen &&
             gen === handoff.confirmed?.gen &&
             gen !== candidate?.gen;
           const size = gen === handoff.confirmed?.gen ? handoff.confirmed : fit;

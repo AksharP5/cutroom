@@ -8,7 +8,7 @@ import type { JobState } from "../../shared/jobs";
 import type { Project } from "../../shared/project";
 import { projectPath } from "../projects/store";
 import { FilmstripSchema, MediaInfoSchema, PiecesSchema } from "./protocol";
-import type { MediaKind, MediaTask, Pieces } from "./protocol";
+import type { MediaKind, MediaTask, Pieces, RampWindow } from "./protocol";
 import {
   fragmentsStart,
   pieceAt,
@@ -65,6 +65,7 @@ type MediaJob = {
   cancel?: () => void;
   retryAt?: number;
   work?: ProxyWork;
+  ready?: ReturnType<typeof Promise.withResolvers<boolean>>;
 };
 const artifacts = {
   probe: "probe.json",
@@ -74,6 +75,7 @@ const artifacts = {
   scrub: "scrub.mp4",
   proxy: "proxy.mp4",
   pieces: "pieces.json",
+  ramp: "ramp.wav",
 } satisfies Record<MediaKind, string>;
 /** A clip with no editing proxy shows no picture at all, so its proxy comes before strips. */
 const priority = {
@@ -82,6 +84,7 @@ const priority = {
   peaks: 1,
   pieces: 1,
   proxy: 2,
+  ramp: 2,
   filmstrip: 3,
   scrub: 4,
 } satisfies Record<MediaKind, number>;
@@ -94,6 +97,7 @@ const recipe = {
   scrub: "media-v7",
   proxy: "media-v8",
   pieces: "media-v12",
+  ramp: "ramp-v1",
 } satisfies Record<MediaKind, string>;
 /** Whole-file passes share one worker, so peaks and visible frames always have the other. */
 /**
@@ -104,7 +108,7 @@ const wanted = (job: MediaJob) =>
   !!job.work &&
   (job.work.waiting > 0 || performance.now() - job.work.polledAt < 3000);
 const background = (kind: MediaKind) =>
-  kind === "filmstrip" || kind === "scrub";
+  kind === "filmstrip" || kind === "scrub" || kind === "ramp";
 
 export type MediaService = ReturnType<typeof createMediaService>;
 
@@ -449,6 +453,7 @@ export function createMediaService(
     path: string,
     kind: MediaKind,
     time = 0,
+    ramp?: RampWindow,
   ): Promise<MediaResult> => {
     if (closing)
       throw new HttpError(503, "The media service is shutting down.");
@@ -457,7 +462,7 @@ export function createMediaService(
     const identity = await fingerprint(source);
     let info: z.infer<typeof MediaInfoSchema> | undefined;
     let frame: number | undefined;
-    if (kind !== "probe") {
+    if (kind !== "probe" && kind !== "ramp") {
       const probe = await request(project, path, "probe");
       if (!probe.artifact) return probe;
       info = MediaInfoSchema.parse(await Bun.file(probe.artifact).json());
@@ -489,7 +494,9 @@ export function createMediaService(
       pieces = PiecesSchema.parse(await Bun.file(plan.artifact).json());
     }
     const key = createHash("sha256")
-      .update(`${recipe[kind]}\0${kind}\0${identity}\0${frame ?? ""}`)
+      .update(
+        `${recipe[kind]}\0${kind}\0${identity}\0${ramp ? JSON.stringify(ramp) : (frame ?? "")}`,
+      )
       .digest("hex");
     await mkdir(await projectPath(project, ".cutroom", true), {
       recursive: true,
@@ -538,6 +545,7 @@ export function createMediaService(
       kind,
       sequence: requestSequence,
       machine,
+      ready: ramp ? Promise.withResolvers<boolean>() : undefined,
       run: async () => {
         let scratch: string | undefined;
         let failure: string | undefined;
@@ -554,6 +562,7 @@ export function createMediaService(
               ffprobe,
               info,
               time,
+              ramp,
             },
             workerUrl,
             options.stopTimeoutMs ?? 1000,
@@ -610,6 +619,7 @@ export function createMediaService(
               error: failure,
             });
           else machine.transition({ status: "done", progress: 1 });
+          job.ready?.resolve(machine.state.status === "done");
           if (machine.state.status === "failed")
             job.retryAt = Date.now() + (options.failureTtlMs ?? 30_000);
           else jobs.delete(directory);
@@ -646,6 +656,20 @@ export function createMediaService(
   };
   return {
     request,
+    async rampAudio(project: Project, path: string, window: RampWindow) {
+      const result = await request(project, path, "ramp", 0, window);
+      return {
+        key: result.key,
+        available: Boolean(result.artifact),
+        pending:
+          result.state.status === "queued" || result.state.status === "running"
+            ? result.job?.ready?.promise
+            : undefined,
+      };
+    },
+    rampArtifact(project: Project, key: string) {
+      return projectPath(project, `.cutroom/cache/${key}/${artifacts.ramp}`);
+    },
     /** The requested piece's presentation times, with its neighbours at either boundary. */
     async proxySamples(project: Project, path: string, time: number) {
       const plan = await request(project, path, "pieces").catch(
@@ -796,6 +820,7 @@ export function createMediaService(
           status: "cancelled",
           progress: job.machine.state.progress,
         });
+        job.ready?.resolve(false);
         if (!job.work) continue;
         for (const piece of [...job.work.waiters.keys()])
           settle(

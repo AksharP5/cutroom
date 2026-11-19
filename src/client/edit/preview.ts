@@ -13,6 +13,7 @@ import {
   PreviewReplySchema,
   PreviewTimingSchema,
   PreviewUnloadedSchema,
+  RampAudioFailedSchema,
   RuntimeStateSchema,
   TrackGainPreviewSchema,
 } from "../../shared/preview";
@@ -287,7 +288,10 @@ export const useGradeBypass = create<{ bypass: boolean }>(() => ({
 }));
 
 /** Owns one frame's message requests and cached clock. It never reads the composition's DOM. */
-export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
+export function connectPreview(
+  frame: HTMLIFrameElement,
+  { onUnload, onRampFailure }: { onUnload(): void; onRampFailure(): void },
+) {
   let state: PreviewState = {
     ready: false,
     root: false,
@@ -356,6 +360,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
     ) {
       const status = PreviewFrameStatusSchema.safeParse(event.data);
       if (status.success) reportFrameError(status.data.error);
+      return;
+    }
+    if (
+      event.data &&
+      typeof event.data === "object" &&
+      "type" in event.data &&
+      event.data.type === "ramp-audio-failed" &&
+      RampAudioFailedSchema.safeParse(event.data).success
+    ) {
+      onRampFailure();
       return;
     }
     if (active) {
@@ -788,6 +802,16 @@ export function connectPreview(frame: HTMLIFrameElement, onUnload: () => void) {
       return state;
     },
     inspect: async () => void (await request("inspect")),
+    checkRampAudio: async () => void (await request("check-ramp")),
+    async waitForRamp() {
+      const response = await fetch(`${frame.src}&cutroom-ramp=1`, {
+        signal: closing.signal,
+      });
+      return (
+        response.ok &&
+        z.object({ ready: z.boolean() }).parse(await response.json()).ready
+      );
+    },
     painted: async () => void (await request("paint")),
     get hasTimingHint() {
       return Boolean(timingRevision);

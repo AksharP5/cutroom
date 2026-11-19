@@ -630,6 +630,7 @@ test("an edit that would start an animation is taken back before the old picture
       ".spinner{position:absolute;inset:0;background:#00f;animation:spin 4s linear infinite}@keyframes spin{to{rotate:1turn}}",
   });
   // A clear clip on its own track first; its new track needs a fresh document anyway.
+  await waitForPreview(page);
   const path = join(project.path, "index.html");
   const loaded = await page
     .locator(".edit-stage")
@@ -643,13 +644,17 @@ test("an edit that would start an animation is taken back before the old picture
   );
   await waitForPreview(page, { after: loaded });
   await waitForPreview(page, { timing: true });
+  await expect(
+    page.frameLocator("iframe[data-live]").locator("#spinner"),
+  ).toHaveClass("clip");
+  await expect(page.locator("iframe")).toHaveCount(1);
   await seek("0311");
   const ready = await page
     .locator(".edit-stage")
     .getAttribute("data-preview-ready");
   const before = await page.locator("iframe[data-live]").getAttribute("src");
   const replacement = Promise.withResolvers<void>();
-  let heldNavigation: Promise<void> | undefined;
+  const heldNavigations: Promise<void>[] = [];
   const previewRoute = (url: URL) =>
     url.pathname ===
       `/api/projects/${encodeURIComponent(project.id)}/isolated-preview` &&
@@ -658,10 +663,10 @@ test("an edit that would start an animation is taken back before the old picture
   try {
     // Hold only the fresh document. The timing and mix checks must finish first.
     await page.route(previewRoute, (route) => {
-      if (heldNavigation || !route.request().isNavigationRequest())
-        return route.fallback();
-      heldNavigation = replacement.promise.then(() => route.continue());
-      return heldNavigation;
+      if (!route.request().isNavigationRequest()) return route.fallback();
+      const held = replacement.promise.then(() => route.continue());
+      heldNavigations.push(held);
+      return held;
     });
     capture.reset();
     await writeFile(
@@ -671,7 +676,7 @@ test("an edit that would start an animation is taken back before the old picture
         'id="spinner" class="clip spinner"',
       ),
     );
-    await expect.poll(() => Boolean(heldNavigation)).toBe(true);
+    await expect.poll(() => heldNavigations.length).toBeGreaterThan(0);
     const old = await capture.read();
     await expect(page.locator("iframe[data-live]")).toHaveAttribute(
       "src",
@@ -685,7 +690,7 @@ test("an edit that would start an animation is taken back before the old picture
   } finally {
     replacement.resolve();
     try {
-      await heldNavigation;
+      await Promise.all(heldNavigations);
       await page.unroute(previewRoute);
     } finally {
       await capture.stop();
