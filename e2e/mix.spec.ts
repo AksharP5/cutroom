@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { parseAutomation } from "@hyperframes/core/audio-automation";
 import type {
   APIRequestContext,
   Locator,
@@ -713,7 +714,7 @@ test("gain follows the pointer, Shift adjusts finely, horizontal presses move cl
     .locator('[data-clip="music"]')
     .click({ position: { x: 25, y: 5 } });
   const clear = page.getByRole("button", {
-    name: "Clear automation",
+    name: "Clear audio automation",
     exact: true,
   });
   await expect(clear).toBeVisible();
@@ -740,6 +741,90 @@ test("gain follows the pointer, Shift adjusts finely, horizontal presses move cl
     });
   await page.keyboard.press("Control+z");
   await expect.poll(read).toEqual(baked);
+});
+
+test("clearing audio automation leaves the speed ramp on both linked clips, and Undo restores the mix", async ({
+  page,
+  request,
+}, info) => {
+  const project = ProjectSchema.parse(
+    await (
+      await request.post("/api/cutroom/projects", {
+        data: {
+          name: "Linked speed and mix",
+          width: 320,
+          height: 240,
+          duration: 4,
+        },
+      })
+    ).json(),
+  );
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=320x240:r=30:d=6",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=6",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-c:a",
+    "aac",
+    "-shortest",
+    join(project.path, "shot.mp4"),
+  ]);
+  const rate = {
+    target: "rate",
+    points: [
+      { t: 0, v: 0.5 },
+      { t: 4, v: 2 },
+    ],
+  };
+  const volume = {
+    target: "volume",
+    points: [
+      { t: 0, v: 0.5 },
+      { t: 4, v: 1 },
+    ],
+  };
+  const automation = (lanes: unknown[]) =>
+    JSON.stringify({ version: 1, lanes });
+  const file = join(project.path, "index.html");
+  const authored = `<!doctype html><main data-composition-id="main" data-no-timeline data-width="320" data-height="240" data-duration="4" data-fps="30">
+    <video id="picture" class="clip" src="shot.mp4" muted data-link="shot" data-start="0" data-duration="4" data-track-index="0" data-automation='${automation([rate])}'></video>
+    <audio id="sound" class="clip" src="shot.mp4" data-link="shot" data-start="0" data-duration="4" data-track-index="1" data-automation='${automation([rate, volume])}'></audio>
+  </main>`;
+  await writeFile(file, authored);
+  await page.goto(`/#project/${project.id}`);
+  await expect(page.locator("iframe[data-live]")).toBeVisible();
+  await page.locator('[data-clip="sound"]').click();
+  const clear = page.getByRole("button", {
+    name: "Clear audio automation",
+    exact: true,
+  });
+  await expect(clear).toBeVisible();
+  await page.screenshot({ path: info.outputPath("before-clear.png") });
+  await clear.click();
+  await expect(clear).toHaveCount(0);
+  const video = page.frameLocator("iframe[data-live]").locator("video#picture");
+  const audio = page.frameLocator("iframe[data-live]").locator("audio#sound");
+  const lanes = async (element: Locator) => {
+    const attribute = await element.getAttribute("data-automation");
+    return attribute ? parseAutomation(attribute).lanes : [];
+  };
+  await expect.poll(() => lanes(audio)).toEqual([rate]);
+  expect(await lanes(video)).toEqual([rate]);
+  await page.screenshot({ path: info.outputPath("after-clear.png") });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(clear).toBeVisible();
+  await expect.poll(() => lanes(audio)).toEqual([rate, volume]);
+  expect(await readFile(file, "utf8")).toBe(authored);
 });
 
 test("cold audio starting at five seconds drives meters, clipping latches until click or restart, and stop clears peak markers", async ({

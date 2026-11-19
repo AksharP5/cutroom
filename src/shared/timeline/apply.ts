@@ -19,6 +19,7 @@ import { cutRegion, defaultRegion, editRegion } from "./region";
 import type { Region, RegionEdit } from "./region";
 import { TimelineError } from "./errors";
 import {
+  clearAudioAutomation,
   clipFades,
   CUTROOM_AUDIO_GROUP_PREFIX,
   trackGainWarning,
@@ -1387,13 +1388,13 @@ function run(timeline: Timeline, command: Command, batch: Batch): Timeline {
                   fx: buildFxChain(clip.fx, command.fx),
                 }),
                 ...(command.automation !== undefined && {
-                  automation:
-                    command.automation &&
-                    withVolumePoints(
-                      clip.automation,
-                      command.automation.volume,
-                      timeline.fps,
-                    ),
+                  automation: command.automation
+                    ? withVolumePoints(
+                        clip.automation,
+                        command.automation.volume,
+                        timeline.fps,
+                      )
+                    : clearAudioAutomation(clip.automation),
                 }),
                 ...(command.x !== undefined && { x: command.x }),
                 ...(command.y !== undefined && { y: command.y }),

@@ -14,7 +14,7 @@ import {
   MIN_PLAYBACK_RATE,
 } from "@hyperframes/parsers/media-duration";
 import { MAX_AUDIO_GAIN } from "@hyperframes/core/audio-gain";
-import { clipFades } from "../../../shared/timeline/mix";
+import { clearAudioAutomation, clipFades } from "../../../shared/timeline/mix";
 import { z } from "zod";
 import { toFrames } from "../../../shared/timeline/apply";
 import { api, json } from "../../api";
@@ -950,15 +950,16 @@ export function Inspector({
                     ])
                   }
                 />
-                {audio.automation && (
+                {clearAudioAutomation(audio.automation) !==
+                  audio.automation && (
                   <button
                     className="inspector-clear-automation"
                     disabled={locked}
-                    title="Remove this clip's HyperFrames automation, including baked volume ramps"
+                    title="Remove this clip's volume and effect automation"
                     onClick={() => {
                       void editTimeline(
                         projectId,
-                        "Clear clip automation",
+                        "Clear audio automation",
                         () => [
                           {
                             type: "setClip",
@@ -969,7 +970,7 @@ export function Inspector({
                       );
                     }}
                   >
-                    Clear automation
+                    Clear audio automation
                   </button>
                 )}
               </details>

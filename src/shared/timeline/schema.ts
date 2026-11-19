@@ -903,7 +903,7 @@ export const CommandSchema = z.discriminatedUnion("type", [
         .nullable()
         .optional()
         .describe(
-          "Volume automation on a clip with sound, on top of its gain and fades. Replaces the volume envelope and keeps effect lanes; null clears every lane, including baked volume ramps",
+          "Volume automation on a clip with sound, on top of its gain and fades. Replaces the volume envelope and keeps effect lanes. Null clears volume and effect automation while keeping speed automation",
         ),
       fadeIn: frame
         .optional()
