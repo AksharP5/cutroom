@@ -693,7 +693,8 @@ export function Viewer({
   const load = async (gen: number, frame: HTMLIFrameElement) => {
     if (gen !== latest.current || !frame.isConnected) return;
     const useAuthoredAudio = () => {
-      if (gen !== latest.current) return;
+      const shown = shownHandoff.current.confirmed;
+      if (gen !== latest.current && shown?.gen !== gen) return;
       if (rampSwap.current?.gen === gen) {
         rampSwap.current = null;
         loadingRevision.current = null;
@@ -701,9 +702,11 @@ export function Viewer({
         return;
       }
       const loading = loadingRevision.current;
-      const shown = shownHandoff.current.confirmed;
-      const picture = loading?.gen === gen ? loading : shown;
-      if (picture?.gen !== gen) return;
+      const revision =
+        loading?.gen === gen || shown?.gen === gen
+          ? (loading?.revision ?? shown?.revision)
+          : undefined;
+      if (revision === undefined) return;
       if (
         shown?.gen === gen &&
         useTransport.getState().state.kind === "playing"
@@ -711,7 +714,7 @@ export function Viewer({
         transport.dispatch({ type: "stop" });
         showToast("Playback paused. Reloading the original audio.");
       }
-      reload(picture.revision, undefined, "native");
+      reload(revision, undefined, "native");
     };
     const preview = connectPreview(frame, {
       onUnload: () => {

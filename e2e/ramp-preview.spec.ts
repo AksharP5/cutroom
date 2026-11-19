@@ -33,42 +33,49 @@ const masterPeak = (audio: Locator) =>
 
 for (const mode of [
   "separate audio",
+  "retained audio",
   "embedded audio",
   "mounted scene",
   "unavailable audio",
   "truncated WAV",
+  "parked audio with blocked media",
+  "parked audio with a truncated WAV",
   "Play during the swap",
 ])
   test(`preview handles a ramp with ${mode} without interrupting playback`, async ({
     page,
     request,
   }, info) => {
+    const parked = mode.startsWith("parked");
+    const duration = parked ? 18 : 6;
     const project = ProjectSchema.parse(
       await (
         await request.post("/api/cutroom/projects", {
-          data: { name: "Ramp preview", width: 640, height: 360, duration: 6 },
+          data: { name: "Ramp preview", width: 640, height: 360, duration },
         })
       ).json(),
     );
     const embedded = mode === "embedded audio";
     const nested = mode === "mounted scene";
-    const unavailable = mode === "unavailable audio";
-    const truncated = mode === "truncated WAV";
+    const unavailable =
+      mode === "unavailable audio" || mode.endsWith("blocked media");
+    const truncated = mode.endsWith("truncated WAV");
     const playDuringSwap = mode === "Play during the swap";
     const folder = nested ? join(project.path, "scenes") : project.path;
     await mkdir(folder, { recursive: true });
-    const name = "Tone # 1.mp4";
+    const name = parked ? "Tone.mp4" : "Tone # 1.mp4";
+    const mediaLength = parked ? 18 : 8;
     await promisify(execFile)("ffmpeg", [
       "-v",
       "error",
       "-f",
       "lavfi",
       "-i",
-      "color=0x1648c9:s=320x180:r=30:d=8",
+      `color=0x1648c9:s=320x180:r=30:d=${mediaLength}`,
       "-f",
       "lavfi",
       "-i",
-      "aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*440*t):s=48000:d=8",
+      `aevalsrc=0.12*sin(2*PI*440*t)|0.12*sin(2*PI*440*t):s=48000:d=${mediaLength}`,
       "-c:v",
       "libx264",
       "-preset",
@@ -93,18 +100,26 @@ for (const mode of [
       version: 1,
       nodes: [{ id: "quieter", type: "gain", params: { gain: -6 } }],
     });
-    const timing = `src="Tone%20%23%201.mp4" data-start="0" data-duration="6" data-playback-start="0.25" data-audio-group="dialogue" data-automation='${ramp}'`;
+    const media = `src="${encodeURIComponent(name)}"`;
+    const timing = `${media} data-start="${parked ? 12 : 0}" data-duration="6" data-playback-start="0.25" data-audio-group="dialogue" data-automation='${ramp}'`;
     const id = nested ? "dialogue-scene" : "main";
-    const content = `<style>body{margin:0}video{position:absolute;inset:0;width:100%;height:100%;}</style>
-      <main id="${id}" data-composition-id="${id}" data-no-timeline data-width="640" data-height="360" data-fps="30" data-duration="6">
+    const style = parked
+      ? "<style>body{margin:0}</style>"
+      : "<style>body{margin:0}video{position:absolute;inset:0;width:100%;height:100%;}</style>";
+    const picture = parked
+      ? `<video id="picture" class="clip" ${media} muted data-start="0" data-duration="18" data-track-index="0" style="position:absolute;inset:0;width:100%;height:100%"></video>`
+      : `<video id="picture" class="clip" ${timing} ${embedded ? `data-has-audio="true" data-fx-chain='${fx}'` : "muted"} data-track-index="0"></video>`;
+    const content = `
+      <main id="${id}" data-composition-id="${id}" data-no-timeline data-width="640" data-height="360" data-fps="30" data-duration="${duration}">
       <hf-audio-group id="dialogue" data-volume="0.5"></hf-audio-group>
-      <video id="picture" class="clip" ${timing} ${embedded ? `data-has-audio="true" data-fx-chain='${fx}'` : "muted"} data-track-index="0"></video>
-      ${embedded ? "" : `<audio id="sound" ${timing} data-track-index="1"></audio>`}
+      ${picture}
+      ${embedded ? "" : `<audio id="sound" ${timing} ${parked ? 'preload="none"' : ""} data-track-index="1"></audio>`}
       </main>`;
     const html = nested
-      ? `<template>${content}</template>`
-      : `<!doctype html><html><body>${content}</body></html>`;
+      ? `<template>${style}${content}</template>`
+      : `<!doctype html><html><head>${style}</head><body>${content}</body></html>`;
     const source = join(folder, nested ? "dialogue.html" : "index.html");
+    let savedSource = html;
     await writeFile(source, html);
     if (nested)
       await writeFile(
@@ -122,6 +137,11 @@ for (const mode of [
         await route.fulfill({ response });
       },
     );
+    if (parked)
+      await page.addInitScript(() => {
+        if (window === window.top)
+          localStorage.setItem("cutroom.footagePipeline", "true");
+      });
     if (playDuringSwap)
       await page.addInitScript(() => {
         if (window === parent) {
@@ -153,6 +173,7 @@ for (const mode of [
       await page.goto(`/#project/${project.id}`);
       const stage = page.locator(".edit-stage");
       await expect(stage).toHaveAttribute("data-preview-ready");
+      if (parked) await expect(stage).toHaveAttribute("data-pipeline", "on");
       const live = page.locator("iframe[data-live]");
       const old = await live.getAttribute("src");
       const frame = page.frameLocator("iframe[data-live]");
@@ -204,7 +225,9 @@ for (const mode of [
         }
         const mediaRequest = page.waitForRequest("**/ramp-audio/*.wav");
         await stop.click();
-        const preparedUrl = (await mediaRequest).url();
+        const preparedMedia = await mediaRequest;
+        expect(preparedMedia.resourceType()).toBe("media");
+        const preparedUrl = preparedMedia.url();
         await expect(page.locator("iframe.edit-frame")).toHaveCount(1);
         await expect(stage).toHaveAttribute("data-preview-ready");
         await expect(live).toHaveAttribute("src", old!);
@@ -218,7 +241,7 @@ for (const mode of [
         await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
         await expect(stage).toHaveAttribute("data-preview-ready");
         await expect(frame.locator("#sound")).toHaveAttribute("src", /Tone/);
-        await seekFrame(page, 60);
+        await seekFrame(page, parked ? 420 : 60);
         await page
           .getByRole("button", { name: "Play forward", exact: true })
           .click();
@@ -304,7 +327,41 @@ for (const mode of [
         info.outputPath("audio-clock.json"),
         JSON.stringify({ mode, peak, samples }, null, 2),
       );
-      if (mode === "separate audio") {
+      if (mode === "retained audio") {
+        await stop.click();
+        const prepared = await live.getAttribute("src");
+        await page.route(
+          (url) => url.pathname.endsWith("/isolated-preview"),
+          async (route) => {
+            const navigation = route.request().isNavigationRequest();
+            const native = new URL(route.request().url()).searchParams.has(
+              "cutroom-native-ramp",
+            );
+            if (navigation && !native) {
+              await route.fulfill({
+                contentType: "text/html",
+                body: "<p>Preview failed to start</p>",
+              });
+            } else await route.continue();
+          },
+        );
+        savedSource = html.replace(
+          "</main>",
+          '<div id="new-layer" data-start="0" data-duration="6" data-track-index="2">New layer</div></main>',
+        );
+        await writeFile(source, savedSource);
+        await expect(stage).toHaveAttribute("data-handoff", "loading");
+        await expect(stage).toHaveAttribute("data-handoff", "showing", {
+          timeout: 18_000,
+        });
+        await expect(live).toHaveAttribute("src", prepared!);
+        await expect(audio).toHaveCount(1);
+        await page
+          .getByRole("button", { name: "Play forward", exact: true })
+          .click();
+        expect(await masterPeak(audio)).toBeGreaterThan(0.047);
+      }
+      if (mode === "separate audio" || mode === "retained audio") {
         // A new request can fail after the prepared document was already confirmed.
         const beforeFailure = Number(
           (await time.textContent())?.replaceAll(":", "").trim(),
@@ -315,6 +372,8 @@ for (const mode of [
         await requested;
         await expect(live).toHaveAttribute("src", /cutroom-native-ramp=1/);
         await expect(stage).toHaveAttribute("data-preview-ready");
+        if (mode === "retained audio")
+          await expect(frame.locator("#new-layer")).toHaveText("New layer");
         const play = page.getByRole("button", {
           name: "Play forward",
           exact: true,
@@ -336,7 +395,7 @@ for (const mode of [
         );
       }
       await stop.click();
-      expect(await readFile(source, "utf8")).toBe(html);
+      expect(await readFile(source, "utf8")).toBe(savedSource);
       await page.screenshot({ path: info.outputPath("prepared-ramp.png") });
       if (embedded) {
         // Changing the real muted attribute would make this authored picture vanish.

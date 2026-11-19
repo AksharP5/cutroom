@@ -1800,6 +1800,7 @@ function installPreviewBridge(
     signal: AbortSignal,
   ) =>
     new Promise<void>((resolve, reject) => {
+      signal.throwIfAborted();
       const events = [
         "loadedmetadata",
         "loadeddata",
@@ -1817,8 +1818,8 @@ function installPreviewBridge(
         new Error("Prepared ramp audio could not be loaded.");
       const timeout = () => finish(failure());
       const inspect = () => {
-        if (parked.has(audio)) finish();
-        else if (invalidRamp(audio, duration)) finish(failure());
+        if (parked.has(audio) || invalidRamp(audio, duration))
+          finish(failure());
         else if (
           audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
           audio.buffered.length > 0
@@ -3978,17 +3979,31 @@ function installPreviewBridge(
         case "check-ramp": {
           const deadline = AbortSignal.timeout(4000);
           const loaded = new Set<string>();
-          const checks = [];
           for (const audio of document.querySelectorAll<HTMLAudioElement>(
             "audio[src]",
           )) {
             const src = audio.getAttribute("src") ?? "";
             const duration = rampFiles.get(src);
             if (duration === undefined) continue;
+            if (parked.has(audio)) {
+              // Keep distant clips parked. Validate their WAV with one temporary
+              // decoder at a time instead of trusting the parked ready-state shim.
+              if (loaded.has(src)) continue;
+              const probe = new Audio();
+              probe.crossOrigin = "anonymous";
+              probe.preload = "auto";
+              probe.src = src;
+              try {
+                await loadRamp(probe, duration, deadline);
+              } finally {
+                probe.removeAttribute("src");
+                probe.load();
+              }
+            } else {
+              await loadRamp(audio, duration, deadline);
+            }
             loaded.add(src);
-            checks.push(loadRamp(audio, duration, deadline));
           }
-          await Promise.all(checks);
           if (loaded.size !== rampFiles.size)
             throw new Error("A prepared ramp audio clip is missing.");
           break;
