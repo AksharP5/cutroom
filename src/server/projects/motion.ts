@@ -5,17 +5,28 @@ import { parseHTML } from "linkedom";
 import { parseGsapScript } from "@hyperframes/parsers/gsap-parser";
 import type { GsapAnimation } from "@hyperframes/parsers/gsap-parser";
 import { parseGsapScriptAcornForWrite } from "@hyperframes/parsers/gsap-parser-acorn";
-import { updateAnimationInScript } from "@hyperframes/parsers/gsap-writer-acorn";
+import {
+  addAnimationToScript,
+  updateAnimationInScript,
+} from "@hyperframes/parsers/gsap-writer-acorn";
 import {
   applyFileMutations,
   fileContentVersion,
 } from "@hyperframes/studio-server";
 import { HttpError } from "../../shared/errors";
 import { AGENT_HEADER } from "../../shared/review";
-import { MotionReadSchema, MotionUpdateSchema } from "../../shared/motion";
-import type { MotionSnapshot, MotionUpdate } from "../../shared/motion";
-import { emptyTimelineSettings } from "../../shared/timeline/schema";
-import type { TimelineSettings } from "../../shared/timeline/schema";
+import { MotionReadSchema, MotionWriteSchema } from "../../shared/motion";
+import type {
+  MotionAddFade,
+  MotionSnapshot,
+  MotionUpdate,
+} from "../../shared/motion";
+import { clipEnd, frameTime } from "../../shared/timeline/apply";
+import {
+  emptyTimelineSettings,
+  isAudioKind,
+} from "../../shared/timeline/schema";
+import type { Clip, TimelineSettings } from "../../shared/timeline/schema";
 import { posix } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -24,7 +35,7 @@ import {
   scopeElements,
 } from "../timeline/composition";
 import { projectMutationGuard } from "./authorization";
-import { projectWritePath } from "./path";
+import { projectWritePath, resolveProjectPath } from "./path";
 import { historyWho, parseInput } from "./routes";
 import { readSource } from "./store";
 import type { ProjectStore } from "./store";
@@ -109,7 +120,8 @@ const number = (node: Syntax | undefined): number | null => {
     node?.type === "UnaryExpression" &&
     (node.operator === "-" || node.operator === "+") &&
     node.argument?.type === "Literal" &&
-    typeof node.argument.value === "number"
+    typeof node.argument.value === "number" &&
+    Number.isFinite(node.argument.value)
   )
     return node.operator === "-" ? -node.argument.value : node.argument.value;
   return null;
@@ -145,20 +157,58 @@ function fields(node: Syntax | undefined): Map<string, Syntax> | null {
 
 const SOURCE_ONLY =
   "Only direct literal calls on one top-level GSAP timeline are editable. Helpers, loops, aliases and other timeline uses stay in Source.";
+const FADE_FILE_LINK =
+  "Open the original scene file to add a fade. This path is a file link.";
+
+function registersTimeline(node: Syntax, timeline: string, rootId: string) {
+  return (
+    node.type === "AssignmentExpression" &&
+    node.operator === "=" &&
+    identifier(node.right, timeline) &&
+    node.left?.type === "MemberExpression" &&
+    member(node.left.object, "window", "__timelines") &&
+    (node.left.computed
+      ? string(node.left.property) === rootId
+      : identifier(node.left.property, rootId))
+  );
+}
+
+/** Timeline options must leave its clock alone. The new tween writes its own ease and duration. */
+function simpleTimelineOptions(args: Syntax[] = []) {
+  if (args.length === 0) return true;
+  if (args.length !== 1) return false;
+  const options = fields(args[0]);
+  if (!options) return false;
+  return [...options].every(([key, option]) => {
+    if (key === "paused") return typeof option.value === "boolean";
+    if (key !== "defaults") return false;
+    const defaults = fields(option);
+    return (
+      defaults &&
+      [...defaults.keys()].every((key) => key === "duration" || key === "ease")
+    );
+  });
+}
 
 /** Prove ownership with a positive grammar, rather than trusting the parser's computed expansion. */
-function timelineReason(
+function timelineOwnership(
   raw: NonNullable<ReturnType<typeof parseGsapScriptAcornForWrite>>,
   ast: Syntax,
   rootId: string,
 ) {
   if (!raw.hasTimeline)
-    return raw.located.some((entry) => !entry.animation.global)
-      ? SOURCE_ONLY
-      : null;
-  if (!Array.isArray(ast.body)) return SOURCE_ONLY;
+    return {
+      reason: raw.located.some((entry) => !entry.animation.global)
+        ? SOURCE_ONLY
+        : null,
+      sceneTimeline: false,
+    };
+  if (!Array.isArray(ast.body))
+    return { reason: SOURCE_ONLY, sceneTimeline: false };
   const allowed = new Set<number>();
   let declarations = 0;
+  let registrations = 0;
+  let simpleClock = false;
   for (const statement of ast.body) {
     if (
       statement.type === "VariableDeclaration" &&
@@ -172,6 +222,7 @@ function timelineReason(
       ) {
         declarations++;
         allowed.add(declaration.id!.start);
+        simpleClock = simpleTimelineOptions(declaration.init.arguments);
       }
     }
     if (statement.type !== "ExpressionStatement") continue;
@@ -179,17 +230,9 @@ function timelineReason(
       continue;
     let call: Syntax | undefined = statement.expression;
     // Registration is the only non-tween use supported by this slice.
-    if (
-      call?.type === "AssignmentExpression" &&
-      call.operator === "=" &&
-      identifier(call.right, raw.timelineVar) &&
-      call.left?.type === "MemberExpression" &&
-      member(call.left.object, "window", "__timelines") &&
-      (call.left.computed
-        ? string(call.left.property) === rootId
-        : identifier(call.left.property, rootId))
-    ) {
+    if (registersTimeline(call, raw.timelineVar, rootId)) {
       allowed.add(call.right!.start);
+      registrations++;
       continue;
     }
     while (
@@ -203,7 +246,7 @@ function timelineReason(
       call = receiver;
     }
   }
-  if (declarations !== 1) return SOURCE_ONLY;
+  if (declarations !== 1) return { reason: SOURCE_ONLY, sceneTimeline: false };
   let unsafe = false;
   fullAncestor(raw.ast, (node) => {
     if (node.type === "Identifier") {
@@ -212,7 +255,10 @@ function timelineReason(
         unsafe = true;
     }
   });
-  return unsafe ? SOURCE_ONLY : null;
+  return {
+    reason: unsafe ? SOURCE_ONLY : null,
+    sceneTimeline: !unsafe && simpleClock && registrations === 1,
+  };
 }
 
 function parseScript(code: string, start: number, rootId: string) {
@@ -221,10 +267,11 @@ function parseScript(code: string, start: number, rootId: string) {
   const parsed = parseGsapScript(code);
   const ast = SyntaxSchema.safeParse(raw.ast);
   if (!ast.success) return null;
+  const ownership = timelineOwnership(raw, ast.data, rootId);
   let reason =
     parsed.multipleTimelines || parsed.unsupportedTimelinePattern
       ? "Multiple or unresolved GSAP timelines stay in Source."
-      : timelineReason(raw, ast.data, rootId);
+      : ownership.reason;
   const gsapReferences = new Set<number>();
   const references = new Set<string>();
   fullAncestor(raw.ast, (node) => {
@@ -260,7 +307,16 @@ function parseScript(code: string, start: number, rootId: string) {
       .array(z.object({ type: z.string() }))
       .parse(entry.call.ancestors),
   }));
-  return { code, start, raw, parsed, reason, located, references };
+  return {
+    code,
+    start,
+    raw,
+    parsed,
+    ...ownership,
+    reason,
+    located,
+    references,
+  };
 }
 
 type Script = NonNullable<ReturnType<typeof parseScript>>;
@@ -315,6 +371,24 @@ function entryReason(script: Script, entry: Entry) {
   return null;
 }
 
+function fadeTimelineReason(script: Script) {
+  if (script.parsed.animations.length !== script.located.length)
+    return SOURCE_ONLY;
+  for (const entry of script.located) {
+    // The writer can insert after a standalone set, so its location must be safe too.
+    const reason = entryReason(script, entry);
+    if (reason) return reason;
+    if (entry.animation.global) continue;
+    const { position, vars } = tweenFields(entry);
+    const start = number(position);
+    const delay = vars?.has("delay") ? number(vars.get("delay")) : 0;
+    // A negative child start moves GSAP's time zero.
+    if (start === null || start < 0 || delay === null || delay < 0)
+      return "Existing tweens need explicit, nonnegative start times and delays to add a fade. Use Source.";
+  }
+  return null;
+}
+
 /** Source and identities come from this one read. Templates use the timeline projection's scope. */
 function inspect(
   content: string,
@@ -327,7 +401,8 @@ function inspect(
     scope: compositionScope(composition),
   });
   const element = projection.elements.get(clipId);
-  if (!element)
+  const clip = projection.timeline.clips.find((clip) => clip.id === clipId);
+  if (!element || !clip)
     throw new HttpError(404, `No clip ${clipId} in ${composition}.`);
   const all = scopeElements(projection.roots, projection.scope);
   const lockedTracks = new Set(
@@ -360,7 +435,7 @@ function inspect(
   const selected = [...queryRoot.querySelectorAll("[id]")].filter(
     (node) => node.id === element.attrs.id,
   );
-  const snapshot: MotionSnapshot = {
+  const snapshot: Omit<MotionSnapshot, "fadeReason"> = {
     composition,
     clipId,
     version,
@@ -482,7 +557,116 @@ function inspect(
     }
   }
   snapshot.notices = [...new Set(snapshot.notices)];
-  return { snapshot, entries, projection };
+  const fadeTimeline = scripts.find((script) => script.sceneTimeline);
+  const elementId = element.attrs.id;
+  return {
+    snapshot: { ...snapshot, fadeReason: fadeRestriction(clip, elementId) },
+    entries,
+    projection,
+    clip,
+    fadeTimeline,
+    elementId,
+  };
+
+  function fadeRestriction(clip: Clip, elementId: string | undefined) {
+    if (projection.scope !== "sub-composition")
+      return "Add fades inside a scene so the motion moves with it.";
+    if (snapshot.reason) return snapshot.reason;
+    if (!fadeTimeline)
+      return "Adding a fade needs a registered inline GSAP timeline with standard timing. Use Source.";
+    if (!elementId || !/^[a-zA-Z_][\w-]*$/.test(elementId))
+      return "Adding a fade needs an element id that can be used as a simple GSAP selector. Use Source.";
+    if (lockedTracks.has(clip.track)) return "This clip is on a locked track.";
+    if (isAudioKind(clip.kind) || clip.adjustment)
+      return "Adding a fade needs a visual clip.";
+    if (clip.title) return "Set a Cutroom title's fade in Title.";
+    if (clip.keyframes?.opacity || snapshot.animations.length)
+      return "This clip already has motion.";
+    // A mounted scene can add IDs that do not exist in this file's DOM yet.
+    if (
+      all.some(
+        (node) =>
+          node !== projection.root &&
+          (node.attrs["data-composition-id"] !== undefined ||
+            node.attrs["data-composition-src"] !== undefined),
+      )
+    )
+      return "Adding a fade to a scene with nested compositions stays in Source.";
+    return fadeTimelineReason(fadeTimeline);
+  }
+}
+
+function addFade(
+  content: string,
+  inspected: ReturnType<typeof inspect>,
+  input: MotionAddFade,
+  settings: TimelineSettings,
+) {
+  const { snapshot, clip, projection, fadeTimeline, elementId } = inspected;
+  if (snapshot.fadeReason || !fadeTimeline || !elementId)
+    throw new HttpError(
+      422,
+      snapshot.fadeReason ?? "No writable GSAP timeline was found.",
+    );
+  const remaining =
+    Math.min(clipEnd(clip), projection.timeline.duration) - input.frame;
+  if (input.frame < clip.start || remaining <= 0)
+    throw new HttpError(422, "Move the playhead over the clip to add a fade.");
+  const { fps } = projection.timeline;
+  const position = frameTime(input.frame, fps);
+  const duration = Math.min(0.5, frameTime(remaining, fps));
+  const selector = `#${elementId}`;
+  const { script, id } = addAnimationToScript(fadeTimeline.code, {
+    method: "from",
+    targetSelector: selector,
+    position,
+    duration,
+    ease: "none",
+    properties: { opacity: 0 },
+    extras: { immediateRender: position === 0 },
+  });
+  const after =
+    content.slice(0, fadeTimeline.start) +
+    script +
+    content.slice(fadeTimeline.start + fadeTimeline.code.length);
+  const written = inspect(
+    after,
+    fileContentVersion(after),
+    snapshot.composition,
+    clip.id,
+    settings,
+  );
+  const [added] = written.snapshot.animations;
+  const insertedId = `${fadeTimeline.start}:${id}`;
+  const entry = written.entries.get(insertedId)?.entry;
+  const immediateRender =
+    entry && tweenFields(entry).vars?.get("immediateRender");
+  if (
+    written.snapshot.reason ||
+    written.snapshot.animations.length !== 1 ||
+    !added ||
+    added.id !== insertedId ||
+    added.reason ||
+    added.method !== "from" ||
+    added.selector !== selector ||
+    added.from.opacity !== 0 ||
+    added.targets.length !== 1 ||
+    added.targets[0] !== selector ||
+    added.position !== position ||
+    added.duration !== duration ||
+    added.ease !== "none" ||
+    !entry ||
+    !member(entry.node.callee, fadeTimeline.raw.timelineVar, "from") ||
+    entry.ancestors.length !== 3 ||
+    entry.ancestors[1]?.type !== "ExpressionStatement" ||
+    immediateRender?.type !== "Literal" ||
+    immediateRender.value !== (position === 0)
+  )
+    throw new HttpError(
+      422,
+      "The GSAP writer could not add a direct fade on this clip. Use Source.",
+    );
+  return { after, snapshot: written.snapshot };
 }
 
 function changeSource(
@@ -625,18 +809,23 @@ export function createMotionRoutes(
     const settings =
       (await store.document(project)).timelines[composition] ??
       emptyTimelineSettings();
-    return c.json(
-      inspect(
-        source.content,
-        source.version,
-        composition,
-        input.clipId,
-        settings,
-      ).snapshot,
+    const { snapshot } = inspect(
+      source.content,
+      source.version,
+      composition,
+      input.clipId,
+      settings,
     );
+    if (
+      snapshot.fadeReason === null &&
+      (await resolveProjectPath(project, composition)).path !== composition
+    )
+      snapshot.fadeReason = FADE_FILE_LINK;
+    return c.json(snapshot);
   });
   api.post("/projects/:id/motion", async (c) => {
-    const input = parseInput(MotionUpdateSchema, await c.req.json());
+    const input = parseInput(MotionWriteSchema, await c.req.json());
+    const addingFade = "frame" in input;
     const project = await store.get(c.req.param("id"));
     const composition = path(input.composition);
     const result = await reviews.editComposition(
@@ -646,8 +835,15 @@ export function createMotionRoutes(
       () =>
         store.mutate(
           project,
-          `Edit ${input.clipId} motion`,
+          addingFade
+            ? `Add fade-in to ${input.clipId}`
+            : `Edit ${input.clipId} motion`,
           async () => {
+            const target = addingFade
+              ? await resolveProjectPath(project, composition)
+              : null;
+            if (target && target.path !== composition)
+              throw new HttpError(422, FADE_FILE_LINK);
             const source = await readSource(project, composition);
             if (source.version !== input.expectedVersion)
               throw new HttpError(
@@ -664,23 +860,37 @@ export function createMotionRoutes(
               input.clipId,
               settings,
             );
-            const after = changeSource(source.content, inspected, input);
+            const { after, snapshot } = addingFade
+              ? addFade(source.content, inspected, input, settings)
+              : {
+                  after: changeSource(source.content, inspected, input),
+                  snapshot: null,
+                };
+            const absolute = await projectWritePath(project, composition);
+            if (target && absolute !== target.absolute)
+              throw new HttpError(
+                409,
+                "The scene file changed. Inspect motion again.",
+              );
             applyFileMutations(project.path, [
               {
                 sourceFile: composition,
-                absPath: await projectWritePath(project, composition),
+                absPath: absolute,
                 before: source.content,
                 after,
                 expectedVersion: input.expectedVersion,
               },
             ]);
-            return inspect(
-              after,
-              fileContentVersion(after),
-              composition,
-              input.clipId,
-              settings,
-            ).snapshot;
+            return (
+              snapshot ??
+              inspect(
+                after,
+                fileContentVersion(after),
+                composition,
+                input.clipId,
+                settings,
+              ).snapshot
+            );
           },
           historyWho(reviews, c, project),
         ),

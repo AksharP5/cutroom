@@ -73,6 +73,7 @@ test("claiming, finishing, blocking, and releasing a note and choosing destinati
     "clip_version_keep",
     "source_write",
     "motion_update",
+    "motion_add_fade",
     "variables_instance_set",
     "transcript_edit",
     "history_undo",

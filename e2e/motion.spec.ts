@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { expect, test } from "./fixtures";
+import type { APIRequestContext } from "@playwright/test";
 import {
   createPositionProject,
   seekFrame,
@@ -107,6 +108,30 @@ function greenBox(rgb: Buffer) {
   return { left, top, right, bottom };
 }
 
+async function renderMotion(request: APIRequestContext, projectId: string) {
+  const response = await request.post(`/api/projects/${projectId}/export`, {
+    data: { quality: "draft", filename: "motion.mp4", gpu: false },
+  });
+  expect(response.ok()).toBe(true);
+  const job = z
+    .object({ jobId: z.string(), outputPath: z.string() })
+    .parse(await response.json());
+  await expect
+    .poll(
+      async () => {
+        const state = z
+          .object({ status: z.string(), error: z.string().nullish() })
+          .parse(await (await request.get(`/api/render/${job.jobId}`)).json());
+        if (state.status === "failed")
+          throw new Error(state.error ?? "Export failed");
+        return state.status;
+      },
+      { timeout: 100_000 },
+    )
+    .toBe("complete");
+  return job;
+}
+
 test("authored motion edits the picture, uses shared Undo/Redo and matches actual MP4 frames", async ({
   page,
   request,
@@ -184,26 +209,7 @@ test("authored motion edits the picture, uses shared Undo/Redo and matches actua
     decoding.child.stdin!.end(png);
     preview.set(frame, greenBox((await decoding).stdout));
   }
-  const response = await request.post(`/api/projects/${project.id}/export`, {
-    data: { quality: "draft", filename: "motion.mp4", gpu: false },
-  });
-  expect(response.ok()).toBe(true);
-  const job = z
-    .object({ jobId: z.string(), outputPath: z.string() })
-    .parse(await response.json());
-  await expect
-    .poll(
-      async () => {
-        const state = z
-          .object({ status: z.string(), error: z.string().nullish() })
-          .parse(await (await request.get(`/api/render/${job.jobId}`)).json());
-        if (state.status === "failed")
-          throw new Error(state.error ?? "Export failed");
-        return state.status;
-      },
-      { timeout: 100_000 },
-    )
-    .toBe("complete");
+  const job = await renderMotion(request, project.id);
   const comparison = [];
   for (const frame of frames) {
     const { stdout } = await exec(
@@ -246,6 +252,147 @@ test("authored motion edits the picture, uses shared Undo/Redo and matches actua
   await writeFile(
     join(evidence, "parity.json"),
     JSON.stringify({ project, job, comparison }, null, 2),
+  );
+});
+
+test("the first scene fade follows its host and matches the exported picture", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(150_000);
+  const project = await createPositionProject(
+    request,
+    {
+      name: "Scene fade",
+      width: 640,
+      height: 360,
+      duration: 6,
+    },
+    `<!doctype html><html><head><style>html,body{margin:0;background:#11151b}</style><script src="assets/vendor/gsap.min.js"></script></head><body>
+<main data-composition-id="main" data-no-timeline data-width="640" data-height="360" data-fps="30" data-duration="6">
+<div id="intro" class="clip" data-composition-id="intro" data-composition-src="compositions/intro.html" data-start="1" data-duration="3" data-track-index="0" data-width="640" data-height="360" data-label="Intro scene"></div>
+</main></body></html>`,
+  );
+  const scene = `<template><div data-composition-id="intro" data-width="640" data-height="360" data-fps="30" data-duration="3" style="position:absolute;inset:0;background:#11151b">
+<div id="card" class="clip" data-start="0.5" data-duration="2.5" data-track-index="0" data-label="Scene card" style="position:absolute;left:60px;top:100px;width:100px;height:80px;background:#00ff00"></div>
+<script>
+const tl = gsap.timeline({ paused: true });
+window.__timelines ??= {};
+window.__timelines.intro = tl;
+</script></div></template>`;
+  const file = join(project.path, "compositions", "intro.html");
+  await mkdir(join(project.path, "compositions"));
+  await writeFile(file, scene);
+  const evidence =
+    process.env.CUTROOM_FADE_EVIDENCE ?? info.outputPath("evidence");
+  await mkdir(evidence, { recursive: true });
+  await page.goto(`/#project/${project.id}`);
+  const host = page.locator('[data-clip="intro"]');
+  await host.dblclick();
+  await page.locator('[data-clip="card"]').click();
+  const fade = page.getByRole("button", { name: "Add fade in", exact: true });
+  const inspector = page.getByRole("complementary", { name: "Inspector" });
+  const frame = page.locator("iframe[data-live]");
+  const card = page
+    .frameLocator("iframe[data-live]")
+    .locator('[data-label="Scene card"]');
+  const opacity = () =>
+    card.evaluate((element) => Number(getComputedStyle(element).opacity));
+  await seekFrame(page, 0);
+  await expect(fade).toBeDisabled();
+  await seekFrame(page, 36);
+  await expect(fade).toBeEnabled();
+  await expect.poll(opacity).toBe(1);
+  await page.screenshot({ path: join(evidence, "before.png") });
+  await seekFrame(page, 30);
+  await fade.click();
+  await expect(
+    inspector.getByRole("textbox", { name: "Motion 1 position" }),
+  ).toHaveValue("1 s");
+  await expect.poll(opacity).toBe(0);
+  const after = scene.replace(
+    "window.__timelines ??= {};",
+    'tl.from("#card", { opacity: 0, duration: 0.5, ease: "none", immediateRender: false }, 1);\nwindow.__timelines ??= {};',
+  );
+  expect(await readFile(file, "utf8")).toBe(after);
+  await seekFrame(page, 29);
+  await expect.poll(opacity).toBe(1);
+  await seekFrame(page, 36);
+  await expect.poll(opacity).toBeCloseTo(0.4, 2);
+  await page.screenshot({ path: join(evidence, "after.png") });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(fade).toBeEnabled();
+  await expect.poll(opacity).toBe(1);
+  expect(await readFile(file, "utf8")).toBe(scene);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(fade).toBeDisabled();
+  await expect.poll(opacity).toBeCloseTo(0.4, 2);
+  expect(await readFile(file, "utf8")).toBe(after);
+
+  await page
+    .getByRole("navigation", { name: "Composition" })
+    .getByRole("button", { name: "Scene fade", exact: true })
+    .click();
+  await host.click();
+  await seekFrame(page, 66);
+  await expect.poll(opacity).toBeCloseTo(0.4, 2);
+  const start = inspector.getByRole("textbox", { name: "Start", exact: true });
+  await start.fill("2s");
+  await start.press("Enter");
+  await expect(start).toHaveValue("00:00:02:00");
+  await seekFrame(page, 96);
+  await expect.poll(opacity).toBeCloseTo(0.4, 2);
+  expect(await readFile(file, "utf8")).toBe(after);
+  await page.screenshot({ path: join(evidence, "after-host-move.png") });
+
+  const sample = async (input: Buffer | string, filter = "") => {
+    const decoding = exec(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-i",
+        typeof input === "string" ? input : "pipe:0",
+        "-vf",
+        `${filter}scale=640:360,crop=2:2:100:126`,
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "rgb24",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+      ],
+      { encoding: "buffer" },
+    );
+    if (typeof input !== "string") decoding.child.stdin!.end(input);
+    const { stdout } = await decoding;
+    expect(stdout.length).toBe(12);
+    return [...stdout.subarray(0, 3)];
+  };
+  const shown = await sample(await frame.screenshot());
+  expect(shown[1]).toBeGreaterThan(105);
+  expect(shown[1]).toBeLessThan(140);
+  const job = await renderMotion(request, project.id);
+  const select = "select=eq(n\\,96)";
+  const exportPixel = await sample(job.outputPath, `${select},`);
+  for (const [index, value] of shown.entries())
+    expect(Math.abs(value - exportPixel[index]!)).toBeLessThanOrEqual(6);
+  await exec("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-i",
+    job.outputPath,
+    "-vf",
+    select,
+    "-frames:v",
+    "1",
+    join(evidence, "export-frame96.png"),
+  ]);
+  await writeFile(
+    join(evidence, "pixels.json"),
+    JSON.stringify({ frame: 96, shown, export: exportPixel }, null, 2),
   );
 });
 
