@@ -26,12 +26,7 @@ import { ApiError, api, json, tabOrigin } from "../api";
 import { clipName, trackRows } from "../timeline/math";
 import { emptySelection } from "../timeline/selection";
 import type { Selection } from "../timeline/selection";
-import {
-  NO_COMPOSITION_ROOT,
-  reportEditorError,
-  showToast,
-  useWorkspace,
-} from "../workspace";
+import { reportEditorError, showToast, useWorkspace } from "../workspace";
 import { formatTimecode } from "../../shared/timeline/timecode";
 import { anchorsChanged, editAnchors } from "./anchors";
 import {
@@ -61,6 +56,7 @@ const HistorySchema = z.object({
   canRedo: z.boolean(),
   entries: z.array(z.object({ id: z.string(), undone: z.boolean() })),
 });
+const TimelineEditsSchema = TimelineViewSchema.pick({ clipEdits: true });
 
 /** The engine's timeline for the open composition, shared by the viewer, transport, and timeline. */
 export const useTimeline = create(() => ({
@@ -72,6 +68,8 @@ export const useTimeline = create(() => ({
   parents: [] as readonly string[],
   /** The engine's last answer with the edits it has not answered yet applied on top. */
   view: null as TimelineView | null,
+  /** Edits still available to review when the current source cannot produce a timeline. */
+  recoveryEdits: null as NonNullable<TimelineView["clipEdits"]> | null,
   history: { canUndo: false, canRedo: false },
   /** Selected clip ids. A clip id names one clip for good, so an id is that clip or gone. */
   selection: emptySelection as Selection,
@@ -163,11 +161,14 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
   dismissRipple();
   dismissOutside();
   rippleRevision = null;
+  historyHead = undefined;
   useTimeline.setState({
     projectId,
     composition: ROOT_COMPOSITION,
     parents: [],
     view: null,
+    recoveryEdits: null,
+    history: { canUndo: false, canRedo: false },
     selection: emptySelection,
   });
   signal?.addEventListener(
@@ -180,6 +181,8 @@ export function openTimeline(projectId: string, signal?: AbortSignal) {
       useTimeline.setState({
         projectId: null,
         view: null,
+        recoveryEdits: null,
+        history: { canUndo: false, canRedo: false },
         selection: emptySelection,
       });
     },
@@ -354,7 +357,11 @@ function settle(
     dismissRipple();
     rippleRevision = null;
   }
-  useTimeline.setState({ view: shown(projectId), history });
+  useTimeline.setState({
+    view: shown(projectId),
+    history,
+    recoveryEdits: null,
+  });
   // The engine read this timeline, so an earlier refusal no longer stands.
   reportEditorError("timeline", null);
 }
@@ -375,17 +382,25 @@ async function read(
       }`,
       TimelineViewSchema,
       { signal },
-    ),
+    ).catch(async (error: unknown) => {
+      if (error instanceof ApiError && error.status === 422) {
+        const history = await historyRead.catch(() => null);
+        if (!signal?.aborted && isOpen(projectId, composition)) {
+          const edits = TimelineEditsSchema.safeParse(error.body);
+          if (history)
+            historyHead = history.entries.findLast(
+              (entry) => !entry.undone,
+            )?.id;
+          useTimeline.setState({
+            ...(history && { history }),
+            recoveryEdits: edits.success ? (edits.data.clipEdits ?? []) : [],
+          });
+        }
+      }
+      throw error;
+    }),
     historyRead,
-  ]).catch(async (error: unknown) => {
-    // A bad source can still be repaired by undoing the edit that broke it.
-    if (error instanceof ApiError && error.message === NO_COMPOSITION_ROOT) {
-      const history = await historyRead.catch(() => null);
-      if (history && !signal?.aborted && isOpen(projectId, composition))
-        useTimeline.setState({ history });
-    }
-    throw error;
-  });
+  ]);
   if (useTimeline.getState().projectId !== projectId) return view;
   answers.set(view.composition, view);
   if (!isOpen(projectId, view.composition)) return view;
@@ -421,6 +436,7 @@ export function showComposition(
       parents,
       selection,
       view: shown(projectId),
+      recoveryEdits: null,
     });
   };
   const known = answers.get(composition);
@@ -793,8 +809,11 @@ export const stepHistory = (
     clipboardTask.then(() =>
       enqueue(async () => {
         if (expectedHistoryId) {
-          await read(projectId);
-          if (historyHead !== expectedHistoryId)
+          const history = await readHistory(projectId);
+          if (
+            history.entries.findLast((entry) => !entry.undone)?.id !==
+            expectedHistoryId
+          )
             throw new Error("The history changed. Use Undo in the toolbar.");
         }
         dismissRipple();

@@ -627,20 +627,29 @@ export function createTimelineRoutes(
     const composition = canonicalProjectPath(
       c.req.query("composition") ?? "index.html",
     );
-    try {
-      return c.json(
-        await reviews.readComposition(project, composition, async () => {
+    const snapshot = await reviews.readComposition(
+      project,
+      composition,
+      async () => {
+        try {
           const { parsed, revision } = await read(project, composition);
           return {
             composition,
             revision,
             timeline: parsed.timeline,
           } satisfies TimelineView;
-        }),
-      );
-    } catch (error) {
-      return refused(c, error);
-    }
+        } catch (error) {
+          if (!(error instanceof TimelineError)) throw error;
+          // Review follows the admitted source even when it cannot be projected onto tracks.
+          return {
+            error: error.message,
+            code: error.code,
+            command: error.command,
+          };
+        }
+      },
+    );
+    return c.json(snapshot, snapshot.error === undefined ? 200 : 422);
   });
   // The code panel follows the selection to each clip's element in the composition's source.
   api.get("/projects/:id/timeline/sources", async (c) => {

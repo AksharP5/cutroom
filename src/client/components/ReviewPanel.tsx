@@ -201,11 +201,11 @@ export function ReviewPanel({
   onSend: () => void;
 }) {
   const view = useTimeline((state) => state.view);
-  const hasChanges = view?.clipEdits?.some(pendingEdit);
+  const recoveryEdits = useTimeline((state) => state.recoveryEdits);
+  const edits = recoveryEdits ?? view?.clipEdits;
+  const hasChanges = edits?.some(pendingEdit);
   const compositionChanges = reviewRows(
-    view?.clipEdits?.filter(
-      (edit) => edit.clipId === null && pendingEdit(edit),
-    ) ?? [],
+    edits?.filter((edit) => edit.clipId === null && pendingEdit(edit)) ?? [],
   );
   const draftFps = useFps();
   const noteFps = useNoteFps(projectId, items);
@@ -553,16 +553,19 @@ export function ReviewPanel({
           {error || reviewError}
         </p>
       )}
-      {items.length === accepted.length && !draft && !reviewError && (
-        <div className="small-empty">
-          <ChatTeardropText size={25} weight="light" />
-          <h3>Start with what you see.</h3>
-          <p>
-            Draw on the picture or pin a comment. Each note stays in the queue
-            until it is done or withdrawn.
-          </p>
-        </div>
-      )}
+      {items.length === accepted.length &&
+        !hasChanges &&
+        !draft &&
+        !reviewError && (
+          <div className="small-empty">
+            <ChatTeardropText size={25} weight="light" />
+            <h3>Start with what you see.</h3>
+            <p>
+              Draw on the picture or pin a comment. Each note stays in the queue
+              until it is done or withdrawn.
+            </p>
+          </div>
+        )}
       {groups.map(([title, statuses]) => {
         const members = items.filter((item) =>
           statuses.some((status) => status === item.review.status),

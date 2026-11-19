@@ -9,10 +9,10 @@ import {
 import { ReviewItemSchema } from "../src/shared/review";
 import { TimelineViewSchema } from "../src/shared/timeline/schema";
 
-test("an invalid clip envelope updates the picture and can be repaired without reopening", async ({
+test("an invalid clip envelope keeps the picture, Review, and Undo usable", async ({
   page,
   request,
-}) => {
+}, info) => {
   const project = ProjectSchema.parse(
     await (
       await request.post("/api/cutroom/projects", {
@@ -24,8 +24,9 @@ test("an invalid clip envelope updates the picture and can be repaired without r
   const read = async () =>
     SourceSchema.parse(await (await request.get(path)).json());
   const original = (await read()).content;
-  const save = async (content: string) => {
+  const save = async (content: string, agent = false) => {
     const result = await request.put(path, {
+      ...(agent && { headers: { "x-cutroom-agent": "external" } }),
       data: {
         path: "index.html",
         expectedVersion: (await read()).version,
@@ -38,20 +39,49 @@ test("an invalid clip envelope updates the picture and can be repaired without r
   await page.goto(`/#project/${project.id}`);
   const headline = page.frameLocator("iframe[data-live]").locator("#headline");
   await expect(headline).toHaveText("Audio source recovery");
+  const corrected = original.replaceAll(
+    "Audio source recovery",
+    "Updated picture",
+  );
   await save(
-    original
-      .replaceAll("Audio source recovery", "Updated picture")
-      .replace(
-        "</main>",
-        `<audio id="voice" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
-      ),
+    corrected.replace(
+      "</main>",
+      `<audio id="voice" src="voice.wav" data-start="0" data-duration="1" data-hidden data-automation='{"version":1,"lanes":[{"target":"rate","points":null}]}'></audio></main>`,
+    ),
+    true,
   );
   await expect(headline).toHaveText("Updated picture");
   await expect(
     page.getByText(/Clip voice has invalid audio automation/).first(),
   ).toBeVisible();
-  await save(original);
+  const openReview = () =>
+    page.getByRole("button", { name: "Review", exact: true }).click();
+  const changes = page.getByRole("list", { name: "Composition changes" });
+  const accept = page.getByRole("button", { name: "Accept agent changes" });
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  await openReview();
+  await expect(changes).toContainText("Edited index.html composition");
+  await expect(accept).toBeVisible();
+  await expect(undo).toBeEnabled();
+  await page.screenshot({ path: info.outputPath("invalid-source-review.png") });
+
+  await page.reload();
+  await expect(headline).toHaveText("Updated picture");
+  await openReview();
+  await expect(changes).toContainText("Edited index.html composition");
+  await undo.click();
   await expect(headline).toHaveText("Audio source recovery");
+  await expect(changes).toHaveCount(0);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(headline).toHaveText("Updated picture");
+  await expect(accept).toBeVisible();
+  await accept.click();
+  await expect(changes).toHaveCount(0);
+  await expect(
+    page.getByText(/Clip voice has invalid audio automation/).first(),
+  ).toBeVisible();
+  await save(corrected);
+  await expect(headline).toHaveText("Updated picture");
   await expect(page.locator('[data-clip="headline"]')).toBeVisible();
   await expect(
     page.getByText(/Clip voice has invalid audio automation/),

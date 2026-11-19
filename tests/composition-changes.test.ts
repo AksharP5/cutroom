@@ -57,7 +57,12 @@ test("a saved invalid clip envelope keeps the source reviewable and editable", a
     );
     const rejected = await f.request(`${f.base}/timeline`);
     expect(rejected.status).toBe(422);
-    expect(await rejected.text()).toContain("voice");
+    expect(await rejected.json()).toMatchObject({
+      error: expect.stringContaining("Clip voice has invalid audio automation"),
+      clipEdits: view.clipEdits.map(({ id, clipId, by, accepted }) =>
+        expect.objectContaining({ id, clipId, by, accepted }),
+      ),
+    });
     await f.save(html);
     expect((await f.request(`${f.base}/timeline`)).status).toBe(200);
   } finally {
