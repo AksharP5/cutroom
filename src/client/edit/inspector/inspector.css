@@ -118,6 +118,13 @@
 .inspector-motion .inspector-value .select-trigger {
   width: 100%;
 }
+.inspector-motion-actions > button {
+  margin-inline: var(--space-2);
+}
+.inspector-motion-actions > button[aria-disabled="true"] {
+  color: var(--text-tertiary);
+  cursor: default;
+}
 .clip-inspector .inspector-motion .inspector-motion-source {
   width: auto;
   padding-inline: var(--space-1);
