@@ -129,7 +129,7 @@ Rechecked November 18, 2026 on Chromium 155, headed at 1720 × 1050. Each row is
 | 4×, off          |        4.3 → 4.0 |           92 → 102 |               883 / 737 → 884 / 815 |    1,446 → 1,444 |                                 1,109 → 1,103 |
 | 4×, on           |      12.9 → 13.2 |              8 → 4 |               343 / 157 → 268 / 163 |    1,626 → 1,694 |                                 1,299 → 1,253 |
 
-The 1× graded control varied between 16 and 48 holds across these two runs. Two further graded GPU runs on the playback build measured three and four holds. In ungraded footage-only sessions on the combined build, enabling GPU playback gave 6 → 3 holds at 1× and 6 → 7 at 4×.
+The 1× graded control varied between 16 and 48 holds across these two runs. Three more alternating runs per build with GPU playback off, on a quiet machine (load average near 1), measured 7, 61 and 14 holds on main `2f34460f` and 62, 18 and 14 on this change, with scrub at 13.6 and 15.0 pictures a second and ripple to picture at 767 and 773 ms (medians). The off path runs no new code, and its holds vary this much between runs of the same build. Two further graded GPU runs on the playback build measured three and four holds. In ungraded footage-only sessions on the combined build, enabling GPU playback gave 6 → 3 holds at 1× and 6 → 7 at 4×.
 
 Closing the screenshot-reading tab removed 347 to 450 MiB from the graded GPU-on readings. The remaining PSS dropped by 57 MiB at 1× and 46 MiB at 4× across the two builds with GPU playback enabled. It still sat 149 to 150 MiB above GPU-off on the combined build after the five edits. The first 1× control was sampled before the second PSS reading was added.
 
