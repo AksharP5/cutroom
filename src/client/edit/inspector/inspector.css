@@ -915,6 +915,64 @@
   font-size: var(--type-xs);
 }
 
+.inspector-wheel-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+.inspector-wheel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+.inspector-wheel-pad {
+  position: relative;
+  aspect-ratio: 1;
+  isolation: isolate;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle closest-side, var(--surface-panel), transparent),
+    var(--grade-wheel-hues);
+  box-shadow: inset 0 0 0 var(--stroke-hair) var(--line-strong);
+  cursor: crosshair;
+  touch-action: none;
+}
+.inspector-wheel-pad[aria-disabled="true"] {
+  cursor: default;
+  filter: grayscale(1);
+}
+.inspector-wheel-centre,
+.inspector-wheel-marker {
+  position: absolute;
+  width: var(--space-3);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
+}
+.inspector-wheel-centre {
+  inset: 50% auto auto 50%;
+  width: var(--space-1);
+  background: var(--glyph-faint);
+}
+.inspector-wheel-marker {
+  border: var(--stroke-hair) solid var(--text-primary);
+  box-shadow: 0 0 0 var(--stroke-hair) var(--surface-panel);
+}
+.inspector-wheel-fields .inspector-field {
+  grid-template-columns: minmax(0, 1fr) var(--size-inspector-value);
+}
+.inspector-color .inspector-wheel-fields .inspector-value {
+  display: block;
+}
+.inspector-wheel-fields input {
+  width: 100%;
+}
+
 /* Curves: a square plot, the neutral diagonal faint, the curve in its channel's colour. */
 .inspector-curve {
   display: grid;

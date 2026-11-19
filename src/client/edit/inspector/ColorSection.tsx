@@ -2,7 +2,11 @@ import { ArrowCounterClockwise, CaretRight } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { sourceUrl } from "../../../shared/media";
-import { editGrade, LutInfoSchema } from "../../../shared/timeline/grade";
+import {
+  editGrade,
+  LutInfoSchema,
+  writeGrade,
+} from "../../../shared/timeline/grade";
 import type { Grade, GradeEdit, LutInfo } from "../../../shared/timeline/grade";
 import type { Clip, Fps } from "../../../shared/timeline/schema";
 import { ApiError, api } from "../../api";
@@ -19,6 +23,14 @@ import { Row } from "./TitleSection";
 import { ValueField } from "./ValueField";
 import { CurveEditor, IDENTITY } from "./CurveEditor";
 import type { CurveChannel } from "./CurveEditor";
+import { ColourWheel } from "./ColourWheel";
+import type { WheelEdit, WheelRange } from "./ColourWheel";
+
+const WHEELS = {
+  shadows: "Shadows",
+  midtones: "Midtones",
+  highlights: "Highlights",
+} satisfies Record<WheelRange, string>;
 
 type AdjustKey = keyof NonNullable<Grade["adjust"]>;
 
@@ -248,6 +260,7 @@ type Props = {
   fps: Fps;
   disabled: boolean;
   open: boolean;
+  visible: boolean;
   onToggle(open: boolean): void;
 };
 
@@ -262,6 +275,7 @@ export function ColorSection({
   fps,
   disabled,
   open,
+  visible,
   onToggle,
 }: Props) {
   const grade = clip.grade;
@@ -270,6 +284,7 @@ export function ColorSection({
   const bypass = useGradeBypass((state) => state.bypass);
   const { luts, reload } = useLuts(projectId, open);
   const [channel, setChannel] = useState<CurveChannel>("master");
+  const [wheel, setWheel] = useState<WheelRange>("midtones");
   const file = useRef<HTMLInputElement>(null);
 
   const save = (label: string, change: GradeEdit | null) =>
@@ -282,6 +297,9 @@ export function ColorSection({
   };
   const commit = (label: string, change: GradeEdit) =>
     void commitGradePreview(() => save(label, change));
+  const wheelChange = (base: Grade | null, change: WheelEdit): GradeEdit => ({
+    wheels: { [wheel]: { ...base?.wheels?.[wheel], ...change } },
+  });
 
   const lutPath = (src: string) =>
     luts?.find((lut) => sourceUrl(composition, lut.path) === src)?.path ?? src;
@@ -465,6 +483,55 @@ export function ColorSection({
           />
         );
       })}
+      {open && visible && (
+        <ColourWheel
+          key={`${clip.id}:${wheel}`}
+          label={WHEELS[wheel]}
+          value={grade?.wheels?.[wheel]}
+          fps={fps}
+          disabled={locked}
+          selector={
+            <SelectMenu
+              label="Colour wheels"
+              value={wheel}
+              disabled={locked}
+              options={Object.entries(WHEELS).map(([value, label]) => ({
+                value,
+                label,
+              }))}
+              onChange={(value) => {
+                if (
+                  value === "shadows" ||
+                  value === "midtones" ||
+                  value === "highlights"
+                )
+                  setWheel(value);
+              }}
+            />
+          }
+          onPreview={(value) => draft(wheelChange(grade, value))}
+          onCommit={(value) =>
+            void commitGradePreview(() =>
+              editTimeline(projectId, `Set ${wheel} wheel`, (timeline) => {
+                const current = timeline.clips.find(({ id }) => id === clip.id);
+                if (!current) return [];
+                const change = wheelChange(current.grade, value);
+                const edited = editGrade(current.grade, change);
+                if (
+                  "grade" in edited &&
+                  writeGrade(edited.grade) === writeGrade(current.grade)
+                )
+                  return [];
+                return [{ type: "setClip", clipId: clip.id, grade: change }];
+              }),
+            )
+          }
+          onReset={() =>
+            void save(`Reset ${wheel} wheel`, { wheels: { [wheel]: {} } })
+          }
+          onCancel={() => cancelGradePreview(clip.id)}
+        />
+      )}
       <Row label="Curves">
         <button
           type="button"
